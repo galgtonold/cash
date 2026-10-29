@@ -689,6 +689,25 @@ def _live_writing_classes(namespace: Mapping[str, Any], hc: Any) -> list[type]:
     return [c for c in bound + users_module_classes() + hc.live_users_classes() if hc.reaching_special_functions(c)]
 
 
+#: The methods ``@dataclass`` writes from text (``dataclasses._create_fn``).
+_DATACLASS_MADE = frozenset(
+    {
+        "__init__",
+        "__repr__",
+        "__eq__",
+        "__lt__",
+        "__le__",
+        "__gt__",
+        "__ge__",
+        "__hash__",
+        "__setattr__",
+        "__delattr__",
+        "__getstate__",
+        "__setstate__",
+    }
+)
+
+
 def library_made(code: types.CodeType, globals_: Mapping[str, Any]) -> bool:
     """Is *code* a method a library wrote for a class of the user's, from
     text of its own: what ``@dataclass`` (``__create_fn__``), attrs
@@ -705,6 +724,10 @@ def library_made(code: types.CodeType, globals_: Mapping[str, Any]) -> bool:
     if filename != "<string>":
         return False
     if attribute_or(code, "co_qualname", "").startswith("__create_fn__.<locals>."):
+        return True
+    if sys.version_info < (3, 11) and code.co_firstlineno == 2 and code.co_name in _DATACLASS_MADE:
+        # No ``co_qualname`` before 3.11: ``__create_fn__`` puts the method
+        # it makes on its second line, under one of these names.
         return True
     name = globals_.get("__name__") if isinstance(globals_, Mapping) else None
     return code.co_name == "<lambda>" and isinstance(name, str) and name.startswith("namedtuple_")

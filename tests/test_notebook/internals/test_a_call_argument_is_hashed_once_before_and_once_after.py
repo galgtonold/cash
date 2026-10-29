@@ -69,7 +69,9 @@ def test_a_first_run_reads_the_argument_twice(cash_magics, mock_shell, reads_of_
     assert len(reads_of_x) == 2, f"x was hashed {len(reads_of_x)} times"
 
 
-def test_a_frame_is_read_once_when_it_provably_did_not_change(cash_magics, mock_shell, reads_of_x, monkeypatch):
+def test_a_frame_is_read_once_when_it_provably_did_not_change(
+    cash_magics, mock_shell, reads_of_x, monkeypatch, request
+):
     """A frame under copy-on-write is checked rather than read again
     (`ArgFingerprints`), by every check that asks.
 
@@ -77,7 +79,11 @@ def test_a_frame_is_read_once_when_it_provably_did_not_change(cash_magics, mock_
     (pandas 2 is the newest for Python 3.10): turned on here for this test.
     """
     if int(pd.__version__.split(".", 1)[0]) < 3:
-        monkeypatch.setattr(pd.options.mode, "copy_on_write", True)
+        # Set through pandas: `monkeypatch.setattr` on ``pd.options.mode``
+        # cannot undo itself there (the wrapper has no attribute to delete).
+        before = pd.get_option("mode.copy_on_write")
+        pd.set_option("mode.copy_on_write", True)
+        request.addfinalizer(lambda: pd.set_option("mode.copy_on_write", before))
         monkeypatch.setattr(arg_hashing, "_COW_PANDAS", None)
     mock_shell.user_ns["__name__"] = "__main__"
     run_cash_cell(cash_magics, SETUP)
