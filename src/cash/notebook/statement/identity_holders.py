@@ -124,6 +124,8 @@ def _held_by_id(
             )
     lowest = max(_LOWEST_ADDRESS, _lowest_address())
     candidates = {n for n in numbers if n >= lowest and not n % 8}
+    if candidates:
+        candidates = _mapped(candidates)
     if not candidates:
         return None
     if not candidates.isdisjoint(seen):
@@ -267,6 +269,27 @@ def _lowest_address() -> int:
     if sys.platform == "darwin" and sys.maxsize > 2**32:
         return _MACOS_PAGEZERO
     return 0
+
+
+def _mapped(numbers: set[int]) -> set[int]:
+    """Those of *numbers* inside a mapping of this process that can be
+    written, where every object lies: on Linux, from ``/proc/self/maps``,
+    read each time. A sum of 200,000 numbers (``19999900000``) lies in no
+    mapping, so it is no id(). Elsewhere, or where the file cannot be
+    read, all of them."""
+    if not sys.platform.startswith("linux"):
+        return numbers
+    try:
+        with open("/proc/self/maps", encoding="ascii") as maps:
+            ranges = []
+            for line in maps:
+                fields = line.split()
+                if len(fields) > 1 and fields[1].startswith("rw"):
+                    start, end = fields[0].split("-", 1)
+                    ranges.append((int(start, 16), int(end, 16)))
+    except (OSError, ValueError):
+        return numbers
+    return {n for n in numbers if any(start <= n < end for start, end in ranges)}
 
 
 def weakly_held_reason(name: str, value: Any, user_ns: dict[str, Any]) -> IdentityHeld | None:
