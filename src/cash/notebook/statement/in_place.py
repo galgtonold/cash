@@ -204,6 +204,7 @@ def _held_by_the_notebook(parts: set[int], refs: list[Any], namespace: Mapping[s
     texts = {spell(part) for part in parts for spell in (str, hex)}
     budget = _MAX_SEEN
     seen: set[int] = set()
+    ids = _Ids(parts)
     level = list(namespace.values())
     if parts.intersection(v for v in level if type(v) is int):
         return _BY_ID
@@ -214,7 +215,7 @@ def _held_by_the_notebook(parts: set[int], refs: list[Any], namespace: Mapping[s
         for value in level:
             if id(value) in seen:
                 continue
-            held = _what_it_holds(value, parts)
+            held = _what_it_holds(value, ids)
             if held is None:
                 continue
             if type(held) is str:
@@ -249,14 +250,38 @@ def _held_by_the_notebook(parts: set[int], refs: list[Any], namespace: Mapping[s
     return None
 
 
-def _what_it_holds(value: Any, parts: set[int]) -> list[Any] | str | None:
+class _Ids:
+    """The ``id()``s `_held_by_the_notebook` looks for, as a sorted NumPy
+    array and its bounds, made once for every integer array it meets: a dict
+    of 3,000 frames made it again for each frame's column."""
+
+    def __init__(self, parts: set[int]) -> None:
+        self.parts = parts
+        self._sorted: Any = None
+
+    def in_array(self, value: Any) -> bool:
+        """Whether the integer NumPy array *value* holds one of them."""
+        numpy = sys.modules["numpy"]
+        if self._sorted is None:
+            self._sorted = numpy.sort(numpy.fromiter(self.parts, dtype=numpy.int64, count=len(self.parts)))
+        if not self._sorted.size:
+            return False
+        flat = value.ravel()
+        flat = flat[(flat >= self._sorted[0]) & (flat <= self._sorted[-1])]
+        if not flat.size:
+            return False
+        at = numpy.searchsorted(self._sorted, flat).clip(max=self._sorted.size - 1)
+        return bool((self._sorted[at] == flat).any())
+
+
+def _what_it_holds(value: Any, ids: _Ids) -> list[Any] | str | None:
     """What *value* holds, for `_held_by_the_notebook`: a dict's keys and
     values both (``{id(p.seen): ...}``, ``{'seen': id(p.seen)}``,
     ``{weakref.ref(p.child): ...}``), the items of a list, tuple, set or
     deque or of a subclass of one (read through the builtin type's own
     methods, not the class's), the items of a NumPy array of objects, and
     an object's attributes and slots. `_BY_ID` for an integer NumPy array
-    holding one of *parts*, `_TOO_MANY` for a container that cannot be
+    holding one of *ids*, `_TOO_MANY` for a container that cannot be
     read. None when nothing in it is looked at."""
     kind = type(value)
     if kind in _PLAIN:
@@ -282,8 +307,7 @@ def _what_it_holds(value: Any, parts: set[int]) -> list[Any] | str | None:
         if value.dtype.hasobject:
             return value.ravel().tolist()
         if value.dtype.kind in "iu" and value.dtype.itemsize == 8 and value.size:
-            numpy = sys.modules["numpy"]
-            return _BY_ID if bool(numpy.isin(value, list(parts)).any()) else None
+            return _BY_ID if ids.in_array(value) else None
         return None
     else:
         try:
