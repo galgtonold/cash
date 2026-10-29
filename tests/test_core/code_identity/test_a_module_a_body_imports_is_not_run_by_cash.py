@@ -288,6 +288,30 @@ def test_a_module_in_a_folder_with_no_init_is_keyed_by_its_source(tmp_path, spel
         "import builtins\nfrom builtins import getattr as ga\n"
         "E = max(map(max(map(ga, [builtins], ['__import__'])), ['os']))\n"
         "K = int(max(map(ga, [E], ['environ']))['K'])",
+        "import builtins\ngetattr = abs\ndef _drop():\n    global getattr\n    del getattr\n_drop()\n"
+        "E = max(map(max(map(getattr, [builtins], ['__import__'])), ['os']))\n"
+        "K = int(max(map(getattr, [E], ['environ']))['K'])",
+        "import builtins\ngetattr = abs\nif True:\n    from builtins import getattr\n"
+        "E = max(map(max(map(getattr, [builtins], ['__import__'])), ['os']))\n"
+        "K = int(max(map(getattr, [E], ['environ']))['K'])",
+        "import builtins\ngetattr = abs\nfrom builtins import *\n"
+        "E = max(map(max(map(getattr, [builtins], ['__import__'])), ['os']))\n"
+        "K = int(max(map(getattr, [E], ['environ']))['K'])",
+        "import builtins\nclass C:\n    getattr = abs\n"
+        "    E = [max(map(max(map(getattr, [builtins], ['__import__'])), ['os'])) for _ in [0]][0]\n"
+        "    K = [int(max(map(getattr, [E], ['environ']))['K']) for E in [E]][0]\nK = C.K",
+        "import builtins\ndef _u():\n    from functools import reduce as getattr\n"
+        "E = max(map(max(map(getattr, [builtins], ['__import__'])), ['os']))\n"
+        "K = int(max(map(getattr, [E], ['environ']))['K'])",
+        "import builtins\ndef _u():\n    import builtins as getattr\n"
+        "E = max(map(max(map(getattr, [builtins], ['__import__'])), ['os']))\n"
+        "K = int(max(map(getattr, [E], ['environ']))['K'])",
+        "import builtins\nclass C:\n    from functools import reduce as getattr\n"
+        "E = max(map(max(map(getattr, [builtins], ['__import__'])), ['os']))\n"
+        "K = int(max(map(getattr, [E], ['environ']))['K'])",
+        "import builtins\nclass C:\n    from functools import reduce as getattr\n"
+        "    E = [max(map(max(map(getattr, [builtins], ['__import__'])), ['os'])) for _ in [0]][0]\n"
+        "    K = [int(max(map(getattr, [E], ['environ']))['K']) for E in [E]][0]\nK = C.K",
     ],
     ids=[
         "eval_handed_to_map",
@@ -304,6 +328,14 @@ def test_a_module_in_a_folder_with_no_init_is_keyed_by_its_source(tmp_path, spel
         "getattr_read_from_the_builtins_module_by_another_name",
         "getattr_imported_from_builtins",
         "getattr_imported_from_builtins_by_another_name",
+        "getattr_deleted_by_a_function_the_top_level_calls",
+        "getattr_imported_again_under_an_if",
+        "getattr_imported_again_by_a_star_import",
+        "getattr_in_a_comprehension_of_a_class_body",
+        "getattr_imported_in_a_function_as_another_function",
+        "getattr_imported_in_a_function_as_the_builtins_module",
+        "getattr_imported_in_a_class_body",
+        "getattr_imported_in_a_class_body_read_in_its_comprehension",
     ],
 )
 def test_a_value_read_outside_the_source_without_a_call_runs_with_a_warning(tmp_path, top_level):
@@ -316,7 +348,7 @@ def test_a_value_read_outside_the_source_without_a_call_runs_with_a_warning(tmp_
     ``except ... as getattr`` unbinds as its handler ends, or an ``if False:``
     never binds, or ``getattr = abs`` below the use, or read from the
     ``builtins`` module an import names (``builtins.getattr``, ``from
-    builtins import getattr``), which is no rebinding; and ``operator.attrgetter`` or ``methodcaller`` given
+    builtins import getattr``), which is no rebinding, or an import in a function or class binds, which leaves the top level's the builtin; and ``operator.attrgetter`` or ``methodcaller`` given
     ``'__import__'``, ``getattr`` by another name."""
     _write(tmp_path, "helpmod.py", f"import sys\n\n{top_level}\n\ndef scale(x):\n    return x * K\n")
     _write(
@@ -383,17 +415,24 @@ def test_a_module_with_only_its_bytecode_runs_with_a_warning(tmp_path):
         "def pick(getattr):\n    return max(map(getattr, [1], ['real']))\n\nK = pick(lambda value, name: 3)",
         "import operator\nK = max(map(operator.attrgetter('real'), [3]))",
         "getattr = abs\nK = max(map(getattr, [-3]))",
+        "import numpy as np\nW = np.zeros(4)\nK = int(np.max([3]))",
+        "class C:\n    getattr = abs\n    K = [x for x in [max(map(getattr, [-3]))]][0]\nK = C.K",
     ],
     ids=[
         "a_str_method_handed_to_map",
         "a_parameter_named_like_a_builtin",
         "an_attrgetter_of_a_public_name",
         "a_builtin_name_the_module_always_binds",
+        "numpy_arrays_made_from_their_arguments",
+        "a_class_name_read_in_its_comprehensions_first_iterable",
     ],
 )
 def test_a_source_only_top_level_is_still_vouched_for(tmp_path, monkeypatch, top_level):
     """A public method of ``str`` handed on, and a parameter named
-    ``getattr`` used in its own function's body, follow from the source."""
+    ``getattr`` used in its own function's body, follow from the source,
+    as do ``np.zeros(4)`` and ``np.max([3])``, and a class body's
+    ``getattr = abs`` read in its comprehension's first iterable, which runs
+    in the class body."""
     from cash.analysis.unloaded_modules import source_digest
 
     _write(tmp_path, "plainmod.py", f"{top_level}\n\ndef scale(x):\n    return x\n")

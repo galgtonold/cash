@@ -75,6 +75,15 @@ _SOURCE_ONLY_CALLS = frozenset(
         "typing.runtime_checkable",
         "cash.cache",
         "cash.pure",
+        # numpy's array makers and reductions: functions of their
+        # arguments. Not ``numpy.empty``, whose items are whatever memory held.
+        *(
+            f"numpy.{n}"
+            for n in (
+                "abs all any arange array asarray concatenate cumsum dot exp eye full identity linspace log max "
+                "mean min ones prod sqrt stack sum where zeros"
+            ).split()
+        ),
     }
 )
 #: Modules whose every function is a function of its arguments.
@@ -314,6 +323,13 @@ class _SourceOnly:
         #: names the class or function body being read binds in its own
         #: scope (a parameter ``id``), innermost last.
         self.scopes: list[dict[str, int]] = []
+        #: whether each of `scopes` is a class body's, whose names a
+        #: comprehension inside it does not see.
+        self.class_scopes: list[bool] = []
+        #: names the module's own imports bind, not one inside a function or
+        #: class; and the function and class bodies being read, innermost last.
+        self.module_aliases: set[str] = set()
+        self.import_scopes: list[ast.AST] = []
         #: the top level's functions, by name.
         self.functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
         #: user functions asked about (`_vouches`), and the answers.
@@ -343,6 +359,7 @@ class _SourceOnly:
         for node in ast.walk(tree):
             if isinstance(node, (ast.Import, ast.ImportFrom)):
                 self._note_import(node)
+        self.module_aliases = _import_names(tree)
         self.defined = {
             n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
         }
@@ -439,6 +456,19 @@ class _SourceOnly:
         return name in _SOURCE_ONLY_CALLS or self._vouches(name)
 
     def _expr(self, node: ast.expr) -> bool:
+        if isinstance(node, _COMPREHENSIONS) and self.class_scopes and self.class_scopes[-1]:
+            # Its own scope, which the class body's names do not reach:
+            # ``getattr`` in it is the module's, or the builtin. All but its
+            # first iterable, which runs in the class body before the scope
+            # is entered: ``[x for x in map(getattr, ...)]`` reads the
+            # class's ``getattr = abs``.
+            if not self._expr(node.generators[0].iter):
+                return False
+            self.import_scopes.append(_NO_IMPORTS)
+            try:
+                return self._scoped({}, False, lambda: self._comprehension_body(node))
+            finally:
+                self.import_scopes.pop()
         if isinstance(node, ast.Lambda):
             # Runs only when called; its code is in the source.
             return all(map(self._expr, [*node.args.defaults, *(d for d in node.args.kw_defaults if d is not None)]))
@@ -447,7 +477,7 @@ class _SourceOnly:
             # other expressions do; at the top level they are not followed.
             return bool(self.in_body) and (node.value is None or self._expr(node.value))
         if isinstance(node, ast.Call):
-            name = self._qualified(node.func)
+            name = self._qualified_here(node.func)
             if name in _NAME_TAKING and not _public_names_only(name, node):
                 return False
             if name is None or not (
@@ -459,7 +489,7 @@ class _SourceOnly:
                 return False
             return all(map(self._expr, [*node.args, *(k.value for k in node.keywords)]))
         if isinstance(node, (ast.Attribute, ast.Name)):
-            name = self._qualified(node)
+            name = self._qualified_here(node)
             if name is not None and name.partition(".")[0] in _AMBIENT_MODULES and name not in _INTERPRETER_FACTS:
                 return False
             if name in _NAME_TAKING:
@@ -489,6 +519,13 @@ class _SourceOnly:
 
     def _comprehension(self, node: ast.comprehension) -> bool:
         return self._expr(node.iter) and all(map(self._expr, node.ifs))
+
+    def _comprehension_body(self, node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp) -> bool:
+        """What of comprehension *node* runs in its own scope: all but its
+        first iterable."""
+        first, *later = node.generators
+        values = [node.key, node.value] if isinstance(node, ast.DictComp) else [node.elt]
+        return all(map(self._expr, [*values, *first.ifs])) and all(map(self._comprehension, later))
 
     def _qualified(self, node: ast.expr) -> str | None:
         """``np.linalg.norm`` -> ``numpy.linalg.norm`` through the top level's
@@ -558,11 +595,42 @@ class _SourceOnly:
             self.in_body -= 1
 
     def _in_scope(self, node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef, read) -> bool:
-        self.scopes.append(_scope_names(node))
+        self.import_scopes.append(node)
+        try:
+            return self._scoped(_scope_names(node), isinstance(node, ast.ClassDef), read)
+        finally:
+            self.import_scopes.pop()
+
+    def _qualified_here(self, node: ast.expr) -> str | None:
+        """`_qualified`, but a builtin's name that only an import in another
+        function or class binds is the builtin here: ``def _u(): from
+        functools import reduce as getattr`` binds ``_u``'s local, not the
+        top level's ``getattr``."""
+        name = self._qualified(node)
+        head = _head(node)
+        if head in BUILTIN_NAMES and name != f"builtins.{head}" and self._only_imported_elsewhere(head):
+            spelled = _spelled(node)
+            return None if spelled is None else f"builtins.{spelled}"
+        return name
+
+    def _only_imported_elsewhere(self, name: str) -> bool:
+        """Is *name* in `aliases` only from an import of a function or class
+        body other than the ones being read, so that here it is not bound?"""
+        if name not in self.aliases or name in self.module_aliases:
+            return False
+        scopes = [s for s in self.import_scopes if not isinstance(s, ast.ClassDef)]
+        if self.import_scopes and isinstance(self.import_scopes[-1], ast.ClassDef):
+            scopes.append(self.import_scopes[-1])
+        return not any(name in _import_names(scope) for scope in scopes)
+
+    def _scoped(self, names: dict[str, int], is_class: bool, read) -> bool:
+        self.scopes.append(names)
+        self.class_scopes.append(is_class)
         try:
             return read()
         finally:
             self.scopes.pop()
+            self.class_scopes.pop()
 
     def _binds(self, name: str | None, node: ast.AST) -> bool:
         """Does the scope being read bind *name* by the time *node* runs, so
@@ -575,6 +643,9 @@ class _SourceOnly:
         return name is not None and any(name in scope and scope[name] < line for scope in scopes)
 
 
+#: A scope with no imports of its own: a comprehension in a class body.
+_NO_IMPORTS = ast.Module(body=[], type_ignores=[])
+_COMPREHENSIONS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
 #: How many user functions deep a call at import is followed (`_SourceOnly._vouches`).
 _MAX_DEPTH = 8
 #: Values read from outside the source wherever a module names them.
@@ -637,6 +708,8 @@ def _scope_names(node: ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFu
     ... as`` name, which the handler's end unbinds; and only for a use on a
     line below that statement. Not the names a function, class, lambda or
     comprehension inside binds."""
+    if isinstance(node, ast.Module):
+        return _module_bound(node)
     if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
         return _always_bound(node.body)
     args = node.args
@@ -655,6 +728,22 @@ def _scope_names(node: ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFu
             names.add(child.name)
         pending.extend(ast.iter_child_nodes(child))
     return dict.fromkeys(names, 0)
+
+
+def _module_bound(tree: ast.Module) -> dict[str, int]:
+    """`_always_bound` for a module, less what may be bound again by the
+    time a use runs: a name a function of it declares ``global`` (``del
+    getattr`` there, called at import, brings the builtin back), and, after
+    ``from m import *`` anywhere in it, every builtin's name (``from
+    builtins import *`` binds them all)."""
+    bound = _always_bound(tree.body)
+    rebound: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Global):
+            rebound.update(node.names)
+        elif isinstance(node, ast.ImportFrom) and any(alias.name == "*" for alias in node.names):
+            rebound |= BUILTIN_NAMES
+    return {name: line for name, line in bound.items() if name not in rebound}
 
 
 def _always_bound(body: list[ast.stmt]) -> dict[str, int]:
@@ -688,6 +777,21 @@ def _always_bound(body: list[ast.stmt]) -> dict[str, int]:
         for name in names:
             first.setdefault(name, stmt.end_lineno or stmt.lineno)
     return {name: line for name, line in first.items() if name not in deleted}
+
+
+def _import_names(scope: ast.AST) -> set[str]:
+    """The names the imports of *scope*'s own body bind: not those of a
+    function, class or lambda inside it."""
+    names: set[str] = set()
+    pending = list(ast.iter_child_nodes(scope))
+    while pending:
+        node = pending.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            continue
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            names |= {(a.asname or a.name).partition(".")[0] for a in node.names if a.name != "*"}
+        pending.extend(ast.iter_child_nodes(node))
+    return names
 
 
 def _head(node: ast.expr) -> str | None:
