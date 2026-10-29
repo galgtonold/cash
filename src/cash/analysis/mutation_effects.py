@@ -1369,24 +1369,36 @@ def _resolve_once(resolve_source: SourceResolver) -> SourceResolver:
     return resolve
 
 
-#: How far `drawn_generator_sources` looks into what an iterator draws through.
-_DRAW_DEPTH = 4
+#: How many iterators deep `drawn_generator_sources` looks into what an
+#: iterator draws through; past it, what a draw runs is unknown.
+_DRAW_DEPTH = 8
 
 
-def drawn_generator_sources(tree: ast.AST | None, namespace: Mapping[str, Any] | None) -> tuple[str, ...]:
+def drawn_generator_sources(
+    tree: ast.AST | None, namespace: Mapping[str, Any] | None
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """The sources of the notebook's functions a draw by *tree* from an
     iterator held by name runs (``next(it)``, ``list(it)``): a generator's
     function, and what a generator expression or ``map``, ``filter`` and
     the like call as they draw (``map(f, rows)``). Each may change a global
-    (``log.append(i)``) as a call would."""
+    (``log.append(i)``) as a call would.
+
+    And why what a draw runs is unknown, when the look stops short of the
+    end: iterators nested deeper than `_DRAW_DEPTH`. The statement then
+    runs uncached, as for a callee whose source cannot be read."""
     if tree is None or not namespace:
-        return ()
+        return (), ()
     out: dict[str, None] = {}
-    stack = [(namespace.get(name), 0) for name in sorted(consumed_input_names(tree))]
+    unknown: dict[str, None] = {}
+    stack = [(name, namespace.get(name), 0) for name in sorted(consumed_input_names(tree))]
     seen: set[int] = set()
     while stack:
-        obj, depth = stack.pop()
-        if obj is None or id(obj) in seen or depth > _DRAW_DEPTH:
+        name, obj, depth = stack.pop()
+        if obj is None or id(obj) in seen:
+            continue
+        if depth > _DRAW_DEPTH:
+            if type(obj) is types.GeneratorType or _draws_through(obj):
+                unknown[f"what a draw from {name!r} runs is nested too deep to read"] = None
             continue
         seen.add(id(obj))
         if type(obj) is types.FunctionType:
@@ -1398,12 +1410,22 @@ def drawn_generator_sources(tree: ast.AST | None, namespace: Mapping[str, Any] |
                 continue  # done: drawing runs nothing
             _add_source(out, obj.gi_code)
             # A generator expression calls by name what its body calls.
-            stack.extend((namespace.get(name), depth + 1) for name in obj.gi_code.co_names if name in namespace)
-        elif not _has_next(obj) and type(obj) is not tuple:
-            # A tuple is how ``map`` and ``zip`` hold what they draw from.
+            stack.extend((name, namespace.get(n), depth + 1) for n in obj.gi_code.co_names if n in namespace)
+        elif not _draws_through(obj):
             continue
-        stack.extend((held, depth + 1) for held in gc.get_referents(obj))
-    return tuple(out)
+        # A tuple is how ``map`` and ``zip`` hold what they draw from: a
+        # step that is not one more iterator.
+        step = depth if type(obj) is tuple else depth + 1
+        stack.extend((name, held, step) for held in gc.get_referents(obj))
+    return tuple(out), tuple(unknown)
+
+
+def _draws_through(obj: Any) -> bool:
+    """Whether a draw from *obj* may draw from what it holds: an iterator,
+    a tuple ``map`` and ``zip`` hold their sources in, or an object of
+    itertools' own (the data ``tee`` keeps its source in)."""
+    kind = type(obj)
+    return kind is tuple or _has_next(obj) or attribute_or(kind, "__module__", None) == "itertools"
 
 
 def _has_next(obj: Any) -> bool:
@@ -1450,18 +1472,22 @@ def statement_effects(
             )
             handed = handed_callables(tree, namespace, scope="no_control_bodies") if not control_body else None
         if handed is not None:
+            drawn, undrawn = drawn_generator_sources(tree, namespace)
             callee_globals = (
                 callee_global_mutations(
                     tree,
                     resolve_source,
                     scope="no_control_bodies",
-                    extra_sources=handed.sources + drawn_generator_sources(tree, namespace),
+                    extra_sources=handed.sources + drawn,
                 )
                 | handed.receivers
             )
+            if undrawn and namespace is not None:
+                # What the draws change is unknown: any variable may be.
+                callee_globals |= every_variable(namespace)
             if namespace is not None:
                 callee_globals = capturable_globals(callee_globals, namespace)
-            unreadable = handed.unreadable
+            unreadable = handed.unreadable + undrawn
         arg_mutations = frozenset(
             v for v in function_arg_mutations(tree, resolve_source) if not is_module_name(v, namespace, virtual_modules)
         )

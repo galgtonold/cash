@@ -28,6 +28,9 @@ SHAPES = {
     "a map": [FN + "it = map(f, range(6))", FIRST, TAIL],
     "a map over a generator": [GEN + "it = map(str, g())", FIRST, TAIL],
     "a zip over a generator": [GEN + "it = zip(g(), range(6))", FIRST, TAIL],
+    "three maps over a generator": [GEN + "it = map(str, map(int, map(abs, g())))", FIRST, TAIL],
+    "a tee of a generator": [GEN + "import itertools\nit = itertools.tee(g())[0]", FIRST, TAIL],
+    "maps nested past the look": [GEN + "it = g()\nfor _ in range(12):\n    it = map(abs, it)", FIRST, TAIL],
     "the list in its own cell": ["log = []", GEN.replace("log = []\n", "") + "it = g()", FIRST, TAIL],
 }
 
