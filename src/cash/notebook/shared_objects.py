@@ -2322,15 +2322,35 @@ def _holders_from_referrers(
             if holder is user_ns:
                 found.update(name for name, value in user_ns.items() if id(value) in level_ids and name not in known)
                 continue
-            if not (issubclass(type(holder), _CONTAINERS) or attributes_of(holder) is not None) or _is_module_namespace(
-                holder
-            ):
+            if not (
+                issubclass(type(holder), _CLIMBED_CONTAINERS) or attributes_of(holder) is not None
+            ) or _is_module_namespace(holder):
                 # A frame, a closure cell, a function, a module or its
                 # namespace, a library's object.
                 if gave_up is None:
                     return None
                 seen.add(id(holder))
                 outside.add(id(holder))
+                if instance_of(holder, type):
+                    # A class keeps it as its state, and so does what has
+                    # the class as an attribute (``Outer.Store``, a module's
+                    # ``Reg``): climbed by the namespaces holding it, not
+                    # its instances and subclasses.
+                    for namespace in gc.get_referrers(holder):
+                        if type(namespace) is not dict or id(namespace) in seen:
+                            continue
+                        if namespace is user_ns:
+                            found.update(n for n, v in user_ns.items() if v is holder and n not in known)
+                        elif _is_module_namespace(namespace):
+                            outside.add(id(namespace))
+                        else:
+                            seen.add(id(namespace))
+                            upper.append(namespace)
+                elif not instance_of(holder, types.FrameType) and not _is_module_namespace(holder):
+                    # Not climbed as a container a restore copies, but what
+                    # holds it keeps the object too: the class a ``Queue``
+                    # is an attribute of.
+                    upper.append(holder)
                 continue
             seen.add(id(holder))
             upper.append(holder)
@@ -2339,6 +2359,11 @@ def _holders_from_referrers(
             return _gave_up(gave_up, found, outside, user_ns, known) if outside else found
         level = upper
     return _gave_up(gave_up, found, outside, user_ns, known, complete=False)
+
+
+#: What `_holders_from_referrers` climbs through: a ``deque`` holds its
+#: items as a list does (``Queue.queue``, a class's ``held = deque()``).
+_CLIMBED_CONTAINERS = (*_CONTAINERS, collections.deque)
 
 
 def _past_deadline() -> bool:

@@ -160,9 +160,40 @@ for _holder, _box in [
         READ,
     ]
 
+# Kept where the class's own lists are not: a deque or a Queue on the
+# class, a class defined inside it, a list on a class of a user module a
+# function there appends to. Each was served from before the edit.
+_MOD = (
+    "import pathlib, sys\npathlib.Path('keptreg.py').write_text('class Reg:\\n    held = []\\n"
+    "def register(d):\\n    Reg.held.append(d)\\n')\nsys.modules.pop('keptreg', None)\nimport keptreg\n"
+)
+for _name, _state, _hold, _bump in [
+    ("a deque on the class", "    held = collections.deque()", "type(self).held.append(d)", "cls.held[-1]['n'] += n"),
+    ("a Queue on the class", "    held = queue.Queue()", "type(self).held.put(d)", "cls.held.queue[-1]['n'] += n"),
+    (
+        "a class inside the class",
+        "    class Store:\n        held = []",
+        "type(self).Store.held.append(d)",
+        "cls.Store.held[-1]['n'] += n",
+    ),
+    ("a list in a user module", "    pass", "keptreg.register(d)", "keptreg.Reg.held[-1]['n'] += n"),
+]:
+    SHAPES[_name] = [
+        (_MOD if "module" in _name else "")
+        + f"import collections, queue\nclass SBox:\n{_state}\n    def hold(self, d):\n        {_hold}\n"
+        f"    @classmethod\n    def bump(cls, n):\n        {_bump}",
+        "sbox = SBox()",
+        DATA,
+        "sbox.hold(data['meta'])",
+        "SBox.bump(5)",
+        READ,
+    ]
+
 
 @pytest.mark.parametrize("shape", sorted(SHAPES))
-def test_an_edited_change_through_the_class_is_not_served_from_before(cash_magics, shape):
+def test_an_edited_change_through_the_class_is_not_served_from_before(cash_magics, shape, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)  # where a shape writes its module, imported from there
+    monkeypatch.syspath_prepend(str(tmp_path))
     cells = list(SHAPES[shape])
     for rnd in range(3):
         if rnd == 1:
@@ -174,7 +205,7 @@ def test_an_edited_change_through_the_class_is_not_served_from_before(cash_magic
 
 
 @pytest.mark.parametrize("ending", ["out of time", "given up"])
-def test_a_holder_search_cut_short_still_links_the_class(cash_magics, monkeypatch, ending):
+def test_a_holder_search_cut_short_still_links_the_class(cash_magics, monkeypatch, tmp_path, ending):
     """The search for what keeps ``data`` runs within a time budget, and cut
     short it handed back nothing: the class it had already found holding
     ``data['meta']`` went unlinked, and on a slow enough run the edited bump
@@ -198,7 +229,9 @@ def test_a_holder_search_cut_short_still_links_the_class(cash_magics, monkeypatc
         return search(*args, **kwargs)
 
     monkeypatch.setattr(processor, "share_group", cut_short)
-    test_an_edited_change_through_the_class_is_not_served_from_before(cash_magics, "through-an-object")
+    test_an_edited_change_through_the_class_is_not_served_from_before(
+        cash_magics, "through-an-object", tmp_path, monkeypatch
+    )
 
 
 def test_a_read_through_objects_a_class_already_keeps_is_served(cash_magics):
@@ -268,7 +301,7 @@ def test_past_the_items_cash_reads_it_runs_and_warns(cash_magics, monkeypatch):
             assert cash_magics.shell.user_ns["result"] == expected, f"run {rnd + 1} served a value from before"
 
 
-def test_holders_of_a_class_defined_anew_not_all_found_are_all_rebuilt(cash_magics, monkeypatch):
+def test_holders_of_a_class_defined_anew_not_all_found_are_all_rebuilt(cash_magics, monkeypatch, tmp_path):
     """When the climb to the variables holding an object of the old class is
     cut short, every variable holding an object is forgotten, and
     NOTEBOOK-SHARE-UNCHECKED says so."""
@@ -287,6 +320,6 @@ def test_holders_of_a_class_defined_anew_not_all_found_are_all_rebuilt(cash_magi
     monkeypatch.setattr(processor, "referring_names", cut_short)
     with pytest.warns(Warning, match="NOTEBOOK-SHARE-UNCHECKED"):
         test_an_edited_change_through_the_class_is_not_served_from_before(
-            cash_magics, "an object kept from before the class cell ran again"
+            cash_magics, "an object kept from before the class cell ran again", tmp_path, monkeypatch
         )
     assert cut, "the climb from the old class's objects never ran"
