@@ -191,6 +191,7 @@ from ..shared_objects import (
     history_names,
     is_value,
     library_value_types,
+    note_raw_attribute_writes,
     output_history,
     referring_names,
     scalar_identity,
@@ -2502,6 +2503,7 @@ class StatementProcessor:
     def _post_execute_reading_once(
         self, run: StatementRun, execution: StatementExecution, reads: contextlib.ExitStack, alive: bool
     ) -> None:
+        note_raw_attribute_writes(run.tree, self.shell.user_ns)
         if scalar_identity_news() and self._restored_scalar_values:
             self._warn_scalar_copies(run)
         self._observe_process_state(run)

@@ -31,6 +31,7 @@ classes, functions bound to nothing, enum members, numpy scalars and dtypes,
 
 from __future__ import annotations
 
+import ast
 import collections
 import contextlib
 import dataclasses
@@ -249,6 +250,93 @@ def _note_unless_its_own(obj: Any, name: Any, own: dict[tuple[type, str], bool])
             own[key] = known
     if not known:
         _note_scalar_attribute()
+
+
+#: Methods of a dict that write into it: through ``obj.__dict__`` or
+#: ``vars(obj)``, an attribute set that no ``__setattr__`` sees.
+_DICT_WRITES = frozenset(("update", "setdefault", "pop", "popitem", "clear", "__setitem__", "__delitem__", "__ior__"))
+
+
+def note_raw_attribute_writes(tree: Any, user_ns: Mapping[str, Any]) -> None:
+    """Turn `scalar_identity` on when the statement *tree* (just run) may
+    have set an attribute on a pandas scalar past its ``__setattr__``:
+    ``t.__dict__['tag'] = 1``, ``vars(t).update(tag=1)``,
+    ``object.__setattr__(t, 'tag', 1)``. The hook on the types sees none of
+    these, so the switch stayed off and a copy of ``t`` kept by a stored
+    entry was restored without the attribute.
+
+    A name bound in *user_ns* is looked at: on when it is a pandas scalar
+    holding an attribute its type does not keep for itself. Anything else
+    that can be one -- a parameter inside a ``def`` or ``lambda``, an item
+    reached through an expression -- turns it on as it is, unless *tree*
+    writes it in the body of a class of its own (``self.__dict__.update``
+    in a class not built on a pandas scalar). Only while pandas is loaded."""
+    if _SCALAR_IDENTITY or "pandas" not in sys.modules or tree is None:
+        return
+    for target, scoped in _raw_attribute_targets(tree):
+        if scoped or not isinstance(target, ast.Name) or target.id not in user_ns:
+            _note_scalar_attribute()
+            return
+        value = user_ns[target.id]
+        if _ATTRIBUTED_SCALARS and isinstance(value, tuple(_ATTRIBUTED_SCALARS)):
+            attrs = own_dict(value) or {}
+            if any(not _cached_by_its_type(value, name) for name in attrs if isinstance(name, str)) or any(
+                not isinstance(name, str) for name in attrs
+            ):
+                _note_scalar_attribute()
+                return
+
+
+def _raw_attribute_targets(tree: Any) -> Iterator[tuple[Any, bool]]:
+    """``(object written, inside a def or lambda?)`` for each attribute
+    write in *tree* that goes past ``__setattr__``. A class body of a class
+    not built on a pandas scalar is passed over."""
+
+    def owner(node: Any) -> Any:
+        """The X of ``X.__dict__`` or ``vars(X)``, or None."""
+        if isinstance(node, ast.Attribute) and node.attr == "__dict__":
+            return node.value
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "vars"
+            and len(node.args) == 1
+            and not node.keywords
+        ):
+            return node.args[0]
+        return None
+
+    def visit(node: Any, scoped: bool) -> Iterator[tuple[Any, bool]]:
+        if isinstance(node, ast.ClassDef) and not any(
+            "Timestamp" in ast.unparse(b) or "Timedelta" in ast.unparse(b) or "Period" in ast.unparse(b)
+            for b in node.bases
+        ):
+            for decorator in node.decorator_list:
+                yield from visit(decorator, scoped)
+            return
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            scoped = True
+        targets: list[Any] = []
+        if isinstance(node, (ast.Assign, ast.Delete)):
+            targets = node.targets
+        elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
+            targets = [node.target]
+        for target in targets:
+            for part in ast.walk(target):
+                if isinstance(part, ast.Subscript) and (found := owner(part.value)) is not None:
+                    yield found, scoped
+        if isinstance(node, ast.AugAssign) and (found := owner(node.target)) is not None:
+            yield found, scoped  # ``vars(t) |= {...}``
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            func = node.func
+            if func.attr in _DICT_WRITES and (found := owner(func.value)) is not None:
+                yield found, scoped
+            elif func.attr in ("__setattr__", "__delattr__") and node.args:
+                yield node.args[0], scoped
+        for child in ast.iter_child_nodes(node):
+            yield from visit(child, scoped)
+
+    yield from visit(tree, False)
 
 
 def _unhook_pandas_scalars() -> None:

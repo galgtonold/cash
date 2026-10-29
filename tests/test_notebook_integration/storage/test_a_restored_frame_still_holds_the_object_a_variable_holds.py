@@ -6,7 +6,10 @@ an object of ``f``'s). The RAM tier copied the frame's cells through pickle
 on their own, and ``t`` apart from them: the restored ``f`` held a copy of
 ``t``, and ``t.tag = 2`` no longer reached it. A pandas ``Timestamp`` was
 taken for a value, its object left out of the check: ``t.tag = 1`` set
-after the frame was restored never reached the frame either.
+after the frame was restored never reached the frame either. Nor did one
+set past the type's ``__setattr__`` (``t.__dict__['tag'] = 1``,
+``vars(t).update(...)``, ``object.__setattr__``), which the hook that
+turns the check on never saw.
 """
 
 from __future__ import annotations
@@ -34,8 +37,21 @@ def _plain(cells: list[str]) -> object:
         ("t = types.SimpleNamespace(tag=1)", "t.tag = 2"),
         ("t = pd.Timestamp('2021-01-01')", "t.tag = 1"),
         ("t = pd.Timestamp('2021-01-01'); t.tag = 1", "t.tag = t.tag + 1"),
+        # Past the type's ``__setattr__``, which the hook never sees.
+        ("t = pd.Timestamp('2021-01-01')", "t.__dict__['tag'] = 1"),
+        ("t = pd.Timestamp('2021-01-01')", "vars(t).update(tag=1)"),
+        ("t = pd.Timestamp('2021-01-01')", "object.__setattr__(t, 'tag', 1)"),
+        ("t = pd.Timestamp('2021-01-01')\ndef tag(x):\n    vars(x)['tag'] = 1", "tag(t)"),
     ],
-    ids=["an object", "a timestamp given an attribute after the restore", "a timestamp with an attribute"],
+    ids=[
+        "an object",
+        "a timestamp given an attribute after the restore",
+        "a timestamp with an attribute",
+        "through its __dict__",
+        "through vars",
+        "through object.__setattr__",
+        "through vars in a function",
+    ],
 )
 def test_run_all_twice_matches_plain_python(nb_runner, made, change):
     cells = [
