@@ -46,7 +46,14 @@ from cash.notebook.cache_key import (
 from cash.notebook.cache_status import CacheStatus, ExecutionResult
 from cash.notebook.call_effects import DigestHandoff
 from cash.notebook.compiled_source import register_cell_source
-from cash.notebook.consumables import drawn_stream_inputs, with_other_names, without_read_handles
+from cash.notebook.consumables import (
+    STREAM,
+    UNREAD,
+    drawn_stream_inputs,
+    drawn_stream_inputs_why,
+    with_other_names,
+    without_read_handles,
+)
 from cash.notebook.per_item_reruns import MIN_COST_S as PER_ITEM_MIN_COST_S
 from cash.notebook.read_handles import reaches_read_handle
 from cash.notebook.statement import reducer_writes, sparse_order
@@ -631,6 +638,8 @@ class StatementProcessor:
         self._identity_held_warned: set[str] = set()
         #: Statements already told about NOTEBOOK-ANALYSIS-BUDGET.
         self._past_budget_told: set[str] = set()
+        #: Statements already told about NOTEBOOK-ITEMS-UNREAD for a draw.
+        self._items_unread_told: set[str] = set()
         #: What a statement's text last took to run, in seconds, or None when
         #: never measured (``CashSession.expected_compute``, set by the
         #: magics): its analysis budget (`analysis_budget_seconds`).
@@ -1515,6 +1524,25 @@ class StatementProcessor:
             changed.add(ENVIRON)
         run.process_state = frozenset(changed)
 
+    def _tell_items_unread(self, run: StatementRun, unread: list[str]) -> None:
+        """Say once per statement that it runs every time because a
+        container it reads an item of holds more objects than cash reads to
+        rule out an iterator in it (``NOTEBOOK-ITEMS-UNREAD``)."""
+        if run.source_hash in self._items_unread_told:
+            return
+        self._items_unread_told.add(run.source_hash)
+        what = (
+            f"this statement reads an item of {', '.join(unread)} by an index or method cash cannot follow, and "
+            "it holds more objects than cash reads to rule out an iterator or stream, which a cache hit would "
+            "not advance: the statement runs every time rather than be served from the cache"
+        )
+        fix = (
+            "read the item by a constant index or key, or keep iterators and streams out of a container this "
+            "big; then the statement is cached again."
+        )
+        log_diagnostic(logger, "NOTEBOOK-ITEMS-UNREAD", what, fix)
+        warn_diagnostic(CashWarning, "NOTEBOOK-ITEMS-UNREAD", what, fix)
+
     def _tell_past_budget(self, run: StatementRun, cost: float) -> None:
         """Say once per statement that it was not cached because working out
         how to key it took longer than it could save
@@ -1814,12 +1842,23 @@ class StatementProcessor:
             run.value_varies = True
             self._tell_unreadable_changers(run, run.metrics["uncacheable_reasons"][-1])
             return
-        drawn = drawn_stream_inputs(run.tree, run.inputs, run.outputs, self.shell.user_ns)
+        why = drawn_stream_inputs_why(run.tree, run.inputs, run.outputs, self.shell.user_ns)
+        drawn = list(why)
         if drawn:
-            run.metrics["uncacheable_reasons"].append(
-                f"Reads from {', '.join(repr(n) for n in drawn)}, an iterator or stream: "
-                f"a cache hit would not advance it, so the statement runs every time"
-            )
+            streams = [repr(name) for name, kind in why.items() if kind == STREAM]
+            unread = [repr(name) for name, kind in why.items() if kind == UNREAD]
+            if streams:
+                run.metrics["uncacheable_reasons"].append(
+                    f"Reads from {', '.join(streams)}, an iterator or stream: "
+                    f"a cache hit would not advance it, so the statement runs every time"
+                )
+            if unread:
+                run.metrics["uncacheable_reasons"].append(
+                    f"Reads an item of {', '.join(unread)} by an index or method cash cannot follow, and it holds "
+                    f"more objects than cash reads to rule out an iterator a cache hit would not advance, "
+                    f"so the statement runs every time"
+                )
+                self._tell_items_unread(run, unread)
             run.skip_cache = True
             run.value_varies = True
             run.drew_from_stream = any(isinstance(self.shell.user_ns.get(name), io.IOBase) for name in drawn)

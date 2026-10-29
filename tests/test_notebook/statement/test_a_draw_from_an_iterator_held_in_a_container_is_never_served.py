@@ -1,5 +1,7 @@
 """A statement that draws from an iterator held in a list, a dict or an
 attribute runs every time, as one that draws from a name holding it does.
+Where the way in cannot be read without running code (an index cash cannot
+work out, a property, a slot, a method), any iterator the holder keeps counts.
 
 ``rest = list(h[0])`` moves the iterator inside ``h``; the check that refuses
 a hit looked only at what the name itself holds, so a hit was served (once
@@ -30,8 +32,45 @@ def _run(processor, code):
         ("h = ([iter(range(6))],)", "rest = list(h[0][0])"),
         ("class B:\n    pass\nh = B()\nh.it = iter(range(6))", "rest = list(h.it)"),
         ("h = [1, iter(range(6))]\ni = 1", "rest = list(h[i])"),
+        ("h = list(range(100)) + [iter(range(6))]", "rest = list(h[-1])"),
+        ("h = [('a', iter(range(6)))]\ni = 0", "rest = list(h[i][1])"),
+        ("h = [0] * 70 + [iter(range(6))]\ni = 70", "rest = list(h[i])"),
+        ("import collections\nh = collections.deque([iter(range(6))])", "rest = list(h[0])"),
+        ("import collections\nh = collections.defaultdict(list)\nh['k'] = iter(range(6))", "rest = list(h['k'])"),
+        (
+            "import collections\nP = collections.namedtuple('P', 'it')\nh = P(iter(range(6)))",
+            "rest = list(h.it)",
+        ),
+        ("class S:\n    __slots__ = ('it',)\nh = S()\nh.it = iter(range(6))", "rest = list(h.it)"),
+        (
+            "class S:\n    def __init__(self, s):\n        self._s = s\n"
+            "    @property\n    def it(self):\n        return self._s\nh = S(iter(range(6)))",
+            "rest = list(h.it)",
+        ),
+        (
+            "class S:\n    def __init__(self, s):\n        self._s = s\n"
+            "    def get(self):\n        return self._s\nh = S(iter(range(6)))",
+            "rest = list(h.get())",
+        ),
+        ("class B:\n    pass\nh = B()\nh.d = {'k': iter(range(6))}", "rest = list(h.d['k'])"),
     ],
-    ids=["list", "dict", "nested", "attribute", "index-not-constant"],
+    ids=[
+        "list",
+        "dict",
+        "nested",
+        "attribute",
+        "index-not-constant",
+        "negative-index-past-64",
+        "index-not-constant-then-constant",
+        "index-name-past-64",
+        "deque",
+        "defaultdict",
+        "namedtuple",
+        "slots",
+        "property",
+        "method",
+        "dict-in-attribute",
+    ],
 )
 def test_a_draw_through_a_holder_runs_again(statement_processor, mock_shell, holder, draw):
     _run(statement_processor, holder)
@@ -39,7 +78,8 @@ def test_a_draw_through_a_holder_runs_again(statement_processor, mock_shell, hol
     assert mock_shell.user_ns["rest"] == [0, 1, 2, 3, 4, 5]
     second = _run(statement_processor, draw)
     assert first["status"] == second["status"] == CacheStatus.COMPUTED
-    assert any("iterator or stream" in r for r in second["uncacheable_reasons"])
+    # A method call on a notebook object already runs as a change to it.
+    assert any("iterator or stream" in r or "In-place mutation on: h" in r for r in second["uncacheable_reasons"])
     assert mock_shell.user_ns["rest"] == []
 
 
@@ -58,3 +98,62 @@ def test_a_property_is_not_run_to_look_for_a_stream(statement_processor, mock_sh
     )
     _run(statement_processor, "n = list(range(p.it))")
     assert mock_shell.user_ns["P"].reads == 1
+
+
+def test_an_item_only_bound_to_a_name_is_served(statement_processor, monkeypatch):
+    """Control: ``x = h[i]`` does not draw from what it reads, so a holder too
+    big to read through does not stop the hit. (The limit is lowered to keep
+    the test quick.)"""
+    monkeypatch.setattr("cash.notebook.consumables._HELD_ITEMS", 10_000)
+    _run(statement_processor, "h = list(range(20_000)) + [iter(range(6))]\ni = 5")
+    _run(statement_processor, "x = h[i]")
+    assert _run(statement_processor, "x = h[i]")["status"] == CacheStatus.RESTORED
+
+
+def test_a_method_whose_result_is_dropped_is_not_a_draw(statement_processor, mock_shell, monkeypatch):
+    """Control: ``h.append(..)`` as its own statement draws nothing, however
+    much ``h`` holds."""
+    from cash.notebook.consumables import drawn_stream_inputs
+
+    monkeypatch.setattr("cash.notebook.consumables._HELD_ITEMS", 10_000)
+    _run(statement_processor, "h = list(range(20_000)) + [iter(range(6))]")
+    tree = __import__("ast").parse("h.append(1)")
+    assert drawn_stream_inputs(tree, ["h"], [], mock_shell.user_ns) == []
+
+
+def test_numbers_past_the_objects_cash_reads_are_served(statement_processor, monkeypatch):
+    """Control: numbers and strings are passed over in bulk, so a draw by an
+    index cash cannot follow from more numbers than the objects cash looks
+    into is no draw. (The limit is lowered to keep the test quick.)"""
+    monkeypatch.setattr("cash.notebook.consumables._HELD_SCAN", 1_000)
+    _run(statement_processor, "h = list(range(20_000)) + ['a', 'b']\nkeys = [0, 1]")
+    _run(statement_processor, "s = sum(h[k] for k in keys)")
+    assert _run(statement_processor, "s = sum(h[k] for k in keys)")["status"] == CacheStatus.RESTORED
+
+
+def test_a_holder_past_the_objects_cash_reads_says_so(statement_processor, mock_shell):
+    """Past the objects cash reads, the draw counts, and the reason says the
+    holder is too big to read, not that it is an iterator."""
+    _run(statement_processor, "class O:\n    pass\nh = {i: O() for i in range(30_000)}\nkeys = [0, 1]")
+    _run(statement_processor, "def f(x):\n    return 1")
+    _run(statement_processor, "s = [f(h[k]) for k in keys]")
+    second = _run(statement_processor, "s = [f(h[k]) for k in keys]")
+    assert second["status"] == CacheStatus.COMPUTED
+    assert any("more objects than cash reads" in r for r in second["uncacheable_reasons"])
+    assert not any("an iterator or stream" in r for r in second["uncacheable_reasons"])
+
+
+def test_a_holder_past_the_objects_cash_reads_warns_once(statement_processor):
+    """Rerun every time, the statement says so with a warning, not only on
+    its badge, and once."""
+    import warnings
+
+    _run(statement_processor, "class O:\n    pass\nh = {i: O() for i in range(30_000)}\nkeys = [0, 1]")
+    _run(statement_processor, "def f(x):\n    return 1")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        for _ in range(2):
+            _run(statement_processor, "s = [f(h[k]) for k in keys]")
+    said = [w for w in caught if "NOTEBOOK-ITEMS-UNREAD" in str(w.message)]
+    assert len(said) == 1, [str(w.message) for w in caught]
+    assert "'h'" in str(said[0].message)

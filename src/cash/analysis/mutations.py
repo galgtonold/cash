@@ -1274,15 +1274,19 @@ def consumed_input_names(tree: ast.Module | None) -> frozenset[str]:
         ):
             return False
         if isinstance(parent, ast.Attribute):
-            grand = parents.get(parent)
-            # ``q.qsize()`` / ``fh.tell()`` — receiver of a reporting method.
-            if isinstance(grand, ast.Call) and grand.func is parent and parent.attr in _NON_CONSUMING_METHODS:
-                return False
-            # A bare attribute read (``g.gi_frame``, ``q.maxsize``) never draws.
-            if not isinstance(grand, ast.Call):
-                return False
-            # ``q.get()`` / ``fh.read()`` / ``g.send(..)`` — consuming method.
-            return True
+            # Up the whole chain (``h.d['k']``, ``h.a.get()``) to what is drawn.
+            top, through_item = parent, False
+            grand = parents.get(top)
+            while isinstance(grand, (ast.Attribute, ast.Subscript)) and grand.value is top:
+                through_item = through_item or isinstance(grand, ast.Subscript)
+                top, grand = grand, parents.get(grand)
+            if isinstance(top, ast.Attribute) and isinstance(grand, ast.Call) and grand.func is top:
+                # ``q.qsize()`` / ``fh.tell()`` report; ``q.get()`` / ``fh.read()`` /
+                # ``g.send(..)`` consume.
+                return top.attr not in _NON_CONSUMING_METHODS
+            # A bare attribute read (``g.gi_frame``, ``q.maxsize``) never draws; an
+            # item reached through one (``next(h.d['k'])``) or a value handed on may.
+            return through_item or isinstance(grand, ast.Call)
         return True
 
     consumed: set[str] = set()
