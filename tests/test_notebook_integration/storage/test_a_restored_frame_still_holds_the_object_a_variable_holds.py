@@ -6,10 +6,17 @@ an object of ``f``'s). The RAM tier copied the frame's cells through pickle
 on their own, and ``t`` apart from them: the restored ``f`` held a copy of
 ``t``, and ``t.tag = 2`` no longer reached it. A pandas ``Timestamp`` was
 taken for a value, its object left out of the check: ``t.tag = 1`` set
-after the frame was restored never reached the frame either.
+after the frame was restored never reached the frame either. Nor did one
+set past the type's ``__setattr__`` (``t.__dict__['tag'] = 1``,
+``vars(t).update(...)``, ``object.__setattr__``), which the hook that
+turns the check on never saw. Nor did a name of the user's that looked
+like one the type keeps for itself (``t._month``), nor an attribute on a
+subclass of the user's (``class MyTD(pd.Timedelta)``).
 """
 
 from __future__ import annotations
+
+import re
 
 import pytest
 
@@ -18,7 +25,7 @@ pytest.importorskip("pandas")
 pytestmark = [pytest.mark.integration, pytest.mark.fresh_kernel, pytest.mark.timeout(600)]
 
 FRAME = "f = pd.DataFrame({'o': [list(pd.date_range('2020-01-01', periods=50)) + [t], [t]]})"
-READ = "time.sleep(0.3)\n{name} = [getattr(x, 'tag', None) for l in f['o'] for x in l][-3:]\nprint({name})"
+READ = "time.sleep(0.3)\n{name} = [getattr(x, '{attr}', None) for l in f['o'] for x in l][-3:]\nprint({name})"
 
 
 def _plain(cells: list[str]) -> object:
@@ -34,15 +41,36 @@ def _plain(cells: list[str]) -> object:
         ("t = types.SimpleNamespace(tag=1)", "t.tag = 2"),
         ("t = pd.Timestamp('2021-01-01')", "t.tag = 1"),
         ("t = pd.Timestamp('2021-01-01'); t.tag = 1", "t.tag = t.tag + 1"),
+        # Past the type's ``__setattr__``, which the hook never sees.
+        ("t = pd.Timestamp('2021-01-01')", "t.__dict__['tag'] = 1"),
+        ("t = pd.Timestamp('2021-01-01')", "vars(t).update(tag=1)"),
+        ("t = pd.Timestamp('2021-01-01')", "object.__setattr__(t, 'tag', 1)"),
+        ("t = pd.Timestamp('2021-01-01')\ndef tag(x):\n    vars(x)['tag'] = 1", "tag(t)"),
+        ("t = pd.Timestamp('2021-01-01')", "t._month = 'user'"),
+        ("t = pd.Timedelta(7)", "t._days = 'user'"),
+        ("class MyTD(pd.Timedelta):\n    pass\nt = MyTD(7)", "t.tag = 2"),
     ],
-    ids=["an object", "a timestamp given an attribute after the restore", "a timestamp with an attribute"],
+    ids=[
+        "an object",
+        "a timestamp given an attribute after the restore",
+        "a timestamp with an attribute",
+        "through its __dict__",
+        "through vars",
+        "through object.__setattr__",
+        "through vars in a function",
+        "a name like one the type keeps",
+        "a name like one a timedelta keeps",
+        "a subclass of the user's",
+    ],
 )
 def test_run_all_twice_matches_plain_python(nb_runner, made, change):
+    named = re.fullmatch(r"t\.(_\w+) = .*", change)
+    attr = named.group(1) if named else "tag"
     cells = [
         f"import time, types\nimport pandas as pd\n{made}\n{FRAME}",
-        READ.format(name="before"),
+        READ.format(name="before", attr=attr),
         change,
-        READ.format(name="after"),
+        READ.format(name="after", attr=attr),
     ]
     expected = _plain(cells)
     nb_runner.create_notebook(cells)
@@ -60,7 +88,7 @@ def test_an_attribute_set_after_a_restore_from_before_says_so(nb_runner):
     cells = [
         "import time, types\nimport pandas as pd\nt = pd.Timestamp('2021-01-01')\n"
         "f = (time.sleep(0.3), pd.DataFrame({'o': [[t], [t]]}))[1]",
-        READ.format(name="before"),
+        READ.format(name="before", attr="tag"),
         "t.tag = 1",
     ]
     nb_runner.create_notebook(cells)
