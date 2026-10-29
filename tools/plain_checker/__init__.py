@@ -57,7 +57,9 @@ class Shape:
     module_writes: list[str] = field(default_factory=list)
     #: With a plan: a cell re-run alone answers as the Run All before it
     #: (cash re-runs the cells above a draw's tail), so a difference there
-    #: that the Run All gave counts as one on a fresh kernel.
+    #: that the Run All gave counts as one on a fresh kernel; only when the
+    #: run shows the rebuild (`_shows_a_rebuild`), as a stale hit gives the
+    #: Run All's value too.
     alone_as_run_all: bool = False
     setup: str = ""
     steps: list[str] = field(default_factory=list)
@@ -222,6 +224,14 @@ def _fresh_runs(shape: Shape) -> dict[str, str]:
     return fresh
 
 
+def _shows_a_rebuild(statuses: dict[str, dict[int, list[str]]], run_name: str, run_all: str) -> bool:
+    """Whether the cells *run_name* re-ran alone report more statements than
+    they did in the Run All *run_all*: cash re-ran cells above with them,
+    where a stale hit reports only their own."""
+    alone, before = statuses.get(run_name, {}), statuses.get(run_all, {})
+    return bool(alone) and all(len(ran) > len(before.get(cell, ())) for cell, ran in alone.items())
+
+
 def check(shape: Shape, work_dir: Any, configs: list[str] | None = None) -> Report:
     """Run *shape* in each of *configs* (default: all of `CONFIGS`) and in
     plain Python, under *work_dir* (a fresh folder per side is made in it)."""
@@ -249,6 +259,8 @@ def check(shape: Shape, work_dir: Any, configs: list[str] | None = None) -> Repo
         for run_name in dict.fromkeys([*plain.seen, *got.seen]):
             mine, theirs = got.seen.get(run_name, {}), plain.seen.get(run_name, {})
             first = plain.seen.get(fresh[run_name], {}) if run_name in fresh else {}
+            if shape.plan is not None and first and not _shows_a_rebuild(got.statuses, run_name, fresh[run_name]):
+                first = {}
             for where in sorted(set(mine) | set(theirs), key=str):
                 if mine.get(where) == theirs.get(where):
                     continue
