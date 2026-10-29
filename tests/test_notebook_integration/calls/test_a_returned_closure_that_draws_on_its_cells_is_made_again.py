@@ -47,6 +47,28 @@ def test_a_closure_that_only_reads_its_cells_keeps_no_state():
     assert not holds_a_closure_with_state((lambda x: x * scale["k"],))
 
 
+def _over(value):
+    return lambda: value()
+
+
+def test_a_closure_over_a_bound_method_of_an_object_keeps_state():
+    """``pl = dq.popleft`` then ``lambda: pl()``, and ``getattr(dq,
+    'popleft')()``: neither text names a change to ``dq``."""
+    import collections
+
+    dq = collections.deque(range(3))
+    assert holds_a_closure_with_state((_over(dq.popleft),))
+    assert holds_a_closure_with_state((lambda: getattr(dq, "popleft")(),))
+
+
+def test_a_closure_over_a_method_of_a_text_or_a_module_keeps_no_state():
+    """Control: ``"abc".upper`` and ``math.sqrt`` change nothing."""
+    import math
+
+    assert not holds_a_closure_with_state((_over("abc".upper),))
+    assert not holds_a_closure_with_state((_over(math.sqrt),))
+
+
 #: ``(what mk holds, what it returns)``: a closure set on a library module
 #: (``textwrap.t = (mk(),)``) drawing through what its cell holds.
 ON_A_MODULE = {
@@ -55,6 +77,8 @@ ON_A_MODULE = {
     "an_object_holding_one": ("b = types.SimpleNamespace(it=itertools.count())", "lambda: next(b.it)"),
     "a_random_of_its_own": ("r = random.Random(0)", "lambda: r.randrange(1000)"),
     "a_deque_popleft": ("dq = collections.deque(range(100))", "lambda: dq.popleft()"),
+    "popleft_by_getattr": ("dq = collections.deque(range(100))", "lambda: getattr(dq, 'popleft')()"),
+    "a_bound_popleft": ("dq = collections.deque(range(100)); pl = dq.popleft", "lambda: pl()"),
 }
 
 

@@ -910,8 +910,9 @@ _FIRST_ARG_MODULES = frozenset({"heapq", "random"})
 def _handed_writes(node: ast.AST) -> set[str]:
     """Free names *node* changes in ways the shared reader leaves to a
     statement's own analysis: a global handed to a function that changes
-    it (``next(GEN)``, ``heapq.heappush(H, 1)``, ``random.shuffle(L)``), or
-    whose mutating method is handed on (``map(calls.append, rows)``)."""
+    it (``next(GEN)``, ``heapq.heappush(H, 1)``, ``random.shuffle(L)``),
+    whose mutating method is handed on (``map(calls.append, rows)``), or
+    looked up by ``getattr``."""
     out: set[str] = set()
     called: set[int] = set()
     for sub in ast.walk(node):
@@ -930,6 +931,12 @@ def _handed_writes(node: ast.AST) -> set[str]:
         )
         if name in _FIRST_ARG_CHANGERS and sub.args and isinstance(sub.args[0], ast.Name):
             out.add(sub.args[0].id)
+        elif name == "getattr" and len(sub.args) >= 2 and isinstance(sub.args[0], ast.Name):
+            # ``getattr(dq, 'popleft')()``: a mutating method looked up by
+            # name, or by a name the text does not give.
+            attr = sub.args[1]
+            if not (isinstance(attr, ast.Constant) and isinstance(attr.value, str)) or attr.value in MUTATING_METHODS:
+                out.add(sub.args[0].id)
     for sub in ast.walk(node):
         if (
             isinstance(sub, ast.Attribute)

@@ -535,7 +535,9 @@ def holds_a_stream(fn) -> bool:
     ``x = h()`` gave the second number, not the first. Looked for in tuples,
     lists, sets and dicts (``st = {'it': iter(...)}``), in an object of the
     user's (``self.it``), and in another function's closure (a helper ``g``
-    that holds it).
+    that holds it). A builtin method that draws from what it is bound to,
+    held itself (``pl = dq.popleft``, ``def h(nxt=it.__next__)``), is taken
+    as one: what calling it changes, the text that calls it does not show.
 
     Told by type, read off the class (`_stream_type`): no ``__iter__`` of
     the user's runs. Read a level at a time, each level's objects in one
@@ -550,6 +552,8 @@ def holds_a_stream(fn) -> bool:
     parts = held_by(fn)
     if not parts or _EXACT_ATOMS.issuperset(map(type, parts)):
         return False
+    if any(_bound_to_an_object(part) for part in parts):
+        return True
     from cash import value_watch
 
     # The shell (``get_ipython = lambda: shell``) holds the whole session:
@@ -886,6 +890,24 @@ def _draws_on_its_closure(fn, cells: Mapping[str, _types.CellType]) -> bool:
     if "?" in writes:
         return any(not callable(value) for value in held.values())
     return any(name in held for name in writes)
+
+
+def _bound_to_an_object(value) -> bool:
+    """A builtin method that draws from the object it is bound to (``pl =
+    dq.popleft``, ``nxt = it.__next__``): each call hands back the next
+    item, which the text that calls it does not show. One that only adds
+    (``note = calls.append``) is left to the rules for writes."""
+    kind = type(value)
+    if kind is not _types.BuiltinMethodType and kind is not _types.MethodWrapperType:
+        return False
+    owner = value.__self__
+    if owner is None or type(owner) is _types.ModuleType or issubclass(type(owner), type):
+        return False
+    return attribute_or(value, "__name__", None) in _DRAWING_METHODS and not _plain_value(owner)
+
+
+#: Builtin methods that take the next item out of what they are bound to.
+_DRAWING_METHODS = frozenset({"pop", "popleft", "popitem", "__next__", "send", "get_nowait"})
 
 
 def _plain_value(value) -> bool:
