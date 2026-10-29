@@ -1616,9 +1616,34 @@ def set_reducer_veto(veto: Any, reason: Any = None) -> None:
     _REDUCER_VETO[1] = reason
 
 
+#: How deep this thread is in a call of a ``@cash.cache`` function
+#: (`reducers_run`): its pickles run every reducer, vetoed or not.
+_IN_A_CACHED_CALL = threading.local()
+
+
+@contextlib.contextmanager
+def reducers_run() -> Iterator[None]:
+    """Run every reducer of the user's in the pickles of cash's made here,
+    as outside a notebook: the veto (`set_reducer_veto`) is the notebook's
+    rule for its statements, and a ``@cash.cache`` function always stores
+    its result."""
+    depth = getattr(_IN_A_CACHED_CALL, "depth", 0)
+    _IN_A_CACHED_CALL.depth = depth + 1
+    try:
+        yield
+    finally:
+        _IN_A_CACHED_CALL.depth = depth
+
+
+def in_reducers_run() -> bool:
+    """Whether this thread is in `reducers_run`: a write it hands to a
+    background thread runs there the same way."""
+    return bool(getattr(_IN_A_CACHED_CALL, "depth", 0))
+
+
 def _refuse_writer(t: type) -> None:
     veto, reason = _REDUCER_VETO
-    if veto is not None and veto(t):
+    if veto is not None and not getattr(_IN_A_CACHED_CALL, "depth", 0) and veto(t):
         why = reason(t) if reason is not None else "it changes other values"
         raise ReducerNotRun(f"cash does not run the reducer of {t.__qualname__}: {why}")
 

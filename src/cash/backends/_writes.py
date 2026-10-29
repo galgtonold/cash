@@ -33,6 +33,7 @@ import weakref
 from collections.abc import Callable
 from typing import Any
 
+from cash import kept_state
 from cash.diagnostics import warn_diagnostic
 from cash.exceptions import CashCacheStoreFailedWarning
 from cash.tracking.tracker_context import untracked
@@ -418,12 +419,19 @@ class PendingWrites:
         with self._lock:
             return self._shutdown
 
-    def _run_task(self, key: str, fn: Callable[..., Any], args: tuple, kwargs: dict) -> Any:
-        """Worker-side wrapper: marks ``current_key`` and records a failure as it happens."""
+    def _run_task(self, key: str, fn: Callable[..., Any], args: tuple, kwargs: dict, reducers_ran: bool = False) -> Any:
+        """Worker-side wrapper: marks ``current_key`` and records a failure as it happens.
+
+        *reducers_ran*: it was handed on from a ``@cash.cache`` call, whose
+        pickles run every reducer of the user's (`kept_state.reducers_run`),
+        and so do its pickles here."""
         self._tls.current_key = key
         prev_worker = getattr(_WORKER_THREAD, "active", False)
         _WORKER_THREAD.active = True
         try:
+            if reducers_ran:
+                with kept_state.reducers_run():
+                    return fn(*args, **kwargs)
             return fn(*args, **kwargs)
         except BaseException as exc:
             # Recorded here, not when someone next asks for the key: until
@@ -463,7 +471,7 @@ class PendingWrites:
         with self._lock:
             if self._shutdown:
                 raise RuntimeError("PendingWrites: executor has been shut down")
-            future = self._executor.submit(self._run_task, key, fn, args, kwargs)
+            future = self._executor.submit(self._run_task, key, fn, args, kwargs, kept_state.in_reducers_run())
             self._pending[key] = future
         # Registered outside the lock: the callback runs inline when the future
         # has already finished, and it takes ``_lock`` itself.

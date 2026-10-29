@@ -305,13 +305,16 @@ class WritesAGlobalDict:
         return (WritesAGlobalDict, ())
 
 
-def test_a_cached_function_returning_one_is_not_stored_and_the_reducer_does_not_run(disk_cash):
-    """With the default backend, RAM and disk tiers alike."""
+def test_a_cached_function_returning_one_stores_it_and_runs_the_reducer(disk_cash):
+    """The refusal is the notebook's rule for its statements: a ``@cash.cache``
+    function always stores its result, RAM and disk tiers alike, and its
+    pickles run the reducer as they do outside a notebook."""
     import warnings
 
     from cash.backends.tiered_backend import TieredBackend
     from cash.decorator.store import REDUCER_NOT_RUN_FIX
 
+    CFG["k"] = 0
     calls = []
 
     @disk_cash.cache
@@ -328,9 +331,27 @@ def test_a_cached_function_returning_one_is_not_stored_and_the_reducer_does_not_
     finally:
         reducer_writes.unwatch()
     assert isinstance(disk_cash.backend, TieredBackend)
-    assert CFG == {"k": 1}
-    assert calls == [1, 1]
-    assert any(REDUCER_NOT_RUN_FIX.split(":")[0] in str(w.message) for w in seen)
+    assert calls == [1]
+    assert CFG["k"] > 0
+    assert not any(REDUCER_NOT_RUN_FIX.split(":")[0] in str(w.message) for w in seen)
+
+
+def test_a_pickle_outside_a_cached_call_still_refuses_it():
+    """The other side: a notebook statement's pickle, made outside any
+    ``@cash.cache`` call, does not run the writer."""
+    from cash.kept_state import ReducerNotRun, dumps, reducers_run
+
+    CFG["k"] = 0
+    reducer_writes.watch({"cfg": CFG})
+    try:
+        with pytest.raises(ReducerNotRun):
+            dumps(WritesAGlobalDict())
+        assert CFG["k"] == 0
+        with reducers_run():
+            dumps(WritesAGlobalDict())
+        assert CFG["k"] == 1
+    finally:
+        reducer_writes.unwatch()
 
 
 class HandsAGlobalToAMethodOfABuiltinType:
@@ -345,7 +366,9 @@ def test_a_global_handed_to_a_method_of_a_builtin_type_counts_as_written():
     assert writer is not None and {"LST", "DEFAULTS"} <= writer.written | writer.handed
 
 
-def test_a_cached_result_whose_reducer_cannot_be_read_is_not_stored_and_says_why_once(disk_cash):
+def test_a_cached_result_whose_reducer_cannot_be_read_is_stored_all_the_same(disk_cash):
+    """Its code unread, a notebook statement holding it is not stored; a
+    ``@cash.cache`` function's result is, and the reducer runs."""
     import warnings
 
     ns: dict = {"__name__": __name__}
@@ -366,11 +389,11 @@ def test_a_cached_result_whose_reducer_cannot_be_read_is_not_stored_and_says_why
             warnings.simplefilter("always")
             for i in (1, 1, 2):
                 make(i)
+        assert reducer_writes.refuses(unread)
     finally:
         reducer_writes.unwatch()
-    assert calls == [1, 1, 2]
-    said = [str(w.message) for w in seen if "STORE-FAILED" in str(w.message)]
-    assert len(said) == 1 and "its source cannot be read" in said[0], said
+    assert calls == [1, 2]
+    assert not [w for w in seen if "does not run the reducer" in str(w.message)]
 
 
 ROWS_CFG = {"rows": []}
