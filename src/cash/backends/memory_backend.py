@@ -234,6 +234,14 @@ _PREMADE = threading.local()
 PAST_BUDGET_MAX_BYTES = 2 << 30
 
 
+def held_entries(backend: Any) -> list[dict]:
+    """The mappings *backend*'s RAM tiers keep their entries in: copies of
+    the notebook's objects only cash holds, which a search for the
+    variables holding an object does not climb through."""
+    tiers = getattr(backend, "backends", None) or [backend]
+    return [tier._store for tier in tiers if isinstance(tier, InMemoryBackend)]
+
+
 def room_past_budget(backend: Any) -> int | None:
     """How many bytes the pickle of a statement's output whose digest ran
     out of its budget may take when the store makes it

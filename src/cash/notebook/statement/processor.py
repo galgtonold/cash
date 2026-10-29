@@ -3510,7 +3510,11 @@ class StatementProcessor:
                     user_ns,
                     share_check_budget(cost),
                     skip_name=lambda name: instance_of(user_ns.get(name), type),
-                    ignore=[replaced, run.metrics],
+                    ignore=[
+                        replaced,
+                        run.metrics,
+                        *memory_backend.held_entries(attribute_or(self.cash_instance, "backend", None)),
+                    ],
                 )
                 del instances
             except Exception:  # an object of the user's raised: as if cut short
