@@ -200,7 +200,7 @@ def _weakly_found_by_others(targets: list[Any]) -> bool:
     entry when the object goes) is not a variable's."""
     for target in targets:
         for ref in weakref.getweakrefs(target):
-            code = getattr(getattr(ref, "__callback__", None), "__code__", None)
+            code = attribute_or(attribute_or(ref, "__callback__", None), "__code__", None)
             if code is None or not code.co_filename.startswith(_CASH_DIR):
                 return True
     return False
