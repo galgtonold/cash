@@ -17,7 +17,8 @@ What is looked at:
   and not inside the value itself (a restore rebuilds those together); a
   class, a module or a function comes back as itself and does not count;
 - an ``int`` in the value equal to the ``id()`` of an object the value holds
-  or the notebook's variables hold, at any depth.
+  or the notebook's variables hold, at any depth; a number below every
+  address this process uses (`_lowest_address`) is not one.
 
 The value is walked through lists, tuples, dicts, sets and the ``__dict__``
 of objects of the user's own classes, not into a library's objects (a
@@ -79,7 +80,7 @@ def identity_held_reason(name: str, value: Any, user_ns: dict[str, Any]) -> Iden
     numbers: set[int] = set()
     targets: list[Any] = []
     _walk([value], seen, user_kinds, refs, numbers, targets)
-    found = _held_by_id(name, refs, seen, numbers, user_kinds, user_ns)
+    found = _held_by_id(name, refs, seen, numbers, user_kinds, user_ns, numbers_only=type(value) is int)
     if found is None and targets:
         found = _weakly_held(name, targets, user_ns)
     return found
@@ -92,9 +93,11 @@ def _held_by_id(
     numbers: set[int],
     user_kinds: dict[type, bool],
     user_ns: dict[str, Any],
+    numbers_only: bool = False,
 ) -> IdentityHeld | None:
     """`identity_held_reason`'s answer for what *value* itself holds, from
-    its walk: *refs*, *seen* and *numbers*."""
+    its walk: *refs*, *seen* and *numbers*; *numbers_only* when the value is
+    a bare ``int``."""
     for ref in refs:
         if not issubclass(type(ref), weakref.ReferenceType):
             if _alive(ref):
@@ -113,21 +116,52 @@ def _held_by_id(
                 name,
                 "a weak reference",
             )
-    candidates = {n for n in numbers if n >= _LOWEST_ADDRESS and not n % 8}
+    lowest = max(_LOWEST_ADDRESS, _lowest_address(user_ns))
+    candidates = {n for n in numbers if n >= lowest and not n % 8}
     if not candidates:
         return None
+    if not candidates.isdisjoint(seen):
+        return _holds_an_id(name)
     held = set(seen)
     from .output_refusals import is_history_name
 
     roots = [v for k, v in user_ns.items() if k != name and not is_history_name(k)]
-    if not _walk(roots, held, user_kinds, [], set()) or not candidates.isdisjoint(held):
-        return IdentityHeld(
-            f"'{name}' holds the id() of an object the notebook holds; restored, the object would be "
-            "another one, so the statement re-runs every time",
-            name,
-            "an id()",
-        )
-    return None
+    if _walk(roots, held, user_kinds, [], set(), wanted=candidates):
+        return _holds_an_id(name) if not candidates.isdisjoint(held) else None
+    if not candidates.isdisjoint(held):
+        return _holds_an_id(name)
+    if numbers_only:
+        # A bare number (``x = 1 << 20``) is far likelier a count than an
+        # id(); only a value that keeps one beside other data is refused.
+        return None
+    return IdentityHeld(
+        f"'{name}' holds a number that may be the id() of an object, and the notebook holds too many objects "
+        "to rule that out; restored, the object would be another one, so the statement re-runs every time",
+        name,
+        "an id()",
+        what=(
+            f"'{name}' holds a number that may be the id() of an object, and cash could not look through all of "
+            "the notebook's objects to rule that out. Restored from the cache, it would find another object, "
+            "so this statement runs every time instead."
+        ),
+    )
+
+
+def _holds_an_id(name: str) -> IdentityHeld:
+    return IdentityHeld(
+        f"'{name}' holds the id() of an object the notebook holds; restored, the object would be "
+        "another one, so the statement re-runs every time",
+        name,
+        "an id()",
+    )
+
+
+def _lowest_address(user_ns: dict[str, Any]) -> int:
+    """Half the lowest address among a few objects of this process: its
+    own (``None``), a small and a large one just made, and the notebook's
+    namespace. An id() the notebook keeps is an address in the same heap;
+    a number below this (``65536``, ``len(df)``) is not looked for."""
+    return min(id(None), id(object()), id(bytearray(1 << 20)), id(user_ns)) // 2
 
 
 def weakly_held_reason(name: str, value: Any, user_ns: dict[str, Any]) -> IdentityHeld | None:
@@ -233,6 +267,7 @@ def _walk(
     numbers: set[int],
     targets: list[Any] | None = None,
     levels: int | None = None,
+    wanted: set[int] | None = None,
 ) -> bool:
     """Look through *roots* (see the module docstring), adding the ``id()``
     of each object to *seen*, each weak reference to *refs* and each
@@ -240,7 +275,8 @@ def _walk(
     reference points at; with *levels*, no deeper than that below *roots*.
     False when it stopped at `_MAX_SEEN`, and with *levels*, also when it
     left an object to look into: below the last level, or in a container of
-    over `_MAX_SCANNED` items."""
+    over `_MAX_SCANNED` items. With *wanted*, it stops, complete, at the
+    first level that sees one of those ids."""
     level = roots
     complete = True
     while level:
@@ -290,6 +326,8 @@ def _walk(
                 complete = complete and levels is None
                 continue
             nxt.extend(items)
+        if wanted is not None and not wanted.isdisjoint(seen):
+            return True
         level = nxt
     return complete
 

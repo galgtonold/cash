@@ -61,6 +61,23 @@ def test_a_value_not_finding_an_object_by_identity_is_restored(cash_magics, cash
     assert "RESTORED" in statuses[-1], statuses
 
 
+@pytest.mark.parametrize("value", ["cfg = {'size': 65536, 'name': 'a'}", "x = 1 << 20"])
+def test_a_round_number_beside_more_objects_than_the_walk_reads_is_restored(cash_magics, cash_instance, value):
+    """65536 and 1 << 20 are multiples of 8 as an id() is, but below any
+    address the process uses; and with more objects in the notebook than
+    the look for one reads, a bare number is still not taken for an id()."""
+    _stored_however_cheap(cash_instance)
+    cells = ["data = [[{'k': i} for i in range(9000)] for _ in range(25)]", value]
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        for _ in range(2):
+            for cell in cells:
+                run_cash_cell(cash_magics, cell, cells=cells)
+    statuses = [str(s["status"]) for s in cash_magics._last_cell_metrics["statements"]]
+    assert "RESTORED" in statuses[-1], statuses
+    assert not [w for w in caught if "IDENTITY-HELD" in str(w.message)]
+
+
 @pytest.mark.parametrize(
     ("holder", "name", "kind"),
     [("a weak reference", "wr", "a weak reference"), ("an id key", "reg", "an id()")],
