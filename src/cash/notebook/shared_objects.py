@@ -2882,6 +2882,8 @@ def _holders_from_referrers(
     # leads to every logger; the search then says what it said before it
     # climbed past them.
     beyond: list[Any] = []
+    # The functions and closure cells climbed past (`_climb_level`).
+    code: set[int] = set()
     for _depth in range(_MAX_DEPTH):
         if len(level) > _MAX_REFERRER_TARGETS:
             return _gave_up(gave_up, found, outside, user_ns, known, complete=False)
@@ -2894,7 +2896,7 @@ def _holders_from_referrers(
         upper: list[Any] = []
         further: list[Any] = []
         for objs, climbed in ((level, upper), (beyond, further)):
-            if objs and _climb_level(objs, climbed, further, seen, found, outside, user_ns, known) is None:
+            if objs and _climb_level(objs, climbed, further, seen, found, outside, user_ns, known, code) is None:
                 if gave_up is None:
                     return None
         if not upper and not further:
@@ -2914,11 +2916,16 @@ def _climb_level(
     outside: set[int],
     user_ns: Mapping[str, Any],
     known: set[str],
+    code: set[int],
 ) -> bool | None:
     """One level of `_holders_from_referrers`: the containers holding
     *level* go in *upper*, what holds the classes and library objects among
     its holders in *further*, the variables bound to one of them in
-    *found*. None when a holder is one the search stops at."""
+    *found*. None when a holder is one the search stops at. The functions
+    and closure cells climbed past go in *code*: a variable bound to one is
+    not a holder to store with the value (a default or a free variable
+    holding it is the default check's to tell), but a class holding one
+    (``getter = staticmethod(lambda: d)``) keeps the value as its state."""
     # Passed as one tuple, which the call hands on as it is: it is a
     # referrer too.
     args = tuple(level)
@@ -2934,7 +2941,14 @@ def _climb_level(
         if id(holder) in seen:
             continue
         if holder is user_ns:
-            found.update(name for name, value in user_ns.items() if id(value) in level_ids and name not in known)
+            found.update(
+                name
+                for name, value in user_ns.items()
+                if id(value) in level_ids
+                and name not in known
+                and id(value) not in code
+                and not name.startswith("__cash")
+            )
             continue
         if not (
             issubclass(type(holder), _CLIMBED_CONTAINERS) or attributes_of(holder) is not None
@@ -2946,13 +2960,17 @@ def _climb_level(
             outside.add(id(holder))
             if instance_of(holder, type):
                 classes.append(holder)
-            elif not instance_of(holder, _NOT_CLIMBED_PAST) and not _is_module_namespace(holder):
+            elif (
+                not instance_of(holder, types.FrameType)
+                and not _is_module_namespace(holder)
+                and not _is_cash_own(holder)
+            ):
                 # Not climbed as a container a restore copies, but what
                 # holds it keeps the object too: the class a ``Queue`` is
                 # an attribute of. Each one met widens the next level's
                 # read of the heap past such holders, and can add a level.
-                # Not a function or a closure cell: a default or a free
-                # variable holding it is the default check's to tell.
+                if instance_of(holder, (types.FunctionType, types.CellType)):
+                    code.add(id(holder))
                 further.append(holder)
             continue
         seen.add(id(holder))
@@ -2981,9 +2999,6 @@ def _climb_level(
         del namespaces, held, classes
     return None if stopped else True
 
-
-#: Holders `_climb_level` stops at without climbing past them.
-_NOT_CLIMBED_PAST = (types.FrameType, types.FunctionType, types.CellType)
 
 #: What `_holders_from_referrers` climbs through: a ``deque`` holds its
 #: items as a list does (``Queue.queue``, a class's ``held = deque()``).
