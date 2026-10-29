@@ -11,7 +11,9 @@ import pytest
 
 from tests._nbharness.runner import CASH_TEST_PIN_THRESHOLDS
 
-pytestmark = [pytest.mark.integration, pytest.mark.timeout(600)]
+# Each test compares the first kernel's keys with those of the kernel after a
+# restart; a warm kernel a test before used keys the loops otherwise.
+pytestmark = [pytest.mark.integration, pytest.mark.fresh_kernel, pytest.mark.timeout(600)]
 
 STATUS = (
     "[str(r['status']) for r in get_ipython().magics_manager.registry['CashMagics']._last_cell_metrics['statements']]"

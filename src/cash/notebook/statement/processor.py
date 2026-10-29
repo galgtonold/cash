@@ -2794,7 +2794,8 @@ class StatementProcessor:
         for name in run.outputs:
             if saved is None and name in captured_vars:
                 value = captured_vars[name]
-                unstored[name] = (id(value), type(value))
+                # Ids only: holding the type would keep a class made per call alive.
+                unstored[name] = (id(value), id(type(value)))
             else:
                 unstored.pop(name, None)
 

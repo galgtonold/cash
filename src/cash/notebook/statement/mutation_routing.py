@@ -304,7 +304,7 @@ class MutationRouting:
             name
             for name in names
             if name in user_ns
-            and state.unstored.get(name) == (id(user_ns[name]), type(user_ns[name]))
+            and state.unstored.get(name) == (id(user_ns[name]), id(type(user_ns[name])))
             and name not in below
             and _only_called_on(run.tree, name)
         }
