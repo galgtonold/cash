@@ -1,10 +1,12 @@
-"""An intercepted call whose result cannot be copied is not served by
+"""An intercepted call whose result holds a lock is never served by
 reference.
 
-The RAM tier keeps a value it cannot copy -- one holding a lock or a
-connection -- as the object itself, unless the entry requires a copy. The call cache did not ask, so
-``st = build()`` run again handed back the very object of the first run,
-with every change made to it since, where plain Python builds a fresh one.
+The RAM tier kept a value it could not copy -- one holding a lock or a
+connection -- as the object itself, unless the entry required a copy. The
+call cache did not ask, so ``st = build()`` run again handed back the very
+object of the first run, with every change made to it since, where plain
+Python builds a fresh one. A free lock is now stored as a new free lock, so
+the hit is a fresh copy, as a plain run builds.
 """
 
 from __future__ import annotations
@@ -58,10 +60,15 @@ def _resolved(call_cache, build):
 def test_a_second_call_builds_a_fresh_object(call_cache):
     cached = _resolved(call_cache, build_store)
     first = cached()
+    first.lock.acquire()
+    first.rows.append(3)
     second = cached()
     third = cached()
     assert first is not second and second is not third
-    assert not any(e["cache_hit"] for e in call_cache.drain_call_log())
+    for made in (second, third):
+        assert made.lock is not first.lock and not made.lock.locked()
+        assert made.rows == [1, 2] and made.rows is not first.rows
+    assert [e["cache_hit"] for e in call_cache.drain_call_log()] == [False, True, True]
 
 
 def test_a_chain_too_deep_for_deepcopy_is_served_as_a_full_copy(call_cache):
