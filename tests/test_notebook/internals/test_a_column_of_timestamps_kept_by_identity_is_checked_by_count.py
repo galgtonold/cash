@@ -6,7 +6,8 @@ From then on pandas scalars are objects to the share check
 its own node: 12 s a check for a million rows, against 0.2 s for a column
 of lists. A Timestamp is a leaf there, so only its own count matters, and
 those are read at C speed as a lone record's are. One held by a variable
-is still found.
+is still found, and so is a list one holds as an attribute of the user's
+(``t.tag = lst``) that a variable holds too.
 
 Run in a fresh interpreter: the switch is for the whole process.
 """
@@ -50,6 +51,14 @@ CHECK = textwrap.dedent(
     ns = {"df": df, "held": held}
     holders, shared = so.share_group(["df"], ns, ns)
     assert set(holders) == {"held"} and not shared, (holders, shared)
+    del holders, shared, held, ns
+
+    df = frame()
+    lst = [1]
+    df["at"].iloc[9].tag = lst
+    ns = {"df": df, "lst": lst}
+    holders, shared = so.share_group(["df"], ns, ns)
+    assert set(holders) == {"lst"} and not shared, (holders, shared)
     print("ok")
     """
 )

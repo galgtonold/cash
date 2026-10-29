@@ -525,6 +525,21 @@ _MAIN = sys.modules["__main__"]
 
 
 @pytest.fixture(autouse=True)
+def _pandas_scalars_values_again():
+    """Count pandas scalars as values again after a test that set an
+    attribute on one.
+
+    ``t.tag = 1`` on a ``pd.Timestamp`` turns on, for the whole process,
+    keeping them by identity in the share check. Left on, it changed what
+    later tests in the same worker saw: about ten failed or passed by how
+    xdist spread them."""
+    yield
+    shared = sys.modules.get("cash.notebook.shared_objects")
+    if shared is not None and (shared.scalar_identity() or shared._SCALAR_IDENTITY_NEWS):
+        shared.reset_scalar_identity()
+
+
+@pytest.fixture(autouse=True)
 def _reducer_veto_put_back():
     """Disarm the reducer veto a test's ``%cash_on`` left armed.
 

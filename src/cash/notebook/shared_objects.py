@@ -154,6 +154,9 @@ _SCALAR_IDENTITY = False
 _SCALAR_IDENTITY_NEWS = False
 #: The pandas scalar types that take attributes, once hooked.
 _ATTRIBUTED_SCALARS: frozenset[type] = frozenset()
+#: `_ATTRIBUTED_SCALARS` as a tuple, for ``isinstance``: a user's subclass
+#: (``class MyTD(pd.Timedelta)``) is one of them too.
+_SCALAR_KINDS: tuple[type, ...] = ()
 
 
 def scalar_identity() -> bool:
@@ -185,12 +188,91 @@ def _note_scalar_attribute() -> None:
         turn_on_scalar_identity()
 
 
-def _cached_by_its_type(obj: Any, name: str) -> bool:
-    """Whether *name* is where the type keeps what one of its own
-    attributes computed: a ``Timedelta``'s ``seconds`` keeps ``_seconds``
-    in its dict. Computed again from the value, a copy without it gives the
-    same, so it is no attribute of the user's."""
-    return name.startswith("_") and len(name) > 1 and has_attribute(type(obj), name[1:])
+#: The names each pandas scalar type sets in its own dict, by type name:
+#: what one of its attributes computed, kept (``td.seconds`` keeps
+#: ``_seconds`` and ``_microseconds``; pandas 3.1's ``Period`` keeps
+#: ``_cache``, and ``NaT`` and ``NA`` ``__module__``). Computed again from the value, a
+#: copy without them gives the same, so they are no attributes of the
+#: user's. Read on pandas 2.3.3, 3.0 and 3.1; a name another version keeps
+#: only turns `scalar_identity` on, which is slower, never wrong. A user's
+#: ``t._month`` once read as the type's own, by the rule "``_`` and the
+#: name of an attribute of the type", and a frame holding ``t`` was
+#: restored without it.
+_OWN_SCALAR_NAMES: dict[str, frozenset[str]] = {
+    "Timedelta": frozenset(("_seconds", "_microseconds")),
+    "Period": frozenset(("_cache",)),
+    "NaTType": frozenset(("__module__",)),
+    "NAType": frozenset(("__module__",)),
+}
+
+
+#: `_OWN_SCALAR_NAMES` by pandas' own types, once hooked; a subclass of
+#: the user's is looked up along its MRO, not kept here.
+_OWN_NAMES_BY_TYPE: dict[type, frozenset[str]] = {}
+
+
+def _user_attributes(value: Any) -> bool:
+    """Whether the pandas scalar *value* holds an attribute its type does
+    not keep for itself (`_OWN_SCALAR_NAMES`).
+
+    Read through what the object refers to (``gc.get_referents``), not its
+    ``__dict__``: asking for that makes one for a ``Timestamp`` that had
+    none, and the check of a million of them kept 344 MB of empty dicts."""
+    refs = gc.get_referents(value)
+    if not refs:
+        return False  # neither a dict nor an attribute stored without one
+    kind = type(value)
+    own = _OWN_NAMES_BY_TYPE.get(kind)
+    if own is None:
+        own = next(
+            (_OWN_SCALAR_NAMES.get(base.__name__, frozenset()) for base in kind.__mro__ if base in _ATTRIBUTED_SCALARS),
+            frozenset(),
+        )
+    if kind.__flags__ & _INLINE_VALUES:
+        # Attributes kept in the object itself (``NA``, a subclass of the
+        # user's): its referents are their values, not a dict.
+        attrs = own_dict(value)
+        return bool(attrs) and not own.issuperset(attrs)
+    return any(type(ref) is dict and not own.issuperset(ref) for ref in refs)
+
+
+#: ``Py_TPFLAGS_INLINE_VALUES`` (3.13 on): attributes kept in the object.
+_INLINE_VALUES = 1 << 2
+
+
+def _attributed_scalars(children: list[Any], kinds: set[type]) -> list[Any]:
+    """The pandas scalars among *children* that hold an attribute of the
+    user's (`_user_attributes`). Most refer to nothing at all, and those
+    are passed over at C speed; a column whose every item holds just its
+    type's own dict (``td.seconds`` read on each) is told apart at C speed
+    too."""
+    scalars = [child for child in children if type(child) in kinds] if kinds != set(map(type, children)) else children
+    some = list(itertools.compress(scalars, map(len, map(gc.get_referents, scalars))))
+    if not some:
+        return []
+    refs = list(map(gc.get_referents, some))
+    own = _OWN_NAMES_BY_TYPE.get(type(some[0])) if len(kinds) == 1 else None
+    if (
+        own is not None
+        and not type(some[0]).__flags__ & _INLINE_VALUES
+        and set(map(len, refs)) == {1}
+        and set(map(type, itertools.chain.from_iterable(refs))) == {dict}
+    ):
+        return list(
+            itertools.compress(some, map(operator.not_, map(own.issuperset, itertools.chain.from_iterable(refs))))
+        )
+    return [child for child in some if _user_attributes(child)]
+
+
+def reset_scalar_identity() -> None:
+    """Count pandas scalars as values again, as in a new process: for a
+    test, whose ``t.tag = 1`` would otherwise leave them objects (and the
+    hooks off) for every later test in its worker."""
+    global _SCALAR_IDENTITY, _SCALAR_IDENTITY_NEWS, _ATTRIBUTED_SCALARS, _SCALAR_KINDS
+    _unhook_pandas_scalars()
+    _SCALAR_IDENTITY = _SCALAR_IDENTITY_NEWS = False
+    _ATTRIBUTED_SCALARS, _SCALAR_KINDS = frozenset(), ()
+    _EXACT_WITH_LIBRARIES.clear()
 
 
 #: The hooks `_hook_pandas_scalars` put on each type: ``(type, set, delete)``.
@@ -205,51 +287,35 @@ def _hook_pandas_scalars(pd: Any) -> None:
 
     Every set goes through the hook, the type's own too: ``td.seconds``
     keeps ``_seconds`` and ``_microseconds``, and the first read of 200,000
-    Timedeltas took 4x plain. Whether a name is one the type keeps is
-    remembered per type and name, and once the switch is on the hooks come
-    off: there is nothing left for them to tell."""
-    global _ATTRIBUTED_SCALARS
+    Timedeltas took 4x plain. The names the type keeps
+    (`_OWN_SCALAR_NAMES`) are let through by a set lookup, and once the
+    switch is on the hooks come off: there is nothing left for them to
+    tell."""
+    global _ATTRIBUTED_SCALARS, _SCALAR_KINDS
     kinds = (pd.Timestamp, pd.Timedelta, pd.Period, type(pd.NaT), type(pd.NA))
     for kind in kinds:
         if "__setattr__" in vars(kind) or "__delattr__" in vars(kind):
             continue
         set_attr, del_attr = kind.__setattr__, kind.__delattr__
-        #: (type, name) -> whether the type keeps it (`_cached_by_its_type`).
-        its_own: dict[tuple[type, str], bool] = {}
+        its_own = _OWN_SCALAR_NAMES.get(kind.__name__, frozenset())
 
-        def noting_set(obj: Any, name: str, value: Any, _set: Any = set_attr, _own: dict = its_own) -> None:
+        def noting_set(obj: Any, name: str, value: Any, _set: Any = set_attr, _own: frozenset = its_own) -> None:
             _set(obj, name, value)
-            if not _SCALAR_IDENTITY:
-                _note_unless_its_own(obj, name, _own)
+            if not _SCALAR_IDENTITY and name not in _own:
+                _note_scalar_attribute()
 
-        def noting_del(obj: Any, name: str, _del: Any = del_attr, _own: dict = its_own) -> None:
+        def noting_del(obj: Any, name: str, _del: Any = del_attr, _own: frozenset = its_own) -> None:
             _del(obj, name)
-            if not _SCALAR_IDENTITY:
-                _note_unless_its_own(obj, name, _own)
+            if not _SCALAR_IDENTITY and name not in _own:
+                _note_scalar_attribute()
 
         kind.__setattr__ = noting_set
         kind.__delattr__ = noting_del
         _SCALAR_HOOKS.append((kind, noting_set, noting_del))
-    _ATTRIBUTED_SCALARS = frozenset(kinds)
+    _ATTRIBUTED_SCALARS, _SCALAR_KINDS = frozenset(kinds), kinds
+    _OWN_NAMES_BY_TYPE.update((kind, _OWN_SCALAR_NAMES.get(kind.__name__, frozenset())) for kind in kinds)
     if _SCALAR_IDENTITY:
         _unhook_pandas_scalars()
-
-
-def _note_unless_its_own(obj: Any, name: Any, own: dict[tuple[type, str], bool]) -> None:
-    """`_note_scalar_attribute`, unless *name* is one *obj*'s type keeps;
-    *own* holds the answers so far, by type (a subclass of the user's is
-    asked for itself) and name."""
-    if not isinstance(name, str):
-        _note_scalar_attribute()
-        return
-    key = (type(obj), name)
-    known = own.get(key)
-    if known is None:
-        known = _cached_by_its_type(obj, name)
-        if len(own) < 256:
-            own[key] = known
-    if not known:
-        _note_scalar_attribute()
 
 
 #: Methods of a dict that write into it: through ``obj.__dict__`` or
@@ -278,13 +344,9 @@ def note_raw_attribute_writes(tree: Any, user_ns: Mapping[str, Any]) -> None:
             _note_scalar_attribute()
             return
         value = user_ns[target.id]
-        if _ATTRIBUTED_SCALARS and isinstance(value, tuple(_ATTRIBUTED_SCALARS)):
-            attrs = own_dict(value) or {}
-            if any(not _cached_by_its_type(value, name) for name in attrs if isinstance(name, str)) or any(
-                not isinstance(name, str) for name in attrs
-            ):
-                _note_scalar_attribute()
-                return
+        if _ATTRIBUTED_SCALARS and isinstance(value, _SCALAR_KINDS) and _user_attributes(value):
+            _note_scalar_attribute()
+            return
 
 
 def _raw_attribute_targets(tree: Any) -> Iterator[tuple[Any, bool]]:
@@ -499,8 +561,9 @@ def is_value(value: Any, value_types: tuple[type, ...]) -> bool:
     ``BagObj``, ``np.load(...).f``), makes an ``isinstance`` against an ABC
     raise: it is read by its type alone."""
     try:
-        if _SCALAR_IDENTITY and type(value) in _ATTRIBUTED_SCALARS:
+        if _SCALAR_IDENTITY and isinstance(value, _SCALAR_KINDS):
             # A ``Timestamp`` is a ``datetime``: a value by `VALUE_TYPES`.
+            # A subclass of the user's too (``class MyTD(pd.Timedelta)``).
             return False
         if instance_of(value, value_types):
             return True
@@ -617,10 +680,12 @@ def _values_only(value: Any, exact: frozenset[type]) -> bool:
 
 def children_of(value: Any) -> Iterable[Any] | None:
     """What *value* holds that a restore copies with it, or None for a leaf."""
-    if type(value) in _ATTRIBUTED_SCALARS:
+    if type(value) in _ATTRIBUTED_SCALARS and not _user_attributes(value):
         # A leaf, as `_library_children` finds, without the questions asked
         # on the way there: a column of a million Timestamps, objects to the
         # share check once one had an attribute set, took 12 s against 0.2.
+        # One holding an attribute of the user's (``t.tag = lst``) is asked
+        # as before, so that what it holds is seen.
         return None
     # By the real type: a proxy that only claims to be a dict or list is
     # read as what it really is.
@@ -3061,8 +3126,15 @@ def _records_left(
         # Pandas scalars kept by identity (`scalar_identity`): leaves to
         # `children_of`, nothing below them to read, only their own counts.
         # A column of a million Timestamps took 12 s a walk one at a time,
-        # against 0.2 s for a column of lists.
-        return _left_by_count(children, kinds, leaves)
+        # against 0.2 s for a column of lists. One holding an attribute of
+        # the user's (``t.tag = lst``) is walked: what it holds may be held
+        # elsewhere too.
+        left = _left_by_count(children, kinds, leaves)
+        attributed = _attributed_scalars(children, kinds)
+        if attributed:
+            left_ids = set(map(id, left))
+            left.extend(child for child in attributed if id(child) not in left_ids)
+        return left
     if kinds and kinds <= _FLAT_CONTAINERS:
         return _lone_flat_containers_left(children, kinds, leaves, exact)
     if len(kinds) != 1:
