@@ -191,3 +191,38 @@ def test_storing_and_restoring_a_container_runs_none_of_its_methods(cash_magics,
         assert ns["seen"][1] == 0, ns["CALLS"]
         assert type(ns["c"]).__name__ == "C"
     assert "RESTORED" in str(statuses[-1][0]), statuses  # ``c = C(...)``, stored and restored
+
+
+@pytest.mark.parametrize(
+    ("cls", "make", "read"),
+    [
+        (
+            "class C(list):\n    __slots__ = 'tag'\n    def append(self, x):\n        list.append(self, x)",
+            "c = C(range(5))\nc.tag = 'T'",
+            "(list(c), getattr(c, 'tag', 'LOST'))",
+        ),
+        (
+            "class C(dict):\n    __slots__ = ('__x',)\n    def keys(self):\n        return dict.keys(self)\n"
+            "    def setx(self, v):\n        self.__x = v",
+            "c = C(a=1)\nc.setx(5)",
+            "(dict(c), getattr(c, '_C__x', 'LOST'))",
+        ),
+    ],
+    ids=["a slot named by one string", "a private slot"],
+)
+def test_a_container_subclass_keeps_its_slots_through_a_restore(cash_magics, cash_instance, cls, make, read):
+    """``__slots__ = 'tag'`` is one slot, not three, and ``'__x'`` is stored
+    as ``_C__x``: read by name from ``__slots__``, both came back unset."""
+    from tests._cell_driver import run_cash_cell
+
+    cash_instance.config.min_execution_time_to_cache_seconds = 0.0
+    cash_instance.config.call_cost_floor_seconds = 0.0
+    cells = ["import time\n" + cls, "time.sleep(0.05)\n" + make, f"seen = {read}  # @cash:no-cache"]
+    ns = cash_magics.shell.user_ns
+    expected = None
+    for _ in range(3):
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+        expected = expected or ns["seen"]
+        assert ns["seen"] == expected
+    assert "LOST" not in ns["seen"]

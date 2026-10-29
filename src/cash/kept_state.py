@@ -1688,15 +1688,16 @@ def _reduce_container_subclass(obj: Any) -> Any:
         attrs = object.__getattribute__(obj, "__dict__")
     except AttributeError:
         attrs = None
+    from cash.closure_sharing import _slot_readers  # imports this module
+
     slots = {}
-    for klass in kind.__mro__:
-        for name in vars(klass).get("__slots__", ()):
-            descriptor = vars(klass).get(name)
-            if type(descriptor) is types.MemberDescriptorType:
-                try:
-                    slots[name] = descriptor.__get__(obj, kind)
-                except AttributeError:  # an unset slot
-                    pass
+    # By the class dicts' member descriptors, named as Python stores them:
+    # ``__slots__ = 'tag'`` is one slot, and ``'__x'`` is ``_Priv__x``.
+    for descriptor in _slot_readers(kind):
+        try:
+            slots[descriptor.__name__] = descriptor.__get__(obj, kind)
+        except AttributeError:  # an unset slot
+            pass
     return (rebuild_container_subclass, (kind, base, items, dict(attrs) if attrs else None, slots or None))
 
 
