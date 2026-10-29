@@ -48,10 +48,17 @@ def test_a_new_code_on_a_gone_codes_id_gets_its_own_entry():
         read_credit._record_read(equal, "/data/equal.csv", ("equal",))
         gone = id(equal)
         del equal
-        new = compile(f"other = {i} * 2\n", "<new>", "exec")
+        # Unequal code of the same size, made until one takes the gone id:
+        # which freed block the allocator hands out next differs by platform.
+        held = []
+        for j in range(64):
+            new = compile(f"k = {100_000 + j}\n", "<new>", "exec")
+            if id(new) == gone:
+                break
+            held.append(new)
         reused += id(new) == gone
         read_credit._record_read(new, "/data/new.csv", ("new",))
         assert read_credit.credited_reads(new) == {"/data/new.csv": ("new",)}
         assert "/data/new.csv" not in read_credit.credited_reads(kept)
-        del kept, new
+        del kept, new, held
     assert reused, "no new code took a gone code's id: the case is not reached"
