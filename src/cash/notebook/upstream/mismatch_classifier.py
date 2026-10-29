@@ -26,7 +26,7 @@ from ..cache_key import statement_source_hash
 from ..cache_status import CacheStatus
 from ..lineage_store import statement_tag
 from ..statement.derivation_edges import shared_object_partners
-from ..tracking_state import TrackingState
+from ..tracking_state import UNAPPLIED, TrackingState
 from ._types import (
     CellCheck,
     ClassificationResult,
@@ -192,6 +192,11 @@ class MismatchClassifier:
                 if inp == name or inp in loop_target_vars:
                     continue
                 live = self.tracking_state.variable_lineage.get(inp)
+                if live is not None and live.startswith(UNAPPLIED):
+                    # Left unfilled by a loop's hit after it was read
+                    # (``TrackingState.unapplied``): what was built on it
+                    # came out as the run that stored it built it.
+                    live = live[len(UNAPPLIED) :]
                 if live is not None and live != built_on:
                     trace_event(
                         "built_on_older_input",
@@ -367,6 +372,11 @@ class MismatchClassifier:
         loop_var_input_lineages: dict[str, dict[str, str]],
     ) -> None:
         """Classify a single variable and add it to ``result.broken_vars`` if needed."""
+        if self.tracking_state.variable_lineage[var_name].startswith(UNAPPLIED):
+            # A loop's hit left it as it was (``TrackingState.unapplied``):
+            # no rule may keep it.
+            result.broken_vars.add(var_name)
+            return
         vars_derived_from_loops = sim.vars_derived_from_loops
         vars_mutated_by_loops = sim.vars_mutated_by_loops
         simulation_trace_codes = result.trace_codes

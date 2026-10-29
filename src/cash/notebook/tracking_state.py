@@ -14,9 +14,17 @@ from cash.notebook.recorded_reads import ReadRecord
 from cash.notebook.value_cutoff import ValueCutoff
 
 if TYPE_CHECKING:
+    import ast
+    from collections.abc import Sequence
+
     from cash.notebook.restored_var import HeldObject
 
-__all__ = ["TrackingState", "outcome_key"]
+__all__ = ["UNAPPLIED", "TrackingState", "outcome_key"]
+
+#: What the lineage of a name a loop's hit left as it was begins with
+#: (`TrackingState.unapplied`), followed by the lineage it had: no run of the
+#: notebook gives it, so a cell that reads the name builds it again.
+UNAPPLIED = "unapplied:"
 
 
 def outcome_key(code: str, occurrence_index: int = 0) -> str:
@@ -189,6 +197,32 @@ class TrackingState:
     # then nothing is persisted ahead of need.
     # W: UpstreamChecker (per cell). R: StatementProcessor.end_cell_persistence (RebuildCostLedger).
     read_by_later_cells: Set[str] | None = None
+
+    # The running cell's top-level statements and the index of the one
+    # running; None outside a cell's statements. With ``read_by_later_cells``,
+    # what decides whether a loop may leave a value cash cannot store as it
+    # was (`MutationRouting._unapplied_fills`).
+    # W: CellExecutor (per top-level statement). R: MutationRouting.
+    running_statement: tuple[Sequence[ast.stmt], int] | None = None
+
+    # Variable -> ``(id, type)`` of the value a statement that ran bound it
+    # to and cash did not store (refused, as its own parts hold it, or not
+    # worth an entry). A loop that changes that very object in place may be
+    # stored without it (`MutationRouting._unapplied_fills`).
+    # W: StatementProcessor (after its store). R: MutationRouting.
+    unstored: dict[str, tuple[int, type]] = field(default_factory=dict)
+
+    # The names a hit of such a loop left as they were in the running
+    # top-level statement: once it finished their lineage is marked
+    # (`UNAPPLIED`), so a cell that reads one later builds it again.
+    # W: StatementProcessor (hit). R: CellExecutor (after each top-level statement).
+    unapplied: set[str] = field(default_factory=set)
+
+    # Variable -> the lineage such a loop gave it, computed or restored (by
+    # its key): a structure around the loop that ends with the name still
+    # at it keeps it, as its value (a bar's clock) names nothing.
+    # W: ControlStructureProcessor (single unit). R: update_lineage_after_execution.
+    fill_lineages: dict[str, str] = field(default_factory=dict)
 
     # The simulation's lineage for every name as of just before the current
     # cell ran. Used for one thing: a name a control structure read that the

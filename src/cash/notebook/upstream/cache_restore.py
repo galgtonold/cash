@@ -163,6 +163,13 @@ class CacheRestorer:
             # Extract saved execution time
             saved_time = metadata.get("execution_time", 0.0) if metadata else 0.0
 
+            if metadata and metadata.get("unapplied_fills"):
+                # Its run left an object cash could not store as it was
+                # (``unapplied_fills``): served only to a cell that does not
+                # read it again, which a rebuild cannot tell.
+                logger.debug("[UPSTREAM] Restore failed: the entry leaves %s unfilled", metadata["unapplied_fills"])
+                return set(), _perf_counter() - start_time, 0.0
+
             if metadata and cached_data is not None:
                 # 3. Check file dependencies (Critical!)
                 file_deps = metadata.get("file_dependencies", {})
@@ -533,6 +540,8 @@ class CacheRestorer:
         is: refused after all, the statement ran on that value (``w -= 1``
         run again alone, its result stored with ``layers``, reached -2)."""
         if ttl is not None and ttl_expired(metadata.get("timestamp"), ttl):
+            return True
+        if metadata.get("unapplied_fills"):
             return True
         lineage = self.tracking_state.variable_lineage
         user_ns = self.shell.user_ns

@@ -327,6 +327,10 @@ def update_lineage_after_execution(
     seen = frozenset(state.structure_module_writes)
     state_names = module_state_names(code, user_ns, structure=True) | state_holders(seen, code, user_ns)
     mutated_vars |= state_names
+    # What a loop inside it left unfilled kept the lineage that loop named it
+    # by (`TrackingState.fill_lineages`): its value says nothing.
+    fills = state.fill_lineages
+    mutated_vars -= {name for name in mutated_vars if name in fills and state.variable_lineage.get(name) == fills[name]}
     statement_processor.note_module_state(code, state_names, module_state_writes(code, user_ns) | seen)
     # Drawing through pyplot changes the current figure and axes
     # (``pyplot_draws``); recorded for the simulation as a statement's is.

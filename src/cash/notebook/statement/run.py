@@ -215,6 +215,11 @@ class StatementRun:
     #: The input variables holding a random generator that the statement drew
     #: from (``carrier_advances``); None when it read no generator.
     carriers_advanced: set[str] | None = None
+    #: The names a loop run as one unit changes in place whose values cash
+    #: refused to store (``pbar`` of ``for f in files: ...; pbar.update()``):
+    #: stored without them, and a hit leaves them as they were
+    #: (`MutationRouting._unapplied_fills`).
+    unapplied_fills: frozenset[str] = frozenset()
     #: The inputs holding a sparse matrix the run put in canonical form
     #: (`sparse_order`); None when it put none.
     sparse_ordered: list[str] | None = None

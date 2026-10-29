@@ -271,11 +271,52 @@ class MutationRouting:
         # gs.fit(X, y)`) is stored as the fit at cell level is
         # (`_route_receivers`).
         run.in_place = set(changed) - run.outputs - run.est_fit
+        run.unapplied_fills = frozenset(self._unapplied_fills(run, run.in_place))
+        run.in_place -= run.unapplied_fills
+        if run.unapplied_fills:
+            run.metrics["unapplied_fills"] = sorted(run.unapplied_fills)
         if run.in_place:
             _skip(
                 run,
                 f"In-place mutation on: {', '.join(sorted(run.in_place))} (statement re-executes)",
             )
+
+    def _unapplied_fills(self, run: StatementRun, names: set[str]) -> set[str]:
+        """The names among *names*, changed in place by the loop *run*, that
+        it may be stored without: each holds the very object a statement
+        bound it to that cash did not store (``pbar = ProgBar(...)``: its
+        own parts hold it, or it is not worth an entry), the loop only calls
+        methods on it and drops
+        what they return (``pbar.update()``), and nothing after the loop
+        reads it: not the rest of its top-level statement, the statements
+        below it in the cell, the cells below, or a function of the notebook.
+        A hit then leaves it as it was, and once the statement finished its
+        lineage says so (`TrackingState.unapplied`). Never while the upstream
+        check rebuilds, or outside a notebook's cell."""
+        state = self.tracking_state
+        if not names or not state.unstored or state.running_cell is None:
+            return set()
+        below, at = state.read_by_later_cells, state.running_statement
+        if below is None or at is None:
+            return set()
+        user_ns = self.shell.user_ns
+        picked = {
+            name
+            for name in names
+            if name in user_ns
+            and state.unstored.get(name) == (id(user_ns[name]), type(user_ns[name]))
+            and name not in below
+            and _only_called_on(run.tree, name)
+        }
+        if not picked:
+            return picked
+        body, index = at
+        later = _loaded_names(body[index + 1 :])
+        if later is None:
+            return set()
+        picked -= later
+        picked = {name for name in picked if _loads(body[index], name) <= _loads(run.tree, name)}
+        return picked - _read_by_functions(user_ns, picked)
 
     def _route_receivers(
         self, run: StatementRun, effects: StatementEffects, mut_pre_route: set[str], fit_only: set[str] = frozenset()
@@ -476,7 +517,7 @@ class MutationRouting:
         store, so it is skip-cached for them too."""
         if run.loop_watch is None or self._in_loop is None:
             return
-        seen = self._in_loop.finish_watch(run.loop_watch) - run.outputs - run.in_place
+        seen = self._in_loop.finish_watch(run.loop_watch) - run.outputs - run.in_place - run.unapplied_fills
         if seen:
             run.in_place |= seen
             run.skip_cache = True
@@ -579,6 +620,79 @@ def _is_structure(tree: ast.Module | None) -> bool:
     from ..control_structures.common import is_control_structure
 
     return tree is not None and len(tree.body) == 1 and is_control_structure(tree.body[0])
+
+
+#: Calls that read the namespace by name, which no text scan follows.
+_NAMESPACE_READERS = frozenset({"globals", "locals", "vars", "eval", "exec", "dir"})
+
+
+def _loaded_names(nodes) -> set[str] | None:
+    """The names *nodes* read; None when one reads the namespace by name."""
+    names: set[str] = set()
+    for node in nodes:
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load):
+                if sub.id in _NAMESPACE_READERS:
+                    return None
+                names.add(sub.id)
+    return names
+
+
+def _loads(node: ast.AST, name: str) -> int:
+    """How often *node* reads *name*."""
+    return sum(1 for sub in ast.walk(node) if isinstance(sub, ast.Name) and sub.id == name)
+
+
+def _only_called_on(tree: ast.AST, name: str) -> bool:
+    """Whether *tree* uses *name* only as ``name.method(...)`` statements
+    whose result is dropped and whose arguments are literals: what the
+    object holds then reaches nothing else the loop changes."""
+    allowed: set[int] = set()
+    for sub in ast.walk(tree):
+        if not (isinstance(sub, ast.Expr) and isinstance(sub.value, ast.Call)):
+            continue
+        func = sub.value.func
+        if not (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id == name):
+            continue
+        args = [*sub.value.args, *(k.value for k in sub.value.keywords)]
+        if all(_literal(arg) for arg in args):
+            allowed.add(id(func.value))
+    return all(id(sub) in allowed for sub in ast.walk(tree) if isinstance(sub, ast.Name) and sub.id == name)
+
+
+def _literal(node: ast.AST) -> bool:
+    """A constant, or a string formatted from anything (``f"{i}"``)."""
+    if isinstance(node, ast.JoinedStr):
+        return True
+    try:
+        ast.literal_eval(node)
+    except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+        return False
+    return True
+
+
+def _read_by_functions(user_ns: Mapping[str, Any], names: set[str]) -> set[str]:
+    """The names among *names* a function or class of the notebook reads as
+    a global, which no cell's text shows."""
+    read: set[str] = set()
+
+    def visit(code: types.CodeType) -> None:
+        read.update(names.intersection(code.co_names))
+        for const in code.co_consts:
+            if isinstance(const, types.CodeType):
+                visit(const)
+
+    for value in list(user_ns.values()):
+        if isinstance(value, types.FunctionType) and attribute_or(value, "__module__", None) == "__main__":
+            visit(value.__code__)
+        elif isinstance(value, type) and attribute_or(value, "__module__", None) == "__main__":
+            for member in list(vars(value).values()):
+                parts = (member.fget, member.fset) if isinstance(member, property) else (member,)
+                for part in parts:
+                    func = attribute_or(part, "__func__", part)
+                    if isinstance(func, types.FunctionType):
+                        visit(func.__code__)
+    return read
 
 
 def _skip(run: StatementRun, reason: str) -> None:

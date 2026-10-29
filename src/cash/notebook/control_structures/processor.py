@@ -735,13 +735,14 @@ class ControlStructureProcessor:
         """
         # After execution, update lineage for mutated variables
         status = metrics.get("status")
+        unapplied = frozenset(metrics.get("unapplied_fills", ()))
         if update_lineage and status in (CacheStatus.COMPUTED, CacheStatus.RESTORED):
             _helpers.update_lineage_after_execution(
                 self.shell,
                 self.statement_processor,
                 node,
                 code,
-                unchanged=frozenset(metrics.get("estimator_fits", ())),
+                unchanged=frozenset(metrics.get("estimator_fits", ())) | unapplied,
                 unit_digest=self._unit_digest(node, code, metrics),
                 also=self.statement_processor.in_loop.close_watch(code, ran=status == CacheStatus.COMPUTED),
                 link_shares=_helpers.current_loop_pass(self) is None,
@@ -749,6 +750,16 @@ class ControlStructureProcessor:
             )
         elif update_lineage:
             self.statement_processor.in_loop.close_watch(code, ran=False)
+        if unapplied and status in (CacheStatus.COMPUTED, CacheStatus.RESTORED):
+            # Named by the key, as the run that stored the loop moved them: a
+            # hit leaves them as they were, and the next pass must find the
+            # entry it stored. Their value (a bar writing to a stream) says
+            # nothing a later kernel can find again.
+            state = self.statement_processor.tracking_state
+            for name in unapplied:
+                named = hashlib.sha256(f"{metrics.get('cache_key')}:fill:{name}".encode()).hexdigest()
+                state.lineage.reset_to(name, named)
+                state.fill_lineages[name] = named
 
         # Annotate metrics with control structure body statements
         # so the badge can show individual statements instead of the

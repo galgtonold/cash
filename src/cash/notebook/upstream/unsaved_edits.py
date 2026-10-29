@@ -20,6 +20,7 @@ from ..cache_key import (
     statement_source_hash,
 )
 from ..lineage_formula import recorded_reads_lineage_component
+from ..tracking_state import UNAPPLIED
 from ._types import normalize_stmt
 from .statement_lineage import unbound_builtin
 
@@ -108,7 +109,10 @@ class UnsavedEdits:
         # The names whose two lineages differ, found by one comparison of the
         # two maps rather than a lookup per name the notebook binds.
         for vname, _ in virtual_lineage.items() - recorded.items():
-            if vname not in recorded:
+            if vname not in recorded or recorded[vname].startswith(UNAPPLIED):
+                # Left unfilled by a loop's hit (``TrackingState.unapplied``):
+                # rebuilt for a cell that reads it, and what the loop built
+                # from it is as the stored run built it.
                 continue
             producing_code = self.tracking_state.executed_cell_codes.get(vname)
             if producing_code is None:

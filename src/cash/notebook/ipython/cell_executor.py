@@ -81,7 +81,7 @@ from ..compiled_source import statement_place
 from ..control_structures import contains_top_level_await, is_control_structure
 from ..statement import ProcessResult
 from ..statement.capture import replay_outputs, show_unshown_output
-from ..tracking_state import TrackingState
+from ..tracking_state import UNAPPLIED, TrackingState
 from ._types import PipelineCompleted, PipelineSyntaxError, RunInstead
 from .autoreload_hook import in_place_reload, run_autoreload_now
 from .cell_count import running_cell_count
@@ -1108,10 +1108,12 @@ class CellExecutor:
 
         for i, node in enumerate(tree.body):
             if i in jump_runs:
+                self.tracking_state.running_statement = None
                 plan = self._upstream_checker.plan_cell_run(
                     tree.body[i : jump_runs[i]], raw_cell, dict(stmt_occurrence_counts)
                 )
                 planned = {i + k: m for k, m in (plan or {}).items()}
+            self.tracking_state.running_statement = (tree.body, i)
             texts = statement_texts(cell.ipython.source if cell.ipython is not None else raw_cell, node)
             if texts is None:
                 continue
@@ -1174,6 +1176,8 @@ class CellExecutor:
                     cell, node, steps, step=unified_step, total=total_steps_unified
                 )
             except BaseException:
+                self.tracking_state.running_statement = None
+                self._forget_unapplied()
                 # What follows never ran; the upstream check must not credit it.
                 digest = exact_source_digest(raw_cell)
                 self.tracking_state.failed_cells[digest] = i
@@ -1211,8 +1215,21 @@ class CellExecutor:
                     )
                 raise
             badge_render_time += render_time
+            self._forget_unapplied()
 
+        self.tracking_state.running_statement = None
         return (all_metrics, buffered_result_outputs, badge_render_time)
+
+    def _forget_unapplied(self) -> None:
+        """Give the names a loop's hit left as they were
+        (`TrackingState.unapplied`) a lineage no run of the notebook gives:
+        nothing below reads them, and a cell that comes to read one finds it
+        does not match and builds it again."""
+        unapplied = self.tracking_state.unapplied
+        lineage = self.tracking_state.lineage
+        for name in unapplied:
+            lineage.reset_to(name, UNAPPLIED + lineage.get(name, name))
+        unapplied.clear()
 
     def _drop_what_a_failed_run_left(self, names: set[str], failed: int) -> None:
         """Forget the lineage of *names*, which the cell left in a state no

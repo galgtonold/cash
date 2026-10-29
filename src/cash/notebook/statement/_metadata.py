@@ -84,6 +84,11 @@ class StatementCacheMetadata:
     #: (``advanced_carrier_lineage``); empty when it read one and did not
     #: draw, absent when it read none. Read by the simulation after a restart.
     carriers_advanced: list[str] | None = None
+    #: The variables a loop changed in place that cash cannot store
+    #: (`StatementRun.unapplied_fills`): a hit leaves them as they were, so
+    #: it is served only where no statement reads them afterwards, and never
+    #: while the upstream check rebuilds them.
+    unapplied_fills: list[str] | None = None
     #: The input variables holding a scipy sparse matrix the statement put
     #: in canonical form by reading it (`sparse_order`): a hit does too.
     sparse_ordered: list[str] | None = None

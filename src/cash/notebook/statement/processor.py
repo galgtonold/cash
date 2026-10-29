@@ -1477,7 +1477,9 @@ class StatementProcessor:
             code=run.code,
             tree=run.tree,
             inputs=run.inputs,
-            outputs=run.outputs,
+            # A loop may change what cash cannot store in place, and leave it
+            # so on a hit (`MutationRouting._unapplied_fills`).
+            outputs=run.outputs | run.unapplied_fills,
             annotation=run.annotation,
             analysis=run.analysis,
             user_ns=self.shell.user_ns,
@@ -1611,6 +1613,12 @@ class StatementProcessor:
     ) -> ProcessResult | None:
         """Restore *run* from its entry; the finished result, or None when the
         restore failed and the statement must run after all."""
+        unapplied = set((metadata.unapplied_fills or ()) if metadata is not None else ())
+        if not unapplied <= run.unapplied_fills:
+            # Its run left an object cash could not store as it was; it may
+            # stay so only where nothing reads it afterwards
+            # (`MutationRouting._unapplied_fills`).
+            return None
         # Read before the restore moves the generators.
         advanced = None if is_control_body(run.code) else carriers_an_entry_advanced(cached_data, self.shell.user_ns)
         reseeded = (
@@ -1623,6 +1631,7 @@ class StatementProcessor:
         hit_result = self._hits.serve(run, cached_data, metadata, self._randomness.seed_epochs)
         if hit_result is None:
             return None
+        self.tracking_state.unapplied |= unapplied
         # The streams its run seeded, put back where that run left them.
         self._randomness.adopt_seeds_of_a_hit(reseeded, run.code)
         if metadata is not None:
@@ -2609,6 +2618,7 @@ class StatementProcessor:
                     )
                 else:
                     logger.debug("%s Skipping cache save due to @cash:no-cache", _LOG_ANNOTATION)
+        self._note_unstored(run, captured_vars, saved_metadata)
         moved = self._move_holders(run, saved_metadata)
         # After the save: the entry records each input's lineage as the
         # statement read it, before its draw moved it on.
@@ -2773,6 +2783,20 @@ class StatementProcessor:
             run.metrics.setdefault("uncacheable_reasons", []).append(reason)
             return None
         return holders
+
+    def _note_unstored(
+        self, run: StatementRun, captured_vars: dict[str, Any], saved: StatementCacheMetadata | None
+    ) -> None:
+        """Remember the objects *run* bound and cash did not store
+        (`TrackingState.unstored`): refused (its own parts hold it), or not
+        worth an entry (``pbar = ProgBar(...)``)."""
+        unstored = self.tracking_state.unstored
+        for name in run.outputs:
+            if saved is None and name in captured_vars:
+                value = captured_vars[name]
+                unstored[name] = (id(value), type(value))
+            else:
+                unstored.pop(name, None)
 
     #: Most statements `_share_refused` remembers, and the most runs one is
     #: refused in a row without the check.

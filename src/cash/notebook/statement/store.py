@@ -656,6 +656,7 @@ class StatementStore:
             ),
             frozen_tags=_frozen_tags(captured_vars, run.outputs),
             carriers_advanced=_carriers_advanced(run),
+            unapplied_fills=sorted(run.unapplied_fills) or None,
             sparse_ordered=run.sparse_ordered or None,
             env_reads=run.env_reads,
             helper_memos=run.helper_memos,
@@ -946,6 +947,7 @@ class StatementStore:
                 self.tracking_state, run.inputs, self.tracking_state.statement_entry_lineages.get(run.code)
             ),
             carriers_advanced=_carriers_advanced(run),
+            unapplied_fills=sorted(run.unapplied_fills) or None,
             replay=replay_record(execution.captured),
             **cost_fields,
         )
