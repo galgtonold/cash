@@ -119,3 +119,27 @@ def test_a_holder_emptied_after_the_draw_runs_nothing_above_again(cash_magics):
         for cell in cells:
             run_cash_cell(cash_magics, cell, cells=cells)
         assert (ns["first"], ns["rest"], ns["n"]) == ([0, 1], [2, 3, 4, 5], 6)
+
+
+def test_a_loop_drawing_into_a_stored_call_is_served_on_a_rerun(cash_magics, tmp_path):
+    """``v = compute(next(it))`` in a loop over ``it = iter(range(3))``: the
+    first draw ran unstored and left ``it`` out of ``v``'s lineage, a draw
+    whose call was served kept it in, so the next draw read ``CALLS`` (which
+    ``compute`` writes) at another lineage and ran ``compute`` again."""
+    ticks = tmp_path / "ticks"
+    defs = (
+        "import os, time\nCALLS = []\ndef compute(v):\n    CALLS.append(v)\n"
+        f"    fd = os.open({str(ticks)!r}, os.O_WRONLY | os.O_APPEND | os.O_CREAT)  # @cash:assume-safe\n"
+        "    os.write(fd, b'X')\n    os.close(fd)\n    time.sleep(0.2)\n    return v * 10"
+    )
+    loop = (
+        "CALLS.clear()\nit = iter(range(3))\nout = []\nfor _ in range(3):\n    v = compute(next(it))\n    out.append(v)"
+    )
+    cells = [defs, loop]
+    ns = cash_magics.shell.user_ns
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    cold = len(ticks.read_bytes())
+    run_cash_cell(cash_magics, loop, cells=cells)
+    assert (ns["out"], ns["CALLS"]) == ([0, 10, 20], [0, 1, 2])
+    assert len(ticks.read_bytes()) - cold == 0
