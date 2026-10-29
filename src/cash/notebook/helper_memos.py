@@ -32,7 +32,6 @@ a ``classmethod`` or a plain attribute).
 from __future__ import annotations
 
 import functools
-import gc
 import logging
 import sys
 import types
@@ -40,6 +39,7 @@ import weakref
 from collections.abc import Iterator, Mapping
 from typing import Any
 
+from cash._referents import get_referents
 from cash._user_attrs import attribute_or, instance_of
 from cash.install_paths import is_user_code_file, is_user_module
 from cash.value_hash import compute_hash
@@ -329,7 +329,7 @@ def _items(memo: Any) -> list[tuple[Any, Any]] | None:
     try:
         size = memo.cache_info().currsize
         maxsize = memo.cache_parameters().get("maxsize")
-        refs = gc.get_referents(memo)
+        refs = get_referents(memo)
     except Exception:  # noqa: BLE001 - a wrapper that cannot be read
         return None
     if refs and refs[0] is type(memo):

@@ -8,7 +8,6 @@ import ctypes
 import datetime
 import decimal
 import functools
-import gc
 import io
 import itertools
 import logging
@@ -21,6 +20,7 @@ import weakref
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
+from cash._referents import get_referents
 from cash._user_attrs import instance_of, own_dict
 from cash.exceptions import CacheBackendError
 
@@ -565,7 +565,7 @@ def _reaches_marshalled(value: Any) -> bool:
             return True
         if type(obj) in _ATOMS or instance_of(obj, stop):
             continue
-        todo.extend(gc.get_referents(obj))
+        todo.extend(get_referents(obj))
     return False
 
 

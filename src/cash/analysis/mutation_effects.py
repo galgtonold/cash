@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import ast
 import functools
-import gc
 import inspect
 import os
 import pathlib
@@ -26,6 +25,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from cash._referents import get_referents
 from cash._user_attrs import attribute_or, instance_of
 
 from ..content_hashers import builtin_hash_family
@@ -1420,7 +1420,7 @@ def drawn_generator_sources(
         # A tuple is how ``map`` and ``zip`` hold what they draw from: a
         # step that is not one more iterator.
         step = depth if type(obj) is tuple else depth + 1
-        stack.extend((name, held, step) for held in gc.get_referents(obj))
+        stack.extend((name, held, step) for held in get_referents(obj))
     return tuple(out), tuple(unknown)
 
 

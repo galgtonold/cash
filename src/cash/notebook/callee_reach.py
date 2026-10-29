@@ -13,7 +13,6 @@ from __future__ import annotations
 import ast
 import dis
 import functools
-import gc
 import importlib
 import inspect
 import operator
@@ -28,6 +27,7 @@ from contextlib import contextmanager
 from itertools import compress, islice, repeat
 from typing import Any, NamedTuple
 
+from cash._referents import get_referents
 from cash._user_attrs import attribute_or, has_attribute, instance_of, is_routine
 
 from .._memo import NOTEBOOK_STATEMENTS
@@ -922,7 +922,7 @@ def _parts_held(value: Any, kind: type) -> Iterable[Any] | None:
     if not kind.__flags__ & _HAVE_GC:
         return () if top in _OWN_GC_MODULES or top in sys.stdlib_module_names else None
     try:
-        held = gc.get_referents(value)
+        held = get_referents(value)
     except Exception:  # noqa: BLE001 - an object the collector cannot read
         return None
     # Its class, which the collector names first for a class of Python

@@ -31,7 +31,6 @@ its ``id()``.
 
 from __future__ import annotations
 
-import gc
 import sys
 import types
 import weakref
@@ -39,6 +38,7 @@ from collections.abc import Iterable, Mapping
 from itertools import chain
 from typing import Any
 
+from cash._referents import get_referents
 from cash._user_attrs import attribute_or, builtin_base, builtin_items, own_dict
 from cash.closure_sharing import slot_readers
 from cash.install_paths import is_user_code_module
@@ -160,7 +160,7 @@ def _held_itself(obj: Any, namespace: Mapping[str, Any]) -> str | None:
         # One *obj* holds itself comes back with the copy (pandas keeps one
         # to the frame in its ``_flags``).
         inside: set[int] = set()
-        if _reaches(gc.get_referents(obj), _NOTHING, seen=inside) is not None:
+        if _reaches(get_referents(obj), _NOTHING, seen=inside) is not None:
             refs = [ref for ref in refs if id(ref) not in inside]
     return _held_by_the_notebook({id(obj)}, refs, namespace)
 
@@ -425,7 +425,7 @@ def _reaches(
                 weakly.append(item)
             if len(seen) > _MAX_SEEN:
                 return None
-            nxt.extend(ref for ref in gc.get_referents(item) if type(ref) not in IMMUTABLE_LEAF_TYPES)
+            nxt.extend(ref for ref in get_referents(item) if type(ref) not in IMMUTABLE_LEAF_TYPES)
         level = nxt
     return False
 

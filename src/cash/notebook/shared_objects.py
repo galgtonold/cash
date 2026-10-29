@@ -56,6 +56,7 @@ from typing import Any
 from cash import _native, _plain_data
 from cash._clock import CpuLimit
 from cash._plain_data import held_items_facts
+from cash._referents import get_referents
 from cash._type_memo import MroMemo, TypeMemo, type_key
 from cash._user_attrs import attribute_or, builtin_items, has_attribute, instance_of, own_dict, own_lookup
 from cash.live_state import is_live_stream
@@ -219,7 +220,7 @@ def _user_attributes(value: Any) -> bool:
     Read through what the object refers to (``gc.get_referents``), not its
     ``__dict__``: asking for that makes one for a ``Timestamp`` that had
     none, and the check of a million of them kept 344 MB of empty dicts."""
-    refs = gc.get_referents(value)
+    refs = get_referents(value)
     if not refs:
         return False  # neither a dict nor an attribute stored without one
     kind = type(value)
@@ -248,10 +249,10 @@ def _attributed_scalars(children: list[Any], kinds: set[type]) -> list[Any]:
     type's own dict (``td.seconds`` read on each) is told apart at C speed
     too."""
     scalars = [child for child in children if type(child) in kinds] if kinds != set(map(type, children)) else children
-    some = list(itertools.compress(scalars, map(len, map(gc.get_referents, scalars))))
+    some = list(itertools.compress(scalars, map(len, map(get_referents, scalars))))
     if not some:
         return []
-    refs = list(map(gc.get_referents, some))
+    refs = list(map(get_referents, some))
     own = _OWN_NAMES_BY_TYPE.get(type(some[0])) if len(kinds) == 1 else None
     if (
         own is not None
@@ -1136,7 +1137,7 @@ def _held_below(obj: Any) -> list[Any]:
         return [] if target is None else [target]
     if instance_of(obj, _NOT_PARTS):
         return []
-    return gc.get_referents(obj)
+    return get_referents(obj)
 
 
 def on_bases(value: Any, bases: set[int], views: list[Any], np: Any) -> bool:
@@ -1176,7 +1177,7 @@ def refers_back(value: Any) -> bool:
     while level and looked < _BACK_REF_OBJECTS:
         below = []
         for obj in level:
-            for ref in gc.get_referents(obj):
+            for ref in get_referents(obj):
                 if ref is value:
                     if obj is not value:
                         return True
@@ -1251,7 +1252,7 @@ def ids_through_libraries(values: Iterable[Any]) -> set[int]:
         found.add(id(obj))
         found.update(view_bases(obj))
         if read_down:
-            stack.extend(gc.get_referents(obj))
+            stack.extend(get_referents(obj))
     return found
 
 
@@ -2037,7 +2038,7 @@ def _held_within(nodes: dict[int, Any], inbound: dict[int, int], excess: list[in
         return False
     while stack:
         parent = id(stack[-1])
-        referents = gc.get_referents(stack.pop())
+        referents = get_referents(stack.pop())
         for child in referents:
             if is_value(child, value_types) or issubclass(type(child), _NOT_WITHIN):
                 continue
@@ -2349,7 +2350,7 @@ def _held_from_outside(
         if not pops & 255:
             check_walk_budget()
         opaque = _opaque_parts(parent) if id(parent) == root else None
-        children, weak = (gc.get_referents(parent), False) if opaque is None else opaque
+        children, weak = (get_referents(parent), False) if opaque is None else opaque
         for child in children:
             if type(child) in skipped:
                 continue
@@ -2469,7 +2470,7 @@ def _held_by_a_module(objs: tuple[Any, ...], namespaces: list[dict]) -> bool:
     itself: what `_variables_holding` gives up on past its first level,
     found without reading the whole heap for their referrers."""
     ids = {id(obj) for obj in objs}
-    referents = gc.get_referents
+    referents = get_referents
     return any(not ids.isdisjoint(map(id, referents(namespace))) for namespace in namespaces)
 
 
@@ -2553,7 +2554,7 @@ def _referrers_of(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
         _UNREADABLE[0] = True
         raise WalkBudgetExceeded
     found = []
-    referents, misses = gc.get_referents, ids.isdisjoint
+    referents, misses = get_referents, ids.isdisjoint
     # A block of the heap is read in one call, and only a block holding one
     # of *objs* object by object: most hold none, and the heap's order stays.
     for start in range(0, len(heap), _REFERRERS_BLOCK):
@@ -3221,7 +3222,7 @@ def _iterator_parts(value: Any) -> list[Any] | None:
     kind = type(value)
     if attribute_or(kind, "__next__", None) is None or has_attribute(value, "__dict__"):
         return None
-    return gc.get_referents(value)
+    return get_referents(value)
 
 
 #: Most containers below a root of JSON-like data that `_walk` takes on

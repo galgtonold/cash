@@ -20,7 +20,6 @@ import datetime as _dt
 import decimal as _decimal
 import fractions as _fractions
 import functools
-import gc
 import hashlib
 import itertools
 import logging
@@ -38,6 +37,7 @@ from typing import TYPE_CHECKING, Any
 from cash import _native, _plain_data
 from cash._memo import CODE_OBJECTS, LruMemo
 from cash._paths import MAIN_MODULE_NAMES, is_pseudo_filename
+from cash._referents import get_referents
 from cash._user_attrs import attribute_or, builtin_items, has_attribute, instance_of
 from cash.analysis.bytecode import NAME_LOADS, argvals
 from cash.analysis.callee_effects import resolve_function_def, source_global_mutations
@@ -694,7 +694,7 @@ class _StreamWalk:
                     # holds (its ``__dict__``, its slots, its class), read
                     # without asking it.
                     self.object_kinds.add(kind)
-                    next_children.extend(gc.get_referents(*new))
+                    next_children.extend(get_referents(*new))
                 elif not (
                     kernels is not None
                     and kind in _EXACT_CONTAINERS
@@ -1074,7 +1074,7 @@ class _FlatRecords:
         class aside): its attributes, or lists and tuples of them, or an
         attribute dict of them?"""
         leaves = self.leaves
-        for part in gc.get_referents(item):
+        for part in get_referents(item):
             ptype = type(part)
             if ptype in leaves or part is kind:
                 continue
@@ -1292,7 +1292,7 @@ def held_by(item) -> list | None:
     if issubclass(kind, (*_MEMBER_HOLDERS, *_PLAIN_HOLDERS)) or _users_type(kind):
         # A user's list or dict subclass included: its items and its own
         # attributes, without asking it (``__iter__``, ``values``).
-        return gc.get_referents(item)
+        return get_referents(item)
     return None
 
 
@@ -1397,7 +1397,7 @@ def holds_a_closure_with_state(
                     return True
                 if _named(item):
                     continue
-            held = gc.get_referents(item) if reading == _REFERENTS else held_by(item)
+            held = get_referents(item) if reading == _REFERENTS else held_by(item)
             if held:
                 pushed = False
                 for part in held:
