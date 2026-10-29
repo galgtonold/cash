@@ -23,6 +23,7 @@ from ...diagnostics import log_diagnostic, warn_diagnostic
 from ...exceptions import CashUpstreamSyntaxWarning, ForwardReferenceError
 from .._protocols import ShellProtocol
 from ..magic_effects import is_magic_statement, magic_effects, simulation_cell
+from ..namespace_reads import NAMESPACE_READ, reaches_the_namespace
 from ..shared_objects import history_names
 from ..tracking_state import TrackingState
 
@@ -54,12 +55,19 @@ def _cell_writes(cell_code: str) -> frozenset[str]:
 
 @functools.lru_cache(maxsize=NOTEBOOK_CELLS)
 def _cell_reads(cell_code: str) -> frozenset[str]:
-    """The names a cell reads that it does not bind first (by its source)."""
+    """The names a cell reads that it does not bind first (by its source),
+    and `NAMESPACE_READ` when it may read any: it has an IPython magic or
+    shell line (``%whos``, ``!echo {bar.n}``), does not parse, or names one
+    of `NAMESPACE_REACHERS`."""
+    code = cell_code.replace("\r\n", "\n")
     try:
-        clean = CodeAnalyzer.strip_magics(cell_code.replace("\r\n", "\n"))
+        clean = CodeAnalyzer.strip_magics(code)
         inputs, _ = CodeAnalyzer.analyze_code_block(clean)
+        tree = ast.parse(clean)
     except (SyntaxError, ValueError, TypeError):
-        return frozenset()
+        return frozenset({NAMESPACE_READ})
+    if clean.strip() != code.strip() or reaches_the_namespace(tree):
+        return frozenset({*inputs, NAMESPACE_READ})
     return frozenset(inputs)
 
 

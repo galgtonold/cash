@@ -15,6 +15,7 @@ from __future__ import annotations
 import ast
 import dis
 import types
+import weakref
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
@@ -32,6 +33,7 @@ from ...value_types import BUILTIN_NAMES
 from ..cache_key import statement_source_hash
 from ..call_key import changes_its_closure
 from ..callee_reach import CWD, ENVIRON, module_state_names, module_state_writes, process_state_writes, state_holders
+from ..namespace_reads import NAMESPACE_REACHERS, NAMESPACE_READ, reaches_the_namespace
 from ..shared_objects import history_names
 from .control_body import is_control_body
 
@@ -300,9 +302,12 @@ class MutationRouting:
         if not names or not state.unstored or state.running_cell is None:
             return set()
         below, at = state.read_by_later_cells, state.running_statement
-        if below is None or at is None or any(reader in below for reader in _NAMESPACE_READERS):
+        if below is None or at is None or NAMESPACE_READ in below:
             return set()
         user_ns = self.shell.user_ns
+        if any(_a_namespace(user_ns.get(name), user_ns) for name in below):
+            # ``mm`` bound to ``__main__`` above, ``mm.bar.n`` below.
+            return set()
         picked = {
             name
             for name in names
@@ -633,7 +638,20 @@ def _is_structure(tree: ast.Module | None) -> bool:
 
 
 #: Calls and names that read the namespace by name, which no text scan follows.
-_NAMESPACE_READERS = frozenset({"globals", "locals", "vars", "eval", "exec", "dir", "get_ipython", "__main__"})
+_NAMESPACE_READERS = NAMESPACE_REACHERS
+
+
+def _a_namespace(value: Any, user_ns: Mapping[str, Any]) -> bool:
+    """Is *value* a way to every variable: the notebook's namespace, the
+    ``__main__`` module, or ``sys``?"""
+    import sys
+
+    return (
+        value is user_ns
+        or value is sys
+        or (isinstance(value, types.ModuleType) and attribute_or(value, "__name__", None) == "__main__")
+    )
+
 
 #: Most objects `_kept_to_itself` looks at in what the object holds.
 _KEPT_MAX = 5000
@@ -656,35 +674,18 @@ def _methods_called(tree: ast.AST, name: str) -> set[str]:
 
 def _kept_to_itself(obj: Any, name: str, user_ns: Mapping[str, Any], methods: set[str]) -> bool:
     """Whether a hit may leave *obj* (bound to *name*) as it was without
-    another value changing with it: no other variable, container, default
-    or closure holds *obj* or anything it holds (``Bar(sink)`` appending to
-    the notebook's ``sink``), nothing it holds is notebook code, and the
-    notebook methods the loop calls on it (*methods*) name no notebook
-    value, class or namespace reader as a global. Streams it writes to are
+    another value changing with it: all it holds is provably its own
+    (`_private_parts`), no other variable, container, default or closure
+    holds *obj* or anything it holds (``Bar(sink)`` appending to the
+    notebook's ``sink``), and the notebook methods the loop calls on it
+    (*methods*) name no notebook value, class or namespace reader as a
+    global. The streams ``sys.stdout`` and ``sys.stderr`` it writes to are
     output, which a hit shows again."""
     import gc
-    import io
 
-    held: dict[int, Any] = {}
-    todo = [obj]
-    while todo:
-        item = todo.pop()
-        if isinstance(item, _ATOMS) or id(item) in held:
-            continue
-        if isinstance(item, (types.ModuleType, type, io.IOBase)):
-            continue
-        if isinstance(item, (types.FunctionType, types.MethodType, types.BuiltinFunctionType)):
-            owner = attribute_or(item, "__self__", None)
-            if isinstance(item, types.FunctionType) or isinstance(owner, types.ModuleType):
-                if attribute_or(item, "__module__", None) == "__main__":
-                    return False
-                continue
-            todo.append(owner)
-            continue
-        held[id(item)] = item
-        if len(held) > _KEPT_MAX:
-            return False
-        todo.extend(gc.get_referents(item))
+    held = _private_parts(obj)
+    if held is None:
+        return False
     if any(other is not name and id(value) in held for other, value in user_ns.items()):
         return False
     # A tuple: a call spreads it as its own arguments, so the one
@@ -706,6 +707,127 @@ def _kept_to_itself(obj: Any, name: str, user_ns: Mapping[str, Any], methods: se
         )
         if isinstance(func, types.FunctionType) and not _names_no_notebook_value(func, user_ns, set()):
             return False
+    return True
+
+
+def _private_parts(obj: Any) -> dict[int, Any] | None:
+    """Every object *obj* holds, by id, when each is of a kind whose every
+    part can be read: a plain value, a list, tuple, dict or set, an
+    instance of a class written in Python (its ``__dict__`` and slots), a
+    library function (its closure and defaults) or a method of one of
+    those. None for anything else: a class, a module, a stream other than
+    stdout and stderr (a ``StringIO`` the notebook reads back), a weak
+    reference, a NumPy view, an object of a C type -- what it holds or
+    points at cannot be read, so it may be another value of the notebook's.
+    Not a list of kinds that are not: one missed was a stale value."""
+    import sys
+
+    streams = {id(s) for s in (sys.stdout, sys.stderr, sys.__stdout__, sys.__stderr__) if s is not None}
+    held: dict[int, Any] = {}
+    weak: list[Any] = []
+    todo = [obj]
+    while todo:
+        item = todo.pop()
+        if type(item) in _ATOMS or id(item) in held or id(item) in streams or _a_module_function(item):
+            continue
+        if type(item) in _WEAK_REFERENCES:
+            # Its own, if it points at something held (a bar's writer
+            # keeps a proxy to the bar): checked once all is found.
+            weak.append(item)
+            parts = [attribute_or(item, "__callback__", None)] if type(item) is not weakref.ProxyType else []
+        else:
+            parts = _parts(item)
+        if parts is None:
+            return None
+        held[id(item)] = item
+        if len(held) > _KEPT_MAX:
+            return None
+        todo.extend(part for part in parts if part is not None)
+    if weak:
+        own = {id(ref) for value in held.values() for ref in weakref.getweakrefs(value)}
+        if any(id(ref) not in own for ref in weak):
+            return None
+    return held
+
+
+def _parts(item: Any) -> list[Any] | None:
+    """What *item* holds, when `_private_parts` can read all of it."""
+    kind = type(item)
+    if kind in (list, tuple, set, frozenset):
+        return list(item)
+    if kind is dict:
+        return [*item, *item.values()]
+    if kind is types.FunctionType:
+        if attribute_or(item, "__module__", None) == "__main__":
+            return None
+        return [item.__closure__, item.__defaults__, item.__kwdefaults__]
+    if kind is types.CellType:
+        return [item.cell_contents] if _filled(item) else []
+    if kind is types.MethodType:
+        return [item.__func__, item.__self__]
+    if kind is types.BuiltinFunctionType:
+        return [] if item.__self__ is None else [item.__self__]
+    if not _written_in_python(kind) or _an_io_object(item):
+        return None
+    parts = [object.__getattribute__(item, "__dict__")] if kind.__dictoffset__ else []
+    for base in kind.__mro__:
+        for slot in base.__dict__.get("__slots__", ()):
+            descriptor = base.__dict__.get(slot)
+            if type(descriptor) is types.MemberDescriptorType:
+                try:
+                    parts.append(descriptor.__get__(item, kind))
+                except AttributeError:  # an unset slot
+                    pass
+    return parts
+
+
+def _a_module_function(item: Any) -> bool:
+    """A C module's function (``time.time``): shared with its module, but
+    it holds nothing that can change."""
+    return type(item) is types.BuiltinFunctionType and isinstance(item.__self__, types.ModuleType)
+
+
+_WEAK_REFERENCES = (weakref.ReferenceType, weakref.ProxyType, weakref.CallableProxyType)
+
+#: ``Py_TPFLAGS_HEAPTYPE`` and ``Py_TPFLAGS_DISALLOW_INSTANTIATION``.
+_HEAP_TYPE = 1 << 9
+_NOT_MADE = 1 << 7
+
+
+def _written_in_python(kind: type) -> bool:
+    """Whether *kind* and every class it inherits from but ``object`` is a
+    class statement's: one adds to ``object``'s layout only its slots and
+    a ``__dict__`` and ``__weakref__``, and makes its objects with
+    ``object.__new__`` or a ``__new__`` of its own written in Python. A C
+    type made at run time (``io.StringIO``, a lock, ``deque`` on 3.12) is
+    a heap type too, and holds what cannot be read."""
+    for base in kind.__mro__:
+        if base is object:
+            continue
+        if not base.__flags__ & _HEAP_TYPE or base.__flags__ & _NOT_MADE:
+            return False
+        new = base.__dict__.get("__new__")
+        if new is not None and not isinstance(new, staticmethod):
+            return False
+        slots = sum(
+            1 for cls in base.__mro__ for value in cls.__dict__.values() if type(value) is types.MemberDescriptorType
+        )
+        if base.__basicsize__ > object.__basicsize__ + 8 * slots + 16:
+            return False
+    return True
+
+
+def _an_io_object(item: Any) -> bool:
+    import io
+
+    return isinstance(item, io.IOBase)
+
+
+def _filled(cell: Any) -> bool:
+    try:
+        cell.cell_contents  # raises for an empty cell
+    except ValueError:
+        return False
     return True
 
 
@@ -747,6 +869,8 @@ def _loaded_names(nodes) -> set[str] | None:
     """The names *nodes* read; None when one reads the namespace by name."""
     names: set[str] = set()
     for node in nodes:
+        if reaches_the_namespace(node):
+            return None
         for sub in ast.walk(node):
             if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load):
                 if sub.id in _NAMESPACE_READERS:
