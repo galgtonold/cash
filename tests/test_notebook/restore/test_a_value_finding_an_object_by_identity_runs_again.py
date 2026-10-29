@@ -33,6 +33,30 @@ HOLDERS = {
         "regs = [{'pid': id(p.seen)} for _ in range(20_000)]",
         "r = regs[0]['pid'] == id(p.seen)",
     ),
+    "an id four levels down in each of 20,000 dicts": (
+        "regs = [{'a': {'b': {'pid': id(p.seen)}}} for _ in range(20_000)]",
+        "r = regs[0]['a']['b']['pid'] == id(p.seen)",
+    ),
+    "an id in each of 20,000 records": (
+        "class R:\n    def __init__(self, pid):\n        self.pid = pid\nregs = [R(id(p.seen)) for _ in range(20_000)]",
+        "r = regs[0].pid == id(p.seen)",
+    ),
+    "an id nested past what is sampled": (
+        "regs = [[[[[[[[[[id(p.seen)]]]]]]]]] for _ in range(20_000)]",
+        "r = regs[0][0][0][0][0][0][0][0][0][0] == id(p.seen)",
+    ),
+    "an object DataFrame column of ids": (
+        "import pandas as pd\ndf = pd.DataFrame({'pid': pd.Series([id(p.seen)], dtype=object), 'v': [1]})",
+        "r = bool(df['pid'][0] == id(p.seen))",
+    ),
+    "a nullable DataFrame column of ids": (
+        "import pandas as pd\ndf = pd.DataFrame({'pid': pd.array([id(p.seen), None], dtype='Int64'), 'v': [1, 2]})",
+        "r = bool(df['pid'][0] == id(p.seen))",
+    ),
+    "a DataFrame column of ids past 1,024 integer columns": (
+        "import pandas as pd\ndf = pd.DataFrame({**{f'c{i}': [i] for i in range(1024)}, 'pid': [id(p.seen)]})",
+        "r = bool(df['pid'][0] == id(p.seen))",
+    ),
     "a DataFrame column of ids": (
         "import pandas as pd\ndf = pd.DataFrame({'pid': [id(p.seen)], 'v': [1]})",
         "r = bool(df['pid'][0] == id(p.seen))",

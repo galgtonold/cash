@@ -17,8 +17,8 @@ What is looked at:
   and not inside the value itself (a restore rebuilds those together); a
   class, a module or a function comes back as itself and does not count;
 - an ``int`` in the value equal to the ``id()`` of an object the value holds
-  or the notebook's variables hold, at any depth; a number below every
-  address this process has mapped (`_lowest_address`) is not one.
+  or the notebook's variables hold, at any depth; a number outside every
+  writable mapping of the process (`_mapped`) is not one.
 
 The value is walked through lists, tuples, dicts, sets and the ``__dict__``
 of objects of the user's own classes, not into a library's objects (a
@@ -41,7 +41,7 @@ import types
 import weakref
 from typing import Any
 
-from cash._user_attrs import attribute_or, builtin_items
+from cash._user_attrs import attribute_or, builtin_items, own_dict
 from cash.install_paths import is_user_code_module
 
 __all__ = ["IdentityHeld", "identity_held_reason", "weakly_held_reason"]
@@ -87,11 +87,30 @@ def identity_held_reason(name: str, value: Any, user_ns: dict[str, Any]) -> Iden
     targets: list[Any] = []
     unread: list[Any] = []
     _walk([value], seen, user_kinds, refs, numbers, targets, unread=unread)
-    numbers.update(_sampled_ints(unread))
+    sampled, cut = _sampled_ints(unread, user_kinds)
+    numbers.update(sampled)
     found = _held_by_id(name, refs, seen, numbers, user_kinds, user_ns)
+    if found is None and cut:
+        found = _sampling_cut(name)
     if found is None and targets:
         found = _weakly_held(name, targets, user_ns)
     return found
+
+
+def _sampling_cut(name: str) -> IdentityHeld:
+    """The refusal for a value whose sampling stopped with something it
+    could not read (`_sampled_ints`): an id() may be kept there."""
+    return IdentityHeld(
+        f"cash could not sample all of '{name}' for a number that may be the id() of an object; restored, "
+        "the object would be another one, so the statement re-runs every time",
+        name,
+        "an id()",
+        what=(
+            f"'{name}' holds containers nested deeper than cash samples, or more integer columns than it reads, "
+            "so cash could not rule out that it keeps the id() of an object. Restored from the cache, such a "
+            "number would find another object, so this statement runs every time instead."
+        ),
+    )
 
 
 def _held_by_id(
@@ -122,8 +141,8 @@ def _held_by_id(
                 name,
                 "a weak reference",
             )
-    lowest = max(_LOWEST_ADDRESS, _lowest_address())
-    candidates = {n for n in numbers if n >= lowest and not n % 8}
+    # Read the process's mappings only for a number that could be an id.
+    candidates = {n for n in numbers if n >= _LOWEST_ADDRESS and not n % 8}
     if candidates:
         candidates = _mapped(candidates)
     if not candidates:
@@ -169,27 +188,32 @@ def _holds_an_id(name: str) -> IdentityHeld:
 _SAMPLE = 32
 
 
-def _sampled_ints(unread: list[Any]) -> set[int]:
-    """The ints among the first and last items (and keys) of each container
-    in *unread* too big to look inside, and of the index, the values and
-    each integer column of each pandas or NumPy object: a registry keyed by
-    ``id()`` keeps them all alike, so a few find it. A sampled item that is
-    a list, tuple, set or dict is sampled the same way, `_SAMPLE_LEVELS`
-    deep: ``[{'pid': id(p)} for p in ps]`` keeps its ids a level down."""
+def _sampled_ints(unread: list[Any], user_kinds: dict[type, bool]) -> tuple[set[int], bool]:
+    """``(ints, cut)``: the ints among the first and last items (and keys)
+    of each container in *unread* too big to look inside, and of the
+    index, the values and each integer or object column of each pandas or
+    NumPy object: a registry keyed by ``id()`` keeps them all alike, so a
+    few find it. A sampled item that is a list, tuple, set, dict or object
+    of the user's is sampled the same way, `_SAMPLE_LEVELS` deep: ``[{'pid':
+    id(p)} for p in ps]`` keeps its ids a level down. *cut* when the
+    sampling stopped with one such item unread, or a frame had more integer
+    columns than `_SAMPLE_COLUMNS`: the caller refuses, as for a cut walk.
+    The rows between the ends stay unread by design."""
     out: set[int] = set()
+    cut: list[bool] = []
     for obj in unread:
-        _sample_into(obj, out, _SAMPLE_LEVELS)
-    return out
+        _sample_into(obj, out, _SAMPLE_LEVELS, user_kinds, cut)
+    return out, bool(cut)
 
 
 #: How many levels of containers `_sampled_ints` samples into.
-_SAMPLE_LEVELS = 3
+_SAMPLE_LEVELS = 8
 
-#: Most integer columns of one frame `_sampled_ints` reads.
-_SAMPLE_COLUMNS = 64
+#: Most integer and object columns of one frame `_sampled_ints` reads.
+_SAMPLE_COLUMNS = 1024
 
 
-def _sample_into(obj: Any, out: set[int], levels: int) -> None:
+def _sample_into(obj: Any, out: set[int], levels: int, user_kinds: dict[type, bool], cut: list[bool]) -> None:
     import itertools
 
     def ends(items: Any) -> list[Any]:
@@ -209,41 +233,77 @@ def _sample_into(obj: Any, out: set[int], levels: int) -> None:
             # A Series' values; a frame's would copy every column.
             picked += _array_ends(attribute_or(obj, "values", None))
         elif attribute_or(obj, "ndim", None) == 2:
-            picked += _frame_column_ends(obj)
+            picked += _frame_column_ends(obj, cut)
     for item in picked:
-        if type(item) is int:
+        kind = type(item)
+        if kind is int:
             out.add(item)
-        elif levels > 1 and type(item) in (dict, list, tuple, set, frozenset):
-            _sample_into(item, out, levels - 1)
+            continue
+        if kind in (dict, list, tuple, set, frozenset):
+            inner = item
+        elif _users(kind, user_kinds) and type(own_dict(item)) is dict:
+            # ``self.pid = id(p)`` on each of a list of records.
+            inner = own_dict(item)
+        else:
+            continue
+        if levels > 1:
+            _sample_into(inner, out, levels - 1, user_kinds, cut)
+        else:
+            cut.append(True)
 
 
 def _array_ends(array: Any) -> list[int]:
-    """The first and last `_SAMPLE` items of an integer NumPy array."""
-    if attribute_or(attribute_or(array, "dtype", None), "kind", None) not in ("i", "u"):
+    """The first and last `_SAMPLE` items of an integer NumPy array, and
+    the ints among those of an object array."""
+    kind = attribute_or(attribute_or(array, "dtype", None), "kind", None)
+    if kind not in ("i", "u", "O"):
         return []
     try:
         flat = array.ravel()
-        return [int(n) for n in (*flat[:_SAMPLE], *flat[-_SAMPLE:])]
+        ends = (*flat[:_SAMPLE], *flat[-_SAMPLE:])
+        if kind == "O":
+            return [item for item in ends if type(item) is int]
+        return [int(n) for n in ends]
     except (TypeError, ValueError, AttributeError, IndexError):
         return []
 
 
-def _frame_column_ends(frame: Any) -> list[int]:
-    """The ends of each integer column of a pandas frame (a ``pid`` column
-    of ids), read a column at a time: the frame's ``values`` would copy
-    every column into one array."""
+def _frame_column_ends(frame: Any, cut: list[bool]) -> list[int]:
+    """The ends of each integer or object column of a pandas frame (a
+    ``pid`` column of ids), read a column's ends at a time: the frame's
+    ``values``, or a whole nullable column's, would be copied first. Past
+    `_SAMPLE_COLUMNS` such columns, *cut* says the rest went unread."""
     dtypes = attribute_or(frame, "dtypes", None)
     iloc = attribute_or(frame, "iloc", None)
     if dtypes is None or iloc is None:
         return []
     picked: list[int] = []
     try:
-        columns = [i for i, dtype in enumerate(dtypes) if attribute_or(dtype, "kind", None) in ("i", "u")]
+        columns = [i for i, dtype in enumerate(dtypes) if attribute_or(dtype, "kind", None) in ("i", "u", "O")]
+        if len(columns) > _SAMPLE_COLUMNS:
+            cut.append(True)
         for position in columns[:_SAMPLE_COLUMNS]:
-            picked += _array_ends(iloc[:, position].to_numpy())
+            for part in (iloc[:_SAMPLE, position], iloc[-_SAMPLE:, position]):
+                # As objects: a nullable column with a missing value would
+                # otherwise come back as floats.
+                picked += _plain_ints(part.to_numpy(dtype=object))
     except (TypeError, ValueError, AttributeError, IndexError):
         return picked
     return picked
+
+
+def _plain_ints(array: Any) -> list[int]:
+    """The ints in *array*, a few items of a column: an integer column's
+    all, an object or nullable one's ints (``pd.NA`` and strings left out)."""
+    kind = attribute_or(attribute_or(array, "dtype", None), "kind", None)
+    if kind in ("i", "u"):
+        return [int(n) for n in array]
+    if kind == "O":
+        return [int(item) for item in array if type(item) is int or type(item).__name__ in _NUMPY_INTS]
+    return []
+
+
+_NUMPY_INTS = frozenset({"int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"})
 
 
 #: The lowest address a 64-bit macOS process maps: ``__PAGEZERO`` covers
@@ -274,13 +334,30 @@ def _lowest_address() -> int:
 def _mapped(numbers: set[int]) -> set[int]:
     """Those of *numbers* inside a mapping of this process that can be
     written, where every object lies: on Linux, from ``/proc/self/maps``,
-    read each time. A sum of 200,000 numbers (``19999900000``) lies in no
-    mapping, so it is no id(). Elsewhere, or where the file cannot be
-    read, all of them."""
+    read again only for a number outside the mappings read before. A sum
+    of 200,000 numbers (``19999900000``) lies in no mapping, so it is no
+    id(). Elsewhere, those at or above `_lowest_address`; where the file
+    cannot be read, all of them."""
     if not sys.platform.startswith("linux"):
+        lowest = _lowest_address()
+        return {n for n in numbers if n >= lowest}
+    ranges = _MAPPINGS[0]
+    inside = {n for n in numbers if ranges is not None and any(start <= n < end for start, end in ranges)}
+    if len(inside) == len(numbers):
+        return inside
+    # One outside the mappings read before: a mapping made since may hold
+    # it. One the process has since unmapped is kept, which only reruns.
+    ranges = _MAPPINGS[0] = _read_mappings()
+    if ranges is None:
         return numbers
+    return {n for n in numbers if any(start <= n < end for start, end in ranges)}
+
+
+def _read_mappings() -> list[tuple[int, int]] | None:
+    """The writable mappings of ``/proc/self/maps``; None when it cannot be
+    read."""
     try:
-        with open("/proc/self/maps", encoding="ascii") as maps:
+        with open("/proc/self/maps", encoding="ascii", errors="replace") as maps:
             ranges = []
             for line in maps:
                 fields = line.split()
@@ -288,8 +365,12 @@ def _mapped(numbers: set[int]) -> set[int]:
                     start, end = fields[0].split("-", 1)
                     ranges.append((int(start, 16), int(end, 16)))
     except (OSError, ValueError):
-        return numbers
-    return {n for n in numbers if any(start <= n < end for start, end in ranges)}
+        return None
+    return ranges
+
+
+#: The mappings `_mapped` read last.
+_MAPPINGS: list[list[tuple[int, int]] | None] = [None]
 
 
 def weakly_held_reason(name: str, value: Any, user_ns: dict[str, Any]) -> IdentityHeld | None:
