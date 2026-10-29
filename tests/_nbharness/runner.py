@@ -601,7 +601,9 @@ class NotebookTestRunner:
                 output_hook=lambda msg: None,
             )
         )
-        if not _REUSE_KERNEL:
+        if self._warm is None:
+            # Only a warm kernel needs it, and a fresh kernel started without
+            # cash must stay plain: the import below installs cash's hooks.
             return
         # Re-point the cache directory, which the chdir above does NOT move.
         #
