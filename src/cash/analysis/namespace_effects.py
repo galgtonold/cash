@@ -19,7 +19,7 @@ import pathlib
 import sys
 import textwrap
 import types
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import Any
 
 from cash._user_attrs import attribute_or, instance_of, is_routine
@@ -1734,6 +1734,9 @@ def _call_handoffs(
     unknown, and to *free* the free names a function of the user's it calls
     hands on (see :func:`function_handoffs`)."""
     func = call.func
+    while isinstance(func, ast.NamedExpr):
+        # ``(p := HOOKS[0])(x)`` calls what ``HOOKS[0]`` holds.
+        func = func.value
     if isinstance(func, ast.Name) and func.id in local:
         # ``for h in HOOKS: h(x)``, ``p = OPS['push']; p(x)``: a local bound
         # to what a global holds, a method of which changes what it is bound
@@ -1900,6 +1903,10 @@ def _holders_of_bound(container: Any, user_ns: Mapping[str, Any]) -> set[str]:
         items = list(dict.values(container))
     elif instance_of(container, (list, tuple)):
         items = list(container)
+    elif type(container) is types.SimpleNamespace or issubclass(type(container), type):
+        # ``NS = SimpleNamespace(push=LOG.append)``, ``H.push = partial(...)``:
+        # what their own dict holds, read without running code of theirs.
+        items = list(_own_dict(container).values())
     else:
         return set()
     if len(items) > _BOUND_SCAN:
@@ -1932,12 +1939,11 @@ def _local_aliases(fdef: ast.FunctionDef | ast.AsyncFunctionDef) -> dict[str, fr
             targets, value = [node.target], node.value
         else:
             continue
-        root = _held_root(value)
-        if root is None:
-            continue
         for target in targets:
-            if isinstance(target, ast.Name) and target.id != root:
-                direct.setdefault(target.id, set()).add(root)
+            for name, part in _paired(target, value):
+                for root in _held_roots(part):
+                    if name != root:
+                        direct.setdefault(name, set()).add(root)
     resolved: dict[str, frozenset[str]] = {}
     for name, roots in direct.items():
         found: set[str] = set()
@@ -1955,14 +1961,47 @@ def _local_aliases(fdef: ast.FunctionDef | ast.AsyncFunctionDef) -> dict[str, fr
     return resolved
 
 
-def _held_root(value: ast.expr) -> str | None:
-    """The variable *value* reads an item or attribute of, or is: ``OPS``
-    for ``OPS['push']``, ``cfg.hook``, ``OPS.get('f')`` or ``OPS``."""
+def _paired(target: ast.expr, value: ast.expr) -> Iterator[tuple[str, ast.expr]]:
+    """The names *target* binds, each with the part of *value* it gets:
+    ``p, q = OPS['push'], None`` pairs ``p`` with ``OPS['push']``. A
+    starred or unequal unpacking pairs every name with the whole value."""
+    if isinstance(target, ast.Name):
+        yield target.id, value
+    elif isinstance(target, (ast.Tuple, ast.List)):
+        if (
+            isinstance(value, (ast.Tuple, ast.List))
+            and len(value.elts) == len(target.elts)
+            and not any(isinstance(item, ast.Starred) for item in (*target.elts, *value.elts))
+        ):
+            for item, part in zip(target.elts, value.elts):
+                yield from _paired(item, part)
+        else:
+            for item in target.elts:
+                yield from _paired(item.value if isinstance(item, ast.Starred) else item, value)
+
+
+def _held_roots(value: ast.expr) -> list[str]:
+    """The variables *value* reads an item or attribute of, or is: ``OPS``
+    for ``OPS['push']``, ``cfg.hook``, ``OPS.get('f')``, ``getattr(H,
+    'push')``, ``(p := OPS['push'])`` or ``OPS``; both branches of ``a if c
+    else b``."""
+    if isinstance(value, ast.IfExp):
+        return [*_held_roots(value.body), *_held_roots(value.orelse)]
+    if isinstance(value, ast.NamedExpr):
+        return _held_roots(value.value)
     if isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute) and value.func.attr == "get":
         value = value.func.value
+    elif isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id == "getattr" and value.args:
+        value = value.args[0]
     while isinstance(value, (ast.Subscript, ast.Attribute)):
         value = value.value
-    return value.id if isinstance(value, ast.Name) else None
+    return [value.id] if isinstance(value, ast.Name) else []
+
+
+def _own_dict(value: Any) -> Mapping[str, Any]:
+    if issubclass(type(value), type):
+        return type.__dict__["__dict__"].__get__(value)
+    return object.__getattribute__(value, "__dict__")
 
 
 def _may_hold_bound(value: Any) -> bool:
