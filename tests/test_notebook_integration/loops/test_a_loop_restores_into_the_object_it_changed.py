@@ -310,3 +310,21 @@ def test_what_points_at_what_it_assigns_into_is_asked_again_at_a_restore(nb_runn
     nb_runner.set_cell_source(2, made_later)
     nb_runner.run_all()
     assert nb_runner.get_output(4).strip() == expected
+
+
+@pytest.mark.fresh_kernel
+@pytest.mark.parametrize(
+    "held",
+    ["import weakref\nheld = weakref.ref(out)", "held = {id(out): 'out'}"],
+    ids=["a weak reference", "an id key"],
+)
+def test_an_array_the_notebook_holds_by_identity_runs_the_loop_with_the_warning(nb_runner, held):
+    """Bound to the stored copy, an array the notebook finds by a weak
+    reference or its ``id()`` would not be the object it finds: the loop
+    runs every time, and says so."""
+    make = f"import time\nimport numpy as np\nout = np.zeros(3000)\n{held}"
+    loop = "for i in range(3000):\n    time.sleep(0.0003)\n    out[i] = i * 2"
+    printed, seen = _run(nb_runner, make, loop, "print(out[-1], out.sum())")
+    assert printed == "5998.0 8997000.0"
+    assert "RESTORED" not in str(seen)
+    assert "NOTEBOOK-IDENTITY-HELD" in _shown(nb_runner, 2)

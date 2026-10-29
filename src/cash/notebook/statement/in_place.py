@@ -82,7 +82,12 @@ def refusal(obj: Any, namespace: Mapping[str, Any] | None = None) -> str | None:
     (`_held_by_the_notebook`)."""
     kind = type(obj)
     if not restorable_kind(obj):
-        return f"a {kind.__name__} is not restored into the object it is, and a new one would not be that object"
+        why = f"a {kind.__name__} is not restored into the object it is, and a new one would not be that object"
+        # Only a loop's assignments into it (``arr[i] = v``) bring it here,
+        # when the notebook holds it by identity (`bound_as_a_copy`): say
+        # so, and warn.
+        held = _held_itself(obj, namespace or {}) if namespace is not None else None
+        return why if held is None else _identity_refusal(held, it=f"it, {why}")
     parts: set[int] = set()
     weakly: list[Any] = []
     found = _reaches(_state(obj), obj, seen=parts, weakly=weakly)
@@ -94,22 +99,34 @@ def refusal(obj: Any, namespace: Mapping[str, Any] | None = None) -> str | None:
     # between the blocks of a frame).
     refs = [ref for item in weakly for ref in weakref.getweakrefs(item) if id(ref) not in parts]
     held = _held_by_the_notebook(parts, refs, namespace or {})
+    return None if held is None else _identity_refusal(held)
+
+
+#: `IdentityHeld.what` of a refusal about the loop's object itself.
+_ITSELF = "itself"
+
+
+def _identity_refusal(held: str, it: str | None = None) -> IdentityHeld:
+    """The refusal for what `_held_by_the_notebook` found: by default about
+    an object the loop's object holds, else about *it*."""
     if held == _WEAK:
+        if it is not None:
+            return IdentityHeld(f"a weak reference points at {it}", "", "a weak reference", _ITSELF)
         return IdentityHeld(
             "a weak reference points at an object it holds, and a restore would hand it a copy", "", "a weak reference"
         )
     if held == _BY_ID:
+        if it is not None:
+            return IdentityHeld(f"a container keeps the id() of {it}", "", "an id()", _ITSELF)
         return IdentityHeld(
             "a container keeps the id() of an object it holds, and a restore would hand it a copy", "", "an id()"
         )
-    if held == _TOO_MANY:
-        return IdentityHeld(
-            "the notebook holds containers too big to look through for a weak reference to, or the id() "
-            "of, an object it holds",
-            "",
-            "too many",
-        )
-    return None
+    return IdentityHeld(
+        "the notebook holds containers too big to look through for a weak reference to, or the id() "
+        "of, an object it holds",
+        "",
+        "too many",
+    )
 
 
 def restorable_kind(obj: Any) -> bool:
@@ -127,6 +144,12 @@ def bound_as_a_copy(obj: Any, namespace: Mapping[str, Any]) -> bool:
     a weak reference or its ``id()``."""
     if restorable_kind(obj) or isinstance(obj, (list, dict, set)):
         return False
+    return _held_itself(obj, namespace) is None
+
+
+def _held_itself(obj: Any, namespace: Mapping[str, Any]) -> str | None:
+    """How the notebook holds *obj* itself by identity (`_held_by_the_notebook`):
+    a weak reference to it, or its ``id()``; None when it does not."""
     try:
         refs = weakref.getweakrefs(obj)
     except TypeError:
@@ -137,7 +160,7 @@ def bound_as_a_copy(obj: Any, namespace: Mapping[str, Any]) -> bool:
         inside: set[int] = set()
         if _reaches(gc.get_referents(obj), _NOTHING, seen=inside) is not None:
             refs = [ref for ref in refs if id(ref) not in inside]
-    return _held_by_the_notebook({id(obj)}, refs, namespace) is None
+    return _held_by_the_notebook({id(obj)}, refs, namespace)
 
 
 def _users_class(value: Any) -> bool:
@@ -252,6 +275,9 @@ def _what_it_holds(value: Any, parts: set[int]) -> list[Any] | str | None:
             held.extend(builtin_items(value) or ())
         except Exception:  # noqa: BLE001 - not readable: what it holds is unknown
             return _TOO_MANY
+        state = own_dict(value)
+        if state:
+            held.extend(state.values())
     elif kind.__name__ == "ndarray" and kind.__module__ == "numpy":
         if value.dtype.hasobject:
             return value.ravel().tolist()

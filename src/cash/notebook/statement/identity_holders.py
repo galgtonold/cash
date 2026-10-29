@@ -23,9 +23,10 @@ What is looked at:
 The value is walked through lists, tuples, dicts, sets, deques and their
 subclasses (read through the builtin type's own methods, never the
 class's), a NumPy array of objects, and the attributes and slots of
-objects of the user's own classes and of a ``SimpleNamespace``. A library's
-object is looked into for ids only: a pandas frame keeps weak references
-between its own parts, which a restore rebuilds together. A container of
+objects of the user's own classes and of a ``SimpleNamespace``, not into a
+library's objects: a pandas frame keeps weak references between its own
+parts, which a restore rebuilds together, and a stream the ident of its
+thread, which no object of the notebook's is. A container of
 more than `_MAX_SCANNED` numbers, strings and the like, or of tuples of
 them (records), is read at C speed rather than item by item; one of the
 notebook's holding other objects is checked for the ``id()`` of its items,
@@ -124,7 +125,7 @@ def identity_held_reason(name: str, value: Any, user_ns: dict[str, Any]) -> Iden
                     "a weak reference",
                 )
             continue
-        target = ref()
+        target = weakref.ref.__call__(ref)  # not a subclass's own __call__: the user's code
         if target is not None and id(target) not in walk.seen and not issubclass(type(target), _BY_REFERENCE):
             return IdentityHeld(
                 f"'{name}' holds a weak reference to an object it does not hold; restored, it would "
@@ -193,21 +194,16 @@ class _Walk:
         self.quiet = quiet
 
     def run(self, roots: list[Any]) -> None:
-        # Two levels at a time: what is looked into in full, and what a
-        # library's object holds, looked into for ids only.
-        loud, soft = ([], list(roots)) if self.quiet else (list(roots), [])
-        while loud or soft:
-            next_loud: list[Any] = []
-            next_soft: list[Any] = []
-            for item in loud:
-                self._open(item, True, next_loud, next_soft)
-            for item in soft:
-                self._open(item, False, next_soft, next_soft)
+        level = list(roots)
+        while level:
+            into: list[Any] = []
+            for item in level:
+                self._open(item, into)
             if self.cut:
                 return
-            loud, soft = next_loud, next_soft
+            level = into
 
-    def _open(self, item: Any, loud: bool, into: list[Any], into_soft: list[Any]) -> None:
+    def _open(self, item: Any, into: list[Any]) -> None:
         kind = type(item)
         if kind is int:
             self.numbers.add(item)
@@ -223,7 +219,7 @@ class _Walk:
             self.cut = True
             return
         if issubclass(kind, _REFERENCES):
-            if loud:
+            if not self.quiet:
                 self.refs.append(item)
             return
         if issubclass(kind, _BY_REFERENCE):
@@ -238,9 +234,13 @@ class _Walk:
             except Exception:  # noqa: BLE001 - not readable: what it holds is unknown
                 items = None
             if items is None:
-                if loud:
+                if not self.quiet:
                     self.unread.append(item)
                 return
+            # A subclass's own attributes: ``c = C([1]); c.meta = id(p.child)``.
+            state = own_dict(item)
+            if state:
+                items.extend(state.values())
         elif issubclass(kind, _WEAK_CONTAINERS):
             state = own_dict(item)
             data = state.get("data") if state else None
@@ -255,10 +255,10 @@ class _Walk:
             if item.dtype.hasobject:
                 items = item.ravel().tolist()
             else:
-                if loud and item.dtype.kind in "iu" and item.dtype.itemsize == 8:
+                if not self.quiet and item.dtype.kind in "iu" and item.dtype.itemsize == 8:
                     self.arrays.append(item)
                 return
-        else:
+        elif issubclass(kind, types.SimpleNamespace) or self._users(kind):
             items = []
             state = own_dict(item)
             if state:
@@ -268,8 +268,11 @@ class _Walk:
                     items.append(reader.__get__(item, kind))
                 except AttributeError:  # an empty slot
                     continue
-            if not (issubclass(kind, types.SimpleNamespace) or self._users(kind)):
-                into = into_soft
+        else:
+            # A library's object: its own parts hold weak references to
+            # each other (a pandas frame's), and numbers that are no id()
+            # of the notebook's (a stream's thread ident).
+            return
         if len(items) > _MAX_SCANNED:
             if self._read_flat(items):
                 return
