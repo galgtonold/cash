@@ -377,7 +377,9 @@ def holds_a_stream(fn) -> bool:
     ``x = h()`` gave the second number, not the first. Looked for in tuples,
     lists, sets and dicts (``st = {'it': iter(...)}``), in an object of the
     user's (``self.it``), and in another function's closure (a helper ``g``
-    that holds it).
+    that holds it). A method bound to an object it holds itself (``pl =
+    dq.popleft``, ``def h(draw=rng.random)``) is taken as one: what calling
+    it changes, the text that calls it does not show.
 
     Told by type, read off the class (`_stream_type`): no ``__iter__`` of
     the user's runs. Read a level at a time, each level's objects in one
@@ -392,6 +394,8 @@ def holds_a_stream(fn) -> bool:
     parts = held_by(fn)
     if not parts or _EXACT_ATOMS.issuperset(map(type, parts)):
         return False
+    if any(_bound_to_an_object(part) for part in parts):
+        return True
     from cash import value_watch
 
     # The shell (``get_ipython = lambda: shell``) holds the whole session:
@@ -728,6 +732,22 @@ def _draws_on_its_closure(fn, cells: Mapping[str, _types.CellType]) -> bool:
     if "?" in writes:
         return any(not callable(value) for value in held.values())
     return any(name in held for name in writes)
+
+
+def _bound_to_an_object(value) -> bool:
+    """A method bound to an object that is not a module or a plain value
+    (``pl = dq.popleft``, ``draw = rng.random``): calling it may change the
+    object, which the text that calls it does not show."""
+    kind = type(value)
+    if kind is _types.MethodType:
+        owner = value.__self__
+    elif kind is _types.BuiltinMethodType or kind is _types.MethodWrapperType:
+        owner = value.__self__
+        if owner is None or type(owner) is _types.ModuleType:
+            return False
+    else:
+        return False
+    return not issubclass(type(owner), type) and not _plain_value(owner)
 
 
 def _plain_value(value) -> bool:
