@@ -2197,7 +2197,10 @@ Outside a notebook with cash on, or after `%cash_off`, cash's pickles run
 every reducer, as before. So do those of a `@cash.cache` function, in a
 notebook too: it always stores its result, and storing it, or handing back
 a stored one, runs the reducer as any pickle of it would. The rule above is
-for the notebook's own statements.
+for the notebook's own statements. When a reducer run that way changes a
+variable of the notebook, plain Python would have left it alone: the
+warning names the variables it changed, and they count as changed, so the
+cells reading them run again.
 
 **Why it matters.** Your results are correct: the variables hold what
 plain Python leaves in them. The statement runs again every time, and a

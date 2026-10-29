@@ -3238,17 +3238,21 @@ class StatementProcessor:
         variable moves when the code's reach cannot be read. Warned
         (``NOTEBOOK-REDUCE-WROTE``), naming the class."""
         refused = reducer_writes.refused_since(run.reducer_mark)
-        if refused:
-            self._warn_reducer_refused(run, refused)
+        # Read before the refusal's warning moves the mark on: a reducer a
+        # ``@cash.cache`` call ran (`kept_state.reducers_run`) wrote all the
+        # same, in the statement whose own pickle refused it.
         found = reducer_writes.writers(run.reducer_mark)
-        if not found:
-            return
         user_ns = self.shell.user_ns
-        names = reducer_writes.reach(found, user_ns)
+        names = reducer_writes.reach(found, user_ns) if found else set()
         if names is not None and not names:
             # It writes nothing of the notebook's (`reducer_writes.writes_into`).
+            if refused:
+                self._warn_reducer_refused(run, refused)
             run.reducer_mark = reducer_writes.runs_now()
             return
+        # It ran and wrote, so the warning below says what it changed; that
+        # the statement's own pickle refused it (a ``@cash.cache`` call's
+        # ran it) is the same statement not stored.
         lineages = self.tracking_state.variable_lineage
         moved = set(lineages) if names is None else names
         moved = {name for name in moved if name in lineages and name in user_ns}
