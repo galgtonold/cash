@@ -28,6 +28,7 @@ import types
 
 from ..install_paths import in_own_package, top_package
 from ..tracking.function_tracker import is_local_module
+from ..value_types import BUILTIN_NAMES
 
 #: Calls at a module's top level whose result follows from their arguments
 #: alone. A call not listed makes the module's values unvouched for.
@@ -236,6 +237,12 @@ def _stat(path: str | None) -> tuple | None:
     except OSError:
         return None
     return (st.st_mtime_ns, st.st_size, st.st_ino)
+
+
+def module_file(name: str) -> str | None:
+    """The file module *name* is, or would be, loaded from, found without
+    running any module (`_origin`)."""
+    return _origin(name)
 
 
 def _origin(name: str) -> str | None:
@@ -535,7 +542,7 @@ class _SourceOnly:
             root = self.aliases[head]
         elif head in self.defined:
             root = f"own:{head}"
-        elif head in _BUILTIN_NAMES:
+        elif head in BUILTIN_NAMES:
             root = f"builtins.{head}"
         else:
             return None
@@ -601,7 +608,7 @@ class _SourceOnly:
         top level's ``getattr``."""
         name = self._qualified(node)
         head = _head(node)
-        if head in _BUILTIN_NAMES and name != f"builtins.{head}" and self._only_imported_elsewhere(head):
+        if head in BUILTIN_NAMES and name != f"builtins.{head}" and self._only_imported_elsewhere(head):
             spelled = _spelled(node)
             return None if spelled is None else f"builtins.{spelled}"
         return name
@@ -636,7 +643,6 @@ class _SourceOnly:
         return name is not None and any(name in scope and scope[name] < line for scope in scopes)
 
 
-_BUILTIN_NAMES = frozenset(dir(builtins))
 #: A scope with no imports of its own: a comprehension in a class body.
 _NO_IMPORTS = ast.Module(body=[], type_ignores=[])
 _COMPREHENSIONS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
@@ -736,7 +742,7 @@ def _module_bound(tree: ast.Module) -> dict[str, int]:
         if isinstance(node, ast.Global):
             rebound.update(node.names)
         elif isinstance(node, ast.ImportFrom) and any(alias.name == "*" for alias in node.names):
-            rebound |= _BUILTIN_NAMES
+            rebound |= BUILTIN_NAMES
     return {name: line for name, line in bound.items() if name not in rebound}
 
 
