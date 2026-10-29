@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import threading
 
+import pytest
+
 from cash.backends import InMemoryBackend
 from cash.backends.tiered_backend import TieredBackend
 from cash.notebook.closed_stream import stored_form
@@ -98,20 +100,39 @@ def test_two_names_for_the_records_still_share_them():
     assert variables["same"] is variables["records"] and variables["pair"][0] is variables["records"]
 
 
-def test_an_object_holding_the_records_that_cannot_be_copied_is_a_miss():
-    """The records sit inside an object no copy can be made of: they cannot
-    be read out of it, so the entry is not served at all."""
+class _Box:
+    def __init__(self, records):
+        self.records = records
+        self.lock = _lock_maker()
 
-    class Box:
-        def __init__(self, records):
-            self.records = records
-            self.lock = _lock_maker()
 
+def _local_box():
+    class Box(_Box):
+        pass
+
+    return Box
+
+
+@pytest.mark.parametrize("make_box", [_local_box, lambda: _Box], ids=["local class", "module class"])
+def test_an_object_holding_the_records_is_served_with_them_or_not_at_all(make_box):
+    """The records sit inside an object holding a lock. Where a copy of
+    it can be made (a module's class, rebuilt with a new lock), the hit
+    holds the records, the object's own among them; where none can (a
+    class local to a function, on most Pythons), the entry is not served
+    at all. Never the tier's bytes."""
+    box_class = make_box()
     backend = InMemoryBackend()
     records = _records()
-    backend.set("k", {"variables": {"records": records, "box": Box(records)}})
-    assert backend.peek_entry("k") is None
-    assert backend.get("k") == (None, None)
+    backend.set("k", {"variables": {"records": records, "box": box_class(records)}})
+    peeked = backend.peek_entry("k")
+    got = backend.get("k")
+    for found in (peeked, got):
+        if found is None or found == (None, None):
+            continue
+        variables = found[1]["variables"]
+        assert _plain(variables) and variables["records"] == _records()
+        assert variables["box"].records is variables["records"]
+        assert type(variables["box"]).__name__ == box_class.__name__
 
 
 def test_the_entry_as_peeked_holds_the_records(tmp_path):
