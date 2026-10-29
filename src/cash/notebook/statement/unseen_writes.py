@@ -25,6 +25,7 @@ from __future__ import annotations
 import ast
 import dis
 import functools
+import inspect
 import json
 import os
 import sys
@@ -45,6 +46,7 @@ __all__ = [
     "COULD_RUN_TOO_BIG_REASON",
     "library_made",
     "live_writers",
+    "called_methods",
     "own_writes",
     "unseen_writers",
     "writers_without_a_trace",
@@ -273,6 +275,10 @@ def writers_without_a_trace(
             todo.append((value, 0))
     seen: set[int] = set()
     classes: dict[type, None] = {}
+    # Functions of the user's it reaches: the statement's analysis reads
+    # one from its text, which ``inner.__code__ = <a lambda compiled from a
+    # string>`` leaves it none of; the trace reads the code that ran.
+    functions: dict[Any, None] = {}
     over = False
     steps = 0
     work = [0, 0]  # items read at C speed, items looked into one by one
@@ -303,6 +309,8 @@ def writers_without_a_trace(
             break
         if kind not in classes and _users_special(kind, hc):
             classes[kind] = None
+        if kind is types.FunctionType:
+            functions[value] = None
         todo.extend((item, depth + 1) for item in _held(value, kind, hc, work))
         if work[0] > _READ_AT or work[1] > _SCAN_AT:
             over = True
@@ -310,7 +318,9 @@ def writers_without_a_trace(
     reached = set(classes)
     if over and hc.special_classes_exist(namespace):
         classes.update(dict.fromkeys(_with_objects_alive(_live_writing_classes(namespace, hc))))
-    found: list[tuple[str, tuple[str, ...]]] = []
+    found: list[tuple[str, tuple[str, ...]]] = [
+        (fn.__qualname__, ("what its unreadable text changes",)) for fn in functions if _unreadable_users(fn)
+    ]
     for cls in classes:
         before = len(found)
         for attr, fn in _users_special(cls, hc):
@@ -332,6 +342,20 @@ def writers_without_a_trace(
         if too_big is not None and cls not in reached:
             too_big.update(fn for fn, _ in found[before:])
     return found
+
+
+def _unreadable_users(fn: Any) -> bool:
+    """A function of the user's whose code has no text to read: what it
+    changes is unknown."""
+    code = fn.__code__
+    return (
+        # What Python 3.14 compiles for a class's or function's annotations
+        # (``P.__annotate__``) has no text of its own and builds a dict.
+        code.co_name != "__annotate__"
+        and is_user_code_file(code.co_filename)
+        and not library_made(code, fn.__globals__)
+        and _UNKNOWN in own_writes(code)
+    )
 
 
 _MISSING = object()
@@ -385,7 +409,12 @@ def _held(value: Any, kind: type, hc: Any, work: list[int]) -> Iterable[Any]:
             return []
         if hc.users_instance_type(kind) or kind is types.SimpleNamespace:
             attributes = own_dict(value)
-            return _not_plain(attributes.values()) if attributes else []
+            held = _not_plain(attributes.values()) if attributes else []
+            if kind is not types.SimpleNamespace:
+                # Its class too: ``obj.m(3)`` runs the function its class
+                # holds, which may have been given other code.
+                held.append(kind)
+            return held
     except Exception:  # noqa: BLE001 - a value that cannot be looked into
         return []
     return []
@@ -660,6 +689,25 @@ def _live_writing_classes(namespace: Mapping[str, Any], hc: Any) -> list[type]:
     return [c for c in bound + users_module_classes() + hc.live_users_classes() if hc.reaching_special_functions(c)]
 
 
+#: The methods ``@dataclass`` writes from text (``dataclasses._create_fn``).
+_DATACLASS_MADE = frozenset(
+    {
+        "__init__",
+        "__repr__",
+        "__eq__",
+        "__lt__",
+        "__le__",
+        "__gt__",
+        "__ge__",
+        "__hash__",
+        "__setattr__",
+        "__delattr__",
+        "__getstate__",
+        "__setstate__",
+    }
+)
+
+
 def library_made(code: types.CodeType, globals_: Mapping[str, Any]) -> bool:
     """Is *code* a method a library wrote for a class of the user's, from
     text of its own: what ``@dataclass`` (``__create_fn__``), attrs
@@ -677,8 +725,74 @@ def library_made(code: types.CodeType, globals_: Mapping[str, Any]) -> bool:
         return False
     if attribute_or(code, "co_qualname", "").startswith("__create_fn__.<locals>."):
         return True
+    if sys.version_info < (3, 11) and code.co_firstlineno == 2 and code.co_name in _DATACLASS_MADE:
+        # No ``co_qualname`` before 3.11: ``__create_fn__`` puts the method
+        # it makes on its second line, under one of these names.
+        return True
     name = globals_.get("__name__") if isinstance(globals_, Mapping) else None
     return code.co_name == "<lambda>" and isinstance(name, str) and name.startswith("namedtuple_")
+
+
+#: How many functions `unreadable_changers` follows from one statement.
+_CALLEES_FOLLOWED = 200
+
+
+def unreadable_changers(names: Iterable[str], namespace: Mapping[str, Any]) -> list[str]:
+    """The functions of the user's, among *names* and the functions they call
+    by name, whose text cannot be read (``exec`` of a ``def``, a lambda
+    compiled from a string) and whose bytecode does not show that they change
+    nothing (`own_writes` gives ``"?"``). The statement's own analysis reads
+    callees by their text and took such a one for a builtin, so a hit was
+    served while traces were off and what it changes was left unchanged."""
+    found: list[str] = []
+    seen: set[int] = set()
+    pending = [(name, namespace) for name in sorted(names)]
+    while pending and len(seen) < _CALLEES_FOLLOWED:
+        name, scope = pending.pop()
+        fn = _method_named(name, scope) if "." in name else scope.get(name) if isinstance(scope, Mapping) else None
+        code = attribute_or(fn, "__code__", None) if type(fn) is types.FunctionType else None
+        if code is None or id(code) in seen:
+            continue
+        seen.add(id(code))
+        if not is_user_code_file(code.co_filename) and code.co_filename != "<string>":
+            continue
+        if _function_node(code) is None:
+            if _UNKNOWN in own_writes(code):
+                found.append(name)
+            continue
+        pending.extend((callee, fn.__globals__) for callee in code.co_names)
+    return found
+
+
+def _method_named(path: str, scope: Mapping[str, Any]) -> Any:
+    """The function ``obj.method`` names (``k.go`` for a ``k`` of a class an
+    ``exec`` defined), read as stored: from the object's class or the class
+    itself, a static or class method unwrapped. None for anything else."""
+    base, _, attr = path.partition(".")
+    value = scope.get(base, _MISSING) if isinstance(scope, Mapping) else _MISSING
+    if value is _MISSING or instance_of(value, types.ModuleType):
+        return None
+    try:
+        member = inspect.getattr_static(value, attr)
+    except AttributeError:
+        return None
+    if instance_of(member, (staticmethod, classmethod)):
+        member = member.__func__
+    if type(member) is not types.FunctionType or library_made(member.__code__, member.__globals__):
+        return None
+    return member
+
+
+def called_methods(tree: ast.AST | None) -> frozenset[str]:
+    """``name.attr`` for each call ``name.attr(...)`` in *tree*: the methods
+    a statement calls on what it names, for `unreadable_changers`."""
+    if tree is None:
+        return frozenset()
+    return frozenset(
+        f"{node.func.value.id}.{node.func.attr}"
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
+    )
 
 
 @functools.lru_cache(maxsize=4096)

@@ -17,7 +17,7 @@ from collections.abc import Callable, Mapping
 
 from cash._user_attrs import has_attribute
 
-from ..._paths import resolve_file_dep_path
+from ..._paths import is_remote_url, normalize_path, resolve_file_dep_path
 from ...analysis.ast_util import called_names
 from ...analysis.cacheability import statement_writes_files
 from ...analysis.code_analyzer import CodeAnalyzer
@@ -334,7 +334,7 @@ class ControlSimulation:
             # ``PACK.mkdir()`` without it.
             # The same rule simple statements follow in simulate_one_node.
             sim.trace.append(TraceEntry(stmt_code, set(), inputs, input_hashes, {}, files_stale))
-        return files
+        return _absolute_only(files)
 
     def _input_hashes(self, stmt_code: str, virtual_lineage: dict[str, str]) -> tuple[set[str], dict[str, str]]:
         """What *stmt_code* reads, and the lineage each of those names has here."""
@@ -414,3 +414,28 @@ def _stats_of(paths: set[str], known: Mapping[str, tuple[int, int, int]]) -> dic
         except OSError:
             continue
     return out
+
+
+def _absolute_only(files: dict[str, tuple[int, int, int]]) -> dict[str, tuple[int, int, int]]:
+    """*files* without the relative spelling of a read they hold the
+    absolute one of too (``FileAccessTracker.track_path`` records both).
+    Checked later, the relative one is resolved against the folder the
+    notebook is in then, not the one it read in: after an ``os.chdir`` it
+    names another file, or none, and the reading cell re-ran in the wrong
+    folder."""
+    by_name: dict[str, list[str]] = {}
+    for path in files:
+        if os.path.isabs(path):
+            absolute = normalize_path(path)
+            by_name.setdefault(absolute.rpartition("/")[2], []).append(absolute)
+    kept: dict[str, tuple[int, int, int]] = {}
+    for path, stat in files.items():
+        if not os.path.isabs(path) and not is_remote_url(path):
+            parts = normalize_path(os.path.normpath(path)).split("/")
+            while parts and parts[0] == "..":
+                del parts[0]
+            tail = "/" + "/".join(parts)
+            if any(other.endswith(tail) for other in by_name.get(parts[-1], ())):
+                continue
+        kept[path] = stat
+    return kept

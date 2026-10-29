@@ -24,6 +24,10 @@ ISSUE_UNTRACKABLE_DEP = "untrackable_dep"
 #: How an untrackable check its class's own metaclass answers is described
 #: (`HelperWalk._note_decided_at_run_time`).
 ANSWERED_AT_RUN_TIME = "answered at run time by"
+#: How an ``untrackable_dep`` finding for a body's import of a user module
+#: not loaded yet, whose source cannot vouch for what it binds, ends
+#: (`HelperWalk._unvouched_import_issues`).
+UNREAD_MODULE = "a module not imported yet whose top level cash cannot read without running it"
 #: How an ``untrackable_dep`` finding that is a lookup by a run-time name
 #: (``getattr(obj, name)``, ``importlib.import_module(name)``,
 #: ``__import__(name)``) begins: on Python 3.12+ such a call is cached on a
@@ -157,6 +161,11 @@ class PurityReport:
     #: call. ``bindings_changed`` reports a change once the module binds one,
     #: so the function is analysed again and the new helper is keyed.
     unbound_names: tuple[tuple[str, str], ...] = ()
+    #: User modules a function-body import names that were not loaded when
+    #: analysed (`unloaded_modules.unloaded_import`): the walk could not
+    #: see their helpers. ``bindings_changed`` reports a change once one is
+    #: in ``sys.modules``, so the function is analysed again with it.
+    unloaded_modules: tuple[str, ...] = ()
     unkeyable: tuple[str, ...] = ()
     #: ``(ref, code objects)`` for each function and class the walk read the
     #: code of, as `cash.loaded_code.code_objects_of` gave them then.

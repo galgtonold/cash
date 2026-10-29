@@ -597,7 +597,10 @@ class FileWriterScheduler:
             # its own run bound, takes it a step on. The writer last ran with
             # the ``n`` that run bound, as Run All leaves it, so that is no
             # drift. Only while that code bound the live ``n`` and nothing
-            # else it reads moved.
+            # else it reads moved -- itself included: it read the live ``n``,
+            # not one a statement above it bound anew (``weekly =
+            # weekly[weekly['units'] >= 0]`` below ``weekly = raw...``, which
+            # a changed file moved).
             producer = latest_producer(simulation_trace, name, writer)
             if producer is None:
                 return False
@@ -605,6 +608,8 @@ class FileWriterScheduler:
             if name not in entry.inputs or self.tracking_state.executed_cell_codes.get(name) != entry.stmt_code:
                 return False
             seen = key_lineages(entry.input_hashes)
+            if name not in seen or seen.get(name) != runtime_lineage.get(name):
+                return False
             return all(
                 seen.get(other) == runtime_lineage.get(other)
                 for other in entry.inputs

@@ -34,7 +34,7 @@ import types
 import weakref
 from typing import Any
 
-from cash._user_attrs import attribute_or
+from cash._user_attrs import attribute_or, builtin_items
 from cash.install_paths import is_user_code_module
 
 __all__ = ["IdentityHeld", "identity_held_reason"]
@@ -78,7 +78,20 @@ def identity_held_reason(name: str, value: Any, user_ns: dict[str, Any]) -> Iden
     seen: set[int] = set()
     refs: list[Any] = []
     numbers: set[int] = set()
-    _walk([value], seen, user_kinds, refs, numbers)
+    unread: list[Any] = []
+    _walk([value], seen, user_kinds, refs, numbers, unread)
+    if unread:
+        return IdentityHeld(
+            f"'{name}' holds a {type(unread[0]).__name__} cash cannot look inside; it could hold a weak "
+            "reference or an id(), so the statement re-runs every time",
+            name,
+            "a container cash cannot read",
+            what=(
+                f"'{name}' holds a {type(unread[0]).__name__} cash cannot look inside, so it cannot tell "
+                "whether it finds another object by a weak reference or an id(). This statement runs every "
+                "time instead."
+            ),
+        )
     for ref in refs:
         if not issubclass(type(ref), weakref.ReferenceType):
             if _alive(ref):
@@ -104,7 +117,7 @@ def identity_held_reason(name: str, value: Any, user_ns: dict[str, Any]) -> Iden
     from .output_refusals import is_history_name
 
     roots = [v for k, v in user_ns.items() if k != name and not is_history_name(k)]
-    if not _walk(roots, held, user_kinds, [], set()) or not candidates.isdisjoint(held):
+    if not _walk(roots, held, user_kinds, [], set(), []) or not candidates.isdisjoint(held):
         return IdentityHeld(
             f"'{name}' holds the id() of an object the notebook holds; restored, the object would be "
             "another one, so the statement re-runs every time",
@@ -125,10 +138,18 @@ def _alive(proxy: Any) -> bool:
     return True
 
 
-def _walk(roots: list[Any], seen: set[int], user_kinds: dict[type, bool], refs: list[Any], numbers: set[int]) -> bool:
+def _walk(
+    roots: list[Any],
+    seen: set[int],
+    user_kinds: dict[type, bool],
+    refs: list[Any],
+    numbers: set[int],
+    unread: list[Any],
+) -> bool:
     """Look through *roots* (see the module docstring), adding the ``id()``
-    of each object to *seen*, each weak reference to *refs* and each
-    ``int`` to *numbers*. False when it stopped at `_MAX_SEEN`."""
+    of each object to *seen*, each weak reference to *refs*, each ``int``
+    to *numbers* and each container that could not be read to *unread*.
+    False when it stopped at `_MAX_SEEN`."""
     level = roots
     while level:
         nxt: list[Any] = []
@@ -144,7 +165,17 @@ def _walk(roots: list[Any], seen: set[int], user_kinds: dict[type, bool], refs: 
                 refs.append(item)
                 continue
             if kind in _CONTAINERS or issubclass(kind, (list, dict, set)):
-                items: Any = list(item.keys()) + list(item.values()) if issubclass(kind, dict) else item
+                # Through the builtin type's own methods: a dict subclass's
+                # ``values()`` or a list subclass's ``__iter__`` is the
+                # user's code, which plain Python never called here.
+                try:
+                    items: Any = builtin_items(item)
+                except Exception:  # noqa: BLE001 - not readable: what it holds is unknown
+                    items = None
+                if items is None:
+                    unread.append(item)
+                    seen.add(id(item))
+                    continue
             elif issubclass(kind, _WEAK_CONTAINERS):
                 data = attribute_or(item, "data")
                 items = (
