@@ -41,7 +41,7 @@ from cash.analysis.namespace_effects import bound_to_state, capturable_globals, 
 from cash.exceptions import SOURCE_RETRIEVAL_ERRORS
 from cash.install_paths import is_user_code_module, is_user_path
 from cash.notebook import shadow as _shadow
-from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
+from cash.notebook.cache_key import CacheKeyContext, body_imports_of, compute_cache_key, remember_body_imports
 from cash.notebook.call_effects import closure_cells, rebinds_its_closure
 from cash.sizing import pandas_nbytes
 from cash.source_reading import own_source, wrapper_layers
@@ -1012,7 +1012,12 @@ def call_cache_key(
     elif site.stmt_identity:
         # Hashed, so the statement's own text cannot break the delimiting.
         parts.append("stmt=" + hashlib.sha256(site.stmt_identity.encode("utf-8")).hexdigest())
-    return "call:" + hashlib.sha256((base + "|" + "|".join(parts)).encode("utf-8")).hexdigest()
+    key = "call:" + hashlib.sha256((base + "|" + "|".join(parts)).encode("utf-8")).hexdigest()
+    imported = body_imports_of(base)
+    if imported:
+        # A hit imports them as the call would (`import_body_modules`).
+        remember_body_imports(key, imported)
+    return key
 
 
 #: Values whose content is all there is to them: nothing about them can change

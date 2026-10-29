@@ -36,6 +36,7 @@ from cash.notebook.cache_key import (
     CacheKeyContext,
     CacheKeyResult,
     compute_cache_key,
+    import_body_modules,
     statement_source_hash,
     unkeyed_reach,
 )
@@ -1628,6 +1629,8 @@ class StatementProcessor:
     ) -> ProcessResult | None:
         """Restore *run* from its entry; the finished result, or None when the
         restore failed and the statement must run after all."""
+        # The modules its callees import in their body, imported as its run would.
+        import_body_modules(run.cache_key)
         # Read before the restore moves the generators.
         advanced = None if is_control_body(run.code) else carriers_an_entry_advanced(cached_data, self.shell.user_ns)
         reseeded = (

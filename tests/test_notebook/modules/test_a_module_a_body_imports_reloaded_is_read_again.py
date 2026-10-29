@@ -149,3 +149,26 @@ def test_a_package_function_importing_its_submodule_does_not_rewrite_itself(cash
     for cell in cells[3:]:
         run_cash_cell(cash_magics, cell, cells=cells)
     assert (ns["y"], ns["z"]) == (12, 180)
+
+
+def test_a_hit_after_a_restart_imports_what_the_call_imports(cash_magics, a_package):
+    """``y = g(...)`` served after a restart did not run ``from .helper
+    import scale``, so ``bodypkg.helper`` was never imported and
+    ``importlib.reload(sys.modules['bodypkg.helper'])`` below raised the
+    ``KeyError`` plain Python does not."""
+    api = "import time\ndef g(vals):\n    time.sleep(0.3)\n    from .helper import scale\n    return sum(scale(v) for v in vals)\n"
+    cells = _reload_cells(f"open('bodypkg/api.py', 'w').write({api!r})", "from bodypkg.api import g", "bodypkg.helper")
+    ns = cash_magics.shell.user_ns
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    for name in [n for n in sys.modules if n.startswith("bodypkg.")]:
+        del sys.modules[name]
+    cash_magics.tracking_state.reset_session_state()
+    for name in ("g", "y", "z"):
+        ns.pop(name)
+    statuses = []
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+        statuses.append([str(s.get("status")) for s in cash_magics._last_cell_metrics.get("statements", [])])
+    assert "RESTORED" in statuses[2], statuses
+    assert (ns["y"], ns["z"]) == (12, 180)

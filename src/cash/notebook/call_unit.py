@@ -59,7 +59,7 @@ from cash.exceptions import CashCacheStoreFailedWarning
 from cash.notebook import helper_memos
 from cash.notebook import shadow as _shadow
 from cash.notebook._trace import trace_event
-from cash.notebook.cache_key import CacheKeyContext
+from cash.notebook.cache_key import CacheKeyContext, import_body_modules
 from cash.notebook.call_effects import (
     UNWRAP_FAILED,
     DigestHandoff,
@@ -964,6 +964,7 @@ class CallUnit:
     def _serve_hit(self, call: _Call, value, recorded_cost: float, metadata: Mapping[str, Any], hit_started: float):
         """Hand back a found entry's value, with the call's effects put back."""
         __tracebackhide__ = True
+        import_body_modules(call.key)
         value, captured_globals = unwrap_callee_globals(value, metadata)
         if value is UNWRAP_FAILED:
             # The entry says it carries captured globals and does not.

@@ -12,6 +12,7 @@ import builtins
 import dis
 import functools
 import hashlib
+import importlib
 import logging
 import secrets
 import sys
@@ -56,8 +57,11 @@ __all__ = [
     "CacheKeyContext",
     "CacheKeyResult",
     "VirtualCallable",
+    "body_imports_of",
     "compute_cache_key",
     "control_outcome_key",
+    "import_body_modules",
+    "remember_body_imports",
     "statement_source_hash",
     "write_provenance_key",
     "note_read_provenance_written",
@@ -1361,9 +1365,45 @@ def compute_cache_key(
         )
 
     result = CacheKeyResult(cache_key, source_hash, input_hashes, func_source_hashes, module_source_hashes)
+    body_imported = [part.split(":")[1] for part in callee_deps if part.startswith("bodyimport:")]
+    if body_imported:
+        remember_body_imports(cache_key, body_imported)
     if unfollowed or (by_string and not followed) or unkeyed_modules:
         result.matches_nothing = True
     return result
+
+
+#: The modules of the user's a statement's or call's callees import in their
+#: body (`_body_import_parts`), by its key, most recent last.
+_BODY_IMPORTS: dict[str, tuple[str, ...]] = {}
+_BODY_IMPORTS_MAX = 4096
+
+
+def remember_body_imports(cache_key: str, modules: Iterable[str]) -> None:
+    """Note that the run keyed *cache_key* imports *modules* in a callee's body."""
+    _BODY_IMPORTS[cache_key] = tuple(modules)
+    if len(_BODY_IMPORTS) > _BODY_IMPORTS_MAX:
+        del _BODY_IMPORTS[next(iter(_BODY_IMPORTS))]
+
+
+def body_imports_of(cache_key: str) -> tuple[str, ...]:
+    """The modules the run keyed *cache_key* imports in a callee's body."""
+    return _BODY_IMPORTS.get(cache_key, ())
+
+
+def import_body_modules(cache_key: str) -> None:
+    """Import what the run keyed *cache_key* imports in a callee's body and
+    is not loaded, as its run would have: a hit served after a restart left
+    ``pkg.helper`` unimported, and ``importlib.reload(sys.modules[
+    "pkg.helper"])`` in a cell below raised the ``KeyError`` plain Python
+    does not. Only modules of the user's files are named (`_body_import_parts`)."""
+    for name in _BODY_IMPORTS.get(cache_key, ()):
+        if name in sys.modules:
+            continue
+        try:
+            importlib.import_module(name)
+        except Exception:
+            logger.debug("[CACHE_KEY] Could not import %s for a hit", name, exc_info=True)
 
 
 #: The key a draw moves a generator or stream by (`draw_key`), for each key
