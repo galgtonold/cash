@@ -1098,7 +1098,7 @@ def _module_body_imports(value: Any, user_ns: Mapping[str, Any], found: set[str]
         if id(current) in seen:
             continue
         seen.add(id(current))
-        if isinstance(current, type):
+        if issubclass(type(current), type):
             if _in_users_module(attribute_or(current, "__module__", None)):
                 pending.extend(_members_of(current))
             continue
@@ -1117,7 +1117,7 @@ def _module_body_imports(value: Any, user_ns: Mapping[str, Any], found: set[str]
             found.update(imported - {_UNKNOWN_PACKAGE})
             for ref in code.co_names:
                 held = namespace.get(ref)
-                if type(held) is types.FunctionType or isinstance(held, type):
+                if type(held) is types.FunctionType or issubclass(type(held), type):
                     pending.append(held)
     return complete
 
@@ -1133,10 +1133,14 @@ def _members_of(cls: type) -> list[Any]:
     """The functions a class body holds: its methods, those a static or
     class method wraps and a property's accessors."""
     members: list[Any] = []
-    for member in list(vars(cls).values()):
-        if isinstance(member, (staticmethod, classmethod)):
+    try:
+        held = list(vars(cls).values())
+    except Exception:  # noqa: BLE001 - a metaclass that answers no lookup
+        return members
+    for member in held:
+        if type(member) in (staticmethod, classmethod):
             member = member.__func__
-        if isinstance(member, property):
+        if type(member) is property:
             members.extend(f for f in (member.fget, member.fset, member.fdel) if f is not None)
         elif type(member) is types.FunctionType:
             members.append(member)
