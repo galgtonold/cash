@@ -97,7 +97,7 @@ from cash.notebook.statement.run import (
     over_the_handed_iterable,
 )
 from cash.notebook.statement.store import StatementStore
-from cash.notebook.tracking_state import TrackingState
+from cash.notebook.tracking_state import UNAPPLIED, TrackingState
 from cash.notebook.versioned_json_store import resolve_cache_dir
 from cash.purity import is_known_pure, is_stateful
 from cash.tracking.file_tracker import unrecorded_reads
@@ -501,7 +501,13 @@ class StatementProcessor:
         from-import component and module-attribute accesses all go, so the
         next statement that reads *name* treats it as having no lineage. The
         value in ``user_ns`` is left alone.
+
+        A name a hit left unfilled (`UNAPPLIED`) keeps it all: its lineage
+        already makes what reads it build it again, which a name with no
+        lineage does not when only a function reads it.
         """
+        if self.tracking_state.lineage.get(name, "").startswith(UNAPPLIED):
+            return
         self.tracking_state.lineage.discard(name)
         self.tracking_state.executed_cell_codes.pop(name, None)
         self.tracking_state.executed_input_lineages.pop(name, None)
