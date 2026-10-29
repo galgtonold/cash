@@ -6,7 +6,9 @@ The hook on the types' ``__setattr__`` never sees a write past it. The
 statement's text is read for one instead: a name of the notebook is looked
 at, and a write the text cannot pin down (a parameter of a function) turns
 the switch on as it is. A class's own ``self.__dict__.update(...)`` does
-not, unless the class is built on a pandas scalar.
+not, unless the class is built on a pandas scalar. Nor does the hook see
+a user's write of a name pandas keeps for itself (``td._seconds = 9``),
+which any write of such a name, on anything, stands for.
 
 Each case runs in a fresh interpreter: the switch is for the whole process.
 """
@@ -47,6 +49,12 @@ CASES = {
     "t.seconds if hasattr(t, 'seconds') else None\nvars(t)": False,
     "class C:\n    def __init__(self, **kw):\n        self.__dict__.update(kw)\nc = C(a=1)": False,
     "class T(pd.Timestamp):\n    def mark(self):\n        self.__dict__['m'] = 1": True,
+    # A name pandas keeps for itself, which the hook lets through.
+    "td = pd.Timedelta(5)\ntd._seconds = 9": True,
+    "p = pd.Period('2020')\nsetattr(p, '_cache', {})": True,
+    "td = pd.Timedelta(5)\nvars(td).update(_microseconds=1)": True,
+    "td = pd.Timedelta(5)\ntd.__dict__['_seconds'] = 9": True,
+    "td = pd.Timedelta(5)\ntd.seconds": False,
 }
 
 

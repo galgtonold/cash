@@ -339,6 +339,9 @@ def note_raw_attribute_writes(tree: Any, user_ns: Mapping[str, Any]) -> None:
     in a class not built on a pandas scalar). Only while pandas is loaded."""
     if _SCALAR_IDENTITY or "pandas" not in sys.modules or tree is None:
         return
+    if _writes_own_scalar_name(tree):
+        _note_scalar_attribute()
+        return
     for target, scoped in _raw_attribute_targets(tree):
         if scoped or not isinstance(target, ast.Name) or target.id not in user_ns:
             _note_scalar_attribute()
@@ -347,6 +350,31 @@ def note_raw_attribute_writes(tree: Any, user_ns: Mapping[str, Any]) -> None:
         if _ATTRIBUTED_SCALARS and isinstance(value, _SCALAR_KINDS) and _user_attributes(value):
             _note_scalar_attribute()
             return
+
+
+#: Every name a pandas scalar type keeps for itself (`_OWN_SCALAR_NAMES`).
+_ANY_OWN_SCALAR_NAME = frozenset().union(*_OWN_SCALAR_NAMES.values())
+
+
+def _writes_own_scalar_name(tree: Any) -> bool:
+    """Whether *tree* may set or delete, on anything, an attribute named as
+    one a pandas scalar keeps for itself (``td._seconds = 5``,
+    ``setattr(p, '_cache', {})``, ``vars(td).update(_seconds=5)``): the
+    hook lets those through as pandas' own, so a user's would go unseen.
+    Any such attribute written, or such a name in a string or keyword, says
+    yes; a false alarm (``self._cache = {}``) only turns the switch on
+    sooner."""
+    own = _ANY_OWN_SCALAR_NAME
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute):
+            if node.attr in own and isinstance(node.ctx, (ast.Store, ast.Del)):
+                return True
+        elif isinstance(node, ast.Constant):
+            if isinstance(node.value, str) and node.value in own:
+                return True
+        elif isinstance(node, ast.keyword) and node.arg in own:
+            return True
+    return False
 
 
 def _raw_attribute_targets(tree: Any) -> Iterator[tuple[Any, bool]]:
