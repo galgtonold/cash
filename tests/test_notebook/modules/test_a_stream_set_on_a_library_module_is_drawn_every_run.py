@@ -68,6 +68,11 @@ SHAPES = {
         "next(textwrap.cnt[0])",
         "",
     ),
+    "an_iterator_in_a_masked_array": (
+        "textwrap.cnt = np.ma.array(np.empty(1, dtype=object))\ntextwrap.cnt[0] = itertools.count()",
+        "next(textwrap.cnt[0])",
+        "",
+    ),
     "an_iterator_in_a_slots_dataclass": (
         "textwrap.cnt = DBox(itertools.count())",
         "next(textwrap.cnt.it)",
@@ -214,3 +219,47 @@ def test_a_value_the_walk_cannot_finish_is_read_as_a_draw_with_a_warning(monkeyp
         callee_reach.library_draw_source("textwrap.cnt", textwrap.cnt)
     codes = [getattr(w.message, "code", None) for w in caught]
     assert codes == (["KEY-LIBRARY-VALUE-UNREAD"] if warned else []), codes
+
+
+@pytest.mark.parametrize(
+    ("module", "held"),
+    [("somelib", None), ("builtins", False), ("datetime", False), ("numpy", False)],
+)
+def test_an_object_the_collector_sees_nothing_in_is_known_only_for_the_standard_library(module, held):
+    """A type of another library without the collector's support reads to
+    it as holding nothing, whatever it holds: "no draw" was answered for
+    it, though nothing was known."""
+    import types
+
+    kind = types.SimpleNamespace(__module__=module, __flags__=0)
+    parts = callee_reach._parts_held(object(), kind)
+    assert (None if parts is None else bool(list(parts))) is held
+
+
+def test_an_iterator_in_a_masked_array_is_a_draw(monkeypatch):
+    """``np.ma`` arrays are of ``numpy.ma.core``: the walk read only those
+    of ``numpy`` itself as arrays, and the collector sees no items."""
+    import itertools
+    import textwrap
+
+    import numpy as np
+
+    cnt = np.ma.array(np.empty(1, dtype=object))
+    cnt[0] = itertools.count()
+    monkeypatch.setattr(callee_reach, "_SET_ON_LIBRARIES", {"textwrap": {"cnt"}})
+    monkeypatch.setattr(textwrap, "cnt", cnt, raising=False)
+    assert callee_reach.library_draw_source("textwrap.cnt", textwrap.cnt) is True
+
+
+def test_an_iterator_masked_out_is_still_a_draw(monkeypatch):
+    """``mask=[True]``: the masked array's ``ravel`` hands back ``masked``
+    for the item, and the iterator under it was not seen."""
+    import itertools
+    import textwrap
+
+    import numpy as np
+
+    cnt = np.ma.array([itertools.count()], dtype=object, mask=[True])
+    monkeypatch.setattr(callee_reach, "_SET_ON_LIBRARIES", {"textwrap": {"cnt"}})
+    monkeypatch.setattr(textwrap, "cnt", cnt, raising=False)
+    assert callee_reach.library_draw_source("textwrap.cnt", textwrap.cnt) is True
