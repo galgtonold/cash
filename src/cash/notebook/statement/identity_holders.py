@@ -382,6 +382,8 @@ def _weakly_held(name: str, targets: list[Any], user_ns: dict[str, Any]) -> Iden
     from .output_refusals import is_history_name
 
     wanted = {id(target) for target in targets}
+    # A proxy finds its object as a reference does, but has no call to ask.
+    wanted_refs = {id(ref) for target in targets for ref in weakref.getweakrefs(target)}
     seen: set[int] = set()
     user_kinds: dict[type, bool] = {}
     cut: list[str] = []
@@ -393,7 +395,8 @@ def _weakly_held(name: str, targets: list[Any], user_ns: dict[str, Any]) -> Iden
         if walk.cut or walk.unread:
             cut.append(var)
         if any(
-            issubclass(type(ref), weakref.ReferenceType) and id(weakref.ref.__call__(ref)) in wanted
+            id(ref) in wanted_refs
+            or (issubclass(type(ref), weakref.ReferenceType) and id(weakref.ref.__call__(ref)) in wanted)
             for ref in walk.refs
         ):
             return IdentityHeld(
@@ -478,6 +481,35 @@ def _any_held(in_arrays: list[Any], held: _Walk) -> bool:
         if found.size and numpy.isin(found, ids).any():
             return True
     return False
+
+
+def _code_parts(item: Any) -> list[Any]:
+    """What a class or a function of the user's code holds: a class's own
+    attributes but Python's ``__dunder__`` ones, a function's closure cells
+    and defaults, a bound method's object. Nothing for a library's."""
+    if isinstance(item, types.MethodType):
+        return [item.__self__] if _users_code(item.__func__) else []
+    if not _users_code(item):
+        return []
+    if isinstance(item, type):
+        return [v for k, v in vars(item).items() if not (k.startswith("__") and k.endswith("__"))]
+    if type(item) is types.FunctionType:
+        held: list[Any] = []
+        for cell in item.__closure__ or ():
+            try:
+                held.append(cell.cell_contents)
+            except ValueError:  # an empty cell
+                continue
+        held.extend(item.__defaults__ or ())
+        held.extend((item.__kwdefaults__ or {}).values())
+        return held
+    return []
+
+
+def _users_code(item: Any) -> bool:
+    """Whether *item*, a class or a function, is of the user's code."""
+    module = sys.modules.get(attribute_or(item, "__module__") or "")
+    return module is not None and is_user_code_module(module)
 
 
 def _numpy_array(kind: type) -> bool:
@@ -572,6 +604,12 @@ class _Walk:
                 self.refs.append(item)
             return
         if issubclass(kind, _BY_REFERENCE):
+            # Restored as itself. Looking through the notebook (*quiet*),
+            # a class or a function of the user's still holds objects: an
+            # ``id()`` of ``Reg.items[0]``, or ``r = weakref.ref(o)`` in a
+            # closure, finds them there.
+            if self.quiet:
+                into.extend(_code_parts(item))
             return
         items: Any
         if builtin_base(item) is not None:
@@ -724,6 +762,8 @@ class _Walk:
         kind = type(item)
         if kind in (int, str) or kind in _LEAVES or id(item) in self.seen:
             return False
+        if issubclass(kind, _BY_REFERENCE):
+            return self.quiet and bool(_code_parts(item))
         return (
             issubclass(kind, (*_REFERENCES, *_WEAK_CONTAINERS, types.SimpleNamespace))
             or builtin_base(item) is not None
