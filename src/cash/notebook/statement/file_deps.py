@@ -92,11 +92,15 @@ def compute_file_hash_component(
     # Relative to the notebook, per directory: a folder's files share one.
     rel_dirs: dict[str, str | None] = {}
     # A relative read is recorded under both spellings
-    # (``FileAccessTracker.track_path``): the second is answered by the first.
+    # (``FileAccessTracker.track_path``): the second is answered by the first,
+    # found by the path it ends with, not by the folder the notebook is in
+    # now: after an ``os.chdir`` that names another file, or none, and the
+    # component of a loop's record changed when its files had not.
     answered: dict[str, str] = {}
+    answered_by_name: dict[str, list[str]] = {}
     for f in sorted(accessed_files):
         if not os.path.isabs(f):
-            same = answered.get(normalize_path(os.path.abspath(f)))
+            same = answered.get(normalize_path(os.path.abspath(f))) or _answered_by_tail(f, answered, answered_by_name)
             if same is not None:
                 file_components.append(same)
                 continue
@@ -143,7 +147,9 @@ def compute_file_hash_component(
         component = f"{display_path}:{mtime_ns}:{size}:{ctime_ns}"
         file_components.append(component)
         if os.path.isabs(f):
-            answered[normalize_path(f)] = component
+            absolute = normalize_path(f)
+            answered[absolute] = component
+            answered_by_name.setdefault(absolute.rpartition("/")[2], []).append(absolute)
 
     for url in sorted(accessed_remote or ()):
         # The URL is the identity and the token is the state, exactly as
@@ -241,3 +247,15 @@ class StatementFileDeps:
                 var_name,
                 type(value).__name__,
             )
+
+
+def _answered_by_tail(path: str, answered: dict[str, str], by_name: dict[str, list[str]]) -> str | None:
+    """The component of the one absolute path in *answered* that relative
+    *path* is the end of (``a.txt`` of ``/data/dir1/a.txt``); None when
+    there is none, or more than one."""
+    parts = normalize_path(os.path.normpath(path)).split("/")
+    while parts and parts[0] == "..":
+        del parts[0]
+    tail = "/" + "/".join(parts)
+    found = [other for other in by_name.get(parts[-1], ()) if other.endswith(tail)]
+    return answered[found[0]] if len(found) == 1 else None

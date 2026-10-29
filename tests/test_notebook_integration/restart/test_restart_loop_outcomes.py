@@ -235,6 +235,7 @@ def test_the_loops_own_variables_are_rebuilt_when_a_cell_reads_them(nb_runner, _
             "parts = []\nfor f in files:\n    d = parse(f)\n    d['v'].apply(tracker.record)\n    parts.append(d)",
         ),
     ],
+    ids=["file", "global-rng", "clock", "global-helper", "helper-from-dict", "changing-method"],
 )
 def test_a_loop_that_did_more_than_build_its_outputs_is_not_recorded(nb_runner, _teed, why, loop):
     setup = SETUP + (

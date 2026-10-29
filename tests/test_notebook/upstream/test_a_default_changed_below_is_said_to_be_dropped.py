@@ -197,3 +197,18 @@ def test_a_walk_cut_short_with_nothing_linking_them_says_it_may_hold(cash_magics
     assert cash_magics.shell.user_ns["y"] == 3, "not the value a run from the top gives"
     assert said, "the walk ran out and the change below was dropped without a word"
     assert "reads 'draw', which may hold 'BIG'" in said[0], said[0]
+
+
+@pytest.mark.parametrize("call", ["setup()", "setup(); pass"], ids=["a_helper", "a_helper_in_a_line"])
+def test_a_closure_rebound_inside_a_helper_is_rebuilt_with_its_rebind(cash_magics, call):
+    """``def setup(): rebind([0])`` then ``setup()``: only ``setup`` was seen
+    as the callee, so the reader re-run on its own after a Run All rebuilt
+    ``draw`` from ``make(BIG)`` without the rebind and read ``BIG``."""
+    setup = MAKE.replace("range(3)", "range(20000)") + "draw, rebind = make(BIG)\ndef setup():\n    rebind([0])\n"
+    reader = "y = draw(1)"
+    cells = [setup, call, reader, CHANGES["append"]]
+    for _ in range(2):
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+    run_cash_cell(cash_magics, reader, cells=cells)
+    assert cash_magics.shell.user_ns["y"] == 1, "not the value a run from the top gives"
