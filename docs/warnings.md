@@ -1818,6 +1818,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-ANALYSIS-BUDGET](#notebook-analysis-budget) | notebook | working out how to key a statement took longer than caching it could save; it ran uncached |
 | [NOTEBOOK-ANALYSIS-FAILED](#notebook-analysis-failed) | notebook | a safety check raised; the statement ran uncached |
 | [NOTEBOOK-BAILOUT](#notebook-bailout) | notebook | an internal error; the cell ran uncached |
+| [NOTEBOOK-CALLABLE-UNREAD](#notebook-callable-unread) | notebook | a function the statement calls or hands over cannot be read, so it runs every time |
 | [NOTEBOOK-CELL-SYNTAX](#notebook-cell-syntax) | notebook | an earlier cell does not parse |
 | [NOTEBOOK-CHANGED-BELOW](#notebook-changed-below) | notebook | a cell re-run on its own reads a value rebuilt without the in-place change a cell below made |
 | [NOTEBOOK-CLASS-KEPT](#notebook-class-kept) | notebook | a class's own state a cell changes could not be put back for a re-run, and another cell changes it too |
@@ -1906,6 +1907,26 @@ Restarting the kernel often clears it.
 
 **When it is safe to ignore.** When it happens once. If it repeats on the same
 cell, that cell is never cached.
+
+### NOTEBOOK-CALLABLE-UNREAD {#notebook-callable-unread}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_callable_unread @647d181d, cash/analysis/mutation_effects.py:statement_effects @962b69f9 -->
+**What happened.** The statement calls or hands over a function whose
+source cash cannot read (one made by `exec`, or a lambda from a library),
+or one it can tell only by running code: what a call of yours returns
+(`functools.partial(add, pick(lists))(1)`), an argument unpacked with `*`.
+cash cannot tell what that function changes, so the statement was not
+stored. The message names the callable. It is shown once per statement.
+
+**Why it matters.** Your results are correct: the statement runs every
+time, as plain Python runs it.
+
+**What to do.** Hand over a function defined in the notebook or in a
+module, by its name, so cash can read it.
+
+**When it is safe to ignore.** When the statement is cheap.
 
 ### NOTEBOOK-CELL-SYNTAX {#notebook-cell-syntax}
 

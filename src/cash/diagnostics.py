@@ -319,6 +319,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # changed is kept as that run left it, or could not be put back
         "NOTEBOOK-CHANGED-BELOW",  # a cell re-run on its own reads a value rebuilt
         # without the in-place change a cell below made to it
+        "NOTEBOOK-CALLABLE-UNREAD",  # a callable the statement calls or hands over
+        # cannot be read, so it runs uncached every time
         "NOTEBOOK-CELL-SYNTAX",  # an upstream cell does not parse, so cells that
         # depend on it stop being tracked
         "NOTEBOOK-CLASS-KEPT",  # a class's own state a cell changes is kept

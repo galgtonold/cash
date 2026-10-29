@@ -1339,6 +1339,10 @@ class StatementEffects:
     #: Why the callees could not be analysed, when they could not. The
     #: statement then runs uncached: what it writes is unknown.
     unanalysed: tuple[str, ...] = ()
+    #: Those of ``unanalysed`` that name a callable it calls or hands over
+    #: that cannot be read (`handed_callables`), which the processor warns
+    #: about (``NOTEBOOK-CALLABLE-UNREAD``).
+    unreadable_callables: tuple[str, ...] = ()
     #: How the statement writes into an object no name in its text roots
     #: (`unrooted_write`), when it does: it runs uncached, its outputs are
     #: every variable, and it is warned about.
@@ -1501,6 +1505,7 @@ def statement_effects(
         return StatementEffects(frozenset(inputs), frozenset(outputs), frozenset(), frozenset(), (reason,))
     # A user callable handed to a call whose source cannot be read: what it
     # changes is unknown, so the statement runs uncached.
+    callables = unreadable
     unrooted = (
         unrooted_write(tree, {**namespace_writer_aliases(tree, namespace), **writer_aliases(tree)}) if tree else None
     )
@@ -1513,7 +1518,15 @@ def statement_effects(
         # known before it runs, so each is taken as changed.
         outputs = set(outputs) | every_variable(namespace)
         unreadable = (*unreadable, unrooted)
-    return StatementEffects(frozenset(inputs), frozenset(outputs), callee_globals, arg_mutations, unreadable, unrooted)
+    return StatementEffects(
+        frozenset(inputs),
+        frozenset(outputs),
+        callee_globals,
+        arg_mutations,
+        unreadable,
+        unreadable_callables=callables,
+        unrooted=unrooted,
+    )
 
 
 #: Names IPython binds in a notebook's namespace, which no statement writes into.
