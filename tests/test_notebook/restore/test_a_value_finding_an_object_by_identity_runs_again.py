@@ -24,6 +24,39 @@ HOLDERS = {
     "an id in a list": ("ids = [id(p.child)]", "r = ids[0] == id(p.child)"),
     "an id alone": ("k = id(p)", "r = k == id(p)"),
     "its own id": ("p.me = id(p)", "r = p.me == id(p)"),
+    "an id in a deque": ("from collections import deque\nids = deque([id(p.child)])", "r = ids[0] == id(p.child)"),
+    "an id key in a dict subclass": (
+        "from collections import OrderedDict\nreg = OrderedDict({id(p.seen): 'seen'})",
+        "r = reg.get(id(p.seen)) == 'seen'",
+    ),
+    "an id in a SimpleNamespace": (
+        "from types import SimpleNamespace\nns = SimpleNamespace(k=id(p.child))",
+        "r = ns.k == id(p.child)",
+    ),
+    "a weak reference in a SimpleNamespace": (
+        "from types import SimpleNamespace\nh = SimpleNamespace(wr=weakref.ref(p.child))",
+        "r = h.wr() is p.child",
+    ),
+    "an id in an integer array": (
+        "import numpy as np\narr = np.array([id(p.child)], dtype=np.int64)",
+        "r = int(arr[0]) == id(p.child)",
+    ),
+    "an id in a slots class": (
+        "class H:\n    __slots__ = ('k',)\n    def __init__(self, k):\n        self.k = k\nh = H(id(p.child))",
+        "r = h.k == id(p.child)",
+    ),
+    "an id of a part of a SimpleNamespace": (
+        "from types import SimpleNamespace\nns2 = SimpleNamespace(child=[1])\nreg = {id(ns2.child): 'c'}",
+        "r = reg.get(id(ns2.child)) == 'c'",
+    ),
+    "an id inside a big container of records": (
+        "big = [(j, j) for j in range(20000)] + [('c', id(p.child))]",
+        "r = big[-1][1] == id(p.child)",
+    ),
+    "an id inside a big list of objects": (
+        "class R:\n    pass\nbig = [R() for _ in range(12000)]\nbig[-1].k = id(p.child)",
+        "r = big[-1].k == id(p.child)",
+    ),
 }
 
 
@@ -49,6 +82,9 @@ def test_a_run_all_finds_the_new_object(cash_magics, cash_instance, holder):
         "k = 12345",
         "reg = {'n': len(p.seen)}",
         "stamps = [1_700_000_000_000 + 8 * i for i in range(50)]",
+        "ns = [1_700_000_000_000_000_000 + 8 * i for i in range(50)]",
+        "big = [(j, j * 8) for j in range(20000)]",
+        "import numpy as np\narr = np.arange(0, 800_000, 8)",
     ],
 )
 def test_a_value_not_finding_an_object_by_identity_is_restored(cash_magics, cash_instance, value):
