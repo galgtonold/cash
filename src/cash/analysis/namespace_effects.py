@@ -1704,6 +1704,16 @@ _HANDOFFS_KEPT = 1 << 15
 _UNBOUND = object()
 
 
+def forget_handoffs() -> None:
+    """Drop the kept `function_handoffs` answers: a function was bound anew
+    or a module reloaded. An answer is kept by its text, its bindings and
+    the text of the functions it calls by name; one two calls down, bound
+    anew (``leaf`` turned from ``len(h)`` into ``heapq.heappush(h, 1)``),
+    changed none of them, and the answer from before was served."""
+    _HANDOFFS.clear()
+    _CONDITIONAL_HANDOFFS.clear()
+
+
 def _resolver_key(resolve_source: Callable[[str], str | None] | None) -> Any:
     """What decides the answers of *resolve_source*: its function and the
     namespaces it reads (``partial(_user_source, globals)``, a closure over

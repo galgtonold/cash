@@ -252,3 +252,19 @@ def test_a_hand_off_found_through_one_lookup_is_not_served_to_another(tmp_path, 
     if first == "the statement":
         statement()
     assert "LOG" in call_key.callee_watched_globals(ns["f"], ())
+
+
+def test_a_function_two_calls_down_bound_anew_is_seen(cash_magics):
+    """``d2 -> w -> leaf``, then ``leaf`` turned from ``len(h)`` into
+    ``heapq.heappush(h, 1)``: the answers kept by the direct callees' text
+    were served, and neither the call key nor the statement watched
+    ``LOG``."""
+    from tests._cell_driver import run_cash_cell
+
+    ns = cash_magics.shell.user_ns
+    cells = ["import heapq\nLOG = []\ndef leaf(h):\n    return len(h)\ndef w(h):\n    leaf(h)\ndef d2(x):\n    w(LOG)"]
+    run_cash_cell(cash_magics, cells[0], cells=cells)
+    assert call_key.callee_watched_globals(ns["d2"], ()) == ()
+    cells.append("def leaf(h):\n    heapq.heappush(h, 1)")
+    run_cash_cell(cash_magics, cells[1], cells=cells)
+    assert "LOG" in call_key.callee_watched_globals(ns["d2"], ())
