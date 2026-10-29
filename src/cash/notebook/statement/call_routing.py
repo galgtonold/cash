@@ -74,6 +74,8 @@ class CashMarks(NamedTuple):
     #: (``CallUnit.computed_s``, ``CallUnit.tracking_in_calls_s``).
     computed: float = 0.0
     tracking_in_calls: float = 0.0
+    #: ``len(CallUnit.default_changes)``.
+    defaults_seq: int = 0
 
 
 def statement_price(wall_time: float, spent: CashMarks) -> StatementPrice:
@@ -630,6 +632,7 @@ class CallRouting:
             attribute_or(unit, "reads_seq", 0),
             attribute_or(unit, "computed_s", 0.0),
             attribute_or(unit, "tracking_in_calls_s", 0.0),
+            len(attribute_or(unit, "default_changes", ())),
         )
 
     def _since(self, marks: CashMarks) -> CashMarks:
@@ -664,6 +667,7 @@ class CallRouting:
             marks.reads_seq if same else 0,
             advanced("computed_s", marks.computed),
             advanced("tracking_in_calls_s", marks.tracking_in_calls),
+            marks.defaults_seq if same else 0,
         )
 
     def price(self, wall_time: float, marks: CashMarks) -> StatementPrice:
@@ -684,6 +688,17 @@ class CallRouting:
             return unit.files_read_since(marks.reads_seq if unit is marks.unit else 0)
         except Exception:  # noqa: BLE001 - nothing known is nothing left out
             return frozenset()
+
+    def defaults_changed_in_calls(self, marks: CashMarks) -> list[tuple[str, str]]:
+        """``(function, parameter)`` for each default the calls the cache
+        routed changed in the statement (`CallUnit.default_changes`)."""
+        unit = self._call_cache.call_unit if self._call_cache is not None else None
+        if unit is None:
+            return []
+        try:
+            return unit.default_changes_since(marks.defaults_seq if unit is marks.unit else 0)
+        except Exception:  # noqa: BLE001 - nothing known is nothing changed
+            return []
 
     def returned_digest(self, code: str) -> tuple[Any, str] | None:
         """``(result, digest)`` when the statement is ``name = call(...)``

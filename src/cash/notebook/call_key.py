@@ -11,6 +11,7 @@ statement it sits in.
 from __future__ import annotations
 
 import argparse
+import ast
 import builtins
 import collections
 import contextlib
@@ -261,10 +262,136 @@ def callee_watched_defaults(fn) -> tuple:
         for reached in _functions_reached_in(globals_dict, layer):
             if type(reached) is not _types.FunctionType:
                 continue
-            for param, value in _defaults_by_name(reached).items():
-                if id(value) not in found and _worth_watching(value):
-                    found[id(value)] = (reached.__qualname__, param, value)
+            for function in (reached, *_methods_named_in(reached, globals_dict)):
+                for param, value in _defaults_by_name(function).items():
+                    if id(value) not in found and _worth_watching(value) and not _only_reads(function, param, value):
+                        found[id(value)] = (function.__qualname__, param, value)
     return tuple(found.values())
+
+
+def _only_reads(fn, param: str, value) -> bool:
+    """Does *fn*'s text only read its parameter *param*, whose default is
+    *value*, so a call cannot change that default? ``def f(x, buf=BIG):
+    return x + buf[0]``: a 40 MB array hashed before and after every miss
+    cost 9 ms a call, where a global read the same way is not hashed.
+
+    Only for a library's value (a user class's ``__add__`` is its own code),
+    and only when every use of *param* is read in place: through
+    ``.attr`` and ``[i]`` into an operator, an f-string or a builtin that
+    only reads (``len``, ``float``). Anything else is watched: handed to a
+    call, a method called on it, bound to another name, iterated, returned,
+    stored, written, or named in a ``def`` or ``lambda`` inside."""
+    if is_user_code_module(sys.modules.get(attribute_or(type(value), "__module__", None))):
+        return False
+    fdef = _own_def(fn)
+    if fdef is None:
+        return False
+    found = _PARAM_ONLY_READ.get((fdef, param), _UNREAD)
+    if found is _UNREAD:
+        found = _PARAM_ONLY_READ[(fdef, param)] = _builtins_reading(fdef, param)
+    # ``len`` there is the builtin, not a function of the module's own.
+    namespace = attribute_or(fn, "__globals__", None) or {}
+    return found is not None and not any(name in namespace for name in found)
+
+
+#: ``(def, parameter) -> _builtins_reading``; the trees are only read.
+_PARAM_ONLY_READ: LruMemo[Any, Any] = LruMemo(1024)
+
+#: Builtins that read what they are handed and keep nothing of it.
+_READING_BUILTINS = frozenset(
+    {
+        "len",
+        "float",
+        "int",
+        "str",
+        "repr",
+        "bool",
+        "abs",
+        "round",
+        "print",
+        "format",
+        "isinstance",
+        "id",
+        "hash",
+        "type",
+    }
+)
+
+#: Parents a read ends in: each makes a new value of what it reads.
+_CONSUMING = (ast.BinOp, ast.UnaryOp, ast.Compare, ast.FormattedValue)
+
+
+def _builtins_reading(fdef: ast.FunctionDef | ast.AsyncFunctionDef, param: str) -> frozenset[str] | None:
+    """The builtins *fdef*'s body hands *param* to when every use of it
+    only reads it (`_only_reads`); None when one may not."""
+    parents: dict[int, ast.AST] = {}
+    called: set[str] = set()
+    uses = []
+    for stmt in fdef.body:
+        for node in ast.walk(stmt):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+                if any(isinstance(n, ast.Name) and n.id == param for n in ast.walk(node)):
+                    return None
+            for child in ast.iter_child_nodes(node):
+                parents[id(child)] = node
+            if isinstance(node, ast.Name) and node.id == param:
+                uses.append(node)
+    for name in uses:
+        if not isinstance(name.ctx, ast.Load):
+            return None
+        node: ast.AST = name
+        parent = parents.get(id(node))
+        while (
+            isinstance(parent, (ast.Subscript, ast.Attribute))
+            and parent.value is node
+            and isinstance(parent.ctx, ast.Load)
+        ):
+            node, parent = parent, parents.get(id(parent))
+        if isinstance(parent, _CONSUMING):
+            continue
+        if (
+            isinstance(parent, ast.Call)
+            and node is not parent.func
+            and node in parent.args
+            and isinstance(parent.func, ast.Name)
+            and parent.func.id in _READING_BUILTINS
+        ):
+            called.add(parent.func.id)
+            continue
+        return None
+    return frozenset(called)
+
+
+#: How many methods `_methods_named_in` gives for one function.
+_METHODS_NAMED = 256
+
+
+def _methods_named_in(fn, globals_dict: dict) -> list:
+    """The methods of the classes of this module *fn* names, or whose
+    objects it names, that it may call by an attribute (``c.m(x)`` over
+    ``c = C()``): read off the class, no code of theirs run."""
+    names = set(fn.__code__.co_names)
+    out: list = []
+    seen: set[int] = set()
+    for name in names:
+        value = globals_dict.get(name, _NOT_BOUND)
+        cls = value if issubclass(type(value), type) else type(value)
+        if id(cls) in seen or _CLASS_MODULE(cls) != globals_dict.get("__name__"):
+            continue
+        seen.add(id(cls))
+        for klass in _CLASS_MRO(cls):
+            if _CLASS_MODULE(klass) != globals_dict.get("__name__"):
+                continue
+            for attr, member in list(_CLASS_DICT(klass).items()):
+                if attr not in names:
+                    continue
+                if issubclass(type(member), (staticmethod, classmethod)):
+                    member = member.__func__
+                if type(member) is _types.FunctionType:
+                    out.append(member)
+                    if len(out) >= _METHODS_NAMED:
+                        return out
+    return out
 
 
 def _defaults_by_name(fn) -> dict[str, object]:

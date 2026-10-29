@@ -215,3 +215,38 @@ def test_a_memo_default_is_named_once(cash_magics):
     assert cash_magics.shell.user_ns["a"] == 7
     assert len(said) == 1, said
     assert "fib changes its default 'memo'" in said[0]
+
+
+#: ``(setup, what reads the change)``: the default changed is one of a
+#: function the callee calls.
+REACHED_DEFAULTS = {
+    "a_helper": ("def g(x, L=[]):\n    L.append(x)\n", "g(x)", "n = len(g.__defaults__[0])"),
+    "a_method": (
+        "class C:\n    def m(self, x, L=[]):\n        L.append(x)\nc = C()\n",
+        "c.m(x)",
+        "n = len(C.m.__defaults__[0])",
+    ),
+    "a_lambda": ("g = lambda x, L=[]: L.append(x)\n", "g(x)", "n = len(g.__defaults__[0])"),
+}
+
+
+@pytest.mark.parametrize("trace", ["on", "off"])
+@pytest.mark.parametrize("shape", list(REACHED_DEFAULTS))
+def test_a_default_of_a_function_the_callee_calls_is_changed_again(cash_magics, monkeypatch, shape, trace):
+    """``f`` calling ``g(x, L=[])``: the call was refused, but the statement
+    ``v = f(3)`` around it was stored and served on the next Run All, so
+    the fresh ``g``'s default stayed empty."""
+    if trace == "off":
+        monkeypatch.setenv("CASH_TRACE", "0")
+        monkeypatch.setattr(shadow, "SHADOW", None)
+    setup, call, read = REACHED_DEFAULTS[shape]
+    cells = [
+        f"import time\n{setup}def f(x):\n    time.sleep(0.05)\n    {call}\n    return x * 10",
+        "v = f(3)",
+        read,
+    ]
+    ns = cash_magics.shell.user_ns
+    for run in range(3):
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+        assert (ns["v"], ns["n"]) == (30, 1), f"Run All {run + 1}"
