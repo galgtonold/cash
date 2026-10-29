@@ -96,6 +96,25 @@ def link(derivation_edges: dict[str, set[str]], src: str, dst: str) -> None:
         log.add((src, dst))
 
 
+#: Marks a pair of a share record as an edge dropped, not linked
+#: (`unlink`): ``("!draw", "BIG")``. No name starts with it.
+UNLINKED = "!"
+
+
+def unlink(derivation_edges: dict[str, set[str]], a: str, b: str) -> None:
+    """Drop the edges between *a* and *b*, both ways, and log that in each
+    open log as ``(UNLINKED + a, b)``, for the simulation to drop them too
+    (`apply_share_record`)."""
+    for src, dst in ((a, b), (b, a)):
+        targets = derivation_edges.get(src)
+        if targets is not None:
+            targets.discard(dst)
+            if not targets:
+                del derivation_edges[src]
+    for log in _EDGE_LOGS:
+        log.add((UNLINKED + a, b))
+
+
 @contextmanager
 def logging_edges() -> Iterator[set[tuple[str, str]]]:
     """Collect every edge recorded inside the block, as ``(src, dst)`` pairs.
@@ -184,18 +203,27 @@ def apply_share_record(
 ) -> None:
     """Replay one statement's edges onto *derivation_edges*: drop the edges
     of the names it binds afresh (*rebound*), then add the ones it linked
-    when it ran (*record*), as its run did.
+    when it ran (*record*), and drop the ones it unlinked, as its run did.
 
     With *bound*, an edge to a name not in it is left out: the record is the
     last run of the same text, which may be a later place in the notebook
     where that name shares the object; here the name holds nothing yet, so
     a run here linked nothing to it, and a hit linking it would move the
     name on where a run does not."""
+    record = list(record)
+    linked = {pair for src, dst in record if not src.startswith(UNLINKED) for pair in ((src, dst), (dst, src))}
     for name in rebound:
         clear_edges_for(derivation_edges, name)
     for src, dst in record:
+        if src.startswith(UNLINKED):
+            continue
         if src != dst and (bound is None or (src in bound and dst in bound)):
             link(derivation_edges, src, dst)
+    # An edge it dropped (`unlink`) is dropped here too, after; one the
+    # same record also links (a loop's body did both) is kept.
+    for src, dst in record:
+        if src.startswith(UNLINKED) and (src[len(UNLINKED) :], dst) not in linked:
+            unlink(derivation_edges, src[len(UNLINKED) :], dst)
 
 
 def own_share_edges(metadata: Any) -> frozenset[tuple[str, str]] | None:

@@ -229,6 +229,14 @@ class ControlStructureProcessor:
         try:
             with observe_writes() as written, logging_edges() as linked:
                 result = self._dispatch(node, ttl, silent, parent_context, raw_cell, inherited_annotation, prior_nodes)
+                if result is not None and result.success:
+                    # What its body called through a closure or an object may
+                    # have let go of what they shared (``f([0])`` for ``f`` in
+                    # ``[rebind]``): asked of the structure as a whole.
+                    try:
+                        sp.unlink_what_shares_nothing(ast.Module(body=[node], type_ignores=[]))
+                    except Exception:  # never let bookkeeping break the user's loop
+                        logger.debug("[CONTROL] unlink check failed", exc_info=True)
         finally:
             self._unit_frame = None
             self._unit_occurrence = None
