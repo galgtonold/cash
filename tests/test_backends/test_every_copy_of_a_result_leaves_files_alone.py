@@ -301,10 +301,13 @@ def test_a_pyc_that_was_there_is_left_alone(tmp_path, how, monkeypatch):
     assert backend.get("k") == (None, None)
 
 
-def test_a_loader_the_value_runs_itself_does_not_rewrite_a_pyc(tmp_path):
+def test_a_loader_the_value_runs_itself_does_not_rewrite_a_pyc(tmp_path, monkeypatch):
     """``SourceFileLoader(...).get_code(...)`` in ``__setstate__`` runs
     importlib's own steps below ``get_code``, but no import: the ``.pyc``
     it rewrote over one that was there is refused like any other write."""
+    # ``get_code`` writes a ``.pyc`` only while bytecode is written
+    # (``PYTHONDONTWRITEBYTECODE`` turns that off, and with it the write).
+    monkeypatch.setattr(sys, "dont_write_bytecode", False)
     import importlib.util
 
     source = tmp_path / "pkg" / "keep.py"
@@ -354,6 +357,9 @@ def test_a_module_body_an_import_runs_does_not_rewrite_another_pyc(tmp_path, mon
     ``SourceFileLoader(...).get_code(...)`` on another file: an import is
     running, but that ``get_code`` is the module body's, not the import's,
     and the ``.pyc`` it rewrote over one that was there is refused."""
+    # ``get_code`` writes a ``.pyc`` only while bytecode is written
+    # (``PYTHONDONTWRITEBYTECODE`` turns that off, and with it the write).
+    monkeypatch.setattr(sys, "dont_write_bytecode", False)
     stem = f"body_{tmp_path.name}".replace("-", "_")
     source, kept = _kept_pyc(tmp_path, f"{stem}_kept")
     (tmp_path / f"{stem}_runs.py").write_text(
@@ -378,6 +384,9 @@ def test_a_loader_the_value_runs_under_an_outer_import_does_not_rewrite_a_pyc(tm
     """The copy is made while a module's import runs (a call at its top
     level): the value's own ``get_code`` is no step of that import, and the
     ``.pyc`` it rewrote over one that was there is refused."""
+    # ``get_code`` writes a ``.pyc`` only while bytecode is written
+    # (``PYTHONDONTWRITEBYTECODE`` turns that off, and with it the write).
+    monkeypatch.setattr(sys, "dont_write_bytecode", False)
     stem = f"outer_{tmp_path.name}".replace("-", "_")
     source, kept = _kept_pyc(tmp_path, f"{stem}_kept")
     results = {}
