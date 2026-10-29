@@ -784,7 +784,17 @@ class InMemoryBackend(CacheBackend):
                 # shared, a list of immutables gets a new list, and two names
                 # for one object still come back as one object.
                 memo: dict[int, Any] = dict(premade) if premade else {}
-                InMemoryBackend._premade_copies(value, memo, known_cells, record_cells)
+                alone: list[bool] = []
+                InMemoryBackend._premade_copies(value, memo, known_cells, record_cells, alone=alone)
+                if alone and premade is None:
+                    # A frame of objects went through pickle on its own: an
+                    # object of its cells that another variable holds too
+                    # (``f = pd.DataFrame({'o': [[t]]})`` beside ``t``) came
+                    # back as two. The entry goes through pickle whole.
+                    try:
+                        return _round_trip(value)
+                    except Exception:  # copied part by part, as before
+                        logger.debug("could not copy an entry with a frame of objects whole", exc_info=True)
                 return InMemoryBackend._deep_copy(value, memo, known_cells, record_cells, by_deepcopy)
             if (value_type is list or value_type is tuple) and len(value) <= _PREMADE_ITEMS_MAX:
                 # ``frame, summary, n = build()``: a call's result is a tuple;
@@ -824,6 +834,7 @@ class InMemoryBackend(CacheBackend):
         known_cells: dict[int, bool] | None = None,
         record_cells: dict[int, bool] | None = None,
         memo: dict[int, Any] | None = None,
+        alone: list[bool] | None = None,
     ) -> Any:
         """A copy of a pandas frame/series that no later write can reach.
 
@@ -854,6 +865,9 @@ class InMemoryBackend(CacheBackend):
 
         *memo*, when given, receives ``id(cell) -> copy`` for each cell
         copied: a cell list returned beside its frame stays the frame's.
+        *alone*, when given, gets True when the cells went through pickle
+        with the frame alone, so an object they share with the caller's
+        other values was copied apart from them.
         """
         mutable = known_cells.get(id(frame)) if known_cells is not None else None
         if mutable is _SHARED:
@@ -884,6 +898,8 @@ class InMemoryBackend(CacheBackend):
             # immutable or copied with their blocks; `attrs` only deepcopied.
             full = copied is not None and not frame.attrs
             if copied is None:
+                if alone is not None:
+                    alone.append(True)
                 try:
                     copied = _round_trip(frame)
                     full = True
@@ -1211,6 +1227,7 @@ class InMemoryBackend(CacheBackend):
         known_cells: dict[int, bool] | None = None,
         record_cells: dict[int, bool] | None = None,
         depth: int = 0,
+        alone: list[bool] | None = None,
     ) -> None:
         """Put a copy of each plain container in *value*'s dicts into *memo*.
 
@@ -1219,7 +1236,7 @@ class InMemoryBackend(CacheBackend):
         """
         for item in value.values():
             if _is_pandas_frame(type(item)) and id(item) not in memo:
-                memo[id(item)] = InMemoryBackend._copy_frame(item, known_cells, record_cells, memo)
+                memo[id(item)] = InMemoryBackend._copy_frame(item, known_cells, record_cells, memo, alone)
             elif type(item) is _TableWithBytes and id(item) not in memo:
                 memo[id(item)] = item.read_out(known_cells)
         for item in value.values():
@@ -1235,7 +1252,7 @@ class InMemoryBackend(CacheBackend):
                     continue
                 holds_premade = len(item) <= _PREMADE_ITEMS_MAX and not memo.keys().isdisjoint(map(id, item.values()))
                 if (holds_premade or _plain_data.spine_copy(item, memo) is None) and depth < 4:
-                    InMemoryBackend._premade_copies(item, memo, known_cells, record_cells, depth + 1)
+                    InMemoryBackend._premade_copies(item, memo, known_cells, record_cells, depth + 1, alone)
             elif (item_type is tuple or item_type is list) and id(item) not in memo:
                 if _plain_data.immutable_below(item) or _of_immutable_cells(item):
                     memo[id(item)] = item if item_type is tuple else list(item)

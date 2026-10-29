@@ -54,6 +54,7 @@ from typing import Any
 
 from cash import _native, _plain_data
 from cash._clock import CpuLimit
+from cash._plain_data import held_items_facts
 from cash._type_memo import MroMemo, TypeMemo, type_key
 from cash._user_attrs import attribute_or, builtin_items, has_attribute, instance_of, own_dict, own_lookup
 from cash.tracking.function_tracker import is_local_module
@@ -139,19 +140,104 @@ _CONTAINERS = (list, dict, set, tuple, frozenset)
 _IMMUTABLE_CONTAINERS = (tuple, frozenset)
 
 
+#: Whether an attribute was set on a pandas scalar in this session
+#: (`_note_scalar_attribute`). A ``pd.Timestamp`` takes attributes: ``t.tag
+#: = 1``. Counted as a value, a frame holding ``t`` restored with a copy of
+#: it, and a later ``t.tag = 2`` was not seen through the frame. From the
+#: first such write on, the pandas scalars that take attributes are objects
+#: whose identity a restore keeps; until then they are values, as numbers
+#: are, and a walk over millions of them stays at C speed.
+_SCALAR_IDENTITY = False
+#: Whether `_note_scalar_attribute` turned `_SCALAR_IDENTITY` on since
+#: `scalar_identity_news` was last asked.
+_SCALAR_IDENTITY_NEWS = False
+#: The pandas scalar types that take attributes, once hooked.
+_ATTRIBUTED_SCALARS: frozenset[type] = frozenset()
+
+
+def scalar_identity() -> bool:
+    """Whether pandas scalars are objects to the share check now (`_SCALAR_IDENTITY`)."""
+    return _SCALAR_IDENTITY
+
+
+def turn_on_scalar_identity() -> None:
+    """Count the pandas scalars that take attributes as objects from now on."""
+    global _SCALAR_IDENTITY
+    if not _SCALAR_IDENTITY:
+        _SCALAR_IDENTITY = True
+        _EXACT_WITH_LIBRARIES.clear()
+
+
+def scalar_identity_news() -> bool:
+    """Whether an attribute set on a pandas scalar turned `scalar_identity`
+    on since this was last asked."""
+    global _SCALAR_IDENTITY_NEWS
+    news, _SCALAR_IDENTITY_NEWS = _SCALAR_IDENTITY_NEWS, False
+    return news
+
+
+def _note_scalar_attribute() -> None:
+    global _SCALAR_IDENTITY_NEWS
+    if not _SCALAR_IDENTITY:
+        _SCALAR_IDENTITY_NEWS = True
+        turn_on_scalar_identity()
+
+
+def _cached_by_its_type(obj: Any, name: str) -> bool:
+    """Whether *name* is where the type keeps what one of its own
+    attributes computed: a ``Timedelta``'s ``seconds`` keeps ``_seconds``
+    in its dict. Computed again from the value, a copy without it gives the
+    same, so it is no attribute of the user's."""
+    return name.startswith("_") and len(name) > 1 and has_attribute(type(obj), name[1:])
+
+
+def _hook_pandas_scalars(pd: Any) -> None:
+    """Have an attribute set on (or deleted from) a ``Timestamp``,
+    ``Timedelta``, ``Period``, ``NaT`` or ``NA`` turn `scalar_identity`
+    on, wherever it is set: a cell, a function of the user's, a library.
+    The write itself is the type's own."""
+    global _ATTRIBUTED_SCALARS
+    kinds = (pd.Timestamp, pd.Timedelta, pd.Period, type(pd.NaT), type(pd.NA))
+    for kind in kinds:
+        if "__setattr__" in vars(kind) or "__delattr__" in vars(kind):
+            continue
+        set_attr, del_attr = kind.__setattr__, kind.__delattr__
+
+        def noting_set(obj: Any, name: str, value: Any, _set: Any = set_attr) -> None:
+            _set(obj, name, value)
+            if not _SCALAR_IDENTITY and not _cached_by_its_type(obj, name):
+                _note_scalar_attribute()
+
+        def noting_del(obj: Any, name: str, _del: Any = del_attr) -> None:
+            _del(obj, name)
+            if not _SCALAR_IDENTITY and not _cached_by_its_type(obj, name):
+                _note_scalar_attribute()
+
+        kind.__setattr__ = noting_set
+        kind.__delattr__ = noting_del
+    _ATTRIBUTED_SCALARS = frozenset(kinds)
+
+
 def library_value_types() -> tuple[type, ...]:
     """The value types of numpy and pandas, when they are already imported.
 
     A ufunc (``np.log`` in a ``FunctionTransformer``) is pickled by its name,
     so a restore hands back the very same object; the numpy modules that
-    import it by name are not holders a restore must keep."""
+    import it by name are not holders a restore must keep. Pandas scalars
+    that take attributes are values only while none had one set
+    (`_SCALAR_IDENTITY`)."""
     found: list[type] = []
     np = sys.modules.get("numpy")
     if np is not None:
         found += [np.generic, np.dtype, np.ufunc]
     pd = sys.modules.get("pandas")
     if pd is not None:
-        found += [pd.Timestamp, pd.Timedelta, pd.Period, pd.Interval, type(pd.NA), type(pd.NaT)]
+        if not _ATTRIBUTED_SCALARS:
+            with contextlib.suppress(AttributeError):  # a pandas still importing: hooked next time
+                _hook_pandas_scalars(pd)
+        found.append(pd.Interval)
+        if not _SCALAR_IDENTITY:
+            found += [pd.Timestamp, pd.Timedelta, pd.Period, type(pd.NA), type(pd.NaT)]
     return tuple(found)
 
 
@@ -172,7 +258,7 @@ def exact_value_types() -> frozenset[type]:
     statement: a log-parsing loop of 2 million rows took 1.5x plain."""
     np = sys.modules.get("numpy")
     pd = sys.modules.get("pandas")
-    key = (np is not None, pd is not None)
+    key = (np is not None, pd is not None and not _SCALAR_IDENTITY)
     known = _EXACT_WITH_LIBRARIES.get(key)
     if known is not None:
         return known
@@ -187,7 +273,7 @@ def exact_value_types() -> frozenset[type]:
                 for kind in set(np.sctypeDict.values())
                 if issubclass(kind, np.generic) and kind not in (np.void, np.object_)
             )
-        if pd is not None:
+        if pd is not None and not _SCALAR_IDENTITY:
             found.update((pd.Timestamp, pd.Timedelta, type(pd.NaT), type(pd.NA)))
     except AttributeError:  # a library still importing: asked again next time
         complete = False
@@ -280,6 +366,9 @@ def is_value(value: Any, value_types: tuple[type, ...]) -> bool:
     ``BagObj``, ``np.load(...).f``), makes an ``isinstance`` against an ABC
     raise: it is read by its type alone."""
     try:
+        if _SCALAR_IDENTITY and type(value) in _ATTRIBUTED_SCALARS:
+            # A ``Timestamp`` is a ``datetime``: a value by `VALUE_TYPES`.
+            return False
         if instance_of(value, value_types):
             return True
         return instance_of(value, _CALLABLE_TYPES) and _bound_objects(value) is None
@@ -421,7 +510,8 @@ def _library_children(value: Any) -> list[Any] | None:
     that a restore copies with it, or None for a leaf: a ``deque``'s items,
     a ``UserDict``'s ``data``, a ``ChainMap``'s ``maps``, an object array's
     items (one that owns them: a view's items are its base's), and a
-    pandas object's ``attrs``."""
+    pandas object's ``attrs`` and what its object blocks hold
+    (`_pandas_objects`)."""
     kind = _LIBRARY_KINDS.get(type_key(type(value)))
     if kind is None:
         kind = _library_kind(type(value))
@@ -437,7 +527,41 @@ def _library_children(value: Any) -> list[Any] | None:
             return list(value.flat)
         return None
     attrs = _pandas_attrs(value)
-    return [attrs] if attrs else None
+    held = _pandas_objects(value)
+    if attrs:
+        held.append(attrs)
+    return held or None
+
+
+def _pandas_objects(value: Any) -> list[Any]:
+    """What a frame's or series' object blocks hold but plain values: a
+    restore copies them with it. ``f = pd.DataFrame({'o': [lst]})`` holds
+    ``lst`` itself; restored alone, ``f`` held a copy, and ``lst.append(9)``
+    was not seen through it. Numbers, text and dates are told apart at C
+    speed and left out, as a value is, and so is a column of lists and dicts
+    nothing but its cells holds, all the way down (`held_items_facts`)."""
+    np = sys.modules.get("numpy")
+    try:
+        blocks = vars(value)["_mgr"].blocks
+    except (KeyError, AttributeError, TypeError):
+        return []
+    exact = exact_value_types()
+    found: list[Any] = []
+    for block in blocks:
+        values = attribute_or(block, "values")
+        if np is None or type(values) is not np.ndarray or values.dtype.kind != "O":
+            continue  # numbers, or an extension array (Arrow text) of no Python objects
+        for column in values.reshape(-1, values.shape[-1]) if values.ndim > 1 else (values,):
+            # A row of a block is a view: its cells are held by the block
+            # and the list alone.
+            items = column.tolist()
+            if exact.issuperset(set(map(type, items))):
+                continue
+            facts = held_items_facts(items, 1)
+            if facts is not None and facts.held_once:
+                continue
+            found.extend(itertools.compress(items, map(operator.not_, map(exact.__contains__, map(type, items)))))
+    return found
 
 
 _LEAF, _DEQUE, _WRAPPING, _ARRAY, _PANDAS = "leaf", "deque", "wrapping", "array", "pandas"
@@ -1468,6 +1592,9 @@ def _check_group(
     value_types = VALUE_TYPES + library_value_types()
     if memo is None:
         memo = {}
+    # What the quick pass's search found before the full pass was asked
+    # again: kept when that one gives up too, or its names were lost.
+    earlier = GaveUp()
     for fast in (True, False):
         nodes, inbound, checked, owner, breaks = _walk(
             group, bindings, value_types, keep_identity, fast=fast, memo=memo, leaves=leaves
@@ -1494,7 +1621,7 @@ def _check_group(
             return _inside_library_objects(group, nodes, owner, value_types, user_ns, bindings, cash_held)
         if _held_within(nodes, counted, excess, value_types):
             return _inside_library_objects(group, nodes, owner, value_types, user_ns, bindings, cash_held)
-        shared = {owner[k] for k in excess}
+        shared = _owners_of(owner, excess)
         if user_ns is None:
             return shared, None
         named = {id(mapping) for mapping, _key in named_held if mapping is not user_ns}
@@ -1514,16 +1641,22 @@ def _check_group(
         found = _find_holders([nodes[k] for k in excess], internal, user_ns, set(group) | discounted, partial)
         if found is not None or breaks.isdisjoint(excess):
             if found is None and gave_up is not None and partial is not None:
-                gave_up.names |= partial.names
-                gave_up.modules |= partial.modules
+                gave_up.names |= partial.names | earlier.names
+                gave_up.modules |= partial.modules | earlier.modules
                 gave_up.complete = gave_up.complete and partial.complete
             return shared, found
+        if partial is not None:
+            earlier.names |= partial.names
+            earlier.modules |= partial.modules
         # A container a root read a level at a time holds besides its parent
         # (`_take_breaks`): the search up from it climbs through the
         # containers above it, which the walk left out of *internal*, and a
         # longer climb can give up where the full walk's would not. Asked
         # again of the full walk, with none of these references left.
         del nodes, inbound, checked, owner, breaks, internal, excess, found, partial
+    if gave_up is not None:
+        gave_up.names |= earlier.names
+        gave_up.modules |= earlier.modules
     return shared, None
 
 
@@ -2565,6 +2698,41 @@ def _iterator_parts(value: Any) -> list[Any] | None:
 _MAX_BREAKS = 64
 
 
+class _Owners(dict):
+    """`_walk`'s *owner*: the root each object was first reached from, and
+    in *meets* the pairs of roots whose walks met at an object, so each
+    root that reaches a shared object is found (`_owners_of`), not only the
+    first: ``draw`` and ``rebind`` closing over one cell, ``alias = big``."""
+
+    __slots__ = ("meets",)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.meets: set[tuple[str, str]] = set()
+
+
+def _owners_of(owner: dict[int, str], keys: Iterable[int]) -> set[str]:
+    """The roots that reach the objects *keys*: their first roots, with each
+    root whose walk met one of those (`_Owners`), and so on. A root that
+    met another at any object counts as reaching all that one reaches: a
+    link too many at worst, never one missed."""
+    found = {owner[key] for key in keys}
+    meets = owner.meets if isinstance(owner, _Owners) else None
+    if not meets:
+        return found
+    linked: dict[str, set[str]] = {}
+    for first, other in meets:
+        linked.setdefault(first, set()).add(other)
+        linked.setdefault(other, set()).add(first)
+    todo = list(found)
+    while todo:
+        for name in linked.get(todo.pop(), ()):
+            if name not in found:
+                found.add(name)
+                todo.append(name)
+    return found
+
+
 def _walk(
     group: Mapping[str, Any],
     bindings: list[Mapping[str, Any]],
@@ -2604,7 +2772,7 @@ def _walk(
     """
     nodes: dict[int, Any] = {}
     inbound: dict[int, int] = {}
-    owner: dict[int, str] = {}
+    owner = _Owners()
     order: list[int] = []
     identity = set(group) if keep_identity is None else set(keep_identity)
     exact = exact_value_types()
@@ -2621,6 +2789,8 @@ def _walk(
         key = id(root)
         inbound[key] = inbound.get(key, 0) + 1 + sum(1 for m in bindings if m.get(name) is root)
         if key in nodes:
+            if owner[key] != name:
+                owner.meets.add((owner[key], name))  # ``alias = big``
             continue
         nodes[key] = root
         owner[key] = name
@@ -2714,6 +2884,7 @@ def _descend(
     exact = exact_value_types()
     containers = EXACT_CONTAINER_TYPES
     flat: dict[type, bool] = {}
+    meets = owner.meets if isinstance(owner, _Owners) else None
     pops = 0
     while stack:
         pops += 1
@@ -2752,6 +2923,8 @@ def _descend(
                 ):
                     continue
                 stack.append(child)
+            elif meets is not None and owner[ckey] != name:
+                meets.add((owner[ckey], name))
 
 
 #: Fewest items of a list or dict below a root that `_descend` asks about as
@@ -2938,4 +3111,6 @@ def _take_breaks(
             owner[ckey] = name
             order.append(ckey)
             _descend([obj], name, nodes, inbound, owner, order, value_types, leaves)
+        elif isinstance(owner, _Owners) and owner[ckey] != name:
+            owner.meets.add((owner[ckey], name))
     return True

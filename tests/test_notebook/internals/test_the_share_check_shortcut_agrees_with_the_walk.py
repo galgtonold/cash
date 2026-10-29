@@ -169,13 +169,15 @@ def test_a_record_held_by_a_container_no_name_holds_still_refuses():
 
 def test_parts_of_a_part_another_name_holds_are_walked():
     """A container held besides its parent, inside another one: the
-    shortcut would count the edge between them twice, so it walks."""
+    shortcut would count the edge between them twice, so it walks. ``rec``
+    holds the ``tags`` another name holds as much as ``recs`` does, so both
+    are linked."""
     ns = {"recs": [{"id": i, "tags": ["a"]} for i in range(50)]}
     ns["rec"] = ns["recs"][3]
     ns["tags"] = ns["recs"][3]["tags"]
 
     assert shared_names({"recs": ns["recs"], "rec": ns["rec"], "tags": ns["tags"]}, (ns,)) == set()
-    assert shared_names({"recs": ns["recs"], "rec": ns["rec"]}, (ns,)) == {"recs"}
+    assert shared_names({"recs": ns["recs"], "rec": ns["rec"]}, (ns,)) == {"recs", "rec"}
 
 
 def test_columns_a_dict_gathers_join_it():

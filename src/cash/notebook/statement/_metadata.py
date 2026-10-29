@@ -142,6 +142,11 @@ class StatementCacheMetadata:
     #: for a cell run that skips it to show again; absent when it showed
     #: nothing.
     replay: dict[str, Any] | None = None
+    #: Whether pandas scalars were objects to the share check when this was
+    #: stored (`shared_objects.scalar_identity`): True, or False with pandas
+    #: loaded; absent without pandas. One stored as values may hold a copy
+    #: of a ``Timestamp`` a variable holds: once they are objects, it runs.
+    scalar_identity: bool | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {f.name: value for f in fields(self) if (value := getattr(self, f.name)) is not None}

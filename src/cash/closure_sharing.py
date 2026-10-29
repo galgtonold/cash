@@ -235,9 +235,16 @@ def _object_parts(item: Any, kind: type) -> list:
             continue
     if issubclass(kind, _BUILTIN_CONTAINERS):
         parts.extend(_items(item, kind))
-    elif not attributes and not _users(kind):
+    elif (not attributes or attributes.keys() == _CACHE_ONLY) and not _users(kind):
+        # A pandas block keeps what it has worked out in a ``_cache`` of
+        # its own (``cache_readonly``) once its dtype was read: its values
+        # are still what pickle writes.
         parts.extend(_reduced(item, kind))
     return parts
+
+
+#: The own attributes of a library's object that only caches (`_object_parts`).
+_CACHE_ONLY = {"_cache"}
 
 
 def _items(item: Any, kind: type) -> list:
