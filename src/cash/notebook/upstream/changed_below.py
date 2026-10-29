@@ -18,7 +18,7 @@ import types
 
 from cash.control_markers import strip_markers
 
-from ..._user_attrs import attribute_or, instance_of
+from ..._user_attrs import attribute_or, builtin_base, instance_of
 from ...analysis.ast_util import parse_cached
 from ...analysis.cacheability import analyze_statement
 from ...analysis.code_analyzer import clean_cell_source, parse_cell_source
@@ -123,10 +123,14 @@ def held_objects(holder: object) -> tuple[set[int], bool]:
 def _held_directly(obj: object) -> tuple[list, bool]:
     """What *obj* holds one step down, `_HOLD_ITEMS` at most, and whether
     that is all of it."""
-    if instance_of(obj, dict):
-        return _first_items(obj.values(), len(obj))
-    if instance_of(obj, (list, tuple, set, frozenset)):
-        return _first_items(obj, len(obj))
+    # By the builtin type's own methods, of the real type: a subclass's
+    # ``values()`` or ``__len__`` may print or count, where plain Python
+    # never asked.
+    base = builtin_base(obj)
+    if base is dict:
+        return _first_items(dict.values(obj), dict.__len__(obj))
+    if base in (list, tuple, set, frozenset):
+        return _first_items(base.__iter__(obj), base.__len__(obj))
     if instance_of(obj, functools.partial):
         return [obj.func, *obj.args, *obj.keywords.values()], True
     children = [
