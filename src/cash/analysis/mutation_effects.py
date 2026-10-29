@@ -1517,6 +1517,11 @@ class ReceiverClasses:
     #: runtime drops the module once it sees a handed name change
     #: (`MutationRouting.observe`); the recorded verdict then decides.
     provisional: Mapping[str, frozenset[str]] = field(default_factory=dict)
+    #: Of *mutated*, the arguments that are a live Figure/Axes a call draws on
+    #: (``forest(axes[1], s)``, ``plt.close(fig)``). After a restart the
+    #: simulation has no live object to tell, so the runtime records them in
+    #: the verdict (`MutationClassifier.classify`).
+    drawn: frozenset[str] = frozenset()
 
 
 #: Receivers whose methods are known: the builtin containers and scalars,
@@ -1674,7 +1679,7 @@ def classify_receivers(
     else:
         mutated |= {name for name in args if name in verdict}
         unknown_args = frozenset()
-    return ReceiverClasses(frozenset(mutated), frozenset(unknown), unknown_args, provisional)
+    return ReceiverClasses(frozenset(mutated), frozenset(unknown), unknown_args, provisional, drawn_args)
 
 
 def _receiver_root(node: ast.AST) -> str | None:

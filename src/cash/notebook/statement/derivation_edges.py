@@ -69,6 +69,7 @@ __all__ = [
     "apply_share_record",
     "assigned_names",
     "detect_derivation_edges",
+    "edges_among",
     "link",
     "logging_edges",
     "read_share_edges",
@@ -543,6 +544,17 @@ def record_shared_object_edges(
             link(derivation_edges, holder, out)
 
 
+def edges_among(derivation_edges: dict[str, set[str]], names: Iterable[str]) -> dict[str, frozenset[str]]:
+    """The edges of *names* as they are now, for `bump_derived_lineages`'s
+    *before*: taken before a statement records its own."""
+    return {name: frozenset(derivation_edges[name]) for name in names if name in derivation_edges}
+
+
+def _linked_before(before: dict[str, frozenset[str]], src: str, target: str) -> bool:
+    """Whether *before* has an edge between *src* and *target*, either way."""
+    return target in before.get(src, ()) or src in before.get(target, ())
+
+
 def shared_object_partners(derivation_edges: dict[str, set[str]], var: str) -> set[str]:
     """The variables *var* has an edge with, either way."""
     partners = set(derivation_edges.get(var, ()))
@@ -593,17 +605,20 @@ def bump_derived_lineages(
     skip: Iterable[str] = (),
     kept: Iterable[str] = (),
     code: str | None = None,
+    before: dict[str, frozenset[str]] | None = None,
 ) -> set[str]:
     """Replay derivation bumps after outputs' lineages were written.
 
     For each OUTPUT ``out`` that has outgoing edges and that the statement
     also reads -- a change in place (``v[:] = 9``, ``raw.append(x)``), not a
     rebinding (``raw = [9]``, which leaves the old object unchanged under its
-    other names) -- bump each target ``t``, but ONLY if ``t`` is neither an
-    input nor an output of the current statement. At creation (``v =
-    a[...]``) the base ``a`` IS an input, so a plain view creation does not
-    invalidate the base; at mutation (``v[:] = 9``) the base is NOT an input,
-    so it is bumped. Transitive with a visited set (view-of-view,
+    other names) -- bump each target ``t`` but an output of the current
+    statement. An input ``t`` only through an edge it had before the
+    statement (*before*, `edges_among`): ``ALIAS.x = len(points)`` changes
+    ``points`` through ``ALIAS = points[7]``, but an edge the statement
+    itself made is a creation (``v = a[...]``, or ``forest(ax, df)``
+    leaving ``ax`` holding ``df``'s labels), which changes nothing ``t``
+    holds. Without *before*, every input is bumped. Transitive with a visited set (view-of-view,
     groupby-of-...). Targets no longer present are pruned lazily.
 
     Returns the set of vars whose lineage was bumped. The simulator unions this
@@ -680,8 +695,10 @@ def bump_derived_lineages(
             continue
         for target in sorted(derivation_edges.get(src, ())):
             if target in outputs or target in kept:
-                # Creation edge (``v = a[...]``): do NOT bump the base. Nor
-                # an output: the statement gave it its lineage just now.
+                # An output: the statement gave it its lineage just now.
+                continue
+            if before is not None and target in inputs and not _linked_before(before, src, target):
+                # Creation edge (``v = a[...]``): do NOT bump the base.
                 continue
             if not present(target):
                 continue

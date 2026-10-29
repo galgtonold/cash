@@ -206,7 +206,9 @@ class MutationClassifier:
         else:
             self._provisional.pop(source_hash, None)
         observe: set[str] = set()
-        assumed: set[str] = set()
+        # A Figure/Axes drawn on is known by its live object only: recorded,
+        # so the simulation after a restart takes it as changed too.
+        assumed: set[str] = set(classes.drawn)
         # A receiver no rule or verdict decides is observed when it can be
         # hashed reliably, otherwise assumed to change (correctness first).
         snapshots: dict[str, str] = {}

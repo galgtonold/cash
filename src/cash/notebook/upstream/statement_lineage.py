@@ -93,6 +93,7 @@ from ..statement.derivation_edges import (
     apply_share_record,
     assigned_names,
     bump_derived_lineages,
+    edges_among,
     own_share_edges,
     static_share_edges,
 )
@@ -847,11 +848,13 @@ class StatementLineage:
         output_lineages: dict[str, str],
         moved: set[str] | frozenset[str] = frozenset(),
         kept: set[str] | frozenset[str] = frozenset(),
+        before: dict[str, frozenset[str]] | None = None,
     ) -> set[str]:
         """Take a valid cache entry's *output_lineages* into *virtual_lineage*,
         and return the aliases the write bumps. The variables in *moved* are
         the entry's holders, moved on already (`_move_holders`): not bumped
-        again, as the runtime's hit does not bump them."""
+        again, as the runtime's hit does not bump them. *before* are the
+        edges before the statement linked its own (`edges_among`)."""
         logger.debug("[UPSTREAM] Forward propagating cached lineages for %s...", stmt_code[:30])
         for var, h in output_lineages.items():
             virtual_lineage[var] = h
@@ -870,6 +873,7 @@ class StatementLineage:
             skip=moved,
             kept=kept,
             code=stmt_code,
+            before=before,
         )
         if is_import:
             for out in outputs:
@@ -923,9 +927,11 @@ class StatementLineage:
         virtual_lineage: dict[str, str],
         is_import: bool,
         metadata: dict | None | object = _UNREAD,
+        before: dict[str, frozenset[str]] | None = None,
     ) -> _CacheLookup:
         """Forward-propagate lineages from *cache_key*'s entry when it is valid.
-        *metadata* is the entry's, when the caller read it already.
+        *metadata* is the entry's, when the caller read it already; *before*,
+        the edges before the statement linked its own.
 
         A hit takes the entry's output lineages. A miss -- no entry, no
         lineages, or a file the entry recorded has changed -- returns the
@@ -980,7 +986,7 @@ class StatementLineage:
                     # alias, past them, as the runtime's hit does.
                     held = self._move_holders(moved, cache_key, virtual_lineage, kept)
                     bumped = self._take_cached_lineages(
-                        stmt_code, outputs, inputs, virtual_lineage, is_import, output_lineages, held, kept
+                        stmt_code, outputs, inputs, virtual_lineage, is_import, output_lineages, held, kept, before
                     )
                     bumped |= held
                     hit_file_deps = CacheProbe.stat_file_deps(hist_files)
@@ -1208,11 +1214,14 @@ class StatementLineage:
         own = own_share_edges(metadata)
         if own is None:
             own = own_edges if own_edges is not None else self.share_record_at(stmt_code, {"": cache_key})
+        # Before it links its own, as the runtime takes them: an edge it makes
+        # moves no input on (`bump_derived_lineages`).
+        before = edges_among(self.edges, inputs | outputs)
         self.relink(stmt_code, tree, *relinked, own=own)
 
         file_deps_to_check = self._session_file_deps(outputs)
         lookup = self._lookup_cached_lineages(
-            stmt_code, cache_key, outputs, inputs, virtual_lineage, is_import, metadata
+            stmt_code, cache_key, outputs, inputs, virtual_lineage, is_import, metadata, before
         )
 
         # The generators it draws from move on, as the runtime moves them on
@@ -1251,6 +1260,7 @@ class StatementLineage:
                     present=lambda t: True,
                     skip=lookup.bumped,
                     code=stmt_code,
+                    before=before,
                 )
                 if advanced
                 else set()
@@ -1322,6 +1332,7 @@ class StatementLineage:
             skip=lookup.bumped,
             kept=lookup.kept,
             code=stmt_code,
+            before=before,
         )
         outputs = outputs | bumped
 

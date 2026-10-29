@@ -442,6 +442,13 @@ class StatementLineageBuilder:
 
         return captured_vars
 
+    @staticmethod
+    def edges_now(tracking_state: "TrackingState", names: set[str]) -> dict[str, frozenset[str]]:
+        """The edges of *names* before a statement records its own, for
+        :meth:`replay_derivation_bumps`'s *before* (as `edges_among`)."""
+        edges = tracking_state.derivation_edges
+        return {name: frozenset(edges[name]) for name in names if name in edges}
+
     def replay_derivation_bumps(
         self,
         tracking_state: "TrackingState",
@@ -450,10 +457,12 @@ class StatementLineageBuilder:
         skip: set[str] | frozenset[str] = frozenset(),
         code: str | None = None,
         kept: set[str] | frozenset[str] = frozenset(),
+        before: dict[str, frozenset[str]] | None = None,
     ) -> set[str]:
         """Move on the variables a statement with *outputs* changed through
         another name (`bump_derived_lineages`); the names moved. *code*, the
-        statement's text, says which outputs it changed without naming them.
+        statement's text, says which outputs it changed without naming them;
+        *before*, the edges its inputs had before it ran (`edges_among`).
 
         A mutation of a base/frame bumps its live-alias derivatives, a change
         to a list bumps every other variable bound to it or holding it. The
@@ -485,6 +494,7 @@ class StatementLineageBuilder:
             skip=skip,
             kept=kept,
             code=code,
+            before=before,
         )
         for target, lineage_hash in moved.items():
             if target in tracking_state.current_session_hashes:
