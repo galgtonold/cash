@@ -122,3 +122,21 @@ def test_a_default_changed_by_a_cell_is_still_read_again(cash_magics):
     run_cash_cell(cash_magics, "c = f(1)")
     ns = cash_magics.shell.user_ns
     assert (ns["a"], ns["b"], ns["c"]) == (1.0, 8.0, 8.0)
+
+
+@pytest.mark.parametrize("default", ["buf=BIG", "*, buf=BIG", "cfg={'buf': BIG}"])
+def test_a_default_the_collector_no_longer_tracks_is_still_read_again(cash_magics, default):
+    """A collection stops tracking a tuple or dict that holds only a numpy
+    array, and the search for what else holds ``BIG`` never reached ``f``:
+    ``BIG[0] = 7`` linked nothing to it, and ``f(1)`` gave 1.0 where plain
+    Python gives 8.0."""
+    from tests._cell_driver import run_cash_cell
+
+    read = "cfg['buf'][0]" if default.startswith("cfg") else "buf[0]"
+    run_cash_cell(cash_magics, "import gc, numpy as np, time\nBIG = np.zeros(5)")
+    run_cash_cell(cash_magics, f"def f(x, {default}):\n    time.sleep(0.05)\n    return x + float({read})")
+    run_cash_cell(cash_magics, "gc.collect()\na = f(1)")
+    run_cash_cell(cash_magics, "BIG[0] = 7")
+    run_cash_cell(cash_magics, "b = f(1)")
+    ns = cash_magics.shell.user_ns
+    assert (ns["a"], ns["b"]) == (1.0, 8.0)

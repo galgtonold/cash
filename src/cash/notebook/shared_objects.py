@@ -2945,6 +2945,7 @@ def _climb_level(
     # caller's check of the statement gives up, and it re-runs warned.
     referrers = _referrers(args, seen)
     seen.add(id(referrers))
+    referrers.extend(_untracked_defaults_holding(level_ids, user_ns, seen))
     classes = []
     stopped = False
     for holder in referrers:
@@ -3008,6 +3009,42 @@ def _climb_level(
                 further.append(namespace)
         del namespaces, held, classes
     return None if stopped else True
+
+
+#: Most containers `_untracked_defaults_holding` reads in a function's defaults.
+_DEFAULTS_NODES = 200
+
+
+def _untracked_defaults_holding(level_ids: set[int], user_ns: Mapping[str, Any], seen: set[int]) -> list[Any]:
+    """The tuples and dicts in the defaults of the notebook's functions (and
+    of the classes it defines) that hold an object of *level_ids* while the
+    garbage collector no longer tracks them, so `gc.get_referrers` does not
+    return them. A collection stops tracking a tuple or dict that holds only
+    untracked objects, a numpy array among them: ``def f(x, buf=BIG)`` once
+    a collection had run, the search up from ``BIG`` never reached ``f``,
+    ``BIG[0] = 7`` linked nothing to ``f``, and ``f(1)`` was served from
+    before the change."""
+    functions = []
+    for value in list(user_ns.values()):
+        if type(value) is types.FunctionType:
+            functions.append(value)
+        elif instance_of(value, type) and attribute_or(value, "__module__", None) == user_ns.get("__name__"):
+            functions.extend(item for item in list(vars(value).values()) if type(item) is types.FunctionType)
+    found = []
+    for fn in functions:
+        stack = [held for held in (fn.__defaults__, fn.__kwdefaults__) if held]
+        budget = _DEFAULTS_NODES
+        while stack and budget:
+            container = stack.pop()
+            budget -= 1
+            if id(container) in seen:
+                continue
+            items = list(container.values()) if type(container) is dict else container
+            # A tracked one `gc.get_referrers` returns itself.
+            if not gc.is_tracked(container) and any(id(item) in level_ids for item in items):
+                found.append(container)
+            stack.extend(item for item in items if type(item) in (tuple, dict))
+    return found
 
 
 #: What `_holders_from_referrers` climbs through: a ``deque`` holds its
