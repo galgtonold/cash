@@ -140,9 +140,9 @@ def identity_held_reason(name: str, value: Any, user_ns: dict[str, Any]) -> Iden
         return None
     from .output_refusals import is_history_name
 
-    held = _Walk(user_kinds, seen=set(walk.seen), quiet=True)
+    held = _Walk(user_kinds, seen=set(walk.seen), quiet=True, candidates=frozenset(candidates))
     held.run([v for k, v in user_ns.items() if k != name and not is_history_name(k)])
-    if held.cut or not candidates.isdisjoint(held.seen):
+    if held.cut or held.found or not candidates.isdisjoint(held.seen):
         return IdentityHeld(
             f"'{name}' holds the id() of an object the notebook holds; restored, the object would be "
             "another one, so the statement re-runs every time",
@@ -182,7 +182,13 @@ class _Walk:
     each container that could not be read in `unread`. `cut` when it
     stopped at `_MAX_SEEN`. A *quiet* walk only gathers `seen`."""
 
-    def __init__(self, user_kinds: dict[type, bool], seen: set[int] | None = None, quiet: bool = False) -> None:
+    def __init__(
+        self,
+        user_kinds: dict[type, bool],
+        seen: set[int] | None = None,
+        quiet: bool = False,
+        candidates: frozenset[int] = frozenset(),
+    ) -> None:
         self.user_kinds = user_kinds
         self.seen: set[int] = set() if seen is None else seen
         self.budget = _MAX_SEEN
@@ -192,6 +198,10 @@ class _Walk:
         self.unread: list[Any] = []
         self.cut = False
         self.quiet = quiet
+        #: The ids looked for, by a *quiet* walk; `found` when one is the
+        #: ``id()`` of an item of a big container met.
+        self.candidates = candidates
+        self.found = False
 
     def run(self, roots: list[Any]) -> None:
         level = list(roots)
@@ -279,8 +289,10 @@ class _Walk:
             if self.quiet:
                 # The notebook's big list of records: an ``id()`` of one
                 # of them is found, not one of what each holds, which
-                # walking them all cost every check.
-                self.seen.update(map(id, items))
+                # walking them all cost every check. At C speed, without
+                # a set of their ids.
+                if not self.found and not self.candidates.isdisjoint(map(id, items)):
+                    self.found = True
                 return
         into.extend(items)
 
