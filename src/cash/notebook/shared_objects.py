@@ -2947,11 +2947,13 @@ def _climb_level(
             outside.add(id(holder))
             if instance_of(holder, type):
                 classes.append(holder)
-            elif not instance_of(holder, types.FrameType) and not _is_module_namespace(holder):
+            elif not instance_of(holder, _NOT_CLIMBED_PAST) and not _is_module_namespace(holder):
                 # Not climbed as a container a restore copies, but what
                 # holds it keeps the object too: the class a ``Queue`` is
                 # an attribute of. Each one met widens the next level's
                 # read of the heap past such holders, and can add a level.
+                # Not a function or a closure cell: a default or a free
+                # variable holding it is the default check's to tell.
                 further.append(holder)
             continue
         seen.add(id(holder))
@@ -2980,6 +2982,9 @@ def _climb_level(
         del namespaces, held, classes
     return None if stopped else True
 
+
+#: Holders `_climb_level` stops at without climbing past them.
+_NOT_CLIMBED_PAST = (types.FrameType, types.FunctionType, types.CellType)
 
 #: What `_holders_from_referrers` climbs through: a ``deque`` holds its
 #: items as a list does (``Queue.queue``, a class's ``held = deque()``).
