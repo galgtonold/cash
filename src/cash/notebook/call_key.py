@@ -62,6 +62,7 @@ __all__ = [
     "callee_mutated_globals",
     "callee_watched_defaults",
     "callee_watched_globals",
+    "functions_reached_in",
     "changes_its_closure",
     "global_digests",
     "global_names_reached",
@@ -144,9 +145,7 @@ def callee_mutated_globals(fn) -> tuple[str, ...]:
             continue
         # The functions the layer reaches in the same namespace write those
         # globals too, at any depth: a hit skips them along with *fn*.
-        cached = {
-            name for reached in _functions_reached_in(layer_globals, layer) for name in _source_mutations(reached)
-        }
+        cached = {name for reached in functions_reached_in(layer_globals, layer) for name in _source_mutations(reached)}
         if not cached:
             continue
         # Filtered per call, not memoised: whether a name is bound (and not
@@ -176,7 +175,7 @@ FOREIGN_GLOBALS = "<globals of another module>"
 _CODE_NAMES: LruMemo[Any, frozenset[str]] = LruMemo(CODE_OBJECTS)
 
 
-def _functions_reached_in(globals_dict: dict, fn) -> list:
+def functions_reached_in(globals_dict: dict, fn) -> list:
     """*fn* and every function it calls by a global name, at any depth, that
     lives in *globals_dict* too."""
     reached = [fn]
@@ -236,7 +235,7 @@ def callee_watched_globals(fn, captured: tuple[str, ...]) -> tuple[str, ...]:
     for layer in wrapper_layers(fn):
         if attribute_or(layer, "__globals__", None) is not globals_dict:
             continue
-        for reached in _functions_reached_in(globals_dict, layer):
+        for reached in functions_reached_in(globals_dict, layer):
             try:
                 found |= _watched_names(reached, globals_dict)
             except Exception:  # noqa: BLE001 - not read is every global it loads
@@ -259,7 +258,7 @@ def callee_watched_defaults(fn) -> tuple:
     for layer in wrapper_layers(fn):
         if attribute_or(layer, "__globals__", None) is not globals_dict:
             continue
-        for reached in _functions_reached_in(globals_dict, layer):
+        for reached in functions_reached_in(globals_dict, layer):
             if type(reached) is not _types.FunctionType:
                 continue
             for function in (reached, *_methods_named_in(reached, globals_dict)):

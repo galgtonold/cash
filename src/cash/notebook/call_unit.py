@@ -77,10 +77,10 @@ from cash.notebook.call_entries import ONE_LOCAL, TOO_MANY_WHY, CallEntries, ref
 from cash.notebook.call_interception import CallSite, SiteSlots, interceptable, names_read
 from cash.notebook.call_key import (
     CallKeys,
-    _functions_reached_in,
     callee_mutated_globals,
     callee_watched_defaults,
     callee_watched_globals,
+    functions_reached_in,
     global_digests,
     holds_a_stream,
 )
@@ -472,7 +472,7 @@ def _ran_unseen_writes(call: Any, unit: Any) -> bool:
             if not source:
                 return False
             # The callee and the functions it names are the call's analysis's.
-            reached = {attribute_or(fn, "__qualname__", None) for fn in _functions_reached_in(namespace, call.fn)}
+            reached = {attribute_or(fn, "__qualname__", None) for fn in functions_reached_in(namespace, call.fn)}
             return any(fn not in reached for fn, _targets in writers_without_a_trace(source, namespace))
         if not codes:
             return False
