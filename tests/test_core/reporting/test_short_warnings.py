@@ -90,6 +90,13 @@ def test_a_first_sentence_that_says_only_what_takes_the_next_one():
     )
 
 
+def test_a_first_sentence_without_a_full_stop_gets_one_before_the_fix():
+    # NOTEBOOK-UNSEEN-WRITES read "... would not change it Fix: name ...".
+    assert short_diagnostic("CACHE-THRASH", "the cache is full", "raise it.") == (
+        f"[CACHE-THRASH] the cache is full. Fix: raise it. ({URL})"
+    )
+
+
 def test_inline_code_prints_with_one_backtick():
     text = short_diagnostic("CACHE-THRASH", "the cache is full: ``max_cache_size`` is 500 MB.", "raise ``x``.")
     assert "``" not in text
