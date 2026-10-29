@@ -96,3 +96,46 @@ def test_a_container_keeping_its_items_in_its_attributes_is_sized_by_them():
     slotted.extra = np.zeros(1_000_000)
     assert estimate_object_size(slotted) > 7_000_000
     assert memory_footprint(slotted) > 7_000_000
+
+
+@pytest.mark.parametrize("base", [dict, list])
+def test_attributes_sharing_a_child_are_sized_in_bounded_time(base):
+    """Six levels of a subclass, each with 100 attributes all naming the
+    next: summing every attribute at each level took 40 s a call."""
+    import time
+
+    kind = type("Shared", (base,), {})
+    nxt = kind()
+    for _level in range(6):
+        cur = kind()
+        for i in range(100):
+            setattr(cur, f"a{i}", nxt)
+        nxt = cur
+    start = time.perf_counter()
+    estimate_object_size(cur)
+    assert time.perf_counter() - start < 1.0
+
+
+def test_an_attribute_that_is_also_an_item_is_counted_once():
+    """``self[key] = self.key = value`` (an EasyDict) holds each value once."""
+
+    class EasyDict(dict):
+        pass
+
+    big = list(range(100_000))
+    d = EasyDict()
+    dict.__setitem__(d, "rows", big)
+    d.rows = big
+    alone = estimate_object_size({"rows": big})
+    assert estimate_object_size(d) < 1.5 * alone
+
+
+def test_the_look_below_reads_a_subclass_s_slots():
+    class Slotted(list):
+        __slots__ = ("extra",)
+
+    held = [1]
+    value = Slotted([[0]])
+    value.extra = held
+    items, _whole = _held_directly(value)
+    assert any(item is held for item in items)

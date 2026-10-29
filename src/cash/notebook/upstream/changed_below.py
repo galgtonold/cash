@@ -24,6 +24,7 @@ from ...analysis.cacheability import analyze_statement
 from ...analysis.code_analyzer import clean_cell_source, parse_cell_source
 from ...diagnostics import log_diagnostic, warn_diagnostic
 from ...exceptions import CashWarning
+from ...sizing import _slot_names, _slot_value
 
 __all__ = ["held_objects", "warn_changed_below"]
 
@@ -132,13 +133,16 @@ def _held_directly(obj: object) -> tuple[list, bool]:
             items, whole = _first_items(dict.values(obj), dict.__len__(obj))
         else:
             items, whole = _first_items(base.__iter__(obj), base.__len__(obj))
-        attrs = own_dict(obj) if type(obj) is not base else None
+        if type(obj) is base:
+            return items, whole
+        # A subclass's own attributes and slots: one keeping its items there
+        # (``self._d``) held nothing by its builtin storage alone.
+        attrs = own_dict(obj)
         if attrs:
-            # A subclass's own attributes: one keeping its items there
-            # (``self._d``) held nothing by its builtin storage alone.
             more, all_of_them = _first_items(dict.values(attrs), dict.__len__(attrs))
-            return items + more, whole and all_of_them
-        return items, whole
+            items, whole = items + more, whole and all_of_them
+        slots = [value for value in (_slot_value(obj, name) for name in _slot_names(type(obj))) if value is not None]
+        return items + slots, whole
     if instance_of(obj, functools.partial):
         return [obj.func, *obj.args, *obj.keywords.values()], True
     children = [

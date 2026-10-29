@@ -514,9 +514,27 @@ def _estimate_own_attrs(obj: Any, _depth: int) -> int:
     if type(obj) in _CONTAINER_KINDS:
         return 0
     attrs = own_dict(obj)
-    values = list(attrs.values()) if attrs is not None else []
+    # ``self.__dict__ = self`` (an EasyDict-style config): its items are
+    # its attributes, already counted.
+    values = list(attrs.values()) if attrs is not None and attrs is not obj else []
+    if values and isinstance(obj, dict):
+        # ``self[key] = self.key = value`` (an EasyDict): the item counts it.
+        values = [value for key, value in attrs.items() if dict.get(obj, key, _MISSING) is not value]
     values += [v for v in (_slot_value(obj, name) for name in _slot_names(type(obj))) if v is not None]
-    return sum(estimate_object_size(value, _depth + 1) for value in values)
+    values = [value for value in values if value is not obj]
+    # Sampled as a dict's values are (`_estimate_dict`): summing every one
+    # at each level was exponential in depth when they share a child.
+    n = len(values)
+    if n == 0:
+        return 0
+    if n <= 2:
+        return sum(estimate_object_size(value, _depth + 1) for value in values)
+    if _depth >= 1:
+        return n * estimate_object_size(values[0], _depth + 1)
+    return n * ((estimate_object_size(values[0], _depth + 1) + estimate_object_size(values[-1], _depth + 1)) // 2)
+
+
+_MISSING = object()
 
 
 def _estimate_indexable(obj: Any, _depth: int) -> int:
