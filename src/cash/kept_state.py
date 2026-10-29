@@ -1123,6 +1123,8 @@ class _KeepDict(dict):
             reducer = functools.partial(_reduce_for_key, protocol=self._protocol, registered=registered)
         elif registered is not None:
             reducer = registered
+        elif _plain_container_subclass(t):
+            reducer = _reduce_container_subclass
         else:
             if _drops_dict(t):
                 reducer = _reducer_with_dict(self._protocol)
@@ -1140,6 +1142,8 @@ class _KeepDict(dict):
         """The reducer a store's pickle (not *keyed*) takes for *t*."""
         if registered is not None:
             return registered
+        if _plain_container_subclass(t):
+            return _reduce_container_subclass
         if _drops_dict(t):
             reducer = _reducer_with_dict(self._protocol)
         else:
@@ -1589,6 +1593,131 @@ def _packed_array(dtype: Any, packed: Any) -> Any:
     import numpy as np
 
     return packed.astype(np.dtype(dtype))
+
+
+#: The builtin containers `_plain_container_subclass` takes a subclass of.
+_CONTAINER_BASES = (dict, list, tuple, set, frozenset)
+
+#: What decides how a class is pickled, when a class of its own defines it.
+_PICKLE_HOOKS = ("__reduce__", "__reduce_ex__", "__getstate__", "__setstate__", "__getnewargs__", "__getnewargs_ex__")
+
+#: By class, held weakly: a class made per call is not kept alive by it.
+_PLAIN_SUBCLASS: weakref.WeakKeyDictionary[type, bool] = weakref.WeakKeyDictionary()
+
+
+def _plain_container_subclass(t: type) -> bool:
+    """Whether *t* is a class written in Python on a dict, list, tuple, set
+    or frozenset that holds nothing but the builtin's items, its
+    ``__dict__`` and its slots, and leaves pickling to the builtin (or to
+    ``collections.Counter``, whose reduce is ``dict(self)``), but has
+    methods of its own that pickling reads or fills it with: then
+    `_reduce_container_subclass` copies it without running a method of
+    the class. Pickled by its own route, a subclass whose ``__iter__``,
+    ``__len__`` or ``keys`` prints and counts printed and counted as cash
+    stored it, where plain Python never asked. A namedtuple keeps its
+    route, as does a class on a C subclass (``OrderedDict``,
+    ``defaultdict``), which keeps more than the items."""
+    try:
+        return _PLAIN_SUBCLASS[t]
+    except KeyError:
+        pass
+    except TypeError:  # a class whose metaclass makes it unhashable
+        return False
+    found = _PLAIN_SUBCLASS[t] = _decide_plain_container_subclass(t)
+    return found
+
+
+def _decide_plain_container_subclass(t: type) -> bool:
+    mro = t.__mro__
+    base = next((klass for klass in mro if klass in _CONTAINER_BASES), None)
+    if base is None or t is base or "_fields" in vars(t):
+        return False
+    for klass in mro[: mro.index(base)]:
+        if not klass.__flags__ & _HEAP_TYPE or "__new__" in vars(klass) and klass.__module__ != "collections":
+            return False
+        if klass.__module__ != "collections" and any(hook in vars(klass) for hook in _PICKLE_HOOKS):
+            return False
+        if klass.__module__ == "collections" and klass.__name__ != "Counter":
+            return False
+    # Pickle's own way runs none of the class's methods, where it has none
+    # of the ones it reads and fills a container with: kept as it is.
+    return any(
+        klass.__module__ == "collections" or any(name in vars(klass) for name in _CONTAINER_METHODS)
+        for klass in mro[: mro.index(base)]
+    )
+
+
+#: What storing, copying and sizing a container read or fill it with.
+_CONTAINER_METHODS = (
+    "__iter__",
+    "__len__",
+    "__getitem__",
+    "__setitem__",
+    "__contains__",
+    "__reversed__",
+    "__getattribute__",
+    "__getattr__",
+    "__setattr__",
+    "__sizeof__",
+    "items",
+    "keys",
+    "values",
+    "append",
+    "extend",
+    "add",
+    "update",
+    "copy",
+    "__copy__",
+    "__deepcopy__",
+)
+
+
+#: ``Py_TPFLAGS_HEAPTYPE``: a class a ``class`` statement made.
+_HEAP_TYPE = 1 << 9
+
+
+def _reduce_container_subclass(obj: Any) -> Any:
+    """*obj*, a `_plain_container_subclass`, as its builtin's items, its
+    ``__dict__`` and its slots, each read by the builtin's or ``object``'s
+    own methods: rebuilt by `rebuild_container_subclass`, which runs none
+    of the class's methods either."""
+    kind = type(obj)
+    base = next(klass for klass in kind.__mro__ if klass in _CONTAINER_BASES)
+    items = list(dict.items(obj)) if base is dict else list(base.__iter__(obj))
+    try:
+        attrs = object.__getattribute__(obj, "__dict__")
+    except AttributeError:
+        attrs = None
+    slots = {}
+    for klass in kind.__mro__:
+        for name in vars(klass).get("__slots__", ()):
+            descriptor = vars(klass).get(name)
+            if type(descriptor) is types.MemberDescriptorType:
+                try:
+                    slots[name] = descriptor.__get__(obj, kind)
+                except AttributeError:  # an unset slot
+                    pass
+    return (rebuild_container_subclass, (kind, base, items, dict(attrs) if attrs else None, slots or None))
+
+
+def rebuild_container_subclass(kind: type, base: type, items: list, attrs: dict | None, slots: dict | None) -> Any:
+    """A *kind* holding *items*, *attrs* and *slots*, made by the builtin
+    *base*'s own methods (`_reduce_container_subclass`)."""
+    if base in (tuple, frozenset):
+        obj = base.__new__(kind, items)
+    else:
+        obj = base.__new__(kind)
+        if base is dict:
+            dict.update(obj, items)
+        elif base is list:
+            list.extend(obj, items)
+        else:
+            set.update(obj, items)
+    if attrs:
+        object.__getattribute__(obj, "__dict__").update(attrs)
+    for name, value in (slots or {}).items():
+        object.__setattr__(obj, name, value)
+    return obj
 
 
 def _drops_dict(t: type) -> bool:

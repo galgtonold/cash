@@ -3350,7 +3350,9 @@ def _walk(
                 type(c) not in exact
                 and (type(c) in containers or not is_value(c, value_types))
                 and carries.get(id(c), id(c) in nodes)
-                for c in value
+                # By the builtin's own iterator: a subclass's ``__iter__``
+                # may print or count, where plain Python never asked.
+                for c in (builtin_items(value) or ())
             )
     candidates = order[:reached]
     return nodes, inbound, [k for k in candidates if carries.get(k, True)], owner, taken

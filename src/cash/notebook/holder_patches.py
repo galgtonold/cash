@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .. import _plain_data
-from .._user_attrs import builtin_items
+from .._user_attrs import builtin_base, builtin_items
 from .shared_objects import (
     TREE_LEAVES,
     VALUE_TYPES,
@@ -207,7 +207,10 @@ def _places(value: Any, targets: set[int], value_types: tuple[type, ...]) -> lis
 def _get(obj: Any, step: Step) -> Any:
     kind, label = step
     if kind != "attr":
-        return obj[label]
+        # By the builtin type's own method: a subclass's ``__getitem__``
+        # may print or count, where plain Python never asked.
+        base = builtin_base(obj)
+        return base.__getitem__(obj, label) if base in (dict, list, tuple) else obj[label]
     # Where the walk read it (`_steps`): never through the object's own
     # ``__getattribute__``, which is the user's code.
     attrs = attributes_of(obj)
@@ -239,6 +242,8 @@ def apply_patch(live: Any, patch: HolderPatch, restored: Mapping[str, Any]) -> A
     for container, (kind, label), target in sets:
         if kind == "attr":
             setattr(container, label, target)
+        elif builtin_base(container) in (dict, list):
+            builtin_base(container).__setitem__(container, label, target)
         else:
             container[label] = target
     return live
