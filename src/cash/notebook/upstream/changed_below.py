@@ -18,12 +18,13 @@ import types
 
 from cash.control_markers import strip_markers
 
-from ..._user_attrs import attribute_or, instance_of
+from ..._user_attrs import attribute_or, builtin_base, instance_of, own_dict
 from ...analysis.ast_util import parse_cached
 from ...analysis.cacheability import analyze_statement
 from ...analysis.code_analyzer import clean_cell_source, parse_cell_source
 from ...diagnostics import log_diagnostic, warn_diagnostic
 from ...exceptions import CashWarning
+from ...sizing import _slot_names, _slot_value
 
 __all__ = ["held_objects", "warn_changed_below"]
 
@@ -123,10 +124,25 @@ def held_objects(holder: object) -> tuple[set[int], bool]:
 def _held_directly(obj: object) -> tuple[list, bool]:
     """What *obj* holds one step down, `_HOLD_ITEMS` at most, and whether
     that is all of it."""
-    if instance_of(obj, dict):
-        return _first_items(obj.values(), len(obj))
-    if instance_of(obj, (list, tuple, set, frozenset)):
-        return _first_items(obj, len(obj))
+    # By the builtin type's own methods, of the real type: a subclass's
+    # ``values()`` or ``__len__`` may print or count, where plain Python
+    # never asked.
+    base = builtin_base(obj)
+    if base is not None:
+        if base is dict:
+            items, whole = _first_items(dict.values(obj), dict.__len__(obj))
+        else:
+            items, whole = _first_items(base.__iter__(obj), base.__len__(obj))
+        if type(obj) is base:
+            return items, whole
+        # A subclass's own attributes and slots: one keeping its items there
+        # (``self._d``) held nothing by its builtin storage alone.
+        attrs = own_dict(obj)
+        if attrs:
+            more, all_of_them = _first_items(dict.values(attrs), dict.__len__(attrs))
+            items, whole = items + more, whole and all_of_them
+        slots = [value for value in (_slot_value(obj, name) for name in _slot_names(type(obj))) if value is not None]
+        return items + slots, whole
     if instance_of(obj, functools.partial):
         return [obj.func, *obj.args, *obj.keywords.values()], True
     children = [

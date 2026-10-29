@@ -14,6 +14,7 @@ Functions only; nothing here hashes or stores a value.
 from __future__ import annotations
 
 import dataclasses
+import functools
 import itertools
 import logging
 import pickle
@@ -24,7 +25,7 @@ import weakref
 from typing import Any
 
 from . import _native, _plain_data
-from ._user_attrs import attribute_or, instance_of, own_dict
+from ._user_attrs import attribute_or, builtin_items, instance_of, own_dict
 from .value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, PLAIN_SEQS, library_scalar_types
 
 logger = logging.getLogger(__name__)
@@ -506,14 +507,44 @@ def estimate_object_size(obj: Any, _depth: int = 0) -> int:
         if type_name in ("bytes", "bytearray"):
             return len(obj)
         if issubclass(type(obj), (list, tuple)):
-            return _estimate_indexable(obj, _depth)
+            return _estimate_indexable(obj, _depth) + _estimate_own_attrs(obj, _depth)
         if issubclass(type(obj), dict):
-            return _estimate_dict(obj, _depth)
+            return _estimate_dict(obj, _depth) + _estimate_own_attrs(obj, _depth)
         if issubclass(type(obj), (set, frozenset)):
-            return _estimate_set(obj, _depth)
+            return _estimate_set(obj, _depth) + _estimate_own_attrs(obj, _depth)
         return sys.getsizeof(obj)
     except Exception:  # noqa: BLE001 - an object's own lookups (``__class__`` raising) are not cash's error
         return sys.getsizeof(obj)
+
+
+def _estimate_own_attrs(obj: Any, _depth: int) -> int:
+    """What a container subclass holds besides its items: its ``__dict__``
+    and slots. One keeping its items there (``self._d``), its builtin
+    storage empty, was estimated at 80 bytes holding 16 MB."""
+    if type(obj) in _CONTAINER_KINDS:
+        return 0
+    attrs = own_dict(obj)
+    # ``self.__dict__ = self`` (an EasyDict-style config): its items are
+    # its attributes, already counted.
+    values = list(attrs.values()) if attrs is not None and attrs is not obj else []
+    if values and isinstance(obj, dict):
+        # ``self[key] = self.key = value`` (an EasyDict): the item counts it.
+        values = [value for key, value in attrs.items() if dict.get(obj, key, _MISSING) is not value]
+    values += [v for v in (_slot_value(obj, name) for name in _slot_names(type(obj))) if v is not None]
+    values = [value for value in values if value is not obj]
+    # Sampled as a dict's values are (`_estimate_dict`): summing every one
+    # at each level was exponential in depth when they share a child.
+    n = len(values)
+    if n == 0:
+        return 0
+    if n <= 2:
+        return sum(estimate_object_size(value, _depth + 1) for value in values)
+    if _depth >= 1:
+        return n * estimate_object_size(values[0], _depth + 1)
+    return n * ((estimate_object_size(values[0], _depth + 1) + estimate_object_size(values[-1], _depth + 1)) // 2)
+
+
+_MISSING = object()
 
 
 def _estimate_indexable(obj: Any, _depth: int) -> int:
@@ -523,13 +554,17 @@ def _estimate_indexable(obj: Any, _depth: int) -> int:
     element sizes from monotonic-build patterns; K=1 (first element) at
     depth >= 1 to bound total recursive cost.
     """
-    n = len(obj)
+    # By the builtin type's own methods: a subclass's ``__len__`` or
+    # ``__getitem__`` may print or count, where plain Python never asked.
+    kind = list if issubclass(type(obj), list) else tuple
+    n = kind.__len__(obj)
+    item = functools.partial(kind.__getitem__, obj)
     base = sys.getsizeof(obj)
     if n == 0:
         return base
     if n <= 2 or _depth >= 1:
-        return base + n * estimate_object_size(obj[0], _depth + 1)
-    samples = (obj[0], obj[n // 2], obj[-1])
+        return base + n * estimate_object_size(item(0), _depth + 1)
+    samples = (item(0), item(n // 2), item(-1))
     avg = sum(estimate_object_size(s, _depth + 1) for s in samples) // 3
     return base + n * avg
 
@@ -541,27 +576,28 @@ def _estimate_dict(obj: dict, _depth: int) -> int:
     >= 1.  CPython doesn't support O(1) middle-by-index access, so we
     accept the weaker position-bias detection for dicts.
     """
-    n = len(obj)
+    n = dict.__len__(obj)  # by dict's own methods, as `_estimate_indexable`
     base = sys.getsizeof(obj)
     if n == 0:
         return base
-    first_val = next(iter(obj.values()))
+    first_val = next(iter(dict.values(obj)))
     if n == 1:
         return base + estimate_object_size(first_val, _depth + 1)
     if _depth >= 1:
         return base + n * estimate_object_size(first_val, _depth + 1)
-    last_val = next(reversed(obj.values()))
+    last_val = next(reversed(dict.values(obj)))
     avg = (estimate_object_size(first_val, _depth + 1) + estimate_object_size(last_val, _depth + 1)) // 2
     return base + n * avg
 
 
 def _estimate_set(obj: Any, _depth: int) -> int:
     """Estimate size of a set or frozenset (unordered; K=1 always)."""
-    n = len(obj)
+    kind = set if issubclass(type(obj), set) else frozenset
+    n = kind.__len__(obj)  # by the builtin type's own methods, as `_estimate_indexable`
     base = sys.getsizeof(obj)
     if n == 0:
         return base
-    sample = next(iter(obj))
+    sample = next(kind.__iter__(obj))
     return base + n * estimate_object_size(sample, _depth + 1)
 
 
@@ -613,16 +649,24 @@ def _own_footprint(obj: Any, seen: set[int], stack: list) -> int:
             return size
         size = sys.getsizeof(obj)
         held: list = []
+        # By the builtin type's own methods: a subclass's ``values()`` or
+        # ``__len__`` may print or count, where plain Python never asked.
         if issubclass(type(obj), dict):
-            held += obj.values()
-            held += obj
+            held += dict.values(obj)
+            held += dict.keys(obj)
         elif issubclass(type(obj), (list, tuple, set, frozenset)):
-            sampled = _sampled_instances(obj, seen) if len(obj) > _plain_data.SIZE_EXACT_UP_TO else None
+            items = builtin_items(obj)
+            items = list(obj) if items is None else items
+            sampled = _sampled_instances(items, seen) if len(items) > _plain_data.SIZE_EXACT_UP_TO else None
             if sampled is None:
-                held += obj
+                held += items
             else:
                 size += sampled
         elif not instance_of(obj, _HELD_BY_NAME):
+            size += _attrs_footprint(obj, seen, held)
+        if type(obj) not in _CONTAINER_KINDS and issubclass(type(obj), _CONTAINER_KINDS):
+            # A subclass's own attributes: one keeping its items there
+            # (``self._d``), its builtin storage empty, read as 80 bytes.
             size += _attrs_footprint(obj, seen, held)
     except Exception:
         logger.debug("Could not estimate size of %s object", type(obj).__name__, exc_info=True)
@@ -631,6 +675,8 @@ def _own_footprint(obj: Any, seen: set[int], stack: list) -> int:
     stack += held
     return size
 
+
+_CONTAINER_KINDS = (dict, list, tuple, set, frozenset)
 
 #: What a copy of a value refers to rather than holds: pickled by name.
 _HELD_BY_NAME = (type, types.ModuleType, types.FunctionType, types.BuiltinFunctionType, types.MethodType)
