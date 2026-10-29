@@ -185,13 +185,16 @@ def rebound_outputs(
     (`assigned_names`) and the ones it does not read, but for a class it
     does not bind by name either. ``sbox.bump(5)`` changing ``SBox.held``
     through ``type(self)``, or ``k.hold(d)`` appending to a metaclass's
-    list, changes the class in place: its edges stay, so a value kept on it
-    moves with it. The runtime and the simulation both ask this."""
+    list, changes the class in place, as ``SBox.bump(5)`` changing
+    ``reg.Reg.held`` changes the module ``reg``: its edges stay, so a value
+    kept on it moves with it. The runtime and the simulation both ask this."""
     rebound = assigned_names(tree) & outputs
     unread = {name for name in outputs if name not in inputs}
     named = bound_names(tree)
     if named is not None:
-        unread = {name for name in unread if name in named or not instance_of(namespace.get(name), type)}
+        unread = {
+            name for name in unread if name in named or not instance_of(namespace.get(name), (type, types.ModuleType))
+        }
     return rebound | unread
 
 

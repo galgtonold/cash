@@ -450,17 +450,26 @@ def _class_state(cls: type) -> tuple | None:
     and after a statement when it put nothing on the class. None past
     `_STATE_READ` objects, when it cannot tell."""
     out: list[Any] = []
-    seen: set[int] = set()
-    stack: list[Any] = [value for key, value in vars(cls).items() if not (key.startswith("__") and key.endswith("__"))]
+    stack: list[Any] = _own_attributes(cls)
+    seen: set[int] = {id(cls)}
     while stack:
         value = stack.pop()
         out.append(id(value))
-        if id(value) in seen or instance_of(value, (type, types.ModuleType, types.FunctionType)):
+        if id(value) in seen or instance_of(value, (types.ModuleType, types.FunctionType)):
+            continue
+        if instance_of(value, type):
+            # A class defined inside it (``cls.Store.held``) keeps its
+            # state as the class does; another class is its own.
+            if attribute_or(value, "__module__", None) == attribute_or(cls, "__module__", None) and attribute_or(
+                value, "__qualname__", ""
+            ).startswith(attribute_or(cls, "__qualname__", "") + "."):
+                seen.add(id(value))
+                stack.extend(_own_attributes(value))
             continue
         seen.add(id(value))
         if len(seen) > _STATE_READ:
             return None
-        if type(value) in (list, tuple, set, frozenset):
+        if type(value) in (list, tuple, set, frozenset, collections.deque):
             out.append(len(value))
             stack.extend(value)
         elif type(value) is dict:
@@ -473,6 +482,11 @@ def _class_state(cls: type) -> tuple | None:
                 out.append(len(attributes))
                 stack.extend(attributes.values())
     return tuple(out)
+
+
+def _own_attributes(cls: type) -> list[Any]:
+    """What *cls* holds in its own attributes but Python's ``__dunder__`` ones."""
+    return [value for key, value in vars(cls).items() if not (key.startswith("__") and key.endswith("__"))]
 
 
 def _defined_class_bases(tree: ast.AST, user_ns: Mapping[str, Any]) -> list[type]:
@@ -3278,6 +3292,17 @@ class StatementProcessor:
             and instance_of(user_ns[name], (type, types.ModuleType))
         }
         self._note_class_changes(run, {name for name in changed if instance_of(user_ns[name], type)})
+        # A module it set state on through a function it calls, named
+        # nowhere in its text (``sbox.hold(d)`` calling ``reg.register(d)``):
+        # what it keeps there moves with the module.
+        state_modules = {
+            name
+            for name, value in list(user_ns.items())
+            if run.state_modules
+            and instance_of(value, types.ModuleType)
+            and attribute_or(value, "__name__", None) in run.state_modules
+        }
+        changed |= state_modules
         value_types = VALUE_TYPES + library_value_types()
         # A class it defines keeps what its body was handed
         # (``class A(Base): meta = data['meta']``), and the classes it
@@ -3409,7 +3434,7 @@ class StatementProcessor:
             # A global of a module the statement set state on holds it: the
             # names through which it did (``Pt`` of ``Pt.hold(...)``) stand
             # for the module, as they do for its rebuild.
-            record_shared_object_edges(edges, handed, run.state_names & changed)
+            record_shared_object_edges(edges, handed, (run.state_names | state_modules) & changed)
 
     def record_structure_share_edges(
         self,

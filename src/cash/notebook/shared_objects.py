@@ -2631,46 +2631,113 @@ def _holders_from_referrers(
     # alive, and add to the counts taken again afterwards.
     outside: set[int] = set()
     level = targets
+    # What the search reaches only past such a holder (a class, a library
+    # object it climbs through): read on its own, and dropped, not given up
+    # on, when it outgrows the limits below. A logger holding a handler
+    # leads to every logger; the search then says what it said before it
+    # climbed past them.
+    beyond: list[Any] = []
     for _depth in range(_MAX_DEPTH):
         if len(level) > _MAX_REFERRER_TARGETS:
             return _gave_up(gave_up, found, outside, user_ns, known, complete=False)
-        if outside and _past_deadline():
+        if beyond and (len(beyond) > _MAX_REFERRER_TARGETS or _past_deadline()):
+            beyond = []
+        if outside and level and _past_deadline():
             # Past a holder the search used to stop at: within the walk's
             # budget, or the names found so far are all it says.
             return _gave_up(gave_up, found, outside, user_ns, known, complete=False)
-        # Passed as one tuple, which the call hands on as it is: it is a
-        # referrer too.
-        args = tuple(level)
-        seen.update((id(level), id(args)))
-        level_ids = {id(obj) for obj in level}
-        # Not known here (`_referrers`) raises as out of time does: the
-        # caller's check of the statement gives up, and it re-runs warned.
-        referrers = _referrers(args, seen)
-        seen.add(id(referrers))
-        upper = []
-        for holder in referrers:
-            if id(holder) in seen:
-                continue
-            if holder is user_ns:
-                found.update(name for name, value in user_ns.items() if id(value) in level_ids and name not in known)
-                continue
-            if not (issubclass(type(holder), _CONTAINERS) or attributes_of(holder) is not None) or _is_module_namespace(
-                holder
-            ):
-                # A frame, a closure cell, a function, a module or its
-                # namespace, a library's object.
+        upper: list[Any] = []
+        further: list[Any] = []
+        for objs, climbed in ((level, upper), (beyond, further)):
+            if objs and _climb_level(objs, climbed, further, seen, found, outside, user_ns, known) is None:
                 if gave_up is None:
                     return None
-                seen.add(id(holder))
-                outside.add(id(holder))
-                continue
-            seen.add(id(holder))
-            upper.append(holder)
-        del referrers, args
-        if not upper:
+        if not upper and not further:
             return _gave_up(gave_up, found, outside, user_ns, known) if outside else found
-        level = upper
+        level, beyond = upper, further
+    if not level:
+        return _gave_up(gave_up, found, outside, user_ns, known)
     return _gave_up(gave_up, found, outside, user_ns, known, complete=False)
+
+
+def _climb_level(
+    level: list[Any],
+    upper: list[Any],
+    further: list[Any],
+    seen: set[int],
+    found: set[str],
+    outside: set[int],
+    user_ns: Mapping[str, Any],
+    known: set[str],
+) -> bool | None:
+    """One level of `_holders_from_referrers`: the containers holding
+    *level* go in *upper*, what holds the classes and library objects among
+    its holders in *further*, the variables bound to one of them in
+    *found*. None when a holder is one the search stops at."""
+    # Passed as one tuple, which the call hands on as it is: it is a
+    # referrer too.
+    args = tuple(level)
+    seen.update((id(level), id(args)))
+    level_ids = {id(obj) for obj in level}
+    # Not known here (`_referrers`) raises as out of time does: the
+    # caller's check of the statement gives up, and it re-runs warned.
+    referrers = _referrers(args, seen)
+    seen.add(id(referrers))
+    classes = []
+    stopped = False
+    for holder in referrers:
+        if id(holder) in seen:
+            continue
+        if holder is user_ns:
+            found.update(name for name, value in user_ns.items() if id(value) in level_ids and name not in known)
+            continue
+        if not (
+            issubclass(type(holder), _CLIMBED_CONTAINERS) or attributes_of(holder) is not None
+        ) or _is_module_namespace(holder):
+            # A frame, a closure cell, a function, a module or its
+            # namespace, a library's object.
+            stopped = True
+            seen.add(id(holder))
+            outside.add(id(holder))
+            if instance_of(holder, type):
+                classes.append(holder)
+            elif not instance_of(holder, types.FrameType) and not _is_module_namespace(holder):
+                # Not climbed as a container a restore copies, but what
+                # holds it keeps the object too: the class a ``Queue`` is
+                # an attribute of. Each one met widens the next level's
+                # read of the heap past such holders, and can add a level.
+                further.append(holder)
+            continue
+        seen.add(id(holder))
+        upper.append(holder)
+    del referrers, args
+    if classes:
+        # A class keeps it as its state, and so does what has the class as
+        # an attribute (``Outer.Store``, a module's ``Reg``): climbed by the
+        # namespaces holding it, not its instances and subclasses. The
+        # level's classes in one read (`_referrers`).
+        held = tuple(classes)
+        seen.update((id(classes), id(held)))
+        class_ids = {id(klass) for klass in held}
+        namespaces = _referrers(held, seen)
+        seen.add(id(namespaces))
+        for namespace in namespaces:
+            if type(namespace) is not dict or id(namespace) in seen:
+                continue
+            if namespace is user_ns:
+                found.update(n for n, v in user_ns.items() if id(v) in class_ids and n not in known)
+            elif _is_module_namespace(namespace):
+                outside.add(id(namespace))
+            else:
+                seen.add(id(namespace))
+                further.append(namespace)
+        del namespaces, held, classes
+    return None if stopped else True
+
+
+#: What `_holders_from_referrers` climbs through: a ``deque`` holds its
+#: items as a list does (``Queue.queue``, a class's ``held = deque()``).
+_CLIMBED_CONTAINERS = (*_CONTAINERS, collections.deque)
 
 
 def _past_deadline() -> bool:
