@@ -463,6 +463,8 @@ def attributes_of(value: Any) -> dict[str, Any] | None:
     user's own modules, a ``SimpleNamespace``, a dataclass or an estimator;
     ``None`` for anything else (a leaf)."""
     cls = type(value)
+    if cls in _ATTRIBUTED_SCALARS:
+        return None  # pandas' own class: asked of each of a million in a column
     if not (
         attribute_or(cls, "__module__", None) == "__main__"
         or cls is types.SimpleNamespace
@@ -527,6 +529,11 @@ def _values_only(value: Any, exact: frozenset[type]) -> bool:
 
 def children_of(value: Any) -> Iterable[Any] | None:
     """What *value* holds that a restore copies with it, or None for a leaf."""
+    if type(value) in _ATTRIBUTED_SCALARS:
+        # A leaf, as `_library_children` finds, without the questions asked
+        # on the way there: a column of a million Timestamps, objects to the
+        # share check once one had an attribute set, took 12 s against 0.2.
+        return None
     # By the real type: a proxy that only claims to be a dict or list is
     # read as what it really is.
     items = builtin_items(value) if issubclass(type(value), _CONTAINERS) else None
@@ -1612,7 +1619,19 @@ def _copies_keep_old_objects(group: Mapping[str, Any], leaves: Leaves | None = N
         seen.add(id(obj))
         if instance_of(obj, (types.FunctionType, types.BuiltinFunctionType)):
             return True
-        stack.extend(children_of(obj) or ())
+        children = children_of(obj)
+        if not children:
+            continue
+        if (
+            type(children) is list
+            and len(children) >= _FLAT_RECORDS_MIN
+            and _plain_data.is_tree(children, plain_leaves)
+        ):
+            # An object column of lists of numbers: JSON-like all the way
+            # down, no function in it, asked at C speed -- a million lists
+            # took a Python step each, 4 s of a check.
+            continue
+        stack.extend(children)
     return False
 
 
@@ -2950,6 +2969,14 @@ def _records_left(
     a walk a record at a time, and a loop over it is walked twice per
     statement. None, with nothing decided, for any other children."""
     kinds = set(map(type, children)) - exact
+    if kinds and kinds <= _ATTRIBUTED_SCALARS:
+        # Pandas scalars kept by identity (`scalar_identity`): leaves to
+        # `children_of`, nothing below them to read, only their own counts.
+        # A column of a million Timestamps took 12 s a walk one at a time,
+        # against 0.2 s for a column of lists.
+        return _left_by_count(children, kinds, leaves)
+    if kinds and kinds <= _FLAT_CONTAINERS:
+        return _lone_flat_containers_left(children, kinds, leaves, exact)
     if len(kinds) != 1:
         return None
     (kind,) = kinds
@@ -2971,13 +2998,54 @@ def _records_left(
     ):
         return None
     del states, records
+    return _left_by_count(children, kinds, leaves, counts)
+
+
+#: The containers `_records_left` takes by count when each holds values alone.
+_FLAT_CONTAINERS = frozenset((list, dict))
+
+
+def _lone_flat_containers_left(
+    children: list[Any], kinds: set[type], leaves: Leaves | None, exact: frozenset[type]
+) -> list[Any] | None:
+    """`_records_left` for children that are lists and dicts: those held by
+    their container alone and holding values alone (`_values_only`) are no
+    part of anything else and hold nothing that can be, so they are left
+    out. None when one held by its container alone holds anything else:
+    the walk then takes them one at a time. A frame's column of a million
+    one-item lists, one of them also bound to a variable, was walked a list
+    at a time: 8 s a check."""
+    counts = list(map(sys.getrefcount, children))
+    lone = [child for child in itertools.compress(children, map(_LONE_RECORD.__eq__, counts)) if type(child) in kinds]
+    if kinds == {list}:
+        flat = exact.issuperset(map(type, itertools.chain.from_iterable(lone)))
+    else:
+        flat = all(map(_values_only, lone, itertools.repeat(exact)))
+    del lone
+    if not flat:
+        return None
+    return _left_by_count(children, kinds, leaves, counts)
+
+
+def _left_by_count(
+    children: list[Any], kinds: set[type], leaves: Leaves | None, counts: list[int] | None = None
+) -> list[Any]:
+    """The children of *kinds* that something besides their container
+    holds (by *counts*, taken before anything else held them), and those of
+    *leaves*: `_records_left`'s answer once each child of *kinds* is known
+    to need no walk below it."""
+    if counts is None:
+        counts = list(map(sys.getrefcount, children))
+    mixed = len(kinds) != len(set(map(type, children)))
     left = list(itertools.compress(children, map(_LONE_RECORD.__ne__, counts)))
     if mixed:
-        left = [child for child in left if type(child) is kind]
+        left = [child for child in left if type(child) in kinds]
     if leaves and leaves.ids:
         left_ids = set(map(id, left))
         left.extend(
-            child for child in children if type(child) is kind and id(child) in leaves.ids and id(child) not in left_ids
+            child
+            for child in children
+            if type(child) in kinds and id(child) in leaves.ids and id(child) not in left_ids
         )
     return left
 
