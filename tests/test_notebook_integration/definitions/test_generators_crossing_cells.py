@@ -316,9 +316,11 @@ def test_genfunc_downstream_instance_edit(nb_runner):
 
 def test_half_consumed_iterator_isolated_rerun_persist(nb_runner):
     """Half of the iterator consumed in B, rest in C; ISOLATED re-run of C
-    under persist. Exhausted-generator-adjacent: with the statement cached (persist on),
-    can cash serve rest=[3, 4, 5] instead of re-executing on the exhausted
-    iterator?"""
+    under persist. Correct is what a restart and Run All give (``[3, 4,
+    5]``), not what re-running C alone in plain Python gives (``[]``, the
+    iterator exhausted): a cell re-run alone gives its top-to-bottom answer
+    (docs/known-limitations.md). Served, or rebuilt from ``it`` rebuilt and
+    B run again, it is ``[3, 4, 5]`` either way."""
     nb_runner.create_notebook(
         [
             "it = iter(range(6))",

@@ -40,11 +40,13 @@ import copy
 import copyreg
 import functools
 import inspect
+import json
+import pickle
 import sys
 import textwrap
 import types
 import weakref
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from typing import Any
 
 from cash._user_attrs import attribute_or, instance_of
@@ -57,6 +59,7 @@ from cash.analysis.callee_effects import (
     source_global_rebinds,
 )
 from cash.analysis.mutations import MutationVisitor
+from cash.install_paths import is_user_code_module
 from cash.kept_state import next_mark, set_reducer_veto, user_state_runs, user_state_types_since, users_function
 from cash.source_reading import getsourcelines
 
@@ -218,7 +221,18 @@ def reach(found: list[Writer], user_ns: Mapping[str, Any]) -> set[str] | None:
             if not isinstance(g, dict):
                 return None
             changes_module = False
-            for chain in bytecode_global_refs(function):
+            refs = list(bytecode_global_refs(function))
+            named = {chain[0] for chain in refs}
+            # Written but not named by its code: a parameter's default
+            # (``_c=CFG``) stands for the global.
+            refs += [(n,) for n in sorted((writer.written | writer.handed) - named) if n in g]
+            for cell_name, value in _cells(function).items():
+                if cell_name in writer.written and type(value) not in _ATOMS:
+                    # A closure's cell (``acc.append(1)``): the notebook may
+                    # hold its object (``ACC``).
+                    written.add(id(value))
+                    reached[id(value)] = value
+            for chain in refs:
                 value = g.get(chain[0], _ABSENT)
                 if value is _ABSENT:
                     continue
@@ -258,15 +272,34 @@ def reach(found: list[Writer], user_ns: Mapping[str, Any]) -> set[str] | None:
     return found_names
 
 
+def _cells(function: Any) -> dict[str, Any]:
+    """*function*'s closure, name to what each cell holds (an empty one left out)."""
+    code = attribute_or(function, "__code__", None)
+    out: dict[str, Any] = {}
+    for cell_name, cell in zip(
+        attribute_or(code, "co_freevars", ()), attribute_or(function, "__closure__", None) or ()
+    ):
+        try:
+            out[cell_name] = cell.cell_contents
+        except ValueError:
+            continue
+    return out
+
+
 _CODE_TYPES = (types.ModuleType, types.FunctionType, types.BuiltinFunctionType, type)
 #: Values no write changes, and that many unrelated names share by id.
 _ATOMS = frozenset({int, float, complex, bool, str, bytes, type(None)})
 _ABSENT = object()
 
 
-#: `_writer` by class: None for a class whose reducers write nothing.
+#: `_writer` by class: ``(answer, cleared)``, the answer `_PURE` for a
+#: class whose reducers write nothing, *cleared* the globals `_atoms_only`
+#: found holding only numbers and strings as it was decided.
 _WRITERS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 _PURE = object()
+#: The globals `_atoms_only` cleared, as ``(namespace, name)``, for the
+#: decision being made (`_writer`); None when none is being kept.
+_CLEARED: list[list[tuple[Mapping[str, Any], str]] | None] = [None]
 
 
 def _writer(t: type) -> Writer | None:
@@ -274,12 +307,22 @@ def _writer(t: type) -> Writer | None:
         # Registered with ``copyreg``, perhaps after it was first decided.
         return _decide(t)
     try:
-        found = _WRITERS.get(t)
+        kept = _WRITERS.get(t)
     except TypeError:
         return _decide(t)
-    if found is None:
-        found = _WRITERS[t] = _decide(t) or _PURE
-    return None if found is _PURE else found
+    if kept is not None and not all(_holds_atoms_only(g, name) for g, name in kept[1]):
+        # ``for row in G: row.append(1)`` was decided writing nothing while
+        # ``G`` held only strings; it holds a list now (``G.append([])``).
+        kept = None
+    if kept is None:
+        cleared: list[tuple[Mapping[str, Any], str]] = []
+        outer, _CLEARED[0] = _CLEARED[0], cleared
+        try:
+            found = _decide(t) or _PURE
+        finally:
+            _CLEARED[0] = outer
+        kept = _WRITERS[t] = (found, tuple(cleared))
+    return None if kept[0] is _PURE else kept[0]
 
 
 def _decide(t: type) -> Writer | None:
@@ -301,7 +344,24 @@ def _decide(t: type) -> Writer | None:
         body = _body(function)
         if body is None or (id(function) in roots and _writes_itself(body)):
             return Writer(name, None)
-        changed = free_vars_mutated_in_function(body) | _changed_through_copies(function, body)
+        if _reads_a_namespace(body, attribute_or(function, "__globals__", {})):
+            # ``globals()['CFG']['rows'].append(1)``, ``vars(OBJ)['seen']``:
+            # what it changes is reached by a string.
+            return Writer(name, None)
+        changed = set(free_vars_mutated_in_function(body)) | _changed_through_copies(function, body)
+        if _ANY_GLOBAL in changed:
+            # Through what a function of another module returns: its names
+            # are not this one's.
+            return Writer(name, None)
+        if _OWN_CLASS in changed:
+            # ``type(self).seen.append(1)``: the class, by the names its
+            # module holds it under; none, and what holds it is not known.
+            changed.discard(_OWN_CLASS)
+            g = attribute_or(function, "__globals__", {})
+            held_as = {n for n, value in list(g.items()) if value is t}
+            if not held_as:
+                return Writer(name, None)
+            changed |= held_as
         to_libraries |= _handed_to_libraries(function, body) - changed
         if changed or _rebinds(function):
             written |= changed
@@ -652,29 +712,47 @@ class _RunningMutations(MutationVisitor):
         return None
 
 
-#: Calls that copy a container one level deep: what the copy holds is what
-#: the original holds (``c = copy.copy(CFG); c['rows'].append(1)``).
-_SHALLOW_BUILDERS = frozenset({"dict", "list", "set", "tuple", "frozenset", "bytearray"})
-
-
 def _changed_through_copies(function: Any, body: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
-    """The globals *body* changes through a local bound to one of them or
-    to a shallow copy of one (``c = CFG``, ``c = copy.copy(CFG)``,
-    ``c = dict(CFG)``, ``c = CFG.copy()``, ``c = CFG[:]``): a change made
-    through the local may change what the global holds. Any change counts,
-    the top-level one of a copy too."""
+    """The globals *body* changes through a local bound from an expression
+    that reads one of them (``c = CFG``, ``c = CFG['rows']``, ``c =
+    copy.copy(CFG)``, ``c = OBJ.seen``, ``for c in [CFG]``, ``c, k = CFG,
+    1``, ``len(c := CFG['rows'])``, ``with nullcontext(CFG) as c``) or from
+    a parameter whose default is one (``_c=CFG``): a change made through the
+    local may change what the global holds. Fails closed: any expression
+    reading the global counts but a deep copy and a few calls whose result
+    holds nothing of it (`_HOLDS_NOTHING_OF_IT`). Any change counts, the
+    top-level one of a copy too."""
     g = attribute_or(function, "__globals__", {})
     params = {a.arg for a in ast.walk(body.args) if isinstance(a, ast.arg)}
     aliases: dict[str, set[str]] = {}
-    for node in ast.walk(body):
-        if not isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)) or node.value is None:
-            continue
-        source = _copied_global(node.value, g, params, aliases)
-        if not source:
-            continue
-        for target in node.targets if isinstance(node, ast.Assign) else [node.target]:
-            if isinstance(target, ast.Name):
-                aliases.setdefault(target.id, set()).update(source)
+    arguments = body.args
+    positional = [*arguments.posonlyargs, *arguments.args]
+    self_name = positional[0].arg if positional else None
+    defaulted = [
+        *zip(positional[len(positional) - len(arguments.defaults) :], arguments.defaults),
+        *((a, d) for a, d in zip(arguments.kwonlyargs, arguments.kw_defaults) if d is not None),
+    ]
+    for arg, default in defaulted:
+        source = _globals_read(default, g, set(), aliases)
+        if source:
+            aliases[arg.arg] = source
+    for cell_name, value in _cells(function).items():
+        if type(value) not in _ATOMS and not _never_changed(value):
+            # ``c = acc``: the cell's object, which the notebook may hold.
+            aliases.setdefault(cell_name, {cell_name})
+    bindings = list(_bindings(body))
+    grown = True
+    while grown:
+        grown = False
+        for targets, value, items in bindings:
+            source = (_items_read if items else _globals_read)(value, g, params, aliases, self_name)
+            if not source:
+                continue
+            for target in targets:
+                known = aliases.setdefault(target, set())
+                if not source <= known:
+                    known |= source
+                    grown = True
     if not aliases:
         return set()
     visitor = _RunningMutations()
@@ -686,34 +764,272 @@ def _changed_through_copies(function: Any, body: ast.FunctionDef | ast.AsyncFunc
     return out
 
 
-def _copied_global(
-    value: ast.expr, g: Mapping[str, Any], params: set[str], aliases: Mapping[str, set[str]]
+def _reads_a_namespace(body: ast.AST, g: Mapping[str, Any]) -> bool:
+    """Does *body* call ``globals()``, ``vars()`` or ``locals()``, the builtins?"""
+    return any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in ("globals", "vars", "locals")
+        and node.func.id not in g
+        for node in ast.walk(body)
+    )
+
+
+def _bindings(body: ast.AST) -> Iterator[tuple[list[str], ast.expr, bool]]:
+    """``(names, value, items)`` for each binding *body* makes of local
+    names from a value: an assignment (each name of an unpacked target), a
+    walrus, a loop's or a comprehension's target from the items of what it
+    iterates (*items* true), a ``with``'s ``as`` from its context manager."""
+    for node in ast.walk(body):
+        if isinstance(node, ast.Assign):
+            yield [n for t in node.targets for n in _names(t)], node.value, False
+        elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)) and node.value is not None:
+            yield _names(node.target), node.value, False
+        elif isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
+            yield _names(node.target), node.iter, True
+        elif isinstance(node, ast.withitem) and node.optional_vars is not None:
+            yield _names(node.optional_vars), node.context_expr, False
+
+
+def _names(target: ast.AST) -> list[str]:
+    return [n.id for n in ast.walk(target) if isinstance(n, ast.Name)]
+
+
+#: Calls whose result holds nothing of what they are handed.
+_HOLDS_NOTHING_OF_IT = frozenset(
+    {"len", "str", "int", "float", "bool", "repr", "hash", "id", "abs", "round", "format", "isinstance", "callable"}
+)
+
+
+def _globals_read(
+    value: ast.expr,
+    g: Mapping[str, Any],
+    params: set[str],
+    aliases: Mapping[str, set[str]],
+    self_name: str | None = None,
 ) -> set[str]:
-    """The globals *value* is, or is a shallow copy of."""
-    if isinstance(value, ast.Name):
-        if value.id in aliases:
-            return set(aliases[value.id])
-        changeable = value.id in g and value.id not in params and not _never_changed(g[value.id])
-        return {value.id} if changeable else set()
-    if isinstance(value, ast.Subscript) and isinstance(value.slice, ast.Slice):
-        return _copied_global(value.value, g, params, aliases)
-    if not isinstance(value, ast.Call) or len(value.args) != 1 or value.keywords:
-        if isinstance(value, ast.Call) and not value.args and not value.keywords:
-            func = value.func
-            if isinstance(func, ast.Attribute) and func.attr == "copy":
-                return _copied_global(func.value, g, params, aliases)  # ``CFG.copy()``
+    """The changeable globals, directly or through *aliases*, that the
+    object *value* gives may be or hold part of. Followed: a name, an
+    attribute or item of what is followed, a method called on it, what a
+    literal, an unpacking, ``a or b``, ``a if t else b`` or ``a + b`` puts
+    together, a comprehension's items, and the items a copying builtin
+    (``list(G)``, ``sorted(G)``, ``{**G}``) takes, unless they are all
+    numbers and strings, an attribute of a class of the user's (``K.seen``)
+    or of the object's own (``type(self).seen``, `_OWN_CLASS`), and what a
+    function of the user's called reads (``holder().seen``, `_read_by`).
+    Not a test (``k not in SKIP``), a comparison, a deep copy, nor a call
+    whose result holds nothing of its arguments (`_HOLDS_NOTHING_OF_IT`).
+    Anything else counts every global it reads: it fails closed."""
+
+    def held(node: ast.AST | None, local: Mapping[str, set[str]]) -> set[str]:
+        if node is None or isinstance(node, (ast.Constant, ast.Compare, ast.JoinedStr)):
+            return set()
+        if isinstance(node, ast.UnaryOp):
+            # ``+G`` is whatever ``G.__pos__`` returns, which may be ``G``.
+            return set() if isinstance(node.op, ast.Not) else held(node.operand, local)
+        if isinstance(node, ast.Name):
+            if node.id in local:
+                return set(local[node.id])
+            changeable = (
+                node.id in g
+                and node.id not in params
+                and not _never_changed(g[node.id])
+                and not instance_of(g[node.id], types.ModuleType)
+            )
+            return {node.id} if changeable else set()
+        if isinstance(node, (ast.Attribute, ast.Subscript)):
+            inner = node.value
+            if _is_own_class(inner, self_name):
+                return {_OWN_CLASS}
+            if isinstance(inner, ast.Name) and inner.id not in local and inner.id not in params:
+                if _a_users_class(g.get(inner.id)) or instance_of(g.get(inner.id), types.ModuleType):
+                    # ``K.seen``, ``M.SEEN``: a class's or a module's
+                    # attributes change, the class or module does not.
+                    return {inner.id}
+            return held(inner, local)
+        if isinstance(node, (ast.Starred, ast.NamedExpr, ast.Await)):
+            return held(node.value, local)
+        if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+            return set().union(
+                *(items(e.value, local) if isinstance(e, ast.Starred) else held(e, local) for e in node.elts)
+            )
+        if isinstance(node, ast.Dict):
+            out: set[str] = set()
+            for key, item in zip(node.keys, node.values):
+                out |= items(item, local) if key is None else held(key, local) | held(item, local)
+            return out
+        if isinstance(node, ast.IfExp):
+            return held(node.body, local) | held(node.orelse, local)
+        if isinstance(node, ast.BoolOp):
+            return set().union(*(held(v, local) for v in node.values))
+        if isinstance(node, ast.BinOp):
+            return held(node.left, local) | held(node.right, local)
+        if isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)):
+            inner = dict(local)
+            for gen in node.generators:
+                bound = items(gen.iter, inner)
+                for name in _names(gen.target):
+                    inner[name] = bound
+            if isinstance(node, ast.DictComp):
+                return held(node.key, inner) | held(node.value, inner)
+            return held(node.elt, inner)
+        if isinstance(node, ast.Call):
+            return called(node, local)
+        return every_global(node, local)
+
+    def items(node: ast.AST, local: Mapping[str, set[str]]) -> set[str]:
+        """What the items of *node*, taken out one by one, may be or hold."""
+        if _atoms_only(node, g, params, local):
+            return set()
+        return held(node, local)
+
+    def called(node: ast.Call, local: Mapping[str, set[str]]) -> set[str]:
+        func = node.func
+        args = [*node.args, *(k.value for k in node.keywords)]
+        callee = None
+        if isinstance(func, ast.Name):
+            if func.id not in g and func.id in _HOLDS_NOTHING_OF_IT:
+                return set()
+            if func.id not in g and func.id in _COPIES_ITEMS:
+                return set().union(*(items(a.value if isinstance(a, ast.Starred) else a, local) for a in args))
+            callee = g.get(func.id)
+        elif isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id not in local:
+            callee = attribute_or(g.get(func.value.id), func.attr, None)
+        if callee is copy.deepcopy or any(callee is fresh for fresh in _FRESH_FROM_TEXT):
+            return set()
+        if callee is copy.copy or _is_numpy_array(callee) and not node.keywords:
+            return set().union(*(items(a, local) for a in node.args))
+        if type(callee) is types.FunctionType and _users(callee):
+            # ``holder().seen``: what it returns may be any global it reads.
+            if callee.__globals__ is not g:
+                return {_ANY_GLOBAL}
+            return _read_by(callee, g, params) | set().union(*(held(a, local) for a in args))
+        if isinstance(func, ast.Attribute):
+            # ``CFG.copy()``, ``CFG.get('rows')``: what it is called on, and
+            # what it is handed.
+            return held(func.value, local) | set().union(*(held(a, local) for a in args))
+        return every_global(node, local)
+
+    def every_global(node: ast.AST, local: Mapping[str, set[str]]) -> set[str]:
+        found: set[str] = set()
+        for name in ast.walk(node):
+            if isinstance(name, ast.Name) and isinstance(name.ctx, ast.Load):
+                found |= held(name, local)
+        return found
+
+    return held(value, aliases)
+
+
+#: What `_globals_read` gives for the class of the object pickled
+#: (``type(self)``), and for a value a function of another module returns.
+_OWN_CLASS = "\x00own class"
+_ANY_GLOBAL = "\x00any global"
+#: How many functions `_read_by` follows.
+_READ_BY_FOLLOWED = 64
+
+
+def _is_own_class(node: ast.AST, self_name: str | None) -> bool:
+    """``type(self)`` or ``self.__class__``, *self_name* the first parameter."""
+    if self_name is None:
+        return False
+    if isinstance(node, ast.Attribute):
+        return node.attr == "__class__" and isinstance(node.value, ast.Name) and node.value.id == self_name
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "type"
+        and len(node.args) == 1
+        and not node.keywords
+        and isinstance(node.args[0], ast.Name)
+        and node.args[0].id == self_name
+    )
+
+
+def _a_users_class(value: Any) -> bool:
+    """Is *value* a class defined in the user's code?"""
+    return instance_of(value, type) and is_user_code_module(sys.modules.get(attribute_or(value, "__module__", None)))
+
+
+def _read_by(function: types.FunctionType, g: Mapping[str, Any], params: set[str]) -> set[str]:
+    """The changeable globals of *g*, and its classes, that *function* and
+    the functions of the user's it names read, by their code: what a call of
+    it may return."""
+    found: set[str] = set()
+    seen: set[int] = set()
+    todo = [function.__code__]
+    while todo and len(seen) < _READ_BY_FOLLOWED:
+        code = todo.pop()
+        if id(code) in seen:
+            continue
+        seen.add(id(code))
+        todo.extend(const for const in code.co_consts if isinstance(const, types.CodeType))
+        for name in code.co_names:
+            if name in params or name not in g:
+                continue
+            value = g[name]
+            if type(value) is types.FunctionType and value.__globals__ is g and _users(value):
+                todo.append(value.__code__)
+            elif _a_users_class(value) or not _never_changed(value) and not instance_of(value, types.ModuleType):
+                found.add(name)
+    return found
+
+
+def _items_read(
+    value: ast.expr,
+    g: Mapping[str, Any],
+    params: set[str],
+    aliases: Mapping[str, set[str]],
+    self_name: str | None = None,
+) -> set[str]:
+    """`_globals_read` for a loop target bound to the items of *value*: none
+    when they are all numbers and strings (``for name in NAMES``)."""
+    if _atoms_only(value, g, params, aliases):
         return set()
-    func, (arg,) = value.func, value.args
-    if isinstance(func, ast.Name) and func.id in _SHALLOW_BUILDERS and func.id not in g:
-        return _copied_global(arg, g, params, aliases)
-    callee = None
-    if isinstance(func, ast.Name):
-        callee = g.get(func.id)
-    elif isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
-        callee = attribute_or(g.get(func.value.id), func.attr, None)
-    if callee is copy.copy:
-        return _copied_global(arg, g, params, aliases)
-    return set()
+    return _globals_read(value, g, params, aliases, self_name)
+
+
+#: Builtins whose result holds the items of what they are handed, not it.
+_COPIES_ITEMS = frozenset(
+    {"list", "tuple", "set", "frozenset", "dict", "sorted", "reversed", "iter", "enumerate", "zip", "bytearray"}
+)
+#: How many items `_atoms_only` looks at.
+_ATOMS_SCAN = 10_000
+
+
+def _atoms_only(node: ast.AST, g: Mapping[str, Any], params: set[str], aliases: Mapping[str, set[str]]) -> bool:
+    """Is *node* a global (not a local standing for one) whose items, a
+    dict's keys and values, are all numbers and strings? Its items are then
+    nothing a change can reach."""
+    if not isinstance(node, ast.Name) or node.id in aliases or node.id in params or node.id not in g:
+        return False
+    if not _holds_atoms_only(g, node.id):
+        return False
+    if _CLEARED[0] is not None:
+        _CLEARED[0].append((g, node.id))
+    return True
+
+
+def _holds_atoms_only(g: Mapping[str, Any], name: str) -> bool:
+    """Does the global *name* of *g* hold a list, tuple, set or dict of
+    numbers and strings only?"""
+    value = g.get(name, _ABSENT)
+    if type(value) is dict:
+        held = [*value, *value.values()]
+    elif type(value) in (list, tuple, set, frozenset):
+        held = list(value)
+    else:
+        return False
+    return len(held) <= _ATOMS_SCAN and all(type(item) in _ATOMS for item in held)
+
+
+def _is_numpy_array(callee: Any) -> bool:
+    """Is *callee* ``numpy.array``, which copies what it is handed?"""
+    np = sys.modules.get("numpy")
+    return np is not None and callee is attribute_or(np, "array", None)
+
+
+#: Calls that build a new object from text: ``pickle.loads(pickle.dumps(CFG))``.
+_FRESH_FROM_TEXT = (pickle.loads, json.loads)
 
 
 def _never_changed(value: Any) -> bool:

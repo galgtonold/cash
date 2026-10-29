@@ -305,13 +305,16 @@ class WritesAGlobalDict:
         return (WritesAGlobalDict, ())
 
 
-def test_a_cached_function_returning_one_is_not_stored_and_the_reducer_does_not_run(disk_cash):
-    """With the default backend, RAM and disk tiers alike."""
+def test_a_cached_function_returning_one_stores_it_and_runs_the_reducer(disk_cash):
+    """The refusal is the notebook's rule for its statements: a ``@cash.cache``
+    function always stores its result, RAM and disk tiers alike, and its
+    pickles run the reducer as they do outside a notebook."""
     import warnings
 
     from cash.backends.tiered_backend import TieredBackend
     from cash.decorator.store import REDUCER_NOT_RUN_FIX
 
+    CFG["k"] = 0
     calls = []
 
     @disk_cash.cache
@@ -328,9 +331,27 @@ def test_a_cached_function_returning_one_is_not_stored_and_the_reducer_does_not_
     finally:
         reducer_writes.unwatch()
     assert isinstance(disk_cash.backend, TieredBackend)
-    assert CFG == {"k": 1}
-    assert calls == [1, 1]
-    assert any(REDUCER_NOT_RUN_FIX.split(":")[0] in str(w.message) for w in seen)
+    assert calls == [1]
+    assert CFG["k"] > 0
+    assert not any(REDUCER_NOT_RUN_FIX.split(":")[0] in str(w.message) for w in seen)
+
+
+def test_a_pickle_outside_a_cached_call_still_refuses_it():
+    """The other side: a notebook statement's pickle, made outside any
+    ``@cash.cache`` call, does not run the writer."""
+    from cash.kept_state import ReducerNotRun, dumps, reducers_run
+
+    CFG["k"] = 0
+    reducer_writes.watch({"cfg": CFG})
+    try:
+        with pytest.raises(ReducerNotRun):
+            dumps(WritesAGlobalDict())
+        assert CFG["k"] == 0
+        with reducers_run():
+            dumps(WritesAGlobalDict())
+        assert CFG["k"] == 1
+    finally:
+        reducer_writes.unwatch()
 
 
 class HandsAGlobalToAMethodOfABuiltinType:
@@ -345,7 +366,9 @@ def test_a_global_handed_to_a_method_of_a_builtin_type_counts_as_written():
     assert writer is not None and {"LST", "DEFAULTS"} <= writer.written | writer.handed
 
 
-def test_a_cached_result_whose_reducer_cannot_be_read_is_not_stored_and_says_why_once(disk_cash):
+def test_a_cached_result_whose_reducer_cannot_be_read_is_stored_all_the_same(disk_cash):
+    """Its code unread, a notebook statement holding it is not stored; a
+    ``@cash.cache`` function's result is, and the reducer runs."""
     import warnings
 
     ns: dict = {"__name__": __name__}
@@ -366,11 +389,11 @@ def test_a_cached_result_whose_reducer_cannot_be_read_is_not_stored_and_says_why
             warnings.simplefilter("always")
             for i in (1, 1, 2):
                 make(i)
+        assert reducer_writes.refuses(unread)
     finally:
         reducer_writes.unwatch()
-    assert calls == [1, 1, 2]
-    said = [str(w.message) for w in seen if "STORE-FAILED" in str(w.message)]
-    assert len(said) == 1 and "its source cannot be read" in said[0], said
+    assert calls == [1, 2]
+    assert not [w for w in seen if "does not run the reducer" in str(w.message)]
 
 
 ROWS_CFG = {"rows": []}
@@ -493,3 +516,155 @@ class CopiesAGlobalAndChangesNothing:
 
 def test_a_copy_of_a_global_that_is_only_read_is_no_writer():
     assert reducer_writes._decide(CopiesAGlobalAndChangesNothing) is None
+
+
+_BODIES = {
+    "an_item": "c = ALIASED['rows']\nc.append(1)",
+    "get": "c = ALIASED.get('rows')\nc.append(1)",
+    "an_attribute": "c = ALIASED_OBJECT.seen\nc.append(1)",
+    "getattr": "c = getattr(ALIASED_OBJECT, 'seen')\nc.append(1)",
+    "a_walrus": "len(c := ALIASED['rows'])\nc.append(1)",
+    "a_dict_unpacked": "c = {**ALIASED}\nc['rows'].append(1)",
+    "a_list_of_values": "c = list(ALIASED.values())\nc[0].append(1)",
+    "a_loop_target": "for c in [ALIASED]:\n    c['rows'].append(1)",
+    "an_unpacked_target": "c, k = ALIASED, 1\nc['rows'].append(1)",
+    "a_with_target": "import contextlib\nwith contextlib.nullcontext(ALIASED) as c:\n    c['rows'].append(1)",
+    "next_of_iter": "c = next(iter([ALIASED]))\nc['rows'].append(1)",
+    "a_conditional": "c = ALIASED if self else None\nc['rows'].append(1)",
+    "sorted_items_that_change": "c = sorted(NESTED_ROWS)\nc[0].append(1)",
+    "a_comprehension_of_items_that_change": "c = [r for r in NESTED_ROWS]\nc[0].append(1)",
+    "a_loop_over_items_that_change": "for c in NESTED_ROWS:\n    c.append(1)",
+    "a_class_attribute": "c = K.seen\nc.append(1)",
+    "a_module_attribute": "c = M.SEEN\nc.append(1)",
+    "a_unary_operator": "c = +POSITIVE\nc.seen.append(1)",
+    "its_own_class_by_type": "c = type(self).seen\nc.append(1)",
+    "its_own_class_by_dunder": "c = self.__class__.seen\nc.append(1)",
+    "what_a_function_returns": "c = holder().seen\nc.append(1)",
+}
+#: The variable a body changes, where the body does not name it.
+_HELD_IN = {
+    "a_class_attribute": "K",
+    "a_module_attribute": "M",
+    "a_unary_operator": "POSITIVE",
+    "its_own_class_by_type": "Made",
+    "its_own_class_by_dunder": "Made",
+    "what_a_function_returns": "ALIASED_OBJECT",
+}
+
+
+@pytest.mark.parametrize("body", list(_BODIES))
+def test_a_change_through_any_local_bound_from_a_global_counts(tmp_path, monkeypatch, body):
+    """``c = CFG['rows']; c.append(1)``, ``for c in [CFG]``, ``c, k = CFG,
+    1``: only a local bound to the global or to a recognised copy of it was
+    followed, and the reducer, run on every pickle, appended where plain
+    Python never pickles. So were ``K.seen`` (a class counted as never
+    changed), ``M.SEEN`` (a module), ``+G`` (``__pos__`` may return ``G``), ``type(self).seen`` and ``holder().seen`` (no global named)."""
+    module = _module_with(tmp_path, monkeypatch, _BODIES[body])
+    writer = reducer_writes._decide(module.Made)
+    assert writer is not None, "not a writer"
+    named = _HELD_IN.get(body) or next(n for n in ("ALIASED_OBJECT", "NESTED_ROWS", "ALIASED") if n in _BODIES[body])
+    holder = getattr(module, named)
+    assert reducer_writes.reach([writer], {"cfg": holder}) == {"cfg"}
+
+
+def test_a_default_bound_to_a_global_counts(tmp_path, monkeypatch):
+    module = _module_with(tmp_path, monkeypatch, "_c['rows'].append(1)", params=", _c=ALIASED")
+    writer = reducer_writes._decide(module.Made)
+    assert writer is not None and reducer_writes.reach([writer], {"cfg": module.ALIASED}) == {"cfg"}
+
+
+@pytest.mark.parametrize("body", ["globals()['ALIASED']['rows'].append(1)", "vars(ALIASED_OBJECT)['seen'].append(1)"])
+def test_one_reading_a_namespace_reaches_every_variable(tmp_path, monkeypatch, body):
+    module = _module_with(tmp_path, monkeypatch, body)
+    writer = reducer_writes._decide(module.Made)
+    assert writer is not None and reducer_writes.reach([writer], {"x": 1}) is None
+
+
+@pytest.mark.parametrize("body", ["acc.append(1)", "c = acc\nc.append(1)"], ids=["directly", "through_a_local"])
+def test_a_closure_cell_the_notebook_holds_is_reached(tmp_path, monkeypatch, body):
+    module = _module_with(tmp_path, monkeypatch, body, closure=True)
+    writer = reducer_writes._decide(module.Made)
+    assert writer is not None and reducer_writes.reach([writer], {"held": module.ACC}) == {"held"}
+
+
+@pytest.mark.parametrize("body", ["c = copy.deepcopy(ALIASED)\nc['rows'].append(1)", "c = len(ALIASED)\nc += 1"])
+def test_a_local_holding_nothing_of_a_global_is_no_writer(tmp_path, monkeypatch, body):
+    module = _module_with(tmp_path, monkeypatch, body)
+    assert reducer_writes._decide(module.Made) is None
+
+
+_BODIES_THAT_CHANGE_ONLY_A_NEW_OBJECT = {
+    "a_comprehension_filtered_by_a_global": (
+        "state = {k: v for k, v in self.__dict__.items() if k not in SKIP}\nstate['version'] = 2"
+    ),
+    "a_loop_over_names": "state = {}\nfor name in NAMES:\n    state[name] = getattr(self, name, None)",
+    "sorted_names": "order = sorted(NAMES)\norder.append('x')",
+    "a_merge_of_dicts_of_atoms": "state = {**self.__dict__, **EXTRA}\nstate['v'] = 1",
+    "a_list_of_names": "c = list(NAMES)\nc.append('z')",
+    "a_comprehension_of_names": "rows = [r for r in NAMES]\nrows.append('x')",
+    "a_dict_of_atoms_updated": "out = dict(DEFAULTS)\nout.update(self.__dict__)",
+}
+
+
+@pytest.mark.parametrize("body", list(_BODIES_THAT_CHANGE_ONLY_A_NEW_OBJECT))
+def test_a_change_to_a_new_object_built_from_a_global_is_no_writer(tmp_path, monkeypatch, body):
+    """A global read in a test (``k not in SKIP``), or numbers and strings
+    taken out of one (``for name in NAMES``, ``sorted(NAMES)``, ``{**EXTRA}``):
+    the local holds nothing a change can reach in the global, yet any global
+    read counted, and the statement building the object never cached."""
+    module = _module_with(tmp_path, monkeypatch, _BODIES_THAT_CHANGE_ONLY_A_NEW_OBJECT[body])
+    assert reducer_writes._decide(module.Made) is None
+
+
+def _module_with(tmp_path, monkeypatch, body: str, params: str = "", closure: bool = False):
+    """A module file whose class ``Made`` has a ``__getstate__`` running
+    *body*: its source is read from the file, as a module of the user's is."""
+    import importlib
+    import sys
+    import textwrap
+
+    name = f"_reducer_alias_{abs(hash((body, params, closure)))}"
+    method = f"    def __getstate__(self{params}):\n" + textwrap.indent(body, " " * 8) + "\n        return {}\n"
+    if closure:
+        source = (
+            "ACC = []\n"
+            "def _make(acc):\n"
+            "    class Made:\n" + textwrap.indent(method, "    ") + "    return Made\n"
+            "Made = _make(ACC)\n"
+        )
+    else:
+        source = "import copy\nclass Cfg:\n    def __init__(self):\n        self.seen = []\n"
+        source += "ALIASED = {'rows': []}\nALIASED_OBJECT = Cfg()\nNESTED_ROWS = [[1]]\n"
+        source += "SKIP = {'_lock'}\nNAMES = ['a', 'b']\nEXTRA = {'v': 0}\nDEFAULTS = {'x': 1}\n"
+        source += "class K:\n    seen = []\ndef holder():\n    return ALIASED_OBJECT\n"
+        source += "import types\nM = types.ModuleType('m')\nM.SEEN = []\n"
+        source += "class Same(Cfg):\n    def __pos__(self):\n        return self\nPOSITIVE = Same()\n"
+        source += "class Made:\n" + method
+    (tmp_path / f"{name}.py").write_text(source, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.delitem(sys.modules, name, raising=False)
+    return importlib.import_module(name)
+
+
+_BODIES_THAT_WRITE_ONCE_THE_GLOBAL_HOLDS_A_LIST = {
+    "a_loop_over_it": ("for row in NAMES:\n    if isinstance(row, list):\n        row.append(1)", "NAMES"),
+    "sorted": ("for row in sorted(NAMES, key=str):\n    if isinstance(row, list):\n        row.append(1)", "NAMES"),
+    "a_merge": ("d = {**EXTRA}\nif 'rows' in d:\n    d['rows'].append(1)", "EXTRA"),
+}
+
+
+@pytest.mark.parametrize("body", list(_BODIES_THAT_WRITE_ONCE_THE_GLOBAL_HOLDS_A_LIST))
+def test_a_global_that_gains_a_list_is_decided_again(tmp_path, monkeypatch, body):
+    """``for row in NAMES: row.append(1)`` was decided writing nothing while
+    ``NAMES`` held only strings, and the answer kept for the class: after
+    ``NAMES.append([])`` the reducer changed it, unseen."""
+    text, name = _BODIES_THAT_WRITE_ONCE_THE_GLOBAL_HOLDS_A_LIST[body]
+    module = _module_with(tmp_path, monkeypatch, text)
+    assert reducer_writes._writer(module.Made) is None
+    held = getattr(module, name)
+    if type(held) is dict:
+        held["rows"] = []
+    else:
+        held.append([])
+    writer = reducer_writes._writer(module.Made)
+    assert writer is not None and name in reducer_writes.reach([writer], vars(module))

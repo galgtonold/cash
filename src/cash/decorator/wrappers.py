@@ -12,6 +12,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from .._active import ACTIVE_CONFIG
+from ..kept_state import reducers_run
 from . import hit_memo
 from .cached_function import new_stats
 from .call_state import CACHE_MISS, CALL_ENTRY, enter_cached_call, exit_cached_call
@@ -126,7 +127,8 @@ class Wrappers:
 
         @functools.wraps(func)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-            call = runner.lookup(spec, args, kwargs, async_body=True)
+            with reducers_run():
+                call = runner.lookup(spec, args, kwargs, async_body=True)
             if call.outcome is not CACHE_MISS:
                 # A result the key path produced by calling `func` itself
                 # (no key) is a coroutine here: await it before handing back.
@@ -138,7 +140,8 @@ class Wrappers:
                 with runner.body_scope(spec, call) as run:
                     # call.args: a ``key=`` call's iterators are copies (`split_for_key`).
                     run.res = await func(*call.args, **call.kwargs)
-                return runner.finish_miss(spec, call, run)
+                with reducers_run():
+                    return runner.finish_miss(spec, call, run)
 
             if not locking():
                 return await compute()
@@ -154,19 +157,22 @@ class Wrappers:
 
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            call = runner.lookup(spec, args, kwargs, async_body=False)
-            if call.outcome is not CACHE_MISS:
-                return call.outcome
+            # Its key, its hits and its store run the reducers of the
+            # user's: the notebook refuses one only for its own statements.
+            with reducers_run():
+                call = runner.lookup(spec, args, kwargs, async_body=False)
+                if call.outcome is not CACHE_MISS:
+                    return call.outcome
 
-            def compute() -> Any:
-                with runner.body_scope(spec, call) as run:
-                    # call.args: a ``key=`` call's iterators are copies (`split_for_key`).
-                    run.res = func(*call.args, **call.kwargs)
-                return runner.finish_miss(spec, call, run)
+                def compute() -> Any:
+                    with runner.body_scope(spec, call) as run:
+                        # call.args: a ``key=`` call's iterators are copies (`split_for_key`).
+                        run.res = func(*call.args, **call.kwargs)
+                    return runner.finish_miss(spec, call, run)
 
-            if locking():
-                return runner.compute_with_lock(spec, call, compute)
-            return compute()
+                if locking():
+                    return runner.compute_with_lock(spec, call, compute)
+                return compute()
 
         return wrapper
 

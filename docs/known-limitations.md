@@ -618,7 +618,7 @@ that stops the stream, and use the copy.
 
 ### A class whose pickling changes other values
 
-<!-- claim: cash/notebook/statement/reducer_writes.py:refuses @899c820d, cash/notebook/statement/reducer_writes.py:_handed_to_libraries @b809130a, cash/notebook/statement/reducer_writes.py:_changed_through_copies @a33fedda -->
+<!-- claim: cash/notebook/statement/reducer_writes.py:refuses @899c820d, cash/notebook/statement/reducer_writes.py:_handed_to_libraries @b809130a, cash/notebook/statement/reducer_writes.py:_changed_through_copies @ab946b78, cash/notebook/statement/reducer_writes.py:reach @70dbe7da -->
 cash pickles values to hash and store them, and pickling runs a class's own
 `__getstate__` or `__reduce__`. One that changes something else (a module's
 list, a global array, the object being pickled) would change it where plain
@@ -635,9 +635,16 @@ whose effect cash does not read. Builtins that only read (`len`, `map`,
 (`'-'.join`) and a value nothing can change (a number, a string, a class, a
 function) do not count; a list, dict or array handed to any other library
 function does, even one that only reads it (`copy.copy`, `json.dump`), and
-its statement runs every time. A change made through a local bound to a
-global or to a shallow copy of one (`c = dict(CFG); c['rows'].append(1)`)
-counts as a change of the global, the copy's own top level included.
+its statement runs every time. A change made through a local that may be or
+hold part of a global (`c = CFG['rows']`, `c = dict(CFG)`, `for c in [CFG]`,
+a parameter's default `_c=CFG`, but not `copy.deepcopy(CFG)` or `len(CFG)`)
+counts as a change of the global, the copy's own top level included, and so
+does one through a closure's cell the notebook also holds, an attribute of a
+class (`c = K.seen`, `c = type(self).seen`) or what a function of the user's
+returns (`c = holder().seen`). A new object built
+from a global's numbers and strings (`sorted(NAMES)`, `for name in NAMES`,
+`{**EXTRA}`) or filtered by one (`if k not in SKIP`) holds nothing of it.
+One that reads `globals()` or `vars()` counts as a change of every variable.
 **Fix:** have `__getstate__` / `__reduce__` only read, and change those values
 in the cell that needs them.
 

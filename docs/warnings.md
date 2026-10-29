@@ -2195,7 +2195,7 @@ bottom once. It is shown once per session.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/statement/reducer_writes.py:refuses @899c820d, cash/notebook/statement/reducer_writes.py:_decide @6c9fffd5, cash/notebook/statement/processor.py:StatementProcessor._move_what_reducers_wrote @a8f482f2, cash/notebook/statement/reducer_writes.py:_handed_to_libraries @b090d7eb, cash/decorator/store.py:_store_error @150ddaae -->
+<!-- claim: cash/notebook/statement/reducer_writes.py:refuses @899c820d, cash/notebook/statement/reducer_writes.py:_decide @6c9fffd5, cash/notebook/statement/processor.py:StatementProcessor._move_what_reducers_wrote @a8f482f2, cash/notebook/statement/reducer_writes.py:_handed_to_libraries @b090d7eb, cash/decorator/store.py:_store_error @150ddaae, cash/kept_state.py:reducers_run @8e0732c4 -->
 **What happened.** cash pickles a statement's values to hash and store
 them, and pickling runs the value's own `__reduce__`, `__reduce_ex__`,
 `__getstate__` or `__getnewargs__` (or a reducer you registered with
@@ -2223,9 +2223,10 @@ out about only after they ran (the class could not be named) count every
 variable as changed, and the message says so.
 
 Outside a notebook with cash on, or after `%cash_off`, cash's pickles run
-every reducer, as before. A `@cash.cache` function called in such a
-notebook does not store a result whose reducer would change values the
-notebook holds, and says so (`STORE-FAILED`).
+every reducer, as before. So do those of a `@cash.cache` function, in a
+notebook too: it always stores its result, and storing it, or handing back
+a stored one, runs the reducer as any pickle of it would. The rule above is
+for the notebook's own statements.
 
 **Why it matters.** Your results are correct: the variables hold what
 plain Python leaves in them. The statement runs again every time, and a
