@@ -66,4 +66,18 @@ SHAPES = [
         names=["rows", "total"],
         source="E10's c5: the bar's clock named it, so the passes after the first kept missing",
     ),
+    notebook(
+        "unstorable-fill-function-reader-added-later",
+        [_SETUP, "bar = Bar(sys.stdout)\n" + _FILL, "total = rows * 2"],
+        names=["rows", "total", "seen"],
+        plan=["all", "all", "restart", "all", 2],
+        edits={3: {2: "total = rows * 2\ndef show():\n    return bar.n\nseen = show()"}},
+    ),
+    notebook(
+        "unstorable-fill-function-above-called-later",
+        [_SETUP + "def show():\n    return 0\n", "bar = Bar(sys.stdout)\n" + _FILL, "total = rows * 2"],
+        names=["rows", "total", "seen"],
+        plan=["all", "all", "restart", "all", 0, 2],
+        edits={3: {0: _SETUP + "def show():\n    return bar.n\n"}, 4: {2: "total = rows * 2\nseen = show()"}},
+    ),
 ]
