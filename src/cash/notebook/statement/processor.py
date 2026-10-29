@@ -328,6 +328,12 @@ def _bound_names(tree: ast.AST | None) -> set[str] | None:
 def _pointed_into(name: str, why: IdentityHeld) -> IdentityHeld:
     """`in_place.refusal`'s *why* for the object of *name*, with what the
     warning says (``NOTEBOOK-IDENTITY-HELD``)."""
+    if why.what == "itself":
+        what = (
+            f"this loop assigns into '{name}', and the notebook holds {why.kind} of it. A stored copy bound "
+            "in its place would not be the object it finds, so the loop runs every time instead."
+        )
+        return IdentityHeld(why, name, why.kind, what)
     if why.kind == "too many":
         found = (
             "the notebook holds a container too big to look through for a weak reference to, or the id() of, "

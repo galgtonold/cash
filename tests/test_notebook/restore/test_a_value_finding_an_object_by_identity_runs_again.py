@@ -53,6 +53,23 @@ HOLDERS = {
         "big = [(j, j) for j in range(20000)] + [('c', id(p.child))]",
         "r = big[-1][1] == id(p.child)",
     ),
+    "an id on a list subclass": (
+        "class C(list):\n    pass\nc = C([1])\nc.meta = id(p.child)",
+        "r = c.meta == id(p.child)",
+    ),
+    "a weak reference on a dict subclass": (
+        "class C(dict):\n    pass\nc = C(a=1)\nc.meta = weakref.ref(p.child)",
+        "r = c.meta() is p.child",
+    ),
+    "an id in a named tuple": (
+        "from typing import NamedTuple\nclass T(NamedTuple):\n    k: int\nt = T(id(p.child))",
+        "r = t.k == id(p.child)",
+    ),
+    "an id in a tuple subclass": ("class T(tuple):\n    pass\nt = T([id(p.child)])", "r = t[0] == id(p.child)"),
+    "a weak reference subclass": (
+        "class R(weakref.ref):\n    pass\nr0 = [R(p.child)]",
+        "r = r0[0]() is p.child",
+    ),
     "an id inside a big list of objects": (
         "class R:\n    pass\nbig = [R() for _ in range(12000)]\nbig[-1].k = id(p.child)",
         "r = big[-1].k == id(p.child)",
@@ -82,6 +99,7 @@ def test_a_run_all_finds_the_new_object(cash_magics, cash_instance, holder):
         "k = 12345",
         "reg = {'n': len(p.seen)}",
         "stamps = [1_700_000_000_000 + 8 * i for i in range(50)]",
+        "class C(dict):\n    pass\nreg = C(n=len(p.seen))",
         "ns = [1_700_000_000_000_000_000 + 8 * i for i in range(50)]",
         "big = [(j, j * 8) for j in range(20000)]",
         "import numpy as np\narr = np.arange(0, 800_000, 8)",
@@ -95,6 +113,46 @@ def test_a_value_not_finding_an_object_by_identity_is_restored(cash_magics, cash
             run_cash_cell(cash_magics, cell, cells=cells)
     statuses = [str(s["status"]) for s in cash_magics._last_cell_metrics["statements"]]
     assert "RESTORED" in statuses[-1], statuses
+
+
+RAISING = (
+    "class D(dict):\n"
+    "    def keys(self):\n        raise RuntimeError('keys')\n"
+    "    def values(self):\n        raise RuntimeError('values')\n"
+    "    def items(self):\n        raise RuntimeError('items')\n"
+    "    def __iter__(self):\n        raise RuntimeError('iter')\n"
+    "    def __len__(self):\n        raise RuntimeError('len')\n"
+    "class L(list):\n"
+    "    def __iter__(self):\n        raise RuntimeError('iter')\n"
+    "    def __len__(self):\n        raise RuntimeError('len')\n"
+    "class S(set):\n"
+    "    def __iter__(self):\n        raise RuntimeError('iter')\n"
+    "class R(weakref.ref):\n"
+    "    def __call__(self):\n        raise RuntimeError('call')\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("hold", "read"),
+    [
+        ("reg = D(k=id(p.child))", "r = dict.__getitem__(reg, 'k') == id(p.child)"),
+        ("reg = L([id(p.child)])", "r = list.__getitem__(reg, 0) == id(p.child)"),
+        ("reg = S([id(p.child)])", "r = id(p.child) in set(set.__iter__(reg))"),
+        ("reg = [R(p.child)]", "r = weakref.ref.__call__(reg[0]) is p.child"),
+    ],
+    ids=["a dict subclass", "a list subclass", "a set subclass", "a weak reference subclass"],
+)
+def test_a_holder_whose_own_methods_raise_is_read_without_them(cash_magics, cash_instance, hold, read):
+    """The check reads a container subclass through the builtin type's
+    methods and a weak reference through ``weakref.ref``'s own call, never
+    the class's: plain Python runs none of them here, and an error in one
+    failed the cell."""
+    _stored_however_cheap(cash_instance)
+    cells = [MAKE + "\n" + RAISING, hold, read + "  # @cash:no-cache"]
+    for _ in range(2):
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+        assert cash_magics.shell.user_ns["r"] is True
 
 
 @pytest.mark.parametrize(
