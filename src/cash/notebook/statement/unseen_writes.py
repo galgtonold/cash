@@ -405,7 +405,12 @@ def _held(value: Any, kind: type, hc: Any, work: list[int]) -> Iterable[Any]:
             return _array_items(value, array, hc, work)
         if issubclass(kind, type):
             if hc.is_users_class(value) or _holds_users_code(value):
-                return _not_plain(type.__dict__["__dict__"].__get__(value).values())
+                held = _not_plain(type.__dict__["__dict__"].__get__(value).values())
+                # And its bases of the user's: ``class D(C): pass`` holds
+                # nothing of the ``C.m`` that ``D().m(3)`` runs.
+                bases = type.__dict__["__bases__"].__get__(value)
+                held.extend(base for base in bases if hc.is_users_class(base) or _holds_users_code(base))
+                return held
             return []
         if hc.users_instance_type(kind) or kind is types.SimpleNamespace:
             attributes = own_dict(value)
