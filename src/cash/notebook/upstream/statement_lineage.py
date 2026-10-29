@@ -52,9 +52,15 @@ from ...tracking.randomness import (
 from ...tracking.read_classification import stat_key
 from ...value_types import BUILTIN_NAMES
 from .._protocols import ShellProtocol
-from ..cache_key import CacheKeyContext, compute_cache_key, statement_source_hash
+from ..cache_key import CacheKeyContext, compute_cache_key, draw_key, statement_source_hash
 from ..callee_reach import helper_seeded_modules, module_state_names
-from ..consumables import is_stream, watched_call_receivers
+from ..consumables import (
+    drawn_stream_inputs,
+    is_stream,
+    watched_call_receivers,
+    with_other_names,
+    without_read_handles,
+)
 from ..lineage_formula import (
     binding_source_hash,
     call_time_reads,
@@ -73,6 +79,7 @@ from ..lineage_formula import (
     setting_output_lineage,
     statement_environment_component,
     value_digests_key,
+    without_drawn,
 )
 from ..loop_watch import branch_changes, loop_watch_hash, watch_candidates
 from ..pyplot_draws import pyplot_draw_names
@@ -1212,7 +1219,7 @@ class StatementLineage:
         # after the run or the hit (`carrier_advances`).
         advanced = self._advanced_carriers(stmt_code, lookup.carriers, inputs, outputs, virtual_lineage)
         for name in advanced:
-            virtual_lineage[name] = advanced_carrier_lineage(cache_key, name)
+            virtual_lineage[name] = advanced_carrier_lineage(draw_key(cache_key), name)
             self._generator_lineages.add(virtual_lineage[name])
 
         if lookup.hit:
@@ -1232,7 +1239,23 @@ class StatementLineage:
             # Union derivation-bumped vars so this cached mutation statement
             # is still recorded as a producer of the aliased base.
             self._note_made_generators(stmt_code, outputs, virtual_lineage)
-            outputs = outputs | lookup.bumped | advanced
+            # What holds a generator it drew from moves through its edges,
+            # past what the hit moved already, as the runtime's hit moves it.
+            carried = (
+                bump_derived_lineages(
+                    self.edges,
+                    virtual_lineage,
+                    advanced,
+                    inputs,
+                    record=lambda t, h: virtual_lineage.__setitem__(t, h),
+                    present=lambda t: True,
+                    skip=lookup.bumped,
+                    code=stmt_code,
+                )
+                if advanced
+                else set()
+            )
+            outputs = outputs | lookup.bumped | advanced | carried
             self._register_callables(stmt_code, tree, virtual_lineage, is_import)
             return StatementOutcome(outputs, lookup.lookup_time, False, lookup.file_deps)
 
@@ -1250,18 +1273,20 @@ class StatementLineage:
             )
 
         source_hash = statement_source_hash(stmt_code)
+        no_cache_values = self.tracking_state.no_cache_values.get(
+            value_digests_key(source_hash, input_lineage_map, occurrence_index)
+        )
         lineage_by_out = self.output_lineages(
             source_hash,
-            input_lineages_all,
+            # Less the streams its run drew from, as the runtime left them out.
+            without_drawn(input_lineage_map, no_cache_values),
             file_hash_component,
             inputs,
             outputs,
             stmt_code,
             tree,
             virtual_lineage,
-            no_cache_values=self.tracking_state.no_cache_values.get(
-                value_digests_key(source_hash, input_lineage_map, occurrence_index)
-            ),
+            no_cache_values=no_cache_values,
             recorded_reads=recorded_reads_lineage_component(
                 self.tracking_state, cache_key, stmt_code, self.shell.user_ns, outputs, as_last_run=True
             ),
@@ -1340,6 +1365,15 @@ class StatementLineage:
         }
         return reachable_generators(inputs, user_ns, self.tracking_state.variable_lineage) | dead
 
+    def _drawn_streams(self, stmt_code: str, inputs: set[str], outputs: set[str]) -> set[str]:
+        """The iterators and streams *stmt_code* reads from, which move as a
+        generator does (``drawn_stream_inputs``, as the runtime finds them)."""
+        drawn = drawn_stream_inputs(parse_cached(stmt_code), inputs, outputs, self.shell.user_ns)
+        if not drawn:
+            return set()
+        found = with_other_names(drawn, self.shell.user_ns, self.tracking_state.variable_lineage) - outputs
+        return set(without_read_handles(found, self.shell.user_ns))
+
     def _advanced_carriers(
         self,
         stmt_code: str,
@@ -1362,7 +1396,9 @@ class StatementLineage:
         if recorded is None:
             recorded = self._recorded_draws(stmt_code)
         if recorded is None:
-            recorded = self._reachable_generators(inputs, virtual_lineage)
+            recorded = self._reachable_generators(inputs, virtual_lineage) | self._drawn_streams(
+                stmt_code, inputs, outputs
+            )
         return set(recorded) - outputs
 
     def _advance_carriers_without_outputs(
@@ -1382,7 +1418,11 @@ class StatementLineage:
         recorded = self._recorded_draws(stmt_code)
         if recorded is not None and not recorded:
             return set()
-        if recorded is None and not self._reachable_generators(inputs, virtual_lineage):
+        if (
+            recorded is None
+            and not self._reachable_generators(inputs, virtual_lineage)
+            and not self._drawn_streams(stmt_code, inputs, set())
+        ):
             return set()
         cache_key = self._key(
             stmt_code, inputs | hidden_reads, set(), virtual_lineage, virtual_modules, occurrence_index
@@ -1394,7 +1434,7 @@ class StatementLineage:
         in_entry = metadata.get("carriers_advanced") if metadata else None
         advanced = self._advanced_carriers(stmt_code, in_entry, inputs, set(), virtual_lineage)
         for name in advanced:
-            virtual_lineage[name] = advanced_carrier_lineage(cache_key, name)
+            virtual_lineage[name] = advanced_carrier_lineage(draw_key(cache_key), name)
             self._generator_lineages.add(virtual_lineage[name])
         return advanced
 

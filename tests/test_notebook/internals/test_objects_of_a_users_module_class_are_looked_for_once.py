@@ -13,7 +13,7 @@ import gc
 import sys
 import types
 
-from cash.notebook import held_functions, shared_objects
+from cash.notebook import held_functions
 
 
 class _OfAUsersModule:
@@ -182,16 +182,15 @@ def test_only_a_module_function_held_elsewhere_is_looked_for(monkeypatch):
         lambda: [v for v in vars(module).values() if type(v) is types.FunctionType],
     )
     asked = []
-    real = gc.get_referrers
+    real = held_functions._referrers_or_none
 
-    def counting(*objects):
+    def counting(objects, stop=None):
+        # Each read of what refers to the functions: `gc.get_referrers`, or
+        # the heap read that stands in for it (`_referrers_or_none`).
         asked.append(len(objects))
-        return [referrer for referrer in real(*objects) if referrer is not objects]
+        return real(objects, stop)
 
-    monkeypatch.setattr(held_functions.gc, "get_referrers", counting)
-    # On 3.12.0-3.12.5 every read goes past gc.get_referrers (`_TRAVERSE_LOOPS`);
-    # what is counted here is which functions are asked about.
-    monkeypatch.setattr(shared_objects, "_TRAVERSE_LOOPS", False)
+    monkeypatch.setattr(held_functions, "_referrers_or_none", counting)
     assert not held_functions.module_class_objects_exist()
     assert asked == [], asked
     big = {"fn": module.f7, "rows": [1, 2]}

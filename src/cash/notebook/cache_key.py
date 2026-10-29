@@ -23,6 +23,7 @@ from typing import Any, NamedTuple, Protocol, runtime_checkable
 from cash._memo import CODE_OBJECTS, NOTEBOOK_STATEMENTS, LruMemo
 from cash._user_attrs import attribute_or, has_attribute, instance_of
 from cash.analysis.bytecode import argvals
+from cash.analysis.unloaded_modules import module_file
 from cash.notebook.lineage_store import resolve_lineage
 from cash.source_norm import exact_source_digest, unparse_without_docstrings
 from cash.tracking.function_tracker import is_local_module
@@ -37,6 +38,7 @@ from .lineage_formula import (
     is_cash_instrumentation,
     is_module_like,
     module_read_lineage,
+    read_module_source_hash,
 )
 from .recorded_reads import ReadRecord, choose, read_parts, watch
 from .string_lookups import (
@@ -404,6 +406,7 @@ def called_function_dependencies(
     by_string: set[str] | None = None,
     module_classes: dict[int, type] | None = None,
     by_string_traced: set[str] | None = None,
+    body_imports: set[str] | None = None,
 ) -> list[str]:
     """``"name:lineage"`` components for the globals a called function reaches for.
 
@@ -459,6 +462,10 @@ def called_function_dependencies(
     The classes of the user's modules the walked values hold (an object of
     ``mylib.Order`` in a list: `held_functions.Held.module_classes`) are
     added to *module_classes*, when given.
+
+    The modules the walked code imports as it runs (``from um3 import
+    scale`` in a function's body) are added to *body_imports*, when given
+    (`_body_import_parts`).
     """
     seen: set[str] = set()
     stack = [name for name in inputs]
@@ -503,6 +510,8 @@ def called_function_dependencies(
         # object before Python 3.12), a generator expression, a lambda or an
         # inner function reads its globals at call time as the body does.
         for code_obj in _nested_codes_of(codes_of(name)):
+            if body_imports is not None:
+                body_imports.update(_imported_by(code_obj))
             attrs = _attribute_only_names(code_obj)
             held = id(code_obj) in held_only
             for ref in code_obj.co_names:
@@ -983,7 +992,8 @@ def _callee_deps(
         if ctx.virtual_callables
         else None
     )
-    return called_function_dependencies(
+    imported: set[str] = set()
+    deps = called_function_dependencies(
         sorted_inputs,
         ctx.user_ns,
         ctx.variable_lineage,
@@ -993,7 +1003,41 @@ def _callee_deps(
         by_string=by_string,
         module_classes=module_classes,
         by_string_traced=by_string_traced,
+        body_imports=imported,
     )
+    return deps + _body_import_parts(imported) if imported else deps
+
+
+#: ``code object -> the modules its own instructions import``.
+_IMPORTED_BY: LruMemo[types.CodeType, frozenset[str]] = LruMemo(CODE_OBJECTS)
+
+
+def _imported_by(code: types.CodeType) -> frozenset[str]:
+    """The modules *code* imports when it runs, by the names its
+    ``import`` statements give them (a relative one by its bare name)."""
+    found = _IMPORTED_BY.get(code)
+    if found is None:
+        found = _IMPORTED_BY[code] = frozenset(name for name in argvals(code, _IMPORTS) if name)
+    return found
+
+
+_IMPORTS = frozenset({"IMPORT_NAME"})
+
+
+def _body_import_parts(modules: Iterable[str]) -> list[str]:
+    """A component for each module of the user's a called function imports
+    in its body: what its file holds now. ``from um3 import scale`` binds a
+    local no global lineage follows, so ``um3.py`` edited and reloaded
+    (``importlib.reload``) served the call what the old ``scale`` returned.
+    By its file, found without importing it, so a key built before the
+    first call, after it and in the simulation agree."""
+    parts = []
+    for name in sorted(modules):
+        path = module_file(name)
+        if not path or not path.endswith(".py") or not is_local_module(types.SimpleNamespace(__file__=path)):
+            continue
+        parts.append(f"bodyimport:{name}:{read_module_source_hash(path) or 'unread'}")
+    return parts
 
 
 def _recorded_reads_component(code: str, ctx: CacheKeyContext, statement: str) -> str:
@@ -1145,6 +1189,7 @@ def compute_cache_key(
         f"{source_hash}:{':'.join(input_hashes)}{func_component}{module_component}"
         f"{occurrence_component}{callee_component}"
     )
+    unmatched = bool(unfollowed or (by_string and not followed) or unkeyed_modules)
     # What the environment reads in the statement return and the data of the
     # user's modules it reads hold: a new value is a new entry. Last, and only
     # when there is some, so every other key is unchanged.
@@ -1152,6 +1197,9 @@ def compute_cache_key(
     combined_hash_str += reads
     combined_hash = hashlib.sha256(combined_hash_str.encode("utf-8")).hexdigest()
     cache_key = f"{namespace}:{combined_hash}"
+    if unmatched:
+        stable = f"{source_hash}:{':'.join(input_hashes)}{occurrence_component}"
+        _remember_draw_key(cache_key, f"{namespace}:draw:" + hashlib.sha256(stable.encode("utf-8")).hexdigest())
     if ctx.reads is not None:
         if reads:
             ctx.reads.by_key[cache_key] = reads
@@ -1185,3 +1233,26 @@ def compute_cache_key(
     if unfollowed or (by_string and not followed) or unkeyed_modules:
         result.matches_nothing = True
     return result
+
+
+#: The key a draw moves a generator or stream by (`draw_key`), for each key
+#: built to match no entry, most recent last.
+_DRAW_KEYS: dict[str, str] = {}
+_DRAW_KEYS_MAX = 4096
+
+
+def _remember_draw_key(cache_key: str, stable: str) -> None:
+    _DRAW_KEYS[cache_key] = stable
+    if len(_DRAW_KEYS) > _DRAW_KEYS_MAX:
+        del _DRAW_KEYS[next(iter(_DRAW_KEYS))]
+
+
+def draw_key(cache_key: str) -> str:
+    """The key a draw of the statement keyed *cache_key* moves what it drew
+    from by: *cache_key* itself, but for a key built to match no entry
+    (code reaching a name by a string, ``NS = next(NSS)(globals())``),
+    whose random part differs on every build. Then its source and inputs'
+    lineages, which the runtime and the simulation read alike: the moved
+    ``NSS`` came out at another lineage in each, and the simulation ran the
+    draw again."""
+    return _DRAW_KEYS.get(cache_key, cache_key)
