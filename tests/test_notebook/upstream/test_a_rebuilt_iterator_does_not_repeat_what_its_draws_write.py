@@ -27,6 +27,7 @@ SHAPES = {
     "a generator expression": [FN + "it = (f(x) for x in range(6))", FIRST, TAIL],
     "a map": [FN + "it = map(f, range(6))", FIRST, TAIL],
     "a map over a generator": [GEN + "it = map(str, g())", FIRST, TAIL],
+    "a zip over a generator": [GEN + "it = zip(g(), range(6))", FIRST, TAIL],
     "the list in its own cell": ["log = []", GEN.replace("log = []\n", "") + "it = g()", FIRST, TAIL],
 }
 

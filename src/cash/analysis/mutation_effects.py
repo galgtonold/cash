@@ -1395,7 +1395,8 @@ def drawn_generator_sources(tree: ast.AST | None, namespace: Mapping[str, Any] |
             _add_source(out, obj.gi_code)
             # A generator expression calls by name what its body calls.
             stack.extend((namespace.get(name), depth + 1) for name in obj.gi_code.co_names if name in namespace)
-        elif not _has_next(obj):
+        elif not _has_next(obj) and type(obj) is not tuple:
+            # A tuple is how ``map`` and ``zip`` hold what they draw from.
             continue
         stack.extend((held, depth + 1) for held in gc.get_referents(obj))
     return tuple(out)
