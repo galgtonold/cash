@@ -2031,7 +2031,7 @@ the top.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/statement/identity_holders.py:identity_held_reason @38433126, cash/notebook/statement/processor.py:StatementProcessor._warn_identity_held @a5aa8bda, cash/notebook/statement/processor.py:_pointed_into @3b57c197 -->
+<!-- claim: cash/notebook/statement/identity_holders.py:identity_held_reason @6821fc78, cash/notebook/statement/processor.py:StatementProcessor._warn_identity_held @a5aa8bda, cash/notebook/statement/processor.py:_pointed_into @3b57c197 -->
 **What happened.** A value the statement binds finds another object by
 identity, not by holding it: a weak reference (`wr = weakref.ref(p.child)`,
 a `WeakValueDictionary`) to an object the value does not hold, or an `int`
@@ -2040,7 +2040,8 @@ equal to the `id()` of an object the notebook holds (`reg = {id(p.seen):
 as it was stored, while the cell that builds `p` binds a new one: the weak
 reference finds nothing, and the `id()` matches nothing. So cash did not
 store the statement. The message names the variable and says which of the
-two it holds. It is shown once per statement.
+two it holds. A container cash cannot look inside counts too, since it
+could hold either. It is shown once per statement.
 
 A loop that changes an object in place (`p.update(i)`) is not restored
 into it either when the notebook holds a weak reference to, or the `id()`
