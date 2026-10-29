@@ -828,7 +828,7 @@ def _visit_group(
             attrs = own_dict(obj, subclasses=True)
             if attrs is not None:
                 children.extend(dict.values(attrs))
-    for name in _slot_names(kind):
+    for name in slot_names(kind):
         getter = _slot_getter(kind, name)
         if getter is not None:
             try:
@@ -959,7 +959,7 @@ def _inert(kind: type) -> bool:
     instance dict, no slots, and not a kind it walks into otherwise."""
     if kind in _leaves() or issubclass(kind, _WALKED_KINDS):
         return False
-    return not _may_have_dict(kind) and not _slot_names(kind)
+    return not _may_have_dict(kind) and not slot_names(kind)
 
 
 @per_mro
@@ -986,11 +986,11 @@ def _slot_getter(kind: type, name: str) -> Callable[[Any], Any] | None:
 
 @per_mro
 def _slot_places(kind: type) -> dict[str, int | None]:
-    """For each of `_slot_names`, where along *kind*'s MRO its plain slot
+    """For each of `slot_names`, where along *kind*'s MRO its plain slot
     descriptor is (None when what is found first is not one): the place,
     not the descriptor, which refers to its class and would keep it alive."""
     places: dict[str, int | None] = {}
-    for name in _slot_names(kind):
+    for name in slot_names(kind):
         places[name] = None
         try:
             for at, klass in enumerate(kind.__mro__):
@@ -1017,7 +1017,7 @@ def _cell_contents(cells: tuple[Any, ...] | None) -> list[Any]:
 
 
 @per_mro
-def _slot_names(kind: type) -> tuple[str, ...]:
+def slot_names(kind: type) -> tuple[str, ...]:
     """The slots *kind* and its bases declare, but ``__dict__`` and ``__weakref__``."""
     names: list[str] = []
     for klass in kind.__mro__:

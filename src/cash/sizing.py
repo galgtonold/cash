@@ -338,7 +338,7 @@ def _is_instance(value: Any) -> bool:
         kind in CODELESS_PRIMS
         or kind in BUILTIN_CONTAINERS
         or instance_of(value, _HELD_BY_NAME)
-        or (own_dict(value) is None and not _slot_names(kind))
+        or (own_dict(value) is None and not slot_names(kind))
     )
 
 
@@ -530,7 +530,7 @@ def _estimate_own_attrs(obj: Any, _depth: int) -> int:
     if values and isinstance(obj, dict):
         # ``self[key] = self.key = value`` (an EasyDict): the item counts it.
         values = [value for key, value in attrs.items() if dict.get(obj, key, _MISSING) is not value]
-    values += [v for v in (_slot_value(obj, name) for name in _slot_names(type(obj))) if v is not None]
+    values += [v for v in (slot_value(obj, name) for name in slot_names(type(obj))) if v is not None]
     values = [value for value in values if value is not obj]
     # Sampled as a dict's values are (`_estimate_dict`): summing every one
     # at each level was exponential in depth when they share a child.
@@ -721,14 +721,14 @@ def _attr_values(obj: Any) -> list:
     """The values in *obj*'s ``__dict__`` and ``__slots__``."""
     attrs = own_dict(obj)
     values = list(attrs.values()) if attrs is not None else []
-    for name in _slot_names(type(obj)):
-        value = _slot_value(obj, name)
+    for name in slot_names(type(obj)):
+        value = slot_value(obj, name)
         if value is not None:
             values.append(value)
     return values
 
 
-def _slot_value(obj: Any, name: str, missing: Any = None) -> Any:
+def slot_value(obj: Any, name: str, missing: Any = None) -> Any:
     """*obj*'s slot *name*, read through the slot's own descriptor as pickle
     reads it (never the object's ``__getattribute__``); *missing* when unset
     or not a slot."""
@@ -753,7 +753,7 @@ def _field_values(obj: Any, names: list[str]) -> list:
         if name in attrs:
             values.append(attrs[name])
             continue
-        value = _slot_value(obj, name, _UNSET)
+        value = slot_value(obj, name, _UNSET)
         values.append(getattr(obj, name) if value is _UNSET else value)
     return values
 
@@ -782,8 +782,8 @@ def _attrs_footprint(obj: Any, seen: set[int], held: list) -> int:
                 size += sys.getsizeof(value)
             else:
                 held.append(value)
-    for name in _slot_names(type(obj)):
-        value = _slot_value(obj, name)
+    for name in slot_names(type(obj)):
+        value = slot_value(obj, name)
         if value is not None:
             if type(value) in _FLAT_CELLS:
                 size += sys.getsizeof(value)
@@ -792,7 +792,7 @@ def _attrs_footprint(obj: Any, seen: set[int], held: list) -> int:
     return size
 
 
-def _slot_names(cls: type) -> tuple[str, ...]:
+def slot_names(cls: type) -> tuple[str, ...]:
     """The ``__slots__`` names *cls* and its bases declare, remembered per class."""
     try:
         return _SLOTS[cls]

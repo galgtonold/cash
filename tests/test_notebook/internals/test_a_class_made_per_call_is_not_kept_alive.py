@@ -214,7 +214,7 @@ def test_a_class_given_new_bases_is_read_by_its_new_mro():
     b.x, b.y = 1, 2
     readers = (
         lambda: shared_objects.attributes_of(b),
-        lambda: sorted(m.__get__(b) for m in closure_sharing._slot_readers(B)),
+        lambda: sorted(m.__get__(b) for m in closure_sharing.slot_readers(B)),
         lambda: held_functions._slot_getter(B, "x")(b),
     )
     before = [read() for read in readers]

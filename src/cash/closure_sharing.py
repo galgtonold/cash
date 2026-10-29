@@ -190,7 +190,7 @@ _USERS: TypeMemo[bool] = TypeMemo()
 _MODULE_OF = type.__dict__["__module__"].__get__
 
 
-def _slot_readers(kind: type) -> tuple:
+def slot_readers(kind: type) -> tuple:
     """The member descriptor of each ``__slots__`` entry along *kind*'s
     MRO: how pickle reads a slotted object, read without running its code."""
     found = _SLOTS.get_for(kind)
@@ -232,7 +232,7 @@ def _object_parts(item: Any, kind: type) -> list:
     attributes = own_dict(item)
     if attributes:
         parts.extend(attributes.values())
-    for reader in _slot_readers(kind):
+    for reader in slot_readers(kind):
         try:
             parts.append(reader.__get__(item, kind))
         except AttributeError:  # an empty slot

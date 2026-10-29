@@ -40,7 +40,7 @@ from itertools import chain
 from typing import Any
 
 from cash._user_attrs import attribute_or, builtin_base, builtin_items, own_dict
-from cash.closure_sharing import _slot_readers
+from cash.closure_sharing import slot_readers
 from cash.install_paths import is_user_code_module
 from cash.live_state import is_live_stream
 from cash.value_types import IMMUTABLE_LEAF_TYPES
@@ -365,7 +365,7 @@ def _what_it_holds(value: Any, ids: _Ids) -> list[Any] | str | None:
     state = own_dict(value)
     if state:
         held.extend(state.values())
-    for reader in _slot_readers(kind):
+    for reader in slot_readers(kind):
         try:
             held.append(reader.__get__(value, kind))
         except AttributeError:  # an empty slot

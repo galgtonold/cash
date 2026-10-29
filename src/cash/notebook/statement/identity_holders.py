@@ -57,7 +57,7 @@ from itertools import chain
 from typing import Any
 
 from cash._user_attrs import attribute_or, builtin_base, builtin_items, own_dict
-from cash.closure_sharing import _slot_readers
+from cash.closure_sharing import slot_readers
 from cash.install_paths import is_user_code_module
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
@@ -652,7 +652,7 @@ class _Walk:
             state = own_dict(item)
             if state:
                 items.extend(state.values())
-            for reader in _slot_readers(kind):
+            for reader in slot_readers(kind):
                 try:
                     items.append(reader.__get__(item, kind))
                 except AttributeError:  # an empty slot
@@ -739,7 +739,7 @@ class _Walk:
         (kind,) = kinds
         if (
             not self._users(kind)
-            or _slot_readers(kind)
+            or slot_readers(kind)
             or own_dict(items[0]) is None
             or attribute_or(kind, "__getattribute__") is not object.__getattribute__
         ):

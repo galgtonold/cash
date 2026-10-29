@@ -24,7 +24,7 @@ from ...analysis.cacheability import analyze_statement
 from ...analysis.code_analyzer import clean_cell_source, parse_cell_source
 from ...diagnostics import log_diagnostic, warn_diagnostic
 from ...exceptions import CashWarning
-from ...sizing import _slot_names, _slot_value
+from ...sizing import slot_names, slot_value
 
 __all__ = ["held_objects", "warn_changed_below"]
 
@@ -141,7 +141,7 @@ def _held_directly(obj: object) -> tuple[list, bool]:
         if attrs:
             more, all_of_them = _first_items(dict.values(attrs), dict.__len__(attrs))
             items, whole = items + more, whole and all_of_them
-        slots = [value for value in (_slot_value(obj, name) for name in _slot_names(type(obj))) if value is not None]
+        slots = [value for value in (slot_value(obj, name) for name in slot_names(type(obj))) if value is not None]
         return items + slots, whole
     if instance_of(obj, functools.partial):
         return [obj.func, *obj.args, *obj.keywords.values()], True
