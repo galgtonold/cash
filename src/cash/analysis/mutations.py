@@ -1537,6 +1537,33 @@ def top_level_calls(tree: ast.Module | None) -> TopLevelCalls:
     return collector.result()
 
 
+def _walk_with_locals(node: ast.AST, local: frozenset[str] = frozenset()):
+    """``(sub, local)`` for each node below *node*, with the names a
+    comprehension or a lambda around it binds for itself: the ``s`` of
+    ``[s.get('k') for s in rows]`` is the loop's, not the notebook's ``s``."""
+    if isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)):
+        inner = set(local)
+        for comp in node.generators:
+            yield from _walk_with_locals(comp.iter, frozenset(inner))
+            inner |= {name.id for name in ast.walk(comp.target) if isinstance(name, ast.Name)}
+            for test in comp.ifs:
+                yield from _walk_with_locals(test, frozenset(inner))
+        parts = [node.key, node.value] if isinstance(node, ast.DictComp) else [node.elt]
+        for part in parts:
+            yield from _walk_with_locals(part, frozenset(inner))
+        return
+    if isinstance(node, ast.Lambda):
+        args = node.args
+        bound = {a.arg for a in [*args.posonlyargs, *args.args, *args.kwonlyargs, args.vararg, args.kwarg] if a}
+        for default in [*args.defaults, *(d for d in args.kw_defaults if d is not None)]:
+            yield from _walk_with_locals(default, local)
+        yield from _walk_with_locals(node.body, local | bound)
+        return
+    yield node, local
+    for child in ast.iter_child_nodes(node):
+        yield from _walk_with_locals(child, local)
+
+
 def _nested_statements(body: list[ast.stmt]):
     """Each statement of *body* and of the blocks inside it, not of the
     functions or classes it defines."""
@@ -1602,10 +1629,10 @@ class _TopLevelCallCollector:
             self._nested_method_calls(node.value)
 
     def _nested_method_calls(self, value: ast.expr, skip: ast.Call | None = None) -> None:
-        for sub in ast.walk(value):
+        for sub, local in _walk_with_locals(value):
             if sub is not skip and isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute):
                 base = _extract_receiver_base_name(sub.func.value)
-                if base:
+                if base and base not in local:
                     self.assigned_method_calls.add((base, sub.func.attr))
 
     def _known_mutations(self, node: ast.stmt) -> None:

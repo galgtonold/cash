@@ -62,10 +62,10 @@ from ..lineage_formula import (
 )
 from ..restored_var import hashed_by_lineage
 from .derivation_edges import (
-    assigned_names,
     bump_derived_lineages,
     clear_edges_for,
     detect_derivation_edges,
+    rebound_outputs,
 )
 from .file_deps import compute_file_hash_component
 
@@ -194,11 +194,10 @@ def clear_rebound_edges(
     set happened to yield ``ax`` first.
     """
     # ``x = x + [5]`` reads ``x`` but binds a new object all the same: the
-    # edges of the old one are dropped too (`assigned_names`); its share
+    # edges of the old one are dropped too (`rebound_outputs`); its share
     # check links the new one again where it is shared.
-    rebound = assigned_names(tree) & outputs
-    for var_name in outputs:
-        if var_name in user_ns and (var_name not in inputs or var_name in rebound):
+    for var_name in rebound_outputs(outputs, inputs, tree, user_ns):
+        if var_name in user_ns:
             clear_edges_for(tracking_state.derivation_edges, var_name)
 
 

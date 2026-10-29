@@ -402,6 +402,17 @@ class TestAssignedMethodCallReceivers:
     def test_none_tree(self):
         assert assigned_method_call_receivers(None) == frozenset()
 
+    def test_a_comprehension_or_lambda_variable_is_not_a_notebook_receiver(self):
+        # The ``s`` of ``for s in rows`` is the loop's: watching the notebook's
+        # ``s`` around the statement recorded it as an output of it.
+        assert self._calls("n = len([s.get('k') for s in rows])") == frozenset()
+        assert self._calls("print([str(s.get('k')) for s in rows])") == frozenset()
+        assert self._calls("v = [s.g() for s in xs if s.h()]") == frozenset()
+        assert self._calls("v = list(map(lambda s: s.f(), xs))") == frozenset()
+        # What the loop reads from outside, or a name it does not bind, is.
+        assert self._calls("v = [s.f(x) for x in s.items()]") == {("s", "f"), ("s", "items")}
+        assert self._calls("v = {k: s.a() for k in ks}") == {("s", "a")}
+
 
 class TestKnownPureMethods:
     """The conservative known-pure inspection set lets the runtime skip

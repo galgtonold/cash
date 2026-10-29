@@ -41,7 +41,7 @@ import inspect
 import logging
 import sys
 import types
-from collections.abc import Container, Iterable, Iterator
+from collections.abc import Container, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from typing import Any, Callable
 
@@ -68,6 +68,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "apply_share_record",
     "assigned_names",
+    "bound_names",
     "detect_derivation_edges",
     "link",
     "logging_edges",
@@ -76,6 +77,7 @@ __all__ = [
     "clear_edges_for",
     "is_uncacheable_alias",
     "own_share_edges",
+    "rebound_outputs",
     "record_shared_object_edges",
     "shared_object_partners",
     "static_share_edges",
@@ -139,6 +141,39 @@ def assigned_names(tree: ast.AST | None) -> set[str]:
                 elif isinstance(sub, ast.Starred):
                     stack.append(sub.value)
     return names
+
+
+def bound_names(tree: ast.AST | None) -> set[str] | None:
+    """The names *tree* binds anywhere: assigned, deleted, defined,
+    imported; None when there is no tree to read them from."""
+    if tree is None:
+        return None
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load):
+            found.add(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            found.add(node.name)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            found.update((a.asname or a.name).split(".")[0] for a in node.names)
+    return found
+
+
+def rebound_outputs(
+    outputs: set[str], inputs: Container[str], tree: ast.AST | None, namespace: Mapping[str, Any]
+) -> set[str]:
+    """The *outputs* whose edges a statement drops: the ones it binds afresh
+    (`assigned_names`) and the ones it does not read, but for a class it
+    does not bind by name either. ``sbox.bump(5)`` changing ``SBox.held``
+    through ``type(self)``, or ``k.hold(d)`` appending to a metaclass's
+    list, changes the class in place: its edges stay, so a value kept on it
+    moves with it. The runtime and the simulation both ask this."""
+    rebound = assigned_names(tree) & outputs
+    unread = {name for name in outputs if name not in inputs}
+    named = bound_names(tree)
+    if named is not None:
+        unread = {name for name in unread if name in named or not instance_of(namespace.get(name), type)}
+    return rebound | unread
 
 
 def apply_share_record(
