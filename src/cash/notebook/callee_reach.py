@@ -369,6 +369,9 @@ def _state_writes(
     # ``def bump(): import cnt; cnt.k += 1``: a module the statements
     # import binds a local, not one of *namespace*'s names.
     imported = _imported_modules(statements)
+    taken_from = _taken_by_from_imports(statements)
+    # ``sa = setattr; sa(cnt, 'k', 1)``.
+    setters = {"setattr", "delattr"} | _bound_to_setters(statements)
 
     def changed_in_place(root: ast.expr) -> None:
         """Add the local module whose state changes when *root* is changed in place."""
@@ -380,6 +383,10 @@ def _state_writes(
             value = namespace.get(root.id)
             if value is None:
                 value = imported.get(root.id)
+            if value is None and root.id in taken_from:
+                # ``from cnt import d; d['k'] += 1``: what it took from the
+                # module is the module's state.
+                value = taken_from[root.id]
             home = _state_home(value, namespace)
             if home is not None:
                 found.add(home)
@@ -398,7 +405,7 @@ def _state_writes(
         users = followed_into(callee, kind, receiver)
         if node is None or users or found is None:
             return
-        if isinstance(func, ast.Name) and func.id in ("setattr", "delattr") and node.args:
+        if isinstance(func, ast.Name) and func.id in setters and node.args:
             target = None
             if isinstance(node.args[0], ast.Name):
                 # ``import cnt; setattr(cnt, 'k', 1)``: the import binds a local.
@@ -519,6 +526,34 @@ def _made_as_it_ran(module: types.ModuleType) -> bool:
         and module.__name__ not in sys.builtin_module_names
         and module.__name__ != "__main__"
     )
+
+
+def _taken_by_from_imports(statements: Iterable[ast.AST]) -> dict[str, types.ModuleType]:
+    """The loaded module each ``from M import x`` among *statements* took
+    a value other than a submodule from, by the name it binds."""
+    taken: dict[str, types.ModuleType] = {}
+    for statement in statements:
+        for node in ast.walk(statement):
+            if isinstance(node, ast.ImportFrom) and node.module and not node.level:
+                module = sys.modules.get(node.module)
+                if module is None:
+                    continue
+                for alias in node.names:
+                    if alias.name != "*" and f"{node.module}.{alias.name}" not in sys.modules:
+                        taken[alias.asname or alias.name] = module
+    return taken
+
+
+def _bound_to_setters(statements: Iterable[ast.AST]) -> set[str]:
+    """The names *statements* bind to ``setattr`` or ``delattr``."""
+    return {
+        target.id
+        for statement in statements
+        for node in ast.walk(statement)
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Name) and node.value.id in ("setattr", "delattr")
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    }
 
 
 def _imported_modules(statements: Iterable[ast.AST]) -> dict[str, types.ModuleType]:

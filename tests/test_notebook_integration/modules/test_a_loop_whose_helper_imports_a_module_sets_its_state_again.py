@@ -82,3 +82,39 @@ def test_the_helper_is_read_as_setting_the_module(helper, monkeypatch):
     monkeypatch.setitem(linecache.cache, filename, (len(source), None, source.splitlines(True), filename))
     exec(compile(source, filename, "exec"), namespace)
     assert module_state_writes("bump()", namespace) == {"cnt"}
+
+
+#: ``(bump, what reads the state)``: what the helper took from the module by
+#: ``from cnt import ...`` changed in place, and ``setattr`` under a name of
+#: its own.
+TAKEN = {
+    "from_import_dict": ("def bump():\n    from cnt import d\n    d['k'] += 1", "cnt.d['k']"),
+    "from_import_list": ("def bump():\n    from cnt import l\n    l.append(1)", "len(cnt.l)"),
+    "setattr_alias": ("def bump():\n    import cnt\n    sa = setattr\n    sa(cnt, 'k', cnt.k + 1)", "cnt.k"),
+}
+
+
+@pytest.mark.parametrize("helper", list(TAKEN))
+def test_a_helper_changing_what_it_took_from_the_module_sets_it_again(nb_runner, helper):
+    bump, read = TAKEN[helper]
+    setup = MADE + "m.d = {'k': 0}\nm.l = []\n"
+    nb_runner.create_notebook([setup + bump, "t = 0\n" + LOOP, f"import cnt\nprint({read})"])
+    nb_runner.start_kernel()
+    for restart in (False, False, False, True, False):
+        if restart:
+            nb_runner.restart()
+        nb_runner.run_all()
+        assert "300" in nb_runner.get_output(3), f"the loop was served: {nb_runner.get_output(3)!r}"
+
+
+@pytest.mark.parametrize("helper", list(TAKEN))
+def test_what_it_took_is_read_as_the_modules(helper, monkeypatch):
+    module = types.ModuleType("cnt")
+    module.k, module.d, module.l = 0, {"k": 0}, []
+    monkeypatch.setitem(sys.modules, "cnt", module)
+    namespace: dict = {"__name__": "__main__"}
+    source = TAKEN[helper][0] + "\n"
+    filename = f"<cell-{helper}>"
+    monkeypatch.setitem(linecache.cache, filename, (len(source), None, source.splitlines(True), filename))
+    exec(compile(source, filename, "exec"), namespace)
+    assert module_state_writes("bump()", namespace) == {"cnt"}
