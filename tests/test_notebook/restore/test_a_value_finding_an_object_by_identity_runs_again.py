@@ -29,6 +29,14 @@ HOLDERS = {
         "reg = {id(p.seen): 'seen', **{i: i for i in range(20_000)}}",
         "r = reg.get(id(p.seen)) == 'seen'",
     ),
+    "an id in each of 20,000 dicts": (
+        "regs = [{'pid': id(p.seen)} for _ in range(20_000)]",
+        "r = regs[0]['pid'] == id(p.seen)",
+    ),
+    "a DataFrame column of ids": (
+        "import pandas as pd\ndf = pd.DataFrame({'pid': [id(p.seen)], 'v': [1]})",
+        "r = bool(df['pid'][0] == id(p.seen))",
+    ),
     "a Series indexed by ids": (
         "import pandas as pd\nser = pd.Series(['seen'], index=[id(p.seen)])",
         "r = ser.get(id(p.seen)) == 'seen'",

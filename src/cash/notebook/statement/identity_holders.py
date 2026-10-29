@@ -169,41 +169,79 @@ _SAMPLE = 32
 
 def _sampled_ints(unread: list[Any]) -> set[int]:
     """The ints among the first and last items (and keys) of each container
-    in *unread* too big to look inside, and of the index and values of each
-    pandas or NumPy object: a registry keyed by ``id()`` keeps them all
-    alike, so a few find it."""
-    import itertools
-
+    in *unread* too big to look inside, and of the index, the values and
+    each integer column of each pandas or NumPy object: a registry keyed by
+    ``id()`` keeps them all alike, so a few find it. A sampled item that is
+    a list, tuple, set or dict is sampled the same way, `_SAMPLE_LEVELS`
+    deep: ``[{'pid': id(p)} for p in ps]`` keeps its ids a level down."""
     out: set[int] = set()
+    for obj in unread:
+        _sample_into(obj, out, _SAMPLE_LEVELS)
+    return out
+
+
+#: How many levels of containers `_sampled_ints` samples into.
+_SAMPLE_LEVELS = 3
+
+#: Most integer columns of one frame `_sampled_ints` reads.
+_SAMPLE_COLUMNS = 64
+
+
+def _sample_into(obj: Any, out: set[int], levels: int) -> None:
+    import itertools
 
     def ends(items: Any) -> list[Any]:
         if isinstance(items, (list, tuple)):
             return [*items[:_SAMPLE], *items[-_SAMPLE:]]
         return list(itertools.islice(items, _SAMPLE))
 
-    def array_ends(array: Any) -> list[Any]:
-        if attribute_or(attribute_or(array, "dtype", None), "kind", None) not in ("i", "u"):
-            return []
-        try:
-            flat = array.ravel()
-            return [int(n) for n in (*flat[:_SAMPLE], *flat[-_SAMPLE:])]
-        except (TypeError, ValueError, AttributeError, IndexError):
-            return []
+    if isinstance(obj, dict):
+        picked = ends(dict.__iter__(obj)) + ends(dict.values(obj))
+    elif isinstance(obj, (list, tuple, set, frozenset)):
+        picked = ends(obj if isinstance(obj, (list, tuple)) else iter(obj))
+    else:
+        picked = _array_ends(obj)
+        for part in ("index", "columns"):
+            picked += _array_ends(attribute_or(attribute_or(obj, part, None), "values", None))
+        if attribute_or(obj, "ndim", None) == 1:
+            # A Series' values; a frame's would copy every column.
+            picked += _array_ends(attribute_or(obj, "values", None))
+        elif attribute_or(obj, "ndim", None) == 2:
+            picked += _frame_column_ends(obj)
+    for item in picked:
+        if type(item) is int:
+            out.add(item)
+        elif levels > 1 and type(item) in (dict, list, tuple, set, frozenset):
+            _sample_into(item, out, levels - 1)
 
-    for obj in unread:
-        if isinstance(obj, dict):
-            picked = ends(dict.__iter__(obj)) + ends(dict.values(obj))
-        elif isinstance(obj, (list, tuple, set, frozenset)):
-            picked = ends(obj if isinstance(obj, (list, tuple)) else iter(obj))
-        else:
-            picked = array_ends(obj)
-            for part in ("index", "columns"):
-                picked += array_ends(attribute_or(attribute_or(obj, part, None), "values", None))
-            if attribute_or(obj, "ndim", None) == 1:
-                # A Series' values; a frame's would copy every column.
-                picked += array_ends(attribute_or(obj, "values", None))
-        out.update(n for n in picked if type(n) is int)
-    return out
+
+def _array_ends(array: Any) -> list[int]:
+    """The first and last `_SAMPLE` items of an integer NumPy array."""
+    if attribute_or(attribute_or(array, "dtype", None), "kind", None) not in ("i", "u"):
+        return []
+    try:
+        flat = array.ravel()
+        return [int(n) for n in (*flat[:_SAMPLE], *flat[-_SAMPLE:])]
+    except (TypeError, ValueError, AttributeError, IndexError):
+        return []
+
+
+def _frame_column_ends(frame: Any) -> list[int]:
+    """The ends of each integer column of a pandas frame (a ``pid`` column
+    of ids), read a column at a time: the frame's ``values`` would copy
+    every column into one array."""
+    dtypes = attribute_or(frame, "dtypes", None)
+    iloc = attribute_or(frame, "iloc", None)
+    if dtypes is None or iloc is None:
+        return []
+    picked: list[int] = []
+    try:
+        columns = [i for i, dtype in enumerate(dtypes) if attribute_or(dtype, "kind", None) in ("i", "u")]
+        for position in columns[:_SAMPLE_COLUMNS]:
+            picked += _array_ends(iloc[:, position].to_numpy())
+    except (TypeError, ValueError, AttributeError, IndexError):
+        return picked
+    return picked
 
 
 #: The lowest address a 64-bit macOS process maps: ``__PAGEZERO`` covers
