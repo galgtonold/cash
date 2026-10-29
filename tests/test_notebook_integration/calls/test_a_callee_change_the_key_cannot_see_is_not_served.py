@@ -30,7 +30,7 @@ SETUP = (
     "CV = contextvars.ContextVar('cv', default=0)\n"
     "Q = queue.Queue()\nSQ = queue.SimpleQueue()\nEV = threading.Event()\n"
     "PUSHP = functools.partial(list.append, LOG)\n"
-    "OPS = {'push': LOG.append}\nOPL = [LOG.append]\n"
+    "OPS = {'push': LOG.append}\nOPL = [LOG.append]\nHOOKS = [LOG.append]\n"
 )
 
 BODIES = {
@@ -54,6 +54,10 @@ BODIES = {
     "builtin_class_method": ("list.append(LOG, x)", "n = len(LOG)", 1),
     "a_method_a_dict_holds": ("OPS['push'](x)", "n = len(LOG)", 1),
     "a_method_a_list_holds": ("OPL[0](x)", "n = len(LOG)", 1),
+    # Called through a local bound to what the global holds.
+    "hooks_iterated": ("for h in HOOKS:\n        h(x)", "n = len(LOG)", 1),
+    "a_local_alias_of_a_held_method": ("p = OPS['push']\n    p(x)", "n = len(LOG)", 1),
+    "an_alias_got_from_a_dict": ("p = OPS.get('push')\n    p(x)", "n = len(LOG)", 1),
 }
 
 
@@ -92,12 +96,15 @@ HOLDERS = {
     "default_argument": None,
     "default_an_item_of_a_global": None,
     "default_of_a_lambda_it_calls": None,
+    "a_partial_a_class_holds": "HP.push(x)",
 }
 #: The whole definition, where the shape is not one call in ``inner``.
 DEFINED = {
     "default_argument": "def inner(x, L=DQ):\n    time.sleep(0.05)\n    L.append(x)\n    return x * 10",
+    # Held by ``CFG`` alone: no global is the default itself.
     "default_an_item_of_a_global": (
-        "CFG = {'a': DQ}\ndef inner(x, L=CFG['a']):\n    time.sleep(0.05)\n    L.append(x)\n    return x * 10"
+        "CFG = {'a': collections.deque()}\ndef inner(x, L=CFG['a']):\n    time.sleep(0.05)\n    L.append(x)\n"
+        "    return x * 10"
     ),
     "default_of_a_lambda_it_calls": (
         "PL = lambda x, L=DQ: L.append(x)\ndef inner(x):\n    time.sleep(0.05)\n    PL(x)\n    return x * 10"
@@ -115,7 +122,9 @@ def test_a_change_through_what_a_global_holds_is_made_again(cash_magics, record,
     setup = SETUP.replace(
         "DQ = collections.deque()", "DQ = []" if "list." in (body or "") else "DQ = collections.deque()"
     )
-    cells = [setup + fn, "v = inner(3)", "n = len(LOG)" if shape == "partial_of_append" else "n = len(DQ)"]
+    setup += "class HP: pass\nHP.push = functools.partial(collections.deque.append, DQ)\n"
+    read = {"partial_of_append": "n = len(LOG)", "default_an_item_of_a_global": "n = len(CFG['a'])"}
+    cells = [setup + fn, "v = inner(3)", read.get(shape, "n = len(DQ)")]
     ns = cash_magics.shell.user_ns
     for run in range(3):
         for cell in cells:
