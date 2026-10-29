@@ -1422,7 +1422,13 @@ def _call_name(func: ast.expr) -> str | None:
 
 def rebound_modules(before: Mapping[str, Mapping[str, Any]]) -> frozenset[str]:
     """The modules of *before* (`module_globals`) whose globals now hold
-    another object than they did, or one more or fewer."""
+    another object than they did, or one more or fewer.
+
+    A package's submodule the import system bound on it is not one: ``from
+    .helper import scale`` in a function of ``pkg/__init__.py`` sets
+    ``pkg.helper`` as it imports it. Taken for state the call set, it made
+    the call's statement the writer of the function's module, and a Run
+    All after a restart ran it again below a reload of the helper."""
     changed = set()
     for name, held in before.items():
         module = sys.modules.get(name)
@@ -1432,11 +1438,19 @@ def rebound_modules(before: Mapping[str, Mapping[str, Any]]) -> frozenset[str]:
         # By identity, at C speed: *held* keeps every object it saw alive,
         # so an id cannot be reused for another one meanwhile.
         if (now.keys() != held.keys() or not all(map(operator.is_, now.values(), held.values()))) and any(
-            key not in INTERPRETER_MANAGED_GLOBALS and now.get(key, _ABSENT) is not held.get(key, _ABSENT)
+            key not in INTERPRETER_MANAGED_GLOBALS
+            and now.get(key, _ABSENT) is not held.get(key, _ABSENT)
+            and not _bound_submodule(name, key, now.get(key, _ABSENT))
             for key in now.keys() | held.keys()
         ):
             changed.add(name)
     return frozenset(changed)
+
+
+def _bound_submodule(package: str, key: str, value: Any) -> bool:
+    """Is *value*, under *key* of *package*, the submodule the import system
+    binds there (``sys.modules["pkg.helper"]`` as ``pkg.helper``)?"""
+    return value is not _ABSENT and value is sys.modules.get(f"{package}.{key}")
 
 
 def _modules_changed_by(

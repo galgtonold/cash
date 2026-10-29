@@ -12,18 +12,21 @@ import builtins
 import dis
 import functools
 import hashlib
+import importlib
 import logging
 import secrets
 import sys
 import types
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple, Protocol, runtime_checkable
 
 from cash._memo import CODE_OBJECTS, NOTEBOOK_STATEMENTS, LruMemo
+from cash._paths import is_pseudo_filename
 from cash._user_attrs import attribute_or, has_attribute, instance_of
 from cash.analysis.bytecode import argvals
 from cash.analysis.unloaded_modules import module_file
+from cash.install_paths import is_user_path
 from cash.notebook.lineage_store import resolve_lineage
 from cash.source_norm import exact_source_digest, unparse_without_docstrings
 from cash.tracking.function_tracker import is_local_module
@@ -54,8 +57,13 @@ __all__ = [
     "CacheKeyContext",
     "CacheKeyResult",
     "VirtualCallable",
+    "body_imports_of",
     "compute_cache_key",
     "control_outcome_key",
+    "import_body_modules",
+    "imported_since",
+    "remember_body_imports",
+    "unloaded_body_imports",
     "statement_source_hash",
     "write_provenance_key",
     "note_read_provenance_written",
@@ -465,7 +473,8 @@ def called_function_dependencies(
 
     The modules the walked code imports as it runs (``from um3 import
     scale`` in a function's body) are added to *body_imports*, when given
-    (`_body_import_parts`).
+    (`_body_import_parts`): a module's function and class are followed
+    into the code of their module they reach (`_module_body_imports`).
     """
     seen: set[str] = set()
     stack = [name for name in inputs]
@@ -506,12 +515,19 @@ def called_function_dependencies(
         if name in seen:
             continue
         seen.add(name)
+        if (body_imports is not None or by_string is not None) and not _module_body_imports(
+            user_ns.get(name), user_ns, body_imports if body_imports is not None else set()
+        ):
+            # A relative import whose package cannot be told: which module
+            # it imports is known only when it runs (``KEY-UNTRACKABLE-DEP``).
+            if by_string is not None:
+                by_string.add(name)
         # The function's nested code too: a comprehension (its own code
         # object before Python 3.12), a generator expression, a lambda or an
         # inner function reads its globals at call time as the body does.
         for code_obj in _nested_codes_of(codes_of(name)):
             if body_imports is not None:
-                body_imports.update(_imported_by(code_obj))
+                body_imports.update(_imported_by(code_obj) - {_UNKNOWN_PACKAGE})
             attrs = _attribute_only_names(code_obj)
             held = id(code_obj) in held_only
             for ref in code_obj.co_names:
@@ -1009,19 +1025,148 @@ def _callee_deps(
 
 
 #: ``code object -> the modules its own instructions import``.
-_IMPORTED_BY: LruMemo[types.CodeType, frozenset[str]] = LruMemo(CODE_OBJECTS)
+_IMPORTED_BY: LruMemo[tuple[types.CodeType, object], frozenset[str]] = LruMemo(CODE_OBJECTS)
 
 
-def _imported_by(code: types.CodeType) -> frozenset[str]:
-    """The modules *code* imports when it runs, by the names its
-    ``import`` statements give them (a relative one by its bare name)."""
-    found = _IMPORTED_BY.get(code)
+def _imported_by(code: types.CodeType, package: str | None | object = None) -> frozenset[str]:
+    """The modules *code* imports when it runs, by their full names: a
+    relative one (``from .helper import scale``, ``from . import helper2``)
+    resolved against *package*, or the package of the loaded module whose
+    file *code* is in when none is given, and each name ``from pkg import
+    x`` takes as ``pkg.x`` too, which may be a submodule. `_UNKNOWN_PACKAGE`
+    stands for a relative one whose package cannot be told."""
+    if package is None:
+        package = _UNREAD_PACKAGE
+    found = _IMPORTED_BY.get((code, package))
     if found is None:
-        found = _IMPORTED_BY[code] = frozenset(name for name in argvals(code, _IMPORTS) if name)
+        found = _IMPORTED_BY[(code, package)] = frozenset(_imports_of(code, package))
     return found
 
 
-_IMPORTS = frozenset({"IMPORT_NAME"})
+#: What `_imported_by` gives for a relative import whose package is unknown.
+_UNKNOWN_PACKAGE = "<unknown package>"
+
+
+def _imports_of(code: types.CodeType, package: str | None | object) -> Iterator[str]:
+    # ``IMPORT_NAME`` takes the level and the fromlist from the two
+    # constants loaded just before it.
+    loaded: list[Any] = []
+    for ins in dis.get_instructions(code):
+        if ins.opname != "IMPORT_NAME":
+            if ins.opname.startswith(("LOAD_CONST", "LOAD_SMALL_INT")):
+                loaded = [*loaded[-1:], ins.argval]
+            else:
+                loaded = []
+            continue
+        level, fromlist = loaded if len(loaded) == 2 else (0, None)
+        name = ins.argval
+        if isinstance(level, int) and level > 0:
+            if package is _UNREAD_PACKAGE:
+                package = _package_of(code.co_filename)
+            if not package:
+                yield _UNKNOWN_PACKAGE
+                loaded = []
+                continue
+            base = package.rsplit(".", level - 1)[0] if level > 1 else package
+            name = f"{base}.{name}" if name else base
+        if name:
+            yield name
+            for item in fromlist or ():
+                if isinstance(item, str) and item != "*":
+                    yield f"{name}.{item}"
+        loaded = []
+
+
+_UNREAD_PACKAGE = object()
+
+#: How many functions of the user's modules `_module_body_imports` follows.
+_MODULE_FUNCTIONS_FOLLOWED = 256
+
+
+def _module_body_imports(value: Any, user_ns: Mapping[str, Any], found: set[str]) -> bool:
+    """Add to *found* the modules a function or class of the user's modules
+    imports as it runs, in its body and in the code of its module it calls
+    (`_imported_by`), and say whether every relative one's package is known.
+
+    The notebook's walk resolves names in the notebook: ``K().run(vals)`` in
+    a module's ``g`` names a ``K`` the notebook does not hold, so ``from
+    .helper import scale`` in ``K.run`` was in no key and an edited and
+    reloaded ``helper`` served the old result. Each function's names are
+    resolved in its own globals here, and a relative import against their
+    ``__package__``: the module may be gone from ``sys.modules``
+    (``del sys.modules["pkg.api"]``), where its file can no longer name it.
+    """
+    complete = True
+    seen: set[int] = set()
+    pending = [value]
+    while pending and len(seen) < _MODULE_FUNCTIONS_FOLLOWED:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if issubclass(type(current), type):
+            if _in_users_module(attribute_or(current, "__module__", None)):
+                pending.extend(_members_of(current))
+            continue
+        if type(current) is not types.FunctionType:
+            continue
+        namespace = current.__globals__
+        filename = current.__code__.co_filename or ""
+        if namespace is user_ns or is_pseudo_filename(filename) or not is_user_path(filename):
+            # The notebook's own code is walked by the caller; a library's
+            # is followed no further, as a library's state is not keyed.
+            continue
+        package = namespace.get("__package__") or None
+        for code in _nested_codes(current.__code__):
+            imported = _imported_by(code, package if package is not None else _UNREAD_PACKAGE)
+            complete = complete and _UNKNOWN_PACKAGE not in imported
+            found.update(imported - {_UNKNOWN_PACKAGE})
+            for ref in code.co_names:
+                held = namespace.get(ref)
+                if type(held) is types.FunctionType or issubclass(type(held), type):
+                    pending.append(held)
+                elif held is not None and attribute_or(type(held), "__module__", None) not in _PLAIN_MODULES:
+                    # An object of a class of the user's (``INST = K()``,
+                    # then ``INST.run(vals)``): its methods run.
+                    pending.append(type(held))
+    return complete
+
+
+#: Modules whose objects' classes the walk need not look at.
+_PLAIN_MODULES = frozenset({"builtins", "types", "typing", "collections", "functools"})
+
+
+def _in_users_module(name: Any) -> bool:
+    """Is the module named *name* loaded from a file of the user's?"""
+    module = sys.modules.get(name) if isinstance(name, str) else None
+    filename = attribute_or(module, "__file__", None) if module is not None else None
+    return isinstance(filename, str) and is_user_path(filename)
+
+
+def _members_of(cls: type) -> list[Any]:
+    """The functions a class body holds: its methods, those a static or
+    class method wraps and a property's accessors."""
+    members: list[Any] = []
+    try:
+        held = list(vars(cls).values())
+    except Exception:  # noqa: BLE001 - a metaclass that answers no lookup
+        return members
+    for member in held:
+        if type(member) in (staticmethod, classmethod):
+            member = member.__func__
+        if type(member) is property:
+            members.extend(f for f in (member.fget, member.fset, member.fdel) if f is not None)
+        elif type(member) is types.FunctionType:
+            members.append(member)
+    return members
+
+
+def _package_of(filename: str) -> str | None:
+    """The package of the loaded module whose file is *filename*."""
+    for module in list(sys.modules.values()):
+        if attribute_or(module, "__file__", None) == filename:
+            return attribute_or(module, "__package__", None) or None
+    return None
 
 
 def _body_import_parts(modules: Iterable[str]) -> list[str]:
@@ -1230,9 +1375,58 @@ def compute_cache_key(
         )
 
     result = CacheKeyResult(cache_key, source_hash, input_hashes, func_source_hashes, module_source_hashes)
+    body_imported = [part.split(":")[1] for part in callee_deps if part.startswith("bodyimport:")]
+    if body_imported:
+        remember_body_imports(cache_key, body_imported)
     if unfollowed or (by_string and not followed) or unkeyed_modules:
         result.matches_nothing = True
     return result
+
+
+#: The modules of the user's a statement's or call's callees import in their
+#: body (`_body_import_parts`), by its key, most recent last.
+_BODY_IMPORTS: dict[str, tuple[str, ...]] = {}
+_BODY_IMPORTS_MAX = 4096
+
+
+def remember_body_imports(cache_key: str, modules: Iterable[str]) -> None:
+    """Note that the run keyed *cache_key* imports *modules* in a callee's body."""
+    _BODY_IMPORTS[cache_key] = tuple(modules)
+    if len(_BODY_IMPORTS) > _BODY_IMPORTS_MAX:
+        del _BODY_IMPORTS[next(iter(_BODY_IMPORTS))]
+
+
+def body_imports_of(cache_key: str) -> tuple[str, ...]:
+    """The modules the run keyed *cache_key* imports in a callee's body."""
+    return _BODY_IMPORTS.get(cache_key, ())
+
+
+def unloaded_body_imports(cache_key: str) -> tuple[str, ...]:
+    """The modules the callees of the run keyed *cache_key* may import in
+    their body that are not loaded yet: those its run may import."""
+    return tuple(name for name in _BODY_IMPORTS.get(cache_key, ()) if name not in sys.modules)
+
+
+def imported_since(unloaded: Iterable[str]) -> list[str] | None:
+    """Those of *unloaded* (`unloaded_body_imports`) loaded now: what the
+    run imported. Not the list its code names: ``from .noisy import scale``
+    on a branch that did not run imports nothing."""
+    return [name for name in unloaded if name in sys.modules] or None
+
+
+def import_body_modules(modules: Iterable[str] | None) -> None:
+    """Import those of *modules*, the modules a run imported in its callees'
+    bodies (`imported_since`), that are not loaded, as the run did: a hit
+    served after a restart left ``pkg.helper`` unimported, and
+    ``importlib.reload(sys.modules["pkg.helper"])`` in a cell below raised
+    the ``KeyError`` plain Python does not."""
+    for name in modules or ():
+        if name in sys.modules:
+            continue
+        try:
+            importlib.import_module(name)
+        except Exception:
+            logger.debug("[CACHE_KEY] Could not import %s for a hit", name, exc_info=True)
 
 
 #: The key a draw moves a generator or stream by (`draw_key`), for each key

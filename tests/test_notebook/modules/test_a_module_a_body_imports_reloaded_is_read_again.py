@@ -44,3 +44,193 @@ def test_the_call_after_a_reload_runs_the_new_code(cash_magics, in_a_project, bo
     for cell in cells:
         run_cash_cell(cash_magics, cell, cells=cells)
     assert (ns["y"], ns["z"]) == (12, 180)
+
+
+@pytest.fixture
+def a_package(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    (tmp_path / "bodypkg").mkdir()
+    (tmp_path / "bodypkg" / "__init__.py").write_text("", encoding="utf-8")
+    yield
+    for name in [n for n in sys.modules if n == "bodypkg" or n.startswith("bodypkg.")]:
+        sys.modules.pop(name)
+
+
+@pytest.mark.parametrize(
+    "body_import, use",
+    [("from .helper import scale", "scale(v)"), ("from . import helper", "helper.scale(v)")],
+    ids=["from_a_sibling", "the_sibling_itself"],
+)
+def test_a_relative_import_in_a_package_function_is_read_again(cash_magics, a_package, body_import, use):
+    """``from .helper import scale`` in ``bodypkg/api.py`` gave the bare
+    name ``helper``, looked up as a module of its own, and ``from . import
+    helper`` an empty one, dropped: neither keyed ``bodypkg/helper.py``."""
+    api = f"import time\ndef g(vals):\n    time.sleep(0.05)\n    {body_import}\n    return sum({use} for v in vals)\n"
+    cells = [
+        f"open('bodypkg/api.py', 'w').write({api!r})\n"
+        "open('bodypkg/helper.py', 'w').write('def scale(x):\\n    return x * 2\\n')",
+        "from bodypkg.api import g",
+        "y = g([1, 2, 3])",
+        "import importlib, sys\n"
+        "open('bodypkg/helper.py', 'w').write('def scale(x):\\n    return x * 30\\n')\n"
+        "importlib.reload(sys.modules['bodypkg.helper'])",
+        "z = g([1, 2, 3])",
+    ]
+    ns = cash_magics.shell.user_ns
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    assert (ns["y"], ns["z"]) == (12, 180)
+
+
+def _reload_cells(setup: str, fn: str, helper: str) -> list[str]:
+    path = helper.replace(".", "/") + ".py"
+    return [
+        setup + f"\nopen({path!r}, 'w').write('def scale(x):\\n    return x * 2\\n')",
+        fn,
+        "y = g([1, 2, 3])",
+        "import importlib, sys\n"
+        f"open({path!r}, 'w').write('def scale(x):\\n    return x * 30\\n')\n"
+        f"importlib.reload(sys.modules[{helper!r}])",
+        "z = g([1, 2, 3])",
+    ]
+
+
+def test_an_import_in_a_method_the_function_calls_is_read_again(cash_magics, a_package):
+    """``g`` calls ``K().run(vals)``, whose body does ``from .helper import
+    scale``: the walk resolved ``K`` in the notebook, which does not hold
+    it, so ``bodypkg/helper.py`` was in no key."""
+    api = (
+        "import time\nclass K:\n    def run(self, vals):\n        time.sleep(0.05)\n"
+        "        from .helper import scale\n        return sum(scale(v) for v in vals)\n"
+        "def g(vals):\n    return K().run(vals)\n"
+    )
+    cells = _reload_cells(f"open('bodypkg/api.py', 'w').write({api!r})", "from bodypkg.api import g", "bodypkg.helper")
+    ns = cash_magics.shell.user_ns
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    assert (ns["y"], ns["z"]) == (12, 180)
+
+
+def test_a_relative_import_of_a_module_gone_from_sys_modules_is_read_again(cash_magics, a_package):
+    """``del sys.modules['bodypkg.api']`` after ``from bodypkg.api import
+    g``: the package was read off the loaded module whose file ``g``'s code
+    is in, found no more, and the relative import was dropped. It is read
+    off ``g``'s own globals."""
+    api = "import time\ndef g(vals):\n    time.sleep(0.05)\n    from .helper import scale\n    return sum(scale(v) for v in vals)\n"
+    cells = _reload_cells(
+        f"open('bodypkg/api.py', 'w').write({api!r})",
+        "import sys\nfrom bodypkg.api import g\ndel sys.modules['bodypkg.api']",
+        "bodypkg.helper",
+    )
+    ns = cash_magics.shell.user_ns
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    assert (ns["y"], ns["z"]) == (12, 180)
+
+
+def test_a_package_function_importing_its_submodule_does_not_rewrite_itself(cash_magics, a_package):
+    """``from .helper import scale`` in a function of ``bodypkg/__init__.py``
+    sets ``bodypkg.helper`` as the import system does. Taken for state the
+    call set, ``y = g(...)`` became the writer of ``g``, moved its lineage,
+    and a Run All after a restart ran it again below the reload of
+    ``helper``: ``y`` was 180 where plain Python gives 12."""
+    init = "import time\ndef g(vals):\n    time.sleep(0.05)\n    from .helper import scale\n    return sum(scale(v) for v in vals)\n"
+    cells = _reload_cells(
+        f"open('bodypkg/__init__.py', 'w').write({init!r})", "from bodypkg import g", "bodypkg.helper"
+    )
+    ns = cash_magics.shell.user_ns
+    lineage = cash_magics.tracking_state.variable_lineage
+    for cell in cells[:2]:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    before = lineage["g"]
+    run_cash_cell(cash_magics, cells[2], cells=cells)
+    assert lineage["g"] == before
+    for cell in cells[3:]:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    assert (ns["y"], ns["z"]) == (12, 180)
+
+
+def test_a_hit_after_a_restart_imports_what_the_call_imports(cash_magics, a_package):
+    """``y = g(...)`` served after a restart did not run ``from .helper
+    import scale``, so ``bodypkg.helper`` was never imported and
+    ``importlib.reload(sys.modules['bodypkg.helper'])`` below raised the
+    ``KeyError`` plain Python does not."""
+    api = "import time\ndef g(vals):\n    time.sleep(0.3)\n    from .helper import scale\n    return sum(scale(v) for v in vals)\n"
+    cells = _reload_cells(f"open('bodypkg/api.py', 'w').write({api!r})", "from bodypkg.api import g", "bodypkg.helper")
+    ns = cash_magics.shell.user_ns
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    for name in [n for n in sys.modules if n.startswith("bodypkg.")]:
+        del sys.modules[name]
+    cash_magics.tracking_state.reset_session_state()
+    for name in ("g", "y", "z"):
+        ns.pop(name)
+    statuses = []
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+        statuses.append([str(s.get("status")) for s in cash_magics._last_cell_metrics.get("statements", [])])
+    assert "RESTORED" in statuses[2], statuses
+    assert (ns["y"], ns["z"]) == (12, 180)
+
+
+def test_a_hit_imports_no_module_the_run_did_not_import(cash_magics, a_package):
+    """``from .noisy import scale`` on a branch that did not run: a hit
+    after a restart imported ``bodypkg.noisy`` all the same, ran its top
+    level and left it in ``sys.modules``, where plain Python never imports
+    it. A hit imports what the run imported, not what its code names."""
+    api = (
+        "import time\ndef g(vals):\n    time.sleep(0.3)\n    if vals is None:\n"
+        "        from .noisy import scale\n    return sum(vals)\n"
+    )
+    cells = [
+        f"open('bodypkg/api.py', 'w').write({api!r})\n"
+        "open('bodypkg/noisy.py', 'w').write('LOG.append(1)\\ndef scale(x):\\n    return x\\n')",
+        "from bodypkg.api import g",
+        "y = g([1, 2, 3])",
+    ]
+    import builtins
+
+    builtins.LOG = log = []
+    try:
+        ns = cash_magics.shell.user_ns
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+        for name in [n for n in sys.modules if n.startswith("bodypkg.")]:
+            del sys.modules[name]
+        cash_magics.tracking_state.reset_session_state()
+        for name in ("g", "y"):
+            ns.pop(name)
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+        statuses = [str(s.get("status")) for s in cash_magics._last_cell_metrics.get("statements", [])]
+        assert "RESTORED" in statuses, statuses
+        assert ns["y"] == 6
+        assert "bodypkg.noisy" not in sys.modules
+        assert log == []
+    finally:
+        del builtins.LOG
+
+
+def test_a_hit_imports_what_a_method_of_an_object_the_module_holds_imports(cash_magics, a_package):
+    """``INST = K()`` at the module's top level and ``g`` calling
+    ``INST.run(vals)``: the walk followed functions and classes, not the
+    class of an object the module holds, so a hit after a restart left
+    ``bodypkg.helper`` unimported and the reload below raised."""
+    api = (
+        "import time\nclass K:\n    def run(self, vals):\n        time.sleep(0.3)\n"
+        "        from .helper import scale\n        return sum(scale(v) for v in vals)\n"
+        "INST = K()\ndef g(vals):\n    return INST.run(vals)\n"
+    )
+    cells = _reload_cells(f"open('bodypkg/api.py', 'w').write({api!r})", "from bodypkg.api import g", "bodypkg.helper")
+    ns = cash_magics.shell.user_ns
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    for name in [n for n in sys.modules if n.startswith("bodypkg.")]:
+        del sys.modules[name]
+    cash_magics.tracking_state.reset_session_state()
+    for name in ("g", "y", "z"):
+        ns.pop(name)
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    assert (ns["y"], ns["z"]) == (12, 180)

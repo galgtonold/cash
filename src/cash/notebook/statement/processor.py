@@ -40,8 +40,11 @@ from cash.notebook.cache_key import (
     CacheKeyContext,
     CacheKeyResult,
     compute_cache_key,
+    import_body_modules,
+    imported_since,
     statement_source_hash,
     unkeyed_reach,
+    unloaded_body_imports,
 )
 from cash.notebook.cache_status import CacheStatus, ExecutionResult
 from cash.notebook.call_effects import DigestHandoff
@@ -654,6 +657,7 @@ class StatementProcessor:
         self._past_budget_told: set[str] = set()
         #: Statements already told about NOTEBOOK-ITEMS-UNREAD for a draw.
         self._items_unread_told: set[str] = set()
+        self._by_string_told: set[str] = set()
         #: What a statement's text last took to run, in seconds, or None when
         #: never measured (``CashSession.expected_compute``, set by the
         #: magics): its analysis budget (`analysis_budget_seconds`).
@@ -1557,6 +1561,20 @@ class StatementProcessor:
         log_diagnostic(logger, "NOTEBOOK-ITEMS-UNREAD", what, fix)
         warn_diagnostic(CashWarning, "NOTEBOOK-ITEMS-UNREAD", what, fix)
 
+    def _tell_looked_up_by_string(self, run: StatementRun, reason: str) -> None:
+        """Say once per statement that it runs every time because what it
+        reaches is looked up by a string its trace cannot follow
+        (``KEY-UNTRACKABLE-DEP``): ``m = importlib.import_module(name)`` in
+        a helper, then ``m.scale(x)``. Keyed by its text without the loop's
+        pass marker, so a loop's fifty passes say it once."""
+        told = run.verdict_hash or run.source_hash
+        if told in self._by_string_told:
+            return
+        self._by_string_told.add(told)
+        fix = "import what it needs by name (`from wmod import scale`), so the key names the module."
+        log_diagnostic(logger, "KEY-UNTRACKABLE-DEP", reason, fix)
+        warn_diagnostic(CashCacheIneffectiveWarning, "KEY-UNTRACKABLE-DEP", reason, fix)
+
     def _tell_past_budget(self, run: StatementRun, cost: float) -> None:
         """Say once per statement that it was not cached because working out
         how to key it took longer than it could save
@@ -1823,11 +1841,13 @@ class StatementProcessor:
             # Its key cannot name the function a string spells at run time
             # (``string_lookups``): served, it could be stale.
             who = "The statement" if THE_STATEMENT in by_string else ", ".join(repr(n) for n in sorted(by_string))
-            run.metrics["uncacheable_reasons"].append(
-                f"{who} looks names up by a string (globals(), eval, vars(), getattr on a module): "
-                f"which function that reaches, and what it reads, is known only when it runs, "
-                f"so the statement runs every time"
+            reason = (
+                f"{who} looks names up by a string (globals(), eval, vars(), getattr on a module, "
+                f"importlib.import_module, __import__): which function that reaches, and what it reads, "
+                f"is known only when it runs, so the statement runs every time"
             )
+            run.metrics["uncacheable_reasons"].append(reason)
+            self._tell_looked_up_by_string(run, reason)
             run.skip_cache = True
             run.value_varies = True
             return
@@ -1925,6 +1945,9 @@ class StatementProcessor:
     ) -> ProcessResult | None:
         """Restore *run* from its entry; the finished result, or None when the
         restore failed and the statement must run after all."""
+        # The modules its callees imported in their body as its run did.
+        if metadata is not None:
+            import_body_modules(metadata.body_imported)
         # Read before the restore moves the generators.
         advanced = None if is_control_body(run.code) else carriers_an_entry_advanced(cached_data, self.shell.user_ns)
         reseeded = (
@@ -2168,6 +2191,7 @@ class StatementProcessor:
         lineage = self.tracking_state.variable_lineage
         run.entry_lineages = {name: lineage[name] for name in run.inputs if name in lineage}
         unordered = sparse_order.unordered_sparse(run.inputs, self.shell.user_ns)
+        unloaded = unloaded_body_imports(run.cache_key)
         env_reads: set[str] = set()
         helper_memos.new_statement()
         memos_before = None if run.skip_cache else helper_memos.watched(self.shell.user_ns)
@@ -2314,6 +2338,8 @@ class StatementProcessor:
                 )
         if unordered:
             run.sparse_ordered = sparse_order.were_put_in_order(unordered, self.shell.user_ns) or None
+        if unloaded:
+            run.body_imported = imported_since(unloaded)
         if held:
             run.rebound_modules = rebound_modules(held)
             del held

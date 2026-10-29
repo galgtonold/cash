@@ -224,6 +224,9 @@ class StatementRun:
     #: The inputs holding a sparse matrix the run put in canonical form
     #: (`sparse_order`); None when it put none.
     sparse_ordered: list[str] | None = None
+    #: The modules its callees imported in their body as it ran
+    #: (`cache_key.imported_since`); None when they imported none.
+    body_imported: list[str] | None = None
     #: name -> digest of the environment variables installed code read while
     #: it ran (`env_reads.environment_digests`).
     env_reads: dict[str, str] | None = None
