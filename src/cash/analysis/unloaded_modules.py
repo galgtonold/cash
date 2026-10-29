@@ -451,10 +451,15 @@ class _SourceOnly:
     def _expr(self, node: ast.expr) -> bool:
         if isinstance(node, _COMPREHENSIONS) and self.class_scopes and self.class_scopes[-1]:
             # Its own scope, which the class body's names do not reach:
-            # ``getattr`` in it is the module's, or the builtin.
+            # ``getattr`` in it is the module's, or the builtin. All but its
+            # first iterable, which runs in the class body before the scope
+            # is entered: ``[x for x in map(getattr, ...)]`` reads the
+            # class's ``getattr = abs``.
+            if not self._expr(node.generators[0].iter):
+                return False
             self.import_scopes.append(_NO_IMPORTS)
             try:
-                return self._scoped({}, False, lambda: self._expr(node))
+                return self._scoped({}, False, lambda: self._comprehension_body(node))
             finally:
                 self.import_scopes.pop()
         if isinstance(node, ast.Lambda):
@@ -507,6 +512,13 @@ class _SourceOnly:
 
     def _comprehension(self, node: ast.comprehension) -> bool:
         return self._expr(node.iter) and all(map(self._expr, node.ifs))
+
+    def _comprehension_body(self, node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp) -> bool:
+        """What of comprehension *node* runs in its own scope: all but its
+        first iterable."""
+        first, *later = node.generators
+        values = [node.key, node.value] if isinstance(node, ast.DictComp) else [node.elt]
+        return all(map(self._expr, [*values, *first.ifs])) and all(map(self._comprehension, later))
 
     def _qualified(self, node: ast.expr) -> str | None:
         """``np.linalg.norm`` -> ``numpy.linalg.norm`` through the top level's

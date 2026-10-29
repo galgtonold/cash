@@ -416,6 +416,7 @@ def test_a_module_with_only_its_bytecode_runs_with_a_warning(tmp_path):
         "import operator\nK = max(map(operator.attrgetter('real'), [3]))",
         "getattr = abs\nK = max(map(getattr, [-3]))",
         "import numpy as np\nW = np.zeros(4)\nK = int(np.max([3]))",
+        "class C:\n    getattr = abs\n    K = [x for x in [max(map(getattr, [-3]))]][0]\nK = C.K",
     ],
     ids=[
         "a_str_method_handed_to_map",
@@ -423,12 +424,15 @@ def test_a_module_with_only_its_bytecode_runs_with_a_warning(tmp_path):
         "an_attrgetter_of_a_public_name",
         "a_builtin_name_the_module_always_binds",
         "numpy_arrays_made_from_their_arguments",
+        "a_class_name_read_in_its_comprehensions_first_iterable",
     ],
 )
 def test_a_source_only_top_level_is_still_vouched_for(tmp_path, monkeypatch, top_level):
     """A public method of ``str`` handed on, and a parameter named
     ``getattr`` used in its own function's body, follow from the source,
-    as do ``np.zeros(4)`` and ``np.max([3])``."""
+    as do ``np.zeros(4)`` and ``np.max([3])``, and a class body's
+    ``getattr = abs`` read in its comprehension's first iterable, which runs
+    in the class body."""
     from cash.analysis.unloaded_modules import source_digest
 
     _write(tmp_path, "plainmod.py", f"{top_level}\n\ndef scale(x):\n    return x\n")
