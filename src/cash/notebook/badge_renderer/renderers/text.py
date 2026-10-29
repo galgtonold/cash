@@ -10,6 +10,8 @@ rows one step further in.
 
 from __future__ import annotations
 
+import re
+
 from cash._user_attrs import attribute_or
 
 from .. import theme
@@ -392,16 +394,13 @@ def _decorator_lines(sections: tuple[Section, ...], shown: list[str]) -> list[st
     four loop passes that each read ``0/2495 hit`` counts the passes, not
     the calls, and the two disagree.
     """
-    dec_section = next(
-        (s for s in sections if s.kind is SectionKind.DECORATORS),
-        None,
-    )
-    if dec_section is None or not dec_section.items:
+    groups = [item for s in sections if s.kind is SectionKind.DECORATORS for item in s.items]
+    if not groups:
         return []
     sub_calls = [line for line in shown if line.lstrip().startswith("sub-call ")]
     decorated: list[str] = []
     intercepted: list[str] = []
-    for g in dec_section.items:
+    for g in groups:
         if not isinstance(g, DecoratorCallGroup):
             continue
         total = g.n_calls
@@ -413,7 +412,9 @@ def _decorator_lines(sections: tuple[Section, ...], shown: list[str]) -> list[st
             continue
         # The ``[intercepted]`` tag stays on the line: a grep for it is how a
         # reader of the text finds the calls cash wrapped.
-        if any(f"{short}(" in line for line in sub_calls):
+        # The call's own name, not one ending in it (``mid`` in ``pyramid``).
+        named = re.compile(rf"(?<!\w){re.escape(short)}\(")
+        if any(named.search(line) for line in sub_calls):
             intercepted.append(f"    {short}() [intercepted]: counted in the sub-call lines above ({time_s:.3f}s)")
         else:
             intercepted.append(f"    {short}() [intercepted]: {cached}/{total} cached ({time_s:.3f}s)")
