@@ -193,6 +193,25 @@ def test_a_chain_is_followed_once_for_what_it_hands_on(chain, monkeypatch):
     assert len(followed) <= 2 * (CHAIN + 1)
 
 
+def test_a_chain_longer_than_the_parse_cache_was_is_followed_once(tmp_path, monkeypatch):
+    """Past 256 functions each was parsed into a new tree, which missed
+    every answer kept by the tree: a chain of 400 was followed again from
+    each function, 45 s a run, hits included."""
+    name = f"_cclong_{os.getpid()}_{id(tmp_path)}"
+    n = 400
+    src = "".join(f"def f{i}(x):\n    return f{i + 1}(x) + 1\n" for i in range(n)) + f"def f{n}(x):\n    return x\n"
+    (tmp_path / f"{name}.py").write_text(src, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    module = __import__(name)
+    try:
+        monkeypatch.setattr(namespace_effects, "_HANDOFFS", {})
+        followed = _counting(monkeypatch, namespace_effects, "_handoffs")
+        assert call_key.callee_watched_globals(module.f0, ()) == ()
+        assert len(followed) <= 2 * (n + 1)
+    finally:
+        sys.modules.pop(name, None)
+
+
 def test_a_recursive_helper_is_still_cut_where_it_calls_itself(tmp_path, monkeypatch):
     """The cut answer depends on what was seen: kept apart from a whole one."""
     import ast
@@ -204,3 +223,32 @@ def test_a_recursive_helper_is_still_cut_where_it_calls_itself(tmp_path, monkeyp
     first = namespace_effects.function_handoffs(fdef, namespace, sources)
     again = namespace_effects.function_handoffs(fdef, namespace, sources, frozenset({"push"}))
     assert first == again
+
+
+@pytest.mark.parametrize("first", ["the statement", "the call key"])
+def test_a_hand_off_found_through_one_lookup_is_not_served_to_another(tmp_path, monkeypatch, first):
+    """The statement's check looks a callee up among the notebook's
+    functions, the call key among those of the function's own namespace,
+    and the two differ below the direct callees: ``c`` of a module calls
+    the module's ``helper``, which appends, and the notebook's ``helper``
+    only reads. An answer kept for one was served to the other, so the
+    call key stopped watching ``LOG`` when the statement asked first, and
+    a second ``f()`` in one statement was served from the call cache with
+    its append skipped."""
+    import ast
+
+    name = f"_ccxres_{os.getpid()}_{id(tmp_path)}"
+    (tmp_path / f"{name}.py").write_text("def helper(h):\n    h.append(1)\n\ndef c(h):\n    helper(h)\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    cell = f"from {name} import c\ndef helper(h):\n    return len(h)\nLOG = []\ndef g(h):\n    return c(h)\ndef f():\n    return g(LOG)\n"
+    (tmp_path / "cell.py").write_text(cell)
+    ns: dict = {"__name__": "__main__"}
+    exec(compile(cell, str(tmp_path / "cell.py"), "exec"), ns)
+    calls = [node for node in ast.walk(ast.parse("f()")) if isinstance(node, ast.Call)]
+
+    def statement():
+        return namespace_effects._handed_globals(calls, ns, namespace_effects._live_user_function_source(ns))
+
+    if first == "the statement":
+        statement()
+    assert "LOG" in call_key.callee_watched_globals(ns["f"], ())
