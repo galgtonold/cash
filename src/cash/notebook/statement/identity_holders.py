@@ -18,7 +18,7 @@ What is looked at:
   class, a module or a function comes back as itself and does not count;
 - an ``int`` in the value equal to the ``id()`` of an object the value holds
   or the notebook's variables hold, at any depth; a number below every
-  address this process uses (`_lowest_address`) is not one.
+  address this process has mapped (`_lowest_address`) is not one.
 
 The value is walked through lists, tuples, dicts, sets and the ``__dict__``
 of objects of the user's own classes, not into a library's objects (a
@@ -28,8 +28,10 @@ more than `_MAX_SCANNED` items is not looked inside, and the walk stops at
 than the check is worth. Such a container, and a pandas or NumPy object,
 gives the ints among its first and last items and its index
 (`_sampled_ints`): a registry keyed by ``id()`` keeps them all alike. When
-the notebook holds more than the walk reads, the ids of every object the
-garbage collector tracks rule a number in or out.
+the notebook holds more than the walk reads, a number it could not rule out
+is refused, with the warning: not even the ids of every object the garbage
+collector tracks rule one out, as it does not track a dict of plain values
+or a str.
 """
 
 from __future__ import annotations
@@ -86,7 +88,7 @@ def identity_held_reason(name: str, value: Any, user_ns: dict[str, Any]) -> Iden
     unread: list[Any] = []
     _walk([value], seen, user_kinds, refs, numbers, targets, unread=unread)
     numbers.update(_sampled_ints(unread))
-    found = _held_by_id(name, refs, seen, numbers, user_kinds, user_ns, numbers_only=type(value) is int)
+    found = _held_by_id(name, refs, seen, numbers, user_kinds, user_ns)
     if found is None and targets:
         found = _weakly_held(name, targets, user_ns)
     return found
@@ -99,11 +101,9 @@ def _held_by_id(
     numbers: set[int],
     user_kinds: dict[type, bool],
     user_ns: dict[str, Any],
-    numbers_only: bool = False,
 ) -> IdentityHeld | None:
     """`identity_held_reason`'s answer for what *value* itself holds, from
-    its walk: *refs*, *seen* and *numbers*; *numbers_only* when the value is
-    a bare ``int``."""
+    its walk: *refs*, *seen* and *numbers*."""
     for ref in refs:
         if not issubclass(type(ref), weakref.ReferenceType):
             if _alive(ref):
@@ -122,7 +122,7 @@ def _held_by_id(
                 name,
                 "a weak reference",
             )
-    lowest = max(_LOWEST_ADDRESS, _lowest_address(user_ns))
+    lowest = max(_LOWEST_ADDRESS, _lowest_address())
     candidates = {n for n in numbers if n >= lowest and not n % 8}
     if not candidates:
         return None
@@ -137,14 +137,9 @@ def _held_by_id(
     if not candidates.isdisjoint(held):
         return _holds_an_id(name)
     # The walk left objects unread (a list of 20,000 objects, past
-    # `_MAX_SEEN`): ask the collector for every object it tracks instead,
-    # which the objects of the notebook's classes are among.
-    if candidates.isdisjoint(_tracked_ids()):
-        return None
-    if numbers_only:
-        # A bare number (``x = 1 << 20``) is far likelier a count than an
-        # id(); only a value that keeps one beside other data is refused.
-        return None
+    # `_MAX_SEEN`). The collector's objects do not rule a number out: it
+    # tracks no dict of plain values, no str. A bare one too: ``key =
+    # id(p)`` is as much an id as one kept in a dict.
     return IdentityHeld(
         f"'{name}' holds a number that may be the id() of an object, and the notebook holds too many objects "
         "to rule that out; restored, the object would be another one, so the statement re-runs every time",
@@ -165,13 +160,6 @@ def _holds_an_id(name: str) -> IdentityHeld:
         name,
         "an id()",
     )
-
-
-def _tracked_ids() -> set[int]:
-    """The ``id()`` of every object the garbage collector tracks."""
-    import gc
-
-    return {id(obj) for obj in gc.get_objects()}
 
 
 #: How many items `_sampled_ints` reads from each end of a container it was
@@ -218,12 +206,29 @@ def _sampled_ints(unread: list[Any]) -> set[int]:
     return out
 
 
-def _lowest_address(user_ns: dict[str, Any]) -> int:
-    """Half the lowest address among a few objects of this process: its
-    own (``None``), a small and a large one just made, and the notebook's
-    namespace. An id() the notebook keeps is an address in the same heap;
-    a number below this (``65536``, ``len(df)``) is not looked for."""
-    return min(id(None), id(object()), id(bytearray(1 << 20)), id(user_ns)) // 2
+#: The lowest address a 64-bit macOS process maps: ``__PAGEZERO`` covers
+#: the first 4 GB.
+_MACOS_PAGEZERO = 1 << 32
+
+
+def _lowest_address() -> int:
+    """The lowest address this process has mapped, where it can be read:
+    no object lies below it, so a number below it (``65536``, ``len(df)``)
+    is no id(). On Linux, the first mapping in ``/proc/self/maps``, read
+    each time (a mapping made since can be lower); on 64-bit macOS, the end
+    of ``__PAGEZERO``. Elsewhere (Windows) nothing is known: 0, and only
+    the first 64 KB, mapped by no process, is left out (`_LOWEST_ADDRESS`).
+    Not the addresses of a few objects: how far below them the rest may
+    lie depends on how Python was built."""
+    if sys.platform.startswith("linux"):
+        try:
+            with open("/proc/self/maps", encoding="ascii") as maps:
+                return min(int(line.split("-", 1)[0], 16) for line in maps if line.strip())
+        except (OSError, ValueError):
+            return 0
+    if sys.platform == "darwin" and sys.maxsize > 2**32:
+        return _MACOS_PAGEZERO
+    return 0
 
 
 def weakly_held_reason(name: str, value: Any, user_ns: dict[str, Any]) -> IdentityHeld | None:
