@@ -158,11 +158,13 @@ def _weakly_held(name: str, targets: list[Any], user_ns: dict[str, Any]) -> Iden
     wanted = {id(target) for target in targets}
     seen: set[int] = set()
     user_kinds: dict[type, bool] = {}
+    cut: list[str] = []
     for var, held in list(user_ns.items()):
         if var == name or var.startswith("_") or is_history_name(var):
             continue
         refs: list[Any] = []
-        _walk([held], seen, user_kinds, refs, set(), levels=_WEAK_HOLDER_LEVELS)
+        if not _walk([held], seen, user_kinds, refs, set(), levels=_WEAK_HOLDER_LEVELS):
+            cut.append(var)
         if any(issubclass(type(ref), weakref.ReferenceType) and id(ref()) in wanted for ref in refs):
             return IdentityHeld(
                 f"'{var}' finds '{name}' by a weak reference; restored, '{name}' would be another object, "
@@ -175,7 +177,36 @@ def _weakly_held(name: str, targets: list[Any], user_ns: dict[str, Any]) -> Iden
                     "statement runs every time instead."
                 ),
             )
+    if cut and _weakly_found_by_others(targets):
+        listed = ", ".join(f"'{var}'" for var in sorted(cut))
+        return IdentityHeld(
+            f"cash did not look all the way into {listed} for a weak reference to '{name}'; restored, "
+            f"'{name}' would be another object, so the statement re-runs every time",
+            name,
+            "a weak reference",
+            what=(
+                f"An object in '{name}' has a weak reference to it, and cash looked only "
+                f"{_WEAK_HOLDER_LEVELS} levels into {listed} for it. If one of them keeps it, a copy "
+                f"of '{name}' restored from the cache would leave it finding nothing, so this statement "
+                "runs every time instead."
+            ),
+        )
     return None
+
+
+def _weakly_found_by_others(targets: list[Any]) -> bool:
+    """Whether any of *targets* has a weak reference to it that is not
+    cash's own: one whose callback is cash's code (cash's memos drop their
+    entry when the object goes) is not a variable's."""
+    for target in targets:
+        for ref in weakref.getweakrefs(target):
+            code = getattr(getattr(ref, "__callback__", None), "__code__", None)
+            if code is None or not code.co_filename.startswith(_CASH_DIR):
+                return True
+    return False
+
+
+_CASH_DIR = __file__.rsplit("notebook", 1)[0]
 
 
 #: How deep `_weakly_held` looks into the other variables: ``box.h`` is two
@@ -207,12 +238,15 @@ def _walk(
     of each object to *seen*, each weak reference to *refs* and each
     ``int`` to *numbers*, and with *targets*, each object some weak
     reference points at; with *levels*, no deeper than that below *roots*.
-    False when it stopped at `_MAX_SEEN`."""
+    False when it stopped at `_MAX_SEEN`, and with *levels*, also when it
+    left an object to look into: below the last level, or in a container of
+    over `_MAX_SCANNED` items."""
     level = roots
+    complete = True
     while level:
         if levels is not None:
             if levels <= 0:
-                return True
+                return complete and not any(_looked_into(item, seen, user_kinds) for item in level)
             levels -= 1
         nxt: list[Any] = []
         for item in level:
@@ -253,10 +287,23 @@ def _walk(
             if len(seen) > _MAX_SEEN:
                 return False
             if len(items) > _MAX_SCANNED:
+                complete = complete and levels is None
                 continue
             nxt.extend(items)
         level = nxt
-    return True
+    return complete
+
+
+def _looked_into(item: Any, seen: set[int], user_kinds: dict[type, bool]) -> bool:
+    """Whether `_walk` would look into *item*, or keep it as a reference."""
+    kind = type(item)
+    if kind is int or id(item) in seen:
+        return False
+    return (
+        kind in _CONTAINERS
+        or issubclass(kind, (list, dict, set, _REFERENCES, _WEAK_CONTAINERS))
+        or _users(kind, user_kinds)
+    )
 
 
 def _notebook_own(kind: type, user_kinds: dict[type, bool]) -> bool:

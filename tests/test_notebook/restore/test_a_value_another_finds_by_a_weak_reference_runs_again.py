@@ -22,6 +22,15 @@ HOLDERS = {
         "r = sum(row.id for row in box.h())",
     ),
     "a weak reference": ("wr = weakref.ref(BIG)", "r = sum(row.id for row in wr())"),
+    "a weak reference four levels down": (
+        "deep = [[[weakref.ref(BIG)]]]",
+        "r = sum(row.id for row in deep[0][0][0]())",
+    ),
+    # Deeper than cash looks: it says it did not look all the way, and reruns.
+    "a weak reference five levels down": (
+        "deep = [[[[weakref.ref(BIG)]]]]",
+        "r = sum(row.id for row in deep[0][0][0][0]())",
+    ),
     "a WeakValueDictionary of one of its items": (
         "d = weakref.WeakValueDictionary()\nd['first'] = BIG[0]",
         "r = d['first'].id + len(BIG)",
