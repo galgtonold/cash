@@ -42,7 +42,7 @@ from cash.notebook.cache_key import (
 from cash.notebook.cache_status import CacheStatus, ExecutionResult
 from cash.notebook.call_effects import DigestHandoff
 from cash.notebook.compiled_source import register_cell_source
-from cash.notebook.consumables import drawn_stream_inputs, with_other_names
+from cash.notebook.consumables import drawn_stream_inputs, with_other_names, without_read_handles
 from cash.notebook.per_item_reruns import MIN_COST_S as PER_ITEM_MIN_COST_S
 from cash.notebook.read_handles import reaches_read_handle
 from cash.notebook.statement import reducer_writes, sparse_order
@@ -1997,6 +1997,8 @@ class StatementProcessor:
         streams = drawn_stream_inputs(run.tree, run.inputs, run.outputs, self.shell.user_ns)
         if streams:
             streams = with_other_names(streams, self.shell.user_ns, self.tracking_state.variable_lineage)
+            streams = without_read_handles(streams, self.shell.user_ns)
+        if streams:
             run.carriers_advanced = frozenset(run.carriers_advanced or ()) | frozenset(streams)
         if hidden and not run.skip_cache and execution.result is not None and execution.result.success:
             drawn = hidden_generators.moved(hidden)

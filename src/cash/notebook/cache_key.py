@@ -1320,6 +1320,7 @@ def compute_cache_key(
         f"{source_hash}:{':'.join(input_hashes)}{func_component}{module_component}"
         f"{occurrence_component}{callee_component}"
     )
+    unmatched = bool(unfollowed or (by_string and not followed) or unkeyed_modules)
     # What the environment reads in the statement return and the data of the
     # user's modules it reads hold: a new value is a new entry. Last, and only
     # when there is some, so every other key is unchanged.
@@ -1327,6 +1328,9 @@ def compute_cache_key(
     combined_hash_str += reads
     combined_hash = hashlib.sha256(combined_hash_str.encode("utf-8")).hexdigest()
     cache_key = f"{namespace}:{combined_hash}"
+    if unmatched:
+        stable = f"{source_hash}:{':'.join(input_hashes)}{occurrence_component}"
+        _remember_draw_key(cache_key, f"{namespace}:draw:" + hashlib.sha256(stable.encode("utf-8")).hexdigest())
     if ctx.reads is not None:
         if reads:
             ctx.reads.by_key[cache_key] = reads
@@ -1360,3 +1364,26 @@ def compute_cache_key(
     if unfollowed or (by_string and not followed) or unkeyed_modules:
         result.matches_nothing = True
     return result
+
+
+#: The key a draw moves a generator or stream by (`draw_key`), for each key
+#: built to match no entry, most recent last.
+_DRAW_KEYS: dict[str, str] = {}
+_DRAW_KEYS_MAX = 4096
+
+
+def _remember_draw_key(cache_key: str, stable: str) -> None:
+    _DRAW_KEYS[cache_key] = stable
+    if len(_DRAW_KEYS) > _DRAW_KEYS_MAX:
+        del _DRAW_KEYS[next(iter(_DRAW_KEYS))]
+
+
+def draw_key(cache_key: str) -> str:
+    """The key a draw of the statement keyed *cache_key* moves what it drew
+    from by: *cache_key* itself, but for a key built to match no entry
+    (code reaching a name by a string, ``NS = next(NSS)(globals())``),
+    whose random part differs on every build. Then its source and inputs'
+    lineages, which the runtime and the simulation read alike: the moved
+    ``NSS`` came out at another lineage in each, and the simulation ran the
+    draw again."""
+    return _DRAW_KEYS.get(cache_key, cache_key)
