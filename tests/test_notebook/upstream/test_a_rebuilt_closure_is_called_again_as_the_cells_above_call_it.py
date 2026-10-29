@@ -11,6 +11,8 @@ restart and Run All give 1.
 
 from __future__ import annotations
 
+import pytest
+
 from tests._cell_driver import run_cash_cell
 
 MAKE = (
@@ -62,6 +64,29 @@ def test_a_rebind_reached_through_a_dict_is_called_on_the_rebuilt_closure(cash_m
     make = MAKE.replace("EXTRA", "")
     hooks = "draw, rebind = make(BIG)\nHOOKS = {'r': rebind}\ndef setup():\n    HOOKS['r']([0])"
     cells = [make, hooks, "setup()", READER, "BIG.append({'id': -1})"]
+    ns = cash_magics.shell.user_ns
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    assert ns["y"] == 1
+    run_cash_cell(cash_magics, READER, cells=cells)
+    assert ns["y"] == 1
+
+
+#: ``(what holds rebind, how setup calls it)``: a level deeper than a dict,
+#: or in an object.
+DEEPER = {
+    "a_nested_dict": ("HOOKS = {'a': {'r': rebind}}", "HOOKS['a']['r']([0])"),
+    "a_namespace": ("import types\nHOOKS = types.SimpleNamespace(r=rebind)", "HOOKS.r([0])"),
+}
+
+
+@pytest.mark.parametrize("holder", list(DEEPER))
+def test_a_rebind_held_deeper_is_called_on_the_rebuilt_closure(cash_magics, holder):
+    """As above with ``HOOKS = {'a': {'r': rebind}}`` or a ``SimpleNamespace``:
+    the holder was not looked into, so the reader got 2001."""
+    hold, call = DEEPER[holder]
+    hooks = f"draw, rebind = make(BIG)\n{hold}\ndef setup():\n    {call}"
+    cells = [MAKE.replace("EXTRA", ""), hooks, "setup()", READER, "BIG.append({'id': -1})"]
     ns = cash_magics.shell.user_ns
     for cell in cells:
         run_cash_cell(cash_magics, cell, cells=cells)
