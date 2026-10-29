@@ -74,6 +74,38 @@ HOLDERS = {
         "class R:\n    pass\nbig = [R() for _ in range(12000)]\nbig[-1].k = id(p.child)",
         "r = big[-1].k == id(p.child)",
     ),
+    "an id of a part of an item of a big list": (
+        "objs = [P() for _ in range(12000)]\nreg = {id(objs[7].child): 'c'}",
+        "r = reg.get(id(objs[7].child)) == 'c'",
+    ),
+    "an id in a pandas column of objects": (
+        "import pandas as pd\ndf = pd.DataFrame({'ref': [id(p.child)]}, dtype=object)",
+        "r = df['ref'][0] == id(p.child)",
+    ),
+    "an id in a pandas series of integers": (
+        "import pandas as pd\ns = pd.Series([id(p.child)])",
+        "r = int(s[0]) == id(p.child)",
+    ),
+    "a weak reference in a pandas series": (
+        "import pandas as pd\ns = pd.Series([weakref.ref(p.child)], dtype=object)",
+        "r = s[0]() is p.child",
+    ),
+    "an id in a partial": ("import functools\nf = functools.partial(max, id(p.child))", "r = f(0) == id(p.child)"),
+    "an id in an argparse namespace": (
+        "import argparse\nns = argparse.Namespace(k=id(p.child))",
+        "r = ns.k == id(p.child)",
+    ),
+    "a deque in an argparse namespace": (
+        "import argparse\nfrom collections import deque\nns = argparse.Namespace(q=deque([id(p.child)]))",
+        "r = ns.q[0] == id(p.child)",
+    ),
+    "an id in an array.array": ("import array\na = array.array('q', [id(p.child)])", "r = a[0] == id(p.child)"),
+    "an id in a structured array": (
+        "import numpy as np\narr = np.array([(1, id(p.child))], dtype=[('a', 'i8'), ('b', 'i8')])",
+        "r = int(arr['b'][0]) == id(p.child)",
+    ),
+    "an id as hex text": ("reg = {hex(id(p.child)): 'c'}", "r = reg.get(hex(id(p.child))) == 'c'"),
+    "an id as decimal text": ("key = str(id(p.child))", "r = key == str(id(p.child))"),
 }
 
 
@@ -103,6 +135,9 @@ def test_a_run_all_finds_the_new_object(cash_magics, cash_instance, holder):
         "ns = [1_700_000_000_000_000_000 + 8 * i for i in range(50)]",
         "big = [(j, j * 8) for j in range(20000)]",
         "import numpy as np\narr = np.arange(0, 800_000, 8)",
+        "import pandas as pd\ndf = pd.DataFrame({'a': range(5), 'b': ['x', 'y', 'z', 'u', 'v']})",
+        "import argparse\nns = argparse.Namespace(k=3, name='run')",
+        "words = ['a word', '1234', 'deadbeef', '0x12']",
     ],
 )
 def test_a_value_not_finding_an_object_by_identity_is_restored(cash_magics, cash_instance, value):

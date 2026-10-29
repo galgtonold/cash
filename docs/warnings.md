@@ -2055,7 +2055,7 @@ the top.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/statement/identity_holders.py:identity_held_reason @397d77c9, cash/notebook/statement/processor.py:StatementProcessor._warn_identity_held @a5aa8bda, cash/notebook/statement/processor.py:_pointed_into @41961608 -->
+<!-- claim: cash/notebook/statement/identity_holders.py:identity_held_reason @bc641899, cash/notebook/statement/processor.py:StatementProcessor._warn_identity_held @a5aa8bda, cash/notebook/statement/processor.py:_pointed_into @41961608 -->
 **What happened.** A value the statement binds finds another object by
 identity, not by holding it: a weak reference (`wr = weakref.ref(p.child)`,
 a `WeakValueDictionary`) to an object the value does not hold, or an `int`
@@ -2065,11 +2065,16 @@ as it was stored, while the cell that builds `p` binds a new one: the weak
 reference finds nothing, and the `id()` matches nothing. So cash did not
 store the statement. The message names the variable and says which of the
 two it holds. Lists, tuples, dicts, sets and deques (a subclass's items
-and its attributes, a named tuple's fields), integer NumPy arrays, and the
-attributes and slots of your own objects and of a `SimpleNamespace` are
-looked through, not a library's objects. A value of more than
-200,000 objects counts too, since it could hold either. An `id()` turned
-into text (`hex(id(x))`) is not recognised. It is shown once per
+and its attributes, a named tuple's fields), integer and structured NumPy
+arrays, pandas frames, series and indexes, `array.array`, a
+`functools.partial`'s arguments, the attributes of an `argparse.Namespace`,
+and the attributes and slots of your own objects and of a `SimpleNamespace`
+are looked through, and an `id()` turned into text (`hex(id(x))`,
+`str(id(x))`) counts as one. Another library's object is not looked
+inside: a value holding one next to an `id()` or a weak reference runs
+every time too, since that object could hold one as well. So does a value
+of more than 200,000 objects, or one whose `id()` could be of an object
+below more than 200,000 the notebook holds. It is shown once per
 statement.
 
 A loop that changes an object in place (`p.update(i)`) is not restored

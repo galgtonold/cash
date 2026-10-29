@@ -236,15 +236,18 @@ the statement every time instead of storing it:
   a library's registry or a closure, or the statement is in a loop body. See
   [Mutating an object created in an earlier cell](known-limitations.md#mutating-an-object-created-in-an-earlier-cell).
 
-<!-- claim: cash/notebook/statement/identity_holders.py:identity_held_reason @397d77c9 -->
+<!-- claim: cash/notebook/statement/identity_holders.py:identity_held_reason @bc641899 -->
 - **Holds a weak reference, or the `id()` of an object the notebook holds**:
   `wr = weakref.ref(p.child)`, a `WeakValueDictionary`, `reg = {id(p): ...}`.
   Restored, the value would point at the object as it was when it was
   stored, while the statement that binds `p` binds a new one. It runs again,
-  as in plain Python. Ids are looked for in lists, tuples, dicts, sets,
-  deques, integer NumPy arrays and the attributes and slots of objects of
-  your own classes and of a `SimpleNamespace`, not in a library's objects.
-  A value too big to look through runs again too.
+  as in plain Python. Ids, also as text (`hex(id(x))`), are looked for in
+  lists, tuples, dicts, sets, deques, NumPy arrays, pandas objects,
+  `array.array`, a `functools.partial`, an `argparse.Namespace` and the
+  attributes and slots of objects of your own classes and of a
+  `SimpleNamespace`. A value too big to look through runs again too, and so
+  does one holding another library's object next to an id or a weak
+  reference.
 
 A line that is an IPython magic or a shell command (`%load_ext autoreload`,
 `!ls`) shows `Runs an IPython magic or shell command`: cash cannot see what it

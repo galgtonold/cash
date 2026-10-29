@@ -180,7 +180,7 @@ puts the stored state back into the object itself, so other names for it, a
 `weakref` to it and a dict keyed by its `id()` still find it, as after a
 plain run.
 
-<!-- claim: cash/notebook/statement/in_place.py:refusal @4357df4e, cash/notebook/statement/in_place.py:_held_by_the_notebook @50e2b97d, cash/notebook/statement/processor.py:StatementProcessor._cheap_to_rerun @1a1db567, cash/notebook/statement/in_place.py:bound_as_a_copy @57eb0eea -->
+<!-- claim: cash/notebook/statement/in_place.py:refusal @4357df4e, cash/notebook/statement/in_place.py:_held_by_the_notebook @2eb5bc52, cash/notebook/statement/processor.py:StatementProcessor._cheap_to_rerun @1a1db567, cash/notebook/statement/in_place.py:bound_as_a_copy @57eb0eea -->
 Only a list, a dict, a set, or an object of your own class pickled the default
 way is restored into. An object of another kind the loop only assigns into
 (`arr[i] = v` on a NumPy array) is bound to the stored copy, as before, when
@@ -192,8 +192,9 @@ inside another container; when a `weakref` the notebook holds (in a
 variable, a container at any depth (a deque, a `SimpleNamespace` or an
 object's slots among them), an attribute of a class of yours, such as a
 registry filled in `__init__`, or a `weakref.finalize`) points at an object
-it holds, or such a container or an integer NumPy array keeps one's `id()`
-as a key, a value or an item (what it holds comes back as copies; both are checked again at each
+it holds, or such a container, a NumPy array, a pandas object, a
+`functools.partial` or an `argparse.Namespace` keeps one's `id()` as a key,
+a value or an item, or as text (`hex(id(x))`) (what it holds comes back as copies; both are checked again at each
 restore); when the notebook holds a container of more than 10,000 items that
 holds anything but numbers, strings and the like, which is not looked inside;
 when a function it calls writes a module it imports;
