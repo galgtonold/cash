@@ -5,7 +5,9 @@ import builtins
 import logging
 import sys
 import textwrap
-from typing import TYPE_CHECKING
+import types
+from collections.abc import Iterable, Mapping
+from typing import TYPE_CHECKING, Any
 
 from cash._user_attrs import has_attribute
 from cash.control_markers import iteration_digest
@@ -18,6 +20,7 @@ from .._trace import trace_event
 from ..cache_key import statement_source_hash
 from ..call_key import TooMuchToLookThrough, holds_a_closure_with_state
 from ..stateful_carriers import carrier_kind_from_producer, stateful_carrier_kind
+from ..statement.mutation_routing import _functions_in
 from ._types import ClassificationResult, ReexecutionPlan, SimulationResult, latest_producer
 from .carrier_fills import fills_carrier
 from .figure_writes import FigureWriteGuard
@@ -718,6 +721,11 @@ class ReexecutionPlanner:
         ``draw`` read all of ``BIG`` where a Run All gives ``len([0])``. A
         call of a function whose closure keeps nothing (`holds_a_closure_with_state`)
         changes nothing a re-run undoes and is left alone.
+
+        So does a later statement binding what holds such a function
+        (``HOOKS = {'r': rebind}``): left as it was, it held the old
+        ``rebind``, and ``setup()`` calling ``HOOKS['r']([0])`` rebound the
+        old closure, not the rebuilt ``draw``'s.
         """
         scheduled = set(stmts_to_run_indices)
         user_ns = self._user_ns()
@@ -737,7 +745,10 @@ class ReexecutionPlanner:
             for v in sorted(simulation_trace[i].outputs):
                 for p in range(i + 1, len(simulation_trace)):
                     entry = simulation_trace[p]
-                    if p in scheduled or v not in entry.inputs or v not in _called_names(entry.stmt_code):
+                    if p in scheduled or v not in entry.inputs:
+                        continue
+                    called = v in _called_names(entry.stmt_code)
+                    if not called and not _holds_it(entry.outputs, user_ns, user_ns.get(v)):
                         continue
                     if not with_state(v):
                         break
@@ -1076,6 +1087,14 @@ def _rebuilds_of_what_it_changes(simulation_trace: list, index: int, consumables
             return None
         rebuilds.update(writers)
     return rebuilds
+
+
+def _holds_it(names: Iterable[str], user_ns: Mapping[str, Any], fn: Any) -> bool:
+    """Whether one of *names* is bound to a dict, list or tuple holding *fn*
+    (``HOOKS = {'r': rebind}``), as `closure_writers_reached` reaches it."""
+    if type(fn) is not types.FunctionType:
+        return False
+    return any(item is fn for held in map(user_ns.get, names) for item in _functions_in(held))
 
 
 def _called_names(code: str) -> frozenset[str]:
