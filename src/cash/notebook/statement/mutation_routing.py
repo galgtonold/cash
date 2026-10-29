@@ -653,24 +653,47 @@ _CONTROL_STATEMENTS = (ast.For, ast.AsyncFor, ast.While, ast.If, ast.With, ast.A
 _CONTROL_BODY_FIELDS = frozenset({"body", "orelse", "finalbody", "handlers"})
 
 
-#: How many items of a container `functions_in` looks at.
+#: How many items `functions_in` looks at in all.
 _ITEMS_LOOKED_AT = 1000
+#: How many levels of holders `functions_in` looks down.
+_DEPTH_LOOKED_AT = 3
 
 
 def functions_in(value: Any) -> list[types.FunctionType]:
-    """*value* if a function, or the functions an exact dict, list or tuple
-    of at most `_ITEMS_LOOKED_AT` items holds."""
+    """*value* if a function, or the functions an exact dict, list, tuple or
+    ``SimpleNamespace`` holds, down to `_DEPTH_LOOKED_AT` levels
+    (``HOOKS = {'a': {'r': rebind}}``), `_ITEMS_LOOKED_AT` items in all."""
     if type(value) is types.FunctionType:
         return [value]
-    if type(value) is dict:
-        items = list(value.values())
-    elif type(value) in (list, tuple):
-        items = list(value)
-    else:
-        return []
-    if len(items) > _ITEMS_LOOKED_AT:
-        return []
-    return [item for item in items if type(item) is types.FunctionType]
+    found: list[types.FunctionType] = []
+    level, seen, looked = [value], set(), 0
+    for _depth in range(_DEPTH_LOOKED_AT):
+        below = []
+        for holder in level:
+            if id(holder) in seen:
+                continue
+            seen.add(id(holder))
+            kind = type(holder)
+            if kind is dict:
+                items = list(holder.values())
+            elif kind in (list, tuple):
+                items = list(holder)
+            elif kind is types.SimpleNamespace:
+                items = list(vars(holder).values())
+            else:
+                continue
+            looked += len(items)
+            if looked > _ITEMS_LOOKED_AT:
+                return found
+            for item in items:
+                if type(item) is types.FunctionType:
+                    found.append(item)
+                else:
+                    below.append(item)
+        if not below:
+            break
+        level = below
+    return found
 
 
 #: How many functions `callees_changing_their_closure` looks at.
