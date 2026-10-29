@@ -96,3 +96,55 @@ def test_a_container_keeping_its_items_in_its_attributes_is_sized_by_them():
     slotted.extra = np.zeros(1_000_000)
     assert estimate_object_size(slotted) > 7_000_000
     assert memory_footprint(slotted) > 7_000_000
+
+
+def _counting_cell(base: str, names: list[str], slots: str = "") -> str:
+    body = "".join(
+        f"    def {m}(self, *a, **k):\n        CALLS.append('{m}')\n        return {base}.{m}(self, *a, **k)\n"
+        for m in names
+    )
+    return f"import collections, time\nCALLS = []\nclass C({base}):\n{slots}{body}"
+
+
+_SEQ = ["__iter__", "__len__", "__getitem__", "__contains__", "__eq__"]
+_MAP = [*_SEQ, "keys", "values", "items", "get", "copy"]
+
+
+@pytest.mark.parametrize(
+    ("cls", "make", "read"),
+    [
+        (_counting_cell("tuple", _SEQ), "c = C([[1], 2])", "tuple.__getitem__(c, 1)"),
+        (_counting_cell("frozenset", _SEQ), "c = C([1, 2])", "frozenset.__len__(c)"),
+        (
+            _counting_cell("collections.Counter", _MAP),
+            "c = C()\ndict.__setitem__(c, 'k', 3)",
+            "dict.__getitem__(c, 'k')",
+        ),
+        (
+            _counting_cell("list", _SEQ, "    __slots__ = ('extra',)\n"),
+            "c = C()\nlist.append(c, [1])\nc.extra = [2]",
+            "(list.__len__(c), c.extra)",
+        ),
+    ],
+    ids=["tuple", "frozenset", "Counter", "list with slots"],
+)
+def test_storing_and_restoring_a_container_runs_none_of_its_methods(cash_magics, cash_instance, cls, make, read):
+    """Copied and pickled by the class's own route, a tuple, frozenset,
+    Counter or slotted list subclass had its ``__iter__``, ``__len__``,
+    ``keys`` or ``__getitem__`` run as cash stored it, restored it and
+    put it back into its holder."""
+    from tests._cell_driver import run_cash_cell
+
+    cash_instance.config.min_execution_time_to_cache_seconds = 0.0
+    cash_instance.config.call_cost_floor_seconds = 0.0
+    cells = [cls, "time.sleep(0.05)\n" + make, f"seen = ({read}, len(CALLS))  # @cash:no-cache"]
+    ns = cash_magics.shell.user_ns
+    statuses = []
+    for _ in range(3):
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+            if cell is cells[1]:
+                statuses.append([str(s["status"]) for s in cash_magics._last_cell_metrics["statements"]])
+        assert ns["seen"][1] == 0, ns["CALLS"]
+        assert type(ns["c"]).__name__ == "C"
+    assert "RESTORED" in str(statuses[-1][0]), statuses  # ``c = C(...)``, stored and restored

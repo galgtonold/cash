@@ -19,7 +19,7 @@ import types
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from cash._user_attrs import instance_of, own_dict
+from cash._user_attrs import builtin_base, instance_of, own_dict
 from cash.decorator.user_code import is_user_class
 from cash.tracking.randomness.state import object_carrier_state, rng_carrier_kind, same_carrier_state
 from cash.tracking.trace_recorder import is_user_code
@@ -45,14 +45,17 @@ def _children(obj: Any) -> Iterable[tuple[str, Any]]:
         if len(attrs) <= _MODULE_WIDTH and is_user_code(obj):
             yield from ((f".{k}", v) for k, v in list(attrs.items()) if not k.startswith("__"))
         return
-    if issubclass(type(obj), (list, tuple, set, frozenset)):
-        if len(obj) <= _WIDTH:
-            for i, item in enumerate(obj):
+    # By the builtin type's own methods: a subclass's ``__len__`` or
+    # ``__iter__`` may print or count, where plain Python never asked.
+    base = builtin_base(obj)
+    if base in (list, tuple, set, frozenset):
+        if base.__len__(obj) <= _WIDTH:
+            for i, item in enumerate(base.__iter__(obj)):
                 yield f"[{i}]", item
         return
-    if issubclass(type(obj), dict):
-        if len(obj) <= _WIDTH:
-            for k, v in obj.items():
+    if base is dict:
+        if dict.__len__(obj) <= _WIDTH:
+            for k, v in dict.items(obj):
                 yield f"[{k!r}]", v
         return
     if instance_of(obj, types.FunctionType):
