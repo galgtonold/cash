@@ -1,6 +1,6 @@
 """Values keeping id()s where the walk does not look: a registry of more
 items than it reads, a pandas Series indexed by ids, and round numbers in a
-big notebook that are no ids (from the batch 16 review)."""
+big notebook that are no ids."""
 
 from tools.plain_checker import notebook
 
