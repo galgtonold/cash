@@ -27,7 +27,11 @@ def test_a_draw_runs_again_and_advances_the_iterator(statement_processor, mock_s
     first = _run(statement_processor, "header = parse(next(rows))")
     second = _run(statement_processor, "header = parse(next(rows))")
     assert first["status"] == second["status"] == CacheStatus.COMPUTED
-    assert any("iterator or stream" in r for r in second["uncacheable_reasons"])
+    # Said as a draw, or as the change in place the first run was seen
+    # making to ``rows``, handed to ``parse`` inside ``next(rows)``.
+    assert any(
+        "'rows', an iterator or stream" in r or "In-place mutation on: rows" in r for r in second["uncacheable_reasons"]
+    )
     assert mock_shell.user_ns["header"] == "a"
     assert list(mock_shell.user_ns["rows"]) == ["b"]
 

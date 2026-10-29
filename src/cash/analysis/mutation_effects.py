@@ -44,8 +44,10 @@ from .callee_effects import (
     function_arg_mutations,
     handed_or_called_on,
     iterated_sources,
+    loop_target_parts,
     mutating_partials,
     partial_arg_mutations,
+    read_by_helpers,
     reduce_free_mutations,
     resolve_function_def,
     stateful_closure_vars,
@@ -67,6 +69,7 @@ from .mutations import (
     subscript_view_bindings,
     top_level_calls,
     unrooted_write,
+    write_into_a_return,
     writer_aliases,
 )
 from .namespace_effects import (
@@ -896,9 +899,10 @@ def _watch_statements(stmts: list[ast.stmt], names: _LoopNames, found: set[str],
     for stmt in stmts:
         if isinstance(stmt, _COMPOUND):
             if isinstance(stmt, ast.For):
-                roots = _iterable_roots(stmt.iter, names)
-                for target in _loop_targets(stmt):
-                    targets.setdefault(target, set()).update(roots)
+                for part, values in loop_target_parts(stmt.target, stmt.iter):
+                    roots = _iterable_roots(values, names) if values is not None else set()
+                    for target in (n.id for n in ast.walk(part) if isinstance(n, ast.Name)):
+                        targets.setdefault(target, set()).update(roots)
             if isinstance(stmt, (ast.If, ast.While)):
                 found |= _handed_to_unknown_code(_as_statement(stmt.test), names, bare=False)
             if isinstance(stmt, ast.With):
@@ -948,7 +952,7 @@ def _handed_to_unknown_code(tree: ast.Module, names: _LoopNames, *, bare: bool) 
         if call_only_reads(call, arg_names, namespace, bound_by_now=False):
             continue
         for arg in args:
-            out |= argument_roots(arg, {})
+            out |= argument_roots(arg, {}) | read_by_helpers(arg, names.user_source)
     return out
 
 
@@ -1417,6 +1421,10 @@ def statement_effects(
     unrooted = (
         unrooted_write(tree, {**namespace_writer_aliases(tree, namespace), **writer_aliases(tree)}) if tree else None
     )
+    if unrooted is None and tree is not None:
+        unrooted = write_into_a_return(
+            tree, lambda name: _LoopNames(lambda _n: False, namespace, resolve_source).user_source(name) is not None
+        )
     if unrooted is not None:
         # ``globals()[name][7].x = -3``: which variable it changes is not
         # known before it runs, so each is taken as changed.

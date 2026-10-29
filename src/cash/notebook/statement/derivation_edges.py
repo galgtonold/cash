@@ -679,7 +679,7 @@ def bump_derived_lineages(
         if src_lineage is None:
             continue
         for target in sorted(derivation_edges.get(src, ())):
-            if target in inputs or target in outputs or target in kept:
+            if target in outputs or target in kept:
                 # Creation edge (``v = a[...]``): do NOT bump the base. Nor
                 # an output: the statement gave it its lineage just now.
                 continue
