@@ -81,3 +81,71 @@ def test_a_relative_import_in_a_package_function_is_read_again(cash_magics, a_pa
     for cell in cells:
         run_cash_cell(cash_magics, cell, cells=cells)
     assert (ns["y"], ns["z"]) == (12, 180)
+
+
+def _reload_cells(setup: str, fn: str, helper: str) -> list[str]:
+    path = helper.replace(".", "/") + ".py"
+    return [
+        setup + f"\nopen({path!r}, 'w').write('def scale(x):\\n    return x * 2\\n')",
+        fn,
+        "y = g([1, 2, 3])",
+        "import importlib, sys\n"
+        f"open({path!r}, 'w').write('def scale(x):\\n    return x * 30\\n')\n"
+        f"importlib.reload(sys.modules[{helper!r}])",
+        "z = g([1, 2, 3])",
+    ]
+
+
+def test_an_import_in_a_method_the_function_calls_is_read_again(cash_magics, a_package):
+    """``g`` calls ``K().run(vals)``, whose body does ``from .helper import
+    scale``: the walk resolved ``K`` in the notebook, which does not hold
+    it, so ``bodypkg/helper.py`` was in no key."""
+    api = (
+        "import time\nclass K:\n    def run(self, vals):\n        time.sleep(0.05)\n"
+        "        from .helper import scale\n        return sum(scale(v) for v in vals)\n"
+        "def g(vals):\n    return K().run(vals)\n"
+    )
+    cells = _reload_cells(f"open('bodypkg/api.py', 'w').write({api!r})", "from bodypkg.api import g", "bodypkg.helper")
+    ns = cash_magics.shell.user_ns
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    assert (ns["y"], ns["z"]) == (12, 180)
+
+
+def test_a_relative_import_of_a_module_gone_from_sys_modules_is_read_again(cash_magics, a_package):
+    """``del sys.modules['bodypkg.api']`` after ``from bodypkg.api import
+    g``: the package was read off the loaded module whose file ``g``'s code
+    is in, found no more, and the relative import was dropped. It is read
+    off ``g``'s own globals."""
+    api = "import time\ndef g(vals):\n    time.sleep(0.05)\n    from .helper import scale\n    return sum(scale(v) for v in vals)\n"
+    cells = _reload_cells(
+        f"open('bodypkg/api.py', 'w').write({api!r})",
+        "import sys\nfrom bodypkg.api import g\ndel sys.modules['bodypkg.api']",
+        "bodypkg.helper",
+    )
+    ns = cash_magics.shell.user_ns
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    assert (ns["y"], ns["z"]) == (12, 180)
+
+
+def test_a_package_function_importing_its_submodule_does_not_rewrite_itself(cash_magics, a_package):
+    """``from .helper import scale`` in a function of ``bodypkg/__init__.py``
+    sets ``bodypkg.helper`` as the import system does. Taken for state the
+    call set, ``y = g(...)`` became the writer of ``g``, moved its lineage,
+    and a Run All after a restart ran it again below the reload of
+    ``helper``: ``y`` was 180 where plain Python gives 12."""
+    init = "import time\ndef g(vals):\n    time.sleep(0.05)\n    from .helper import scale\n    return sum(scale(v) for v in vals)\n"
+    cells = _reload_cells(
+        f"open('bodypkg/__init__.py', 'w').write({init!r})", "from bodypkg import g", "bodypkg.helper"
+    )
+    ns = cash_magics.shell.user_ns
+    lineage = cash_magics.tracking_state.variable_lineage
+    for cell in cells[:2]:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    before = lineage["g"]
+    run_cash_cell(cash_magics, cells[2], cells=cells)
+    assert lineage["g"] == before
+    for cell in cells[3:]:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    assert (ns["y"], ns["z"]) == (12, 180)
