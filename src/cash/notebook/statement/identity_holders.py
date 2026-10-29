@@ -17,26 +17,35 @@ What is looked at:
   and not inside the value itself (a restore rebuilds those together); a
   class, a module or a function comes back as itself and does not count;
 - an ``int`` in the value equal to the ``id()`` of an object the value holds
-  or the notebook's variables hold, at any depth, and an integer NumPy
-  array holding one.
+  or the notebook's variables hold, at any depth, an integer NumPy array
+  holding one, and one turned into text (``hex(id(x))``, `as_address`).
 
 The value is walked through lists, tuples, dicts, sets, deques and their
 subclasses (read through the builtin type's own methods, never the
 class's), a NumPy array of objects, and the attributes and slots of
-objects of the user's own classes and of a ``SimpleNamespace``, not into a
-library's objects: a pandas frame keeps weak references between its own
-parts, which a restore rebuilds together, and a stream the ident of its
-thread, which no object of the notebook's is. A container of
-more than `_MAX_SCANNED` numbers, strings and the like, or of tuples of
-them (records), is read at C speed rather than item by item; one of the
-notebook's holding other objects is checked for the ``id()`` of its items,
-not of what they hold. A value the
-walk cannot finish within `_MAX_SEEN` objects, or a container it cannot
-read, could hold either, so the statement runs again with the warning.
+objects of the user's own classes and of a ``SimpleNamespace``. A library's
+object is read only as `library_parts` knows it (a pandas object's columns,
+a ``functools.partial``'s arguments), never attribute by attribute: a
+pandas frame keeps weak references between its own parts, which a restore
+rebuilds together, and a stream the ident of its thread, which no object of
+the notebook's is. One it does not know could hold an ``id()`` or a weak
+reference too, so a value holding one next to either runs again. A
+container of more than `_MAX_SCANNED` numbers, strings and the like, or of
+tuples of them (records), is read at C speed rather than item by item; one
+of the notebook's holding objects of one class of the user's with only such
+attributes is checked for the ``id()`` of its items at C speed too. A value
+the walk cannot finish within `_MAX_SEEN` objects, or a container it cannot
+read, could hold either, and so could the notebook's when a candidate
+``id()`` is looked for below more: the statement runs again with the
+warning.
 """
 
 from __future__ import annotations
 
+import array
+import functools
+import operator
+import re
 import sys
 import types
 import weakref
@@ -48,7 +57,7 @@ from cash.closure_sharing import _slot_readers
 from cash.install_paths import is_user_code_module
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
-__all__ = ["IdentityHeld", "identity_held_reason"]
+__all__ = ["IdentityHeld", "as_address", "identity_held_reason", "library_parts"]
 
 #: A container with more items is read at C speed when it holds only
 #: leaves or records of them, and walked item by item otherwise.
@@ -62,6 +71,7 @@ _REFERENCES = (weakref.ReferenceType, weakref.ProxyType, weakref.CallableProxyTy
 _WEAK_CONTAINERS = (weakref.WeakValueDictionary, weakref.WeakKeyDictionary, weakref.WeakSet)
 #: Hold nothing else; never the target of a registry's ``id()``.
 _LEAVES = frozenset(IMMUTABLE_LEAF_TYPES)
+_DICT = operator.attrgetter("__dict__")
 #: The smallest ``id()`` looked for: an object's address. Nothing is mapped
 #: below an executable's base, 0x400000 on Linux when not position
 #: independent and far higher otherwise (macOS keeps the lowest 4 GiB
@@ -135,21 +145,122 @@ def identity_held_reason(name: str, value: Any, user_ns: dict[str, Any]) -> Iden
                 "a weak reference",
             )
     candidates = {n for n in walk.numbers if _LOWEST_ADDRESS <= n < _HIGHEST_ADDRESS and not n % _ALIGNMENT}
-    for array in walk.arrays:
-        candidates.update(_addresses_in(array))
-    if not candidates:
-        return None
-    from .output_refusals import is_history_name
+    # An array's are kept as arrays: a column of millions of numbers is
+    # checked at C speed, never made a set.
+    in_arrays = [found for found in map(_addresses_in, walk.arrays) if found.size]
+    if candidates or in_arrays:
+        from .output_refusals import is_history_name
 
-    held = _Walk(user_kinds, seen=set(walk.seen), quiet=True, candidates=frozenset(candidates))
-    held.run([v for k, v in user_ns.items() if k != name and not is_history_name(k)])
-    if held.cut or held.found or not candidates.isdisjoint(held.seen):
+        held = _Walk(user_kinds, seen=set(walk.seen), quiet=True, candidates=frozenset(candidates))
+        held.id_arrays = [] if in_arrays else None
+        held.run([v for k, v in user_ns.items() if k != name and not is_history_name(k)])
+        if held.cut or held.found or not candidates.isdisjoint(held.seen) or (in_arrays and _any_held(in_arrays, held)):
+            return IdentityHeld(
+                f"'{name}' holds the id() of an object the notebook holds; restored, the object would be "
+                "another one, so the statement re-runs every time",
+                name,
+                "an id()",
+            )
+    if walk.closed and (candidates or in_arrays or walk.refs):
+        # A value that keeps ids or weak references, next to a library's
+        # object cash does not look inside: that object could keep one too.
+        what = f"a {type(walk.closed[0]).__name__} cash does not look inside"
         return IdentityHeld(
-            f"'{name}' holds the id() of an object the notebook holds; restored, the object would be "
-            "another one, so the statement re-runs every time",
+            f"'{name}' holds {what}; it could hold a weak reference or an id(), so the statement re-runs every time",
             name,
-            "an id()",
+            "a container cash cannot read",
+            what=(
+                f"'{name}' holds {what}, so cash cannot tell whether it finds another object by a weak "
+                "reference or an id(). This statement runs every time instead."
+            ),
         )
+    return None
+
+
+#: The lines of text `as_address` may read as a number.
+_NUMBER_LINES = re.compile(r"^(?:0[xX][0-9a-fA-F]{5,16}|[0-9]{7,18})$", re.MULTILINE)
+
+
+def as_address(text: str) -> int | None:
+    """The number *text* spells when it could be an ``id()`` turned into
+    text, ``hex(id(x))`` or ``str(id(x))``; None otherwise."""
+    if not 6 < len(text) < 19:
+        return None
+    try:
+        if text[:2] in ("0x", "0X"):
+            return int(text, 16)
+        return int(text) if text.isdigit() else None
+    except ValueError:
+        return None
+
+
+def library_parts(value: Any) -> list[Any] | None:
+    """What a library's object of a kind cash knows keeps the user's data
+    in: a ``functools.partial``'s function and arguments, an
+    ``argparse.Namespace``'s attributes, an ``array.array``'s numbers, a
+    structured NumPy array's fields, and a pandas frame's, series' or
+    index's columns as NumPy arrays. None for any other object: what it
+    holds is not known."""
+    if isinstance(value, functools.partial):
+        keywords = functools.partial.keywords.__get__(value)
+        parts = [functools.partial.func.__get__(value), *functools.partial.args.__get__(value)]
+        parts.extend(dict.values(keywords) if type(keywords) is dict else ())
+        state = own_dict(value)
+        if state:
+            parts.extend(state.values())
+        return parts
+    kind = type(value)
+    if kind is array.array:
+        return array.array.tolist(value) if value.typecode in "lLqQ" else []
+    if _numpy_array(kind) and value.dtype.names:
+        return [value[field] for field in value.dtype.names]
+    argparse = sys.modules.get("argparse")
+    if argparse is not None and isinstance(value, argparse.Namespace):
+        state = own_dict(value)
+        return list(state.values()) if state else []
+    pandas = sys.modules.get("pandas")
+    if pandas is not None and isinstance(value, (pandas.DataFrame, pandas.Series, pandas.Index)):
+        return _pandas_parts(pandas, value)
+    return None
+
+
+def _pandas_parts(pandas: Any, value: Any) -> list[Any]:
+    """A pandas object's labels and columns that could keep an ``id()`` or
+    a weak reference: as NumPy arrays of 8-byte integers or of objects, a
+    frame's read a dtype at a time (2D)."""
+    if isinstance(value, pandas.RangeIndex):
+        return []
+    if isinstance(value, pandas.DataFrame):
+        parts: list[Any] = [value.columns, value.index]
+        by_dtype: dict[Any, list[int]] = {}
+        for at, dtype in enumerate(value.dtypes):
+            by_dtype.setdefault(dtype, []).append(at)
+        for dtype, columns in by_dtype.items():
+            column = _pandas_column(value.iloc[:, columns], dtype)
+            if column is not None:
+                parts.append(column)
+        return parts
+    if isinstance(value, pandas.MultiIndex):
+        return list(value.levels)
+    column = _pandas_column(value, value.dtype)
+    parts = [] if column is None else [column]
+    if isinstance(value, pandas.Series):
+        parts.append(value.index)
+    return parts
+
+
+def _pandas_column(column: Any, dtype: Any) -> Any:
+    """The values of *column* (a series, an index, or a frame's columns of
+    one *dtype*) as a NumPy array when they could keep an ``id()`` or a
+    weak reference: 8-byte integers, or objects. None otherwise."""
+    kind = attribute_or(dtype, "kind")
+    if kind == "O":
+        return column.to_numpy(dtype=object)
+    if kind in ("i", "u") and attribute_or(dtype, "itemsize") == 8:
+        numpy = sys.modules.get("numpy")
+        if numpy is not None and isinstance(dtype, numpy.dtype):
+            return column.to_numpy()
+        return column.to_numpy(dtype="int64", na_value=0)  # a nullable Int64 column
     return None
 
 
@@ -164,12 +275,29 @@ def _alive(proxy: Any) -> bool:
     return True
 
 
-def _addresses_in(array: Any) -> list[int]:
+def _addresses_in(array: Any) -> Any:
     """The numbers of an integer NumPy *array* that could be an ``id()``,
-    read at C speed."""
+    as an array, read at C speed."""
     flat = array.ravel()
-    found = flat[(flat >= _LOWEST_ADDRESS) & (flat < _HIGHEST_ADDRESS) & (flat % _ALIGNMENT == 0)]
-    return found.tolist() if found.size else []
+    return flat[(flat >= _LOWEST_ADDRESS) & (flat < _HIGHEST_ADDRESS) & (flat % _ALIGNMENT == 0)]
+
+
+def _any_held(in_arrays: list[Any], held: _Walk) -> bool:
+    """Whether a number of *in_arrays* is the ``id()`` of an object *held*
+    met, at C speed: only the numbers between the lowest and the highest
+    of those ids are looked up."""
+    numpy = sys.modules["numpy"]
+    ids = numpy.concatenate(
+        [numpy.fromiter(held.seen, dtype=numpy.int64, count=len(held.seen)), *(held.id_arrays or ())]
+    )
+    if not ids.size:
+        return False
+    low, high = ids.min(), ids.max()
+    for found in in_arrays:
+        found = found[(found >= low) & (found <= high)]
+        if found.size and numpy.isin(found, ids).any():
+            return True
+    return False
 
 
 def _numpy_array(kind: type) -> bool:
@@ -197,12 +325,18 @@ class _Walk:
         self.numbers: set[int] = set()
         self.arrays: list[Any] = []
         self.unread: list[Any] = []
+        #: The library's objects met and not looked inside (`library_parts`).
+        self.closed: list[Any] = []
         self.cut = False
         self.quiet = quiet
         #: The ids looked for, by a *quiet* walk; `found` when one is the
         #: ``id()`` of an item of a big container met.
         self.candidates = candidates
         self.found = False
+        #: The ids of the items of each big container a *quiet* walk met,
+        #: as NumPy arrays, when an array's numbers are looked for; None
+        #: otherwise.
+        self.id_arrays: list[Any] | None = None
 
     def run(self, roots: list[Any]) -> None:
         level = list(roots)
@@ -218,6 +352,13 @@ class _Walk:
         kind = type(item)
         if kind is int:
             self.numbers.add(item)
+            return
+        if kind is str:
+            # ``hex(id(x))`` or ``str(id(x))``: an id() as well.
+            if not self.quiet:
+                number = as_address(item)
+                if number is not None:
+                    self.numbers.add(number)
             return
         if kind in _LEAVES:
             return
@@ -262,6 +403,8 @@ class _Walk:
                 if type(data) is set
                 else []
             )
+        elif _numpy_array(kind) and item.dtype.names and not item.dtype.hasobject:
+            items = [item[field] for field in item.dtype.names]
         elif _numpy_array(kind):
             if item.dtype.hasobject:
                 items = item.ravel().tolist()
@@ -280,10 +423,18 @@ class _Walk:
                 except AttributeError:  # an empty slot
                     continue
         else:
-            # A library's object: its own parts hold weak references to
+            # A library's object: read as `library_parts` knows it, never
+            # attribute by attribute. Its own parts hold weak references to
             # each other (a pandas frame's), and numbers that are no id()
             # of the notebook's (a stream's thread ident).
-            return
+            try:
+                items = library_parts(item)
+            except Exception:  # noqa: BLE001 - not readable: what it holds is unknown
+                items = None
+            if items is None:
+                if not self.quiet:
+                    self.closed.append(item)
+                return
         if len(items) > _MAX_SCANNED:
             if self._read_flat(items):
                 return
@@ -294,7 +445,11 @@ class _Walk:
                 # a set of their ids.
                 if not self.found and not self.candidates.isdisjoint(map(id, items)):
                     self.found = True
-                return
+                self._note_ids(items)
+                if self.found or self._lone_records(items):
+                    return
+                # What each holds is looked through, within the budget:
+                # ``reg = {id(objs[7].child): ...}``.
         into.extend(items)
 
     def _read_flat(self, items: list[Any]) -> bool:
@@ -310,7 +465,14 @@ class _Walk:
             kinds = set(map(type, flat))
             if not kinds <= _LEAVES:
                 return False
-        if int not in kinds or self.quiet:
+        if self.quiet:
+            return True
+        if str in kinds:
+            # The text spelling a number, found by one search of it all.
+            texts = flat if kinds == {str} else [item for item in flat if type(item) is str]
+            self.numbers.update(map(as_address, _NUMBER_LINES.findall("\n".join(texts))))
+            self.numbers.discard(None)
+        if int not in kinds:
             return True
         if kinds == {int}:
             # At C speed: row numbers or counts all below any address.
@@ -318,6 +480,41 @@ class _Walk:
                 self.numbers.update(flat)
         else:
             self.numbers.update(item for item in flat if type(item) is int and item >= _LOWEST_ADDRESS)
+        return True
+
+    def _note_ids(self, items: Any) -> None:
+        """Keep the ids of *items* for an array's numbers, when looked for."""
+        if self.id_arrays is not None:
+            numpy = sys.modules["numpy"]
+            self.id_arrays.append(numpy.fromiter(map(id, items), dtype=numpy.int64, count=len(items)))
+
+    def _lone_records(self, items: list[Any]) -> bool:
+        """Whether the notebook's big container *items* holds objects of
+        one class of the user's, whose attributes are all numbers, strings
+        and the like: nothing below them is an object an ``id()`` could
+        find but their attribute dicts, checked here at C speed (a loop
+        over 200,000 points). False, with nothing checked, otherwise."""
+        kinds = set(map(type, items))
+        if len(kinds) != 1:
+            return False
+        (kind,) = kinds
+        if (
+            not self._users(kind)
+            or _slot_readers(kind)
+            or own_dict(items[0]) is None
+            or attribute_or(kind, "__getattribute__") is not object.__getattribute__
+        ):
+            return False
+        # Python's own slot, read at C speed: the class has no lookup of its
+        # own, and `own_dict` found its ``__dict__`` is that slot.
+        states = list(map(_DICT, items))
+        if set(map(type, states)) != {dict}:
+            return False
+        if not _LEAVES.issuperset(map(type, chain.from_iterable(map(dict.values, states)))):
+            return False
+        if not self.candidates.isdisjoint(map(id, states)):
+            self.found = True
+        self._note_ids(states)
         return True
 
     def _users(self, kind: type) -> bool:

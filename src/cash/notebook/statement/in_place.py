@@ -42,7 +42,7 @@ from cash._user_attrs import attribute_or, builtin_base, builtin_items, own_dict
 from cash.closure_sharing import _slot_readers
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
-from .identity_holders import IdentityHeld
+from .identity_holders import IdentityHeld, library_parts
 
 __all__ = ["bound_as_a_copy", "holder_refusal", "ready", "refusal", "restorable_kind", "restore_into"]
 
@@ -199,6 +199,8 @@ def _held_by_the_notebook(parts: set[int], refs: list[Any], namespace: Mapping[s
     if any(isinstance(attribute_or(ref, "__callback__"), weakref.finalize) for ref in refs):
         return _WEAK
     ref_ids = {id(ref) for ref in refs}
+    # ``hex(id(p.seen))`` or ``str(id(p.seen))``: an id() as text.
+    texts = {spell(part) for part in parts for spell in (str, hex)}
     budget = _MAX_SEEN
     seen: set[int] = set()
     level = list(namespace.values())
@@ -218,10 +220,10 @@ def _held_by_the_notebook(parts: set[int], refs: list[Any], namespace: Mapping[s
                 return held
             seen.add(id(value))
             try:
-                if not parts.isdisjoint(held):
+                if not parts.isdisjoint(held) or not texts.isdisjoint(held):
                     return _BY_ID
             except TypeError:  # an unhashable item: one at a time
-                if any(type(item) is int and item in parts for item in held):
+                if any(type(item) in (int, str) and (item in parts or item in texts) for item in held):
                     return _BY_ID
             if len(held) > _MAX_SCANNED:
                 # Not looked inside: only a container of numbers, strings
@@ -265,12 +267,21 @@ def _what_it_holds(value: Any, parts: set[int]) -> list[Any] | str | None:
         if state:
             held.extend(state.values())
     elif kind.__name__ == "ndarray" and kind.__module__ == "numpy":
+        if value.dtype.names and not value.dtype.hasobject:
+            return [value[field] for field in value.dtype.names]
         if value.dtype.hasobject:
             return value.ravel().tolist()
         if value.dtype.kind in "iu" and value.dtype.itemsize == 8 and value.size:
             numpy = sys.modules["numpy"]
             return _BY_ID if bool(numpy.isin(value, list(parts)).any()) else None
         return None
+    else:
+        try:
+            parts = library_parts(value)
+        except Exception:  # noqa: BLE001 - not readable: what it holds is unknown
+            return _TOO_MANY
+        if parts is not None:
+            return parts or None
     state = own_dict(value)
     if state:
         held.extend(state.values())
