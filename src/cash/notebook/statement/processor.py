@@ -3148,6 +3148,16 @@ class StatementProcessor:
             self._warn_classes_unread(run)
         if not changed and not around:
             return
+        before = run.class_state_before
+        if (
+            not changed
+            and not stateful
+            and before is not None
+            and all(before.get(name) is not None and _class_state(user_ns[name]) == before[name] for name in around)
+        ):
+            # No class it reaches keeps anything new (``objs[0].value()``):
+            # what they hold, an earlier statement put there and linked.
+            return
         handed = [
             name
             for name in sorted(run.inputs - run.outputs)
