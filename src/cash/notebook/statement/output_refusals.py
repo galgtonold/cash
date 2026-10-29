@@ -18,6 +18,7 @@ from ...analysis.cacheability_decision import identity_coupled_reason
 from ..consumables import is_consumable_unrestorable
 from ..shared_objects import GaveUp, attrs_copied_apart, output_history, refers_back, share_group, shared_names
 from .derivation_edges import is_uncacheable_alias
+from .identity_holders import identity_held_reason
 
 __all__ = ["is_history_name", "live_shared_reason", "unrestorable_output_reason"]
 
@@ -128,6 +129,7 @@ def _value_refusal(
         lambda name, value: _alias_refusal(name, value, user_ns, cash_held, inputs),
         identity_coupled_reason,
         _consumable_refusal,
+        lambda name, value: identity_held_reason(name, value, user_ns),
         _context_variable_refusal,
     )
     for refusal in refusals:

@@ -68,6 +68,7 @@ from cash.notebook.statement.expression_memo import ExpressionMemo
 from cash.notebook.statement.file_deps import StatementFileDeps
 from cash.notebook.statement.freshness import CacheFreshnessChecker
 from cash.notebook.statement.hit import CacheHitServer
+from cash.notebook.statement.identity_holders import IdentityHeld
 from cash.notebook.statement.imports import (
     import_bindings_hold,
     import_needs_reexecution,
@@ -192,6 +193,7 @@ from ..shared_objects import (
     is_value,
     library_value_types,
     output_history,
+    owners_sharing,
     referring_names,
     scalar_identity,
     scalar_identity_news,
@@ -380,6 +382,8 @@ class StatementProcessor:
         #: The variables restored from entries stored while pandas scalars
         #: were values (`_warn_scalar_copies`).
         self._restored_scalar_values: set[str] = set()
+        #: Statements already warned NOTEBOOK-IDENTITY-HELD about.
+        self._identity_held_warned: set[str] = set()
         #: Statements already told about NOTEBOOK-ANALYSIS-BUDGET.
         self._past_budget_told: set[str] = set()
         #: What a statement's text last took to run, in seconds, or None when
@@ -2788,6 +2792,8 @@ class StatementProcessor:
         # cost the check twice.
         run.share_gave_up = gave_up[0] if gave_up else None
         self._note_share_refusal(run, reason)
+        if isinstance(reason, IdentityHeld):
+            self._warn_identity_held(run, reason)
         if reason is not None:
             run.skip_cache = True
             run.metrics.setdefault("uncacheable_reasons", []).append(reason)
@@ -3120,8 +3126,18 @@ class StatementProcessor:
             return [*links, (outputs, read)] if read else links
 
         budget = share_check_budget(cost)
+
+        def widened(links: list) -> list:
+            # Each link's owners and every output sharing an object with
+            # them (`owners_sharing`); all of them when that is cut short.
+            try:
+                with walk_budget(budget):
+                    return owners_sharing(links, {name: captured_vars[name] for name in names})
+            except WalkBudgetExceeded:
+                return [(frozenset(names) | owners, holders) for owners, holders in links]
+
         if run.share_gave_up is not None:
-            links, complete = list(run.share_gave_up.links), run.share_gave_up.complete
+            links, complete = widened(list(run.share_gave_up.links)), run.share_gave_up.complete
             return (links if complete else cut_short(links)), complete
         timed_out = run.share_unchecked
         if not timed_out:
@@ -3139,7 +3155,7 @@ class StatementProcessor:
                 # closure, a function's defaults): the variables found beside
                 # it, not a search from the outputs up, which would climb
                 # through the library until its budget ran out.
-                links = list(gave_up.links)
+                links = widened(list(gave_up.links))
                 return (links if gave_up.complete else cut_short(links)), gave_up.complete
             except WalkBudgetExceeded:
                 timed_out = True
@@ -3151,7 +3167,12 @@ class StatementProcessor:
             ignore=[captured_vars, run.metrics, echo, *cash_held],
         )
         links = [(outputs, found_names)]
-        return (links if complete else cut_short(links)), complete
+        # The search up finds what holds the outputs, not what they hold:
+        # ``box = Box(BIG)`` with ``box`` holding ``BIG`` in a pandas object
+        # was left unlinked when the check ran out of time, and a change to
+        # ``BIG`` served ``box.total()`` from before. What the statement read
+        # is linked too, as when the search is cut short.
+        return (links if complete and not timed_out else cut_short(links)), complete
 
     def _fallback_seconds(self, run: StatementRun, fallback_floor: float) -> float:
         """How long the search from the outputs up (`referring_names`) may
@@ -3269,6 +3290,26 @@ class StatementProcessor:
 
         location = ("<cash>", running_cell_count(self.shell))
         warn_diagnostic(CashWarning, "NOTEBOOK-SHARE-UNCHECKED", what, fix, location=location)
+
+    def _warn_identity_held(self, run: StatementRun, held: IdentityHeld) -> None:
+        """Warn, once per statement, that a value it binds finds another
+        object by identity, so it re-runs (``NOTEBOOK-IDENTITY-HELD``)."""
+        if run.source_hash in self._identity_held_warned:
+            return
+        self._identity_held_warned.add(run.source_hash)
+        what = held.what or (
+            f"'{held.name}' holds {held.kind} of an object it does not hold itself. Restored from the cache, "
+            "it would find another object, or none, so this statement runs every time instead."
+        )
+        fix = (
+            "keep the object itself rather than a weak reference or its id(), or build the registry in the "
+            "cell that builds the objects it points at."
+        )
+        log_diagnostic(logger, "NOTEBOOK-IDENTITY-HELD", what, fix)
+        from cash.notebook.ipython.cell_count import running_cell_count  # the ipython package imports this one
+
+        location = ("<cash>", running_cell_count(self.shell))
+        warn_diagnostic(CashWarning, "NOTEBOOK-IDENTITY-HELD", what, fix, location=location)
 
     def _move_what_reducers_wrote(self, run: StatementRun) -> None:
         """Move on the variables a reducer of the user's could have written,

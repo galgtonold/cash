@@ -55,6 +55,10 @@ class Shape:
     #: run again would; a difference on them that a fresh kernel's Run All
     #: gives is accepted (``AS-RESTART``).
     module_writes: list[str] = field(default_factory=list)
+    #: With a plan: a cell re-run alone answers as the Run All before it
+    #: (cash re-runs the cells above a draw's tail), so a difference there
+    #: that the Run All gave counts as one on a fresh kernel.
+    alone_as_run_all: bool = False
     setup: str = ""
     steps: list[str] = field(default_factory=list)
     source: str = ""
@@ -95,6 +99,7 @@ def notebook(
     names: list[str] | None = None,
     plan: list[str | int] | None = None,
     module_writes: list[str] | None = None,
+    alone_as_run_all: bool = False,
     source: str = "",
 ) -> Shape:
     return Shape(
@@ -105,6 +110,7 @@ def notebook(
         names=names,
         plan=plan,
         module_writes=list(module_writes or ()),
+        alone_as_run_all=alone_as_run_all,
         source=source,
     )
 
@@ -201,7 +207,14 @@ def _fresh_runs(shape: Shape) -> dict[str, str]:
     neither has (an edit in between) has none."""
     fresh: dict[str, str] = {}
     if shape.plan is not None:
-        return fresh  # a plan of its own: no fresh Run All to compare with
+        if shape.alone_as_run_all and not shape.edits:
+            last = None
+            for run_name, _restart, cells in shape.runs():
+                if cells is None:
+                    last = run_name
+                elif last is not None:
+                    fresh[run_name] = last
+        return fresh  # otherwise a plan of its own: no fresh Run All to compare with
     for index, run_name in enumerate(RUNS):
         for first in (0, RUNS.index("restart+run1")):
             if first <= index and shape.cells_for(index) == shape.cells_for(first):

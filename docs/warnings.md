@@ -1819,6 +1819,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-FAILED-CELL](#notebook-failed-cell) | notebook | a cell raised part way, and a name it changed is not what a plain run leaves |
 | [NOTEBOOK-FILE-ROUNDTRIP](#notebook-file-roundtrip) | notebook | a file written in this session is read back, so the read reruns after every write |
 | [NOTEBOOK-FORWARD-READ](#notebook-forward-read) | notebook | the cell reads a name only a cell below binds, so it runs uncached |
+| [NOTEBOOK-IDENTITY-HELD](#notebook-identity-held) | notebook | a value finds another object by a weak reference or an id(), so its statement runs every time |
 | [NOTEBOOK-INPUT-UNBUILT](#notebook-input-unbuilt) | notebook | an input the cell's own cache entry was to rebuild was not, so the statement ran on the old value, unstored |
 | [NOTEBOOK-ITEMS-UNREAD](#notebook-items-unread) | notebook | an item of a container too big to look through is read by an index cash cannot tell, while a class of yours has a special method with effects: the statement runs every time |
 | [NOTEBOOK-MAGIC-STALE](#notebook-magic-stale) | notebook | a name a shell command or magic bound is kept, though it would bind it differently now |
@@ -2049,6 +2050,29 @@ cached result would stand for an order of cells the notebook does not have.
 
 **When it is safe to ignore.** Never for long: the notebook does not run from
 the top.
+
+### NOTEBOOK-IDENTITY-HELD {#notebook-identity-held}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/notebook/statement/identity_holders.py:identity_held_reason @38433126, cash/notebook/statement/processor.py:StatementProcessor._warn_identity_held @914a8dc9 -->
+**What happened.** A value the statement binds finds another object by
+identity, not by holding it: a weak reference (`wr = weakref.ref(p.child)`,
+a `WeakValueDictionary`) to an object the value does not hold, or an `int`
+equal to the `id()` of an object the notebook holds (`reg = {id(p.seen):
+'seen'}`). Restored from the cache, such a value would point at the object
+as it was stored, while the cell that builds `p` binds a new one: the weak
+reference finds nothing, and the `id()` matches nothing. So cash did not
+store the statement. The message names the variable and says which of the
+two it holds. It is shown once per statement.
+
+**Why it matters.** Your results are correct: the statement runs every
+time, as plain Python runs it.
+
+**What to do.** Keep the object itself rather than a weak reference or its
+`id()`, or build the registry in the same cell as the objects it points at.
+
+**When it is safe to ignore.** When the statement is cheap.
 
 ### NOTEBOOK-INPUT-UNBUILT {#notebook-input-unbuilt}
 

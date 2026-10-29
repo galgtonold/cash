@@ -327,6 +327,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # below binds; it runs uncached on the value in memory
         "NOTEBOOK-INPUT-UNBUILT",  # an input the cell's own cache hit was
         # to restore was not: the statement ran on the old value, unstored
+        "NOTEBOOK-IDENTITY-HELD",  # a value finds another object by a weak
+        # reference or an id(), so its statement re-runs rather than be restored
         "NOTEBOOK-ITEMS-UNREAD",  # a container too big to look through for objects
         # whose special methods may run: the statement runs every time
         "NOTEBOOK-MAGIC-STALE",  # a name a magic bound is kept as it is,

@@ -92,3 +92,32 @@ def test_module_state_as_a_restart_gives_it_is_kept_apart_from_a_rebuild(monkeyp
     assert report.verdict == "REBUILT"
     only_n = check(notebook("fake", ["n = f()"], module_writes=["n", "v"]), tmp_path, ["trace"])
     assert only_n.verdict == "AS-RESTART" and only_n.ok
+
+
+def test_a_cell_rerun_alone_may_answer_as_the_run_all_before_it(monkeypatch, tmp_path):
+    """``rest = list(it)`` re-run alone: plain gives ``[]``; cash re-runs the
+    cells above and gives the Run All's ``[2]``. Only a shape that says so
+    accepts it, and only the Run All's value."""
+
+    def fake(shape, work, config):
+        alone = "[]" if config is None else "[2]"
+        last = "[]" if config is None else "[9]"
+        return Outcome(
+            seen={
+                "run1": {"rest": "[2]"},
+                "step2": {"rest": alone},
+                "restart+run1": {"rest": "[2]"},
+                "restart+step4": {"rest": last},
+            }
+        )
+
+    monkeypatch.setattr("tools.plain_checker.kernel.run_notebook", fake)
+    plan = ["all", 1, "restart", "all", 1]
+    cells = ["it = iter([1, 2])\nnext(it)", "rest = list(it)"]
+    accepted = check(
+        notebook("fake", cells, plan=plan, module_writes=["rest"], alone_as_run_all=True), tmp_path, ["trace"]
+    )
+    assert [run for _c, run, *_ in accepted.as_restart] == ["step2"]
+    assert [run for _c, run, *_ in accepted.mismatches] == ["restart+step4"]
+    plain_plan = check(notebook("fake", cells, plan=plan, module_writes=["rest"]), tmp_path, ["trace"])
+    assert [run for _c, run, *_ in plain_plan.mismatches] == ["step2", "restart+step4"]
