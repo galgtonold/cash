@@ -1125,7 +1125,15 @@ def _module_body_imports(value: Any, user_ns: Mapping[str, Any], found: set[str]
                 held = namespace.get(ref)
                 if type(held) is types.FunctionType or issubclass(type(held), type):
                     pending.append(held)
+                elif held is not None and attribute_or(type(held), "__module__", None) not in _PLAIN_MODULES:
+                    # An object of a class of the user's (``INST = K()``,
+                    # then ``INST.run(vals)``): its methods run.
+                    pending.append(type(held))
     return complete
+
+
+#: Modules whose objects' classes the walk need not look at.
+_PLAIN_MODULES = frozenset({"builtins", "types", "typing", "collections", "functools"})
 
 
 def _in_users_module(name: Any) -> bool:

@@ -210,3 +210,27 @@ def test_a_hit_imports_no_module_the_run_did_not_import(cash_magics, a_package):
         assert log == []
     finally:
         del builtins.LOG
+
+
+def test_a_hit_imports_what_a_method_of_an_object_the_module_holds_imports(cash_magics, a_package):
+    """``INST = K()`` at the module's top level and ``g`` calling
+    ``INST.run(vals)``: the walk followed functions and classes, not the
+    class of an object the module holds, so a hit after a restart left
+    ``bodypkg.helper`` unimported and the reload below raised."""
+    api = (
+        "import time\nclass K:\n    def run(self, vals):\n        time.sleep(0.3)\n"
+        "        from .helper import scale\n        return sum(scale(v) for v in vals)\n"
+        "INST = K()\ndef g(vals):\n    return INST.run(vals)\n"
+    )
+    cells = _reload_cells(f"open('bodypkg/api.py', 'w').write({api!r})", "from bodypkg.api import g", "bodypkg.helper")
+    ns = cash_magics.shell.user_ns
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    for name in [n for n in sys.modules if n.startswith("bodypkg.")]:
+        del sys.modules[name]
+    cash_magics.tracking_state.reset_session_state()
+    for name in ("g", "y", "z"):
+        ns.pop(name)
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    assert (ns["y"], ns["z"]) == (12, 180)
