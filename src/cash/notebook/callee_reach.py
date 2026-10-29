@@ -510,7 +510,7 @@ def _state_writes(
                 handed(node)
 
 
-def _made_as_it_ran(module: types.ModuleType) -> bool:
+def made_as_it_ran(module: types.ModuleType) -> bool:
     """Is *module* one code made as it ran (``types.ModuleType('cnt')``,
     put in ``sys.modules``): no file, no import spec, no builtin? Its state
     is the notebook's as much as a local module's is."""
@@ -948,7 +948,7 @@ def _state_home(value: Any, namespace: Mapping[str, Any]) -> str | None:
     if value is None or instance_of(value, (*IMMUTABLE_PRIMS, tuple, frozenset)):
         return None
     if instance_of(value, types.ModuleType):
-        return value.__name__ if _is_local(value) or _made_as_it_ran(value) else None
+        return value.__name__ if _is_local(value) or made_as_it_ran(value) else None
     if is_routine(value):
         return None
     if instance_of(value, type):
@@ -1682,7 +1682,7 @@ class _Found:
                 value = self.namespace.get(name)
                 self.value(value)
                 if issubclass(type(value), types.ModuleType):
-                    self._module_attributes(value, co.co_names)
+                    self._module_attributes(value, co.co_names, name)
 
     def _module_body_reads(self, fn: types.FunctionType) -> None:
         """What a function of a local module reads when it is called: the
@@ -1700,13 +1700,21 @@ class _Found:
                 if issubclass(type(value), types.ModuleType):
                     self._module_attributes(value, co.co_names)
 
-    def _module_attributes(self, module: types.ModuleType, names: Iterable[str]) -> None:
+    def _module_attributes(self, module: types.ModuleType, names: Iterable[str], path: str | None = None) -> None:
         """``module.attr`` for each of *names* the local *module* has, or
-        that the notebook set on a library's *module*."""
+        that the notebook set on a library's *module*; for one made as the
+        notebook ran, each it has, by the notebook's name *path* for it
+        (`_data_label`), as a statement naming ``m.v`` itself is read
+        (`chain`): ``def g(): return m.v``."""
+        namespace = vars(module)
+        if path is not None and made_as_it_ran(module):
+            for attr in names:
+                if attr in namespace and not attr.startswith("__"):
+                    self.value(namespace[attr], _data_label(module, path, attr, self.namespace))
+            return
         local = _is_local(module)
         if not local and not _SET_ON_LIBRARIES:
             return
-        namespace = vars(module)
         for attr in names:
             if attr in namespace and not attr.startswith("__") and (local or _set_on_by_the_notebook(module, attr)):
                 self.value(namespace[attr], f"{module.__name__}.{attr}")
@@ -1821,7 +1829,7 @@ def _holds_notebook_data(module: types.ModuleType) -> bool:
     """Is what *module* holds the notebook's data: a local module, or one
     made as the notebook ran (``m = types.ModuleType('m')``; ``m.v = ...``),
     whose names only the notebook sets."""
-    return _is_local(module) or _made_as_it_ran(module)
+    return _is_local(module) or made_as_it_ran(module)
 
 
 def _data_label(module: types.ModuleType, path: str, attr: str, namespace: Mapping[str, Any]) -> str | None:
@@ -1836,7 +1844,7 @@ def _data_label(module: types.ModuleType, path: str, attr: str, namespace: Mappi
     none: it is not followed (`notebook_module`)."""
     if _is_local(module):
         return f"{module.__name__}.{attr}"
-    if not _made_as_it_ran(module) or namespace.get("__name__") != "__main__":
+    if not made_as_it_ran(module) or namespace.get("__name__") != "__main__":
         return None
     _NOTEBOOK[0] = namespace
     return f"@{path}.{attr}"
@@ -1860,7 +1868,7 @@ def notebook_module(path: str) -> types.ModuleType | None:
         if not instance_of(obj, types.ModuleType):
             return None
         obj = vars(obj).get(attr)
-    return obj if instance_of(obj, types.ModuleType) and _made_as_it_ran(obj) else None
+    return obj if instance_of(obj, types.ModuleType) and made_as_it_ran(obj) else None
 
 
 def _local_homes(value: Any) -> Iterable[str]:

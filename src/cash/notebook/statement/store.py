@@ -31,6 +31,7 @@ from cash.closure_sharing import closure_check_budget, closures_sharing
 from cash.diagnostics import log_diagnostic, warn_diagnostic
 from cash.exceptions import CashCacheStoreFailedWarning
 from cash.notebook.anchors import AnchorUnrebuilt, with_anchor_refs
+from cash.notebook.callee_reach import made_as_it_ran
 from cash.notebook.shared_objects import scalar_identity
 from cash.notebook.statement import reducer_writes
 from cash.notebook.statement._metadata import StatementCacheMetadata
@@ -571,10 +572,19 @@ class StatementStore:
 
     @staticmethod
     def _filter_safe_vars(captured_vars: dict[str, Any]) -> dict[str, Any]:
-        """Every captured variable but a module, a closed file as its name and
-        mode (`closed_stream`). Whether a value pickles is the backend's to
-        find out when it stores it."""
-        return {k: stored_form(v) for k, v in captured_vars.items() if not instance_of(v, types.ModuleType)}
+        """Every captured variable but a loaded module, a closed file as its
+        name and mode (`closed_stream`). Whether a value pickles is the
+        backend's to find out when it stores it.
+
+        A module made as the notebook ran (``m = types.ModuleType('m')``)
+        is the notebook's data, not one an import finds again: left out, a
+        hit kept whatever the name held, after ``m, k = k, m`` the other
+        module."""
+        return {
+            k: stored_form(v)
+            for k, v in captured_vars.items()
+            if not instance_of(v, types.ModuleType) or made_as_it_ran(v)
+        }
 
     def _store(
         self,

@@ -10,11 +10,12 @@ from __future__ import annotations
 
 import ast
 import logging
+import types
 import weakref
 from collections.abc import Callable
 from typing import Any
 
-from cash._user_attrs import attribute_or, has_attribute
+from cash._user_attrs import attribute_or, has_attribute, instance_of
 from cash.control_markers import strip_markers
 
 from ...analysis.ast_util import parse_cached
@@ -171,7 +172,11 @@ class StaleValueGuard:
             # base. On ``run_all`` the producers re-run to the same base first, so
             # this only adds a cheap redundant restore there.
             if var_name in effects.crossref_reassigned:
-                broken_vars.add(var_name)
+                # Not a module: its producers make it again empty, without
+                # the ``m.v = ...`` cells set on it, which are no writes of
+                # ``m`` (``m, k = k, m`` raised where plain Python swaps).
+                if not instance_of(self.shell.user_ns.get(var_name), types.ModuleType):
+                    broken_vars.add(var_name)
                 continue
             live_value = self.shell.user_ns.get(var_name)
             live_lineage = statement_tag(live_value)
