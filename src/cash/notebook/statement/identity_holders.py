@@ -24,8 +24,12 @@ The value is walked through lists, tuples, dicts, sets and the ``__dict__``
 of objects of the user's own classes, not into a library's objects (a
 pandas frame keeps weak references between its own parts). A container of
 more than `_MAX_SCANNED` items is not looked inside, and the walk stops at
-`_MAX_SEEN` objects: a registry of ids is small, and walking a big value
-item by item cost each store more than the check is worth.
+`_MAX_SEEN` objects: walking a big value item by item cost each store more
+than the check is worth. Such a container, and a pandas or NumPy object,
+gives the ints among its first and last items and its index
+(`_sampled_ints`): a registry keyed by ``id()`` keeps them all alike. When
+the notebook holds more than the walk reads, the ids of every object the
+garbage collector tracks rule a number in or out.
 """
 
 from __future__ import annotations
@@ -79,7 +83,9 @@ def identity_held_reason(name: str, value: Any, user_ns: dict[str, Any]) -> Iden
     refs: list[Any] = []
     numbers: set[int] = set()
     targets: list[Any] = []
-    _walk([value], seen, user_kinds, refs, numbers, targets)
+    unread: list[Any] = []
+    _walk([value], seen, user_kinds, refs, numbers, targets, unread=unread)
+    numbers.update(_sampled_ints(unread))
     found = _held_by_id(name, refs, seen, numbers, user_kinds, user_ns, numbers_only=type(value) is int)
     if found is None and targets:
         found = _weakly_held(name, targets, user_ns)
@@ -126,10 +132,15 @@ def _held_by_id(
     from .output_refusals import is_history_name
 
     roots = [v for k, v in user_ns.items() if k != name and not is_history_name(k)]
-    if _walk(roots, held, user_kinds, [], set(), wanted=candidates):
+    if _walk(roots, held, user_kinds, [], set(), wanted=candidates, unread=[]):
         return _holds_an_id(name) if not candidates.isdisjoint(held) else None
     if not candidates.isdisjoint(held):
         return _holds_an_id(name)
+    # The walk left objects unread (a list of 20,000 objects, past
+    # `_MAX_SEEN`): ask the collector for every object it tracks instead,
+    # which the objects of the notebook's classes are among.
+    if candidates.isdisjoint(_tracked_ids()):
+        return None
     if numbers_only:
         # A bare number (``x = 1 << 20``) is far likelier a count than an
         # id(); only a value that keeps one beside other data is refused.
@@ -154,6 +165,57 @@ def _holds_an_id(name: str) -> IdentityHeld:
         name,
         "an id()",
     )
+
+
+def _tracked_ids() -> set[int]:
+    """The ``id()`` of every object the garbage collector tracks."""
+    import gc
+
+    return {id(obj) for obj in gc.get_objects()}
+
+
+#: How many items `_sampled_ints` reads from each end of a container it was
+#: not looked inside.
+_SAMPLE = 32
+
+
+def _sampled_ints(unread: list[Any]) -> set[int]:
+    """The ints among the first and last items (and keys) of each container
+    in *unread* too big to look inside, and of the index and values of each
+    pandas or NumPy object: a registry keyed by ``id()`` keeps them all
+    alike, so a few find it."""
+    import itertools
+
+    out: set[int] = set()
+
+    def ends(items: Any) -> list[Any]:
+        if isinstance(items, (list, tuple)):
+            return [*items[:_SAMPLE], *items[-_SAMPLE:]]
+        return list(itertools.islice(items, _SAMPLE))
+
+    def array_ends(array: Any) -> list[Any]:
+        if attribute_or(attribute_or(array, "dtype", None), "kind", None) not in ("i", "u"):
+            return []
+        try:
+            flat = array.ravel()
+            return [int(n) for n in (*flat[:_SAMPLE], *flat[-_SAMPLE:])]
+        except (TypeError, ValueError, AttributeError, IndexError):
+            return []
+
+    for obj in unread:
+        if isinstance(obj, dict):
+            picked = ends(dict.__iter__(obj)) + ends(dict.values(obj))
+        elif isinstance(obj, (list, tuple, set, frozenset)):
+            picked = ends(obj if isinstance(obj, (list, tuple)) else iter(obj))
+        else:
+            picked = array_ends(obj)
+            for part in ("index", "columns"):
+                picked += array_ends(attribute_or(attribute_or(obj, part, None), "values", None))
+            if attribute_or(obj, "ndim", None) == 1:
+                # A Series' values; a frame's would copy every column.
+                picked += array_ends(attribute_or(obj, "values", None))
+        out.update(n for n in picked if type(n) is int)
+    return out
 
 
 def _lowest_address(user_ns: dict[str, Any]) -> int:
@@ -268,6 +330,7 @@ def _walk(
     targets: list[Any] | None = None,
     levels: int | None = None,
     wanted: set[int] | None = None,
+    unread: list[Any] | None = None,
 ) -> bool:
     """Look through *roots* (see the module docstring), adding the ``id()``
     of each object to *seen*, each weak reference to *refs* and each
@@ -276,7 +339,9 @@ def _walk(
     False when it stopped at `_MAX_SEEN`, and with *levels*, also when it
     left an object to look into: below the last level, or in a container of
     over `_MAX_SCANNED` items. With *wanted*, it stops, complete, at the
-    first level that sees one of those ids."""
+    first level that sees one of those ids. With *unread*, each container it
+    did not look inside and each pandas or NumPy object goes there, and the
+    walk is not complete when it left a container unread."""
     level = roots
     complete = True
     while level:
@@ -318,11 +383,16 @@ def _walk(
                 items = list(state.values())
             else:
                 seen.add(id(item))
+                if unread is not None and _an_array(kind):
+                    unread.append(item)
                 continue
             seen.add(id(item))
             if len(seen) > _MAX_SEEN:
                 return False
             if len(items) > _MAX_SCANNED:
+                if unread is not None:
+                    unread.append(item)
+                    complete = False
                 complete = complete and levels is None
                 continue
             nxt.extend(items)
@@ -330,6 +400,13 @@ def _walk(
             return True
         level = nxt
     return complete
+
+
+def _an_array(kind: type) -> bool:
+    """Whether *kind* is a pandas or NumPy class, whose index or values may
+    keep ids (``pd.Series(..., index=[id(p) for p in ps])``)."""
+    module = attribute_or(kind, "__module__", None) or ""
+    return module.split(".", 1)[0] in ("pandas", "numpy")
 
 
 def _looked_into(item: Any, seen: set[int], user_kinds: dict[type, bool]) -> bool:

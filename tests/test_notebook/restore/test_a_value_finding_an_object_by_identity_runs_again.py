@@ -24,6 +24,14 @@ HOLDERS = {
     "an id in a list": ("ids = [id(p.child)]", "r = ids[0] == id(p.child)"),
     "an id alone": ("k = id(p)", "r = k == id(p)"),
     "its own id": ("p.me = id(p)", "r = p.me == id(p)"),
+    "an id key in a dict too big to look inside": (
+        "reg = {id(p.seen): 'seen', **{i: i for i in range(20_000)}}",
+        "r = reg.get(id(p.seen)) == 'seen'",
+    ),
+    "a Series indexed by ids": (
+        "import pandas as pd\nser = pd.Series(['seen'], index=[id(p.seen)])",
+        "r = ser.get(id(p.seen)) == 'seen'",
+    ),
 }
 
 
