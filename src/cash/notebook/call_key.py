@@ -377,9 +377,9 @@ def holds_a_stream(fn) -> bool:
     ``x = h()`` gave the second number, not the first. Looked for in tuples,
     lists, sets and dicts (``st = {'it': iter(...)}``), in an object of the
     user's (``self.it``), and in another function's closure (a helper ``g``
-    that holds it). A method bound to an object it holds itself (``pl =
-    dq.popleft``, ``def h(draw=rng.random)``) is taken as one: what calling
-    it changes, the text that calls it does not show.
+    that holds it). A builtin method that draws from what it is bound to,
+    held itself (``pl = dq.popleft``, ``def h(nxt=it.__next__)``), is taken
+    as one: what calling it changes, the text that calls it does not show.
 
     Told by type, read off the class (`_stream_type`): no ``__iter__`` of
     the user's runs. Read a level at a time, each level's objects in one
@@ -670,13 +670,13 @@ def _stream_type(kind: type) -> Any:
     ``__next__`` is taken as an iterator without asking its ``__iter__``
     whether it hands back itself, which ran the user's code at every
     object of the walk."""
-    from cash.notebook.consumables import _GENERATOR_TYPES, _QUEUE_TYPES
+    from cash.notebook.consumables import GENERATOR_TYPES, QUEUE_TYPES
 
     if issubclass(kind, type):
         return _NOTHING  # a class: its members are looked into, not its iteration
     if issubclass(kind, random.Random) or _numpy_rng_type(kind):
         return _RNG
-    if issubclass(kind, (*_GENERATOR_TYPES, *_QUEUE_TYPES)):
+    if issubclass(kind, (*GENERATOR_TYPES, *QUEUE_TYPES)):
         return _STREAM
     mro = _CLASS_MRO(kind)
     if any("__next__" in _CLASS_DICT(c) for c in mro) and any("__iter__" in _CLASS_DICT(c) for c in mro):
@@ -735,19 +735,21 @@ def _draws_on_its_closure(fn, cells: Mapping[str, _types.CellType]) -> bool:
 
 
 def _bound_to_an_object(value) -> bool:
-    """A method bound to an object that is not a module or a plain value
-    (``pl = dq.popleft``, ``draw = rng.random``): calling it may change the
-    object, which the text that calls it does not show."""
+    """A builtin method that draws from the object it is bound to (``pl =
+    dq.popleft``, ``nxt = it.__next__``): each call hands back the next
+    item, which the text that calls it does not show. One that only adds
+    (``note = calls.append``) is left to the rules for writes."""
     kind = type(value)
-    if kind is _types.MethodType:
-        owner = value.__self__
-    elif kind is _types.BuiltinMethodType or kind is _types.MethodWrapperType:
-        owner = value.__self__
-        if owner is None or type(owner) is _types.ModuleType:
-            return False
-    else:
+    if kind is not _types.BuiltinMethodType and kind is not _types.MethodWrapperType:
         return False
-    return not issubclass(type(owner), type) and not _plain_value(owner)
+    owner = value.__self__
+    if owner is None or type(owner) is _types.ModuleType or issubclass(type(owner), type):
+        return False
+    return attribute_or(value, "__name__", None) in _DRAWING_METHODS and not _plain_value(owner)
+
+
+#: Builtin methods that take the next item out of what they are bound to.
+_DRAWING_METHODS = frozenset({"pop", "popleft", "popitem", "__next__", "send", "get_nowait"})
 
 
 def _plain_value(value) -> bool:
