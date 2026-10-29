@@ -59,7 +59,7 @@ from cash.exceptions import CashCacheStoreFailedWarning
 from cash.notebook import helper_memos
 from cash.notebook import shadow as _shadow
 from cash.notebook._trace import trace_event
-from cash.notebook.cache_key import CacheKeyContext, import_body_modules
+from cash.notebook.cache_key import CacheKeyContext, import_body_modules, imported_since, unloaded_body_imports
 from cash.notebook.call_effects import (
     UNWRAP_FAILED,
     DigestHandoff,
@@ -964,7 +964,7 @@ class CallUnit:
     def _serve_hit(self, call: _Call, value, recorded_cost: float, metadata: Mapping[str, Any], hit_started: float):
         """Hand back a found entry's value, with the call's effects put back."""
         __tracebackhide__ = True
-        import_body_modules(call.key)
+        import_body_modules(metadata.get("body_imported"))
         value, captured_globals = unwrap_callee_globals(value, metadata)
         if value is UNWRAP_FAILED:
             # The entry says it carries captured globals and does not.
@@ -1052,6 +1052,7 @@ class CallUnit:
             attribute_or(call.fn, "__globals__", None),
             propagate_to_parent=True,
         )
+        unloaded = unloaded_body_imports(call.key)
         self._running += 1
         shadow = _shadow.SHADOW
         unit = shadow.begin("call") if shadow is not None else None
@@ -1124,6 +1125,7 @@ class CallUnit:
                 stderr_text,
                 environment_digests(env_reads),
                 memos,
+                imported_since(unloaded) if unloaded else None,
             )
         if self._entries.too_many:
             self._entries.too_many = False
@@ -1228,6 +1230,7 @@ class CallUnit:
         stderr_text: str,
         env_reads: dict[str, str] | None = None,
         memos: list[dict] | None = None,
+        body_imported: list[str] | None = None,
     ) -> bool:
         """Write the result with what the call read, printed and wrote to its
         globals; ``False`` when those globals cannot be captured."""
@@ -1276,6 +1279,7 @@ class CallUnit:
             held_refs=find_for_call(call.fn, result),
             env_reads=env_reads or None,
             helper_memos=memos,
+            body_imported=body_imported,
         )
         if held:
             self._hold(call.key, result, *held)

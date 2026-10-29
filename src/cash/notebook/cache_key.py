@@ -61,7 +61,9 @@ __all__ = [
     "compute_cache_key",
     "control_outcome_key",
     "import_body_modules",
+    "imported_since",
     "remember_body_imports",
+    "unloaded_body_imports",
     "statement_source_hash",
     "write_provenance_key",
     "note_read_provenance_written",
@@ -1391,13 +1393,26 @@ def body_imports_of(cache_key: str) -> tuple[str, ...]:
     return _BODY_IMPORTS.get(cache_key, ())
 
 
-def import_body_modules(cache_key: str) -> None:
-    """Import what the run keyed *cache_key* imports in a callee's body and
-    is not loaded, as its run would have: a hit served after a restart left
-    ``pkg.helper`` unimported, and ``importlib.reload(sys.modules[
-    "pkg.helper"])`` in a cell below raised the ``KeyError`` plain Python
-    does not. Only modules of the user's files are named (`_body_import_parts`)."""
-    for name in _BODY_IMPORTS.get(cache_key, ()):
+def unloaded_body_imports(cache_key: str) -> tuple[str, ...]:
+    """The modules the callees of the run keyed *cache_key* may import in
+    their body that are not loaded yet: those its run may import."""
+    return tuple(name for name in _BODY_IMPORTS.get(cache_key, ()) if name not in sys.modules)
+
+
+def imported_since(unloaded: Iterable[str]) -> list[str] | None:
+    """Those of *unloaded* (`unloaded_body_imports`) loaded now: what the
+    run imported. Not the list its code names: ``from .noisy import scale``
+    on a branch that did not run imports nothing."""
+    return [name for name in unloaded if name in sys.modules] or None
+
+
+def import_body_modules(modules: Iterable[str] | None) -> None:
+    """Import those of *modules*, the modules a run imported in its callees'
+    bodies (`imported_since`), that are not loaded, as the run did: a hit
+    served after a restart left ``pkg.helper`` unimported, and
+    ``importlib.reload(sys.modules["pkg.helper"])`` in a cell below raised
+    the ``KeyError`` plain Python does not."""
+    for name in modules or ():
         if name in sys.modules:
             continue
         try:

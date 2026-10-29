@@ -657,6 +657,7 @@ class StatementStore:
             frozen_tags=_frozen_tags(captured_vars, run.outputs),
             carriers_advanced=_carriers_advanced(run),
             sparse_ordered=run.sparse_ordered or None,
+            body_imported=run.body_imported,
             env_reads=run.env_reads,
             helper_memos=run.helper_memos,
             holders=run.holders or None,

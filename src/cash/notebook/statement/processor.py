@@ -37,8 +37,10 @@ from cash.notebook.cache_key import (
     CacheKeyResult,
     compute_cache_key,
     import_body_modules,
+    imported_since,
     statement_source_hash,
     unkeyed_reach,
+    unloaded_body_imports,
 )
 from cash.notebook.cache_status import CacheStatus, ExecutionResult
 from cash.notebook.call_effects import DigestHandoff
@@ -1629,8 +1631,9 @@ class StatementProcessor:
     ) -> ProcessResult | None:
         """Restore *run* from its entry; the finished result, or None when the
         restore failed and the statement must run after all."""
-        # The modules its callees import in their body, imported as its run would.
-        import_body_modules(run.cache_key)
+        # The modules its callees imported in their body as its run did.
+        if metadata is not None:
+            import_body_modules(metadata.body_imported)
         # Read before the restore moves the generators.
         advanced = None if is_control_body(run.code) else carriers_an_entry_advanced(cached_data, self.shell.user_ns)
         reseeded = (
@@ -1866,6 +1869,7 @@ class StatementProcessor:
         lineage = self.tracking_state.variable_lineage
         run.entry_lineages = {name: lineage[name] for name in run.inputs if name in lineage}
         unordered = sparse_order.unordered_sparse(run.inputs, self.shell.user_ns)
+        unloaded = unloaded_body_imports(run.cache_key)
         env_reads: set[str] = set()
         helper_memos.new_statement()
         memos_before = None if run.skip_cache else helper_memos.watched(self.shell.user_ns)
@@ -2012,6 +2016,8 @@ class StatementProcessor:
                 )
         if unordered:
             run.sparse_ordered = sparse_order.were_put_in_order(unordered, self.shell.user_ns) or None
+        if unloaded:
+            run.body_imported = imported_since(unloaded)
         if held:
             run.rebound_modules = rebound_modules(held)
             del held

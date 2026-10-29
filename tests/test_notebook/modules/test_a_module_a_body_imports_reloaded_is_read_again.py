@@ -172,3 +172,41 @@ def test_a_hit_after_a_restart_imports_what_the_call_imports(cash_magics, a_pack
         statuses.append([str(s.get("status")) for s in cash_magics._last_cell_metrics.get("statements", [])])
     assert "RESTORED" in statuses[2], statuses
     assert (ns["y"], ns["z"]) == (12, 180)
+
+
+def test_a_hit_imports_no_module_the_run_did_not_import(cash_magics, a_package):
+    """``from .noisy import scale`` on a branch that did not run: a hit
+    after a restart imported ``bodypkg.noisy`` all the same, ran its top
+    level and left it in ``sys.modules``, where plain Python never imports
+    it. A hit imports what the run imported, not what its code names."""
+    api = (
+        "import time\ndef g(vals):\n    time.sleep(0.3)\n    if vals is None:\n"
+        "        from .noisy import scale\n    return sum(vals)\n"
+    )
+    cells = [
+        f"open('bodypkg/api.py', 'w').write({api!r})\n"
+        "open('bodypkg/noisy.py', 'w').write('LOG.append(1)\\ndef scale(x):\\n    return x\\n')",
+        "from bodypkg.api import g",
+        "y = g([1, 2, 3])",
+    ]
+    import builtins
+
+    builtins.LOG = log = []
+    try:
+        ns = cash_magics.shell.user_ns
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+        for name in [n for n in sys.modules if n.startswith("bodypkg.")]:
+            del sys.modules[name]
+        cash_magics.tracking_state.reset_session_state()
+        for name in ("g", "y"):
+            ns.pop(name)
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+        statuses = [str(s.get("status")) for s in cash_magics._last_cell_metrics.get("statements", [])]
+        assert "RESTORED" in statuses, statuses
+        assert ns["y"] == 6
+        assert "bodypkg.noisy" not in sys.modules
+        assert log == []
+    finally:
+        del builtins.LOG

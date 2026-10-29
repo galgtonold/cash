@@ -87,6 +87,9 @@ class StatementCacheMetadata:
     #: The input variables holding a scipy sparse matrix the statement put
     #: in canonical form by reading it (`sparse_order`): a hit does too.
     sparse_ordered: list[str] | None = None
+    #: The modules its callees imported in their body as it ran, which a
+    #: hit imports when they are not loaded (`cache_key.import_body_modules`).
+    body_imported: list[str] | None = None
     #: The environment variables installed code read while it ran, each with
     #: a digest of its value: the entry is served only while all match.
     env_reads: dict[str, str] | None = None
