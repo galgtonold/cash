@@ -10,7 +10,7 @@ from __future__ import annotations
 import ast
 import functools
 import textwrap
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from .analysis_budget import check_analysis_budget
@@ -25,6 +25,8 @@ __all__ = [
     "params_mutated_in_function",
     "CallArgTargets",
     "argument_roots",
+    "loop_target_parts",
+    "read_by_helpers",
     "call_arg_targets",
     "iterated_sources",
     "statement_calls",
@@ -304,12 +306,13 @@ def iterated_sources(tree: ast.AST | None) -> dict[str, frozenset[str]]:
     loop_targets: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
-            roots = _iterable_roots(node.iter)
-            for target in ast.walk(node.target):
-                if isinstance(target, ast.Name):
-                    sources.setdefault(target.id, set()).update(roots)
-                    if not isinstance(node, ast.comprehension):
-                        loop_targets.add(target.id)
+            for part, values in loop_target_parts(node.target, node.iter):
+                roots = _iterable_roots(values) if values is not None else set()
+                for target in ast.walk(part):
+                    if isinstance(target, ast.Name):
+                        sources.setdefault(target.id, set()).update(roots)
+                        if not isinstance(node, ast.comprehension):
+                            loop_targets.add(target.id)
     resolved: dict[str, frozenset[str]] = {}
     for name in sources:
         # A nested loop over a row of the outer one: `for row in rows for x in row`.
@@ -331,6 +334,26 @@ def iterated_sources(tree: ast.AST | None) -> dict[str, frozenset[str]]:
     return resolved
 
 
+def loop_target_parts(target: ast.expr, iterable: ast.expr) -> list[tuple[ast.expr, ast.expr | None]]:
+    """Each part of a loop's *target* with the expression its values come
+    out of: for ``for g, ax in zip(range(3), axes)`` ``g`` from
+    ``range(3)`` and ``ax`` from ``axes``; for ``for i, d in
+    enumerate(ds)`` ``i`` from none (a count) and ``d`` from ``ds``. Any
+    other target, whole, from all of *iterable*."""
+    if (
+        isinstance(target, ast.Tuple)
+        and isinstance(iterable, ast.Call)
+        and isinstance(iterable.func, ast.Name)
+        and not iterable.keywords
+        and not any(isinstance(item, ast.Starred) for item in (*target.elts, *iterable.args))
+    ):
+        if iterable.func.id == "zip" and len(target.elts) == len(iterable.args):
+            return list(zip(target.elts, iterable.args))
+        if iterable.func.id == "enumerate" and len(target.elts) == 2 and len(iterable.args) == 1:
+            return [(target.elts[0], None), (target.elts[1], iterable.args[0])]
+    return [(target, iterable)]
+
+
 def _iterable_roots(expr: ast.AST) -> set[str]:
     """The variables the values of *expr*, a loop's iterable, come out of:
     every name it reads, but the functions it calls (``enumerate``, ``zip``)."""
@@ -342,14 +365,114 @@ def argument_roots(arg: ast.AST, iterated: dict[str, frozenset[str]]) -> frozens
     """The variables whose objects *arg*, an argument of a call, hands over:
     ``x``; the ``s`` of ``s.d`` or ``s["d"]`` (the callee gets a part of
     it); for a loop or comprehension target, the variables it iterates
-    (*iterated*, see :func:`iterated_sources`). Nothing for a value the call
-    builds itself (``f(x.copy())``, ``f([1, 2])``)."""
+    (*iterated*, see :func:`iterated_sources`); for a list, tuple, set or
+    dict written in the call, what each of its items hands over:
+    ``reduce(lambda acc, p: setattr(p, 'x', -3), [points[7]], None)`` hands
+    the callee an item of ``points``. For any other expression, every
+    variable inside it: a shallow copy hands the same items
+    (``f(x.copy())``, ``list(x)``, ``zip(x, y)``, ``d.values()``, ``[] +
+    [x]``). Nothing for a literal, text or a truth value (``f([1, 2])``,
+    ``f(f"{kind}.png")``)."""
     node = arg.value if isinstance(arg, ast.Starred) else arg
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        return frozenset().union(*(argument_roots(item, iterated) for item in node.elts))
+    if isinstance(node, ast.Dict):
+        items = [item for item in (*node.keys, *node.values) if item is not None]
+        return frozenset().union(*(argument_roots(item, iterated) for item in items))
     while isinstance(node, (ast.Attribute, ast.Subscript)):
         node = node.value
-    if not isinstance(node, ast.Name):
+    if isinstance(node, ast.Name):
+        return iterated.get(node.id, frozenset({node.id}))
+    if isinstance(node, _NEW_VALUES):
         return frozenset()
-    return iterated.get(node.id, frozenset({node.id}))
+    # What `_names_inside` finds is read where no comprehension of *node*
+    # binds it: a variable of the notebook's, or of a loop around the call.
+    return frozenset().union(*(iterated.get(name, frozenset()) | {name} for name in _names_inside(node)))
+
+
+def read_by_helpers(arg: ast.AST, function_source: Callable[[str], str | None]) -> set[str]:
+    """The globals a function of the user's called in *arg* reads
+    (*function_source* gives its source): what it returns may be an object
+    one of them holds, handed on as a call's own argument is (``reduce(f,
+    [pick(7)], None)`` with ``def pick(i): return points[i]``)."""
+    found: set[str] = set()
+    for sub in ast.walk(arg):
+        if not (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name)):
+            continue
+        try:
+            fdef = resolve_function_def(sub.func.id, function_source) if function_source(sub.func.id) else None
+        except Exception:  # noqa: BLE001 - an unreadable source: nothing known it reads
+            fdef = None
+        if fdef is not None:
+            local = scope_locals(fdef)
+            found |= {n.id for n in ast.walk(fdef) if isinstance(n, ast.Name) and n.id not in local}
+    return found
+
+
+#: Expressions whose value holds nothing of what they read: text, a truth
+#: value, a constant (``f(f"{kind}.png")``, ``f(a == b)``).
+_NEW_VALUES = (ast.Constant, ast.JoinedStr, ast.Compare, ast.UnaryOp)
+
+
+#: Builtins that hand back a new number, text or truth value: nothing they
+#: are given is in it (``write(str(scores))``).
+_SCALAR_BUILTINS = frozenset(
+    ("str", "repr", "ascii", "format", "len", "int", "float", "complex", "bool", "round", "abs", "hash", "id")
+    + ("ord", "chr", "bin", "hex", "oct", "isinstance", "issubclass", "callable", "hasattr")
+)
+
+
+def _names_inside(node: ast.AST) -> set[str]:
+    """The variables expression *node* reads: not a name a comprehension
+    or a lambda in it binds, where it binds it (``[p for p in E] + [p]``
+    reads the outer ``p``), nor a called name (``list`` in ``list(x)``),
+    nor what goes into a new scalar (`_SCALAR_BUILTINS`, `_NEW_VALUES`). A
+    name a walrus binds reads what its value reads, wherever the walrus
+    sits (``[q] if (q := points[7]) is not None else []``)."""
+    walrus = {sub.target.id: sub.value for sub in ast.walk(node) if isinstance(sub, ast.NamedExpr)}
+    found: set[str] = set()
+
+    def visit(sub: ast.AST, bound: frozenset[str]) -> None:
+        if isinstance(sub, _NEW_VALUES) or (
+            isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name) and sub.func.id in _SCALAR_BUILTINS
+        ):
+            return
+        if isinstance(sub, ast.Name):
+            if isinstance(sub.ctx, ast.Load) and sub.id not in bound and sub.id not in walrus:
+                found.add(sub.id)
+            return
+        if isinstance(sub, ast.NamedExpr):
+            visit(sub.value, bound)
+            return
+        if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name):
+            for child in (*sub.args, *sub.keywords):
+                visit(child, bound)
+            return
+        if isinstance(sub, ast.Lambda):
+            args = sub.args
+            names = {a.arg for a in (*args.posonlyargs, *args.args, *args.kwonlyargs)}
+            names |= {a.arg for a in (args.vararg, args.kwarg) if a is not None}
+            for default in (*args.defaults, *(d for d in args.kw_defaults if d is not None)):
+                visit(default, bound)
+            visit(sub.body, bound | names)
+            return
+        if isinstance(sub, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)):
+            inner = bound
+            for index, gen in enumerate(sub.generators):
+                visit(gen.iter, bound if index == 0 else inner)
+                inner = inner | {n.id for n in ast.walk(gen.target) if isinstance(n, ast.Name)}
+                for test in gen.ifs:
+                    visit(test, inner)
+            for part in (sub.key, sub.value) if isinstance(sub, ast.DictComp) else (sub.elt,):
+                visit(part, inner)
+            return
+        for child in ast.iter_child_nodes(sub):
+            visit(child, bound)
+
+    visit(node, frozenset())
+    for value in walrus.values():
+        visit(value, frozenset())
+    return found
 
 
 def call_arg_targets(tree: ast.Module | None) -> frozenset[CallArgTargets]:

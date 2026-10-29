@@ -8,7 +8,7 @@ bare method call, and the accumulator-loop shapes.
 from __future__ import annotations
 
 import ast
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from .file_effects import SideEffectVisitor
@@ -28,6 +28,7 @@ __all__ = [
     "written_argument",
     "writer_aliases",
     "unrooted_write",
+    "write_into_a_return",
     "THE_NAMESPACE",
     "A_HELD_WRITER",
     "WRITES_INTO",
@@ -560,6 +561,21 @@ def unrooted_write(tree: ast.AST, aliases: Mapping[str, str | None]) -> str | No
         for written_into in _written_objects(node, aliases):
             if _namespace_rooted(written_into, aliases):
                 return f"{ast.unparse(written_into)} is read out of the namespace by a name cash cannot read"
+    return None
+
+
+def write_into_a_return(tree: ast.AST, of_the_users: Callable[[str], bool]) -> str | None:
+    """How *tree* writes into what a function of the user's returns
+    (``pick(7).x = -3`` with ``def pick(i): return points[i]``), or None. A
+    function *of_the_users* names may hand back an object a variable holds,
+    and no name in the text says which."""
+    for node in ast.walk(tree):
+        for written_into in _written_objects(node, {}):
+            root = written_into
+            while isinstance(root, (ast.Attribute, ast.Subscript)):
+                root = root.value
+            if isinstance(root, ast.Call) and isinstance(root.func, ast.Name) and of_the_users(root.func.id):
+                return f"{ast.unparse(root)} may return an object a variable holds, and it has no name here"
     return None
 
 

@@ -39,6 +39,7 @@ from .callee_effects import (
     argument_roots,
     iterated_sources,
     positional_param_names,
+    read_by_helpers,
     resolve_function_def,
     scope_locals,
     source_called_names,
@@ -1567,6 +1568,7 @@ def call_arguments(
     names: set[str] = set(bare_call_arguments(tree, user_ns))
     iterated = iterated_sources(tree)
     named_users_calls: list[ast.Call] = []
+    source = resolve_source or _live_user_function_source(user_ns)
     for call in statement_calls(tree, control_bodies=False):
         if users_callee(call.func, user_ns):
             if isinstance(call.func, ast.Name):
@@ -1574,10 +1576,10 @@ def call_arguments(
         elif not _asks_for_a_write(call, user_ns):
             continue
         for arg in [*call.args, *(kw.value for kw in call.keywords)]:
-            names |= argument_roots(arg, iterated)
+            names |= argument_roots(arg, iterated) | read_by_helpers(arg, source)
     if named_users_calls:
-        names |= _handed_globals(named_users_calls, user_ns, resolve_source or _live_user_function_source(user_ns))
-    return _changeable(names | handed_through_items(tree, iterated), user_ns)
+        names |= _handed_globals(named_users_calls, user_ns, source)
+    return _changeable(names | handed_through_items(tree, iterated, source), user_ns)
 
 
 def _live_user_function_source(user_ns: Mapping[str, Any]) -> Callable[[str], str | None]:
@@ -2264,14 +2266,20 @@ def _handed_globals(
     return frozenset(out)
 
 
-def handed_through_items(tree: ast.Module | None, iterated: dict[str, frozenset[str]]) -> frozenset[str]:
+def handed_through_items(
+    tree: ast.Module | None,
+    iterated: dict[str, frozenset[str]],
+    function_source: Callable[[str], str | None] | None = None,
+) -> frozenset[str]:
     """The variables a statement hands, item by item, to code that may
     change the items: a method no rule knows to be pure called on a
     comprehension's or a loop's target (``[r.update(tax=1) for r in
     records]``), and what a call is handed beside a ``lambda``
     (``list(map(lambda r: r.update(tax=1), records))``). Either changes
     what ``records`` holds, as handing ``r`` to a function of the user's
-    would, so they are watched the same way."""
+    would, so they are watched the same way. With *function_source*, also
+    the globals a function of the user's called in such an argument reads
+    (`read_by_helpers`: ``reduce(f, [pick(7)], None)``)."""
     if tree is None:
         return frozenset()
     names: set[str] = set()
@@ -2293,6 +2301,8 @@ def handed_through_items(tree: ast.Module | None, iterated: dict[str, frozenset[
             for arg in args:
                 if not isinstance(arg, ast.Lambda):
                     names |= argument_roots(arg, iterated)
+                    if function_source is not None:
+                        names |= read_by_helpers(arg, function_source)
     return frozenset(names)
 
 
