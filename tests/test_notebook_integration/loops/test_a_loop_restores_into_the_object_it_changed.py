@@ -156,6 +156,31 @@ BUMP = "def bump():\n    import counter_mod\n    counter_mod.k += 1\n"
             "print(Q.by_id.get(id(p.child)), p.child.k)",
             "keeps the id()",
         ),
+        (
+            P + "from collections import deque\np = P()\nids = deque([id(p.seen)])",
+            LOOP,
+            "print(ids[0] == id(p.seen), p.n)",
+            "keeps the id()",
+        ),
+        (
+            P + "import numpy as np\np = P()\narr = np.array([id(p.seen)], dtype=np.int64)",
+            LOOP,
+            "print(int(arr[0]) == id(p.seen), p.n)",
+            "keeps the id()",
+        ),
+        (
+            P + "from types import SimpleNamespace\np = P()\nns = SimpleNamespace(k=id(p.seen))",
+            LOOP,
+            "print(ns.k == id(p.seen), p.n)",
+            "keeps the id()",
+        ),
+        (
+            P + "class H:\n    __slots__ = ('k',)\n    def __init__(self, k):\n        self.k = k\np = P()\n"
+            "h = H(id(p.seen))",
+            LOOP,
+            "print(h.k == id(p.seen), p.n)",
+            "keeps the id()",
+        ),
         (P + GETSTATE + "p = P()", LOOP, "print(p.n, len(p.seen))", "is not restored into"),
         (P + "p = P()\nholder = {'a': [p]}", LOOP, "print(holder['a'][0].n, holder['a'][0] is p)", "container holds"),
         (
@@ -183,6 +208,10 @@ BUMP = "def bump():\n    import counter_mod\n    counter_mod.k += 1\n"
         "an id inside a big container",
         "a weak reference on a class",
         "an id key on a class",
+        "an id in a deque",
+        "an id in an integer array",
+        "an id in a SimpleNamespace",
+        "an id in a slots class",
         "own pickling",
         "a container holding it",
         "a helper writing a module",

@@ -2055,7 +2055,7 @@ the top.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/statement/identity_holders.py:identity_held_reason @6821fc78, cash/notebook/statement/processor.py:StatementProcessor._warn_identity_held @a5aa8bda, cash/notebook/statement/processor.py:_pointed_into @3b57c197 -->
+<!-- claim: cash/notebook/statement/identity_holders.py:identity_held_reason @57a47d5b, cash/notebook/statement/processor.py:StatementProcessor._warn_identity_held @a5aa8bda, cash/notebook/statement/processor.py:_pointed_into @3b57c197 -->
 **What happened.** A value the statement binds finds another object by
 identity, not by holding it: a weak reference (`wr = weakref.ref(p.child)`,
 a `WeakValueDictionary`) to an object the value does not hold, or an `int`
@@ -2064,8 +2064,12 @@ equal to the `id()` of an object the notebook holds (`reg = {id(p.seen):
 as it was stored, while the cell that builds `p` binds a new one: the weak
 reference finds nothing, and the `id()` matches nothing. So cash did not
 store the statement. The message names the variable and says which of the
-two it holds. A container cash cannot look inside counts too, since it
-could hold either. It is shown once per statement.
+two it holds. Lists, tuples, dicts, sets, deques, integer NumPy arrays
+and the attributes and slots of your own objects and of a `SimpleNamespace`
+are looked through; a library's objects for ids only. A container cash
+cannot look inside, or a value of more than 200,000 objects, counts too,
+since it could hold either. An `id()` turned into text (`hex(id(x))`) is
+not recognised. It is shown once per statement.
 
 A loop that changes an object in place (`p.update(i)`) is not restored
 into it either when the notebook holds a weak reference to, or the `id()`

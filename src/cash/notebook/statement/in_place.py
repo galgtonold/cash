@@ -14,8 +14,10 @@ Stored this way only when that restore is what plain Python gives
 added), or one that reaches itself, whose copy would point at the copy, runs
 the loop again, as do other names or containers holding it beside its own
 name (`holder_refusal`), and a weak reference the notebook holds to an
-object it holds, or an ``id()`` of one kept in a container of the notebook
-(`_held_by_the_notebook`): what it holds comes back as copies. A name bound
+object it holds, or an ``id()`` of one kept in a container (a deque, a
+``SimpleNamespace``, an object's slots, an integer NumPy array among them)
+of the notebook (`_held_by_the_notebook`): what it holds comes back as
+copies. A name bound
 to the object itself is fine: it is bound to the live object again. An
 ``id()`` kept in a module, or below a container too big to walk, is not
 seen. A hit asks again of the live objects, since a weak reference made
@@ -36,7 +38,8 @@ import weakref
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from cash._user_attrs import attribute_or
+from cash._user_attrs import attribute_or, builtin_base, builtin_items, own_dict
+from cash.closure_sharing import _slot_readers
 from cash.install_paths import is_user_code_module
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
@@ -192,30 +195,14 @@ def _held_by_the_notebook(parts: set[int], refs: list[Any], namespace: Mapping[s
             return _WEAK
         nxt: list[Any] = []
         for value in level:
-            kind = type(value)
-            if kind in (dict, list, tuple, set, frozenset):
-                items = value
-            elif (
-                (isinstance(value, _OPAQUE) and not _users_class(value))
-                or type(kind.__module__) is not str
-                or (kind.__module__.partition(".")[0] in _NOT_THE_NOTEBOOKS)
-            ):
-                continue
-            else:
-                state = attribute_or(value, "__dict__")
-                if type(state) is types.MappingProxyType and _users_class(value):
-                    # A registry on a class of the user's: ``alive =
-                    # weakref.WeakSet()``, ``by_id = {}`` filled in __init__.
-                    state = dict(state)
-                if type(state) is not dict:
-                    continue
-                items = state
             if id(value) in seen:
                 continue
+            held = _what_it_holds(value, parts)
+            if held is None:
+                continue
+            if type(held) is str:
+                return held
             seen.add(id(value))
-            # A dict's keys and values both: ``{id(p.seen): ...}``,
-            # ``{'seen': id(p.seen)}``, ``{weakref.ref(p.child): ...}``.
-            held = (*items, *items.values()) if isinstance(items, dict) else items
             try:
                 if not parts.isdisjoint(held):
                     return _BY_ID
@@ -234,6 +221,57 @@ def _held_by_the_notebook(parts: set[int], refs: list[Any], namespace: Mapping[s
             nxt.extend(held)
         level = [v for v in nxt if type(v) not in IMMUTABLE_LEAF_TYPES]
     return None
+
+
+def _what_it_holds(value: Any, parts: set[int]) -> list[Any] | str | None:
+    """What *value* holds, for `_held_by_the_notebook`: a dict's keys and
+    values both (``{id(p.seen): ...}``, ``{'seen': id(p.seen)}``,
+    ``{weakref.ref(p.child): ...}``), the items of a list, tuple, set or
+    deque or of a subclass of one (read through the builtin type's own
+    methods, not the class's), the items of a NumPy array of objects, and
+    an object's attributes and slots. `_BY_ID` for an integer NumPy array
+    holding one of *parts*, `_TOO_MANY` for a container that cannot be
+    read. None when nothing in it is looked at."""
+    kind = type(value)
+    if kind in _PLAIN:
+        return [*value, *value.values()] if kind is dict else value
+    if (
+        (isinstance(value, _OPAQUE) and not _users_class(value))
+        or type(kind.__module__) is not str
+        or (kind.__module__.partition(".")[0] in _NOT_THE_NOTEBOOKS)
+    ):
+        return None
+    held: list[Any] = []
+    if isinstance(value, type):
+        # A registry on a class of the user's: ``alive = weakref.WeakSet()``,
+        # ``by_id = {}`` filled in __init__.
+        state = attribute_or(value, "__dict__")
+        return list(dict(state).values()) if type(state) is types.MappingProxyType else None
+    if builtin_base(value) is not None:
+        try:
+            held.extend(builtin_items(value) or ())
+        except Exception:  # noqa: BLE001 - not readable: what it holds is unknown
+            return _TOO_MANY
+    elif kind.__name__ == "ndarray" and kind.__module__ == "numpy":
+        if value.dtype.hasobject:
+            return value.ravel().tolist()
+        if value.dtype.kind in "iu" and value.dtype.itemsize == 8 and value.size:
+            numpy = sys.modules["numpy"]
+            return _BY_ID if bool(numpy.isin(value, list(parts)).any()) else None
+        return None
+    state = own_dict(value)
+    if state:
+        held.extend(state.values())
+    for reader in _slot_readers(kind):
+        try:
+            held.append(reader.__get__(value, kind))
+        except AttributeError:  # an empty slot
+            continue
+    return held or None
+
+
+#: Opened as they are.
+_PLAIN = frozenset({dict, list, tuple, set, frozenset})
 
 
 def holder_refusal(name: str, obj: Any, values: Mapping[str, Any]) -> str | None:
