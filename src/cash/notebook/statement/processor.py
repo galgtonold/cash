@@ -135,7 +135,7 @@ from ...analysis.cacheability_decision import (
     identity_coupled_reason,
 )
 from ...analysis.code_analyzer import CodeAnalyzer, calls_ipython, statement_code
-from ...analysis.handed_callables import answers_shared, new_analysis_round, stop_sharing_answers
+from ...analysis.handed_callables import answers_shared, forget_held_answers, new_analysis_round, stop_sharing_answers
 from ...analysis.mutation_effects import (
     StatementEffects,
     live_function_source,
@@ -224,7 +224,7 @@ from ..shared_objects import (
 )
 from ..value_cutoff import LineageAliasStore
 from ..write_observer import children_left_running, kept_writes, observe_writes, process_runs
-from . import hidden_generators
+from . import hidden_generators, in_place
 from .lineage import note_own_writes
 from .observed_draws import ObservedDrawStore
 from .thread_reach import ThreadReach
@@ -599,6 +599,51 @@ def _cut_short_why(what: str, budget: float) -> str:
     return f"{what} would take longer than {budget:.1f}s, more than the statement is worth, so it re-runs every time"
 
 
+def _bound_names(tree: ast.AST | None) -> set[str] | None:
+    """The names *tree* binds: assigned, defined, imported; None when there
+    is no tree to read them from."""
+    if tree is None:
+        return None
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load):
+            found.add(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            found.add(node.name)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            found.update((a.asname or a.name).split(".")[0] for a in node.names)
+    return found
+
+
+def _pointed_into(name: str, why: IdentityHeld) -> IdentityHeld:
+    """`in_place.refusal`'s *why* for the object of *name*, with what the
+    warning says (``NOTEBOOK-IDENTITY-HELD``)."""
+    if why.what == "itself":
+        what = (
+            f"this loop assigns into '{name}', and the notebook holds {why.kind} of it. A stored copy bound "
+            "in its place would not be the object it finds, so the loop runs every time instead."
+        )
+        return IdentityHeld(why, name, why.kind, what)
+    if why.kind == "too many":
+        found = (
+            "the notebook holds a container too big to look through for a weak reference to, or the id() of, "
+            "an object in it"
+        )
+    else:
+        found = f"the notebook holds {why.kind} of an object in it"
+    what = (
+        f"this loop changes '{name}' in place, and {found}. A restore would hand '{name}' copies of its "
+        "objects, so the loop runs every time instead."
+    )
+    return IdentityHeld(why, name, why.kind, what)
+
+
+def _is_while(tree: ast.Module | None) -> bool:
+    """Whether *tree* is a single ``while`` loop."""
+    body = attribute_or(tree, "body", None) or []
+    return len(body) == 1 and isinstance(body[0], ast.While)
+
+
 class StatementProcessor:
     """
     Processes and caches individual Python statements.
@@ -636,6 +681,9 @@ class StatementProcessor:
         self._amplification = AmplificationGuard()
         #: The variables work a statement left running can change (`thread_reach`).
         self._thread_reach = ThreadReach()
+        #: Whether the loop run as one unit with this text did nothing but
+        #: leave its outcome; set by the control-structure processor.
+        self.unit_outcome_trusted: Callable[[str], bool] | None = None
         #: The work NOTEBOOK-WORK-RUNNING was given for.
         self._work_running_warned: set[str] = set()
         #: Statements already warned NOTEBOOK-CALLABLE-UNREAD about.
@@ -732,7 +780,7 @@ class StatementProcessor:
         self._records = StatementRecords(shell, self.tracking_state, cash_instance, self.function_tracker)
         self._in_loop = InLoopChanges(shell, self.tracking_state, self._records)
         self._mutation_routing = MutationRouting(
-            shell, self.tracking_state, self._mutations, self._records, self._in_loop
+            shell, self.tracking_state, self._mutations, self._records, self._in_loop, self._cheap_to_rerun
         )
 
         # Used to prevent the "redundant import" optimization from skipping
@@ -2017,6 +2065,64 @@ class StatementProcessor:
         )
         return hit_result
 
+    def _keep_stored_in_place(self, run: StatementRun) -> None:
+        """Store what a loop run as one unit changed in place only when it is
+        stored and its outcome is all it did (`unit_outcome_trusted`); else
+        it runs every time, as before, and the structure's lineage update
+        names those objects by their values."""
+        trusted = self.unit_outcome_trusted
+        if not run.skip_cache and trusted is not None and trusted(run.code):
+            return
+        names = ", ".join(sorted(run.metrics["stored_in_place"]))
+        if _is_while(run.tree):
+            why = "a while loop is not stored with what it changes"
+        else:
+            why = "it reads a clock, draws a value or changes what its key does not name"
+        self._unstore_in_place(run, f"In-place mutation on: {names} ({why}; statement re-executes)")
+
+    def _restorable_in_place(
+        self, run: StatementRun, captured_vars: dict[str, Any], holders: dict[str, Any] | None
+    ) -> None:
+        """Keep what the loop changed stored only when a hit can restore it
+        into the live object (`in_place`): the object keeps its identity, so
+        a weak reference or an ``id()`` key still finds it. Else it runs
+        every time, with the reason."""
+        names = sorted(run.metrics["stored_in_place"])
+        values = {**captured_vars, **(holders or {})}
+        for name in names:
+            obj = captured_vars.get(name)
+            why = in_place.refusal(obj, self.shell.user_ns) or in_place.holder_refusal(name, obj, values)
+            if isinstance(why, IdentityHeld):
+                self._warn_identity_held(run, _pointed_into(name, why))
+            if why is not None:
+                self._unstore_in_place(run, f"In-place mutation on: {name} ({why}; statement re-executes)")
+                return
+        run.restored_into = set(names)
+
+    def _cheap_to_rerun(self, run: StatementRun) -> bool:
+        """Whether a loop last ran in less than the cost model's compute
+        floor: storing what it changes costs its run the checks and the
+        write, and a hit saves next to nothing, so it runs again. A loop not
+        measured yet is stored."""
+        if run.force_persist:
+            return False
+        last = self._expected_run_time(run.code)
+        return last is not None and last < self.persistence_policy().compute_floor_s
+
+    def _unstore_in_place(self, run: StatementRun, reason: str) -> None:
+        """Run the loop every time, as before it stored what it changed."""
+        names = set(run.metrics.pop("stored_in_place"))
+        run.restored_into = set()
+        run.est_fit = run.est_fit - names
+        run.in_place = run.in_place | names
+        run.outputs = run.outputs - names
+        if run.skip_cache:
+            # It runs every time for another reason: named by its key, what
+            # it changed would keep the lineage of the run that stored it.
+            return
+        run.skip_cache = True
+        run.metrics["uncacheable_reasons"].append(reason)
+
     def _live_objects_shared(self, run: StatementRun, metadata: StatementCacheMetadata | None) -> bool:
         """Whether a hit of *run* must not restore over the objects its names
         are bound to now (`live_shared_reason`), with the miss reason set.
@@ -2029,6 +2135,9 @@ class StatementProcessor:
         """
         held = set((metadata.holders or {}) if metadata is not None else ())
         mutated = set(run.analysis.all_mutated_vars) & run.outputs if run.analysis is not None else set()
+        # What the analyses of this statement kept of its objects is cash's
+        # reference, not a holder of the user's.
+        forget_held_answers()
         user_ns = self.shell.user_ns
         names = {name for name in run.outputs | held if user_ns.get(name) is not FORWARD_PROBE_PLACEHOLDER}
         keep = (held | mutated) & names
@@ -2844,6 +2953,10 @@ class StatementProcessor:
         self._observe_process_state(run)
         self._mutation_routing.observe(run)
         self._mutation_routing.note_module_state(run)
+        if run.metrics.get("stored_in_place"):
+            # Before its outputs are captured: what it will not store is
+            # left out of them, as before it ran.
+            self._keep_stored_in_place(run)
         if run.carriers_advanced is not None:
             # A generator the statement rebinds or was seen changing in place
             # is an output, with an output's lineage.
@@ -2925,7 +3038,12 @@ class StatementProcessor:
             with _plain_data.one_look(captured_vars):
                 holders = None
                 if not run.skip_cache:
+                    # What the analyses kept of the outputs is cash's, not a
+                    # holder the share check should count.
+                    forget_held_answers()
                     holders = self._refuse_unrestorable_outputs(run, captured_vars, execution.echo, execution.cost)
+                if not run.skip_cache and run.metrics.get("stored_in_place"):
+                    self._restorable_in_place(run, captured_vars, holders)
                 with logging_edges() as shared:
                     self._record_shared_object_edges(run, captured_vars, holders, execution.echo, execution.cost)
                     self._link_inputs_kept_by(run, execution.echo, execution.cost)
@@ -2960,6 +3078,8 @@ class StatementProcessor:
                     # entry would be served without that write
                     # (`_move_what_reducers_wrote`).
                     run.skip_cache = True
+                if run.metrics.get("stored_in_place"):
+                    self._keep_stored_in_place(run)
                 if not run.skip_cache:
                     saved_metadata = self._store.save(
                         run,

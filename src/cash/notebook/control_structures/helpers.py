@@ -278,6 +278,7 @@ def update_lineage_after_execution(
     link_shares: bool = True,
     cost: float = 0.0,
     held: tuple[Any, ...] = (),
+    prior_lineages: dict[str, str] | None = None,
 ) -> None:
     """
     Update lineage for variables that may have been mutated inside the
@@ -307,6 +308,10 @@ def update_lineage_after_execution(
     which the loop's own call covers when it ends. *cost* is what the
     structure took, for the check's time budget, and *held* what cash still
     holds of it (the loop's iterable), which is no other holder.
+
+    *prior_lineages* are the lineages some variables had before the
+    structure ran, where the structure's own run moved them already: the
+    objects a loop run as one unit stores as outputs (``stored_in_place``).
     """
     body_nodes = get_body_nodes(node)
     if not body_nodes:
@@ -358,6 +363,7 @@ def update_lineage_after_execution(
                 mutated_vars | target_names,
             ),
             unit_digest=unit_digest,
+            prior_lineages=prior_lineages,
         )
 
 
@@ -608,6 +614,7 @@ def update_mutated_variable_lineages(
     loop_code: str,
     input_lineages: dict[str, str] | None = None,
     unit_digest: str | None = None,
+    prior_lineages: dict[str, str] | None = None,
 ) -> None:
     """Give every variable the control structure mutated a new lineage.
 
@@ -658,7 +665,11 @@ def update_mutated_variable_lineages(
                 value_hash = statement_processor.compute_hash(val)
 
             # `prev=`: what this variable was before the loop touched it.
-            prior_lineage = statement_processor.tracking_state.variable_lineage.get(var_name)
+            # Before the structure ran: a loop that stores what it changed
+            # moved it as an output already, computed or restored alike.
+            prior_lineage = (prior_lineages or {}).get(
+                var_name
+            ) or statement_processor.tracking_state.variable_lineage.get(var_name)
             lineage_components = [loop_code_hash, value_hash]
             if prior_lineage:
                 lineage_components.append(f"prev={prior_lineage}")

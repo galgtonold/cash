@@ -156,7 +156,7 @@ cells: in a headless run
 ([`NOTEBOOK-NOT-FOUND`](../warnings.md#notebook-not-found)), run the cells
 from the top, and each one is restored from the cache as it comes.
 
-<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor._persistable_callees @7a89a67f -->
+<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor._persistable_callees @447a65b1 -->
 A value built by a `for` loop can be restored too. cash records what the loop
 produced when it ran, and trusts that record after a restart only while
 everything the loop and its functions read is unchanged, and only if the loop
@@ -170,6 +170,34 @@ the loop holds. Otherwise
 the loop runs again. The loop's own working variables (`parts` in
 `for f in files: parts.append(read(f))`) are not stored; a cell that reads
 them runs the loop.
+
+<!-- claim: cash/notebook/statement/mutation_routing.py:MutationRouting._route_unit @c2493cc8, cash/notebook/statement/processor.py:StatementProcessor._keep_stored_in_place @b8c0edcd -->
+A long `for` loop that cash runs as one step stores the objects it changes in
+place, such as a progress counter it calls `update()` on, a list from an
+earlier cell it appends to, or an object or dict it assigns into
+(`p.n += 1`, `d[k] = v`), when the loop passes the same checks. A restore
+puts the stored state back into the object itself, so other names for it, a
+`weakref` to it and a dict keyed by its `id()` still find it, as after a
+plain run.
+
+<!-- claim: cash/notebook/statement/in_place.py:refusal @4357df4e, cash/notebook/statement/in_place.py:_held_by_the_notebook @ffa2511c, cash/notebook/statement/processor.py:StatementProcessor._cheap_to_rerun @1a1db567 -->
+Only a list, a dict, a set, or an object of your own class pickled the default
+way is restored into. An object of another kind the loop only assigns into
+(`arr[i] = v` on a NumPy array) is bound to the stored copy, as before, when
+nothing the notebook holds points at it by a `weakref` or its `id()`. The
+loop runs again when an object it changes in place is of another kind,
+defines its own pickling (`__getstate__`, `__reduce__`), holds itself, or sits
+inside another container; when a `weakref` the notebook holds (in a
+variable or a container at any depth, a deque, a `SimpleNamespace` or an
+object's slots among them, or a `weakref.finalize`) points at an object it
+holds, or such a container, a NumPy array, a pandas object, a
+`functools.partial` or an `argparse.Namespace` keeps one's `id()` as a
+key, a value or an item, or as text (`hex(id(x))`) (what it holds comes back as copies; both are checked again at each
+restore); when the notebook holds a container of more than 10,000 items that
+holds anything but numbers, strings and the like or tuples of them (records), which is not looked inside;
+when a function it calls writes a module it imports;
+when it is a `while` loop; and when it last ran in less than 0.1 s, where
+storing it costs more than a restore saves. A loop not measured yet is stored.
 
 <!-- claim: cash/analysis/mutations.py:module_setting_receivers @977421aa, cash/analysis/mutations.py:_TopLevelCallCollector._bare_call @6775632d -->
 A setting kept inside a library, such as `plt.style.use("ggplot")`,

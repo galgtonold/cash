@@ -15,7 +15,7 @@ from collections.abc import Callable, Iterable
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from .analysis_budget import check_analysis_budget
 from .ast_util import CallScope, called_names, handed_names
-from .mutations import MutationVisitor, iter_store_targets
+from .mutations import MUTATING_METHODS, MutationVisitor, iter_store_targets
 
 __all__ = [
     "all_param_names",
@@ -774,6 +774,46 @@ def source_global_mutations(source: str) -> frozenset[str]:
         return free_vars_mutated_in_function(node)
     except RecursionError:
         return frozenset()
+
+
+@functools.lru_cache(maxsize=4096)
+def writes_a_module_it_imports(source: str) -> bool:
+    """Whether the function defined by *source* imports a module itself and
+    changes it: ``import cnt`` then ``cnt.k += 1``. The name is the
+    function's own, so :func:`source_global_mutations` does not see it, yet
+    the module is shared state a skipped call would leave as it was."""
+    node = parse_function_source(source)
+    if node is None:
+        return False
+    imported = {
+        (alias.asname or alias.name).split(".")[0]
+        for sub in ast.walk(node)
+        if isinstance(sub, (ast.Import, ast.ImportFrom))
+        for alias in sub.names
+        if isinstance(sub, ast.Import) or alias.asname or alias.name != "*"
+    }
+    if not imported:
+        return False
+    for sub in ast.walk(node):
+        targets: list[ast.expr] = []
+        if isinstance(sub, (ast.Assign, ast.Delete)):
+            targets = list(sub.targets)
+        elif isinstance(sub, (ast.AugAssign, ast.AnnAssign)):
+            targets = [sub.target]
+        elif isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute) and sub.func.attr in MUTATING_METHODS:
+            targets = [sub.func.value]
+        elif isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name) and sub.func.id in ("setattr", "delattr"):
+            targets = sub.args[:1]
+        for target in targets:
+            for part in iter_store_targets(target) if not isinstance(sub, ast.Call) else [target]:
+                root = part
+                depth = 0
+                while isinstance(root, (ast.Attribute, ast.Subscript)):
+                    root = root.value
+                    depth += 1
+                if isinstance(root, ast.Name) and root.id in imported and (depth or isinstance(sub, ast.Call)):
+                    return True
+    return False
 
 
 @functools.lru_cache(maxsize=4096)

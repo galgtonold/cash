@@ -16,6 +16,7 @@ from cash._clock import perf_counter as _perf_counter
 from cash.exceptions import CacheBackendError, CacheSerializationError
 from cash.notebook.anchors import resolve_anchors
 from cash.notebook.cache_status import CacheStatus
+from cash.notebook.statement import in_place
 from cash.notebook.statement.derivation_edges import record_shared_object_edges
 from cash.notebook.statement.results import COST_MODEL_KEYS
 from cash.notebook.statement.run import ECHO_FIELD, echoes
@@ -71,6 +72,23 @@ class CacheHitServer:
             # another statement) a plain run does not show.
             logger.debug("[CACHE] Entry holds an echoed value this statement does not show, running it instead.")
             return None
+        if metadata is not None and metadata.restored_into:
+            # Restored into the live objects: each must be one of the kind stored.
+            variables = cached_data.get("variables") if isinstance(cached_data, dict) else None
+            if not isinstance(variables, dict) or not in_place.ready(
+                variables, metadata.restored_into, self._restorer.shell.user_ns
+            ):
+                logger.debug("[CACHE] A name it restores into is bound to another kind of object, running it instead.")
+                return None
+            # A weak reference or an id() key held now finds a copy after the
+            # restore, whenever it was made: asked of the live objects, as
+            # when the loop was stored.
+            user_ns = self._restorer.shell.user_ns
+            for name in sorted(metadata.restored_into):
+                why = in_place.refusal(user_ns.get(name), user_ns)
+                if why is not None:
+                    logger.debug("[CACHE] Not restoring into %s (%s), running it instead.", name, why)
+                    return None
         if metadata is not None and metadata.anchors:
             # The variables' objects the entry holds by reference: the live
             # ones, or a miss when one changed (`anchors`).

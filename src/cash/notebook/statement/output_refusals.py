@@ -129,8 +129,8 @@ def _value_refusal(
         lambda name, value: _alias_refusal(name, value, user_ns, cash_held, inputs),
         identity_coupled_reason,
         _consumable_refusal,
-        lambda name, value: identity_held_reason(name, value, user_ns),
         _context_variable_refusal,
+        lambda name, value: identity_held_reason(name, value, user_ns),
     )
     for refusal in refusals:
         for out in outputs:

@@ -17,47 +17,78 @@ What is looked at:
   and not inside the value itself (a restore rebuilds those together); a
   class, a module or a function comes back as itself and does not count;
 - an ``int`` in the value equal to the ``id()`` of an object the value holds
-  or the notebook's variables hold, at any depth; a number below every
-  address this process has mapped (`_lowest_address`) is not one.
+  or the notebook's variables hold, at any depth, an integer NumPy array
+  holding one, and one turned into text (``hex(id(x))``, `as_address`); a
+  number outside every mapping this process can write (`_mapped`) is not
+  one;
+- a weak reference another variable keeps to the value, or to an object in
+  it (`_weakly_held`).
 
-The value is walked through lists, tuples, dicts, sets and the ``__dict__``
-of objects of the user's own classes, not into a library's objects (a
-pandas frame keeps weak references between its own parts). A container of
-more than `_MAX_SCANNED` items is not looked inside, and the walk stops at
-`_MAX_SEEN` objects: walking a big value item by item cost each store more
-than the check is worth. Such a container, and a pandas or NumPy object,
-gives the ints among its first and last items and its index
-(`_sampled_ints`): a registry keyed by ``id()`` keeps them all alike. When
-the notebook holds more than the walk reads, a number it could not rule out
-is refused, with the warning: not even the ids of every object the garbage
-collector tracks rule one out, as it does not track a dict of plain values
-or a str.
+The value is walked through lists, tuples, dicts, sets, deques and their
+subclasses (read through the builtin type's own methods, never the
+class's), a NumPy array of objects, and the attributes and slots of
+objects of the user's own classes and of a ``SimpleNamespace``. A library's
+object is read only as `library_parts` knows it (a pandas object's columns,
+a ``functools.partial``'s arguments), never attribute by attribute: a
+pandas frame keeps weak references between its own parts, which a restore
+rebuilds together, and a stream the ident of its thread, which no object of
+the notebook's is. One it does not know could hold an ``id()`` or a weak
+reference too, so a value holding one next to either runs again. A
+container of more than `_MAX_SCANNED` numbers, strings and the like, or of
+tuples of them (records), is read at C speed rather than item by item; one
+of the notebook's holding objects of one class of the user's with only such
+attributes is checked for the ``id()`` of its items at C speed too. A value
+the walk cannot finish within `_MAX_SEEN` objects, or a container it cannot
+read, could hold either, and so could the notebook's when a candidate
+``id()`` is looked for below more: the statement runs again with the
+warning.
 """
 
 from __future__ import annotations
 
+import array
+import functools
+import operator
+import re
 import sys
 import types
 import weakref
+from itertools import chain
 from typing import Any
 
-from cash._user_attrs import attribute_or, builtin_items
+from cash._user_attrs import attribute_or, builtin_base, builtin_items, own_dict
+from cash.closure_sharing import _slot_readers
 from cash.install_paths import is_user_code_module
+from cash.value_types import IMMUTABLE_LEAF_TYPES
 
-__all__ = ["IdentityHeld", "identity_held_reason", "weakly_held_reason"]
+__all__ = ["IdentityHeld", "as_address", "identity_held_reason", "library_parts"]
 
-#: A container with more items is not looked inside.
+#: A container with more items is read at C speed when it holds only
+#: leaves or records of them, and walked item by item otherwise.
 _MAX_SCANNED = 10_000
 #: Most objects one walk looks at.
 _MAX_SEEN = 200_000
 #: Restored as themselves, by reference: a weak reference to one stays right.
 _BY_REFERENCE = (type, types.ModuleType, types.FunctionType, types.BuiltinFunctionType, types.MethodType)
 _REFERENCES = (weakref.ReferenceType, weakref.ProxyType, weakref.CallableProxyType)
-_CONTAINERS = (list, tuple, dict, set, frozenset)
 #: Hold their weak references in ``.data``.
 _WEAK_CONTAINERS = (weakref.WeakValueDictionary, weakref.WeakKeyDictionary, weakref.WeakSet)
-#: The smallest ``id()`` looked for: an object's address, aligned to 8.
-_LOWEST_ADDRESS = 1 << 16
+#: Hold nothing else; never the target of a registry's ``id()``.
+_LEAVES = frozenset(IMMUTABLE_LEAF_TYPES)
+_DICT = operator.attrgetter("__dict__")
+#: The smallest ``id()`` looked for: an object's address. Nothing is mapped
+#: below an executable's base, 0x400000 on Linux when not position
+#: independent and far higher otherwise (macOS keeps the lowest 4 GiB
+#: unmapped): ``N = 100_000`` or a ``range`` of row numbers is no ``id()``.
+_LOWEST_ADDRESS = 1 << 22
+#: Above any address a 64-bit process maps (48-bit virtual addresses): a
+#: nanosecond or microsecond timestamp is no ``id()``.
+_HIGHEST_ADDRESS = 1 << 48
+#: What every object's address is a multiple of: a pointer's size. The heap
+#: keeps 16 bytes on 64-bit builds, but an object compiled into a C image
+#: keeps only 8: ``np.True_`` (which ``(arr >= 0).all()`` returns), ``()``,
+#: and the builtin types on a clang build.
+_ALIGNMENT = 8 if sys.maxsize > 1 << 32 else 4
 
 
 class IdentityHeld(str):
@@ -67,7 +98,9 @@ class IdentityHeld(str):
 
     name: str
     kind: str
-    #: What the warning says, when not that *name* holds *kind* of an object.
+    #: What the warning says happened, when not that *name* holds *kind*:
+    #: a loop's refusal to restore into an object the notebook points at
+    #: (`in_place.refusal`).
     what: str | None
 
     def __new__(cls, reason: str, name: str, kind: str, what: str | None = None) -> IdentityHeld:
@@ -79,32 +112,35 @@ class IdentityHeld(str):
 def identity_held_reason(name: str, value: Any, user_ns: dict[str, Any]) -> IdentityHeld | None:
     """Why *value*, bound to *name*, cannot be restored apart from what it
     points at by identity (see the module docstring), or while another
-    variable finds it by one (`weakly_held_reason`); None when it can."""
+    variable finds it by one (`_weakly_held`); None when it can."""
     user_kinds: dict[type, bool] = {}
-    seen: set[int] = set()
-    refs: list[Any] = []
-    numbers: set[int] = set()
-    targets: list[Any] = []
-    unread: list[Any] = []
-    _walk([value], seen, user_kinds, refs, numbers, targets, unread=unread)
-    numbers.update(_sampled_ints(unread))
-    found = _held_by_id(name, refs, seen, numbers, user_kinds, user_ns)
-    if found is None and targets:
-        found = _weakly_held(name, targets, user_ns)
+    walk = _Walk(user_kinds, targets=[])
+    walk.run([value])
+    found = _held_by_id(name, walk, user_kinds, user_ns)
+    if found is None and walk.targets:
+        found = _weakly_held(name, walk.targets, user_ns)
     return found
 
 
-def _held_by_id(
-    name: str,
-    refs: list[Any],
-    seen: set[int],
-    numbers: set[int],
-    user_kinds: dict[type, bool],
-    user_ns: dict[str, Any],
-) -> IdentityHeld | None:
-    """`identity_held_reason`'s answer for what *value* itself holds, from
-    its walk: *refs*, *seen* and *numbers*."""
-    for ref in refs:
+def _held_by_id(name: str, walk: _Walk, user_kinds: dict[type, bool], user_ns: dict[str, Any]) -> IdentityHeld | None:
+    """`identity_held_reason`'s answer for what the value itself holds, from
+    its *walk*."""
+    if walk.unread or walk.cut:
+        what = (
+            f"a {type(walk.unread[0]).__name__} cash cannot look inside"
+            if walk.unread
+            else "more objects than cash looks through"
+        )
+        return IdentityHeld(
+            f"'{name}' holds {what}; it could hold a weak reference or an id(), so the statement re-runs every time",
+            name,
+            "a container cash cannot read",
+            what=(
+                f"'{name}' holds {what}, so cash cannot tell whether it finds another object by a weak "
+                "reference or an id(). This statement runs every time instead."
+            ),
+        )
+    for ref in walk.refs:
         if not issubclass(type(ref), weakref.ReferenceType):
             if _alive(ref):
                 return IdentityHeld(
@@ -114,8 +150,8 @@ def _held_by_id(
                     "a weak reference",
                 )
             continue
-        target = ref()
-        if target is not None and id(target) not in seen and not issubclass(type(target), _BY_REFERENCE):
+        target = weakref.ref.__call__(ref)  # not a subclass's own __call__: the user's code
+        if target is not None and id(target) not in walk.seen and not issubclass(type(target), _BY_REFERENCE):
             return IdentityHeld(
                 f"'{name}' holds a weak reference to an object it does not hold; restored, it would "
                 "point at another object, so the statement re-runs every time",
@@ -123,127 +159,142 @@ def _held_by_id(
                 "a weak reference",
             )
     lowest = max(_LOWEST_ADDRESS, _lowest_address())
-    candidates = {n for n in numbers if n >= lowest and not n % 8}
+    candidates = {n for n in walk.numbers if lowest <= n < _HIGHEST_ADDRESS and not n % _ALIGNMENT}
     if candidates:
         candidates = _mapped(candidates)
-    if not candidates:
+    # An array's are kept as arrays: a column of millions of numbers is
+    # checked at C speed, never made a set.
+    in_arrays = [found for found in map(_addresses_in, walk.arrays) if found.size]
+    if candidates or in_arrays:
+        from .output_refusals import is_history_name
+
+        held = _Walk(user_kinds, seen=set(walk.seen), quiet=True, candidates=frozenset(candidates))
+        held.id_arrays = [] if in_arrays else None
+        held.run([v for k, v in user_ns.items() if k != name and not is_history_name(k)])
+        if held.cut and not held.found:
+            # Not known to be an id(): the notebook's objects were not all
+            # looked through.
+            return IdentityHeld(
+                f"'{name}' holds a number that could be an id(), and the notebook holds more objects than cash "
+                "looks through, so the statement re-runs every time",
+                name,
+                "a container cash cannot read",
+                what=(
+                    f"'{name}' holds a number that could be the id() of an object, and the notebook holds more "
+                    "objects than cash looks through, so cash cannot tell whether it is one. This statement "
+                    "runs every time instead."
+                ),
+            )
+        if held.found or not candidates.isdisjoint(held.seen) or (in_arrays and _any_held(in_arrays, held)):
+            return IdentityHeld(
+                f"'{name}' holds the id() of an object the notebook holds; restored, the object would be "
+                "another one, so the statement re-runs every time",
+                name,
+                "an id()",
+            )
+    if walk.closed and (candidates or in_arrays or walk.refs):
+        # A value that keeps ids or weak references, next to a library's
+        # object cash does not look inside: that object could keep one too.
+        what = f"a {type(walk.closed[0]).__name__} cash does not look inside"
+        return IdentityHeld(
+            f"'{name}' holds {what}; it could hold a weak reference or an id(), so the statement re-runs every time",
+            name,
+            "a container cash cannot read",
+            what=(
+                f"'{name}' holds {what}, so cash cannot tell whether it finds another object by a weak "
+                "reference or an id(). This statement runs every time instead."
+            ),
+        )
+    return None
+
+
+#: Every digit as ``0``: a run of seven digits is then ``"0000000"``.
+_DIGITS_AS_ZERO = str.maketrans("123456789", "000000000")
+#: The lines of text `as_address` may read as a number.
+_NUMBER_LINES = re.compile(r"^(?:0[xX][0-9a-fA-F]{5,16}|[0-9]{7,18})$", re.MULTILINE)
+
+
+def as_address(text: str) -> int | None:
+    """The number *text* spells when it could be an ``id()`` turned into
+    text, ``hex(id(x))`` or ``str(id(x))``; None otherwise."""
+    if not 6 < len(text) < 19:
         return None
-    if not candidates.isdisjoint(seen):
-        return _holds_an_id(name)
-    held = set(seen)
-    from .output_refusals import is_history_name
-
-    roots = [v for k, v in user_ns.items() if k != name and not is_history_name(k)]
-    if _walk(roots, held, user_kinds, [], set(), wanted=candidates, unread=[]):
-        return _holds_an_id(name) if not candidates.isdisjoint(held) else None
-    if not candidates.isdisjoint(held):
-        return _holds_an_id(name)
-    # The walk left objects unread (a list of 20,000 objects, past
-    # `_MAX_SEEN`). The collector's objects do not rule a number out: it
-    # tracks no dict of plain values, no str. A bare one too: ``key =
-    # id(p)`` is as much an id as one kept in a dict.
-    return IdentityHeld(
-        f"'{name}' holds a number that may be the id() of an object, and the notebook holds too many objects "
-        "to rule that out; restored, the object would be another one, so the statement re-runs every time",
-        name,
-        "an id()",
-        what=(
-            f"'{name}' holds a number that may be the id() of an object, and cash could not look through all of "
-            "the notebook's objects to rule that out. Restored from the cache, it would find another object, "
-            "so this statement runs every time instead."
-        ),
-    )
-
-
-def _holds_an_id(name: str) -> IdentityHeld:
-    return IdentityHeld(
-        f"'{name}' holds the id() of an object the notebook holds; restored, the object would be "
-        "another one, so the statement re-runs every time",
-        name,
-        "an id()",
-    )
-
-
-#: How many items `_sampled_ints` reads from each end of a container it was
-#: not looked inside.
-_SAMPLE = 32
-
-
-def _sampled_ints(unread: list[Any]) -> set[int]:
-    """The ints among the first and last items (and keys) of each container
-    in *unread* too big to look inside, and of the index, the values and
-    each integer column of each pandas or NumPy object: a registry keyed by
-    ``id()`` keeps them all alike, so a few find it. A sampled item that is
-    a list, tuple, set or dict is sampled the same way, `_SAMPLE_LEVELS`
-    deep: ``[{'pid': id(p)} for p in ps]`` keeps its ids a level down."""
-    out: set[int] = set()
-    for obj in unread:
-        _sample_into(obj, out, _SAMPLE_LEVELS)
-    return out
-
-
-#: How many levels of containers `_sampled_ints` samples into.
-_SAMPLE_LEVELS = 3
-
-#: Most integer columns of one frame `_sampled_ints` reads.
-_SAMPLE_COLUMNS = 64
-
-
-def _sample_into(obj: Any, out: set[int], levels: int) -> None:
-    import itertools
-
-    def ends(items: Any) -> list[Any]:
-        if isinstance(items, (list, tuple)):
-            return [*items[:_SAMPLE], *items[-_SAMPLE:]]
-        return list(itertools.islice(items, _SAMPLE))
-
-    if isinstance(obj, dict):
-        picked = ends(dict.__iter__(obj)) + ends(dict.values(obj))
-    elif isinstance(obj, (list, tuple, set, frozenset)):
-        picked = ends(obj if isinstance(obj, (list, tuple)) else iter(obj))
-    else:
-        picked = _array_ends(obj)
-        for part in ("index", "columns"):
-            picked += _array_ends(attribute_or(attribute_or(obj, part, None), "values", None))
-        if attribute_or(obj, "ndim", None) == 1:
-            # A Series' values; a frame's would copy every column.
-            picked += _array_ends(attribute_or(obj, "values", None))
-        elif attribute_or(obj, "ndim", None) == 2:
-            picked += _frame_column_ends(obj)
-    for item in picked:
-        if type(item) is int:
-            out.add(item)
-        elif levels > 1 and type(item) in (dict, list, tuple, set, frozenset):
-            _sample_into(item, out, levels - 1)
-
-
-def _array_ends(array: Any) -> list[int]:
-    """The first and last `_SAMPLE` items of an integer NumPy array."""
-    if attribute_or(attribute_or(array, "dtype", None), "kind", None) not in ("i", "u"):
-        return []
     try:
-        flat = array.ravel()
-        return [int(n) for n in (*flat[:_SAMPLE], *flat[-_SAMPLE:])]
-    except (TypeError, ValueError, AttributeError, IndexError):
-        return []
+        if text[:2] in ("0x", "0X"):
+            return int(text, 16)
+        return int(text) if text.isdigit() else None
+    except ValueError:
+        return None
 
 
-def _frame_column_ends(frame: Any) -> list[int]:
-    """The ends of each integer column of a pandas frame (a ``pid`` column
-    of ids), read a column at a time: the frame's ``values`` would copy
-    every column into one array."""
-    dtypes = attribute_or(frame, "dtypes", None)
-    iloc = attribute_or(frame, "iloc", None)
-    if dtypes is None or iloc is None:
+def library_parts(value: Any) -> list[Any] | None:
+    """What a library's object of a kind cash knows keeps the user's data
+    in: a ``functools.partial``'s function and arguments, an
+    ``argparse.Namespace``'s attributes, an ``array.array``'s numbers, a
+    structured NumPy array's fields, and a pandas frame's, series' or
+    index's columns as NumPy arrays. None for any other object: what it
+    holds is not known."""
+    if isinstance(value, functools.partial):
+        keywords = functools.partial.keywords.__get__(value)
+        parts = [functools.partial.func.__get__(value), *functools.partial.args.__get__(value)]
+        parts.extend(dict.values(keywords) if type(keywords) is dict else ())
+        state = own_dict(value)
+        if state:
+            parts.extend(state.values())
+        return parts
+    kind = type(value)
+    if kind is array.array:
+        return array.array.tolist(value) if value.typecode in "lLqQ" else []
+    if _numpy_array(kind) and value.dtype.names:
+        return [value[field] for field in value.dtype.names]
+    argparse = sys.modules.get("argparse")
+    if argparse is not None and isinstance(value, argparse.Namespace):
+        state = own_dict(value)
+        return list(state.values()) if state else []
+    pandas = sys.modules.get("pandas")
+    if pandas is not None and isinstance(value, (pandas.DataFrame, pandas.Series, pandas.Index)):
+        return _pandas_parts(pandas, value)
+    return None
+
+
+def _pandas_parts(pandas: Any, value: Any) -> list[Any]:
+    """A pandas object's labels and columns that could keep an ``id()`` or
+    a weak reference: as NumPy arrays of 8-byte integers or of objects, a
+    frame's read a dtype at a time (2D)."""
+    if isinstance(value, pandas.RangeIndex):
         return []
-    picked: list[int] = []
-    try:
-        columns = [i for i, dtype in enumerate(dtypes) if attribute_or(dtype, "kind", None) in ("i", "u")]
-        for position in columns[:_SAMPLE_COLUMNS]:
-            picked += _array_ends(iloc[:, position].to_numpy())
-    except (TypeError, ValueError, AttributeError, IndexError):
-        return picked
-    return picked
+    if isinstance(value, pandas.DataFrame):
+        parts: list[Any] = [value.columns, value.index]
+        by_dtype: dict[Any, list[int]] = {}
+        for at, dtype in enumerate(value.dtypes):
+            by_dtype.setdefault(dtype, []).append(at)
+        for dtype, columns in by_dtype.items():
+            column = _pandas_column(value.iloc[:, columns], dtype)
+            if column is not None:
+                parts.append(column)
+        return parts
+    if isinstance(value, pandas.MultiIndex):
+        return list(value.levels)
+    column = _pandas_column(value, value.dtype)
+    parts = [] if column is None else [column]
+    if isinstance(value, pandas.Series):
+        parts.append(value.index)
+    return parts
+
+
+def _pandas_column(column: Any, dtype: Any) -> Any:
+    """The values of *column* (a series, an index, or a frame's columns of
+    one *dtype*) as a NumPy array when they could keep an ``id()`` or a
+    weak reference: 8-byte integers, or objects. None otherwise."""
+    kind = attribute_or(dtype, "kind")
+    if kind == "O":
+        return column.to_numpy(dtype=object)
+    if kind in ("i", "u") and attribute_or(dtype, "itemsize") == 8:
+        numpy = sys.modules.get("numpy")
+        if numpy is not None and isinstance(dtype, numpy.dtype):
+            return column.to_numpy()
+        return column.to_numpy(dtype="int64", na_value=0)  # a nullable Int64 column
+    return None
 
 
 #: The lowest address a 64-bit macOS process maps: ``__PAGEZERO`` covers
@@ -253,13 +304,10 @@ _MACOS_PAGEZERO = 1 << 32
 
 def _lowest_address() -> int:
     """The lowest address this process has mapped, where it can be read:
-    no object lies below it, so a number below it (``65536``, ``len(df)``)
-    is no id(). On Linux, the first mapping in ``/proc/self/maps``, read
-    each time (a mapping made since can be lower); on 64-bit macOS, the end
-    of ``__PAGEZERO``. Elsewhere (Windows) nothing is known: 0, and only
-    the first 64 KB, mapped by no process, is left out (`_LOWEST_ADDRESS`).
-    Not the addresses of a few objects: how far below them the rest may
-    lie depends on how Python was built."""
+    no object lies below it, so a number below it is no id(). On Linux, the
+    first mapping in ``/proc/self/maps``, read each time (a mapping made
+    since can be lower); on 64-bit macOS, the end of ``__PAGEZERO``.
+    Elsewhere (Windows) nothing is known: 0, and `_LOWEST_ADDRESS` holds."""
     if sys.platform.startswith("linux"):
         try:
             with open("/proc/self/maps", encoding="ascii") as maps:
@@ -292,15 +340,6 @@ def _mapped(numbers: set[int]) -> set[int]:
     return {n for n in numbers if any(start <= n < end for start, end in ranges)}
 
 
-def weakly_held_reason(name: str, value: Any, user_ns: dict[str, Any]) -> IdentityHeld | None:
-    """Why *value*, bound to *name*, cannot be restored while another
-    variable finds it, or an object in it, by a weak reference; None when it
-    can (`_weakly_held`, with `identity_held_reason`'s walk)."""
-    targets: list[Any] = []
-    _walk([value], set(), {}, [], set(), targets)
-    return _weakly_held(name, targets, user_ns) if targets else None
-
-
 def _weakly_held(name: str, targets: list[Any], user_ns: dict[str, Any]) -> IdentityHeld | None:
     """Why *name*'s value, whose walk found *targets* with a weak reference
     to them, cannot be restored while another variable holds one.
@@ -310,7 +349,7 @@ def _weakly_held(name: str, targets: list[Any], user_ns: dict[str, Any]) -> Iden
     ``box.h()`` finds nothing (``TypeError: 'NoneType' object is not
     iterable`` where plain Python gives the sum). Asked only of objects that
     have a weak reference at all (`weakref.getweakrefcount`). The other
-    variables are looked into as `_walk` does, `_WEAK_HOLDER_LEVELS` deep: a
+    variables are looked into as `_Walk` does, `_WEAK_HOLDER_LEVELS` deep: a
     weak reference held deeper is not found. Not up the garbage collector's
     referrers: cash keeps weak references to the values it watches itself,
     and the read of the heap that tells those apart spent the share check's
@@ -324,10 +363,14 @@ def _weakly_held(name: str, targets: list[Any], user_ns: dict[str, Any]) -> Iden
     for var, held in list(user_ns.items()):
         if var == name or var.startswith("_") or is_history_name(var):
             continue
-        refs: list[Any] = []
-        if not _walk([held], seen, user_kinds, refs, set(), levels=_WEAK_HOLDER_LEVELS):
+        walk = _Walk(user_kinds, seen=seen, quiet=True, keep_refs=True, levels=_WEAK_HOLDER_LEVELS)
+        walk.run([held])
+        if walk.cut or walk.unread:
             cut.append(var)
-        if any(issubclass(type(ref), weakref.ReferenceType) and id(ref()) in wanted for ref in refs):
+        if any(
+            issubclass(type(ref), weakref.ReferenceType) and id(weakref.ref.__call__(ref)) in wanted
+            for ref in walk.refs
+        ):
             return IdentityHeld(
                 f"'{var}' finds '{name}' by a weak reference; restored, '{name}' would be another object, "
                 "so the statement re-runs every time",
@@ -387,118 +430,294 @@ def _alive(proxy: Any) -> bool:
     return True
 
 
-def _walk(
-    roots: list[Any],
-    seen: set[int],
-    user_kinds: dict[type, bool],
-    refs: list[Any],
-    numbers: set[int],
-    targets: list[Any] | None = None,
-    levels: int | None = None,
-    wanted: set[int] | None = None,
-    unread: list[Any] | None = None,
-) -> bool:
-    """Look through *roots* (see the module docstring), adding the ``id()``
-    of each object to *seen*, each weak reference to *refs* and each
-    ``int`` to *numbers*, and with *targets*, each object some weak
-    reference points at; with *levels*, no deeper than that below *roots*.
-    False when it stopped at `_MAX_SEEN`, and with *levels*, also when it
-    left an object to look into: below the last level, or in a container of
-    over `_MAX_SCANNED` items. With *wanted*, it stops, complete, at the
-    first level that sees one of those ids. With *unread*, each container it
-    did not look inside and each pandas or NumPy object goes there, and the
-    walk is not complete when it left a container unread."""
-    level = roots
-    complete = True
-    while level:
-        if levels is not None:
-            if levels <= 0:
-                return complete and not any(_looked_into(item, seen, user_kinds) for item in level)
-            levels -= 1
-        nxt: list[Any] = []
-        for item in level:
-            kind = type(item)
-            if kind is int:
-                numbers.add(item)
-                continue
-            if id(item) in seen:
-                continue
-            if targets is not None and weakref.getweakrefcount(item) and _notebook_own(kind, user_kinds):
-                targets.append(item)
-            if issubclass(kind, _REFERENCES):
-                seen.add(id(item))
-                refs.append(item)
-                continue
-            if kind in _CONTAINERS or issubclass(kind, (list, dict, set)):
-                # By the builtin type's own methods: a subclass whose
-                # ``keys()`` or ``__iter__`` raises is not asked.
-                items: Any = builtin_items(item) or ()
-            elif issubclass(kind, _WEAK_CONTAINERS):
-                data = attribute_or(item, "data")
-                items = (
-                    list(data.keys()) + list(data.values())
-                    if type(data) is dict
-                    else list(data)
-                    if type(data) is set
-                    else []
-                )
-            elif _users(kind, user_kinds):
-                state = attribute_or(item, "__dict__")
-                if type(state) is not dict:
-                    continue
-                items = list(state.values())
-            else:
-                seen.add(id(item))
-                if unread is not None and _an_array(kind):
-                    unread.append(item)
-                continue
-            seen.add(id(item))
-            if len(seen) > _MAX_SEEN:
-                return False
-            if len(items) > _MAX_SCANNED:
-                if unread is not None:
-                    unread.append(item)
-                    complete = False
-                complete = complete and levels is None
-                continue
-            nxt.extend(items)
-        if wanted is not None and not wanted.isdisjoint(seen):
-            return True
-        level = nxt
-    return complete
+def _addresses_in(array: Any) -> Any:
+    """The numbers of an integer NumPy *array* that could be an ``id()``,
+    as an array, read at C speed."""
+    flat = array.ravel()
+    return flat[(flat >= _LOWEST_ADDRESS) & (flat < _HIGHEST_ADDRESS) & (flat % _ALIGNMENT == 0)]
 
 
-def _an_array(kind: type) -> bool:
-    """Whether *kind* is a pandas or NumPy class, whose index or values may
-    keep ids (``pd.Series(..., index=[id(p) for p in ps])``)."""
-    module = attribute_or(kind, "__module__", None) or ""
-    return module.split(".", 1)[0] in ("pandas", "numpy")
-
-
-def _looked_into(item: Any, seen: set[int], user_kinds: dict[type, bool]) -> bool:
-    """Whether `_walk` would look into *item*, or keep it as a reference."""
-    kind = type(item)
-    if kind is int or id(item) in seen:
-        return False
-    return (
-        kind in _CONTAINERS
-        or issubclass(kind, (list, dict, set, _REFERENCES, _WEAK_CONTAINERS))
-        or _users(kind, user_kinds)
+def _any_held(in_arrays: list[Any], held: _Walk) -> bool:
+    """Whether a number of *in_arrays* is the ``id()`` of an object *held*
+    met, at C speed: only the numbers between the lowest and the highest
+    of those ids are looked up."""
+    numpy = sys.modules["numpy"]
+    ids = numpy.concatenate(
+        [numpy.fromiter(held.seen, dtype=numpy.int64, count=len(held.seen)), *(held.id_arrays or ())]
     )
+    if not ids.size:
+        return False
+    low, high = ids.min(), ids.max()
+    for found in in_arrays:
+        found = found[(found >= low) & (found <= high)]
+        if found.size and numpy.isin(found, ids).any():
+            return True
+    return False
 
 
-def _notebook_own(kind: type, user_kinds: dict[type, bool]) -> bool:
-    """Whether an object of *kind* is the notebook's own data: a list, dict
-    or set, or an object of a class of the user's code. A library's object
-    is not looked at for weak references to it: pandas keeps its own on a
-    frame (``df.flags``), which no variable of the notebook finds it by."""
-    return kind in _CONTAINERS or issubclass(kind, (list, dict, set)) or _users(kind, user_kinds)
+def _numpy_array(kind: type) -> bool:
+    return kind.__name__ == "ndarray" and attribute_or(kind, "__module__") == "numpy"
 
 
-def _users(kind: type, user_kinds: dict[type, bool]) -> bool:
-    """Whether *kind* is a class of the user's code."""
-    known = user_kinds.get(kind)
-    if known is None:
-        module = sys.modules.get(attribute_or(kind, "__module__") or "")
-        known = user_kinds[kind] = module is not None and is_user_code_module(module)
-    return known
+class _Walk:
+    """One look through what objects hold (see the module docstring): the
+    ``id()`` of each object met in `seen`, each weak reference in `refs`,
+    each ``int`` in `numbers`, each integer NumPy array in `arrays`, and
+    each container that could not be read in `unread`. `cut` when it
+    stopped at `_MAX_SEEN`, or with *levels*, when it left an object to look
+    into below the last of them. A *quiet* walk only gathers `seen`, and
+    with *keep_refs* `refs`. With *targets*, each object of the notebook's
+    own (`_notebook_own`) some weak reference points at goes there."""
+
+    def __init__(
+        self,
+        user_kinds: dict[type, bool],
+        seen: set[int] | None = None,
+        quiet: bool = False,
+        candidates: frozenset[int] = frozenset(),
+        targets: list[Any] | None = None,
+        keep_refs: bool = False,
+        levels: int | None = None,
+    ) -> None:
+        self.user_kinds = user_kinds
+        self.targets = targets
+        self.keep_refs = keep_refs
+        self.levels = levels
+        self.seen: set[int] = set() if seen is None else seen
+        self.budget = _MAX_SEEN
+        self.refs: list[Any] = []
+        self.numbers: set[int] = set()
+        self.arrays: list[Any] = []
+        self.unread: list[Any] = []
+        #: The library's objects met and not looked inside (`library_parts`).
+        self.closed: list[Any] = []
+        self.cut = False
+        self.quiet = quiet
+        #: The ids looked for, by a *quiet* walk; `found` when one is the
+        #: ``id()`` of an item of a big container met.
+        self.candidates = candidates
+        self.found = False
+        #: The ids of the items of each big container a *quiet* walk met,
+        #: as NumPy arrays, when an array's numbers are looked for; None
+        #: otherwise.
+        self.id_arrays: list[Any] | None = None
+
+    def run(self, roots: list[Any]) -> None:
+        level = list(roots)
+        levels = self.levels
+        while level:
+            if levels is not None:
+                if levels <= 0:
+                    self.cut = any(self._opens(item) for item in level)
+                    return
+                levels -= 1
+            into: list[Any] = []
+            for item in level:
+                self._open(item, into)
+            if self.cut:
+                return
+            level = into
+
+    def _open(self, item: Any, into: list[Any]) -> None:
+        kind = type(item)
+        if kind is int:
+            self.numbers.add(item)
+            return
+        if kind is str:
+            # ``hex(id(x))`` or ``str(id(x))``: an id() as well.
+            if not self.quiet:
+                number = as_address(item)
+                if number is not None:
+                    self.numbers.add(number)
+            return
+        if kind in _LEAVES:
+            return
+        key = id(item)
+        if key in self.seen:
+            return
+        self.seen.add(key)
+        self.budget -= 1
+        if self.budget < 0:
+            self.cut = True
+            return
+        if self.targets is not None and weakref.getweakrefcount(item) and self._notebook_own(kind):
+            self.targets.append(item)
+        if issubclass(kind, _REFERENCES):
+            if not self.quiet or self.keep_refs:
+                self.refs.append(item)
+            return
+        if issubclass(kind, _BY_REFERENCE):
+            return
+        items: Any
+        if builtin_base(item) is not None:
+            # Through the builtin type's own methods: a dict subclass's
+            # ``values()`` or a list subclass's ``__iter__`` is the user's
+            # code, which plain Python never called here.
+            try:
+                items = builtin_items(item)
+            except Exception:  # noqa: BLE001 - not readable: what it holds is unknown
+                items = None
+            if items is None:
+                if not self.quiet:
+                    self.unread.append(item)
+                return
+            # A subclass's own attributes: ``c = C([1]); c.meta = id(p.child)``.
+            state = own_dict(item)
+            if state:
+                items.extend(state.values())
+        elif issubclass(kind, _WEAK_CONTAINERS):
+            state = own_dict(item)
+            data = state.get("data") if state else None
+            items = (
+                [*dict.keys(data), *dict.values(data)]
+                if type(data) is dict
+                else list(data)
+                if type(data) is set
+                else []
+            )
+        elif _numpy_array(kind) and item.dtype.names and not item.dtype.hasobject:
+            items = [item[field] for field in item.dtype.names]
+        elif _numpy_array(kind):
+            if item.dtype.hasobject:
+                items = item.ravel().tolist()
+            else:
+                if not self.quiet and item.dtype.kind in "iu" and item.dtype.itemsize == 8:
+                    self.arrays.append(item)
+                return
+        elif issubclass(kind, types.SimpleNamespace) or self._users(kind):
+            items = []
+            state = own_dict(item)
+            if state:
+                items.extend(state.values())
+            for reader in _slot_readers(kind):
+                try:
+                    items.append(reader.__get__(item, kind))
+                except AttributeError:  # an empty slot
+                    continue
+        else:
+            # A library's object: read as `library_parts` knows it, never
+            # attribute by attribute. Its own parts hold weak references to
+            # each other (a pandas frame's), and numbers that are no id()
+            # of the notebook's (a stream's thread ident).
+            try:
+                items = library_parts(item)
+            except Exception:  # noqa: BLE001 - not readable: what it holds is unknown
+                items = None
+            if items is None:
+                if not self.quiet:
+                    self.closed.append(item)
+                return
+        if len(items) > _MAX_SCANNED:
+            if self._read_flat(items):
+                return
+            if self.quiet:
+                # The notebook's big list of records: an ``id()`` of one
+                # of them is found, not one of what each holds, which
+                # walking them all cost every check. At C speed, without
+                # a set of their ids.
+                if not self.found and not self.candidates.isdisjoint(map(id, items)):
+                    self.found = True
+                self._note_ids(items)
+                if self.found or self._lone_records(items):
+                    return
+                # What each holds is looked through, within the budget:
+                # ``reg = {id(objs[7].child): ...}``.
+        into.extend(items)
+
+    def _read_flat(self, items: list[Any]) -> bool:
+        """Read a big container of leaves, or of tuples of leaves (records),
+        at C speed: only its ``int``s matter. False when it holds anything
+        else, to be walked item by item."""
+        kinds = set(map(type, items))
+        flat: Any = items
+        if not kinds <= _LEAVES:
+            if not kinds <= _LEAVES | {tuple}:
+                return False
+            flat = list(chain.from_iterable(item for item in items if type(item) is tuple))
+            kinds = set(map(type, flat))
+            if not kinds <= _LEAVES:
+                return False
+        if self.quiet:
+            return True
+        if str in kinds:
+            # The text spelling a number, found by one search of it all.
+            texts = flat if kinds == {str} else [item for item in flat if type(item) is str]
+            text = "\n".join(texts)
+            # Most text has no run of seven digits and no "0x": found by
+            # plain searches, far quicker than the pattern's.
+            if "0x" in text or "0X" in text or "0000000" in text.translate(_DIGITS_AS_ZERO):
+                self.numbers.update(map(as_address, _NUMBER_LINES.findall(text)))
+                self.numbers.discard(None)
+        if int not in kinds:
+            return True
+        if kinds == {int}:
+            # At C speed: row numbers or counts all below any address.
+            if max(flat) >= _LOWEST_ADDRESS and min(flat) < _HIGHEST_ADDRESS:
+                self.numbers.update(flat)
+        else:
+            self.numbers.update(item for item in flat if type(item) is int and item >= _LOWEST_ADDRESS)
+        return True
+
+    def _note_ids(self, items: Any) -> None:
+        """Keep the ids of *items* for an array's numbers, when looked for."""
+        if self.id_arrays is not None:
+            numpy = sys.modules["numpy"]
+            self.id_arrays.append(numpy.fromiter(map(id, items), dtype=numpy.int64, count=len(items)))
+
+    def _lone_records(self, items: list[Any]) -> bool:
+        """Whether the notebook's big container *items* holds objects of
+        one class of the user's, whose attributes are all numbers, strings
+        and the like: nothing below them is an object an ``id()`` could
+        find but their attribute dicts, checked here at C speed (a loop
+        over 200,000 points). False, with nothing checked, otherwise."""
+        kinds = set(map(type, items))
+        if len(kinds) != 1:
+            return False
+        (kind,) = kinds
+        if (
+            not self._users(kind)
+            or _slot_readers(kind)
+            or own_dict(items[0]) is None
+            or attribute_or(kind, "__getattribute__") is not object.__getattribute__
+        ):
+            return False
+        # Python's own slot, read at C speed: the class has no lookup of its
+        # own, and `own_dict` found its ``__dict__`` is that slot.
+        states = list(map(_DICT, items))
+        if set(map(type, states)) != {dict}:
+            return False
+        if not _LEAVES.issuperset(map(type, chain.from_iterable(map(dict.values, states)))):
+            return False
+        if not self.candidates.isdisjoint(map(id, states)):
+            self.found = True
+        self._note_ids(states)
+        return True
+
+    def _opens(self, item: Any) -> bool:
+        """Whether `_open` would look into *item*, or keep it as a weak
+        reference, had the walk gone a level deeper."""
+        kind = type(item)
+        if kind in (int, str) or kind in _LEAVES or id(item) in self.seen:
+            return False
+        return (
+            issubclass(kind, (*_REFERENCES, *_WEAK_CONTAINERS, types.SimpleNamespace))
+            or builtin_base(item) is not None
+            or (_numpy_array(kind) and item.dtype.hasobject)
+            or self._users(kind)
+        )
+
+    def _notebook_own(self, kind: type) -> bool:
+        """Whether an object of *kind* is the notebook's own data: a list,
+        dict or set, or an object of a class of the user's code. A library's
+        object is not looked at for weak references to it: pandas keeps its
+        own on a frame (``df.flags``), which no variable of the notebook
+        finds it by."""
+        return issubclass(kind, (list, dict, set)) or self._users(kind)
+
+    def _users(self, kind: type) -> bool:
+        """Whether *kind* is a class of the user's code."""
+        known = self.user_kinds.get(kind)
+        if known is None:
+            module = sys.modules.get(attribute_or(kind, "__module__") or "")
+            known = self.user_kinds[kind] = module is not None and is_user_code_module(module)
+        return known

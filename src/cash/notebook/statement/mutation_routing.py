@@ -34,9 +34,12 @@ from ..cache_key import statement_source_hash
 from ..call_key import changes_its_closure
 from ..callee_reach import CWD, ENVIRON, module_state_names, module_state_writes, process_state_writes, state_holders
 from ..shared_objects import history_names
+from . import in_place
 from .control_body import is_control_body
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from ...analysis.mutation_effects import StatementEffects
     from .._protocols import ShellProtocol
     from ..tracking_state import TrackingState
@@ -61,12 +64,16 @@ class MutationRouting:
         classifier: MutationClassifier,
         records: StatementRecords,
         in_loop: InLoopChanges | None = None,
+        cheap_to_rerun: Callable[[StatementRun], bool] = lambda run: False,
     ) -> None:
         self.shell = shell
         self.tracking_state = tracking_state
         self._classifier = classifier
         self._records = records
         self._in_loop = in_loop
+        #: Whether a loop last ran faster than storing what it changes would
+        #: save: it runs again, as it did before such loops were stored.
+        self._cheap_to_rerun = cheap_to_rerun
         #: Loop-body statement texts an earlier kernel recorded no verdict for.
         self._unrecorded: set[str] = set()
 
@@ -237,6 +244,7 @@ class MutationRouting:
         changes in place a name it does not store, as the same calls do at
         cell level (``st.push(v)``, ``push(st, v)``, ``tag(df, i)`` in its
         body); the structure's own lineage update moves those names. A loop
+        stores those names instead, while it may (``stored_in_place``). A loop
         that hands names to code whose effect is unknown is watched as it
         runs (``loop_watch``), and must run while its verdict is learned."""
         tree = run.tree
@@ -274,7 +282,31 @@ class MutationRouting:
         # An estimator fitted in the body (`with warnings.catch_warnings():
         # gs.fit(X, y)`) is stored as the fit at cell level is
         # (`_route_receivers`).
-        run.in_place = set(changed) - run.outputs - run.est_fit
+        changed = set(changed) - run.outputs - run.est_fit
+        if isinstance(node, ast.For | ast.While):
+            # A loop run as one unit stores what it changed in place, as an
+            # estimator it fits is stored: the names join its outputs, a hit
+            # restores them, and the share check stores and restores the
+            # variables that hold them too. ``pbar.update()`` in a loop over
+            # 10,000 files sent the whole loop back to run after a restart.
+            # One that cannot be stored refuses the store, and the loop runs.
+            stored = {name for name in changed if _storable_name(name, user_ns)}
+            # A name the loop only assigns into (``p.n += 1``, ``d[k] = v``)
+            # is restored into too: bound to a copy, a weak reference or an
+            # ``id()`` key on the object no longer found it. One of a kind no
+            # restore goes into (``arr[i] = v``) stays an output, bound to
+            # the copy.
+            stored |= {
+                name
+                for name in (run.outputs & _assigned_into(node)) - run.est_fit - _rebound_names(node)
+                if _storable_name(name, user_ns) and not in_place.bound_as_a_copy(user_ns.get(name), user_ns)
+            }
+            if stored and not self._cheap_to_rerun(run):
+                run.outputs = run.outputs | stored
+                run.est_fit = run.est_fit | stored
+                run.metrics["stored_in_place"] = sorted(stored)
+                changed -= stored
+        run.in_place = changed
         if run.in_place:
             _skip(
                 run,
@@ -670,6 +702,50 @@ def sharing_a_cell(writers: set[str], user_ns: Mapping[str, Any]) -> set[str]:
 
 
 _PROCESS_WORDS = {ENVIRON: "environment", CWD: "working directory"}
+
+
+def _assigned_into(node: ast.AST) -> set[str]:
+    """The names *node* assigns into: the root of an attribute or item it
+    assigns, augments or deletes (``p.n += 1``, ``d[k] = v``, ``del a.x``)."""
+    names: set[str] = set()
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Attribute | ast.Subscript) and isinstance(sub.ctx, ast.Store | ast.Del):
+            root = sub.value
+            while isinstance(root, ast.Attribute | ast.Subscript):
+                root = root.value
+            if isinstance(root, ast.Name):
+                names.add(root.id)
+    return names
+
+
+def _rebound_names(node: ast.AST) -> set[str]:
+    """The names *node* binds or deletes itself, its loop target among them,
+    as against the names it only assigns into."""
+    names: set[str] = set()
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store | ast.Del):
+            names.add(sub.id)
+        elif isinstance(sub, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            names.add(sub.name)
+        elif isinstance(sub, ast.alias):
+            names.add((sub.asname or sub.name).split(".")[0])
+        elif isinstance(sub, ast.Global | ast.Nonlocal):
+            names.update(sub.names)
+        elif isinstance(sub, ast.ExceptHandler) and sub.name:
+            names.add(sub.name)
+        elif isinstance(sub, ast.MatchAs | ast.MatchStar) and sub.name:
+            names.add(sub.name)
+    return names
+
+
+def _storable_name(name: str, user_ns: dict) -> bool:
+    """Whether a loop's in-place change of *name* can be stored as its
+    output: a variable of the notebook holding a value, not a module, a
+    class or a function, whose state the loop's store does not keep."""
+    if name not in user_ns:
+        return False
+    value = user_ns[name]
+    return not isinstance(value, type | types.ModuleType | types.FunctionType | types.BuiltinFunctionType)
 
 
 def _is_structure(tree: ast.Module | None) -> bool:

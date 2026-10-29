@@ -36,13 +36,13 @@ import json
 import logging
 import textwrap
 import types
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from typing import TYPE_CHECKING, Any
 
 from cash._user_attrs import attribute_or, instance_of
 
 from ...analysis.cacheability import statement_writes_files
-from ...analysis.callee_effects import callee_global_mutations
+from ...analysis.callee_effects import callee_global_mutations, writes_a_module_it_imports
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.handed_callables import handed_callables, users_object_attributes
 from ...analysis.namespace_effects import statement_calls_user_writer
@@ -158,6 +158,7 @@ class ControlStructureProcessor:
         self._for_handler = ForLoopHandler(shell, statement_processor, dispatcher=self)
         self._if_handler = IfHandler(shell, statement_processor, dispatcher=self)
         self._try_handler = TryHandler(shell, statement_processor, dispatcher=self)
+        statement_processor.unit_outcome_trusted = self._unit_outcome_trusted
 
     def process(
         self,
@@ -444,6 +445,30 @@ class ControlStructureProcessor:
                 return None
         return hashlib.sha256(":".join(parts).encode()).hexdigest()
 
+    def _lineages_before(self, code: str, names: Iterable[str]) -> dict[str, str]:
+        """The lineages *names* had when the structure *code* began, as its
+        statement took them as inputs."""
+        entry = self.statement_processor.tracking_state.statement_entry_lineages.get(code, {})
+        return {name: entry[name] for name in names if name in entry}
+
+    def _unit_outcome_trusted(self, code: str) -> bool:
+        """Whether the top-level loop running now as one unit, *code*, did
+        nothing but leave its outcome (`_persistable_callees`): only then are
+        the objects it changed in place stored with it. One that drew from a
+        global counter or read the clock in a helper would be restored with
+        the values of the run that stored it."""
+        frame = self._unit_frame
+        if frame is None:
+            return False
+        node, reads, before, rng_before = frame[:4]
+        try:
+            if ast.unparse(node) != code or any(is_stream(self.shell.user_ns.get(name)) for name in reads):
+                return False
+            return self._persistable_callees(node, code, reads, before, rng_before) is not None
+        except Exception:  # never let bookkeeping break the user's loop; it runs again
+            logger.debug("[CONTROL] could not tell whether a loop's outcome is all it did", exc_info=True)
+            return False
+
     def _persistable_callees(self, node, code, reads, before, rng_before) -> dict[str, str] | None:
         """What a later kernel must find unchanged to trust this loop's record, or None.
 
@@ -533,6 +558,7 @@ class ControlStructureProcessor:
                 or CodeAnalyzer.scan_function_bodies_for_forbidden_functions(source, namespace)
                 or mints_unseeded_generator(source)
                 or statement_environment_reads(source, namespace)
+                or writes_a_module_it_imports(source)
             ):
                 return None
         if (
@@ -754,6 +780,7 @@ class ControlStructureProcessor:
                 also=self.statement_processor.in_loop.close_watch(code, ran=status == CacheStatus.COMPUTED),
                 link_shares=_helpers.current_loop_pass(self) is None,
                 cost=metrics.get("execution_time", 0.0),
+                prior_lineages=self._lineages_before(code, metrics.get("stored_in_place", ())),
             )
         elif update_lineage:
             self.statement_processor.in_loop.close_watch(code, ran=False)
