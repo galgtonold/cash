@@ -167,3 +167,23 @@ def test_a_handler_on_a_file_of_the_user_s_is_still_climbed_from(tmp_path):
         assert any(obj is f for obj in _inside(handler)), "the user's file is looked for"
         on_stderr = logging.StreamHandler(sys.stderr)
         assert not any(obj is sys.stderr for obj in _inside(on_stderr))
+
+
+def test_what_a_standard_stream_holds_is_not_climbed_from(monkeypatch):
+    """Under pytest's capture on Windows, ``sys.stderr`` is a text stream
+    over a temporary file wrapper: its closer and file were looked for up
+    the test runner's objects, and the check gave up
+    (NOTEBOOK-SHARE-UNCHECKED on ``t = Thread(...)``)."""
+    import io
+    import logging
+    import tempfile
+
+    wrapper = tempfile.NamedTemporaryFile(mode="w+b")
+    stream = io.TextIOWrapper(wrapper, encoding="utf-8")
+    monkeypatch.setattr(sys, "stderr", stream)
+    try:
+        handler = logging.StreamHandler(sys.stderr)
+        assert _inside(handler) == []
+    finally:
+        monkeypatch.undo()
+        stream.close()

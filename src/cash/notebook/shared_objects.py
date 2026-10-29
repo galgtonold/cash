@@ -2340,6 +2340,7 @@ def _held_from_outside(
     if not roots:
         return {}, set()
     stack = [(nodes[key], key) for key in roots]
+    streams = _standard_streams()
     within: dict[int, Any] = {}
     refs: dict[int, int] = {}
     root_of: dict[int, int] = {}
@@ -2369,6 +2370,13 @@ def _held_from_outside(
             if key == root:
                 held_back.add(root)
                 break
+            if key in streams:
+                # Nor read down: what a stream holds is the process's too.
+                # Under pytest's capture on Windows, ``sys.stderr`` holds a
+                # temporary file wrapper whose closer and file the climb
+                # looked for up through the test runner's objects, and gave
+                # up (NOTEBOOK-SHARE-UNCHECKED on ``t = Thread(...)``).
+                continue
             if leaves is not None and key in leaves.ids:
                 leaves.met.add(key)
                 continue
@@ -2386,11 +2394,8 @@ def _held_from_outside(
                 stack.append((child, root))
         child = children = opaque = None  # no reference of this frame's left in the counts
     parent = None
-    streams = _standard_streams()
     held = [
-        key
-        for key in within
-        if root_of[key] not in held_back and key not in streams and sys.getrefcount(within[key]) - refs[key] > _OVERHEAD
+        key for key in within if root_of[key] not in held_back and sys.getrefcount(within[key]) - refs[key] > _OVERHEAD
     ]
     return {key: within[key] for key in held}, {roots[root_of[key]] for key in held}
 
