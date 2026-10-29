@@ -199,7 +199,7 @@ def unseeded_library_calls(func: Callable, src: str) -> list[tuple[str, int, str
         return []
     namespace = build_namespace(func)
     for local, (module_name, prefix) in local_import_map(fn, func).items():
-        obj = resolve_local_import(module_name, prefix, None)
+        obj = resolve_local_import(module_name, prefix)
         if obj is not None:
             namespace[local] = obj
     return unseeded_library_calls_in(fn, namespace)
