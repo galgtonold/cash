@@ -21,6 +21,10 @@ from cash.content_hashers import builtin_hash
 from cash.decorator import arg_hashing
 from cash.decorator.arg_hashing import cow_frame_digest
 
+pytestmark = pytest.mark.skipif(
+    not arg_hashing.is_cow_pandas(pd.Series([1.0])), reason="the frame memo runs under copy-on-write only"
+)
+
 
 def _lists(n: int = 50_000) -> "pd.DataFrame":
     frame = pd.DataFrame(

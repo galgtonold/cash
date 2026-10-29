@@ -92,7 +92,8 @@ def _both(value):
 @pytest.mark.parametrize(
     ("a", "b"),
     [
-        (pd.Timestamp("2020-01-01"), pd.Timestamp("2020-01-01").as_unit("s")),
+        # Each unit named: pandas 2 parses this string to seconds already.
+        (pd.Timestamp("2020-01-01").as_unit("ns"), pd.Timestamp("2020-01-01").as_unit("s")),
         (pd.Timestamp("2020-01-01", tz="UTC"), pd.Timestamp("2020-01-01", tz="UTC").tz_convert("Europe/Berlin")),
         (pd.Timestamp("2020-01-01", tz="UTC"), pd.Timestamp("2020-01-01")),
         (pd.Timestamp("2020-10-25 02:30"), pd.Timestamp("2020-10-25 02:30").replace(fold=1)),

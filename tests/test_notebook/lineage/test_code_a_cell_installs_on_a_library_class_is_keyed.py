@@ -85,7 +85,7 @@ def test_the_statement_is_still_served_while_the_code_is_the_same(cash_magics, m
     a busy machine took longer than the sleep for a hit. (A counting
     ``time.sleep`` would be a function writing outside the statement, which
     cash rightly runs every time.)"""
-    cells = [DATA, ACCESSOR.format(k=2, tag="same"), "res = df.fx_same.slow()"]
+    cells = [DATA, ACCESSOR.format(k=2, tag="same"), "res = df.copy().fx_same.slow()"]
     _run(cash_magics, cells)
     _run(cash_magics, cells, start=1)
     assert str(cash_magics._last_cell_metrics["statements"][-1]["status"]) == "RESTORED"
