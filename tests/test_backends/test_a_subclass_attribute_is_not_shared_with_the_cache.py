@@ -17,6 +17,15 @@ import pytest
 from cash.backends.memory_backend import InMemoryBackend
 from cash.exceptions import CacheBackendError
 
+
+def _held_lock():
+    """A lock someone holds: unlike a free one, which is stored as a new free
+    lock (`cash.live_state`), it cannot be copied or stored."""
+    lock = threading.Lock()
+    lock.acquire()
+    return lock
+
+
 pd = pytest.importorskip("pandas")
 np = pytest.importorskip("numpy")
 
@@ -150,10 +159,10 @@ def test_an_attribute_deepcopy_refuses_is_copied_through_pickle():
 
 
 def test_an_attribute_no_copy_can_be_made_of_is_refused_not_shared():
-    """A lock neither deep-copies nor pickles: a decorator store refuses the
+    """A held lock neither deep-copies nor pickles: a decorator store refuses the
     table, as it does a frame whose cells cannot be copied."""
     table = _tagged()
-    table.info = {"lock": threading.Lock()}
+    table.info = {"lock": _held_lock()}
     with pytest.raises(CacheBackendError):
         _store_and_hit(table)
     backend = InMemoryBackend()

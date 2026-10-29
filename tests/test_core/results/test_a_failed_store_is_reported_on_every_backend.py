@@ -21,10 +21,18 @@ from cash.backends.file_backend import FileBackend
 from cash.exceptions import CashCacheStoreFailedWarning
 
 
+def _held_lock():
+    """A lock someone holds: unlike a free one, which is stored as a new free
+    lock (`cash.live_state`), it cannot be copied or stored."""
+    lock = threading.Lock()
+    lock.acquire()
+    return lock
+
+
 def _unpicklable_maker(cash):
     @cash.cache
     def make_lock(n):
-        return {"n": n, "lock": threading.Lock()}
+        return {"n": n, "lock": _held_lock()}
 
     return make_lock
 

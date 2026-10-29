@@ -26,6 +26,14 @@ from cash.backends import InMemoryBackend
 from cash.exceptions import CashCacheStoreFailedWarning
 
 
+def _held_lock():
+    """A lock someone holds: unlike a free one, which is stored as a new free
+    lock (`cash.live_state`), it cannot be copied or stored."""
+    lock = threading.Lock()
+    lock.acquire()
+    return lock
+
+
 @pytest.fixture
 def cash(tmp_path):
     return Cash(cache_dir=str(tmp_path / "c"), register_magic=False)
@@ -37,7 +45,7 @@ def test_a_result_holding_a_lock_is_recomputed(cash):
     @cash.cache
     def context(n):
         runs.append(n)
-        return {"rows": [1, 2, 3], "lock": threading.Lock()}
+        return {"rows": [1, 2, 3], "lock": _held_lock()}
 
     with warnings.catch_warnings(record=True) as seen:
         warnings.simplefilter("always")
@@ -54,7 +62,7 @@ def test_a_result_holding_a_lock_is_recomputed(cash):
 def test_the_reason_is_available_afterwards(cash):
     @cash.cache
     def context(n):
-        return {"lock": threading.Lock()}
+        return {"lock": _held_lock()}
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -92,15 +100,15 @@ def test_the_memory_backend_refuses_a_value_it_must_copy(tmp_path):
     from cash.exceptions import CacheBackendError
 
     with pytest.raises(CacheBackendError):
-        backend.set("k", {"lock": threading.Lock()}, {"copy_required": True})
+        backend.set("k", {"lock": _held_lock()}, {"copy_required": True})
     assert backend.get("k") == (None, None)
 
-    backend.set("stmt", {"lock": threading.Lock()}, {})  # a notebook payload
+    backend.set("stmt", {"lock": _held_lock()}, {})  # a notebook payload
     assert backend.get("stmt")[1] is not None
 
     # Decorated, but frozen: the caller has promised not to modify the result,
     # so handing the same object back is exactly what was asked for.
-    backend.set("frozen", {"lock": threading.Lock()}, {"decorator_entry": True})
+    backend.set("frozen", {"lock": _held_lock()}, {"decorator_entry": True})
     assert backend.get("frozen")[1] is not None
 
 
@@ -120,7 +128,7 @@ def test_a_frozen_result_may_be_one_cash_cannot_copy(cash):
     @cash.cache(frozen=True)
     def context(n):
         runs.append(n)
-        return {"rows": [1, 2, 3], "lock": threading.Lock()}
+        return {"rows": [1, 2, 3], "lock": _held_lock()}
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -134,7 +142,7 @@ def test_a_frozen_result_may_be_one_cash_cannot_copy(cash):
 class _Worker:
     def __init__(self, n):
         self.n = n
-        self.lock = threading.Lock()
+        self.lock = _held_lock()
         self.done = []
 
 

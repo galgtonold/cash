@@ -24,6 +24,14 @@ from cash.backends.memory_backend import InMemoryBackend
 from cash.backends.tiered_backend import TieredBackend
 
 
+def _held_lock():
+    """A lock someone holds: unlike a free one, which is stored as a new free
+    lock (`cash.live_state`), it cannot be copied or stored."""
+    lock = threading.Lock()
+    lock.acquire()
+    return lock
+
+
 class _Recording(CacheBackend):
     """A persistent tier that records what it was handed."""
 
@@ -100,7 +108,7 @@ def test_big_records_go_to_disk_read_out_of_the_bytes_the_ram_tier_keeps():
 
 def test_a_value_the_ram_tier_keeps_by_reference_is_not_private():
     tiers, disk = _tiers()
-    lock_holder = {"lock": threading.Lock(), "n": 1}  # cannot be copied: kept as it is
+    lock_holder = {"lock": _held_lock(), "n": 1}  # cannot be copied: kept as it is
     tiers.set("k", lock_holder, {"execution_time": 5.0})
     ((_key, written, private),) = disk.calls
     assert not private and written is lock_holder
@@ -178,7 +186,7 @@ def test_a_later_persist_of_a_value_kept_by_reference_is_not_written():
     """The RAM tier holds the caller's own object: written later, it would be
     what the caller has made of it since, not what was stored."""
     tiers, disk = _tiers()
-    lock_holder = {"lock": threading.Lock(), "n": 1}  # cannot be copied: the caller still holds it
+    lock_holder = {"lock": _held_lock(), "n": 1}  # cannot be copied: the caller still holds it
     tiers.set("k", lock_holder, dict(_NOTEBOOK))
     assert disk.calls == []
     lock_holder["n"] = 2
