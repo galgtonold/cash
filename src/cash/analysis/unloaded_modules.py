@@ -28,6 +28,7 @@ import types
 
 from ..install_paths import in_own_package, top_package
 from ..tracking.function_tracker import is_local_module
+from ..value_types import BUILTIN_NAMES
 
 #: Calls at a module's top level whose result follows from their arguments
 #: alone. A call not listed makes the module's values unvouched for.
@@ -504,7 +505,7 @@ class _SourceOnly:
             root = self.aliases[head]
         elif head in self.defined:
             root = f"own:{head}"
-        elif head in _BUILTIN_NAMES:
+        elif head in BUILTIN_NAMES:
             root = f"builtins.{head}"
         else:
             return None
@@ -574,7 +575,6 @@ class _SourceOnly:
         return name is not None and any(name in scope and scope[name] < line for scope in scopes)
 
 
-_BUILTIN_NAMES = frozenset(dir(builtins))
 #: How many user functions deep a call at import is followed (`_SourceOnly._vouches`).
 _MAX_DEPTH = 8
 #: Values read from outside the source wherever a module names them.

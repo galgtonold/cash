@@ -227,8 +227,13 @@ def test_two_lambdas_on_one_line_are_read_each_as_itself():
 
 
 @pytest.mark.skipif(sys.version_info >= (3, 11), reason="3.10 has no positions to tell them apart")
-def test_two_lambdas_on_one_line_are_unreadable_before_3_11():
-    assert own_writes(H["g"].__code__) == {"?"}
+def test_two_lambdas_on_one_line_are_read_off_their_bytecode_before_3_11():
+    # Their text cannot be told apart, so each is read off its bytecode: one
+    # that loads and calls nothing changes nothing, one that calls may.
+    assert own_writes(H["g"].__code__) == set()
+    assert own_writes(G["g"].__code__) == set()
+    assert own_writes(H["f"].__code__) == {"?"}
+    assert own_writes(G["f"].__code__) == {"?"}
 
 
 def test_a_method_set_on_a_class_later_is_said_to_be_unseeable():
