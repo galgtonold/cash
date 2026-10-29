@@ -52,6 +52,7 @@ from cash._user_attrs import attribute_or, has_attribute, instance_of
 
 from ..analysis.mutation_effects import captured_call_receivers
 from ..analysis.mutations import consumed_input_names
+from .read_handles import reaches_read_handle
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,7 @@ __all__ = [
     "has_diverged",
     "is_write_stream",
     "with_other_names",
+    "without_read_handles",
 ]
 
 # ``itertools`` iterators that hold advanceable state and are not deep-copyable.
@@ -384,6 +386,16 @@ def with_other_names(names: Iterable[str], user_ns: Mapping[str, Any], known: It
         if value is not held and held.get(id(value), held) is value:
             found.add(name)
     return found
+
+
+def without_read_handles(names: Iterable[str], user_ns: Mapping[str, Any]) -> list[str]:
+    """*names* but those bound to a file open for reading, or to what reaches
+    one (``rd = f.readline``). Such a handle is named by its file and where it
+    stands (`read_handle_digest`), and what reads it runs every time, so it
+    is not moved as a generator is: a cell that only looks at it, re-run on
+    its own, reads it where it stands, and the ``open()`` above stays as it
+    ran."""
+    return [name for name in names if not reaches_read_handle(user_ns.get(name))]
 
 
 def is_stream(obj: Any) -> bool:

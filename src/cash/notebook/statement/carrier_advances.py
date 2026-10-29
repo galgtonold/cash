@@ -23,7 +23,7 @@ from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from ...tracking.randomness import advanced_carrier_lineage, carrier_positions, moved_carrier_names, rng_carrier_kind
-from ..cache_key import called_function_globals
+from ..cache_key import called_function_globals, draw_key
 
 if TYPE_CHECKING:
     from ..tracking_state import TrackingState
@@ -88,7 +88,9 @@ def advance_carriers(
     tracking_state.carrier_advances[source_hash] = names
     for name in sorted(names):
         if name in user_ns:
-            tracking_state.lineage.record(name, advanced_carrier_lineage(statement_key, name), value=user_ns[name])
+            tracking_state.lineage.record(
+                name, advanced_carrier_lineage(draw_key(statement_key), name), value=user_ns[name]
+            )
             tracking_state.executed_cell_codes[name] = code
 
 
