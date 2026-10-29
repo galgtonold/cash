@@ -3195,6 +3195,7 @@ class StatementProcessor:
                     holders=holders,
                     gave_up=gave_up,
                     inputs=run.inputs,
+                    restored_into=run.metrics.get("stored_in_place") or (),
                 )
                 if reason is not None and holders is not None:
                     # Anchors only where holders alone refuse: an anchor binds
@@ -3213,6 +3214,7 @@ class StatementProcessor:
                         holders=retry_holders,
                         gave_up=retry_gave_up,
                         inputs=run.inputs,
+                        restored_into=run.metrics.get("stored_in_place") or (),
                         anchorable=self._anchorable(run),
                         anchors=anchors,
                         anchor_links=anchor_links,

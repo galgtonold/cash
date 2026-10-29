@@ -73,9 +73,12 @@ def unrestorable_output_reason(
     anchorable: Callable[[str], bool] | None = None,
     anchors: dict[str, Any] | None = None,
     anchor_links: set[str] | None = None,
+    restored_into: Iterable[str] = (),
 ) -> str | None:
     """Why one of *outputs* cannot be cached, the first refusal found; None
-    when every captured value can. *cash_held* are containers cash itself
+    when every captured value can. An output in *restored_into*, a loop's a
+    hit restores into the live object (`in_place`), keeps its identity: a
+    weak reference another variable keeps to it still finds it. *cash_held* are containers cash itself
     holds (the entries of the cell's call results), whose references do not
     make an output shared.
 
@@ -94,7 +97,9 @@ def unrestorable_output_reason(
     """
     cash_held = list(cash_held)
     inputs = set(inputs)
-    reason = _value_refusal(outputs, captured_vars, user_ns, cash_held, inputs) or shared_output_reason(
+    reason = _value_refusal(
+        outputs, captured_vars, user_ns, cash_held, inputs, set(restored_into)
+    ) or shared_output_reason(
         outputs, captured_vars, user_ns, cash_held, shell, holders, gave_up, anchorable, anchors, anchor_links
     )
     if reason is None and holders:
@@ -123,6 +128,7 @@ def _value_refusal(
     user_ns: dict[str, Any],
     cash_held: Iterable[Any] = (),
     inputs: Iterable[str] = (),
+    restored_into: set[str] | frozenset[str] = frozenset(),
 ) -> str | None:
     """The first refusal one output's value earns on its own."""
     refusals: tuple[Callable[[str, Any], str | None], ...] = (
@@ -130,7 +136,7 @@ def _value_refusal(
         identity_coupled_reason,
         _consumable_refusal,
         _context_variable_refusal,
-        lambda name, value: identity_held_reason(name, value, user_ns),
+        lambda name, value: identity_held_reason(name, value, user_ns, weak_holders=name not in restored_into),
     )
     for refusal in refusals:
         for out in outputs:

@@ -109,12 +109,16 @@ class IdentityHeld(str):
         return made
 
 
-def identity_held_reason(name: str, value: Any, user_ns: dict[str, Any]) -> IdentityHeld | None:
+def identity_held_reason(
+    name: str, value: Any, user_ns: dict[str, Any], weak_holders: bool = True
+) -> IdentityHeld | None:
     """Why *value*, bound to *name*, cannot be restored apart from what it
-    points at by identity (see the module docstring), or while another
-    variable finds it by one (`_weakly_held`); None when it can."""
+    points at by identity (see the module docstring), or with *weak_holders*,
+    while another variable finds it by one (`_weakly_held`); None when it
+    can. Not *weak_holders* for a loop's object a hit restores into: it
+    stays the object those references find."""
     user_kinds: dict[type, bool] = {}
-    walk = _Walk(user_kinds, targets=[])
+    walk = _Walk(user_kinds, targets=[] if weak_holders else None)
     walk.run([value])
     found = _held_by_id(name, walk, user_kinds, user_ns)
     if found is None and walk.targets:
