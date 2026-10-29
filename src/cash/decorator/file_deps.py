@@ -608,12 +608,12 @@ class FileDeps:
             CashCacheStoreFailedWarning,
             func_name,
             "work_running",
-            f"@cash.cache on {func_name}: work the call handed to a thread or thread pool was still "
-            f"running when it returned, so the result was returned but not cached. What that work "
-            f"reads or changes from then on is outside the cached result.",
+            f"@cash.cache on {func_name}: wait for the work it hands to a thread or thread pool "
+            f"before it returns, or leave that work out of it: the work was still running when the "
+            f"call returned, so the result was returned but not cached. What that work reads or "
+            f"changes from then on is outside the cached result.",
             code="STORE-WORK-RUNNING",
-            fix="wait for the work before returning (future.result(), concurrent.futures.wait, "
-            "or thread.join()), or leave the pool or thread out of the cached function.",
+            fix="future.result(), concurrent.futures.wait or thread.join() before the return.",
         )
         return True
 

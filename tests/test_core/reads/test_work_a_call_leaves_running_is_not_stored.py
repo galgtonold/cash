@@ -79,8 +79,9 @@ def test_a_file_read_by_work_left_running_is_not_served_stale(disk_cash, tmp_pat
     assert len(runs) == 2, "the entry stored while its work still ran was served"
     assert result == {"a": "A1", "b": "B2"}
     told = [str(w.message) for w in caught if "STORE-WORK-RUNNING" in str(w.message)]
-    # The one-line form keeps what it means: the result was not cached.
+    # It leads with the fix, and the one-line form keeps what it means.
     assert told and "returned but not cached" in told[0], [str(w.message) for w in caught]
+    assert ": wait for the work" in told[0].split("returned but not cached")[0], told
 
 
 def test_work_the_call_waited_for_is_stored(disk_cash, tmp_path):
@@ -167,8 +168,9 @@ def test_a_thread_the_call_does_not_join_holds_the_store(disk_cash, tmp_path):
     assert len(runs) == 2, "the entry stored while its thread still ran was served"
     assert result == {"a": "A1", "b": "B2"}
     told = [str(w.message) for w in caught if "STORE-WORK-RUNNING" in str(w.message)]
-    # The one-line form keeps what it means: the result was not cached.
+    # It leads with the fix, and the one-line form keeps what it means.
     assert told and "returned but not cached" in told[0], [str(w.message) for w in caught]
+    assert ": wait for the work" in told[0].split("returned but not cached")[0], told
 
 
 def test_a_thread_the_call_joins_is_stored(disk_cash, tmp_path):
