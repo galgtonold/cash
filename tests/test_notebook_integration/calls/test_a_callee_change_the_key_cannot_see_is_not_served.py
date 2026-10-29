@@ -31,6 +31,8 @@ SETUP = (
     "Q = queue.Queue()\nSQ = queue.SimpleQueue()\nEV = threading.Event()\n"
     "PUSHP = functools.partial(list.append, LOG)\n"
     "OPS = {'push': LOG.append}\nOPL = [LOG.append]\nHOOKS = [LOG.append]\n"
+    "import types\nSNS = types.SimpleNamespace(push=LOG.append)\n"
+    "class HC: pass\nHC.push = functools.partial(list.append, LOG)\n"
 )
 
 BODIES = {
@@ -58,6 +60,11 @@ BODIES = {
     "hooks_iterated": ("for h in HOOKS:\n        h(x)", "n = len(LOG)", 1),
     "a_local_alias_of_a_held_method": ("p = OPS['push']\n    p(x)", "n = len(LOG)", 1),
     "an_alias_got_from_a_dict": ("p = OPS.get('push')\n    p(x)", "n = len(LOG)", 1),
+    "an_alias_unpacked_from_a_tuple": ("p, q = OPS['push'], None\n    p(x)", "n = len(LOG)", 1),
+    "an_alias_from_either_branch": ("p = OPS['push'] if x else None\n    p(x)", "n = len(LOG)", 1),
+    "an_alias_bound_by_a_walrus": ("(p := HOOKS[0])(x)", "n = len(LOG)", 1),
+    "an_alias_of_a_namespace_attribute": ("p = SNS.push\n    p(x)", "n = len(LOG)", 1),
+    "an_alias_got_by_getattr": ("p = getattr(HC, 'push')\n    p(x)", "n = len(LOG)", 1),
 }
 
 
