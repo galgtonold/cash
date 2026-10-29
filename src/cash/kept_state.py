@@ -32,6 +32,7 @@ from typing import Any
 from . import _native
 from ._own_work import own_work
 from ._user_attrs import instance_of
+from .live_state import is_live_stream, live_reduce
 
 __all__ = [
     "DefinedAgain",
@@ -1005,6 +1006,58 @@ def reducers(protocol: int = pickle.DEFAULT_PROTOCOL, extra: dict | None = None)
     return _KeepDict(protocol, extra)
 
 
+#: Lock types a value may hold for its own use (`live_state.live_reduce`).
+_LOCK_TYPES = frozenset({type(threading.Lock()), type(threading.RLock())})
+
+
+def _refused(obj: Any) -> Any:
+    """A key's reduce of a writer cash puts in front of a stream: refused,
+    as the stream it stands for is."""
+    raise TypeError(f"cannot key {type(obj).__name__!r} object")
+
+
+def _stand_in(obj: Any, reducer: Any, watch: list | None) -> Any:
+    """*reducer*'s reduce of a writer cash puts in front of a stream, which
+    stores as the stream (``notebook/_tee.py``); *watch* is told, as a key
+    refuses it (`_refused`)."""
+    if watch is not None:
+        watch.append(True)
+    return reducer(obj)
+
+
+def _or_live(obj: Any, reducer: Any, watch: list | None = None) -> Any:
+    """*reducer*'s reduce of *obj*; for one pickle refuses, a standard stream
+    or a free lock, the stand-in `live_state.live_reduce` gives. What pickled
+    before pickles as it did. The stand-in is in the stored bytes only, which
+    *watch* (`_KeepDict`) is told of: keyed bytes still refuse the object.
+
+    A standard stream's own reduce may succeed and its state fail later
+    (ipykernel's ``OutStream`` holds the session's HMAC): one is asked whether
+    it pickles whole, which only the few streams bound in ``sys`` are."""
+    if is_live_stream(obj) and not _pickles(obj):
+        if watch is not None:
+            watch.append(True)
+        return live_reduce(obj)
+    try:
+        return reducer(obj)
+    except (TypeError, pickle.PicklingError):
+        live = live_reduce(obj)
+        if live is None:
+            raise
+        if watch is not None:
+            watch.append(True)
+        return live
+
+
+def _pickles(obj: Any) -> bool:
+    """Whether ``pickle`` takes *obj* whole."""
+    try:
+        pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL)
+    except Exception:  # noqa: BLE001 - whatever its own reduce raises
+        return False
+    return True
+
+
 class _KeepDict(dict):
     """A pickler's ``dispatch_table``: each type's reducer, decided at its
     first instance. The ordinary ``__reduce_ex__`` for most, so the stream
@@ -1031,6 +1084,15 @@ class _KeepDict(dict):
             reducer = _names_apart(self._reducer(t), self._names)
             if _holds_dtype(t):
                 reducer = _dtypes_apart(reducer, self._dtypes)
+        if self._keyed:
+            # A key refuses a stream and a lock as it did: what stands in for
+            # one is stored, never keyed (`live_state`).
+            if getattr(t, "_cash_wrapped_stream", None) is not None:
+                reducer = _refused
+        elif getattr(t, "_cash_wrapped_stream", None) is not None:
+            reducer = functools.partial(_stand_in, reducer=reducer, watch=self._watch)
+        elif issubclass(t, io.IOBase) or t in _LOCK_TYPES:
+            reducer = functools.partial(_or_live, reducer=reducer, watch=self._watch)
         self[t] = reducer
         return reducer
 

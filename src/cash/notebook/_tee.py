@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import contextlib
 import sys
+import threading
 import time
 from collections.abc import Callable, Iterable
 from typing import Any
 
 from cash._user_attrs import attribute_or
+from cash.live_state import live_reduce
 
 __all__ = ["StreamTaken", "TeeWriter"]
 
@@ -75,10 +77,36 @@ class TeeWriter:
         """Return all accumulated text."""
         return "".join(self._chunks)
 
+    def _cash_wrapped_stream(self) -> Any:
+        """The stream this writer passes writes on to."""
+        real = self._real
+        return real._cash_wrapped_stream() if type(real) is _Passthrough else real
+
+    def __reduce_ex__(self, protocol: Any) -> Any:
+        return _stream_reduce(self)
+
     # Forward attribute access (encoding, fileno, etc.) to the real stream
     # so libraries that introspect the stream object still work.
     def __getattr__(self, name: str) -> Any:
         return getattr(self._real, name)
+
+
+def _stream_reduce(writer: Any) -> tuple:
+    """How a writer standing in for a stream is stored: as the stream.
+
+    Code holds what it finds while a cell runs: ``ProgBar(stream=sys.stdout)``
+    keeps ``sys.stdout.write``, which is a `TeeWriter`'s then. Plain Python
+    holds the stream's own ``write``, so the writer is stored as the stream
+    it writes to (`live_state`): ``sys.stdout`` or ``sys.stderr``, or not at
+    all. Left to pickle's default, it was stored as an empty writer whose
+    ``__getattr__`` recursed as soon as it was read back.
+    """
+    reduced = live_reduce(writer)
+    if reduced is None:
+        raise TypeError(
+            f"cannot pickle {type(writer).__name__!r} object: it writes to a stream that is not sys.stdout or sys.stderr"
+        )
+    return reduced
 
 
 class _Passthrough:
@@ -92,8 +120,63 @@ class _Passthrough:
     def flush(self) -> None:
         self._stream.flush()
 
+    def _cash_wrapped_stream(self) -> Any:
+        """The stream whose ``write`` this passes writes on to."""
+        return self._stream
+
+    def __reduce_ex__(self, protocol: Any) -> Any:
+        return _stream_reduce(self)
+
     def __getattr__(self, name: str) -> Any:
         return getattr(self._stream, name)
+
+
+class _StreamMethod:
+    """``stream.<name>`` while :class:`StreamTaken` points it at a sink.
+
+    Code keeps what it finds: ``ProgBar(stream=sys.stdout)`` holds
+    ``sys.stdout.write``. Stored, that is the stream's own method again
+    (``getattr(stream, name)``), as plain Python holds it; a sink's bound
+    method stored as the sink, which pickles apart from the stream beside
+    it, so the object hashed one way computed and another restored.
+
+    Once its `StreamTaken` has ended, a call goes where a call of the
+    stream's method goes now, so the statement capturing then records it,
+    as it records a bar made in plain Python; from inside that call, to
+    what the stream's method was when this one was put in place (*under*).
+    """
+
+    __slots__ = ("_call", "_name", "_stream", "_under", "active")
+
+    def __init__(self, stream: Any, name: str, call: Callable[..., Any], under: Callable[..., Any]) -> None:
+        self._stream = stream
+        self._name = name
+        self._call = call
+        self._under = under
+        self.active = True
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        if self.active:
+            return self._call(*args, **kwargs)
+        if _PASSING.on:
+            return self._under(*args, **kwargs)
+        _PASSING.on = True
+        try:
+            return getattr(self._stream, self._name)(*args, **kwargs)
+        finally:
+            _PASSING.on = False
+
+    def __reduce_ex__(self, protocol: Any) -> Any:
+        return getattr, (self._stream, self._name)
+
+
+class _Passing(threading.local):
+    """Set while an ended `_StreamMethod` passes a call on to the stream."""
+
+    on = False
+
+
+_PASSING = _Passing()
 
 
 class StreamTaken:
@@ -116,6 +199,8 @@ class StreamTaken:
         self.sink: Any = None
         self._stream: Any = None
         self._own: dict[str, Any] = {}
+        #: The methods this put in place, ended with it.
+        self._taken: dict[str, _StreamMethod] = {}
         self._swapped = False
 
     def __enter__(self) -> StreamTaken:
@@ -127,8 +212,14 @@ class StreamTaken:
         self._own = {m: own[m] for m in self._METHODS if m in own}
         self.sink = self._make_sink(_Passthrough(stream, write))
         try:
-            stream.write = self.sink.write
-            stream.writelines = self.sink.writelines
+            self._taken = {
+                "write": _StreamMethod(stream, "write", self.sink.write, write),
+                "writelines": _StreamMethod(
+                    stream, "writelines", self.sink.writelines, attribute_or(stream, "writelines", self.sink.writelines)
+                ),
+            }
+            stream.write = self._taken["write"]
+            stream.writelines = self._taken["writelines"]
         except (AttributeError, TypeError):
             self._put_back()
             return self._swap()
@@ -142,6 +233,8 @@ class StreamTaken:
 
     def _put_back(self) -> None:
         for m in self._METHODS:
+            if m in self._taken:
+                self._taken[m].active = False
             with contextlib.suppress(AttributeError, TypeError):
                 if m in self._own:
                     setattr(self._stream, m, self._own[m])

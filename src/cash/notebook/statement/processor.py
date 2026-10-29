@@ -683,7 +683,7 @@ class StatementProcessor:
         self._thread_reach = ThreadReach()
         #: Whether the loop run as one unit with this text did nothing but
         #: leave its outcome; set by the control-structure processor.
-        self.unit_outcome_trusted: Callable[[str], bool] | None = None
+        self.unit_outcome_trusted: Callable[[str, Collection[str]], bool] | None = None
         #: The work NOTEBOOK-WORK-RUNNING was given for.
         self._work_running_warned: set[str] = set()
         #: Statements already warned NOTEBOOK-CALLABLE-UNREAD about.
@@ -2071,7 +2071,7 @@ class StatementProcessor:
         it runs every time, as before, and the structure's lineage update
         names those objects by their values."""
         trusted = self.unit_outcome_trusted
-        if not run.skip_cache and trusted is not None and trusted(run.code):
+        if not run.skip_cache and trusted is not None and trusted(run.code, run.inputs):
             return
         names = ", ".join(sorted(run.metrics["stored_in_place"]))
         if _is_while(run.tree):

@@ -42,6 +42,7 @@ from typing import Any
 from cash._user_attrs import attribute_or, builtin_base, builtin_items, own_dict
 from cash.closure_sharing import _slot_readers
 from cash.install_paths import is_user_code_module
+from cash.live_state import is_live_stream
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
 from .identity_holders import IdentityHeld, library_parts
@@ -385,7 +386,8 @@ def _reaches(
             if item is target:
                 return True
             key = id(item)
-            if key in seen or key in module_dicts or isinstance(item, _OPAQUE):
+            if key in seen or key in module_dicts or isinstance(item, _OPAQUE) or is_live_stream(item):
+                # A standard stream comes back as itself (`live_state`).
                 continue
             seen.add(key)
             if weakly is not None and weakref.getweakrefcount(item):

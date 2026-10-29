@@ -74,8 +74,8 @@ def test_a_longer_range_after_a_hit_runs_the_loop_again(nb_runner):
 
 @pytest.mark.fresh_kernel
 def test_an_object_the_store_cannot_keep_runs_the_loop(nb_runner):
-    """A lock in the object: not stored, the loop runs, as before."""
-    make = P + "import threading\np = P()\np.lock = threading.Lock()"
+    """A lock the object holds, held: not stored, the loop runs, as before."""
+    make = P + "import threading\np = P()\np.lock = threading.Lock()\np.lock.acquire()"
     nb_runner.create_notebook([make, LOOP.format(n=3000), "print(p.n)"])
     nb_runner.start_kernel()
     nb_runner.run_all()

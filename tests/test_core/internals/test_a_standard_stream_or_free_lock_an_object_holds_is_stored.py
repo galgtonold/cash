@@ -1,0 +1,200 @@
+"""An object holding ``sys.stdout``, ``sys.stderr`` or a free lock is stored.
+
+A progress bar holds the stream it writes to (``ProgBar(n,
+stream=sys.stdout)``) and its ``write``; an object may hold a lock for its own
+use. ``pickle`` refuses both, so the object was never stored and the loop
+updating it ran again after every restart. Plain Python, after a restart and a
+Run All, has a bar writing to the stream the process has then, and a lock no
+one holds. So one of the process's own streams that is ``sys.stdout`` or
+``sys.stderr`` as it is stored is stored as that name, and a lock no one holds
+as a new lock of its kind (`live_state`), in what is stored only: a key still
+refuses both. Any other file, also a user's file bound to ``sys.stdout``, and
+a held lock stay unstorable.
+
+Only what ``pickle`` refuses is stored this way: what could be stored before
+is pickled, and keyed, to the same bytes.
+"""
+
+from __future__ import annotations
+
+import io
+import pickle
+import sys
+import threading
+
+import pytest
+
+from cash import kept_state, live_state
+from cash.notebook._tee import StreamTaken, TeeWriter
+
+
+class Bar:
+    def __init__(self, stream):
+        self.stream = stream
+        self.out = stream.write
+        self.n = 0
+
+
+class Guarded:
+    def __init__(self, lock):
+        self.lock = lock
+        self.items = [1, 2]
+
+
+def _round_trip(value):
+    return pickle.loads(kept_state.dumps(value))
+
+
+def _own_streams(monkeypatch):
+    """``sys.stdout`` and ``sys.stderr`` as the interpreter's own streams,
+    not the test runner's capture (which it binds again after fixtures)."""
+    monkeypatch.setattr(sys, "stdout", sys.__stdout__)
+    monkeypatch.setattr(sys, "stderr", sys.__stderr__)
+
+
+@pytest.mark.parametrize("name", ["stdout", "stderr"])
+def test_a_bar_on_a_standard_stream_restores_onto_the_stream_of_the_time(name, monkeypatch):
+    _own_streams(monkeypatch)
+    bar = Bar(getattr(sys, name))
+    data = kept_state.dumps(bar)
+    now = io.StringIO()
+    monkeypatch.setattr(sys, name, now)
+    restored = pickle.loads(data)
+    assert restored.stream is now
+    restored.out("x")
+    assert now.getvalue() == "x"
+
+
+def test_a_bar_made_while_a_cell_ran_restores_as_one_made_in_plain_python(monkeypatch):
+    """While a cell runs, ``sys.stdout.write`` is cash's: the bar stores as a
+    bar holding the stream's own ``write``, to the bytes of one that does."""
+    _own_streams(monkeypatch)
+    plain = kept_state.dumps(Bar(sys.stdout))
+    with StreamTaken("stdout", TeeWriter):
+        during = kept_state.dumps(Bar(sys.stdout))
+    assert during == plain
+
+
+@pytest.mark.parametrize("kind", [threading.Lock, threading.RLock])
+def test_a_free_lock_restores_as_a_new_free_lock_of_its_kind(kind):
+    restored = _round_trip(Guarded(kind()))
+    assert type(restored.lock) is type(kind())
+    assert restored.lock.acquire(blocking=False)
+    restored.lock.release()
+    assert restored.items == [1, 2]
+
+
+@pytest.mark.parametrize("kind", [threading.Lock, threading.RLock])
+def test_a_free_lock_is_not_keyed(kind):
+    """Every free lock would key alike: a key would lose which lock it was,
+    so a key still refuses one, as before."""
+    with pytest.raises((TypeError, pickle.PicklingError)):
+        kept_state.dumps(Guarded(kind()), keyed=True)
+
+
+@pytest.mark.parametrize("kind", [threading.Lock, threading.RLock])
+def test_a_held_lock_stays_unstorable(kind):
+    lock = kind()
+    lock.acquire()
+    try:
+        with pytest.raises((TypeError, pickle.PicklingError)):
+            kept_state.dumps(Guarded(lock))
+    finally:
+        lock.release()
+
+
+def test_any_other_file_stays_unstorable(tmp_path):
+    with open(tmp_path / "log.txt", "w", encoding="utf-8") as f:
+        with pytest.raises((TypeError, pickle.PicklingError)):
+            kept_state.dumps(Bar(f))
+
+
+def test_a_writer_on_a_file_stays_unstorable(tmp_path):
+    with open(tmp_path / "log.txt", "w", encoding="utf-8") as f:
+        with pytest.raises((TypeError, pickle.PicklingError)):
+            kept_state.dumps(TeeWriter(f))
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        io.StringIO("text"),
+        io.BytesIO(b"bytes"),
+        {"buf": io.StringIO("a"), "n": [1, 2]},
+        Guarded(None),
+    ],
+    ids=["StringIO", "BytesIO", "dict holding one", "object without a lock"],
+)
+def test_what_was_storable_is_pickled_as_before(value, monkeypatch):
+    """Never asked: what pickle takes is not stored as live state."""
+    before = kept_state.dumps(value)
+
+    def refuse(_obj):
+        raise AssertionError("asked for a value pickle takes")
+
+    monkeypatch.setattr(kept_state, "live_reduce", refuse)
+    assert kept_state.dumps(value) == before
+
+
+def test_only_the_standard_streams_are_live(monkeypatch):
+    _own_streams(monkeypatch)
+    assert live_state.is_live_stream(sys.stdout)
+    assert live_state.is_live_stream(sys.stderr)
+    assert not live_state.is_live_stream(io.StringIO())
+
+
+def test_a_file_of_the_users_bound_as_stdout_stays_unstorable(tmp_path, monkeypatch):
+    """``sys.stdout = f`` while the bar is made: the bar writes to the file,
+    which a restore binding the stdout of the time would not."""
+    with open(tmp_path / "log.txt", "w", encoding="utf-8") as f:
+        monkeypatch.setattr(sys, "stdout", f)
+        assert not live_state.is_live_stream(sys.stdout)
+        with pytest.raises((TypeError, pickle.PicklingError)):
+            kept_state.dumps(Bar(sys.stdout))
+
+
+def test_a_standard_stream_is_not_keyed(monkeypatch):
+    """A key refuses an object holding the stream as it did, so a decorated
+    call given one runs and warns as before; also one made while a cell ran."""
+    _own_streams(monkeypatch)
+    with pytest.raises((TypeError, pickle.PicklingError)):
+        kept_state.dumps(Bar(sys.stdout), keyed=True)
+    with StreamTaken("stdout", TeeWriter):
+        with pytest.raises((TypeError, pickle.PicklingError)):
+            kept_state.dumps(Bar(sys.stdout), keyed=True)
+
+
+class OutStream(io.TextIOBase):
+    """Like ipykernel's ``OutStream``, by name: its reduce succeeds, its
+    state does not pickle."""
+
+    def __init__(self):
+        self.session = {"signer": threading.Lock()}
+        self.text = []
+
+    def write(self, s):
+        self.text.append(s)
+        return len(s)
+
+
+OutStream.__module__ = "ipykernel.iostream"
+
+
+def test_a_kernel_stream_whose_state_does_not_pickle_is_stored_as_the_stream(monkeypatch):
+    kernel = OutStream()
+    monkeypatch.setattr(sys, "stdout", kernel)
+    data = kept_state.dumps(Bar(sys.stdout))
+    later = OutStream()
+    monkeypatch.setattr(sys, "stdout", later)
+    restored = pickle.loads(data)
+    assert restored.stream is later
+    restored.out("x")
+    assert later.text == ["x"]
+
+
+def test_a_buffer_bound_as_stdout_is_pickled_as_before(monkeypatch):
+    """``redirect_stdout(buf)``: a ``StringIO`` pickle takes, stored as one."""
+    buf = io.StringIO("kept")
+    before = kept_state.dumps({"buf": buf})
+    monkeypatch.setattr(sys, "stdout", buf)
+    assert kept_state.dumps({"buf": buf}) == before

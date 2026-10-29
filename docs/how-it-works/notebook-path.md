@@ -171,7 +171,7 @@ the loop runs again. The loop's own working variables (`parts` in
 `for f in files: parts.append(read(f))`) are not stored; a cell that reads
 them runs the loop.
 
-<!-- claim: cash/notebook/statement/mutation_routing.py:MutationRouting._route_unit @c2493cc8, cash/notebook/statement/processor.py:StatementProcessor._keep_stored_in_place @b8c0edcd -->
+<!-- claim: cash/notebook/statement/mutation_routing.py:MutationRouting._route_unit @c2493cc8, cash/notebook/statement/processor.py:StatementProcessor._keep_stored_in_place @ced6780e -->
 A long `for` loop that cash runs as one step stores the objects it changes in
 place, such as a progress counter it calls `update()` on, a list from an
 earlier cell it appends to, or an object or dict it assigns into
@@ -200,6 +200,18 @@ holds anything but numbers, strings and the like or tuples of them (records), wh
 when a function it calls writes a module it imports;
 when it is a `while` loop; and when it last ran in less than 0.1 s, where
 storing it costs more than a restore saves. A loop not measured yet is stored.
+
+<!-- claim: cash/live_state.py:live_reduce @e5b888fb, cash/kept_state.py:_or_live @67741ade -->
+A progress bar made with `stream=sys.stdout` holds the output stream, which
+cannot be saved as such. The kernel's own output stream, or the
+interpreter's, that is `sys.stdout` or `sys.stderr` when it is stored is
+stored as that name, and a restored bar writes to the output of the kernel it
+is restored in, as a bar made there would. A lock an object keeps for itself
+is stored as a new free lock when no one holds it. Neither is keyed: a cached
+function given one runs and warns as before. A bar on any other file (also a
+file of yours bound to `sys.stdout` as the bar is made), a held lock, and a
+bar whose parts hold the bar itself (tqdm's) are not stored, and the loop runs
+again, with the reason in the badge.
 
 <!-- claim: cash/analysis/mutations.py:module_setting_receivers @977421aa, cash/analysis/mutations.py:_TopLevelCallCollector._bare_call @6775632d -->
 A setting kept inside a library, such as `plt.style.use("ggplot")`,
