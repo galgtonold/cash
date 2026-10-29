@@ -21,6 +21,8 @@ def test_fresh_big_namespace_is_served(nb_runner, n):
         if restart:
             nb_runner.restart()
         nb_runner.run_all()
-        seen.append(nb_runner.get_raw_output(3).strip())
+        # Past the read's limit the check is cut short: served, with
+        # NOTEBOOK-SHARE-UNCHECKED above the cell's own line.
+        seen.append(next(line for line in nb_runner.get_raw_output(3).splitlines() if line.startswith("T ")))
     print(n, "runs:", seen)
     assert all(float(s.split()[1]) < 1.5 for s in seen[1:]), seen

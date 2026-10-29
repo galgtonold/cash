@@ -108,7 +108,13 @@ def test_a_cell_rerun_alone_may_answer_as_the_run_all_before_it(monkeypatch, tmp
                 "step2": {"rest": alone},
                 "restart+run1": {"rest": "[2]"},
                 "restart+step4": {"rest": last},
-            }
+            },
+            statuses={
+                "run1": {0: ["COMPUTED"], 1: ["COMPUTED"]},
+                "step2": {1: ["COMPUTED", "COMPUTED", "COMPUTED"]},
+                "restart+run1": {0: ["COMPUTED"], 1: ["COMPUTED"]},
+                "restart+step4": {1: ["COMPUTED", "COMPUTED", "COMPUTED"]},
+            },
         )
 
     monkeypatch.setattr("tools.plain_checker.kernel.run_notebook", fake)
@@ -121,3 +127,21 @@ def test_a_cell_rerun_alone_may_answer_as_the_run_all_before_it(monkeypatch, tmp
     assert [run for _c, run, *_ in accepted.mismatches] == ["restart+step4"]
     plain_plan = check(notebook("fake", cells, plan=plan, module_writes=["rest"]), tmp_path, ["trace"])
     assert [run for _c, run, *_ in plain_plan.mismatches] == ["step2", "restart+step4"]
+
+
+def test_a_cell_rerun_alone_answering_as_the_run_all_must_show_the_rebuild(monkeypatch, tmp_path):
+    """A stale hit gives the Run All's value too: a re-run alone that ran
+    no cell above it is a difference, not a rebuild."""
+
+    def fake(shape, work, config):
+        return Outcome(
+            seen={"run1": {"rest": "[2]"}, "step2": {"rest": "[]" if config is None else "[2]"}},
+            statuses={"run1": {0: ["COMPUTED"], 1: ["COMPUTED"]}, "step2": {1: ["RESTORED"]}},
+        )
+
+    monkeypatch.setattr("tools.plain_checker.kernel.run_notebook", fake)
+    cells = ["it = iter([1, 2])\nnext(it)", "rest = list(it)"]
+    report = check(
+        notebook("fake", cells, plan=["all", 1], module_writes=["rest"], alone_as_run_all=True), tmp_path, ["trace"]
+    )
+    assert [run for _c, run, *_ in report.mismatches] == ["step2"]

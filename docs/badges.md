@@ -242,8 +242,12 @@ the statement every time instead of storing it:
   Restored, the value would point at the object as it was when it was
   stored, while the statement that binds `p` binds a new one. It runs again,
   as in plain Python. Ids are looked for in lists, tuples, dicts, sets and
-  objects of your own classes, not inside a container of more than 10,000
-  items.
+  objects of your own classes; in a container of more than 10,000 items and
+  in a pandas or NumPy object, among its first and last items and its index.
+  A number below every address the process has mapped (`65536`, `len(df)`;
+  read on Linux and macOS, not on Windows) is not taken for an id. When the
+  notebook holds more objects than cash looks through, a number it could not
+  rule out runs again too, with a warning.
 
 A line that is an IPython magic or a shell command (`%load_ext autoreload`,
 `!ls`) shows `Runs an IPython magic or shell command`: cash cannot see what it

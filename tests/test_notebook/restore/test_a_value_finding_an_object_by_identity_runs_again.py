@@ -6,6 +6,7 @@ None, where plain Python finds the object. Such a statement runs again."""
 
 from __future__ import annotations
 
+import sys
 import warnings
 
 import pytest
@@ -24,6 +25,22 @@ HOLDERS = {
     "an id in a list": ("ids = [id(p.child)]", "r = ids[0] == id(p.child)"),
     "an id alone": ("k = id(p)", "r = k == id(p)"),
     "its own id": ("p.me = id(p)", "r = p.me == id(p)"),
+    "an id key in a dict too big to look inside": (
+        "reg = {id(p.seen): 'seen', **{i: i for i in range(20_000)}}",
+        "r = reg.get(id(p.seen)) == 'seen'",
+    ),
+    "an id in each of 20,000 dicts": (
+        "regs = [{'pid': id(p.seen)} for _ in range(20_000)]",
+        "r = regs[0]['pid'] == id(p.seen)",
+    ),
+    "a DataFrame column of ids": (
+        "import pandas as pd\ndf = pd.DataFrame({'pid': [id(p.seen)], 'v': [1]})",
+        "r = bool(df['pid'][0] == id(p.seen))",
+    ),
+    "a Series indexed by ids": (
+        "import pandas as pd\nser = pd.Series(['seen'], index=[id(p.seen)])",
+        "r = ser.get(id(p.seen)) == 'seen'",
+    ),
 }
 
 
@@ -43,6 +60,38 @@ def test_a_run_all_finds_the_new_object(cash_magics, cash_instance, holder):
         assert cash_magics.shell.user_ns["r"] is True
 
 
+BIG = "data = [[{'k': i} for i in range(9000)] for _ in range(25)]"
+
+
+@pytest.mark.parametrize(
+    "target",
+    ["P()", "{'k': 1}", "'x' * 40 + str(len(data))"],
+    ids=["an object", "a dict the collector does not track", "a str"],
+)
+@pytest.mark.parametrize(
+    ("hold", "read"),
+    [
+        ("key = id(holder['a']['b'][0])", "r = key == id(holder['a']['b'][0])"),
+        ("reg = {'k': id(holder['a']['b'][0])}", "r = reg['k'] == id(holder['a']['b'][0])"),
+    ],
+    ids=["bare", "in a dict"],
+)
+def test_an_id_beside_more_objects_than_the_walk_reads_runs_again(cash_magics, cash_instance, target, hold, read):
+    """The look for the object stops short in a big notebook. The number
+    was then ruled out when no object the collector tracks had it as its
+    id, which a dict of plain values or a str never is; and a bare one was
+    let through whatever it matched. Both were served stale and silently."""
+    _stored_however_cheap(cash_instance)
+    cells = [BIG, "class P:\n    pass\nholder = {'a': {'b': [" + target + "]}}", hold, read + "  # @cash:no-cache"]
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        for _ in range(2):
+            for cell in cells:
+                run_cash_cell(cash_magics, cell, cells=cells)
+            assert cash_magics.shell.user_ns["r"] is True
+    assert [w for w in caught if "IDENTITY-HELD" in str(w.message)]
+
+
 @pytest.mark.parametrize(
     "value",
     [
@@ -59,6 +108,24 @@ def test_a_value_not_finding_an_object_by_identity_is_restored(cash_magics, cash
             run_cash_cell(cash_magics, cell, cells=cells)
     statuses = [str(s["status"]) for s in cash_magics._last_cell_metrics["statements"]]
     assert "RESTORED" in statuses[-1], statuses
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="no lowest mapped address is read on Windows")
+@pytest.mark.parametrize("value", ["cfg = {'size': 65536, 'name': 'a'}", "x = 1 << 20"])
+def test_a_round_number_beside_more_objects_than_the_walk_reads_is_restored(cash_magics, cash_instance, value):
+    """65536 and 1 << 20 are multiples of 8 as an id() is, but below any
+    address the process has mapped, so not taken for one even with more
+    objects in the notebook than the look for one reads."""
+    _stored_however_cheap(cash_instance)
+    cells = ["data = [[{'k': i} for i in range(9000)] for _ in range(25)]", value]
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        for _ in range(2):
+            for cell in cells:
+                run_cash_cell(cash_magics, cell, cells=cells)
+    statuses = [str(s["status"]) for s in cash_magics._last_cell_metrics["statements"]]
+    assert "RESTORED" in statuses[-1], statuses
+    assert not [w for w in caught if "IDENTITY-HELD" in str(w.message)]
 
 
 @pytest.mark.parametrize(

@@ -17,14 +17,21 @@ What is looked at:
   and not inside the value itself (a restore rebuilds those together); a
   class, a module or a function comes back as itself and does not count;
 - an ``int`` in the value equal to the ``id()`` of an object the value holds
-  or the notebook's variables hold, at any depth.
+  or the notebook's variables hold, at any depth; a number below every
+  address this process has mapped (`_lowest_address`) is not one.
 
 The value is walked through lists, tuples, dicts, sets and the ``__dict__``
 of objects of the user's own classes, not into a library's objects (a
 pandas frame keeps weak references between its own parts). A container of
 more than `_MAX_SCANNED` items is not looked inside, and the walk stops at
-`_MAX_SEEN` objects: a registry of ids is small, and walking a big value
-item by item cost each store more than the check is worth.
+`_MAX_SEEN` objects: walking a big value item by item cost each store more
+than the check is worth. Such a container, and a pandas or NumPy object,
+gives the ints among its first and last items and its index
+(`_sampled_ints`): a registry keyed by ``id()`` keeps them all alike. When
+the notebook holds more than the walk reads, a number it could not rule out
+is refused, with the warning: not even the ids of every object the garbage
+collector tracks rule one out, as it does not track a dict of plain values
+or a str.
 """
 
 from __future__ import annotations
@@ -78,7 +85,9 @@ def identity_held_reason(name: str, value: Any, user_ns: dict[str, Any]) -> Iden
     refs: list[Any] = []
     numbers: set[int] = set()
     targets: list[Any] = []
-    _walk([value], seen, user_kinds, refs, numbers, targets)
+    unread: list[Any] = []
+    _walk([value], seen, user_kinds, refs, numbers, targets, unread=unread)
+    numbers.update(_sampled_ints(unread))
     found = _held_by_id(name, refs, seen, numbers, user_kinds, user_ns)
     if found is None and targets:
         found = _weakly_held(name, targets, user_ns)
@@ -113,21 +122,174 @@ def _held_by_id(
                 name,
                 "a weak reference",
             )
-    candidates = {n for n in numbers if n >= _LOWEST_ADDRESS and not n % 8}
+    lowest = max(_LOWEST_ADDRESS, _lowest_address())
+    candidates = {n for n in numbers if n >= lowest and not n % 8}
+    if candidates:
+        candidates = _mapped(candidates)
     if not candidates:
         return None
+    if not candidates.isdisjoint(seen):
+        return _holds_an_id(name)
     held = set(seen)
     from .output_refusals import is_history_name
 
     roots = [v for k, v in user_ns.items() if k != name and not is_history_name(k)]
-    if not _walk(roots, held, user_kinds, [], set()) or not candidates.isdisjoint(held):
-        return IdentityHeld(
-            f"'{name}' holds the id() of an object the notebook holds; restored, the object would be "
-            "another one, so the statement re-runs every time",
-            name,
-            "an id()",
-        )
-    return None
+    if _walk(roots, held, user_kinds, [], set(), wanted=candidates, unread=[]):
+        return _holds_an_id(name) if not candidates.isdisjoint(held) else None
+    if not candidates.isdisjoint(held):
+        return _holds_an_id(name)
+    # The walk left objects unread (a list of 20,000 objects, past
+    # `_MAX_SEEN`). The collector's objects do not rule a number out: it
+    # tracks no dict of plain values, no str. A bare one too: ``key =
+    # id(p)`` is as much an id as one kept in a dict.
+    return IdentityHeld(
+        f"'{name}' holds a number that may be the id() of an object, and the notebook holds too many objects "
+        "to rule that out; restored, the object would be another one, so the statement re-runs every time",
+        name,
+        "an id()",
+        what=(
+            f"'{name}' holds a number that may be the id() of an object, and cash could not look through all of "
+            "the notebook's objects to rule that out. Restored from the cache, it would find another object, "
+            "so this statement runs every time instead."
+        ),
+    )
+
+
+def _holds_an_id(name: str) -> IdentityHeld:
+    return IdentityHeld(
+        f"'{name}' holds the id() of an object the notebook holds; restored, the object would be "
+        "another one, so the statement re-runs every time",
+        name,
+        "an id()",
+    )
+
+
+#: How many items `_sampled_ints` reads from each end of a container it was
+#: not looked inside.
+_SAMPLE = 32
+
+
+def _sampled_ints(unread: list[Any]) -> set[int]:
+    """The ints among the first and last items (and keys) of each container
+    in *unread* too big to look inside, and of the index, the values and
+    each integer column of each pandas or NumPy object: a registry keyed by
+    ``id()`` keeps them all alike, so a few find it. A sampled item that is
+    a list, tuple, set or dict is sampled the same way, `_SAMPLE_LEVELS`
+    deep: ``[{'pid': id(p)} for p in ps]`` keeps its ids a level down."""
+    out: set[int] = set()
+    for obj in unread:
+        _sample_into(obj, out, _SAMPLE_LEVELS)
+    return out
+
+
+#: How many levels of containers `_sampled_ints` samples into.
+_SAMPLE_LEVELS = 3
+
+#: Most integer columns of one frame `_sampled_ints` reads.
+_SAMPLE_COLUMNS = 64
+
+
+def _sample_into(obj: Any, out: set[int], levels: int) -> None:
+    import itertools
+
+    def ends(items: Any) -> list[Any]:
+        if isinstance(items, (list, tuple)):
+            return [*items[:_SAMPLE], *items[-_SAMPLE:]]
+        return list(itertools.islice(items, _SAMPLE))
+
+    if isinstance(obj, dict):
+        picked = ends(dict.__iter__(obj)) + ends(dict.values(obj))
+    elif isinstance(obj, (list, tuple, set, frozenset)):
+        picked = ends(obj if isinstance(obj, (list, tuple)) else iter(obj))
+    else:
+        picked = _array_ends(obj)
+        for part in ("index", "columns"):
+            picked += _array_ends(attribute_or(attribute_or(obj, part, None), "values", None))
+        if attribute_or(obj, "ndim", None) == 1:
+            # A Series' values; a frame's would copy every column.
+            picked += _array_ends(attribute_or(obj, "values", None))
+        elif attribute_or(obj, "ndim", None) == 2:
+            picked += _frame_column_ends(obj)
+    for item in picked:
+        if type(item) is int:
+            out.add(item)
+        elif levels > 1 and type(item) in (dict, list, tuple, set, frozenset):
+            _sample_into(item, out, levels - 1)
+
+
+def _array_ends(array: Any) -> list[int]:
+    """The first and last `_SAMPLE` items of an integer NumPy array."""
+    if attribute_or(attribute_or(array, "dtype", None), "kind", None) not in ("i", "u"):
+        return []
+    try:
+        flat = array.ravel()
+        return [int(n) for n in (*flat[:_SAMPLE], *flat[-_SAMPLE:])]
+    except (TypeError, ValueError, AttributeError, IndexError):
+        return []
+
+
+def _frame_column_ends(frame: Any) -> list[int]:
+    """The ends of each integer column of a pandas frame (a ``pid`` column
+    of ids), read a column at a time: the frame's ``values`` would copy
+    every column into one array."""
+    dtypes = attribute_or(frame, "dtypes", None)
+    iloc = attribute_or(frame, "iloc", None)
+    if dtypes is None or iloc is None:
+        return []
+    picked: list[int] = []
+    try:
+        columns = [i for i, dtype in enumerate(dtypes) if attribute_or(dtype, "kind", None) in ("i", "u")]
+        for position in columns[:_SAMPLE_COLUMNS]:
+            picked += _array_ends(iloc[:, position].to_numpy())
+    except (TypeError, ValueError, AttributeError, IndexError):
+        return picked
+    return picked
+
+
+#: The lowest address a 64-bit macOS process maps: ``__PAGEZERO`` covers
+#: the first 4 GB.
+_MACOS_PAGEZERO = 1 << 32
+
+
+def _lowest_address() -> int:
+    """The lowest address this process has mapped, where it can be read:
+    no object lies below it, so a number below it (``65536``, ``len(df)``)
+    is no id(). On Linux, the first mapping in ``/proc/self/maps``, read
+    each time (a mapping made since can be lower); on 64-bit macOS, the end
+    of ``__PAGEZERO``. Elsewhere (Windows) nothing is known: 0, and only
+    the first 64 KB, mapped by no process, is left out (`_LOWEST_ADDRESS`).
+    Not the addresses of a few objects: how far below them the rest may
+    lie depends on how Python was built."""
+    if sys.platform.startswith("linux"):
+        try:
+            with open("/proc/self/maps", encoding="ascii") as maps:
+                return min(int(line.split("-", 1)[0], 16) for line in maps if line.strip())
+        except (OSError, ValueError):
+            return 0
+    if sys.platform == "darwin" and sys.maxsize > 2**32:
+        return _MACOS_PAGEZERO
+    return 0
+
+
+def _mapped(numbers: set[int]) -> set[int]:
+    """Those of *numbers* inside a mapping of this process that can be
+    written, where every object lies: on Linux, from ``/proc/self/maps``,
+    read each time. A sum of 200,000 numbers (``19999900000``) lies in no
+    mapping, so it is no id(). Elsewhere, or where the file cannot be
+    read, all of them."""
+    if not sys.platform.startswith("linux"):
+        return numbers
+    try:
+        with open("/proc/self/maps", encoding="ascii") as maps:
+            ranges = []
+            for line in maps:
+                fields = line.split()
+                if len(fields) > 1 and fields[1].startswith("rw"):
+                    start, end = fields[0].split("-", 1)
+                    ranges.append((int(start, 16), int(end, 16)))
+    except (OSError, ValueError):
+        return numbers
+    return {n for n in numbers if any(start <= n < end for start, end in ranges)}
 
 
 def weakly_held_reason(name: str, value: Any, user_ns: dict[str, Any]) -> IdentityHeld | None:
@@ -233,6 +395,8 @@ def _walk(
     numbers: set[int],
     targets: list[Any] | None = None,
     levels: int | None = None,
+    wanted: set[int] | None = None,
+    unread: list[Any] | None = None,
 ) -> bool:
     """Look through *roots* (see the module docstring), adding the ``id()``
     of each object to *seen*, each weak reference to *refs* and each
@@ -240,7 +404,10 @@ def _walk(
     reference points at; with *levels*, no deeper than that below *roots*.
     False when it stopped at `_MAX_SEEN`, and with *levels*, also when it
     left an object to look into: below the last level, or in a container of
-    over `_MAX_SCANNED` items."""
+    over `_MAX_SCANNED` items. With *wanted*, it stops, complete, at the
+    first level that sees one of those ids. With *unread*, each container it
+    did not look inside and each pandas or NumPy object goes there, and the
+    walk is not complete when it left a container unread."""
     level = roots
     complete = True
     while level:
@@ -282,16 +449,30 @@ def _walk(
                 items = list(state.values())
             else:
                 seen.add(id(item))
+                if unread is not None and _an_array(kind):
+                    unread.append(item)
                 continue
             seen.add(id(item))
             if len(seen) > _MAX_SEEN:
                 return False
             if len(items) > _MAX_SCANNED:
+                if unread is not None:
+                    unread.append(item)
+                    complete = False
                 complete = complete and levels is None
                 continue
             nxt.extend(items)
+        if wanted is not None and not wanted.isdisjoint(seen):
+            return True
         level = nxt
     return complete
+
+
+def _an_array(kind: type) -> bool:
+    """Whether *kind* is a pandas or NumPy class, whose index or values may
+    keep ids (``pd.Series(..., index=[id(p) for p in ps])``)."""
+    module = attribute_or(kind, "__module__", None) or ""
+    return module.split(".", 1)[0] in ("pandas", "numpy")
 
 
 def _looked_into(item: Any, seen: set[int], user_kinds: dict[type, bool]) -> bool:
