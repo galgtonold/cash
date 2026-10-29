@@ -2008,6 +2008,21 @@ class StatementProcessor:
         execution.wall_time = wall_time
         execution.cost, execution.store_cost, execution.tax = self._calls.price(execution.wall_time, marks)
         execution.cached_call_reads = self._calls.files_read_in_cached_calls(marks)
+        self._refuse_if_a_call_changed_a_default(run, marks)
+
+    def _refuse_if_a_call_changed_a_default(self, run: StatementRun, marks: Any) -> None:
+        """Not stored when a call it routed changed a default of a function
+        (``def g(x, L=[])`` called by ``f``): the call was refused for it
+        (STORE-DEFAULT-CHANGED), and a hit of the statement would leave the
+        default as it was all the same."""
+        changed = self._calls.defaults_changed_in_calls(marks)
+        if not changed:
+            return
+        function, param = changed[0]
+        run.skip_cache = True
+        run.metrics["uncacheable_reasons"].append(
+            f"{function} changes its default {param!r} on each call, and a stored result would not change it"
+        )
 
     def _left_work_running(self, run: StatementRun, execution: StatementExecution) -> None:
         """Not stored when *run* left work running in a thread, or read a

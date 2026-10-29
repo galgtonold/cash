@@ -626,6 +626,12 @@ class CallUnit:
         self._fingerprints = self._digests.fingerprints
         #: ``(function, parameter)`` already told about STORE-DEFAULT-CHANGED.
         self._default_change_told: set[tuple[str, str]] = set()
+        #: Each ``(function, parameter)`` a call changed the default of, in
+        #: order, a refused call run again counted again: the statement
+        #: around it is not stored either (`default_changes_since`).
+        self.default_changes: list[tuple[str, str]] = []
+        #: ``key -> (function, parameter)`` for a call refused for it.
+        self._refused_for_default: dict[str, tuple[str, str]] = {}
 
     def _cost_floor_s(self) -> float:
         """The bar a call's own execution must clear to be stored (:func:`call_cost_floor_s`)."""
@@ -871,6 +877,11 @@ class CallUnit:
         except Exception:  # noqa: BLE001 - an estimate is never worth an error
             return 0.0
 
+    def default_changes_since(self, seq: int) -> list[tuple[str, str]]:
+        """The ``(function, parameter)`` defaults calls changed since
+        ``len(default_changes)`` was *seq*."""
+        return self.default_changes[seq:]
+
     def files_read_since(self, seq: int) -> frozenset[str]:
         """Files and URLs read inside cached calls since :attr:`reads_seq` was *seq*."""
         return frozenset(path for path, at in self._cached_reads.items() if at > seq)
@@ -931,6 +942,9 @@ class CallUnit:
             if self._entries.is_refused(key):
                 if self._invoked_keys:
                     self._invoked_keys[-1] = None
+                if key in self._refused_for_default:
+                    # It changes the default again as it runs.
+                    self.default_changes.append(self._refused_for_default[key])
                 # A previous miss on this exact site proved its effects
                 # cannot be replayed (argument mutation or an RNG draw). Run
                 # it plain -- never look it up, never store over it.
@@ -1243,6 +1257,8 @@ class CallUnit:
         if not changed:
             return False
         function, param = changed[0]
+        self.default_changes.append((function, param))
+        self._refused_for_default[call.key] = (function, param)
         if (function, param) not in self._default_change_told:
             self._default_change_told.add((function, param))
             warn_diagnostic(

@@ -258,10 +258,43 @@ def callee_watched_defaults(fn) -> tuple:
         for reached in _functions_reached_in(globals_dict, layer):
             if type(reached) is not _types.FunctionType:
                 continue
-            for param, value in _defaults_by_name(reached).items():
-                if id(value) not in found and _worth_watching(value):
-                    found[id(value)] = (reached.__qualname__, param, value)
+            for function in (reached, *_methods_named_in(reached, globals_dict)):
+                for param, value in _defaults_by_name(function).items():
+                    if id(value) not in found and _worth_watching(value):
+                        found[id(value)] = (function.__qualname__, param, value)
     return tuple(found.values())
+
+
+#: How many methods `_methods_named_in` gives for one function.
+_METHODS_NAMED = 256
+
+
+def _methods_named_in(fn, globals_dict: dict) -> list:
+    """The methods of the classes of this module *fn* names, or whose
+    objects it names, that it may call by an attribute (``c.m(x)`` over
+    ``c = C()``): read off the class, no code of theirs run."""
+    names = set(fn.__code__.co_names)
+    out: list = []
+    seen: set[int] = set()
+    for name in names:
+        value = globals_dict.get(name, _NOT_BOUND)
+        cls = value if issubclass(type(value), type) else type(value)
+        if id(cls) in seen or _CLASS_MODULE(cls) != globals_dict.get("__name__"):
+            continue
+        seen.add(id(cls))
+        for klass in _CLASS_MRO(cls):
+            if _CLASS_MODULE(klass) != globals_dict.get("__name__"):
+                continue
+            for attr, member in list(_CLASS_DICT(klass).items()):
+                if attr not in names:
+                    continue
+                if issubclass(type(member), (staticmethod, classmethod)):
+                    member = member.__func__
+                if type(member) is _types.FunctionType:
+                    out.append(member)
+                    if len(out) >= _METHODS_NAMED:
+                        return out
+    return out
 
 
 def _defaults_by_name(fn) -> dict[str, object]:

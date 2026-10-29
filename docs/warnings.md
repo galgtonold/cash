@@ -2722,7 +2722,7 @@ something is replacing files under a running job, such as a deploy.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/notebook/call_unit.py:CallUnit._changed_a_default @fd6ef61d -->
+<!-- claim: cash/notebook/call_unit.py:CallUnit._changed_a_default @cc60d350 -->
 **What happened.** A call in a cell changed a default of the function it
 calls, or of a helper it reaches: `def fib(n, memo={})` filling `memo`, or
 `def add(x, log=[])` appending to `log`. The result was returned but not
@@ -2730,7 +2730,8 @@ stored. The warning names the function and the default, once for each.
 
 **Why it matters.** A cache hit runs no code, so the default would stay as
 it was, and whatever reads it later would see something else than a plain
-run gives. So the call runs every time.
+run gives. So the call runs every time, and so does the statement it is
+in: stored, the statement would be served and skip the call.
 
 **What to do.** Nothing, if the call is cheap. Otherwise pass the value in
 (`fib(n, memo)`), or keep what it gathers in a global the cell defines,
