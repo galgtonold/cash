@@ -89,6 +89,14 @@ class CacheHitServer:
                 if why is not None:
                     logger.debug("[CACHE] Not restoring into %s (%s), running it instead.", name, why)
                     return None
+        if metadata is not None and metadata.bound_copies:
+            # Bound to the stored copy: a weak reference or an id() made
+            # since points at the live object, which the copy is not.
+            user_ns = self._restorer.shell.user_ns
+            for name in metadata.bound_copies:
+                if name in user_ns and not in_place.bound_as_a_copy(user_ns[name], user_ns):
+                    logger.debug("[CACHE] Something points at %s now, running it instead.", name)
+                    return None
         if metadata is not None and metadata.anchors:
             # The variables' objects the entry holds by reference: the live
             # ones, or a miss when one changed (`anchors`).

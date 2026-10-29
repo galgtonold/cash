@@ -160,6 +160,20 @@ BUMP = "def bump():\n    import counter_mod\n    counter_mod.k += 1\n"
             "too big to look through",
         ),
         (
+            "import weakref\nclass Q:\n    alive = weakref.WeakSet()\n    def __init__(self):\n        self.k = 0\n"
+            "        Q.alive.add(self)\nclass P:\n    pass\np = P()\np.child = Q()",
+            "import time\nfor i in range(3000):\n    time.sleep(0.0003)\n    p.child.k += 1",
+            "print(p.child in Q.alive, p.child.k)",
+            "weak reference",
+        ),
+        (
+            "class Q:\n    by_id = {}\n    def __init__(self):\n        self.k = 0\n        Q.by_id[id(self)] = 'q'\n"
+            "class P:\n    pass\np = P()\np.child = Q()",
+            "import time\nfor i in range(3000):\n    time.sleep(0.0003)\n    p.child.k += 1",
+            "print(Q.by_id.get(id(p.child)), p.child.k)",
+            "keeps the id()",
+        ),
+        (
             P + "from collections import deque\np = P()\nids = deque([id(p.seen)])",
             LOOP,
             "print(ids[0] == id(p.seen), p.n)",
@@ -234,6 +248,8 @@ BUMP = "def bump():\n    import counter_mod\n    counter_mod.k += 1\n"
         "a weak reference as a dict key",
         "an id inside a big container of records",
         "a big container of lists",
+        "a weak reference on a class",
+        "an id key on a class",
         "an id in a deque",
         "an id in an integer array",
         "an id in a SimpleNamespace",
@@ -311,6 +327,35 @@ def test_what_the_loop_assigns_into_is_restored_after_a_restart(nb_runner, make,
     printed, seen = _run(nb_runner, f"import time\n{make}", loop, f"print({read})")
     assert printed == expected
     assert "RESTORED" in str(seen)
+
+
+@pytest.mark.fresh_kernel
+@pytest.mark.parametrize(
+    ("made_later", "read", "expected"),
+    [
+        ("held = weakref.ref(out)", "print(held is not None and held() is out, out[-1])", "True 5998.0"),
+        ("held = {id(out): 'out'}", "print(held and held.get(id(out)), out[-1])", "out 5998.0"),
+    ],
+    ids=["a weak reference", "an id key"],
+)
+def test_what_points_at_what_it_assigns_into_is_asked_again_at_a_restore(nb_runner, made_later, read, expected):
+    """Made after the loop was stored: a hit would bind ``out`` to the
+    stored copy, which the weak reference or the id() does not find."""
+    nb_runner.create_notebook(
+        [
+            "import time, weakref\nimport numpy as np\nout = np.zeros(3000)",
+            "held = None",
+            "for i in range(3000):\n    time.sleep(0.0003)\n    out[i] = i * 2",
+            read,
+        ]
+    )
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    nb_runner.restart()
+    nb_runner._init_cash()
+    nb_runner.set_cell_source(2, made_later)
+    nb_runner.run_all()
+    assert nb_runner.get_output(4).strip() == expected
 
 
 @pytest.mark.fresh_kernel

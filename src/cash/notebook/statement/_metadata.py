@@ -116,6 +116,11 @@ class StatementCacheMetadata:
     #: The outputs a loop changed in place: a restore gives their live
     #: objects the stored state instead of binding the copies (`in_place`).
     restored_into: list[str] | None = None
+    #: The outputs a loop only assigns into that a restore binds to the
+    #: stored copy (``arr[i] = v``): a hit misses when a weak reference or
+    #: an ``id()`` the notebook holds points at the live one now
+    #: (`in_place.bound_as_a_copy`).
+    bound_copies: list[str] | None = None
     #: The ``anchors`` and the variables found holding an object of the
     #: outputs beside them: a hit links them to the outputs, as the run did,
     #: so a change through one moves the outputs on.

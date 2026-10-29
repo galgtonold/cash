@@ -41,6 +41,7 @@ from typing import Any
 
 from cash._user_attrs import attribute_or, builtin_base, builtin_items, own_dict
 from cash.closure_sharing import _slot_readers
+from cash.install_paths import is_user_code_module
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
 from .identity_holders import IdentityHeld, library_parts
@@ -161,6 +162,14 @@ def _held_itself(obj: Any, namespace: Mapping[str, Any]) -> str | None:
         if _reaches(gc.get_referents(obj), _NOTHING, seen=inside) is not None:
             refs = [ref for ref in refs if id(ref) not in inside]
     return _held_by_the_notebook({id(obj)}, refs, namespace)
+
+
+def _users_class(value: Any) -> bool:
+    """Whether *value* is a class of the user's code."""
+    if not isinstance(value, type):
+        return False
+    module = sys.modules.get(attribute_or(value, "__module__") or "")
+    return module is not None and is_user_code_module(module)
 
 
 #: A target `_reaches` never finds: to collect what an object holds.
@@ -287,12 +296,17 @@ def _what_it_holds(value: Any, ids: _Ids) -> list[Any] | str | None:
     if kind in _PLAIN:
         return [*value, *value.values()] if kind is dict else value
     if (
-        isinstance(value, _OPAQUE)
+        (isinstance(value, _OPAQUE) and not _users_class(value))
         or type(kind.__module__) is not str
         or (kind.__module__.partition(".")[0] in _NOT_THE_NOTEBOOKS)
     ):
         return None
     held: list[Any] = []
+    if isinstance(value, type):
+        # A registry on a class of the user's: ``alive = weakref.WeakSet()``,
+        # ``by_id = {}`` filled in __init__.
+        state = attribute_or(value, "__dict__")
+        return list(dict(state).values()) if type(state) is types.MappingProxyType else None
     if builtin_base(value) is not None:
         try:
             held.extend(builtin_items(value) or ())

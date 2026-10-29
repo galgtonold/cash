@@ -296,11 +296,15 @@ class MutationRouting:
             # ``id()`` key on the object no longer found it. One of a kind no
             # restore goes into (``arr[i] = v``) stays an output, bound to
             # the copy.
-            stored |= {
-                name
-                for name in (run.outputs & _assigned_into(node)) - run.est_fit - _rebound_names(node)
-                if _storable_name(name, user_ns) and not in_place.bound_as_a_copy(user_ns.get(name), user_ns)
-            }
+            copies: set[str] = set()
+            for name in (run.outputs & _assigned_into(node)) - run.est_fit - _rebound_names(node):
+                if not _storable_name(name, user_ns):
+                    continue
+                if in_place.bound_as_a_copy(user_ns.get(name), user_ns):
+                    copies.add(name)
+                else:
+                    stored.add(name)
+            run.bound_copies = copies
             if stored and not self._cheap_to_rerun(run):
                 run.outputs = run.outputs | stored
                 run.est_fit = run.est_fit | stored
