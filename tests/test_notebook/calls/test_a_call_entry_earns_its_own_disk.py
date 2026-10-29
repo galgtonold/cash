@@ -18,23 +18,21 @@ import pytest
 np = pytest.importorskip("numpy")
 
 from cash.backends import FileBackend, InMemoryBackend, TieredBackend
+from cash.notebook import call_unit, shadow
 from tests._cell_driver import run_cash_cell
 
 #: The call's clock. A slow, loaded machine must not decide these tests: a
 #: real 0.4 s sleep once measured 2 s, and 76 MiB built in 2 s is worth its
-#: disk. ``big`` spends 0.4 s on this clock instead, and the call unit reads
+#: disk. Each call spends 0.4 s on this clock instead (moved where cash runs
+#: the call, `spending` below), and the call unit reads
 #: only this clock, so the call's recorded cost is exactly 0.4 s.
 _CLOCK = [0.0]
-
-
-def spend(seconds: float) -> None:
-    _CLOCK[0] += seconds
 
 
 #: 76 MiB in 0.4 s: 190 MiB per second, over the ceiling -- but under twice
 #: it, so the call is digested (``CallEntries._too_big_to_digest``) and its
 #: size is exact, not the estimate that already faced the ceiling.
-DEFS = f"import numpy as np\nfrom {__name__} import spend\ndef big(n):\n    spend(0.4)\n    return np.zeros(n)"
+DEFS = "import numpy as np\ndef big(n):\n    return np.zeros(n)"
 N = 10_000_000
 
 
@@ -44,6 +42,19 @@ def tiers(cash_magics, cash_instance, tmp_path, monkeypatch):
     with the call unit on the test's clock."""
     _CLOCK[0] = 0.0
     monkeypatch.setattr("cash.notebook.call_unit._perf_counter", lambda: _CLOCK[0])
+    run_call = call_unit.call_capturing_output
+
+    def spending(*args, **kwargs):
+        _CLOCK[0] += 0.4
+        return run_call(*args, **kwargs)
+
+    # Moved around the call, not by code the call runs: a function of the
+    # user's moving a module's clock changes state a hit would skip, and the
+    # call is not stored. Nor recorded by the trace, which would see
+    # `spending` itself run in the statement.
+    monkeypatch.setattr("cash.notebook.call_unit.call_capturing_output", spending)
+    monkeypatch.setenv("CASH_TRACE", "0")
+    monkeypatch.setattr(shadow, "SHADOW", None)
     ram, disk = InMemoryBackend(), FileBackend(str(tmp_path / "nbcache"), flush_interval=0)
     cash_instance.backend = TieredBackend([ram, disk])
     yield cash_magics, ram, disk

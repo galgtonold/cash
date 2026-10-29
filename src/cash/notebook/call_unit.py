@@ -77,6 +77,7 @@ from cash.notebook.call_entries import ONE_LOCAL, TOO_MANY_WHY, CallEntries, ref
 from cash.notebook.call_interception import CallSite, SiteSlots, interceptable, names_read
 from cash.notebook.call_key import (
     CallKeys,
+    _functions_reached_in,
     callee_mutated_globals,
     callee_watched_defaults,
     callee_watched_globals,
@@ -445,6 +446,40 @@ class _Call:
     mutated_globals: tuple[str, ...]
     args: tuple
     kwargs: dict
+
+
+def _ran_unseen_writes(call: Any, unit: Any) -> bool:
+    """Did code of the user's that ran in the call change something no
+    entry puts back (`unseen_writers`): a hit would skip it. ``g(a)``
+    returning ``x + 1`` for a closed-over ``x = Vec()``, whose
+    ``__add__`` appends to ``calls``: no global ``g`` names is watched, so
+    a call slow enough to be stored was served after a restart with
+    ``calls`` left empty. The callee's own code is the call's analysis's
+    (what it writes is watched, or put back with the entry). Without a
+    trace (Python 3.10 and 3.11, ``CASH_TRACE=0``), what the call's text
+    could run is read from its objects instead (`writers_without_a_trace`),
+    as for a statement."""
+    # Here, not at the top: the statement package imports this module.
+    from cash.notebook.statement.unseen_writes import unseen_writers, writers_without_a_trace
+
+    namespace = attribute_or(call.fn, "__globals__", None)
+    if not isinstance(namespace, dict):
+        return False
+    codes = attribute_or(unit, "codes", None)
+    try:
+        if unit is None:
+            source = attribute_or(call.site, "source", None)
+            if not source:
+                return False
+            # The callee and the functions it names are the call's analysis's.
+            reached = {attribute_or(fn, "__qualname__", None) for fn in _functions_reached_in(namespace, call.fn)}
+            return any(fn not in reached for fn, _targets in writers_without_a_trace(source, namespace))
+        if not codes:
+            return False
+        own = attribute_or(call.fn, "__code__", None)
+        return bool(unseen_writers(codes, [own] if own is not None else [], call.mutated_globals, namespace))
+    except Exception:  # noqa: BLE001 - not read is not stored
+        return True
 
 
 def _decide_site(run: _SiteRun, site: CallSite) -> None:
@@ -1151,6 +1186,7 @@ class CallUnit:
             )
             and not call_tracker.work_outlived_block
             and not _inputs_moved(call_tracker)
+            and not _ran_unseen_writes(call, unit)
         ):
             stored = self._store_result(
                 call,

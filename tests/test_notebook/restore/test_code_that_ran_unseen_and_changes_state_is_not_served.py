@@ -439,3 +439,23 @@ def test_a_function_given_code_whose_text_cannot_be_read_runs_each_time(cash_mag
         for gone in ("DQ", "inner", "C", "D", "obj", "collections"):
             cash_magics.shell.user_ns.pop(gone, None)
     assert "NOTEBOOK-UNSEEN-WRITES" in said, said
+
+
+@pytest.mark.parametrize("trace", ["on", "off"])
+def test_a_call_slow_enough_to_be_stored_is_not_when_it_ran_such_a_writer(cash_magics, monkeypatch, trace):
+    """``g(a)`` returns ``x + 1`` for a closed-over ``x = Vec()``: the
+    statement was refused, but the call, slow enough to be stored on its
+    own, was served after a restart with ``calls == []`` (macOS under load
+    made the closure case's quick ``g`` that slow)."""
+    if trace == "off":
+        monkeypatch.setenv("CASH_TRACE", "0")
+        monkeypatch.setattr(shadow, "SHADOW", None)
+    setup = (
+        "v = Vec()\ndef mk():\n    x = v\n    def g(a):\n"
+        f"        time.sleep({F})\n        return x + 1\n    return g\ng = mk()"
+    )
+    for _ in range(2):
+        run_cash_cell(cash_magics, HEAD + setup)
+        run_cash_cell(cash_magics, f"w = g({SLEEP})")
+        assert cash_magics.shell.user_ns["calls"] == [1]
+        _restart(cash_magics)
