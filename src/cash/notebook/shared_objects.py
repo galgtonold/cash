@@ -166,6 +166,7 @@ def turn_on_scalar_identity() -> None:
     if not _SCALAR_IDENTITY:
         _SCALAR_IDENTITY = True
         _EXACT_WITH_LIBRARIES.clear()
+        _unhook_pandas_scalars()
 
 
 def scalar_identity_news() -> bool:
@@ -191,31 +192,75 @@ def _cached_by_its_type(obj: Any, name: str) -> bool:
     return name.startswith("_") and len(name) > 1 and has_attribute(type(obj), name[1:])
 
 
+#: The hooks `_hook_pandas_scalars` put on each type: ``(type, set, delete)``.
+_SCALAR_HOOKS: list[tuple[type, Any, Any]] = []
+
+
 def _hook_pandas_scalars(pd: Any) -> None:
     """Have an attribute set on (or deleted from) a ``Timestamp``,
     ``Timedelta``, ``Period``, ``NaT`` or ``NA`` turn `scalar_identity`
     on, wherever it is set: a cell, a function of the user's, a library.
-    The write itself is the type's own."""
+    The write itself is the type's own.
+
+    Every set goes through the hook, the type's own too: ``td.seconds``
+    keeps ``_seconds`` and ``_microseconds``, and the first read of 200,000
+    Timedeltas took 4x plain. Whether a name is one the type keeps is
+    remembered per type and name, and once the switch is on the hooks come
+    off: there is nothing left for them to tell."""
     global _ATTRIBUTED_SCALARS
     kinds = (pd.Timestamp, pd.Timedelta, pd.Period, type(pd.NaT), type(pd.NA))
     for kind in kinds:
         if "__setattr__" in vars(kind) or "__delattr__" in vars(kind):
             continue
         set_attr, del_attr = kind.__setattr__, kind.__delattr__
+        #: (type, name) -> whether the type keeps it (`_cached_by_its_type`).
+        its_own: dict[tuple[type, str], bool] = {}
 
-        def noting_set(obj: Any, name: str, value: Any, _set: Any = set_attr) -> None:
+        def noting_set(obj: Any, name: str, value: Any, _set: Any = set_attr, _own: dict = its_own) -> None:
             _set(obj, name, value)
-            if not _SCALAR_IDENTITY and not _cached_by_its_type(obj, name):
-                _note_scalar_attribute()
+            if not _SCALAR_IDENTITY:
+                _note_unless_its_own(obj, name, _own)
 
-        def noting_del(obj: Any, name: str, _del: Any = del_attr) -> None:
+        def noting_del(obj: Any, name: str, _del: Any = del_attr, _own: dict = its_own) -> None:
             _del(obj, name)
-            if not _SCALAR_IDENTITY and not _cached_by_its_type(obj, name):
-                _note_scalar_attribute()
+            if not _SCALAR_IDENTITY:
+                _note_unless_its_own(obj, name, _own)
 
         kind.__setattr__ = noting_set
         kind.__delattr__ = noting_del
+        _SCALAR_HOOKS.append((kind, noting_set, noting_del))
     _ATTRIBUTED_SCALARS = frozenset(kinds)
+    if _SCALAR_IDENTITY:
+        _unhook_pandas_scalars()
+
+
+def _note_unless_its_own(obj: Any, name: Any, own: dict[tuple[type, str], bool]) -> None:
+    """`_note_scalar_attribute`, unless *name* is one *obj*'s type keeps;
+    *own* holds the answers so far, by type (a subclass of the user's is
+    asked for itself) and name."""
+    if not isinstance(name, str):
+        _note_scalar_attribute()
+        return
+    key = (type(obj), name)
+    known = own.get(key)
+    if known is None:
+        known = _cached_by_its_type(obj, name)
+        if len(own) < 256:
+            own[key] = known
+    if not known:
+        _note_scalar_attribute()
+
+
+def _unhook_pandas_scalars() -> None:
+    """Give each hooked type its own ``__setattr__`` and ``__delattr__`` back."""
+    while _SCALAR_HOOKS:
+        kind, noting_set, noting_del = _SCALAR_HOOKS.pop()
+        own = vars(kind)
+        with contextlib.suppress(AttributeError, TypeError):
+            if own.get("__setattr__") is noting_set:
+                del kind.__setattr__
+            if own.get("__delattr__") is noting_del:
+                del kind.__delattr__
 
 
 def library_value_types() -> tuple[type, ...]:
