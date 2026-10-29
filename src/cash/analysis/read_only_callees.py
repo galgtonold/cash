@@ -25,7 +25,21 @@ NOT_A_LITERAL = object()
 #: each builds a new object, or a number, from what it is given. By module
 #: and name, resolved against the module the process already imported.
 _READ_ONLY_CALLEES: dict[str, tuple[str, ...]] = {
-    "pandas": ("concat", "merge", "to_datetime", "to_numeric", "crosstab", "pivot_table", "get_dummies"),
+    # The constructors too: ``for day, counts in day_counts.items():
+    # weekday_df[day] = pd.Series(counts)`` hashed a Series of a million
+    # dates in lists before and after the loop, 7 s plain against 34 s.
+    "pandas": (
+        "concat",
+        "merge",
+        "to_datetime",
+        "to_numeric",
+        "crosstab",
+        "pivot_table",
+        "get_dummies",
+        "Series",
+        "DataFrame",
+        "Index",
+    ),
     "numpy": (
         "concatenate",
         "stack",
