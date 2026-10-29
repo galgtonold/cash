@@ -376,6 +376,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         "STORE-INPUT-CHANGED",  # a file the call read changed before it
         # returned, so the result was not stored
         "STORE-LOCK-FAILED",  # lock acquisition failed; proceeding unlocked
+        "STORE-DEFAULT-CHANGED",  # a notebook call changed its callee's own
+        # default (a memo default), so the result was not stored
         "STORE-STATE-CHANGED",  # a global the key read changed (another
         # thread) while the call ran, so the result was not stored
         "STORE-WORK-RUNNING",  # work the call handed to a thread or pool was
