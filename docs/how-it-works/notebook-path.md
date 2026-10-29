@@ -180,7 +180,7 @@ puts the stored state back into the object itself, so other names for it, a
 `weakref` to it and a dict keyed by its `id()` still find it, as after a
 plain run.
 
-<!-- claim: cash/notebook/statement/in_place.py:refusal @b3abf462, cash/notebook/statement/in_place.py:_held_by_the_notebook @50e2b97d, cash/notebook/statement/processor.py:StatementProcessor._cheap_to_rerun @1a1db567 -->
+<!-- claim: cash/notebook/statement/in_place.py:refusal @4357df4e, cash/notebook/statement/in_place.py:_held_by_the_notebook @50e2b97d, cash/notebook/statement/processor.py:StatementProcessor._cheap_to_rerun @1a1db567 -->
 Only a list, a dict, a set, or an object of your own class pickled the default
 way is restored into. An object of another kind the loop only assigns into
 (`arr[i] = v` on a NumPy array) is bound to the stored copy, as before, when
