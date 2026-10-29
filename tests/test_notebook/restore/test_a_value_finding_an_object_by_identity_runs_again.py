@@ -171,3 +171,20 @@ def test_it_runs_again_with_one_warning_naming_the_variable(cash_magics, cash_in
     held = [str(w.message) for w in caught if "NOTEBOOK-IDENTITY-HELD" in str(w.message)]
     assert len(held) == 1, held
     assert f"'{name}' holds {kind}" in held[0]
+
+
+@pytest.mark.parametrize(
+    "held",
+    ["numpy.True_", "()", "bool"],
+)
+def test_the_id_of_an_object_compiled_into_a_c_image_is_found(held):
+    """Such an object keeps only a pointer's alignment, not the heap's 16
+    bytes: ``np.True_`` (``(arr >= 0).all()``) sits 8 bytes off on 64-bit
+    builds. Its ``id()`` was not looked for, and a registry keyed by it
+    was restored with an address a restarted process does not reuse."""
+    import numpy
+
+    from cash.notebook.statement.identity_holders import identity_held_reason
+
+    ok = eval(held, {"numpy": numpy})
+    assert identity_held_reason("seen", {id(ok): "ok"}, {"ok": ok}) is not None

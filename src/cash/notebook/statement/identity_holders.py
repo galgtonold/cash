@@ -70,10 +70,11 @@ _LOWEST_ADDRESS = 1 << 22
 #: Above any address a 64-bit process maps (48-bit virtual addresses): a
 #: nanosecond or microsecond timestamp is no ``id()``.
 _HIGHEST_ADDRESS = 1 << 48
-#: What an object's address is a multiple of on a 64-bit build: CPython's
-#: allocator, the system's ``malloc`` and the collector's header all keep
-#: 16 bytes' alignment.
-_ALIGNMENT = 16 if sys.maxsize > 1 << 32 else 8
+#: What every object's address is a multiple of: a pointer's size. The heap
+#: keeps 16 bytes on 64-bit builds, but an object compiled into a C image
+#: keeps only 8: ``np.True_`` (which ``(arr >= 0).all()`` returns), ``()``,
+#: and the builtin types on a clang build.
+_ALIGNMENT = 8 if sys.maxsize > 1 << 32 else 4
 
 
 class IdentityHeld(str):
