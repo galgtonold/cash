@@ -687,9 +687,17 @@ def _kept_to_itself(obj: Any, name: str, user_ns: Mapping[str, Any], methods: se
         todo.extend(gc.get_referents(item))
     if any(other is not name and id(value) in held for other, value in user_ns.items()):
         return False
-    kept = list(held.values())
+    # A tuple: a call spreads it as its own arguments, so the one
+    # referrer that is not the notebook's is `kept` itself.
+    kept = tuple(held.values())
     for holder in gc.get_referrers(*kept):
-        if id(holder) in held or holder is user_ns or holder is kept or isinstance(holder, types.FrameType):
+        if (
+            id(holder) in held
+            or holder is user_ns
+            or holder is kept
+            or holder is held
+            or isinstance(holder, types.FrameType)
+        ):
             continue
         return False
     for method in methods:
