@@ -173,6 +173,30 @@ def _users_class(value: Any) -> bool:
     return module is not None and is_user_code_module(module)
 
 
+def _users_function(func: Any) -> bool:
+    """Whether *func* is a plain function of the user's code."""
+    if type(func) is not types.FunctionType:
+        return False
+    module = sys.modules.get(attribute_or(func, "__module__") or "")
+    return module is not None and is_user_code_module(module)
+
+
+def _function_parts(func: types.FunctionType) -> list[Any] | None:
+    """What a function of the user's holds: its closure cells' contents and
+    its defaults. None for another function, which is not looked into."""
+    if not _users_function(func):
+        return None
+    held: list[Any] = []
+    for cell in func.__closure__ or ():
+        try:
+            held.append(cell.cell_contents)
+        except ValueError:  # an empty cell
+            continue
+    held.extend(func.__defaults__ or ())
+    held.extend((func.__kwdefaults__ or {}).values())
+    return held or None
+
+
 #: A target `_reaches` never finds: to collect what an object holds.
 _NOTHING = object()
 
@@ -290,12 +314,19 @@ def _what_it_holds(value: Any, ids: _Ids) -> list[Any] | str | None:
     ``{weakref.ref(p.child): ...}``), the items of a list, tuple, set or
     deque or of a subclass of one (read through the builtin type's own
     methods, not the class's), the items of a NumPy array of objects, and
-    an object's attributes and slots. `_BY_ID` for an integer NumPy array
+    an object's attributes and slots, and the closure cells and defaults
+    of a function of the user's. `_BY_ID` for an integer NumPy array
     holding one of *ids*, `_TOO_MANY` for a container that cannot be
     read. None when nothing in it is looked at."""
     kind = type(value)
     if kind in _PLAIN:
         return [*value, *value.values()] if kind is dict else value
+    if kind is types.FunctionType:
+        # A function of the user's keeps what its closure cells and
+        # defaults hold: ``r = weakref.ref(c); get = lambda: r().v``.
+        return _function_parts(value)
+    if kind is types.MethodType:
+        return [value.__self__] if _users_function(value.__func__) else None
     if (
         (isinstance(value, _OPAQUE) and not _users_class(value))
         or type(kind.__module__) is not str

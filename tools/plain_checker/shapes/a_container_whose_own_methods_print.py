@@ -1,5 +1,5 @@
 """A container of a class of the user's whose own methods raise, or print
-and count (from the batch 16 launch-bar review, LB2-2): cash reads it by the
+and count: cash reads it by the
 builtin type's methods, so no cell shows a call plain Python never made.
 
 Each shape: cell 0 defines p (p.child is the target) and the container class;
