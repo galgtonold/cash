@@ -326,6 +326,12 @@ def _enter(value: Any, walk: _Walk) -> Any:
     if type(value) in _plain_data.numpy_scalar_set():
         # A number: pickled by value, nothing inside to order.
         return ("__cash_np__", value.dtype.char, value.tobytes())
+    if type(value) in pandas_dates():
+        form = _date_form(value)
+        if form is _ZONED:
+            return _Descend(_zoned_steps(value))
+        if form is not None:
+            return form
     family = walk.content.family(type(value))
     if family is not None:
         if family in _WRITABLE_FAMILIES:
@@ -610,6 +616,8 @@ def _object_steps(value: Any, walk: _Walk) -> Generator[Any, Any, Any]:
             return (yield from _typed(value, tuple(items), walk))
         if isinstance(value, (list, tuple)):
             numbers = _numbers_form(value) if walk.hook is None and len(value) >= RECORDS_FROM else None
+            if numbers is None and walk.hook is None and len(value) >= RECORDS_FROM:
+                numbers = yield from _dates_steps(value)
             if numbers is not None:
                 return (yield from _typed(value, numbers, walk))
             if walk.fielded is not None and len(value) >= RECORDS_FROM:
@@ -681,6 +689,112 @@ def _numbers_form(value: list | tuple) -> tuple | None:
             map(raw.__getitem__, map(slice, range(0, len(raw), size), range(size, len(raw) + size, size))),
         )
     )
+
+
+def pandas_dates() -> frozenset:
+    """The exact types of pandas' ``Timestamp``, ``Timedelta`` and ``NaT``
+    when pandas 2 or later is loaded (never imported here), which key by
+    their values (`_date_form`); empty otherwise. Subclasses are not in it:
+    they keep the route of any object."""
+    pandas = sys.modules.get("pandas")
+    known = _PANDAS_DATES
+    if pandas is known[0]:
+        return known[1]
+    return _pandas_dates(pandas)
+
+
+def _pandas_dates(pandas: Any) -> frozenset:
+    global _PANDAS_DATES
+    try:
+        found = frozenset((pandas.Timestamp, pandas.Timedelta, type(pandas.NaT)))
+        if not hasattr(pandas.Timestamp(0), "unit"):  # pandas 1: no units
+            found = frozenset()
+    except AttributeError:  # no pandas, or one still importing
+        return frozenset()
+    _PANDAS_DATES = (pandas, found)
+    return found
+
+
+_PANDAS_DATES: tuple[Any, frozenset] = (None, frozenset())
+
+#: `_date_form`'s answer for a Timestamp with a time zone, whose form
+#: holds the form of its ``tz`` (`_zoned_steps`).
+_ZONED = object()
+
+_TIMESTAMP = "__cash_pd_ts__"
+_TIMEDELTA = "__cash_pd_td__"
+_NAT = ("__cash_pd_nat__",)
+_DATES = "__cash_pd_dates__"
+
+_UNIT = operator.attrgetter("unit")
+_VALUE = operator.attrgetter("_value")
+_FOLD = operator.attrgetter("fold")
+_TZ = operator.attrgetter("tz")
+
+#: An instance's attributes, None or empty when it has none. Not
+#: ``__dict__``, which makes a dict for each instance that has none: 344 MB
+#: for a million Timestamps. Python 3.10 has no ``object.__getstate__``.
+_OWN_STATE = getattr(object, "__getstate__", operator.attrgetter("__dict__"))
+
+
+def _date_form(value: Any) -> Any:
+    """The form of an exact pandas ``Timestamp``, ``Timedelta`` or ``NaT``
+    (`pandas_dates`): the number it holds in its unit, the unit, and a
+    Timestamp's ``fold`` and time zone, all a program can read of it. Equal
+    instants in two units or two zones key apart, as code can tell them
+    apart. `_ZONED` for a Timestamp with a zone, whose form needs the zone
+    walked; None for one carrying attributes of its own, left to pickle.
+
+    Pickled, each one went through two reducers and pickle's own: 2.4 s a
+    key for a column of seven lists of 140,000 timestamps, which a loop
+    over the frame keyed eight times in one cell."""
+    t = type(value)
+    attrs = _OWN_STATE(value)
+    if t.__name__ == "NaTType":
+        # The one NaT; its ``__dict__`` holds ``__module__`` from birth.
+        return _NAT if all(name.startswith("__") for name in attrs or ()) else None
+    if attrs:
+        return None
+    if t.__name__ == "Timedelta":
+        return (_TIMEDELTA, value.unit, value._value)
+    if value.tz is not None:
+        return _ZONED
+    return (_TIMESTAMP, value.unit, value._value, value.fold, None)
+
+
+def _zoned_steps(value: Any) -> Generator[Any, Any, tuple]:
+    """`_date_form` of a Timestamp with a time zone, the zone walked."""
+    zone = yield value.tz
+    return (_TIMESTAMP, value.unit, value._value, value.fold, zone)
+
+
+def _dates_steps(value: list | tuple) -> Generator[Any, Any, tuple | None]:
+    """The items' form of a list or tuple of exact pandas Timestamps of one
+    time zone, or of Timedeltas: one entry holding the numbers of all of
+    them as bytes, their units and a Timestamp's folds, read at C speed, the
+    zone walked once. None for anything else, walked an item at a time
+    (`_date_form`).
+
+    A form per item was 34 bytes a timestamp to pickle and hash."""
+    kinds = set(map(type, value))
+    if len(kinds) != 1:
+        return None
+    kind = kinds.pop()
+    if kind not in pandas_dates() or kind.__name__ == "NaTType" or any(map(_OWN_STATE, value)):
+        return None
+    import numpy as np
+
+    numbers = np.fromiter(map(_VALUE, value), dtype="<i8", count=len(value)).tobytes()
+    units: Any = set(map(_UNIT, value))
+    units = units.pop() if len(units) == 1 else tuple(map(_UNIT, value))
+    if kind.__name__ == "Timedelta":
+        return ((_DATES, _TIMEDELTA, units, numbers),)
+    if len(set(map(id, map(_TZ, value)))) != 1:  # each zone held by its Timestamps
+        return None
+    zone = value[0].tz
+    if zone is not None:
+        zone = yield zone
+    return ((_DATES, _TIMESTAMP, units, numbers, bytes(map(_FOLD, value)), zone),)
 
 
 #: What the fields of records keyed by their fields may hold
