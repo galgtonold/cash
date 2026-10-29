@@ -1232,6 +1232,114 @@ static PyObject *py_referrers_in(PyObject *self, PyObject *const *args, Py_ssize
     return out;
 }
 
+/* key_alias_id(seen, atoms, by_name, kinds, identityless, outside, obj):
+ * kept_state.key_aliases's persistent_id, answer for answer. A key pickle
+ * asks it of every object it writes, and the Python one took most of the
+ * time of keying a column of a million timestamps. *kinds* is
+ * {type: bool} of the answers of *identityless* (a numpy dtype or number
+ * type?) asked so far; *outside* is a dict or None. */
+static PyObject *py_key_alias_id(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs != 7 || !PyDict_CheckExact(args[0]) || !PyAnySet_Check(args[1]) || !PyAnySet_Check(args[2]) ||
+        !PyDict_CheckExact(args[3]) || (args[5] != Py_None && !PyDict_CheckExact(args[5]))) {
+        PyErr_SetString(PyExc_TypeError, "key_alias_id(dict, set, set, dict, callable, dict | None, obj)");
+        return NULL;
+    }
+    PyObject *seen = args[0], *kinds = args[3], *outside = args[5], *obj = args[6];
+    PyObject *t = (PyObject *)Py_TYPE(obj);
+    int in = PySet_Contains(args[1], t);
+    if (in == 0) in = PySet_Contains(args[2], t);
+    if (in < 0) return NULL;
+    if (in || PyType_IsSubtype(Py_TYPE(obj), &PyType_Type)) Py_RETURN_NONE;
+    PyObject *known = PyDict_GetItemWithError(kinds, t); /* borrowed */
+    if (known == NULL) {
+        if (PyErr_Occurred()) {
+            if (!PyErr_ExceptionMatches(PyExc_TypeError)) return NULL;
+            PyErr_Clear(); /* an unhashable type: not a numpy one */
+        } else {
+            PyObject *answer = PyObject_CallOneArg(args[4], t);
+            if (!answer) return NULL;
+            int truth = PyObject_IsTrue(answer);
+            Py_DECREF(answer);
+            if (truth < 0) return NULL;
+            if (PyDict_SetItem(kinds, t, truth ? Py_True : Py_False) < 0) return NULL;
+            if (truth) Py_RETURN_NONE;
+        }
+    } else if (known == Py_True) {
+        Py_RETURN_NONE;
+    }
+    PyObject *key = PyLong_FromVoidPtr(obj);
+    if (!key) return NULL;
+    PyObject *found = PyDict_GetItemWithError(seen, key); /* borrowed */
+    if (found) {
+        Py_DECREF(key);
+        return Py_BuildValue("(sO)", "__cash_alias__", PyTuple_GET_ITEM(found, 0));
+    }
+    if (PyErr_Occurred()) {
+        Py_DECREF(key);
+        return NULL;
+    }
+    if (outside != Py_None) {
+        PyObject *where = PyDict_GetItemWithError(outside, key); /* borrowed */
+        if (where && where != Py_None) {
+            Py_DECREF(key);
+            return Py_BuildValue("(sO)", "__cash_held__", where);
+        }
+        if (PyErr_Occurred()) {
+            Py_DECREF(key);
+            return NULL;
+        }
+    }
+    PyObject *entry = Py_BuildValue("(nO)", PyDict_GET_SIZE(seen), obj);
+    if (!entry) {
+        Py_DECREF(key);
+        return NULL;
+    }
+    int err = PyDict_SetItem(seen, key, entry);
+    Py_DECREF(entry);
+    Py_DECREF(key);
+    if (err < 0) return NULL;
+    Py_RETURN_NONE;
+}
+
+/* reduce_dict_apart(full, apart, protocol, obj): kept_state's reducer of a
+ * type whose own reduce drops its instances' __dict__ (`_reducer_with_dict`
+ * under `_names_apart`), answer for answer. An instance with something in
+ * its __dict__ goes to full(obj); an empty one is obj.__reduce_ex__(protocol),
+ * a reduce with a state handed to apart(reduced). A key pickle asks it of
+ * every pandas Timestamp it writes: two Python calls each, most of keying a
+ * column of a million of them. */
+static PyObject *str_dunder_dict, *str_reduce_ex;
+
+static PyObject *py_reduce_dict_apart(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs != 4) {
+        PyErr_SetString(PyExc_TypeError, "reduce_dict_apart(full, apart, protocol, obj)");
+        return NULL;
+    }
+    if (!str_dunder_dict && !(str_dunder_dict = PyUnicode_InternFromString("__dict__"))) return NULL;
+    if (!str_reduce_ex && !(str_reduce_ex = PyUnicode_InternFromString("__reduce_ex__"))) return NULL;
+    PyObject *obj = args[3];
+    PyObject *attrs = PyObject_GetAttr(obj, str_dunder_dict);
+    int empty;
+    if (!attrs) {
+        if (!PyErr_ExceptionMatches(PyExc_AttributeError)) return NULL;
+        PyErr_Clear();
+        empty = 1;
+    } else {
+        int truth = PyDict_CheckExact(attrs) ? PyDict_GET_SIZE(attrs) > 0 : PyObject_IsTrue(attrs);
+        Py_DECREF(attrs);
+        if (truth < 0) return NULL;
+        empty = !truth;
+    }
+    if (!empty) return PyObject_CallOneArg(args[0], obj);
+    PyObject *reduced = PyObject_CallMethodOneArg(obj, str_reduce_ex, args[2]);
+    if (!reduced || !PyTuple_CheckExact(reduced) || PyTuple_GET_SIZE(reduced) < 3) return reduced;
+    PyObject *state = PyTuple_GET_ITEM(reduced, 2);
+    if (!PyDict_CheckExact(state) && !PyTuple_CheckExact(state)) return reduced;
+    PyObject *apart = PyObject_CallOneArg(args[1], reduced);
+    Py_DECREF(reduced);
+    return apart;
+}
+
 static PyMethodDef cwalk_methods[] = {
     {"leaf_items", (PyCFunction)(void (*)(void))py_leaf_items, METH_FASTCALL,
      "leaf_items(group, mode, leaves) -> bool | NotImplemented"},
@@ -1252,6 +1360,10 @@ static PyMethodDef cwalk_methods[] = {
      "items_estimate(container, depth, max_depth, no_arrays, at_limit, estimate, seen) -> int | NotImplemented"},
     {"referrers_in", (PyCFunction)(void (*)(void))py_referrers_in, METH_FASTCALL,
      "referrers_in(heap, ids) -> list | NotImplemented"},
+    {"key_alias_id", (PyCFunction)(void (*)(void))py_key_alias_id, METH_FASTCALL,
+     "key_alias_id(seen, atoms, by_name, kinds, identityless, outside, obj) -> None | mark"},
+    {"reduce_dict_apart", (PyCFunction)(void (*)(void))py_reduce_dict_apart, METH_FASTCALL,
+     "reduce_dict_apart(full, apart, protocol, obj) -> reduce value"},
     {NULL, NULL, 0, NULL}};
 
 int cwalk_add_functions(PyObject *m) { return PyModule_AddFunctions(m, cwalk_methods); }

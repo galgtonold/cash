@@ -185,6 +185,16 @@ def _pickled_item_cost(item: Any) -> int:
         return n + (2 if n < 256 else 5) + 1  # opcode, length, memo
     if type(item) in (int, float, bool) or item is None:
         return 9
+    if type(item) in (list, tuple) and len(item) > 4 * _OBJECT_SAMPLE:
+        # A frame of ``groupby(...).agg(list)`` holds one list per group: each
+        # of seven lists of 140,000 timestamps was pickled whole, 3 s a save.
+        # Every so many of its items stand for the rest.
+        n = len(item)
+        part = item[:: n // _OBJECT_SAMPLE][:_OBJECT_SAMPLE]
+        try:
+            return int(len(pickle.dumps(part, protocol=5)) * n / len(part))
+        except Exception:  # noqa: BLE001 - an estimate, as below
+            return 8 * n
     try:
         return len(pickle.dumps(item, protocol=5))
     except Exception:  # noqa: BLE001 - an estimate: count what cannot be seen as small

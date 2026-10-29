@@ -29,7 +29,7 @@ import types
 import uuid
 import weakref
 from collections.abc import Callable, Generator
-from itertools import chain
+from itertools import chain, repeat
 from typing import Any, NamedTuple
 
 from . import _plain_data, kept_state
@@ -609,6 +609,9 @@ def _object_steps(value: Any, walk: _Walk) -> Generator[Any, Any, Any]:
                 items.append((k_form, v if type(v) in prims else (yield v)))
             return (yield from _typed(value, tuple(items), walk))
         if isinstance(value, (list, tuple)):
+            numbers = _numbers_form(value) if walk.hook is None and len(value) >= RECORDS_FROM else None
+            if numbers is not None:
+                return (yield from _typed(value, numbers, walk))
             if walk.fielded is not None and len(value) >= RECORDS_FROM:
                 by_fields = _records_by_fields(value, walk)
                 if by_fields is not None:
@@ -650,6 +653,34 @@ def _object_steps(value: Any, walk: _Walk) -> Generator[Any, Any, Any]:
         return value
     finally:
         walk.stack.discard(id(value))
+
+
+def _numbers_form(value: list | tuple) -> tuple | None:
+    """The items' forms of a list or tuple of numpy numbers all of one type
+    (``list(series)`` of an ``int64`` column), each the tuple `_enter`
+    gives one, read from one array of them; None for anything else.
+
+    One at a time, each number went through the walk: 1.1 us an item, 4.6
+    s a key for a column of seven lists of 140,000 numbers, which a loop
+    over the frame hashed a dozen times."""
+    kinds = set(map(type, value))
+    if len(kinds) != 1:
+        return None
+    kind = kinds.pop()
+    if kind not in _plain_data.numpy_scalar_set():
+        return None
+    import numpy as np
+
+    array = np.array(value, dtype=kind)
+    raw = array.tobytes()
+    size = array.itemsize
+    return tuple(
+        zip(
+            repeat("__cash_np__"),
+            repeat(array.dtype.char),
+            map(raw.__getitem__, map(slice, range(0, len(raw), size), range(size, len(raw) + size, size))),
+        )
+    )
 
 
 #: What the fields of records keyed by their fields may hold

@@ -264,6 +264,10 @@ def immutable_labels(values: Any) -> bool:
     return infer_dtype(values, skipna=False) in _IMMUTABLE_LABEL_KINDS
 
 
+#: What `immutable_items` lets through: `infer_dtype` of immutable scalars.
+IMMUTABLE_ITEM_KINDS = _IMMUTABLE_LABEL_KINDS
+
+
 def immutable_items(values: Any) -> bool:
     """Whether an object-dtype array holds only immutable scalars and missing
     values: `immutable_labels` with gaps allowed, as a column of strings
