@@ -1981,6 +1981,7 @@ class StatementProcessor:
         # Those the restore left at the lineage they had (`keep_held_lineage`).
         lineage = self.tracking_state.variable_lineage
         kept = {name for name in moved if lineage.get(name) == metadata.holders[name]}
+        before = self.lineage_builder.edges_now(self.tracking_state, run.inputs | run.outputs)
         clear_rebound_edges(self.tracking_state, run.outputs, run.inputs, self.shell.user_ns, run.tree)
         # The restore put back the objects its run shared with other
         # variables (the entry stores them together): link them as its run
@@ -1992,7 +1993,7 @@ class StatementProcessor:
             if recorded:
                 apply_share_record(self.tracking_state.derivation_edges, (), recorded, self.shell.user_ns)
         bumped = self.lineage_builder.replay_derivation_bumps(
-            self.tracking_state, run.outputs, run.inputs, skip=moved, code=run.code, kept=kept
+            self.tracking_state, run.outputs, run.inputs, skip=moved, code=run.code, kept=kept, before=before
         )
         # The restore put the generators where the run left them; their
         # lineages follow, as the run's did, and move what holds them
@@ -2000,7 +2001,7 @@ class StatementProcessor:
         self._advance_carriers(run.source_hash, advanced, run.cache_key, run.code)
         if advanced:
             self.lineage_builder.replay_derivation_bumps(
-                self.tracking_state, set(advanced), run.inputs, skip=moved | bumped, code=run.code
+                self.tracking_state, set(advanced), run.inputs, skip=moved | bumped, code=run.code, before=before
             )
         self.analytics_manager.record_event(
             status="HIT",
@@ -2886,6 +2887,8 @@ class StatementProcessor:
         # it came from recorded them (`StatementStore._producer_file_snapshots`).
         sources = self.tracking_state.variable_sources
         run.entry_sources = {name: sources[name] for name in run.inputs & run.outputs if name in sources}
+        # Before it records its own: an edge it makes moves no input on.
+        before = self.lineage_builder.edges_now(self.tracking_state, run.inputs | run.outputs)
         with self._keeping_outputs(run, execution.echo, execution.cost or 0.0):
             # What it links, from its outputs' edges dropped to those found
             # now, is kept for the simulation (`note_share_edges`).
@@ -2983,6 +2986,7 @@ class StatementProcessor:
             skip=moved,
             code=run.code,
             kept=run.holders_unchanged & moved,
+            before=before,
         )
         self._report_saved(run, saved_metadata)
         self._tell_past_budget(run, execution.cost or execution.wall_time or 0.0)
