@@ -219,6 +219,11 @@ def _handed_callables(
             continue
         calling: _Opened | None = None
         for position, keyword, arg in _arguments(call):
+            if _makes_partial(arg, namespace):
+                if calling is None:
+                    calling = _calling_positions(call, namespace)
+                if calling.opens(position, keyword) and found.partials_built(arg, namespace, bound):
+                    continue
             resolved = _resolve_argument(arg, namespace, bound)
             for value, root in resolved.values:
                 opens = False
@@ -1100,24 +1105,36 @@ _UNCHANGEABLE = (int, float, complex, str, bytes, bool, type(None))
 
 
 def _inline_partials(
-    maker: ast.expr, namespace: Mapping[str, Any], bound: Mapping[str, tuple[ast.expr, ...]], depth: int = 0
+    maker: ast.expr,
+    namespace: Mapping[str, Any],
+    bound: Mapping[str, tuple[ast.expr, ...]],
+    roots: dict[int, str],
+    depth: int = 0,
 ) -> list[functools.partial] | str | None:
     """The partials ``functools.partial(f, a)`` (*maker*) may build: one for
     each object its function and arguments may be (``a if flag else b``,
     ``ops[i]``: any of its items; an inner ``functools.partial(...)``: what
     that builds). None when *maker* builds no partial; the reason the
     statement cannot be read when a part is none of the objects found
-    (the result of a call of the user's, an argument unpacked)."""
-    if not (isinstance(maker, ast.Call) and isinstance(maker.func, (ast.Name, ast.Attribute)) and maker.args):
-        return None
-    target = _users_target(maker.func, namespace)
-    if target is None or target[0] is not functools.partial:
+    (the result of a call, an argument unpacked, a name it cannot read).
+    *roots* gets the variable each object it binds is found under, by
+    ``id()``: ``ns`` for ``partial(add, ns.lst)``, whose call changes
+    ``ns``."""
+    if not _makes_partial(maker, namespace):
         return None
     why = f"{_short(maker)} builds a partial, and cash cannot tell what it binds without running it"
-    bindings = _bindings(maker, maker.args, namespace, bound, depth)
+    bindings = _bindings(maker, maker.args, namespace, bound, roots, depth)
     if bindings is None:
         return why
     return [functools.partial(func, *rest, **keywords) for (func, *rest), keywords in bindings if callable(func)]
+
+
+def _makes_partial(node: ast.expr, namespace: Mapping[str, Any]) -> bool:
+    """Whether *node* is ``functools.partial(f, ...)``."""
+    if not (isinstance(node, ast.Call) and isinstance(node.func, (ast.Name, ast.Attribute)) and node.args):
+        return False
+    target = _users_target(node.func, namespace)
+    return target is not None and target[0] is functools.partial
 
 
 def _bindings(
@@ -1125,6 +1142,7 @@ def _bindings(
     args: list[ast.expr],
     namespace: Mapping[str, Any],
     bound: Mapping[str, tuple[ast.expr, ...]],
+    roots: dict[int, str],
     depth: int = 0,
 ) -> list[tuple[tuple[Any, ...], dict[str, Any]]] | None:
     """``(args, keywords)`` *maker* may bind, *args* and its keywords: one
@@ -1135,7 +1153,7 @@ def _bindings(
         return None
     slots: list[list[Any]] = []
     for part in (*args, *(k.value for k in maker.keywords)):
-        found = _one_of(part, namespace, bound, depth)
+        found = _one_of(part, namespace, bound, roots, depth)
         if found is None:
             return None
         slots.append(found)
@@ -1150,18 +1168,25 @@ def _bindings(
 
 
 def _one_of(
-    node: ast.expr, namespace: Mapping[str, Any], bound: Mapping[str, tuple[ast.expr, ...]], depth: int
+    node: ast.expr,
+    namespace: Mapping[str, Any],
+    bound: Mapping[str, tuple[ast.expr, ...]],
+    roots: dict[int, str],
+    depth: int,
 ) -> list[Any] | None:
     """The objects the partial's function or argument *node* may be
-    (`_inline_partials`); None when that cannot be told without running it.
-    A value built in place that holds nothing of the namespace is None."""
+    (`_inline_partials`), each under its variable in *roots*; None when
+    that cannot be told without running it: a name, item, attribute or
+    call nothing is found for (``cm['lst']`` of a ``ChainMap``,
+    ``getattr(ns, key)``). A value built in place that holds nothing of
+    the namespace is None."""
     if isinstance(node, ast.Constant):
         return [node.value]
     if isinstance(node, ast.IfExp):
-        body = _one_of(node.body, namespace, bound, depth)
-        orelse = _one_of(node.orelse, namespace, bound, depth)
+        body = _one_of(node.body, namespace, bound, roots, depth)
+        orelse = _one_of(node.orelse, namespace, bound, roots, depth)
         return None if body is None or orelse is None else body + orelse
-    inner = _inline_partials(node, namespace, bound, depth + 1)
+    inner = _inline_partials(node, namespace, bound, roots, depth + 1)
     if isinstance(inner, str):
         return None
     if inner is not None:
@@ -1169,17 +1194,36 @@ def _one_of(
     resolved = _resolve_argument(node, namespace, bound)
     if resolved.unknown:
         return None
-    found = [value for value, _root in resolved.values]
-    for value, _root in resolved.any_of:
+    found = []
+    for value, root in resolved.values:
         found.append(value)
+        _note_root(roots, value, root)
+    for value, root in resolved.any_of:
+        found.append(value)
+        _note_root(roots, value, root)
         if type(value) in OPENED:
-            found.extend(list(_items(value))[: _MAX_PARTIALS + 1])
+            items = list(_items(value))[: _MAX_PARTIALS + 1]
+            found.extend(items)
+            for item in items:
+                _note_root(roots, item, root)
     if isinstance(node, (ast.Name, ast.Attribute, ast.Subscript, ast.Call)):
         if not found and isinstance(node, ast.Name) and node.id not in namespace:
-            found = [vars(builtins).get(node.id)]
-        return found or [None]
+            builtin = vars(builtins).get(node.id, _MISSING)
+            found = [] if builtin is _MISSING else [builtin]
+        return found or None
     # ``[lst]``, ``x + 1``: a value built in place, not one it names.
     return [None] if all(isinstance(value, _UNCHANGEABLE) for value in found) else None
+
+
+def _note_root(roots: dict[int, str], value: Any, root: str | None) -> None:
+    """Note *root* as the variable *value* is found under, and under which
+    the object of a bound method is (``partial(ns.a.add, x)`` changes
+    ``ns.a``)."""
+    if root is None:
+        return
+    roots.setdefault(id(value), root)
+    if type(value) is types.MethodType:
+        roots.setdefault(id(value.__self__), root)
 
 
 def _users_target(func: ast.Name | ast.Attribute, namespace: Mapping[str, Any]) -> tuple[Any, str] | None:
@@ -1594,6 +1638,10 @@ class _Found:
         self._covered: dict[tuple[frozenset[str] | None, str | None], set[int]] = {}
         #: The objects in `_covered`, kept alive so that their ids stay theirs.
         self._covered_objects: list[Any] = []
+        #: ``id(object) -> variable`` each object a partial built in the
+        #: statement binds was found under (`partials_built`): those objects
+        #: are the namespace's, so their ids stay theirs while it is read.
+        self._bound_roots: dict[int, str] = {}
 
     def add(self, value: Any, root: str | None, open_containers: bool) -> None:
         """Add what calling *value* changes. A builtin container, or an
@@ -2106,12 +2154,24 @@ class _Found:
         called, as one bound to a name is (`wrapping_object_called`). Built
         again here from what its arguments name, which runs nothing of the
         user's (`_inline_partials`)."""
-        built = _inline_partials(call.func, namespace, bound)
+        self.partials_built(call.func, namespace, bound)
+
+    def partials_built(
+        self, maker: ast.expr, namespace: Mapping[str, Any], bound: Mapping[str, tuple[ast.expr, ...]]
+    ) -> bool:
+        """Add the partials *maker* builds, called (`partial_called`) or
+        handed to a call that calls it (``map(functools.partial(add, lst),
+        xs)``); a change to what one binds is a change to the variable it
+        was found under (`_bound_roots`). False when *maker* builds none."""
+        built = _inline_partials(maker, namespace, bound, self._bound_roots)
+        if built is None:
+            return False
         if isinstance(built, str):
             self.unreadable.append(built)
-        elif built is not None:
+        else:
             for value in built:
                 self.add(value, None, False)
+        return True
 
     def _methods_named(
         self, name: str, call: ast.Call, namespace: Mapping[str, Any], bound: Mapping[str, tuple[ast.expr, ...]]
@@ -2266,6 +2326,8 @@ class _Found:
     def _changed(self, obj: Any, root: str | None) -> None:
         """*obj*, which *root* holds or is, is changed in place by the call."""
         self.changes = True
+        if root is None and obj is not None:
+            root = self._bound_roots.get(id(obj))
         if root is not None and not issubclass(type(self.namespace.get(root)), types.ModuleType):
             self.receivers.add(root)
         if obj is not None and not instance_of(obj, types.ModuleType):

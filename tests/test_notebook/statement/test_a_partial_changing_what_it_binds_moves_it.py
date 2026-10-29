@@ -61,6 +61,71 @@ CALLS = {
 }
 
 
+NS = "from types import SimpleNamespace\n"
+#: ``(build, call, read)``: what the partial binds is a part of a variable.
+PARTS = {
+    "an_attribute": (NS + "ns = SimpleNamespace(lst=[0])", "r = functools.partial(add, ns.lst)(1)", "len(ns.lst)"),
+    "an_attribute_by_keyword": (
+        NS + "ns = SimpleNamespace(lst=[0])",
+        "r = functools.partial(add, lst=ns.lst)(x=1)",
+        "len(ns.lst)",
+    ),
+    "an_item_of_a_deque": (
+        "from collections import deque\ndq = deque([[0]])",
+        "r = functools.partial(add, dq[0])(1)",
+        "len(dq[0])",
+    ),
+    "an_attribute_of_an_item": (
+        NS + "d = {'k': SimpleNamespace(lst=[0])}",
+        "r = functools.partial(add, d['k'].lst)(1)",
+        "len(d['k'].lst)",
+    ),
+    "a_method_of_an_attribute": (
+        NS + "ns = SimpleNamespace(a=a, lst=[0])",
+        "r = functools.partial(ns.a.add, ns.lst)(1)",
+        "len(ns.lst)",
+    ),
+    "a_partial_handed_to_map": ("lst = [0]", "r = list(map(functools.partial(add, lst), [1]))", "len(lst)"),
+}
+
+
+@pytest.mark.parametrize("case", list(PARTS))
+def test_a_bound_part_of_a_variable_is_changed_on_every_run_all(cash_magics, case):
+    build, call, read = PARTS[case]
+    cells = [HELPERS, build, call, f"n = {read}"]
+    for _ in range(2):
+        _run_all(cash_magics, cells)
+        assert cash_magics.shell.user_ns["n"] == 2
+
+
+@pytest.mark.parametrize(
+    ("build", "call", "read"),
+    [
+        (
+            NS + "ns = SimpleNamespace(lst=[0])\nkey = 'lst'",
+            "r = functools.partial(add, getattr(ns, key))(1)",
+            "ns.lst",
+        ),
+        (
+            "import collections\ncm = collections.ChainMap({'lst': [0]})",
+            "r = functools.partial(add, cm['lst'])(1)",
+            "cm['lst']",
+        ),
+    ],
+    ids=["what_getattr_returns", "an_item_cash_cannot_read"],
+)
+def test_a_partial_binding_what_cash_cannot_find_runs_every_time(cash_magics, build, call, read):
+    """Bound to what cash finds nothing for, the partial was read as one
+    binding None: the append was missed. It runs every time instead."""
+    cells = [HELPERS, build, call, f"n = len({read})"]
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        for _ in range(2):
+            _run_all(cash_magics, cells)
+            assert cash_magics.shell.user_ns["n"] == 2
+    assert any("NOTEBOOK-CALLABLE-UNREAD" in str(w.message) for w in caught)
+
+
 def _run_all(cash_magics, cells):
     for cell in cells:
         run_cash_cell(cash_magics, cell, cells=cells)
