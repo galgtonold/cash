@@ -181,6 +181,7 @@ def _iteration_pseudo_row(it: IterationRow) -> StatementRow:
         # StatementRow, so a field missing here is a field that cannot render.
         miss_reason=it.miss_reason,
         skipped_reason=it.skipped_reason,
+        uncacheable_reasons=it.uncacheable_reasons,
         sub_units=it.sub_units,
     )
 
@@ -247,7 +248,12 @@ def _loop_statement_summary(stmt: LoopStatement, pad: str, *, is_upstream: bool)
         parts.append(f"{len(restored)} cached (saved {sum(it.saved_time_s for it in restored):.2f}s)")
     if ran:
         parts.append(f"{len(ran)} ran ({sum(it.time_s for it in ran):.2f}s)")
-    reasons = list(dict.fromkeys(shorten_skipped_reason(it.skipped_reason) for it in ran if it.skipped_reason))
+    reasons = list(
+        dict.fromkeys(
+            [shorten_skipped_reason(it.skipped_reason) for it in ran if it.skipped_reason]
+            + [reason for it in ran for reason in it.uncacheable_reasons]
+        )
+    )
     lead = "^" if is_upstream else ""
     line = f"{pad}  {lead}LOOP x{len(its)}: {code}  - {', '.join(parts)}"
     if reasons:

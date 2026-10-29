@@ -696,7 +696,7 @@ def _iter_drilldown_html(
         # attribution rides on the row instead of taking space from it. Before
         # this the reason was computed and then discarded for anything inside a
         # loop -- see IterationRow.
-        why = it.miss_reason or it.skipped_reason
+        why = it.miss_reason or it.skipped_reason or ", ".join(it.uncacheable_reasons)
         title = f' title="{_esc(why)}"' if why else ""
         rows.append(
             f'<div class="c3-iter-row"{title}>'

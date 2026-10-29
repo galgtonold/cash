@@ -94,3 +94,20 @@ def test_the_reason_reaches_the_rendered_text_row():
     )
     line = _row_line(_iteration_pseudo_row(it), is_upstream=False)
     assert "unstable key" in line, line
+
+
+def test_why_a_loop_in_a_pass_is_not_stored_reaches_its_row():
+    """``for file in ...: pbar.update()`` run as one unit in each pass of an
+    outer loop (E10's c5) is not stored for the bar it changes in place; the
+    reason was on the metric and the row read plain EXECUTED."""
+    from cash.notebook.badge_renderer.renderers.text import _loop_statement_summary, _row_line
+    from cash.notebook.badge_renderer.view import LoopStatement
+
+    reason = "In-place mutation on: pbar (statement re-executes)"
+    row = _iteration_row(_Metric.parse(_metric(uncacheable_reasons=[reason])))
+    assert row.uncacheable_reasons == (reason,)
+    line = _row_line(_iteration_pseudo_row(row), is_upstream=False)
+    assert "NOT CACHED" in line and reason in line, line
+    summary = _loop_statement_summary(LoopStatement(base_code=row.code, iterations=(row,) * 8), "", is_upstream=False)
+    assert reason in summary[0], summary
+    assert _iteration_row(_Metric.parse(_metric())).uncacheable_reasons == ()

@@ -662,6 +662,7 @@ def _iteration_row(m: _Metric) -> IterationRow:
         storage_tiers=m.storage,
         miss_reason=m.miss_reason,
         skipped_reason=m.skipped_reason,
+        uncacheable_reasons=m.uncacheable_reasons,
         loop_bindings=m.loop_vars,
         sub_units=_sub_unit_groups(m.calls),
     )

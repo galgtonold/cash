@@ -234,6 +234,10 @@ class IterationRow:
     # makes this the worst place to go quiet.
     miss_reason: str | None = None
     skipped_reason: str | None = None
+    #: Why it is not stored (``In-place mutation on: pbar``), as
+    #: ``StatementRow.uncacheable_reasons``: a loop run as one unit inside
+    #: another loop's pass rendered as plain EXECUTED without it.
+    uncacheable_reasons: tuple[str, ...] = ()
     loop_bindings: tuple[tuple[str, Any], ...] = ()
     """Resolved loop variables for this iteration (denormalised onto the row).
 
