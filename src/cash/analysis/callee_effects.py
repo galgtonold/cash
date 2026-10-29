@@ -178,11 +178,14 @@ def resolve_function_def(name, resolve_source):
     return _parse_function_def(source)
 
 
-@functools.lru_cache(maxsize=256)
+@functools.lru_cache(maxsize=8192)
 def _parse_function_def(source: str) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
     """*source*'s first statement when it is a ``def``. Memoised: every
     statement that calls a helper asks what the helper does to its
-    arguments, and the trees are only read."""
+    arguments, and the trees are only read. One tree per text, kept for
+    thousands of texts: the answers about a tree are kept by the tree
+    (`namespace_effects._HANDOFFS`), and a chain of 400 functions parsed
+    into new trees past a 256-entry cache missed each of them, every run."""
     try:
         parsed = ast.parse(textwrap.dedent(source))
     except (SyntaxError, ValueError):

@@ -1599,7 +1599,7 @@ def _live_user_function_source(user_ns: Mapping[str, Any]) -> Callable[[str], st
                 source = own_source(fn)
             except SOURCE_RETRIEVAL_ERRORS:
                 source = None
-        if len(_USER_SOURCES) >= 512:
+        if len(_USER_SOURCES) >= 8192:
             _USER_SOURCES.clear()
         _USER_SOURCES[code] = source
         return source
@@ -1645,34 +1645,103 @@ def function_handoffs(
     ``lambda`` in the body would do runs later, if ever, and is left out;
     a lambda handed to a call is followed (``map(lambda v: push(h, v), xs)``).
     """
+    return _handoffs(fdef, user_ns, resolve_source, seen, [])
+
+
+def _handoffs(
+    fdef: ast.FunctionDef | ast.AsyncFunctionDef,
+    user_ns: Mapping[str, Any],
+    resolve_source: Callable[[str], str | None] | None,
+    seen: frozenset[str],
+    cuts: list[bool],
+) -> tuple[frozenset[str], frozenset[str]]:
+    """`function_handoffs`, appending to *cuts* when the answer depends on
+    *seen*: a call it did not follow because its callee was in *seen*."""
     params, local, iterated, calls, reads, called = _function_shape(fdef)
     # The answer depends on the text and on what the names it reads are
     # bound to (which callee a call reaches, what a global holds), the
     # source of the functions it calls by name included.
-    key = (
-        fdef,
-        seen,
-        tuple((name, id(value), type(value)) for name in reads for value in (user_ns.get(name, _UNBOUND),)),
-        tuple(_source_or_none(resolve_source, name) for name in called if name not in seen),
-    )
+    bindings = tuple((name, id(value), type(value)) for name in reads for value in (user_ns.get(name, _UNBOUND),))
+    sources = {name: _source_or_none(resolve_source, name) for name in called}
+    # And on how names are resolved: two resolvers find the same direct
+    # callees and differ below them (one follows a module's imports, one
+    # only its own namespace), and an answer kept for one was served to
+    # the other in whichever order they asked.
+    resolver = _resolver_key(resolve_source)
+    # And on *seen* only where a call stopped at a name in it. An answer
+    # where none did is the one for every *seen*: kept without it, so the
+    # helpers of a chain ``f0 -> f1 -> ... -> fN``, asked for from each of
+    # its functions in turn, are followed once and not once per caller.
+    whole_key = (fdef, None, resolver, bindings, tuple(sources.values()))
+    found = _HANDOFFS.get(whole_key)
+    if found is not None:
+        return found
+    key = (fdef, seen, resolver, bindings, tuple(source for name, source in sources.items() if name not in seen))
     found = _HANDOFFS.get(key)
     if found is not None:
+        cuts.append(True)
         return found
     roots: set[str] = set()
     free: set[str] = set()
+    own_cuts: list[bool] = []
     for call in calls:
-        _call_handoffs(call, local, iterated, user_ns, resolve_source, seen, roots, free)
+        _call_handoffs(call, local, iterated, user_ns, resolve_source, seen, roots, free, own_cuts)
     free |= {name for name in roots if name not in local}
     found = (frozenset(roots & params), frozenset(free))
-    if len(_HANDOFFS) >= 1024:
+    if len(_HANDOFFS) >= _HANDOFFS_KEPT:
         _HANDOFFS.clear()
-    _HANDOFFS[key] = found
+    if own_cuts:
+        cuts.append(True)
+        _HANDOFFS[key] = found
+    else:
+        _HANDOFFS[whole_key] = found
     return found
 
 
-#: `function_handoffs` answers, by text and bindings.
+#: `function_handoffs` answers, by text, resolver and bindings; cleared
+#: past `_HANDOFFS_KEPT`, room for a few entries per function of a chain of
+#: thousands, asked for from each of them.
 _HANDOFFS: dict[tuple, tuple[frozenset[str], frozenset[str]]] = {}
+_HANDOFFS_KEPT = 1 << 15
 _UNBOUND = object()
+
+
+def forget_handoffs() -> None:
+    """Drop the kept `function_handoffs` answers: a function was bound anew
+    or a module reloaded. An answer is kept by its text, its bindings and
+    the text of the functions it calls by name; one two calls down, bound
+    anew (``leaf`` turned from ``len(h)`` into ``heapq.heappush(h, 1)``),
+    changed none of them, and the answer from before was served."""
+    _HANDOFFS.clear()
+    _CONDITIONAL_HANDOFFS.clear()
+
+
+def _resolver_key(resolve_source: Callable[[str], str | None] | None) -> Any:
+    """What decides the answers of *resolve_source*: its function and the
+    namespaces it reads (``partial(_user_source, globals)``, a closure over
+    ``user_ns``, a method of an object holding a resolver), not the object
+    itself, made anew for each statement."""
+    if resolve_source is None:
+        return None
+    if type(resolve_source) is functools.partial:
+        return (resolve_source.func, tuple(map(id, resolve_source.args)))
+    func = attribute_or(resolve_source, "__func__", None)
+    if func is not None:
+        owner = attribute_or(resolve_source, "__self__", None)
+        inner = attribute_or(owner, "resolve_source", None)
+        return (func, _resolver_key(inner) if inner is not None else id(owner))
+    code = attribute_or(resolve_source, "__code__", None)
+    if code is None:
+        return resolve_source
+    cells = attribute_or(resolve_source, "__closure__", None) or ()
+    return (code, tuple(id(cell.cell_contents) for cell in cells if _filled_mapping(cell)))
+
+
+def _filled_mapping(cell: Any) -> bool:
+    try:
+        return isinstance(cell.cell_contents, Mapping)
+    except ValueError:  # an empty cell
+        return False
 
 
 def _source_or_none(resolve_source: Callable[[str], str | None] | None, name: str) -> str | None:
@@ -1684,7 +1753,7 @@ def _source_or_none(resolve_source: Callable[[str], str | None] | None, name: st
         return None
 
 
-@functools.lru_cache(maxsize=512)
+@functools.lru_cache(maxsize=8192)
 def _function_shape(
     fdef: ast.FunctionDef | ast.AsyncFunctionDef,
 ) -> tuple[
@@ -1729,10 +1798,14 @@ def _call_handoffs(
     seen: frozenset[str],
     roots: set[str],
     free: set[str],
+    cuts: list[bool] | None = None,
 ) -> None:
     """Add to *roots* the names the one *call* hands to code whose effect is
     unknown, and to *free* the free names a function of the user's it calls
-    hands on (see :func:`function_handoffs`)."""
+    hands on (see :func:`function_handoffs`); to *cuts* when a callee was
+    not followed for being in *seen*."""
+    if cuts is None:
+        cuts = []
     func = call.func
     while isinstance(func, ast.NamedExpr):
         # ``(p := HOOKS[0])(x)`` calls what ``HOOKS[0]`` holds.
@@ -1747,6 +1820,7 @@ def _call_handoffs(
                 roots.update(_holders_of_bound(held, user_ns) or ({source} if _may_hold_bound(held) else set()))
     if isinstance(func, ast.Name) and func.id not in local:
         if func.id in seen:
+            cuts.append(True)
             return
         if bound_to_state(user_ns.get(func.id)):
             # ``PUSH = LOG.append`` then ``PUSH(x)``: the call changes what
@@ -1754,7 +1828,7 @@ def _call_handoffs(
             roots.add(func.id)
         callee = _readable_function(func.id, resolve_source)
         if callee is not None:
-            callee_params, callee_free = function_handoffs(callee, user_ns, resolve_source, seen | {func.id})
+            callee_params, callee_free = _handoffs(callee, user_ns, resolve_source, seen | {func.id}, cuts)
             roots.update(handed_to_params(call, callee, callee_params, iterated))
             free.update(callee_free)
             return
@@ -2070,6 +2144,7 @@ def conditional_param_handoffs(
     key = (
         fdef,
         seen,
+        _resolver_key(resolve_source),
         tuple((name, id(value), type(value)) for name in reads for value in (user_ns.get(name, _UNBOUND),)),
         tuple(_source_or_none(resolve_source, name) for name in called if name not in seen),
     )
@@ -2089,17 +2164,17 @@ def conditional_param_handoffs(
                 inner = conditional_param_handoffs(callee, user_ns, resolve_source, seen | {func.id})
                 roots.update(handed_to_params(call, callee, inner, iterated))
     found = frozenset(roots & params)
-    if len(_CONDITIONAL_HANDOFFS) >= 1024:
+    if len(_CONDITIONAL_HANDOFFS) >= _HANDOFFS_KEPT:
         _CONDITIONAL_HANDOFFS.clear()
     _CONDITIONAL_HANDOFFS[key] = found
     return found
 
 
-#: `conditional_param_handoffs` answers, by text and bindings.
+#: `conditional_param_handoffs` answers, by text, resolver and bindings.
 _CONDITIONAL_HANDOFFS: dict[tuple, frozenset[str]] = {}
 
 
-@functools.lru_cache(maxsize=512)
+@functools.lru_cache(maxsize=8192)
 def _some_runs_only_memo(fdef: ast.AST) -> frozenset[int]:
     """:func:`_some_runs_only`, memoised per function tree
     (`resolve_function_def` hands out one per source), which is only read."""

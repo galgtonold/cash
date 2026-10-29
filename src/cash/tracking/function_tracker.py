@@ -932,6 +932,9 @@ class FunctionTracker:
 
     def _invalidate_module_functions(self, module_name: str):
         """Clear cached source hashes for functions from a specific module."""
+        from cash.analysis.namespace_effects import forget_handoffs
+
+        forget_handoffs()  # what its functions hand on may have changed too
         for key in self._source_cache.keys():
             if key[1] == module_name:
                 self._source_cache.pop(key)

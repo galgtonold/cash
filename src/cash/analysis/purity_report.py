@@ -193,6 +193,20 @@ class PurityReport:
     #: or "". A report that did not reach every helper cannot key the call,
     #: so the call runs uncached.
     unwalkable: str = ""
+    #: A reference (``ref()``) to each function this walk audited exactly as
+    #: a walk from that function would: the same helpers below it, findings
+    #: and environment reads included. Analysing one of them on its own adds
+    #: nothing to this report's, which is what lets `covered_ids` spare the
+    #: callers that union the reports of every function a statement reaches
+    #: a walk per function (a chain ``f0 -> f1 -> ... -> fN`` walked N times
+    #: from N roots was quadratic). Empty when anything in the walk depended
+    #: on where it started (`HelperWalk.composable`).
+    audited_whole: tuple[Any, ...] = ()
+
+    def covered_ids(self) -> set[int]:
+        """``id()`` of each live function in `audited_whole`: a live object
+        with that id is that function."""
+        return {id(fn) for ref in self.audited_whole if (fn := ref()) is not None}
 
     @property
     def is_clean(self) -> bool:

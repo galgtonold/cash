@@ -673,11 +673,17 @@ def callee_environment_reads(
     if reach is None:
         reach = reached_user_code(code, user_ns)
     found: set[tuple[str, str]] = set()
+    covered: set[int] = set()
     for fn in reach.functions:
+        if id(fn) in covered:
+            continue  # its reads are in a caller's report already
         try:
-            found |= get_analyzer().analyze(fn).environment_reads
+            report = get_analyzer().analyze(fn)
         except Exception:
             logger.debug("Could not analyse %r for the environment it reads", fn, exc_info=True)
+            continue
+        found |= report.environment_reads
+        covered |= report.covered_ids()
     return found
 
 
@@ -724,14 +730,26 @@ def helper_ambient_reads(
     # of a caller follows its helpers, so ``label`` calling ``stamp`` finds
     # ``stamp``'s read too, and the order of *reach* decided which came first.
     found: dict[tuple[str, str], tuple[Any, Any]] = {}
+    # A function a caller's walk audited whole (`PurityReport.covered_ids`)
+    # finds nothing that caller did not: only its own reads are named for it.
+    covered: dict[int, tuple[Any, ...]] = {}
     for fn in reach.functions:
         if is_cash_wrapper(fn):
             continue
+        if id(fn) in covered:
+            for issue in covered[id(fn)]:
+                if issue.kind == ISSUE_AMBIENT_READ and _makes_the_read(fn, issue.where):
+                    mark = (issue.where, issue.description)
+                    if mark in found:
+                        found[mark] = (fn, issue)
+            continue
         try:
-            issues = get_analyzer().analyze(fn).issues
+            report = get_analyzer().analyze(fn)
         except Exception:
             logger.debug("Could not analyse %r for the ambient state it reads", fn, exc_info=True)
             continue
+        issues = report.issues
+        covered.update(dict.fromkeys(report.covered_ids(), issues))
         for issue in issues:
             mark = (issue.where, issue.description)
             if issue.kind != ISSUE_AMBIENT_READ or issue.description.startswith(_DURATION_CLOCKS):

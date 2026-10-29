@@ -142,6 +142,7 @@ from ...analysis.mutation_effects import (
     statement_effects,
 )
 from ...analysis.namespace_effects import (
+    forget_handoffs,
     statement_calls_through_ctypes,
     statement_calls_user_writer,
     statement_starting_workers,
@@ -2668,6 +2669,14 @@ class StatementProcessor:
             self._handle_execution_error(result, run.silent)
             return metrics
 
+        user_ns = self.shell.user_ns
+        if any(
+            instance_of(user_ns.get(name), (types.FunctionType, type, types.ModuleType)) for name in run.outputs or ()
+        ):
+            # A function bound anew (``def leaf``) may be one a function two
+            # calls up reaches: the hand-off answers kept by the direct
+            # callees' text do not see it.
+            forget_handoffs()
         self._randomness.flag_inline_unseeded_fit(
             metrics, run.code, run.tree, run.outputs, run.allow_random, is_hit=False, skip_cache=run.skip_cache
         )
