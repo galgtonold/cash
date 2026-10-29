@@ -415,6 +415,15 @@ def _chain_meets_stream(value: Any, chain: list[ast.AST], drawn: bool, known: Ma
             value = found
         elif not instance_of(value, _PLAIN_CONTAINERS):
             return None
+        elif isinstance(step.slice, ast.Slice) and not instance_of(value, dict):
+            # ``for k in big[:1]``: what is drawn from is the slice's items
+            # alone, not all *value* holds.
+            part = _constant_slice(step.slice, known)
+            if part is _UNKNOWN:
+                return _holds_stream(value) if drawn else None
+            value = _items_in(value, part)
+            if step is chain[-1]:
+                return _holds_stream(value) if drawn else None
         else:
             index = _constant_index(step.slice, known)
             if index is _UNKNOWN:
@@ -425,6 +434,31 @@ def _chain_meets_stream(value: Any, chain: list[ast.AST], drawn: bool, known: Ma
         if is_stream(value) and not _an_output_stream(value):
             return STREAM
     return None
+
+
+def _constant_slice(node: ast.Slice, known: Mapping[str, Any]) -> Any:
+    """The ``slice`` *node* spells with literal or *known* bounds (``[:1]``,
+    ``[2:n]``), else _UNKNOWN."""
+    bounds = []
+    for part in (node.lower, node.upper, node.step):
+        if part is None:
+            bounds.append(None)
+            continue
+        bound = _constant_index(part, known)
+        if type(bound) is not int:
+            return _UNKNOWN
+        bounds.append(bound)
+    return slice(*bounds)
+
+
+def _items_in(container: Any, part: slice) -> list[Any]:
+    """The items of *container*, a list, tuple or deque, in *part*, read
+    without a subclass's own lookup."""
+    if isinstance(container, list):
+        return list.__getitem__(container, part)
+    if isinstance(container, tuple):
+        return list(tuple.__getitem__(container, part))
+    return list(collections.deque.__iter__(container))[part]
 
 
 def _an_output_stream(obj: Any) -> bool:
