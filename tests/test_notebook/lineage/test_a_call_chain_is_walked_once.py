@@ -238,10 +238,12 @@ def test_a_hand_off_found_through_one_lookup_is_not_served_to_another(tmp_path, 
     import ast
 
     name = f"_ccxres_{os.getpid()}_{id(tmp_path)}"
-    (tmp_path / f"{name}.py").write_text("def helper(h):\n    h.append(1)\n\ndef c(h):\n    helper(h)\n")
+    (tmp_path / f"{name}.py").write_text(
+        "def helper(h):\n    h.append(1)\n\ndef c(h):\n    helper(h)\n", encoding="utf-8"
+    )
     monkeypatch.syspath_prepend(str(tmp_path))
     cell = f"from {name} import c\ndef helper(h):\n    return len(h)\nLOG = []\ndef g(h):\n    return c(h)\ndef f():\n    return g(LOG)\n"
-    (tmp_path / "cell.py").write_text(cell)
+    (tmp_path / "cell.py").write_text(cell, encoding="utf-8")
     ns: dict = {"__name__": "__main__"}
     exec(compile(cell, str(tmp_path / "cell.py"), "exec"), ns)
     calls = [node for node in ast.walk(ast.parse("f()")) if isinstance(node, ast.Call)]
