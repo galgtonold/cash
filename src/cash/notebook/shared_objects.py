@@ -793,16 +793,30 @@ def _pandas_objects(value: Any) -> list[Any]:
     ``lst`` itself; restored alone, ``f`` held a copy, and ``lst.append(9)``
     was not seen through it. Numbers, text and dates are told apart at C
     speed and left out, as a value is, and so is a column of lists and dicts
-    nothing but its cells holds, all the way down (`held_items_facts`)."""
+    nothing but its cells holds, all the way down (`held_items_facts`).
+    The labels of an object index and the categories of a categorical
+    column count as cells: ``g.index[4].append(9)`` writes into the list
+    ``f['o'][4]`` is."""
     np = sys.modules.get("numpy")
     try:
-        blocks = vars(value)["_mgr"].blocks
+        mgr = vars(value)["_mgr"]
+        blocks = mgr.blocks
+        axes = list(mgr.axes)
     except (KeyError, AttributeError, TypeError):
         return []
     exact = exact_value_types()
     found: list[Any] = []
+    arrays = []
     for block in blocks:
         values = attribute_or(block, "values")
+        categories = attribute_or(attribute_or(values, "categories", None), "_data", None)
+        arrays.append(values if categories is None else categories)
+    for axis in axes:
+        levels = attribute_or(axis, "levels", None) if type(axis).__name__ == "MultiIndex" else None
+        arrays.extend((own_dict(level) or {}).get("_data") for level in levels or ())
+        if levels is None:
+            arrays.append((own_dict(axis) or {}).get("_data"))
+    for values in arrays:
         if np is None or type(values) is not np.ndarray or values.dtype.kind != "O":
             continue  # numbers, or an extension array (Arrow text) of no Python objects
         for column in values.reshape(-1, values.shape[-1]) if values.ndim > 1 else (values,):
