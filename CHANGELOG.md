@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.14.0] - YYYY-MM-DD
+## [0.14.0] - 2026-10-30
 
 This release is about trust and speed. Another long sweep for stale answers
 found more places where a hit skipped something the program needed, or served
