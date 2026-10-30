@@ -80,7 +80,6 @@ from cash.notebook.call_key import (
     callee_mutated_globals,
     callee_watched_defaults,
     callee_watched_globals,
-    changes_its_closure,
     functions_reached_in,
     global_digests,
     holds_a_stream,
@@ -459,11 +458,7 @@ def _ran_unseen_writes(call: Any, unit: Any) -> bool:
     (what it writes is watched, or put back with the entry). Without a
     trace (Python 3.10 and 3.11, ``CASH_TRACE=0``), what the call's text
     could run is read from its objects instead (`writers_without_a_trace`),
-    as for a statement. Nor is a callee that changes what its closure
-    holds (``lambda: xs.pop()``): without a trace that change was not seen,
-    and ``b = t[0]()`` was served the item ``a = t[0]()`` popped."""
-    if changes_its_closure(call.fn):
-        return True
+    as for a statement."""
     # Here, not at the top: the statement package imports this module.
     from cash.notebook.statement.unseen_writes import unseen_writers, writers_without_a_trace
 

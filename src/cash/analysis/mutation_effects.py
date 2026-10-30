@@ -30,6 +30,7 @@ from cash._user_attrs import attribute_or, instance_of
 
 from ..content_hashers import builtin_hash_family
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
+from ..install_paths import is_user_code_file
 from ..source_reading import getsource
 from ..tracking.randomness.state import rng_carrier_kind
 from ..value_types import BUILTIN_NAMES
@@ -122,7 +123,24 @@ def live_function_source(name: str, namespace: Mapping[str, Any]) -> str | None:
     ``clean`` living in ``build``'s module and never in the notebook, resolves
     too. The runtime resolves through this; the simulation falls back to it
     for what the cell text does not define.
+
+    A dotted *name* (``ns.pick``) is read down without running code: a
+    function of the user's an object or a module holds, else None.
     """
+    if "." in name:
+        head, *attrs = name.split(".")
+        fn = namespace.get(head)
+        for attr in attrs:
+            try:
+                fn = inspect.getattr_static(fn, attr)
+            except AttributeError:
+                return None
+        if type(fn) is not types.FunctionType or not is_user_code_file(fn.__code__.co_filename):
+            return None
+        try:
+            return inspect.getsource(fn)
+        except SOURCE_RETRIEVAL_ERRORS:
+            return None
     fn = namespace.get(name)
     if callable(fn) and not isinstance(fn, type):
         try:

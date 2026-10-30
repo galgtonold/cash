@@ -375,13 +375,14 @@ MULTI_LINE = "import time\ncalls = []\nKEYS = {{\n    'first': lambda r: r[0],\n
 def test_a_lambda_in_a_literal_over_several_lines_is_read(cash_magics, body, stored):
     """``'second': lambda r: r[1],`` on a line of its own (black's dict)
     does not parse alone: it was "unreadable text" and refused every run.
-    Read from the cell, a pure one is stored; one that writes is not."""
+    Read from the cell, a pure one is stored; one that writes is not, and
+    its write, read from the lambda's text, is no unseen one."""
     run_cash_cell(cash_magics, MULTI_LINE.format(body=body))
     statement = f"w = (sorted(xs, key=KEYS['second'])[0][0], {SLEEP})"
     said = _codes(cash_magics, statement)
     run_cash_cell(cash_magics, statement)
     assert _status(cash_magics) == (["RESTORED"] if stored else ["COMPUTED"])
-    assert ("NOTEBOOK-UNSEEN-WRITES" in said) is not stored
+    assert "NOTEBOOK-UNSEEN-WRITES" not in said
 
 
 SWAPPED = {

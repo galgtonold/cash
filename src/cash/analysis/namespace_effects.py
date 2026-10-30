@@ -1584,10 +1584,17 @@ def call_arguments(
 
 def _live_user_function_source(user_ns: Mapping[str, Any]) -> Callable[[str], str | None]:
     """``name -> source`` for a function of the user's the kernel holds
-    under *name* (`_users_code`), else None: no scan of other modules."""
+    under *name*, a dotted one read without running code (`_users_code`),
+    else None: no scan of other modules."""
 
     def resolve(name: str) -> str | None:
-        fn = user_ns.get(name)
+        head, *attrs = name.split(".")
+        fn = user_ns.get(head)
+        for attr in attrs:
+            try:
+                fn = inspect.getattr_static(fn, attr)
+            except AttributeError:
+                return None
         if type(fn) is not types.FunctionType:
             return None
         code = fn.__code__
@@ -2462,7 +2469,8 @@ def handed_through_items(
     records]``), and what a call is handed beside a ``lambda``
     (``list(map(lambda r: r.update(tax=1), records))``). Either changes
     what ``records`` holds, as handing ``r`` to a function of the user's
-    would, so they are watched the same way. With *function_source*, also
+    would, so they are watched the same way, and so is a default the
+    ``lambda`` binds (``lambda acc, r, d=p: ...``). With *function_source*, also
     the globals a function of the user's called in such an argument reads
     (`read_by_helpers`: ``reduce(f, [pick(7)], None)``)."""
     if tree is None:
@@ -2484,11 +2492,19 @@ def handed_through_items(
         args = [*call.args, *(kw.value for kw in call.keywords)]
         if any(isinstance(arg, ast.Lambda) for arg in args):
             for arg in args:
-                if not isinstance(arg, ast.Lambda):
-                    names |= argument_roots(arg, iterated)
+                # A lambda's default (``lambda acc, r, d=p: setattr(d, ...)``)
+                # is handed to its body as any other argument is.
+                handed = lambda_defaults(arg) if isinstance(arg, ast.Lambda) else [arg]
+                for value in handed:
+                    names |= argument_roots(value, iterated)
                     if function_source is not None:
-                        names |= read_by_helpers(arg, function_source)
+                        names |= read_by_helpers(value, function_source)
     return frozenset(names)
+
+
+def lambda_defaults(node: ast.Lambda) -> list[ast.expr]:
+    """The default values a ``lambda`` binds its parameters to."""
+    return [*node.args.defaults, *(d for d in node.args.kw_defaults if d is not None)]
 
 
 def _asks_for_a_write(call: ast.Call, user_ns: Mapping[str, Any]) -> bool:

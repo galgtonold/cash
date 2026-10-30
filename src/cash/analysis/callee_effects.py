@@ -397,19 +397,84 @@ def read_by_helpers(arg: ast.AST, function_source: Callable[[str], str | None]) 
     """The globals a function of the user's called in *arg* reads
     (*function_source* gives its source): what it returns may be an object
     one of them holds, handed on as a call's own argument is (``reduce(f,
-    [pick(7)], None)`` with ``def pick(i): return points[i]``)."""
+    [pick(7)], None)`` with ``def pick(i): return points[i]``). Followed
+    through the functions of the user's it reads in turn (``get`` calling
+    ``pick``), for a lambda (``lpick = lambda i: points[i]``) and for a
+    function called by an attribute (``ns.pick(7)``) when *function_source*
+    knows the dotted name: one level only, and ``points`` was not watched."""
     found: set[str] = set()
+    todo: list[str] = []
     for sub in ast.walk(arg):
-        if not (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name)):
+        if isinstance(sub, ast.Call):
+            name = _dotted(sub.func)
+            if name is not None:
+                todo.append(name)
+    seen: set[str] = set()
+    while todo and len(seen) < _HELPERS_FOLLOWED:
+        name = todo.pop()
+        if name in seen:
             continue
+        seen.add(name)
         try:
-            fdef = resolve_function_def(sub.func.id, function_source) if function_source(sub.func.id) else None
+            source = function_source(name)
         except Exception:  # noqa: BLE001 - an unreadable source: nothing known it reads
-            fdef = None
-        if fdef is not None:
-            local = scope_locals(fdef)
-            found |= {n.id for n in ast.walk(fdef) if isinstance(n, ast.Name) and n.id not in local}
+            source = None
+        if not source:
+            continue
+        for node in _helper_nodes(source):
+            local = scope_locals(node)
+            reads = {n.id for n in ast.walk(node) if isinstance(n, ast.Name) and n.id not in local}
+            found |= reads
+            todo.extend(reads - seen)
     return found
+
+
+#: How many functions `read_by_helpers` reads, a chain and its branches together.
+_HELPERS_FOLLOWED = 64
+
+
+def _dotted(func: ast.expr) -> str | None:
+    """``pick`` or ``ns.pick`` for a call of that name, else None."""
+    parts: list[str] = []
+    while isinstance(func, ast.Attribute):
+        parts.append(func.attr)
+        func = func.value
+    if not isinstance(func, ast.Name):
+        return None
+    parts.append(func.id)
+    return ".".join(reversed(parts))
+
+
+def _helper_nodes(source: str) -> list[ast.AST]:
+    """The ``def`` *source* starts with, else every lambda in it (the line
+    ``lpick = lambda i: points[i]`` a lambda's source is)."""
+    fdef = _parse_function_def(source)
+    if fdef is not None:
+        return [fdef]
+    text = textwrap.dedent(source)
+    try:
+        parsed = ast.parse(text)
+    except (SyntaxError, ValueError):
+        parsed = _lambda_on_its_line(text)
+    if parsed is None:
+        return []
+    return [n for n in ast.walk(parsed) if isinstance(n, ast.Lambda)]
+
+
+def _lambda_on_its_line(text: str) -> ast.AST | None:
+    """The lambda a line holds that does not parse alone (``"pick": lambda
+    i: points[i],`` inside a dict): from ``lambda`` to the longest end that
+    parses."""
+    start = text.find("lambda")
+    if start < 0:
+        return None
+    tail = text[start:].rstrip()
+    for end in range(len(tail), max(len(tail) - 64, 0), -1):
+        try:
+            return ast.parse(tail[:end], mode="eval")
+        except (SyntaxError, ValueError):
+            continue
+    return None
 
 
 #: Expressions whose value holds nothing of what they read: text, a truth
@@ -766,15 +831,16 @@ def source_global_mutations(source: str) -> frozenset[str]:
     """Globals the function defined by *source* itself changes
     (:func:`free_vars_mutated_in_function`).
 
-    Empty for anything that is not a single function definition. The verdict
-    is purely syntactic (no namespace is consulted), so memoising on the
-    source text is sound.
+    For a lambda's source, the line it is on (``return lambda: xs.pop()``),
+    what the lambdas there change: no ``def`` to read, so ``xs`` was not
+    captured, and a second call was served the item the first one popped.
+    Empty for anything else. The verdict is purely syntactic (no namespace
+    is consulted), so memoising on the source text is sound.
     """
     node = parse_function_source(source)
-    if node is None:
-        return frozenset()
+    nodes = [node] if node is not None else _helper_nodes(source)
     try:
-        return free_vars_mutated_in_function(node)
+        return frozenset().union(*(free_vars_mutated_in_function(n) for n in nodes))
     except RecursionError:
         return frozenset()
 

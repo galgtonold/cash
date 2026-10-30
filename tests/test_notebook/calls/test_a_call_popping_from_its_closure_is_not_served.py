@@ -1,9 +1,11 @@
-"""A call of a function that changes what its closure holds is not stored.
+"""A call of a lambda that changes what its closure holds is not served
+the first call's answer.
 
 ``textwrap.t = (mk(),)`` with ``mk`` returning ``lambda: xs.pop()``: ``a =
 t[0]()`` popped 99, and ``b = t[0]()`` was served that same 99 from the call
-cache where a run pops 98. With a trace (3.12+) the pop was seen; without one
-(3.10, 3.11, ``CASH_TRACE=0``) nothing read the closure.
+cache where a run pops 98. A lambda has no ``def`` of its own to read, so
+the pop was not found in its text and ``xs`` was not captured with the
+entry; it is now read from the lambda's line.
 """
 
 import pytest
