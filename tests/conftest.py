@@ -540,6 +540,21 @@ def _pandas_scalars_values_again():
 
 
 @pytest.fixture(autouse=True)
+def _lineage_aliases_forgotten():
+    """Forget the lineage aliases a test recorded.
+
+    ``record_lineage_alias`` keeps them for the whole process. An alias
+    ``L2 -> L1`` one test left made a later test's read-only array, bound
+    as ``L2``, come back as ``L1`` (the writeable one's), so
+    ``test_only_an_equal_array_that_is_as_writeable_takes_the_lineage``
+    failed by how xdist spread the tests and passed alone."""
+    yield
+    formula = sys.modules.get("cash.notebook.lineage_formula")
+    if formula is not None and formula._LINEAGE_ALIASES:
+        formula._LINEAGE_ALIASES.clear()
+
+
+@pytest.fixture(autouse=True)
 def _reducer_veto_put_back():
     """Disarm the reducer veto a test's ``%cash_on`` left armed.
 
