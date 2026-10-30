@@ -12,13 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 This release is about trust and speed. Another long sweep for stale answers
 found more places where a hit skipped something the program needed, or served
 a result the key never covered: a function handed in that changes state, a
-global another thread changed mid-call, a helper reached through a property, a
-notebook variable changed in place through another name, a module setting lost
-on reload or restart, a file written by a library cash did not watch. Each is
-now keyed, run every time, or run uncached with a warning that says why.
-Alongside that, hashing big arrays, frames and files, storing and restoring
-large tables, and the notebook's own per-cell work all got much cheaper.
-Warnings now print as one line. 746 commits in all.
+global another thread changed mid-call, a library constant the program changed
+(`math.pi = 3.0`), a helper reached through a property, a `functools.cache`
+helper a statement filled, an iterator drawn from through another name, a weak
+reference or `id()` that a restored copy no longer matches, a module setting
+lost on reload or restart, a file written by a library cash did not watch.
+Each is now keyed, run every time, or run uncached with a warning that says
+why. Alongside that, an optional compiled extension makes repeated hits much
+cheaper on CPython 3.12 and later, and hashing big arrays, frames and files,
+storing and restoring large tables, and the notebook's own per-cell work all
+got much cheaper. Warnings now print as one line. 1,929 commits in all.
 
 **The cache format changed, so existing cache entries are deleted once and
 recomputed.** Read **Breaking** before upgrading, and **Upgrading** at the end.
@@ -26,13 +29,16 @@ recomputed.** Read **Breaking** before upgrading, and **Upgrading** at the end.
 ### Breaking
 
 - **Existing cache entries are deleted once.** The on-disk cache format went
-  from version 2 to version 5: array, column and file digests are taken a new
-  way, and older builds stored some entries this build must not serve (calls
-  whose helper writes a file, folder listings). The first time 0.14 opens a
-  cache folder written by an older cash, it logs a warning and deletes the
-  old entries, so the first run afterwards recomputes everything. Going back to
-  0.13 clears the folder again the same way. SQLite, Redis and S3 tiers carry
-  no format stamp and are not cleared; see **Upgrading**.
+  from version 2 to version 9: array, column, file and pickled-value digests
+  are taken a new way, big buffers are kept once per cache folder, and older
+  builds stored some entries this build must not serve (calls whose helper
+  writes a file, folder listings, statements that draw on pyplot figures,
+  entries that put back every random stream on a hit, a cell's value kept so
+  that a hit would show it twice). The first time 0.14 opens a cache folder
+  written by an older cash, it logs a warning and deletes the old entries, so
+  the first run afterwards recomputes everything. Going back to 0.13 clears
+  the folder again the same way. SQLite, Redis and S3 tiers carry no format
+  stamp and are not cleared; see **Upgrading**.
 - **Picking code by a run-time name no longer raises.** A cached function that
   runs `getattr(module, name)()`, `importlib.import_module(name)`,
   `sys.modules[name]`, `eval`, `exec` or `compile`, or calls a helper that
@@ -59,6 +65,14 @@ recomputed.** Read **Breaking** before upgrading, and **Upgrading** at the end.
 
 ### Added
 
+- **An optional compiled extension.** On CPython 3.12 and later, the platform
+  wheels carry a small C extension that watches the values, functions and
+  classes a cached call read, so a repeated call whose inputs did not change
+  is answered without building its key again, and much of the notebook's
+  bookkeeping runs in C. It is optional everywhere: Python 3.10 and 3.11, other
+  interpreters, an install built without a C compiler, or
+  `CASH_PURE_PYTHON=1` run the pure-Python path, with the same results.
+  `cash info` and `%cash_status` say which one is in use.
 - **`explain()` says what changed and what to do about it.** After an edit,
   `f.explain(...)` names what changed (`helper ticks._parse changed`) under
   `details["changed"]`, in a new process too, and when that is code the
@@ -80,12 +94,20 @@ recomputed.** Read **Breaking** before upgrading, and **Upgrading** at the end.
     code (`api.inner(x)`) reaches a function cash cannot key.
   - `KEY-ITERATOR-CONSUMED`: a `key=` function or registered hasher read an
     iterator argument, so the body got an emptied one; the call runs uncached.
+  - `KEY-READ-UNRECORDED`: cash failed to record a file or other read (for
+    example after `os.environ` was replaced by a plain dict); the call or
+    statement runs every time instead of being served after the file changed.
+  - `KEY-LIBRARY-VALUE-UNREAD`: a value the notebook set on a library's module
+    is too big to look through for an iterator, so code reading it runs every
+    time.
   - `IMPURE-HANDED-CALLABLE`: the call hands the cached function one of your
     functions that changes state when called; the call runs uncached.
   - `STORE-STATE-CHANGED`: a global or class attribute the key read changed
     while the call ran (another thread); the result is returned, not stored.
   - `STORE-UNTRACKED-SOURCE`: a cached callee's `dynamic_depends_on=` source
     cannot be pickled, so the caller's result stays in memory only.
+  - `STORE-PARTS-UNCHECKED`: a result was too big to check in time for a
+    function sharing part of it, so it is not stored.
   - In notebooks: `NOTEBOOK-FAILED-CELL` (a cell that raised part way left a
     value no top-to-bottom run gives), `NOTEBOOK-MAGIC-STALE` (a name a shell
     command or magic binds is out of date), `NOTEBOOK-RELOAD-STATE` (module
@@ -93,6 +115,20 @@ recomputed.** Read **Breaking** before upgrading, and **Upgrading** at the end.
     `NOTEBOOK-SHARE-UNCHECKED` and `NOTEBOOK-SHARED-KEPT` (the search for
     variables sharing an object ran out of time, or a value was kept as is to
     keep a share intact).
+  - Also in notebooks, for statements that now run every time or are not
+    stored, each naming the cause: `NOTEBOOK-WORK-RUNNING` (a thread or
+    process a statement started is still running), `NOTEBOOK-UNSEEN-WRITES`
+    (code of yours that ran changes something the statement's outputs do not
+    hold), `NOTEBOOK-REDUCE-WROTE` (a value's own `__reduce__` or
+    `__getstate__` changes other variables), `NOTEBOOK-IDENTITY-HELD` (a value
+    finds another object by a weak reference or an `id()`),
+    `NOTEBOOK-CALLABLE-UNREAD` (a function the statement calls or hands over
+    cannot be read), `NOTEBOOK-ITEMS-UNREAD` (an item of a container too big
+    to look through is read by an index cash cannot tell),
+    `NOTEBOOK-INPUT-UNBUILT` (an input could not be rebuilt as the cells above
+    leave it), `STORE-DEFAULT-CHANGED` (a call changed its callee's default)
+    and `STORE-REF-UNSUPPORTED` (a value holds a variable's object in a form
+    cash cannot keep, such as `results.append`).
 - **Notebook module state survives reloads and restarts.** What cells set on
   one of your modules (`mylib.K = 7`, `mylib.set_k(7)`,
   `mylib.CONFIG["k"] = 7`, a registering decorator) is rebuilt from those
@@ -100,6 +136,15 @@ recomputed.** Read **Breaking** before upgrading, and **Upgrading** at the end.
   as a variable is. Environment variables and the working directory a
   statement above changed (`os.environ[...] = ...`, `os.chdir`) are set again
   after a restart before a cell you run on its own.
+- **Loops that update a progress bar or fill a list are stored.** A long loop
+  run as one unit that called `pbar.update()` or appended to a list from an
+  earlier cell ran again on every Run All and after every restart. What it
+  changes in place is now stored with it and, on a hit, put back into the
+  very object the loop changed, so other names and weak references to it
+  still see it. A value holding `sys.stdout`, `sys.stderr` or a lock nobody
+  holds (a tqdm bar) can now be stored in a notebook: the stream is restored
+  as the process's stream of the time, the lock as a new free lock. A
+  decorated function given such a value still runs uncached, as before.
 - **`%cash_status` reports `MIXED`** for a statement that ran while calls
   inside it came from the cache, and counts what those calls saved.
 - **More values keep their lineage when rebuilt unchanged.** A networkx graph
@@ -119,8 +164,9 @@ recomputed.** Read **Breaking** before upgrading, and **Upgrading** at the end.
   accessor, a namespace, a patched method); the command line (`sys.argv`,
   `parse_args()`) when the function reads it; `soundfile` reads; folders
   listed through `os.walk` and `Path.walk`; linked sub-folders of a dataset
-  folder; and files a library opens with Python's `open()` (Pillow,
-  openpyxl).
+  folder; files a library opens with Python's `open()` (Pillow, openpyxl);
+  and, in a notebook, files a statement rewrites through code no open event
+  reports (a subprocess, SQLite, h5py, a C library called through `ctypes`).
 
 ### Changed
 
@@ -129,21 +175,44 @@ recomputed.** Read **Breaking** before upgrading, and **Upgrading** at the end.
   changes state; a notebook statement or decorated function seen writing a
   file through any library (`np.savetxt`, `joblib.dump`, a write or append
   through `os.open`, a folder moved into place), appending to a file from your
-  own code, or creating, moving or deleting a file by name in a helper; and a
-  notebook statement that starts worker processes or threads. Each can be
+  own code, or creating, moving or deleting a file by name in a helper; a
+  notebook statement that starts worker processes or threads; and a call into
+  a module of yours whose top level reads something outside its source (the
+  environment, the clock, a file, a builtin reached by a roundabout name such
+  as `__builtins__["eval"]`), which runs uncached with a warning. Each can be
   cached again with `# @cash:assume-safe` on the line the warning names, or
   `assume_safe=True`. In a notebook, a waiver now covers only the write it
   is on, not every write the statement reaches.
+- **More notebook statements run every time.** These are no longer served,
+  since a hit would skip what plain Python does: a statement that fills a
+  `functools.cache` or `lru_cache` memo (unless the helper plainly only
+  computes from its arguments), or names `cache_clear` or `cache_info`; one
+  served only while each memo it read still holds the answers it read; a call
+  that makes or returns a memo, or hands back a function or class whose memo
+  holds answers; a call of a closure holding an iterator or a random
+  generator; a statement that sets a context variable; one whose value finds
+  an object by a weak reference or an `id()`; one that calls a function whose
+  source cash cannot read; and one whose value's own `__reduce__` or
+  `__getstate__` changes other variables (cash no longer runs such a reducer
+  for a notebook statement; a decorated call still stores its result). Each
+  warns with the cause.
+- **No statement is served while work a statement started still runs.** A
+  thread or a process a statement starts and does not wait for (a
+  `threading.Timer`, `subprocess.Popen` without `wait`) may change what a
+  later cell reads, so until it ends, cells run as they would without cash,
+  and `NOTEBOOK-WORK-RUNNING` says so once. `# @cash:assume-safe` on the line
+  in the cell that starts it (a server, a monitor) keeps cells served.
 - **More notebook values are refused as copies.** A call result that is or
   holds one of its arguments, a global the function reaches, or a NumPy view
   of either, and a frame or array that borrows another variable's memory
   (`x = df["a"].to_numpy()`), run every time, because a restored copy would
   stop seeing writes through the other name. Values another variable shares
   (`log = history`, `config = {"features": features}`) are stored and restored
-  together as one object graph.
+  together as one object graph, a frame and the objects in its cells, index
+  and categories included.
 - **`compress` uses zstd or zlib at fast settings.** It ran gzip at level 9,
-  about 31 s to store a 59 MB table; zstd (Python 3.14 and later) or zlib now
-  take about 1 s, and an entry that does not shrink by a tenth is stored as it
+  which was slow to store a big table; zstd (Python 3.14 and later) or zlib
+  are much faster, and an entry that does not shrink by a tenth is stored as it
   is. An entry compressed with zstd on Python 3.14 reads as a miss on Python
   3.13 or earlier and is recomputed there once; it is never read wrongly.
 - **Where the cache folder is.** An existing `.cash` folder that cash made now
@@ -167,34 +236,53 @@ recomputed.** Read **Breaking** before upgrading, and **Upgrading** at the end.
   costs. When that is at least four times the bookkeeping (and at least
   10 ms), later runs cache the loop iteration by iteration, so once those
   entries exist, an edit runs only the iterations it changes or adds. The
-  measurement is kept in the cache folder by the loop's header, numbers
-  aside, so it carries over edits to the body and to the loop's length; a
-  loop measured cheap again goes back to one unit, and an unchanged rerun
-  still restores the whole loop at once.
+  measurement is kept in the cache folder with the loop's header and body,
+  and a loop reads the one taken on a body sharing at least half its
+  statements, so it carries over edits to part of the body and to the loop's
+  length, while another loop with the same header keeps its own. A loop
+  measured cheap again goes back to one unit, and an unchanged rerun still
+  restores the whole loop at once.
 - **The storage notices log only when asked.** The cache-cap and first-eviction
   lines need `CASH_VERBOSE`, `CASH_DEBUG` or an INFO level set on the `cash`
   logger; an application logging everything at INFO no longer gets them on
   every run.
+- **The badge lists intercepted calls apart.** Calls cash wrapped itself in a
+  notebook now show under their own heading, in the text and the HTML badge,
+  instead of under `@cash.cache`, and a loop's passes are counted once. A
+  notebook warning raised inside IPython's own machinery names the cell.
 - **Hashing costs less.**
-  - A big numpy array is hashed on up to eight threads: a hit with a 1 GB
-    argument took 2.5 s.
+  - A big numpy array is hashed on up to eight threads.
   - Frame columns are keyed from their own memory, not row by row or pickled
-    item by item: a 1 GB numeric frame took 4–9 s to key on a first call and
-    in every new process. Lists of plain objects and dataclasses are keyed by
-    their fields in one pass.
+    item by item, so a big numeric frame keys much faster on a first call
+    and in every new process. Lists of plain objects and dataclasses are keyed by
+    their fields in one pass. A big polars frame's columns are hashed side by
+    side, a frame of many small chunks a block at a time.
+  - Lists of numpy numbers, pandas `Timestamp`, `Timedelta` and `NaT`, and
+    frames of lists of them are keyed by their values in bulk, and a frame of
+    lists keeps its digest while each list holds the same items.
+  - A function calling numpy (`np.sum`, `np.mean`, ...) and a call given one
+    big list of records unchanged since the last call are now served by the
+    quick hit path, and a miss with such a list does not hash it again after
+    the body.
+  - Importing cash no longer slows every `id()` call in the process, so a
+    cached call over many small objects keys faster on a miss and a hit.
   - A settled input file's digest is kept in the cache folder, so a new
-    process checks it with one `stat` instead of reading it again (3.45 s a
-    hit for a 500 MB `FileDataSource`). A file of 4 MiB or more is hashed on
-    a thread of its own while the body reads it.
+    process checks it with one `stat` instead of reading it again. A file of 4 MiB or more is hashed on
+    a thread of its own while the body reads it. After a restart, a notebook
+    that read tens of thousands of files no longer reads them all again.
   - The first call in a new process no longer analyses a chain of helpers
-    over and over (300 chained helpers took 8–21 s), and never runs a
-    property of a module-level object to find what a body calls.
+    over and over, and never runs a
+    property of a module-level object to find what a body calls. A notebook
+    statement reaching a long chain of your functions analyses each once,
+    so a Run All no longer grows with the square of the chain's length.
 - **Storing and restoring cost less.**
   - pandas tables are shared between hits under copy-on-write (see
     **Breaking**), and polars frames and LazyFrames are cloned instead of
     pickled: a RAM hit costs well under a millisecond whatever the size.
-  - A polars frame is stored as its Arrow buffers: an 80 MB frame took
-    190 ms to write and 90 ms to read.
+  - A polars frame is stored as its Arrow buffers. Its columns' chunks are copied in one
+    pass each.
+  - Each buffer of 1 MiB or more is written once per cache folder, so results
+    that repeat the same columns no longer write them again.
   - A disk hit is handed over without a second copy into RAM, and on Linux
     and macOS with Python 3.13 or later a split entry of 1 MB or more is
     mapped from the file instead of read, so pool workers restoring the same
@@ -203,13 +291,19 @@ recomputed.** Read **Breaking** before upgrading, and **Upgrading** at the end.
   - A cell no longer waits for its disk writes; they finish while the next
     cell runs, and a cell waits only for what would take more than about two
     seconds to write.
-  - The check before each cell no longer grows with the notebook's length:
-    a Run All of a 300-cell notebook went from 18.4 s to 9.4 s.
+  - The check before each cell no longer grows with the notebook's length.
   - A loop over an open file or an iterator with no length runs as one unit
-    (100,000 items of `for x in it:` took 93 s, now 0.33 s); `len(df)` and
+    instead of one item at a time; `len(df)` and
     `print(df)` no longer hash the frame; plot statements no longer pickle
     their figures; a call site that is cheaper to run than to cache costs one
     dictionary lookup.
+  - The checks after a statement read a big value (a fitted ensemble) once
+    between them, not once each; a statement reading many files from one
+    folder, or unpacking an archive, checks each file fewer times; looking
+    for what holds a library object (a seaborn grid, a matplotlib figure)
+    reads the heap in C; a loop over a big list of records, a frame of lists
+    or a function default the call only reads no longer pays a full check on
+    every run.
 
 ### Fixed
 
@@ -223,19 +317,52 @@ recomputed.** Read **Breaking** before upgrading, and **Upgrading** at the end.
   their code; editing them served the old result. A numba-compiled helper
   imported by name never cached at all. A class or function renamed through
   `__name__` alone kept its old key and served results with the old name.
+- **Classes changed without an edit.** An ABC's `register()`, a new subclass
+  of a class whose `__subclasses__()` the code reads, a method added to a
+  class, and a class's annotations read through `get_type_hints` or
+  `__annotations__` now move the key; the call was served its old answer.
+  Before Python 3.12, an `isinstance` that a metaclass of yours answers runs
+  uncached with `KEY-UNTRACKABLE-DEP`.
 - **Data the key never saw.** The defaults and captures of a cached function
   another one calls, the `ttl` of a callee reached as a value, a global bound
   after the first call, a helper's captured data, attributes a class leaves
   out of its own pickle, environment reads in code reached as data, and a
   pyarrow-backed pandas column (ids above 2**53 that differ hashed alike).
+  A library's plain data the program changed (`math.pi = 3.0`,
+  `sys.argv.append(...)`, `json.JSONEncoder.item_separator = ";"`) is now
+  keyed by value.
+- **Environment reads on Python 3.13.** cash's hook on `os.environ` stopped
+  being called after about a thousand cached calls, so a package's
+  `os.environ.get("TENANT")` went unseen and a long session served the first
+  tenant's result to every other.
+- **Modules a function imports in its body.** One your code imports inside a
+  function is keyed by its source and is no longer run while cash looks at
+  the call (a branch not taken, a `__setstate__`). A module in a folder with
+  no `__init__.py`, or one present only as a `.pyc`, is keyed too; an edit to
+  either was served stale after a restart.
 - **Dependencies of a cached callee reach its callers.** A caller of a
   function with `dynamic_depends_on=` kept its old result after the source
   changed while the callee recomputed; the sources now count as the caller's
   inputs, and are asked again on every lookup.
+- **Arguments shared or changed by another thread.** A list another argument
+  also holds (`f(rows, Box(rows))`) keyed like an equal copy, so
+  `f([1, 2, 3], r)` was served `f(a, r)`'s result, and `same(a, a)` and
+  `same(a, [1, 2, 3])` could share one key. A list another thread changed
+  while the call was keyed, or between the call and storing its result, could
+  have the result filed under the wrong content. Both are fixed.
 - **Results stored that should not have been.** A result whose global another
   thread changed mid-call, a call whose `key=` emptied an iterator argument, a
   folder listing that changed during the call, and a write through a view of a
-  frame's memory.
+  frame's memory. A result whose pickle, when rebuilt, opens a file for
+  writing or removes, renames or truncates one (a class pickled as
+  `(open, (path, "w"))`) emptied that file on every store and hit; it is now
+  neither stored nor served.
+- **Results that share a global.** A result that is or holds a mutable
+  global, a closure variable, a default, an attribute of your class or
+  module, or a view of a global array or a global frame's column is the
+  caller's own object on the first run and a copy on every hit.
+  `CACHE-RESULT-SHARED` now says so, on a hit too, names who keeps the
+  object, and runs none of your code to find out.
 - **`key=` and `ignore=`.** Two wrappers of one function with different
   `key=`, `ignore=` or files shared a key; an ignored parameter's default was
   still keyed; the code real arguments carry and what a key function holds
@@ -245,7 +372,8 @@ recomputed.** Read **Breaking** before upgrading, and **Upgrading** at the end.
   so another working directory was served the first directory's result; it is
   now resolved per call. A `FileDataSource` on a directory or glob tracks its
   files, a file the call creates and keeps is an input, and an `exist_ok`
-  `mkdir` of an existing folder is no write.
+  `mkdir` of an existing folder is no write. A read cash failed to record no
+  longer goes missing: the call runs every time and says so.
 - **A sentinel held inside a result** (`[d.get(k, MISSING) for k in keys]`)
   comes back as the same object, so `is MISSING` holds on a hit.
 - **`RANDOM-UNSEEDED` is quieter for estimators** whose settings never use the
@@ -256,19 +384,66 @@ recomputed.** Read **Breaking** before upgrading, and **Upgrading** at the end.
 
 - **Changes through a second name.** When a statement leaves two names sharing
   an object (`log = history`, `config = {"features": features}`,
-  `train = data["train"]`, a NumPy view), a later in-place change through
-  either name now reruns the cells reading the other, on a cell re-run as on
-  Run All, after a restart included. A re-run no longer applies such a change
-  twice.
+  `train = data["train"]`, a NumPy view, a pandas column on pandas 2), a later
+  in-place change through either name now reruns the cells reading the other,
+  on a cell re-run as on Run All, after a restart included. A re-run no
+  longer applies such a change twice.
 - **In-place changes cash missed.** A change made by a function of yours, in a
   loop body, in an `if` condition, through a method in a comprehension or
   `map`, through a library call handed an object, or through `out=` /
-  `inplace=` arguments is now seen and moves the values it changes.
+  `inplace=` arguments is now seen and moves the values it changes. So are
+  the spellings that hide a write: `setattr` and `delattr` (or an alias of
+  them), `object.__setattr__`, `vars(x)[...] = ...`, `del x.attr`,
+  `bisect.insort`, `deque.appendleft`, `operator.setitem`, a held bound method
+  (`PUSH = LOG.append`), a `functools.partial` or `operator.methodcaller`
+  around a method that changes what it is handed, a callee's mutable default,
+  an operator whose special method writes (`v += x`), and a queue put, an
+  event set or a context variable set.
+- **Code that changes state unseen.** On Python 3.12 and later, code of yours
+  that ran in a statement is read for what it changes outside the
+  statement's outputs; such a run is not stored, and
+  `NOTEBOOK-UNSEEN-WRITES` names the function. Without that record (older
+  Pythons, `CASH_TRACE=0`), the objects a statement reads are looked through
+  for such code. A function defined through `exec` or swapped in through
+  `__code__` runs every time unless its bytecode shows it changes nothing.
 - **Inputs a statement reads through functions.** Environment variables,
   module data and globals read by a function of yours the statement calls,
   however deep, are now part of its key; so is a function handed to a call
   (`df.apply(f)`), a lambda's call site, and code a cell installs on a pandas
-  class.
+  class. A name the notebook sets on a library's module (`textwrap.rv = v`)
+  is keyed by value wherever it is read, and a library function the notebook
+  patched is checked with its defaults and closure. A module made in the
+  notebook (`types.ModuleType("m")`) keys what readers read of it.
+- **Iterators and generators.** A draw from an iterator now moves it on like
+  a random draw, through every name and container holding it, so a cell
+  re-run alone gets the iterator as the cells above leave it. A statement
+  that runs every time while its key does not move (`t = next(GEN)`) keys
+  what it binds by value, so readers below get the new value; it runs once
+  per Run All, not once per reader; and two copies of it in one cell keep
+  their own values. A closure, class attribute or library module holding a
+  generator or iterator is not served a stale draw.
+- **Helper memos.** A statement calling an `@functools.cache` helper was
+  served after a restart while the memo stayed empty, so the next direct call
+  ran the helper's body (and any `random.seed` in it) where plain Python
+  would not. A statement or call is now served only while each memo it used
+  holds the answers it read.
+- **Closures and classes that keep values.** A closure whose shared cell
+  another call rebinds, a value kept on a class through `type(self)`, a
+  classmethod, a base class's registry or a deque on the class, and an object
+  of a class whose cell ran again are now rebuilt with what built them, and
+  `NOTEBOOK-CHANGED-BELOW` says when a re-run cell drops a change made below
+  to an object a function keeps as a default.
+- **Weak references and ids.** A value holding a weak reference to, or the
+  `id()` of, an object it does not hold found nothing (or the wrong object)
+  after a restore; such a statement now runs every time with
+  `NOTEBOOK-IDENTITY-HELD`. A loop restored into its object keeps weak
+  references to it working.
+- **Cells above a change.** `weekly = weekly[...]` above a `to_csv`, after the
+  CSV it reads was edited, left the file below as it was; a counter
+  (`n = n + 1 if "n" in globals() else 1`) above a file writer ran several
+  times on a first Run All; `w -= 1` re-run alone could start from its own
+  output; a fit of a pipeline step a `ColumnTransformer` holds keyed apart
+  from the same fit after a restart.
 - **pyplot.** A statement that makes, picks or draws on the current figure,
   directly or through a library or function of yours, and a helper that reads
   the current figure, run every time; a hit had left the next drawing on
@@ -286,32 +461,67 @@ recomputed.** Read **Breaking** before upgrading, and **Upgrading** at the end.
   IPython runs them; a `%time`, `%timeit` or `%prun` line is rerun in a
   rebuild; a name `%xdel` deleted stays deleted; `%%capture` no longer captures
   the badge; IPython's `Out` history and input history hold your code's
-  results and text; cell annotations are evaluated as plain IPython does;
-  terminal IPython counts as a session without a notebook.
+  results and text, are never taken for a value a statement drew on or
+  changed, and a statement that binds `Out` itself keeps it; cell annotations
+  are evaluated as plain IPython does; terminal IPython counts as a session
+  without a notebook. A magic whose files changed is stale, not rebuilt from
+  the Python above it.
 - **Modules.** An instance is rebuilt after its module's class is edited, an
   `importlib.reload` of a local module runs every time, and modules imported
-  beside magics or under `%autoreload` are tracked.
+  beside magics or under `%autoreload` are tracked. A module a function
+  imports in its body, edited and reloaded, is what the next call runs, and a
+  hit imports what that run imported.
 - **Models.** A `# @cash:cache-fit` hit on a pipeline fits the very step
   estimators it was built from, as `Pipeline.fit` does; a separate fit reruns
-  when the data its earlier fit read changed.
+  when the data its earlier fit read changed. A fitted model restored from
+  disk is recognised as the one stored, so what is keyed on it hits after a
+  restart.
 - **Files.** A file edited keeping its size and modification time is seen from
   a cell below on Linux and macOS; a file rewritten with the same bytes keeps
   its lineage after a restart; existence checks (`os.path.exists`) are inputs;
-  a statement whose file changed mid-run is not stored.
+  a statement whose file changed mid-run is not stored. A file rewritten after
+  a loop read it, by the same cell or one below, no longer reruns the loop,
+  while one rewritten by a cell above does; a file a loop read is checked
+  when only a cell below the loop runs.
+- **A function defined again.** A value holding a function whose cell ran
+  again (a pipeline built on `column_ratio` before `column_ratio` was
+  redefined) is now stored when the definition is the same, and otherwise
+  `STORE-FAILED` says which cells to re-run.
 
 **Storage and tools.**
 
 - **RAM-tier copies are exact and independent.** Nested frames, list and
   object cells, a Series' `attrs` and flags, a DataFrame subclass's own
-  attributes, a dated index's `freq`, a row held twice and polars `Object`
-  columns now come back as stored, and a later write to a hit no longer
-  reaches the stored value.
+  attributes, a dated index's `freq`, a row held twice, polars `Object`
+  columns, a container subclass's slots and a pandas scalar given an
+  attribute now come back as stored, and a later write to a hit no longer
+  reaches the stored value. A value the RAM tier shares with the caller is no
+  longer written to disk later, with whatever the caller did to it since.
+- **pandas 3.1.** Tables with a date column could not be shared on pandas 3.1,
+  so every table was copied on each store and hit; they are shared again.
+- **cash runs none of your code to look at a value.** An object whose
+  `__getattribute__` raises, whose `__class__` lies (a proxy, a `MagicMock`),
+  or a dict or list subclass whose own methods raise or print no longer fails
+  the cell: cash reads such values through Python's own types instead of
+  asking them.
+- **Hangs.** The first cached call in a thread pool could raise into the other
+  workers' code and leave the pool waiting for ever (Python 3.12 and later).
+  On Python 3.12.0 to 3.12.5 with asyncio loaded, a notebook could hang
+  reading what holds an object; it now ends that read, or reruns the
+  statement with a warning.
+- **Memory.** A class a factory makes per call, or the notebook defines again,
+  is no longer kept alive by cash's caches, and a `Cash` that met a
+  `__cash_key__` value no longer keeps a thread running once it has nothing
+  to check.
 - **Deep values no longer crash.** A value too deep for the pickler or for
   `deepcopy` is stored without recursion, and one whose own restore code
   raises reads as a miss.
 - A write cut short by a killed process leaves no partial file behind once a
   later process writes; `cash clear` removes a SQLite cache whole; `cash
-  inspect` names a file read by a relative path once.
+  inspect` names a file read by a relative path once. A notebook entry
+  written to disk takes the call results it refers to with it, so it still
+  hits after a restart; a backend write that fails warns `STORE-FAILED`
+  instead of only logging.
 
 ### Upgrading
 
@@ -340,6 +550,9 @@ Then:
 - Statements and calls that write files, start workers or are handed
   state-changing functions now run every time; if the write may be skipped,
   add `# @cash:assume-safe` on the line the warning names.
+- If you install from source on Python 3.12 or later and want the compiled
+  extension, have a C compiler available; without one the install still
+  succeeds and cash runs its pure-Python path. `cash info` shows which.
 
 ## [0.13.0] - 2026-10-04
 
