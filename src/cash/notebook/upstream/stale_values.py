@@ -175,7 +175,8 @@ class StaleValueGuard:
                 # Not a module: its producers make it again empty, without
                 # the ``m.v = ...`` cells set on it, which are no writes of
                 # ``m`` (``m, k = k, m`` raised where plain Python swaps).
-                if not instance_of(self.shell.user_ns.get(var_name), types.ModuleType):
+                live = self.shell.user_ns.get(var_name)
+                if not instance_of(live, types.ModuleType) and not self._held_by_a_partner(var_name, live):
                     broken_vars.add(var_name)
                 continue
             live_value = self.shell.user_ns.get(var_name)
@@ -347,6 +348,21 @@ class StaleValueGuard:
                     base_input[:8],
                 )
                 broken_vars.add(var_name)
+
+    def _held_by_a_partner(self, var_name: str, live_value: Any) -> bool:
+        """Whether another variable holds *live_value* (``g = [t]``): a
+        restore would hand the cell a copy the other one does not hold.
+        ``t.tag = 2`` then ``t = O()`` in one cell read and rebound ``t``, so
+        ``t`` was taken for a swap and put back from its entry before the
+        cell ran, and the write landed on that copy: ``g[0].tag`` stayed
+        unset where a run sets it. The live object is what the cell's own
+        run changes, as in plain Python."""
+        user_ns = self.shell.user_ns
+        for partner in shared_object_partners(self.tracking_state.derivation_edges, var_name):
+            held = user_ns.get(partner)
+            if held is not None and (held is live_value or holds_part_of(held, [live_value])):
+                return True
+        return False
 
     def mark_consumed_unrestorable_inputs_broken(
         self,
