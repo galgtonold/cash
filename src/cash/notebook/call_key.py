@@ -41,7 +41,8 @@ from cash._referents import get_referents
 from cash._user_attrs import attribute_or, builtin_items, has_attribute, instance_of
 from cash.analysis.bytecode import NAME_LOADS, argvals
 from cash.analysis.callee_effects import resolve_function_def, source_global_mutations
-from cash.analysis.namespace_effects import bound_to_state, capturable_globals, function_handoffs
+from cash.analysis.mutations import MUTATING_METHODS
+from cash.analysis.namespace_effects import bound_to_state, capturable_globals, function_handoffs, state_bound
 from cash.exceptions import SOURCE_RETRIEVAL_ERRORS
 from cash.install_paths import is_user_code_module, is_user_path
 from cash.notebook import shadow as _shadow
@@ -518,10 +519,32 @@ def changes_its_closure(fn) -> bool:
         return False
     cells = closure_cells(fn)
     if cells and (
-        rebinds_its_closure(fn) or any(n in cells for n in _source_mutations(fn)) or _draws_on_its_closure(fn, cells)
+        rebinds_its_closure(fn)
+        or any(n in cells for n in _source_mutations(fn))
+        or _draws_on_its_closure(fn, cells)
+        or _holds_a_writer(cells)
     ):
         return True
     return holds_a_stream(fn)
+
+
+def _holds_a_writer(cells: Mapping[str, _types.CellType]) -> bool:
+    """Whether a cell holds a builtin method that changes the object it is
+    bound to, or a partial of one (``note = calls.append``,
+    ``functools.partial(list.append, calls)``): ``note(x)`` reads as a
+    plain call, and the trace records no Python code for ``append``, so a
+    hit skipped the append."""
+    for cell in cells.values():
+        try:
+            value = cell.cell_contents
+        except ValueError:  # an empty cell
+            continue
+        method = value.func if type(value) is functools.partial else value
+        if attribute_or(method, "__name__", None) in MUTATING_METHODS and any(
+            not _plain_value(owner) for owner in state_bound(value)
+        ):
+            return True
+    return False
 
 
 def holds_a_stream(fn) -> bool:
