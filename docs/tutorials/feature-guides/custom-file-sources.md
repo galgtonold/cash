@@ -31,7 +31,7 @@ print(load_features.explain())
     /home/you/project/data/features.csv: content changed
 ```
 
-<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @a045b99e -->
+<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @d1bb21b4 -->
 The check is by **content**. A `touch`, or a re-save of identical bytes, still
 hits. A same-size edit within the same second still recomputes.
 
@@ -42,7 +42,7 @@ cheap. Every file is hashed in full, whatever its size. The full rule is in
 
 ## What's automatically tracked
 
-<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @fa9f8714, cash/tracking/read_events.py:_on_open @ac42db2f, cash/tracking/read_events.py:_on_listing @41ce1606 -->
+<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @fa9f8714, cash/tracking/read_events.py:_on_open @58f5611d, cash/tracking/read_events.py:_on_listing @218e8bfc -->
 cash tracks `open()` in a read mode and what reads through it, the pandas, polars,
 pyarrow, numpy and soundfile readers, `h5py`, `tables`, `rasterio` and xarray's
 `open_*`, `sqlite3.connect`, directory listings (a new
@@ -59,7 +59,7 @@ A file opened for writing is not a dependency: the entry would then depend on
 its own output. cash reports the write as a side effect instead
 ([Side effects](../../decorator.md#side-effects)).
 
-<!-- claim: cash/tracking/read_classification.py:incidental_read @567b8121 -->
+<!-- claim: cash/tracking/read_classification.py:incidental_read @8e477e98 -->
 Some reads are left out on purpose because they are not your data: files of the
 Python installation, package metadata, reads a library makes while it is
 imported, and an installed package reading its own files (fonts, templates,

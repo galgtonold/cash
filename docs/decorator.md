@@ -34,7 +34,7 @@ slow_square(1_000_000)   # cache hit: returns the stored result
 
 That is all the setup there is. A few rules hold for every cached function:
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @8eedb33b, cash/decorator/store.py:ResultStore.store @e289b59d, cash/decorator/store.py:ResultStore.restore_identity @2e52815d -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @d4f3bed4, cash/decorator/store.py:ResultStore.store @b718811c, cash/decorator/store.py:ResultStore.restore_identity @2e52815d -->
 - **Exceptions are never cached.** If the body raises, nothing is stored and the
   exception reaches you as usual. The next call runs the body again.
 - **A hit does not replay output.** Anything the body printed or logged appears
@@ -76,9 +76,11 @@ takes a backend instance or a backend type name (`backend="sqlite"`). See the
 
 ## Where results are stored
 
-<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @e3aa6741, cash/backends/tiered_backend.py:TieredBackend.set @8aecb084 -->
+<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @e3aa6741, cash/backends/tiered_backend.py:TieredBackend.set @1cf8c4c4 -->
 **Every result is written to disk.** However cheap the call was, a decorated
 result goes to the RAM tier and to the disk tier, so the next process finds it.
+A big result, of which the RAM tier would have to copy 64 MB or more, goes to
+the disk tier alone, and each hit reads it from disk.
 There are two exceptions, and each stays in RAM for this process with a
 warning: a value too big for every disk tier's size cap
 ([`CACHE-VALUE-TOO-BIG`](warnings.md#cache-value-too-big)), and the result of
@@ -154,7 +156,7 @@ cash.storage: caching in /srv/proj/.cash, up to 26.0 GiB (a quarter of the free 
 
 ### Clearing the cache
 
-<!-- claim: cash/decorator/wrappers.py:Wrappers._cache_clear.cache_clear @968ec74a, cash/__main__.py:cmd_clear @fd92c8a3, cash/decorator/maintenance.py:Maintenance.delete_function_entries @a3f2bae5 -->
+<!-- claim: cash/decorator/wrappers.py:Wrappers._cache_clear.cache_clear @968ec74a, cash/__main__.py:cmd_clear @fd92c8a3, cash/decorator/maintenance.py:Maintenance.delete_function_entries @bd12fb09 -->
 Pick the narrowest tool that does the job:
 
 | To remove | Run |
@@ -259,7 +261,7 @@ to more than two seconds.
 If your program configures `logging`, these lines go to your handlers in your
 format instead of stderr.
 
-<!-- claim: cash/diagnostics.py:warn_diagnostic @c9245473, cash/config/schema.py:CashConfig.warning_detail == "short" -->
+<!-- claim: cash/diagnostics.py:warn_diagnostic @c0737e05, cash/config/schema.py:CashConfig.warning_detail == "short" -->
 **Warnings.** cash's warnings are Python warnings, not log records, and each
 prints as one line: the code, what happened, the fix, and a link to its entry
 on [Warnings](warnings.md). The `file:line` in front is the call in your code
@@ -284,7 +286,7 @@ last use; `cash inspect --function NAME` lists one function's entries. See the
 With a bare `@cash.cache`, a call recomputes when anything in the first list
 changed. The second list is what cash does not see, and what to do about it.
 
-<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @8e272f43, cash/decorator/runtime.py:CallRunner._analyze_dependencies @6f5bcbac, cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @8944d903, cash/decorator/code_args.py:CodeArgs.fold_code_args @96467b11 -->
+<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @8e272f43, cash/decorator/runtime.py:CallRunner._analyze_dependencies @6f5bcbac, cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @94b2b412, cash/decorator/code_args.py:CodeArgs.fold_code_args @58904680 -->
 <div class="grid cards" markdown>
 
 -   **Tracked for you: a change recomputes**
@@ -472,7 +474,7 @@ the last step.
 
 ### Split parameter objects { #split-parameter-objects }
 
-<!-- claim: cash/decorator/code_args.py:CodeArgs.fold_code_args @96467b11, cash/decorator/runtime.py:KeyBuilder.build @3514afa3 -->
+<!-- claim: cash/decorator/code_args.py:CodeArgs.fold_code_args @58904680, cash/decorator/runtime.py:KeyBuilder.build @a23b2b7c -->
 An object passed in is keyed by all of its content and by the code of its
 class. With one `Params` holding both the signal settings and the trading
 costs, a new fee value, or a new cost field, reruns every signal search,
@@ -625,7 +627,7 @@ def lookup(key):
     return cache_backend.get_or_none(key)
 ```
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @8eedb33b -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @d4f3bed4 -->
 The predicate runs after the body returns. It decides what is **written**, not
 what is served: a `None` stored before you added the predicate is still
 returned. Clear the function after adding or tightening one.
@@ -719,7 +721,7 @@ same for `async def` functions and generators. `key=` and ignored parameters
 cannot be combined: leave those arguments out of what the key function
 returns.
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @3514afa3 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @a23b2b7c -->
 Only the arguments' value part of the key changes. The function's code, its
 helpers, the globals and files it reads, `depends_on=`, the random seed and
 the rest stay in the key as before, and so does the code the arguments carry:
@@ -739,7 +741,7 @@ object (`key=Pick("id")`). Editing any of them re-keys every call.
     does not run the body, so with an ignored `debug` flag the debug prints of
     a hit do not happen.
 
-<!-- claim: cash/decorator/arg_key.py:key_function_impurities @784f8639, cash/core.py:Cash._check_key_function @c5ba8c38 -->
+<!-- claim: cash/decorator/arg_key.py:key_function_impurities @859b5d2b, cash/core.py:Cash._check_key_function @c5ba8c38 -->
 The key function must compute the key from its arguments alone. One that
 reads a file, the clock, a random number, the network or the environment
 gets [`KEY-FUNCTION-IMPURE`](warnings.md#key-function-impure)
@@ -773,7 +775,7 @@ miss costs.
 
 ### `allow_random=`
 
-<!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @37dc56c2 -->
+<!-- claim: cash/decorator/rng.py:RngWatch.warn_unseeded_randomness @923fc9d4 -->
 When the body draws from an unseeded random generator, cash warns
 ([`RANDOM-UNSEEDED`](warnings.md#random-unseeded)): the first draw is stored and
 every later call gets the same "random" value. The fix is a generator seeded
@@ -791,7 +793,7 @@ entry. That holds whenever the seed was set: before the function was
 decorated, or before `import cash` in the same script. A function
 whose own body seeds the stream is not keyed by where the caller left it.
 
-<!-- claim: cash/decorator/rng.py:replay_rng_state @42b65738, cash/decorator/runtime.py:CallRunner.finish_miss @164e7c5c -->
+<!-- claim: cash/decorator/rng.py:replay_rng_state @42b65738, cash/decorator/runtime.py:CallRunner.finish_miss @dee7d748 -->
 The same holds for a generator in a module global that the body draws from
 (`rng = np.random.default_rng(42)` at module level, `rng.normal()` inside): the
 key includes where `rng` stands, and a hit moves `rng` on to where the computed
@@ -986,7 +988,7 @@ Two observations stop the result from being stored, because a hit could not
 reproduce them: the call changed an argument in place, or it called a
 `unittest.mock` object.
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder._hands_a_state_changing_callable @d02c3941 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder._hands_a_state_changing_callable @1f8f919e -->
 A call that **hands the function one of your functions that changes state**
 when it is called runs uncached, every time, as plain Python runs it: in
 `run(record, 3)` where `record` appends to a global list, a hit would skip the
@@ -1132,7 +1134,7 @@ for example in a test.
 
 ## Common questions
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @3514afa3, cash/decorator/arg_hashing.py:ArgHasher.arg_hash @cdac9dca -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @a23b2b7c, cash/decorator/arg_hashing.py:ArgHasher.arg_hash @afd2fc9d -->
 **Do new command-line flags make every cached function miss?** No. Only a
 function that reads `sys.argv` or calls `parse_args()` itself, or through a
 helper, is keyed by the command line. One that gets the parsed values as
@@ -1175,7 +1177,7 @@ Python function that calls the kernels, or on top of `@njit` itself.
 side effects. A miss's run time, and so the time a hit saves, includes any
 compiling the call did.
 
-<!-- claim: cash/tracking/reader_patches.py:_patch_multiprocessing_pool @c3389dba -->
+<!-- claim: cash/tracking/reader_patches.py:_patch_multiprocessing_pool @9fac5b09 -->
 **Can I use cached functions in a process pool?** Yes: map the cached
 function itself, or a plain function that calls cached ones. Workers share
 the cache folder with the parent. See

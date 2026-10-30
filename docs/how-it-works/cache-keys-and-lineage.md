@@ -25,7 +25,7 @@ key, and a miss.
 
 ## Hashing values
 
-<!-- claim: cash/content_hashers.py:builtin_hash @54c21e7f, cash/value_hash.py:compute_hash @98f5643e -->
+<!-- claim: cash/content_hashers.py:builtin_hash @54c21e7f, cash/value_hash.py:compute_hash @ebd76d97 -->
 Both paths fingerprint data values with the same built-in hashers. The
 decorator uses them for arguments; the notebook uses them wherever it hashes
 a value: a loop iteration's values, the arguments of a cached call inside a
@@ -74,7 +74,7 @@ order-sensitive code can treat them differently; a strided view and its
 contiguous copy share a key. The dtypes are in a pandas key, so `int64` and
 `Int64` columns, or a tz-naive and a tz-aware series, never share an entry.
 
-<!-- claim: cash/value_hash.py:_pickle_digest @5b9dad60, cash/content_hashers.py:hash_sparse @b0bdb6a6, cash/stored_pickle.py:pickle_value @16e67246 -->
+<!-- claim: cash/value_hash.py:_pickle_digest @5b9dad60, cash/content_hashers.py:hash_sparse @b0bdb6a6, cash/stored_pickle.py:pickle_value @429b664a -->
 Any other value, such as a networkx graph or a fitted model, is pickled and
 the pickle is hashed, so it is compared by content too, at the cost of
 pickling it. That pickle is the one cash stores the value as, its large
@@ -84,7 +84,7 @@ something a key must see (an attribute a class's own pickling leaves out),
 the key is taken over a pickle that keeps it, in the same format. To key a
 type faster, or one that cannot be pickled, register a hasher; see [custom hashers](../tutorials/feature-guides/custom-hashers.md).
 
-<!-- claim: cash/core.py:Cash.register_hasher @f8a61573, cash/value_hash.py:compute_hash @98f5643e -->
+<!-- claim: cash/core.py:Cash.register_hasher @f8a61573, cash/value_hash.py:compute_hash @ebd76d97 -->
 === "Decorator"
 
     Registered hashers apply to call arguments and to the values inside a
@@ -104,7 +104,7 @@ type faster, or one that cannot be pickled, register a hasher; see [custom hashe
 
 ### The statement key
 
-<!-- claim: cash/notebook/cache_key.py:compute_cache_key @f900638a -->
+<!-- claim: cash/notebook/cache_key.py:compute_cache_key @dadaf3eb -->
 Every statement key is built by one function. It joins these parts with
 colons, in this order, and hashes the result:
 
@@ -163,7 +163,7 @@ variable the read produced, and it is checked again before each reuse; see
 [what counts as a change](invalidation.md#what-counts-as-a-change).
 
 ??? warning "Keys survive a restart, not a move to another machine"
-    <!-- claim: cash/notebook/statement/file_deps.py:compute_file_hash_component @903b4459 -->
+    <!-- claim: cash/notebook/statement/file_deps.py:compute_file_hash_component @58a44a29 -->
     A statement that reads a file folds the file's modification time, size
     and inode change time into its lineage, and one that only checks whether
     a path exists folds whether it is there. A file rewritten with the same
@@ -280,7 +280,7 @@ r = a(3)                       # cell 3: 8
 
 ### Resolving an input
 
-<!-- claim: cash/notebook/lineage_store.py:resolve_lineage @778e6d73, cash/value_hash.py:compute_hash @98f5643e -->
+<!-- claim: cash/notebook/lineage_store.py:resolve_lineage @778e6d73, cash/value_hash.py:compute_hash @ebd76d97 -->
 For each input variable, the statement key uses the first of these that
 exists:
 

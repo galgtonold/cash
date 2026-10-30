@@ -132,7 +132,7 @@ if __name__ == "__main__":
   `with cash.disabled():` around the second call does not reach them. Create
   the pool inside the block, or set `CASH_DISABLE=1` for the whole run.
 
-<!-- claim: cash/tracking/reader_patches.py:_patch_multiprocessing_pool @c3389dba -->
+<!-- claim: cash/tracking/reader_patches.py:_patch_multiprocessing_pool @9fac5b09 -->
 A file a worker reads for a cached call in the parent is a dependency of that
 call, as if the parent had read it: editing it recomputes the call. This holds
 for `ProcessPoolExecutor`, `multiprocessing.Pool` and joblib's workers. So

@@ -30,7 +30,7 @@ section when a cell does something you did not expect.
 
 This is the one home for randomness in notebooks; other pages link here.
 
-<!-- claim: cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @14093389, cash/tracking/randomness/state.py:restore_rng_state @2e1cc6af, cash/tracking/randomness/state.py:capture_rng_state @421bfe05, cash/notebook/statement/carrier_advances.py:advance_carriers @4ebbcaa0 -->
+<!-- claim: cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @197e8802, cash/tracking/randomness/state.py:restore_rng_state @2e1cc6af, cash/tracking/randomness/state.py:capture_rng_state @421bfe05, cash/notebook/statement/carrier_advances.py:advance_carriers @98d0397f -->
 **Symptom:** re-running a cell returns the same random numbers.
 
 An unseeded draw is cached like any other value, so a re-run shows the stored
@@ -66,7 +66,7 @@ cash finds a draw by following the generator from where it was created. It also
 warns about `df.sample(100)` and other library calls without `random_state`, an
 anonymous generator (`z = np.random.default_rng().normal(size=3)`), and a call to
 one of your functions that builds its own unseeded generator (`rng = make_rng()`).
-<!-- claim: cash/notebook/statement/hidden_generators.py:positions @fc34e5a9 -->
+<!-- claim: cash/notebook/statement/hidden_generators.py:positions @6ef72d92 -->
 A statement that draws from a generator held where no variable's lineage
 follows it is not stored, without a warning: it runs every time, so the draws
 below it match plain Python. That is a generator held by an object built in a
@@ -75,7 +75,7 @@ its closure (`arr = make_data()`). A draw from the global `random`,
 `np.random` or torch stream inside a helper is flagged once the statement has
 run, by comparing the streams.
 
-<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @421bfe05, cash/notebook/statement/carrier_advances.py:advance_carriers @4ebbcaa0, cash/tracking/randomness/lineage.py:advanced_carrier_lineage @eaa66fca, cash/notebook/upstream/statement_lineage.py:StatementLineage._recorded_draws @3b7507d9, cash/notebook/upstream/statement_lineage.py:StatementLineage._reachable_generators @bb6221ba -->
+<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @421bfe05, cash/notebook/statement/carrier_advances.py:advance_carriers @98d0397f, cash/tracking/randomness/lineage.py:advanced_carrier_lineage @eaa66fca, cash/notebook/upstream/statement_lineage.py:StatementLineage._recorded_draws @3b7507d9, cash/notebook/upstream/statement_lineage.py:StatementLineage._reachable_generators @bb6221ba -->
 A statement that draws from a generator held in a variable, or calls a function
 that does (also one the generator is handed to, as in `paths =
 simulate(n, rng)`), counts as changing that variable. It is stored like any
@@ -121,7 +121,7 @@ warnings.filterwarnings("ignore", category=cash.CashRandomnessWarning)
 **Symptom:** a statement that calls one of your functions runs on every run,
 with a KEY-AMBIENT-READ warning.
 
-<!-- claim: cash/analysis/cacheability_decision.py:_helper_ambient_reasons @5edc872e, cash/notebook/lineage_formula.py:helper_ambient_reads @609ad208 -->
+<!-- claim: cash/analysis/cacheability_decision.py:_helper_ambient_reasons @5edc872e, cash/notebook/lineage_formula.py:helper_ambient_reads @63c0d1e5 -->
 A clock read written in the statement itself (`t = datetime.now()`) runs every
 time, and so does a statement that calls a function of yours which reads the
 clock, a fresh UUID or random bytes from the system (`time.time()`,
@@ -153,7 +153,7 @@ Each of these misses a change, or applies one a second time.
 
 ### Mutating through an alias
 
-<!-- claim: cash/notebook/statement/derivation_edges.py:record_shared_object_edges @1d3cdc8d, cash/notebook/statement/derivation_edges.py:bump_derived_lineages @948a7fba, cash/notebook/shared_objects.py:share_group @1523aede, cash/notebook/shared_objects.py:view_base_names @aea7d284, cash/notebook/statement/processor.py:StatementProcessor.record_structure_share_edges @4fe4d23f, cash/notebook/statement/processor.py:StatementProcessor._link_inputs_kept_by @2f874738 -->
+<!-- claim: cash/notebook/statement/derivation_edges.py:record_shared_object_edges @1d3cdc8d, cash/notebook/statement/derivation_edges.py:bump_derived_lineages @9b06fe13, cash/notebook/shared_objects.py:share_group @d4373d63, cash/notebook/shared_objects.py:view_base_names @c9f314c6, cash/notebook/statement/processor.py:StatementProcessor.record_structure_share_edges @a99dfa6a, cash/notebook/statement/processor.py:StatementProcessor._link_inputs_kept_by @e8a315ab -->
 When a statement leaves two names sharing an object, cash links them:
 
 - an alias: `log = history`;
@@ -262,7 +262,7 @@ state in the notebook, or pass it in and return it.
 
 ### A helper memoised with `functools.cache`
 
-<!-- claim: cash/notebook/helper_memos.py:unfilled @36d01050, cash/notebook/helper_memos.py:used @815bf2d3, cash/notebook/helper_memos.py:clears @c8fd014e, cash/notebook/helper_memos.py:MAX_KEYED == 256 -->
+<!-- claim: cash/notebook/helper_memos.py:unfilled @0deb0715, cash/notebook/helper_memos.py:used @c35b5599, cash/notebook/helper_memos.py:clears @4d3601f2, cash/notebook/helper_memos.py:MAX_KEYED == 256 -->
 A statement served from the cache does not run, so a `@functools.cache` or
 `@functools.lru_cache` helper it calls keeps what it held. A run leaves the
 answers in it, and a later call of the helper uses them without running its
@@ -312,7 +312,7 @@ the very same key and answer objects again (cash keeps the ones it saw, so
 it compares objects, not addresses). A memo you fill yourself in
 a dict (`_cache[k] = v`) is a global the function changes, covered above.
 
-<!-- claim: cash/analysis/handed_callables.py:handed_callables @c55bd405, cash/analysis/handed_callables.py:hands_a_state_changing_callable @4c3c2d42, cash/analysis/handed_callables.py:ITEM_TYPES_AT == 100_000 -->
+<!-- claim: cash/analysis/handed_callables.py:handed_callables @c55bd405, cash/analysis/handed_callables.py:hands_a_state_changing_callable @0967f66a, cash/analysis/handed_callables.py:ITEM_TYPES_AT == 100_000 -->
 ### A function handed to a call
 
 A function you hand to another call counts as called. One that only reads
@@ -378,7 +378,7 @@ function a function that calls what it is given (`map(lambda f: f(3), fns)`,
 
 ### Setting state on one of your modules
 
-<!-- claim: cash/notebook/statement/mutation_routing.py:MutationRouting.route @b4d452c3, cash/notebook/callee_reach.py:module_state_writes @67827b2e, cash/notebook/call_unit.py:_rebound_unwatched @2d452d22 -->
+<!-- claim: cash/notebook/statement/mutation_routing.py:MutationRouting.route @2e5bd139, cash/notebook/callee_reach.py:module_state_writes @db4744c6, cash/notebook/call_unit.py:_rebound_unwatched @2d452d22 -->
 A statement that sets state on one of your modules runs every time, so that
 after a restart, or an edit of the module's file, the module holds what a
 top-to-bottom run leaves in it. That covers `mylib.K = slow()`,
@@ -496,7 +496,7 @@ variable, not on the class.
 
 ### Writing to a file opened in an earlier cell
 
-<!-- claim: cash/notebook/consumables.py:is_write_stream @90c4d2aa -->
+<!-- claim: cash/notebook/consumables.py:is_write_stream @8cd77c96 -->
 A re-run of a cell that writes through a file opened in an earlier cell writes
 again, as in plain Jupyter. cash never opens the file a second time to rebuild
 the handle: that would write the earlier lines again too, and a second gzip
@@ -548,7 +548,7 @@ it.
 
 ### A function reached by a name spelled at run time
 
-<!-- claim: cash/notebook/string_lookups.py:code_looks_up_by_string @bb240f70, cash/notebook/cache_key.py:unkeyed_reach @f4481b35 -->
+<!-- claim: cash/notebook/string_lookups.py:code_looks_up_by_string @bb240f70, cash/notebook/cache_key.py:unkeyed_reach @7c907b65 -->
 A statement's key holds the functions its code names and the globals they
 read. Code that finds a function through a string instead
 (`globals()["make"](3)`, `eval("make(3)")`, `vars()[name]`,
@@ -572,7 +572,7 @@ a name bound through the namespace, `eval`, `exec` of a computed string and
 
 ### A special method that changes state outside its object
 
-<!-- claim: cash/notebook/statement/unseen_writes.py:writers_without_a_trace @25806177, cash/notebook/statement/unseen_writes.py:own_writes @bb4fc316 -->
+<!-- claim: cash/notebook/statement/unseen_writes.py:writers_without_a_trace @25806177, cash/notebook/statement/unseen_writes.py:own_writes @6e4e16cd -->
 `s + 1` on objects of yours runs their `__add__`, which the statement's text
 does not name. When such a method changes something outside its object
 (appends to a global list), cash runs the statement every time and says so:
@@ -733,7 +733,7 @@ as an argument (`load_cfg("config.yaml")` inside the cached function).
 
 ### An edit that keeps the size and timestamps
 
-<!-- claim: cash/tracking/file_dep_snapshot.py:_unchanged_since_hashed @59019b2b, cash/tracking/file_dep_snapshot.py:_HASH_MEMO_MIN_AGE_SECONDS == 10.0, cash/notebook/upstream/virtual_lineage.py:VirtualLineage._check_cell_file_deps @eeff0da9 -->
+<!-- claim: cash/tracking/file_dep_snapshot.py:_unchanged_since_hashed @59019b2b, cash/tracking/file_dep_snapshot.py:_HASH_MEMO_MIN_AGE_SECONDS == 10.0, cash/notebook/upstream/virtual_lineage.py:VirtualLineage._check_cell_file_deps @31e1e449 -->
 cash checks a file's size and timestamps first and reads its content only when
 one of them moved. On Linux and macOS every write moves the inode change time,
 so this never misses. On **Windows**, two kinds of edit move nothing: a write
@@ -741,7 +741,7 @@ whose modification time is put back afterwards (`os.utime`, `shutil.copystat`,
 `robocopy /COPY:T`), and a write through a memory map
 (`np.memmap(path, mode="r+")`).
 
-<!-- claim: cash/tracking/written_in_place.py:_on_mmap @fa5b57bf, cash/tracking/written_in_place.py:is_written_in_place @90fefb25, cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @1e9f74d4 -->
+<!-- claim: cash/tracking/written_in_place.py:_on_mmap @e4a5b9ed, cash/tracking/written_in_place.py:is_written_in_place @90fefb25, cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @d1bb21b4 -->
 A file mapped to write (`np.memmap` in `r+` or `w+` mode,
 `np.load(mmap_mode="r+")`, `mmap.mmap` with write access) in a process that
 had imported cash is read at every check from then on, in that process and
@@ -791,7 +791,7 @@ unchanged, the loop is restored whole from its unit entry. A loop kept per
 iteration is measured again, and goes back to one unit once its iterations
 have become cheap.
 
-<!-- claim: cash/notebook/control_structures/single_unit_policy.py:iterations_for_one_unit @9bb4425c, cash/notebook/control_structures/single_unit_policy.py:header_names_the_iterator @c82c885c -->
+<!-- claim: cash/notebook/control_structures/single_unit_policy.py:iterations_for_one_unit @9bb4425c, cash/notebook/control_structures/single_unit_policy.py:header_names_the_iterator @119188dd -->
 A loop over a named iterator of unknown length (`for row in parsed:` after
 `parsed = filter(...)`, or over a generator) runs its first passes one by one
 and, once it reaches the length that would have qualified, the rest as one
@@ -804,7 +804,7 @@ pass. **Fix** when that is slow: bind it first (`rows = make_rows()`, then
 `for x in rows:`). An array built from a list (`enumerate(np.array(lines))`)
 counts as long as the list.
 
-<!-- claim: cash/notebook/control_structures/single_unit_policy.py:header_may_be_left_to_the_unit @a78c2c65, cash/notebook/control_structures/processor.py:ControlStructureProcessor.execute_as_single_unit @9f65ba05 -->
+<!-- claim: cash/notebook/control_structures/single_unit_policy.py:header_may_be_left_to_the_unit @7aa22163, cash/notebook/control_structures/processor.py:ControlStructureProcessor.execute_as_single_unit @39ec9448 -->
 A loop's header is evaluated once, as plain Python evaluates it, so the loop
 gets the same items as without cash: one random draw
 (`np.random.permutation(n)`, `df.sample(n=300).index`), a queue drained once,

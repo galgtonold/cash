@@ -29,7 +29,7 @@ flowchart TB
     R2 --> BD
 ```
 
-<!-- claim: cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell @100752f2, cash/notebook/statement/processor.py:StatementProcessor.process_statement @5f55d8b4 -->
+<!-- claim: cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell @100752f2, cash/notebook/statement/processor.py:StatementProcessor.process_statement @3249c3ab -->
 1. **Inputs.** cash reads from the cell's source which variables it uses.
 2. **Upstream check.** If an input is missing (after a restart) or a cell above
    it was edited, cash works out from the notebook's code which statements
@@ -52,7 +52,7 @@ per statement, which the badge reports as cash's own overhead.
 
 ## Fine-grained caching: loops and branches
 
-<!-- claim: cash/notebook/control_structures/common.py:compute_context_hash @156957b1, cash/notebook/control_structures/for_handler.py:ForLoopHandler.process @a5910229 -->
+<!-- claim: cash/notebook/control_structures/common.py:compute_context_hash @156957b1, cash/notebook/control_structures/for_handler.py:ForLoopHandler.process @5970fc16 -->
 A `for` loop is cached one iteration at a time. Each iteration's statements
 are keyed with the loop variable's value, so changing one item of the list
 does not throw away the others.
@@ -112,7 +112,7 @@ yours is handed keeps its first record. A `with` block is watched the same way; 
 the statements in its branches were seen changing, and, for a branch that has
 not run yet, everything it hands to such code.
 
-<!-- claim: cash/notebook/control_structures/if_handler.py:IfHandler.process @fa28e454, cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @bbdd02b3 -->
+<!-- claim: cash/notebook/control_structures/if_handler.py:IfHandler.process @fa28e454, cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @64f74f50 -->
 `if`/`elif`/`else` and `try`/`except` bodies are cached statement by
 statement too, and only the branch that ran is stored. `while` and `with`
 blocks are cached as one unit, because they have no list of items to key on,
@@ -156,7 +156,7 @@ cells: in a headless run
 ([`NOTEBOOK-NOT-FOUND`](../warnings.md#notebook-not-found)), run the cells
 from the top, and each one is restored from the cache as it comes.
 
-<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor._persistable_callees @447a65b1 -->
+<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor._persistable_callees @2fdbd99a -->
 A value built by a `for` loop can be restored too. cash records what the loop
 produced when it ran, and trusts that record after a restart only while
 everything the loop and its functions read is unchanged, and only if the loop
@@ -171,7 +171,7 @@ the loop runs again. The loop's own working variables (`parts` in
 `for f in files: parts.append(read(f))`) are not stored; a cell that reads
 them runs the loop.
 
-<!-- claim: cash/notebook/statement/mutation_routing.py:MutationRouting._route_unit @c2493cc8, cash/notebook/statement/processor.py:StatementProcessor._keep_stored_in_place @ced6780e -->
+<!-- claim: cash/notebook/statement/mutation_routing.py:MutationRouting._route_unit @7f4c64a9, cash/notebook/statement/processor.py:StatementProcessor._keep_stored_in_place @ced6780e -->
 A long `for` loop that cash runs as one step stores the objects it changes in
 place, such as a progress counter it calls `update()` on, a list from an
 earlier cell it appends to, or an object or dict it assigns into
@@ -180,7 +180,7 @@ puts the stored state back into the object itself, so other names for it, a
 `weakref` to it and a dict keyed by its `id()` still find it, as after a
 plain run.
 
-<!-- claim: cash/notebook/statement/in_place.py:refusal @4357df4e, cash/notebook/statement/in_place.py:_held_by_the_notebook @2eb5bc52, cash/notebook/statement/processor.py:StatementProcessor._cheap_to_rerun @1a1db567, cash/notebook/statement/in_place.py:bound_as_a_copy @57eb0eea -->
+<!-- claim: cash/notebook/statement/in_place.py:refusal @4357df4e, cash/notebook/statement/in_place.py:_held_by_the_notebook @ec39c561, cash/notebook/statement/processor.py:StatementProcessor._cheap_to_rerun @1a1db567, cash/notebook/statement/in_place.py:bound_as_a_copy @07b8a485 -->
 Only a list, a dict, a set, or an object of your own class pickled the default
 way is restored into. An object of another kind the loop only assigns into
 (`arr[i] = v` on a NumPy array) is bound to the stored copy, as before, when
@@ -226,7 +226,7 @@ the cells that use the module as one run does, so they are found in the
 cache after a restart that ran it once. Another value, or the same settings
 in another order, counts as a change.
 
-<!-- claim: cash/notebook/upstream/file_writers.py:FileWriterScheduler._writer_output_already_fresh @982cbefa, cash/notebook/upstream/file_writers.py:FileWriterScheduler.find_stale_file_writer_indices @6c67ce2a -->
+<!-- claim: cash/notebook/upstream/file_writers.py:FileWriterScheduler._writer_output_already_fresh @982cbefa, cash/notebook/upstream/file_writers.py:FileWriterScheduler.find_stale_file_writer_indices @727148db -->
 A cell that writes files (`df.to_csv(...)`, `fig.savefig(...)`) is not re-run
 after a restart just because it ran in an earlier kernel. cash records the
 files it wrote and the lineages of what it read. It re-runs the writer only

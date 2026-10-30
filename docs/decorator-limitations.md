@@ -37,7 +37,7 @@ another object's entry. See [Custom hashers](tutorials/feature-guides/custom-has
 
 ## A table changed past pandas
 
-<!-- claim: cash/decorator/arg_hashing.py:watch_array_handles @84c7787c, cash/decorator/arg_hashing.py:_watch_callback_handouts @e4bee4fe -->
+<!-- claim: cash/decorator/arg_hashing.py:watch_array_handles @785158b0, cash/decorator/arg_hashing.py:_watch_callback_handouts @0bf3e511 -->
 Under pandas copy-on-write, a table passed to a cached function again is not
 hashed again while pandas has given it no new data: pandas copies a column
 before it writes it. A write that goes past pandas is seen as long as it goes
@@ -140,7 +140,7 @@ with `@cash.opaque`; see [Purity markers](tutorials/feature-guides/purity-decora
 
 ## Dispatch tables and strategy registries {#dispatch-tables}
 
-<!-- claim: cash/analysis/purity_visitor.py:PurityVisitor._table_is_reachable_from_the_key @9018bbca, cash/decorator/global_values.py:GlobalValues.data_callable_identity @f5ef89ae -->
+<!-- claim: cash/analysis/purity_visitor.py:PurityVisitor._table_is_reachable_from_the_key @9018bbca, cash/decorator/global_values.py:GlobalValues.data_callable_identity @042f7322 -->
 A cached function that picks a function from a table caches correctly. The
 table can be a dict of functions, a registry a `@register` decorator fills, a
 dict of classes, or a `.get()` on any of them, and it can live at module level,
@@ -194,7 +194,7 @@ calls, so editing `mean_reversion` keeps the `momentum` entries. A hit costs
 about what a direct call to a cached strategy costs (around 0.7 ms with seven
 small pandas strategies, against about 2 ms for the table form).
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks._warn_untrackable @90bfa6af -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks._warn_untrackable @48448c14 -->
 Looking the function up by a name at run time, with `getattr(module, name)()`
 or `importlib.import_module(name)`, is not keyed. On Python 3.12 and newer the
 call is cached anyway, on a record of the code it ran that is checked before
@@ -204,7 +204,7 @@ warning. A table is keyed on every version.
 
 ## Code in installed packages
 
-<!-- claim: cash/install_paths.py:in_own_package @168c5d1e, cash/install_paths.py:is_user_path @8e9083cb, cash/dependency_state.py:DependencyStateHasher.compute @8e272f43 -->
+<!-- claim: cash/install_paths.py:in_own_package @168c5d1e, cash/install_paths.py:is_user_path @34c85fa5, cash/dependency_state.py:DependencyStateHasher.compute @8e272f43 -->
 cash follows the code a cached function calls, and puts it in the key, when
 that code is yours. Yours means:
 
@@ -258,14 +258,15 @@ to watch:
 
 ## Reads cash cannot see
 
-<!-- claim: cash/tracking/reader_patches.py:_patch_multiprocessing_pool @c3389dba, cash/tracking/reader_patches.py:_patch_process_pool_submit @1f70759c, cash/tracking/reader_patches.py:_patch_thread_start @a16e8968 -->
+<!-- claim: cash/tracking/reader_patches.py:_patch_multiprocessing_pool @9fac5b09, cash/tracking/reader_patches.py:_patch_process_pool_submit @a7865b21, cash/tracking/reader_patches.py:_patch_thread_start @1b59e2a1 -->
 cash does not record a file opened by a subprocess, and on macOS one a C
 extension opens itself or `os.open` opens (on Linux and Windows the [native
 file hook](known-limitations.md#reads-through-a-loader-cash-cannot-see), on by
 default, records those). Name such a file with `file_depends_on=`. A
 `threading.Thread` the function starts on code of yours, a lambda or a nested
-function included, reads as part of the call; one still running when the call
-returns keeps the result from being stored
+function included, reads as part of the call. A thread it starts that is still
+running when the call returns keeps the result from being stored, also one it
+starts on a library's function (`threading.Timer(0.5, lib.write).start()`)
 ([STORE-WORK-RUNNING](warnings.md#store-work-running)).
 
 Reads in work the function hands to a pool are recorded: a
@@ -329,7 +330,7 @@ See [Async functions](tutorials/feature-guides/async-caching.md).
 
 ## Edits inside a running process
 
-<!-- claim: cash/loaded_code.py:code_objects_of @256d2c70, cash/decorator/function_identity.py:warn_source_changed_since_load @4f566032 -->
+<!-- claim: cash/loaded_code.py:code_objects_of @dc8caae4, cash/decorator/function_identity.py:warn_source_changed_since_load @4f566032 -->
 cash keys a function by the code that is running. An edit saved while a
 long-running process works is seen by the next process, or in this one once
 the module is reloaded (`importlib.reload`, IPython's `%autoreload`): the

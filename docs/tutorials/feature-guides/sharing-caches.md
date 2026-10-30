@@ -49,7 +49,7 @@ only. Cross-process locking needs Redis as the backend itself; see
 
 ## What travels between machines
 
-<!-- claim: cash/notebook/statement/file_deps.py:compute_file_hash_component @903b4459, cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @a045b99e -->
+<!-- claim: cash/notebook/statement/file_deps.py:compute_file_hash_component @58a44a29, cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @d1bb21b4 -->
 <!-- claim: cash/remote_source.py:RemoteFileDataSource @754fe5e0 broad="the portability claim is a property of the whole source type" -->
 === "Decorator"
 

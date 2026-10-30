@@ -37,7 +37,7 @@ A key has four parts, joined by colons: `function:state:dynamic:args`.
 
 ## What goes into the state
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @3514afa3, cash/dependency_state.py:DependencyStateHasher.compute @8e272f43, cash/decorator/closure_fold.py:HelperIdentity._captures_of @0bee994c, cash/decorator/global_values.py:GlobalValues.code_ref_part @012a244d, cash/decorator/code_args.py:CodeArgs._installed_code @0898110a, cash/jit_functions.py:jit_options @6d1473a7 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @a23b2b7c, cash/dependency_state.py:DependencyStateHasher.compute @8e272f43, cash/decorator/closure_fold.py:HelperIdentity._captures_of @8e0e279e, cash/decorator/global_values.py:GlobalValues.code_ref_part @012a244d, cash/decorator/code_args.py:CodeArgs._installed_code @0898110a, cash/jit_functions.py:jit_options @6d1473a7 -->
 The state starts from source code and then folds in, on every call, each input
 that can change the result without changing an argument:
 
@@ -55,7 +55,7 @@ that can change the result without changing an argument:
 | Environment reads | A digest of each `os.getenv("NAME")`, `os.environ["NAME"]`, `"NAME" in os.environ` or working-directory (`os.getcwd()`, `Path.cwd()`, `os.path.abspath(p)`) value the function, its helpers or the cached functions it calls read with the name written out. A new value is a new entry. |
 | The random seed | For a function seen drawing from the global `random` or `numpy.random` stream: which seed is in force. In a notebook that is the seeding statement. In a script it is where the seeded stream stands at the call, for a `random.seed()` or `np.random.seed()` made at any time before it, by the caller too (module level, or an outer function before it calls this one), and before `import cash` too: numpy's stream shows a seed set before cash watched it, and for `random` cash reads the lines of the script (or the notebook cells) that ran before `import cash`. Re-seeding recomputes, and two draws in a row under one seed are two entries. |
 
-<!-- claim: cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @8944d903 -->
+<!-- claim: cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @94b2b412 -->
 Two limits. A global that cannot be hashed (a lock, a live connection) is left
 out with a [`KEY-UNHASHABLE-GLOBAL`](../warnings.md#key-unhashable-global)
 warning. And reachability is static: code picked at run time, from a dict or
@@ -126,7 +126,7 @@ be written without pandas noticing is read in full every time: one built with
 `read_parquet` (its memory belongs to Arrow), and one with categorical or
 nullable columns.
 
-<!-- claim: cash/canonical_form.py:_object_steps @a3b63962, cash/canonical_form.py:SORTED_SET_MIN == 256 -->
+<!-- claim: cash/canonical_form.py:_object_steps @00d5669c, cash/canonical_form.py:SORTED_SET_MIN == 256 -->
 A frozenset of 256 or more numbers, strings and bytes is put in its sorted
 order once and recognised after that for as long as it exists, so a repeat
 call with a big frozenset costs milliseconds; a set, or a frozenset holding
@@ -149,7 +149,7 @@ registration.
 
 ## When you choose the arguments
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @3514afa3, cash/decorator/arg_key.py:keyed_arguments @d9fd1022 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @a23b2b7c, cash/decorator/arg_key.py:keyed_arguments @d9fd1022 -->
 `ignore=`, a `cash.Ignore` annotation and `key=` change only the `args` part.
 The call is first bound to the signature with its defaults filled in. Ignored
 parameters are then dropped; a key function is called with the bound
@@ -172,7 +172,7 @@ the entry records that hash, so `explain()` can say when a hit was matched by
 
 ## When there is no key
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @a39468e5 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @2826880c -->
 If any part of the key cannot be built, the call runs uncached and cash warns.
 It never caches under a partial key. The usual causes:
 
@@ -197,7 +197,7 @@ change ([`IMPURE-HANDED-CALLABLE`](../warnings.md#impure-handed-callable)).
 
 ## Files
 
-<!-- claim: cash/decorator/file_deps.py:FileDeps.fold_declared_files @3db80a70, cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @a045b99e -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.fold_declared_files @3db80a70, cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @d1bb21b4 -->
 A file the body reads through a tracked reader, and every file named in
 `file_depends_on=`, is recorded with its content hash when the entry is
 written. Before a stored value is returned, each file is checked; if one
@@ -245,9 +245,9 @@ The [decorator guide](../decorator.md#side-effects) covers
 
 ## Storing and returning
 
-<!-- claim: cash/decorator/store.py:ResultStore.store @e289b59d -->
-A result is written to the RAM tier and to disk, however cheap it was, unless
-a tier's size cap refuses it or a source it depends on cannot be pickled or
+<!-- claim: cash/decorator/store.py:ResultStore.store @b718811c -->
+A result is written to the RAM tier and to disk, however cheap it was (a big
+one to disk alone), unless a tier's size cap refuses it or a source it depends on cannot be pickled or
 recorded; see
 [where results are stored](../decorator.md#where-results-are-stored). A hit returns a copy rebuilt from the
 stored bytes, not the object the first call returned, and it does not replay

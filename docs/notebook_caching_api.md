@@ -103,7 +103,7 @@ Some statements always run, because a cache hit would skip something that has to
 happen or would freeze a value that has to change. Others are cached although
 they talk to the outside world.
 
-<!-- claim: cash/notebook/pyplot_state.py:pyplot_state @a69ccc3e, cash/analysis/file_effects.py:NOTEBOOK_POLICY @5ffd29f3, cash/notebook/consumables.py:drawn_stream_inputs @a34833e9, cash/notebook/shared_objects.py:shared_names @f3939b22, cash/notebook/shared_objects.py:share_group @6b5f6133, cash/notebook/lineage_formula.py:keep_held_lineage @97fbc78f, cash/notebook/shared_objects.py:output_history @a6d054ae, cash/analysis/mutation_effects.py:captured_call_receivers @a711d067, cash/notebook/consumables.py:watched_call_receivers @1fefab60, cash/analysis/namespace_effects.py:user_callee_using_pyplot @4fba2d2a, cash/notebook/anchors.py:resolve_anchors @14113653 -->
+<!-- claim: cash/notebook/pyplot_state.py:pyplot_state @2ff00995, cash/analysis/file_effects.py:NOTEBOOK_POLICY @5ffd29f3, cash/notebook/consumables.py:drawn_stream_inputs @4b74ed91, cash/notebook/shared_objects.py:shared_names @f3939b22, cash/notebook/shared_objects.py:share_group @d4373d63, cash/notebook/lineage_formula.py:keep_held_lineage @97fbc78f, cash/notebook/shared_objects.py:output_history @eace1769, cash/analysis/mutation_effects.py:captured_call_receivers @5c64aa71, cash/notebook/consumables.py:watched_call_receivers @1fefab60, cash/analysis/namespace_effects.py:user_callee_using_pyplot @4fba2d2a, cash/notebook/anchors.py:resolve_anchors @14113653 -->
 | A statement that... | What cash does |
 |---|---|
 | writes a file (`open(p, "w")`, `df.to_csv`, `fig.savefig`), directly or through a function you wrote (in the notebook or your own module) | runs every time |
@@ -156,7 +156,7 @@ the reasoning.
 
 ## Fitting models
 
-<!-- claim: cash/notebook/statement/mutations.py:MutationClassifier.estimator_fit_receivers @d9df12ae -->
+<!-- claim: cash/notebook/statement/mutations.py:MutationClassifier.estimator_fit_receivers @13770e82 -->
 A fit changes the estimator it is called on, and cash caches it all the same:
 `model.fit(X, y)`, `X_train = vec.fit_transform(train_texts)` and
 `labels = km.fit_predict(X)` store the fitted estimator with the statement,

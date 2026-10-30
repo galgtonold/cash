@@ -33,7 +33,7 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
 
     A statement recomputes when any of these changed:
 
-    <!-- claim: cash/notebook/held_modules.py:held_module_parts @34c0a619, cash/notebook/held_modules.py:held_data_part @7f1477b6, cash/notebook/held_functions.py:held_notebook_code @875427ef, cash/notebook/ipython/autoreload_hook.py:in_place_reload @91fc9ec5 -->
+    <!-- claim: cash/notebook/held_modules.py:held_module_parts @ce3d3076, cash/notebook/held_modules.py:held_data_part @7f1477b6, cash/notebook/held_functions.py:held_notebook_code @c5f1b92d, cash/notebook/ipython/autoreload_hook.py:in_place_reload @1a058feb -->
     - **Its source.**
     - **An input's lineage**, which changes whenever anything upstream of that
       input changed ([below](#lineage-propagation)).
@@ -110,7 +110,7 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
 
 ### Files
 
-<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @fa9f8714, cash/tracking/read_events.py:_is_read_mode @238e2cb8, cash/tracking/read_events.py:_on_listing @41ce1606 -->
+<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @fa9f8714, cash/tracking/read_events.py:_is_read_mode @238e2cb8, cash/tracking/read_events.py:_on_listing @218e8bfc -->
 cash records a file when your code reads it through one of these:
 
 | Library | Readers |
@@ -149,7 +149,7 @@ the old result, with no warning. For a file read that way, name it with
 `file_depends_on=` on the decorator, or see
 [custom file sources](../tutorials/feature-guides/custom-file-sources.md).
 
-<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @a045b99e, cash/tracking/file_dep_snapshot.py:_note_settled @ec6408ac -->
+<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @d1bb21b4, cash/tracking/file_dep_snapshot.py:_note_settled @ec6408ac -->
 When the result is stored, each file is recorded with its size, modification
 time and a content hash. Before the result is reused:
 
@@ -168,7 +168,7 @@ A file that was read but cannot be stat'ed when the result is stored (a
 permission error, a name the file system rejects) is recorded as never fresh:
 the call recomputes each time rather than lose the dependency.
 
-<!-- claim: cash/tracking/file_tracker.py:FileAccessTracker._digest_now @57e71e71, cash/tracking/pending_digest.py:settle_before_write @e76c92c9, cash/tracking/file_tracker.py:BACKGROUND_DIGEST_MIN_BYTES == 4194304, cash/tracking/file_dep_snapshot.py:_remembered_digest @7327a95f -->
+<!-- claim: cash/tracking/file_tracker.py:FileAccessTracker._digest_now @4364ed7d, cash/tracking/pending_digest.py:settle_before_write @e76c92c9, cash/tracking/file_tracker.py:BACKGROUND_DIGEST_MIN_BYTES == 4194304, cash/tracking/file_dep_snapshot.py:_remembered_digest @7327a95f -->
 A file of 4 MiB or more that the function reads itself is hashed beside it:
 the hash starts when the function opens the file, runs while it reads and
 computes, and is waited for before the result is stored, or before anything
@@ -210,7 +210,7 @@ lineages and miss, however many cells separate them.
 
 ### Upstream simulation
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @67023943, cash/notebook/upstream/simulator.py:NotebookSimulator.simulate_upstream @c9c50888 -->
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @ec79c8f1, cash/notebook/upstream/simulator.py:NotebookSimulator.simulate_upstream @c9c50888 -->
 You edit cell 1, then run cell 3 directly. Before cell 3 runs, cash reads the
 notebook's current cells and *simulates* the cells above: it computes, from
 their code alone and without running them, the lineage each statement would
@@ -233,7 +233,7 @@ ran runs again too, whatever the cell reads.
 
 ### Finding your notebook
 
-<!-- claim: cash/notebook/server_discovery.py:NotebookCellReaders.read @d0b4a970, cash/notebook/server_discovery.py:get_notebook_path @de3f7e08, cash/notebook/server_discovery.py:_collect_running_servers @1929f93c, cash/notebook/server_discovery.py:_search_servers_for_notebook @e0bf82ad -->
+<!-- claim: cash/notebook/server_discovery.py:NotebookCellReaders.read @d0b4a970, cash/notebook/server_discovery.py:get_notebook_path @94e1bc3d, cash/notebook/server_discovery.py:_collect_running_servers @1cd179a1, cash/notebook/server_discovery.py:_search_servers_for_notebook @630038cc -->
 To simulate, cash needs the notebook's current cells. It tries, in order:
 cells pushed by cash's JupyterLab extension before each run, Colab's
 frontend, and VS Code's unsaved-changes backup. All three see edits you have
@@ -251,7 +251,7 @@ on disk.
 
 ### Mutation bumps the receiver's lineage
 
-<!-- claim: cash/analysis/mutation_effects.py:classify_receivers @a2229b61 -->
+<!-- claim: cash/analysis/mutation_effects.py:classify_receivers @5d508fb1 -->
 `items.append(x)` assigns nothing, but it changes `items`. When cash decides a
 method call changed its receiver, the receiver gets a new lineage from that
 statement, so everything built from it downstream misses. How cash decides

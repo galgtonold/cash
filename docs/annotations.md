@@ -60,7 +60,7 @@ table = build_table(raw)  # persist and ttl both apply
 model = train(table)  # not applied: the blank line breaks it
 ```
 
-<!-- claim: cash/analysis/annotations.py:CacheAnnotation.merge @b10e0cdc -->
+<!-- claim: cash/analysis/annotations.py:CacheAnnotation.merge @d7783f49 -->
 When several directives reach one statement, they combine: each flag applies if
 any of them sets it, and the last `ttl=` wins. `no-cache` beats `persist` and
 also switches off the caching of calls inside the statement.
@@ -86,7 +86,7 @@ Results that took longer than 0.1 s are usually on disk already.
 
 ### `# @cash:no-cache`
 
-<!-- claim: cash/analysis/cacheability_decision.py:cacheability_verdict @7ffcfb73 -->
+<!-- claim: cash/analysis/cacheability_decision.py:cacheability_verdict @12a71910 -->
 The statement runs every time and nothing is stored, including the calls inside
 it. The badge shows a plain `EXECUTED` row. A statement below that reads its
 result is cached as usual and computed again when the value changes.
@@ -126,7 +126,7 @@ The value is still cached and replayed. To get a new draw every run, use
 
 ### `# @cash:assume-safe`
 
-<!-- claim: cash/analysis/cacheability_decision.py:cacheability_verdict @7ffcfb73, cash/analysis/annotations.py:leading_cell_annotation @0d279828 -->
+<!-- claim: cash/analysis/cacheability_decision.py:cacheability_verdict @12a71910, cash/analysis/annotations.py:leading_cell_annotation @0d279828 -->
 cash runs a statement with a side effect every time, and it judges effects by
 name: it cannot tell a POST that creates an order from a POST that runs a search.
 `assume-safe` tells it the effect is harmless to skip, so the statement is cached
@@ -196,7 +196,7 @@ The statement around a cached call is then stored only for its own work; see
 The statement's `ttl=`, `persist` and `assume-safe` apply to the calls inside it,
 and `no-cache` switches them off.
 
-<!-- claim: cash/notebook/call_entries.py:CallEntries.storable @1e99e8b2, cash/notebook/call_entries.py:reached_objects @b3cdef27, cash/notebook/shared_objects.py:view_bases @631203da -->
+<!-- claim: cash/notebook/call_entries.py:CallEntries.storable @e186dff5, cash/notebook/call_entries.py:reached_objects @76728b32, cash/notebook/shared_objects.py:view_bases @051bf79b -->
 A hit hands back a copy of the stored result. So a call is not cached, and
 runs every time, when its result has to be the very object it is:
 
@@ -209,8 +209,9 @@ runs every time, when its result has to be the very object it is:
   (`return arr[i:i+3]`, `return np.split(arr, 2)`);
 - something else holds it and cash cannot tell what (a library object, a
   cache of the function's own);
-- it is a matplotlib figure or axes, an open file or a generator, or a
-  function that keeps a count or a log in its closure.
+- it is a matplotlib figure or axes, an open file or a generator, a
+  function that keeps a count or a log in its closure, or a
+  `functools.cache` memo.
 
 With a copy, writes through the result would no longer reach the original.
 

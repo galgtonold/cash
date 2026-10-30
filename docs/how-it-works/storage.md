@@ -96,7 +96,7 @@ less; [the CLI page](../cli.md) has every option.
 
 ## The tiers
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @549a750b, cash/backends/memory_backend.py:_cheap_to_keep @c2798702 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @b5941cce, cash/backends/memory_backend.py:_cheap_to_keep @c2798702 -->
 | Tier | Where | Survives a restart? |
 |------|-------|---------------------|
 | Memory | RAM | No |
@@ -106,9 +106,12 @@ A read tries memory first. A pandas table, or a polars `DataFrame`,
 `Series` or `LazyFrame`, found on disk is kept in memory for the next read without a copy (see below). Any other value found on disk is
 copied into memory on its second read from disk in the same process, so a
 value read once after a restart costs no extra copy. Neither is kept when it
-would take more than 90% of the memory cap.
+would take more than 90% of the memory cap. A value of which the memory tier
+would have to copy 64 MB or more goes to the disk tier alone when it is
+stored, and is not kept in memory when it is read either; when no disk tier
+takes it, memory keeps it as usual.
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._copy_frame @2cfc6ee7, cash/backends/frame_sharing.py:_freeze @d0721597, cash/backends/frame_sharing.py:own_parts @5b3bb403, cash/backends/tiered_backend.py:TieredBackend.get @549a750b, cash/backends/memory_backend.py:_copy_polars @d34b28a6 -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._copy_frame @ffe03df6, cash/backends/frame_sharing.py:_freeze @96fde378, cash/backends/frame_sharing.py:own_parts @5b3bb403, cash/backends/tiered_backend.py:TieredBackend.get @b5941cce, cash/backends/memory_backend.py:_copy_polars @d34b28a6 -->
 The memory tier keeps a copy of each value that only it holds, so nothing you
 do to a value you were handed reaches the stored one, or the other way round.
 Under pandas copy-on-write (pandas 3, or `pd.options.mode.copy_on_write = True`
@@ -155,7 +158,7 @@ The Python objects in an `Object` column are copied.
 tiers; see
 [choosing a backend](../tutorials/feature-guides/choosing-a-backend.md).
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @549a750b, cash/backends/_base.py:effective_ttl @c0f1dab8 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @b5941cce, cash/backends/_base.py:effective_ttl @c0f1dab8 -->
 An entry's ttl is checked on every tier's copy as it is read, so the memory
 copy expires with the disk copy, and a backend used on its own applies the
 same rule. The ttl is the decorator's `ttl=`, or else the shorter of the ttl
@@ -180,7 +183,7 @@ the entry was written with and the tier's current `default_ttl`.
     `%cash_persist on` writes it anyway. The [cost model](../cost-model.md)
     explains the prediction and every setting.
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @8aecb084 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @1cf8c4c4 -->
 Each tier turns down a single value too large for its cap, so a 20 MB frame
 can be stored in memory and on disk while skipping a Redis tier limited to
 10 MB. When a value was meant for disk but every disk tier refused it, cash
@@ -191,7 +194,7 @@ keeps it in memory if it fits and warns once
 
 ## Cache size limit and eviction
 
-<!-- claim: cash/backends/file_backend.py:FileBackend._do_set_sync @d7ba8c7f, cash/backends/file_eviction.py:FileEvictor.evict @697d1c43 -->
+<!-- claim: cash/backends/file_backend.py:FileBackend._do_set_sync @820897ee, cash/backends/file_eviction.py:FileEvictor.evict @697d1c43 -->
 Only a write can start eviction. After each write to disk, the background
 writer adds the entry's size to a running total. If the total is over the cap,
 it deletes entries until the cache is under 90% of the cap, so the next few
@@ -234,7 +237,7 @@ entry, the miss says "evicted to make room", and a recompute of two seconds or
 more warns once
 ([`CACHE-EVICTED-RECOMPUTE`](../warnings.md#cache-evicted-recompute)).
 
-<!-- claim: cash/backends/chunk_store.py:ChunkStore.share @b16f5d81, cash/backends/file_eviction.py:FileEvictor.remove_path @76e08300, cash/backends/chunk_store.py:ORPHAN_CHUNK_AGE == 3600.0 -->
+<!-- claim: cash/backends/chunk_store.py:ChunkStore.share @b16f5d81, cash/backends/file_eviction.py:FileEvictor.remove_path @5711153f, cash/backends/chunk_store.py:ORPHAN_CHUNK_AGE == 3600.0 -->
 The size counted is what the folder holds: a buffer several entries share
 ([below](#shared-buffers)) counts once. For the ranking, its bytes are shared
 out evenly among the entries holding it, and it is deleted with the last of
@@ -253,7 +256,7 @@ notebook statement also drops its older versions when the new one is written.
 
 ## When a result reaches the disk
 
-<!-- claim: cash/backends/_writes.py:PendingWrites.wait_for_backlog @1faf5bd4, cash/backends/_writes.py:MAX_BACKLOG_S == 2.0, cash/backends/_writes.py:_finish_before_child @342230fe, cash/backends/file_backend.py:_finish_before_listing @891535e1, cash/backends/file_backend.py:FileBackend.get @5568ac7d -->
+<!-- claim: cash/backends/_writes.py:PendingWrites.wait_for_backlog @252b9ad2, cash/backends/_writes.py:MAX_BACKLOG_S == 2.0, cash/backends/_writes.py:_finish_before_child @342230fe, cash/backends/file_backend.py:_finish_before_listing @891535e1, cash/backends/file_backend.py:FileBackend.get @02a106e6 -->
 The disk write runs on a background thread, and your code carries on while it
 does. cash waits for a write only when something needs it on disk:
 
@@ -267,7 +270,7 @@ does. cash waits for a write only when something needs it on disk:
 A process this one did not start, reading the same folder at the same time,
 finds a result once its write has finished, and computes it until then.
 
-<!-- claim: cash/backends/memory_backend.py:_snapshot @b77f0d22, cash/backends/tiered_backend.py:TieredBackend._stored_payload @92ed63c1, cash/backends/memory_backend.py:InMemoryBackend.set @8416cd51, cash/notebook/call_refs.py:digest_and_size @c51197c8, cash/kept_state.py:stored_views @8fe0d16f, cash/stored_pickle.py:keeping @d7836c52, cash/notebook/statement/store.py:_nestable @42c0babb, cash/stored_pickle.py:object_digest @3b287f5e, cash/notebook/statement/processor.py:StatementProcessor._keeping_outputs @4c75425d -->
+<!-- claim: cash/backends/memory_backend.py:_snapshot @b77f0d22, cash/backends/tiered_backend.py:TieredBackend._stored_payload @92ed63c1, cash/backends/memory_backend.py:InMemoryBackend.set @6a1fb648, cash/notebook/call_refs.py:digest_and_size @c51197c8, cash/kept_state.py:stored_views @8fe0d16f, cash/stored_pickle.py:keeping @d7836c52, cash/notebook/statement/store.py:_nestable @42c0babb, cash/stored_pickle.py:object_digest @3b287f5e, cash/notebook/statement/processor.py:StatementProcessor._keeping_outputs @0374b627 -->
 An object of a class of its own (a fitted model, a graph) is kept in memory
 as the bytes its disk entry holds, made when it is stored: its arrays are
 copied out of it then, so a later change to your object, by Python or by
@@ -287,7 +290,7 @@ keeps it in memory, and given up past half the statement's run time. A networkx
 graph's views (`G.adj`, `G.nodes`) are left out of the bytes, and networkx
 makes them again on first use.
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend.holds_own_copy @d82553cc, cash/backends/memory_backend.py:InMemoryBackend.private_copy @ef57a587, cash/backends/memory_backend.py:InMemoryBackend.write_copy @987f7a47, cash/backends/memory_backend.py:_frames_own @d957b9f5 -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend.holds_own_copy @8bf55b38, cash/backends/memory_backend.py:InMemoryBackend.private_copy @a0166014, cash/backends/memory_backend.py:InMemoryBackend.write_copy @987f7a47, cash/backends/memory_backend.py:_frames_own @b40bcfa1 -->
 The disk entry is the result as it was computed: a change you make to it
 after the call never reaches the disk. The background write takes the memory
 tier's copy when that copy keeps nothing of yours (numbers, plain data, a
@@ -321,7 +324,7 @@ killed process was still writing is missing, and is computed again.
 
 ## Turning objects into bytes
 
-<!-- claim: cash/decorator/store.py:ResultStore.store @e289b59d, cash/backends/serialization.py:PickleSerializer.serialize @0f446a8f -->
+<!-- claim: cash/decorator/store.py:ResultStore.store @b718811c, cash/backends/serialization.py:PickleSerializer.serialize @d8e20083 -->
 Every result is stored with `pickle` (protocol 5), pandas DataFrames
 included, so a hit hands back the same frame: its class, index, dtypes, cell
 types, `attrs` and `flags`. Pickle is several times faster than Parquet to
@@ -348,22 +351,25 @@ in a new process.
 
 <span id="shared-buffers"></span>
 
-<!-- claim: cash/backends/chunk_store.py:ChunkStore.put @1a6e2443, cash/backends/chunk_store.py:CHUNK_MIN_BYTES @fdf218ec, cash/backends/file_backend.py:FileBackend._write_cache_files @b971c62d -->
+<!-- claim: cash/backends/chunk_store.py:ChunkStore.put @1a6e2443, cash/backends/chunk_store.py:CHUNK_MIN_BYTES @fdf218ec, cash/backends/file_backend.py:FileBackend._write_cache_files @6054b55e -->
 Each buffer of a megabyte or more that a value is written with (a column of
 a table, an array's data) is stored once per cache folder, in its `chunks`
-folder, named by a digest of its bytes. An entry names the chunks it holds.
+folder, known by a digest of its bytes. The buffers one write adds go together
+into one pack file there, so a hit opens a few files, not one per buffer. An
+entry names the chunks it holds.
 When another entry already holds the same bytes -- a table with one column
 added, the same data stored by two statements, a loop whose every result
 carries its input's columns -- the write costs a digest of the buffer instead
 of writing it again. The digest is taken with the same algorithm as cash's
 other digests of big data (BLAKE3, or SHA-256 where `blake3` cannot load),
-and the name says which, so installs hashing differently never share a
+and the digest says which, so installs hashing differently never share a
 chunk. With `compress` on, values are not split this way.
 
-<!-- claim: cash/backends/chunk_store.py:read_chunk @aa8ba979, cash/backends/entry_format.py:_read_apart @97c522a8 -->
+<!-- claim: cash/backends/chunk_store.py:read_chunk @aa8ba979, cash/backends/entry_format.py:_read_apart @ba190100 -->
 A chunk is checked against the checksum its entry recorded each time it is
 read. A chunk that is missing or damaged makes the entry a miss, computed
-again, and a damaged chunk is removed so the next write stores it afresh.
+again. The entries holding a damaged chunk are removed, so the next write
+stores it afresh; the other chunks in its pack stay.
 
 <span id="compression"></span>
 
@@ -389,14 +395,14 @@ that does not match (a half-written file, a bad sector, a sync client that
 merged two versions) counts as missing, and the value is recomputed. So does
 an entry with no checksum. The check finds damage, not tampering.
 
-<!-- claim: cash/backends/cache_dir.py:remove_orphan_temp_files @f7c8f067, cash/backends/file_backend.py:FileBackend._do_set_sync @d7ba8c7f -->
+<!-- claim: cash/backends/cache_dir.py:remove_orphan_temp_files @f7c8f067, cash/backends/file_backend.py:FileBackend._do_set_sync @820897ee -->
 A write that replaces an entry goes to a hidden `.tmp-*.part` file first,
 renamed into place once complete. A process killed in between (a kernel
 restart, an out-of-memory kill) leaves that file behind. The first write of a
 later process on the same machine removes it; one left by another machine
 goes once nobody has written to it for a day.
 
-<!-- claim: cash/backends/entry_format.py:update_metadata_in_place @0db18fc6, cash/backends/file_backend.py:FileBackend.get @5568ac7d -->
+<!-- claim: cash/backends/entry_format.py:update_metadata_in_place @ec1993ba, cash/backends/file_backend.py:FileBackend.get @02a106e6 -->
 Several processes can share one folder. Each one counts the reads of the
 entries it used and writes those counts back later. When another process has
 stored a new result under the same entry meanwhile, the next read takes the

@@ -46,7 +46,7 @@ sales.revenue()   # a hit: the frame is not read to build the key
 # test:inject: revenue = Dataset.revenue  # lets the harness read cache_info
 ```
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.cash_key_hash @839a8823, cash/decorator/cash_key.py:cash_key_method @affd7858, cash/decorator/purity_checks.py:PurityChecks.held_generators @9d730f62 -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.cash_key_hash @839a8823, cash/decorator/cash_key.py:cash_key_method @c2b9f062, cash/decorator/purity_checks.py:PurityChecks.held_generators @9d730f62 -->
 `__cash_key__` returns what identifies the object, and the key uses that
 instead of reading the frames. Building the key costs microseconds however
 much data the object holds, and a stored result is found again after a
@@ -151,7 +151,7 @@ the hasher return something that changes with it, or name it with
   identity only if it really identifies the value, such as a version you
   control.
 
-<!-- claim: cash/content_hashers.py:hash_numpy @77f8f3bc -->
+<!-- claim: cash/content_hashers.py:hash_numpy @06ba30de -->
 To check a hasher, call it on two equal but separately built instances. The
 strings must match. `evaluate.explain(model, data).cache_key` shows the key a
 call would use.

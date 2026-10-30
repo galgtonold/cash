@@ -79,7 +79,7 @@ data = [1, 2, 3]      # stored: [1, 2, 3]
 data.append(4)        # data is now [1, 2, 3, 4]; the stored copy is not
 ```
 
-<!-- claim: cash/analysis/mutations.py:MutationVisitor @d6981bbd, cash/analysis/mutations.py:MUTATING_METHODS @245ce55b broad="the table lists every pattern the visitor detects" -->
+<!-- claim: cash/analysis/mutations.py:MutationVisitor @9e18d5d7, cash/analysis/mutations.py:MUTATING_METHODS @d047b7a6 broad="the table lists every pattern the visitor detects" -->
 What decides the verdict is whether the statement also *produces* the variable
 it changed. If it does, the change is a new version of that variable: it is
 stored, its lineage advances, and the statement caches. If it changes some
@@ -94,7 +94,7 @@ statement is not cached.
 | Known mutating method | `data.append(4)`, `d.update(o)`, `lst.pop()` | Not cached |
 | Other method call that changed its object | `bus.on(fn)` | Not cached |
 | Estimator fit | `model.fit(X, y)` | Cached: `model` is the output, with the variables that hold it |
-| `del` of an item | `del d['k']` | Not cached |
+| `del` of an item or attribute | `del d['k']`, `del p.x` | Not cached |
 | numpy `out=` | `np.add(a, 1, out=a)` | Not cached |
 
 <!-- claim: cash/analysis/mutations.py:selfref_inplace_write_vars @c8102f53 -->
@@ -106,7 +106,7 @@ again. See
 
 #### Method calls
 
-<!-- claim: cash/analysis/mutation_effects.py:classify_receivers @a2229b61, cash/analysis/mutations.py:KNOWN_PURE_METHODS @b44508ae, cash/analysis/mutations.py:chain_is_pure @404cc05d, cash/analysis/mutations.py:_TopLevelCallCollector._bare_call @6775632d, cash/analysis/mutation_effects.py:captured_call_receivers @a711d067, cash/analysis/namespace_effects.py:call_arguments @808a92d9 -->
+<!-- claim: cash/analysis/mutation_effects.py:classify_receivers @5d508fb1, cash/analysis/mutations.py:KNOWN_PURE_METHODS @b44508ae, cash/analysis/mutations.py:chain_is_pure @404cc05d, cash/analysis/mutations.py:_TopLevelCallCollector._bare_call @6775632d, cash/analysis/mutation_effects.py:captured_call_receivers @5c64aa71, cash/analysis/namespace_effects.py:call_arguments @85a3aac6 -->
 A method call has no assignment target, so cash classifies its object:
 
 - **Not a change.** A call on a module (`np.mean(x)`, `time.sleep(1)`), a call
@@ -160,7 +160,7 @@ downstream of it misses, and the statement itself is not cached. Restoring it
 would rebind the name to a copy, while every other reference to the object
 kept the unchanged original.
 
-<!-- claim: cash/value_hash.py:CHANGE_CHECK_BUDGET_S == 0.5, cash/value_hash.py:CHANGE_CHECK_RUN_ON == 2.0, cash/value_hash.py:CHANGE_CHECK_STRETCH == 3.0, cash/value_hash.py:_Check.ask @acbf75d6, cash/notebook/statement/input_change.py:_budget_cut @1b85ea09 -->
+<!-- claim: cash/value_hash.py:CHANGE_CHECK_BUDGET_S == 0.5, cash/value_hash.py:CHANGE_CHECK_RUN_ON == 2.0, cash/value_hash.py:CHANGE_CHECK_STRETCH == 3.0, cash/value_hash.py:_Check.ask @acbf75d6, cash/notebook/statement/input_change.py:_budget_cut @caef3c88 -->
 A check of a value outside the fingerprints above (its content hash after it
 is bound or restored, before and after a statement that may change it) gets
 half a second. A value that takes longer to read, such as a big openpyxl
@@ -215,7 +215,7 @@ cash spots side effects from the statement's source, without running it. So:
   package is not looked into, and neither is a method called on an object
   (`report.build()`): put `# @cash:no-cache` on such a statement.
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._kept_writes_reason @c7ddc27c, cash/notebook/write_observer.py:kept_writes @9f097aed -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._kept_writes_reason @30148a78, cash/notebook/write_observer.py:kept_writes @0c645058 -->
 - In your function, deleting, moving or creating a file or folder by name
   counts too (`p.touch()`, `p.unlink()`, `os.remove(p)`, `shutil.move(a, b)`,
   `os.makedirs(d)`). A write on a handle passed in (`f.write(...)`) does not,
@@ -290,7 +290,7 @@ The badge marks the row `seed`, `random` (a seeded draw) or `unseeded`. A cached
 
 ### Values that cannot survive a round trip
 
-<!-- claim: cash/notebook/statement/derivation_edges.py:is_uncacheable_alias @000c4568, cash/analysis/cacheability_decision.py:identity_coupled_reason @77bfb1cc, cash/notebook/borrowed_memory.py:borrowed_memory_names @5835709f -->
+<!-- claim: cash/notebook/statement/derivation_edges.py:is_uncacheable_alias @d4ac17e9, cash/analysis/cacheability_decision.py:identity_coupled_reason @77bfb1cc, cash/notebook/borrowed_memory.py:borrowed_memory_names @d988c657 -->
 Three kinds of value are refused after the statement runs, because restoring
 a copy would break them: a view of another variable (a numpy slice, a pandas
 `groupby` object), which would come back detached from its base; a frame or
