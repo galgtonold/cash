@@ -11,12 +11,12 @@ search:
 What the test suites cover, where each one runs, and how to run them
 yourself. Figures on this page are derived from the repository by
 `scripts/doc_numbers.py` and checked in CI; they are current as of
-<!-- docnum:version -->0.13.0<!-- /docnum -->.
+<!-- docnum:version -->0.14.0<!-- /docnum -->.
 
 ## The suites
 
-**<!-- docnum:tests_total -->~23,950<!-- /docnum --> tests** in
-<!-- docnum:test_files -->~2,250<!-- /docnum --> files:
+**<!-- docnum:tests_total -->~24,000<!-- /docnum --> tests** in
+<!-- docnum:test_files -->~2,260<!-- /docnum --> files:
 
 | Suite | Size | What it covers |
 |---|---|---|
