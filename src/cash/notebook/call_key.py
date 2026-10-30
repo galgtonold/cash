@@ -280,8 +280,10 @@ def _only_reads(fn, param: str, value) -> bool:
     ``.attr`` and ``[i]`` into an operator, an f-string or a builtin that
     only reads (``len``, ``float``). Anything else is watched: handed to a
     call, a method called on it, bound to another name, iterated, returned,
-    stored, written, or named in a ``def`` or ``lambda`` inside."""
-    if is_user_code_module(sys.modules.get(attribute_or(type(value), "__module__", None))):
+    stored, written, or named in a ``def`` or ``lambda`` inside. A library
+    container holding a value of the user's (``buf=[Vec(1)]``, ``x +
+    buf[0]`` runs ``Vec.__add__``) is watched too (`_holds_users_value`)."""
+    if _holds_users_value(value):
         return False
     fdef = _own_def(fn)
     if fdef is None:
@@ -292,6 +294,38 @@ def _only_reads(fn, param: str, value) -> bool:
     # ``len`` there is the builtin, not a function of the module's own.
     namespace = attribute_or(fn, "__globals__", None) or {}
     return found is not None and not any(name in namespace for name in found)
+
+
+def _holds_users_value(value, limit: int = 4096) -> bool:
+    """Is *value* of a class of the user's, or does it hold one in its
+    builtin containers or object arrays, all the way down? An operator on
+    an item (``buf[0] + x``) runs that class's own code, which may write.
+    A frame or series with an object column, or more than *limit* objects
+    to open, counts as holding one: it is watched, not read."""
+    np = sys.modules.get("numpy")
+    pd = sys.modules.get("pandas")
+    todo = [value]
+    seen: set[int] = set()
+    while todo:
+        item = todo.pop()
+        if id(item) in seen:
+            continue
+        seen.add(id(item))
+        if len(seen) > limit or _users_type(type(item)):
+            return True
+        if np is not None and type(item) is np.ndarray:
+            if item.dtype.hasobject:
+                todo.extend(itertools.islice(item.flat, limit + 1))
+            continue
+        if pd is not None and instance_of(item, (pd.DataFrame, pd.Series)):
+            dtypes = [item.dtype] if instance_of(item, pd.Series) else list(item.dtypes)
+            if any(str(dtype) in ("object", "category") for dtype in dtypes):
+                return True
+            continue
+        items = builtin_items(item)
+        if items is not None:
+            todo.extend(items)
+    return False
 
 
 #: ``(def, parameter) -> _builtins_reading``; the trees are only read.
