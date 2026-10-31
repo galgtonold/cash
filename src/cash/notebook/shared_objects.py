@@ -817,8 +817,10 @@ def _pandas_objects(value: Any) -> list[Any]:
         if levels is None:
             arrays.append((own_dict(axis) or {}).get("_data"))
     for values in arrays:
-        if np is None or type(values) is not np.ndarray or values.dtype.kind != "O":
-            continue  # numbers, or an extension array (Arrow text) of no Python objects
+        if np is None or type(values) is not np.ndarray or values.dtype.kind != "O" or not values.size:
+            # Numbers, an extension array (Arrow text) of no Python objects, or
+            # no cells at all (a 0-row frame, which ``reshape(-1, 0)`` refuses).
+            continue
         for column in values.reshape(-1, values.shape[-1]) if values.ndim > 1 else (values,):
             # A row of a block is a view: its cells are held by the block
             # and the list alone.
