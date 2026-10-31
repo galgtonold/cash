@@ -1013,6 +1013,14 @@ def _plan_makes_each_name(trace: list, broken: set[str], run: set[int], restored
     statement names it (a global a callee sets), the last one that writes
     it must run or be restored.
     """
+    for maker, restored in restored_by_index.items():
+        # The restores come first and the statements that run after them, in
+        # order: one before the maker writing a name it restores binds that
+        # name again (``housing = load()`` above ``housing = train.drop(...)``
+        # left the unsplit frame where the restore had put the split one).
+        for name in restored.get("restored_vars") or ():
+            if any(i < maker and name in trace[i].outputs for i in run):
+                return False
     for name in broken:
         writers = [i for i, entry in enumerate(trace) if name in entry.outputs]
         if not writers:
