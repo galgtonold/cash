@@ -819,6 +819,8 @@ def _pandas_objects(value: Any) -> list[Any]:
     for values in arrays:
         if np is None or type(values) is not np.ndarray or values.dtype.kind != "O":
             continue  # numbers, or an extension array (Arrow text) of no Python objects
+        if not values.size:
+            continue  # a block of no rows holds nothing, and numpy cannot infer the -1 below for it
         for column in values.reshape(-1, values.shape[-1]) if values.ndim > 1 else (values,):
             # A row of a block is a view: its cells are held by the block
             # and the list alone.
