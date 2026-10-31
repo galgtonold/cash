@@ -75,7 +75,9 @@ class LogLines:
             return  # a cache dir that is gone: never recreated from here
         try:
             # Append mode, in one write: lines from two processes interleave whole.
-            with open(self.path, "a", encoding="utf-8") as fh:
+            # Cash's own work: the open hook would take the deferred digests
+            # first, whose lines come back here under the lock held now.
+            with io_watch.own_work(), open(self.path, "a", encoding="utf-8") as fh:
                 fh.write(text)
         except OSError:
             logger.debug("[%s] could not write to %s", self._label, self.path, exc_info=True)
