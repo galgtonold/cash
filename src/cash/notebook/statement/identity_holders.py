@@ -384,10 +384,21 @@ def _arrow_text_spelling_numbers(column: Any) -> list[Any] | None:
     try:
         if not (pyarrow.types.is_string(chunked.type) or pyarrow.types.is_large_string(chunked.type)):
             return None
-        decimal = compute.filter(chunked, compute.match_substring_regex(chunked, _DECIMAL_TEXT))
-        parts: list[Any] = [compute.cast(decimal, pyarrow.int64()).to_numpy(zero_copy_only=False)]
-        hexadecimal = compute.filter(chunked, compute.match_substring_regex(chunked, _HEX_TEXT))
-        parts.extend(int(text, 16) for text in hexadecimal.to_pylist() if text is not None)
+        # Only a value of 7 to 18 bytes can spell either number: picked by
+        # its length first, which Arrow reads without the text. A merged
+        # frame's text column came in thousands of chunks, and the two
+        # patterns over all of it took 6 s after one `merge` (p18).
+        length = compute.binary_length(chunked)
+        fits = compute.and_(compute.greater_equal(length, 7), compute.less_equal(length, 18))
+        parts: list[Any] = []
+        if compute.any(fits).as_py():
+            spelled = compute.filter(chunked, fits)
+            if isinstance(spelled, pyarrow.ChunkedArray):
+                spelled = spelled.combine_chunks()
+            decimal = compute.filter(spelled, compute.match_substring_regex(spelled, _DECIMAL_TEXT))
+            parts.append(compute.cast(decimal, pyarrow.int64()).to_numpy(zero_copy_only=False))
+            hexadecimal = compute.filter(spelled, compute.match_substring_regex(spelled, _HEX_TEXT))
+            parts.extend(int(text, 16) for text in hexadecimal.to_pylist() if text is not None)
         _ARROW_READS[id(chunked)] = (chunked, parts)
         return parts
     except Exception:  # noqa: BLE001 - read as before, through NumPy
