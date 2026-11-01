@@ -38,6 +38,7 @@ from .._lazy_module import LazyModule
 from .._location import per_user_cache_root
 from ..backends.cache_dir import LIBRARY_MAP_FILENAME, LIBRARY_RECORDS_FILENAME
 from ..install_paths import in_own_package, is_cash_path, is_user_path, top_package
+from ..tracking import io_watch
 from ..tracking.tracker_context import untracked
 
 # Imported on first use (6 ms, with zipfile and email): asked only when a
@@ -358,7 +359,10 @@ def _save_map(fingerprint: dict, by_top: dict[str, list]) -> None:
     path = _map_path()
     slot = _slot(fingerprint["header"])
     try:
-        with untracked():
+        # Cash's own file, written while a statement runs (its first look
+        # at a library): no write of the statement's (`io_watch.own_work`),
+        # which refused it as one a hit would skip (p27's ``load``).
+        with untracked(), io_watch.own_work():
             data = _read_saved()
             data.pop(slot, None)
             data[slot] = {"fingerprint": fingerprint, "map": by_top, "digest": _map_digest(by_top)}
@@ -450,7 +454,7 @@ def _save_records(saved: dict) -> None:
     saved.pop("", None)
     path = _records_path()
     try:
-        with untracked():
+        with untracked(), io_watch.own_work():  # cash's own file, as `_save_map`'s
             os.makedirs(os.path.dirname(path), exist_ok=True)
             temp = f"{path}.{os.getpid()}.tmp"
             with open(temp, "w", encoding="utf-8") as fh:

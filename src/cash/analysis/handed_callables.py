@@ -850,7 +850,15 @@ def _resolve_call(
                 out.any_of.append((container, root))
             pending.extend(node.args[1:])
             return
-    if callee is None or _is_users_callable(callee):
+    if callee is None and bound and _bound_root(node.func, bound):
+        # ``x.strip() for x in row[i:].split(sep)`` with ``row`` an item of
+        # what the statement iterates: the method is read from those items
+        # (`_iterated_reference`), not from whatever the name was left
+        # holding by an earlier run.
+        if not _iterated_method_of_data(node.func, namespace, bound, following):
+            out.unknown.append(node)
+            return
+    elif callee is None or _is_users_callable(callee):
         # What a function of the user's returns is known only by running
         # it; so is what a call of a value that cannot be read returns.
         if callee is not None or not _unbound(node.func, namespace):
@@ -869,6 +877,45 @@ def _resolve_call(
         inner.unknown.extend(found.unknown)
     out.any_of.extend(inner.any_of)
     out.unknown.extend(inner.unknown)
+
+
+def _iterated_method_of_data(
+    func: ast.expr,
+    namespace: Mapping[str, Any],
+    bound: Mapping[str, tuple[ast.expr, ...]],
+    following: frozenset[str],
+) -> bool:
+    """Whether the call target *func*, rooted at a name the statement binds
+    by iterating, is a method of data: a builtin's or a library's
+    (``row[i:].split``, ``line.strip`` for each line of a list of strings).
+    True when the items it is read from lead to no callable and no object of
+    the user's (`_iterated_reference`, which finds those however deeply
+    they are held): calling it runs no code of the user's, and what it
+    returns hands over what it was given, as a library's call does.
+
+    Asked of the items themselves, not of what the steps lead to: a step
+    into an object of the user's (``row[1:]``) may run its
+    ``__getitem__``."""
+    if not instance_of(func, ast.Attribute):
+        return False
+    root: ast.expr = func
+    while instance_of(root, (ast.Attribute, ast.Subscript)):
+        root = root.value
+    name = root.id  # type: ignore[attr-defined]
+    if name in following:
+        return False
+    for iterated in bound[name]:
+        found = _resolve_argument(iterated, namespace, bound, following | {name})
+        if found.unknown:
+            return False
+        for value, _root in chain(found.values, found.any_of):
+            if _is_users_callable(value) or _is_users_object(value):
+                return False  # iterating it runs the user's ``__iter__``
+            if type(value) in OPENED:
+                items, complete = _reached_this_round(value)
+                if items or not complete:
+                    return False
+    return True
 
 
 def _of_the_users(found: tuple[Any, str] | None, node: ast.expr, bound) -> bool:

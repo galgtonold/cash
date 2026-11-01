@@ -426,20 +426,20 @@ def _arrow_text_numbers(values: Any) -> list[Any] | None:
             few = _few_texts_spelling_numbers(chunked.to_pylist())
             _ARROW_READS[id(chunked)] = (chunked, few)
             return few
-        # Only a value of 7 to 18 bytes can spell either number: picked by
-        # its length first, which Arrow reads without the text. A merged
-        # frame's text column came in thousands of chunks, and the two
-        # patterns over all of it took 6 s after one `merge` (p18).
+        # Only a value of 7 to 18 bytes can spell either number, all digits
+        # or starting ``0x``: each is picked by masks Arrow computes without
+        # copying the text, and only those taken out. A merged frame's text
+        # column came in thousands of chunks, and two patterns over all of
+        # it took 6 s after one `merge` (p18).
         length = compute.binary_length(chunked)
         fits = compute.and_(compute.greater_equal(length, 7), compute.less_equal(length, 18))
         parts: list[Any] = []
-        if compute.any(fits).as_py():
-            spelled = compute.filter(chunked, fits)
-            if isinstance(spelled, pyarrow.ChunkedArray):
-                spelled = spelled.combine_chunks()
-            decimal = compute.filter(spelled, compute.match_substring_regex(spelled, _DECIMAL_TEXT))
+        decimal = compute.filter(chunked, compute.and_(fits, compute.ascii_is_decimal(chunked)))
+        if len(decimal):
             parts.append(compute.cast(decimal, pyarrow.int64()).to_numpy(zero_copy_only=False))
-            hexadecimal = compute.filter(spelled, compute.match_substring_regex(spelled, _HEX_TEXT))
+        prefixed = compute.filter(chunked, compute.and_(fits, compute.starts_with(chunked, "0x", ignore_case=True)))
+        if len(prefixed):
+            hexadecimal = compute.filter(prefixed, compute.match_substring_regex(prefixed, _HEX_TEXT))
             parts.extend(int(text, 16) for text in hexadecimal.to_pylist() if text is not None)
         _ARROW_READS[id(chunked)] = (chunked, parts)
         return parts
@@ -452,8 +452,8 @@ def _arrow_text_numbers(values: Any) -> list[Any] | None:
 #: loop writing one column of a wide frame leaves the others the same
 #: arrays. Cleared when the cell ends (`forget_flat_reads`).
 _ARROW_READS: dict[int, tuple[Any, list[Any]]] = {}
-#: `_NUMBER_LINES`' two spellings, each a whole value.
-_DECIMAL_TEXT = r"^[0-9]{7,18}$"
+#: `_NUMBER_LINES`' hexadecimal spelling, a whole value (the decimal one,
+#: 7 to 18 digits, is picked by length and `ascii_is_decimal`).
 _HEX_TEXT = r"^0[xX][0-9a-fA-F]{5,16}$"
 #: The same two, for Python's ``re`` (``fullmatch``: Arrow's ``$`` is the
 #: end of the text, never before a last newline).

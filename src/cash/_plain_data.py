@@ -286,6 +286,16 @@ def held_beyond_parents(value: Any, leaves: tuple, limit: int) -> list | None:
             return None
         if facts.held_once:
             return []
+    if _K is not None and hasattr(_K, "held_beyond"):
+        # One pass at C speed: the walk below went over every container and
+        # leaf again after the look's own walk, 0.45 s for 75,000 parsed log
+        # rows of 1.7M ``(action, time)`` pairs.
+        got = _K.held_beyond(value, frozenset(leaves), limit)
+        if got is not NotImplemented:
+            if got is None or got is False:
+                return None
+            got = _without_leaf_tuples(got, leaves)
+            return None if len(got) > limit else got
     found: list = []
     # Tuples held besides their parent, on a level of tuples alone: kept
     # until the level below says whether they hold leaves alone.
