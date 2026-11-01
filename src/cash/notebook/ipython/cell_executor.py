@@ -81,6 +81,7 @@ from ..compiled_source import statement_place
 from ..control_structures import contains_top_level_await, is_control_structure
 from ..statement import ProcessResult
 from ..statement.capture import replay_outputs, show_unshown_output
+from ..statement.identity_holders import forget_flat_reads
 from ..tracking_state import TrackingState
 from ._types import PipelineCompleted, PipelineSyntaxError, RunInstead
 from .autoreload_hook import in_place_reload, run_autoreload_now
@@ -677,6 +678,7 @@ class CellExecutor:
             self._warn_threads_left_running(cell)
         t_persist = _perf_counter()
         self._statement_processor.end_cell_persistence()
+        forget_flat_reads()
         cell.timing_breakdown["persist_final"] = _perf_counter() - t_persist
 
     def _warn_threads_left_running(self, cell: _CellRun) -> None:

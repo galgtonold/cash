@@ -47,6 +47,7 @@ warning.
 from __future__ import annotations
 
 import array
+import bisect
 import functools
 import operator
 import re
@@ -61,7 +62,7 @@ from cash.closure_sharing import slot_readers
 from cash.install_paths import is_user_code_module
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
-__all__ = ["IdentityHeld", "as_address", "identity_held_reason", "library_parts"]
+__all__ = ["IdentityHeld", "as_address", "forget_flat_reads", "identity_held_reason", "library_parts"]
 
 #: A container with more items is read at C speed when it holds only
 #: leaves or records of them, and walked item by item otherwise.
@@ -89,6 +90,44 @@ _HIGHEST_ADDRESS = 1 << 48
 #: keeps only 8: ``np.True_`` (which ``(arr >= 0).all()`` returns), ``()``,
 #: and the builtin types on a clang build.
 _ALIGNMENT = 8 if sys.maxsize > 1 << 32 else 4
+
+
+#: What `_Walk._read_flat` found in a big container of leaves this cell,
+#: by its length: the very items read (held, so none of their ids is
+#: reused while kept) and the numbers they spelled. A loop that writes one
+#: column of a wide frame per pass checks every column after each pass;
+#: the columns it left are the same strings, found here by identity at C
+#: speed instead of read again (student_5: 113 s for one pass over 60
+#: columns of 20,000 rows). Cleared when the cell ends (`forget_flat_reads`).
+_FLAT_READS: dict[int, list[tuple[list[Any], frozenset[int]]]] = {}
+#: The leaves `_FLAT_READS` keeps: plain values every reference count of
+#: cash's leaves out, so keeping them changes no other check's answer.
+_KEPT_KINDS = frozenset({str, int, float, bool, type(None)})
+#: Most items `_FLAT_READS` keeps, all entries together.
+_MAX_FLAT_KEPT = 5_000_000
+_flat_kept = [0]
+
+
+def forget_flat_reads() -> None:
+    """Drop what `_FLAT_READS` keeps: the cell ended."""
+    _FLAT_READS.clear()
+    _flat_kept[0] = 0
+
+
+def _flat_read_before(items: list[Any]) -> frozenset[int] | None:
+    """The numbers a read of these very *items* found earlier this cell, or
+    None when they were not read as leaves."""
+    for kept, numbers in _FLAT_READS.get(len(items), ()):
+        if all(map(operator.is_, kept, items)):
+            return numbers
+    return None
+
+
+def _keep_flat_read(items: list[Any], numbers: frozenset[int]) -> None:
+    if _flat_kept[0] + len(items) > _MAX_FLAT_KEPT:
+        return
+    _flat_kept[0] += len(items)
+    _FLAT_READS.setdefault(len(items), []).append((list(items), numbers))
 
 
 class IdentityHeld(str):
@@ -275,6 +314,11 @@ def _pandas_parts(pandas: Any, value: Any) -> list[Any]:
         for at, dtype in enumerate(value.dtypes):
             by_dtype.setdefault(dtype, []).append(at)
         for dtype, columns in by_dtype.items():
+            if attribute_or(dtype, "kind") == "O":
+                # A column at a time: one a loop rewrote is read again, the
+                # others are the very strings read before (`_FLAT_READS`).
+                parts.extend(_pandas_column(value.iloc[:, at], dtype) for at in columns)
+                continue
             column = _pandas_column(value.iloc[:, columns], dtype)
             if column is not None:
                 parts.append(column)
@@ -294,13 +338,45 @@ def _pandas_column(column: Any, dtype: Any) -> Any:
     weak reference: 8-byte integers, or objects. None otherwise."""
     kind = attribute_or(dtype, "kind")
     if kind == "O":
-        return column.to_numpy(dtype=object)
+        spelled = _arrow_text_spelling_numbers(column)
+        return spelled if spelled is not None else column.to_numpy(dtype=object)
     if kind in ("i", "u") and attribute_or(dtype, "itemsize") == 8:
         numpy = sys.modules.get("numpy")
         if numpy is not None and isinstance(dtype, numpy.dtype):
             return column.to_numpy()
         return column.to_numpy(dtype="int64", na_value=0)  # a nullable Int64 column
     return None
+
+
+def _arrow_text_spelling_numbers(column: Any) -> list[Any] | None:
+    """Of a column of Arrow-backed text (pandas' default ``str``), the only
+    thing that could matter: the numbers its values spell as `as_address`
+    reads them, picked and parsed by Arrow at C speed -- the decimal ones as
+    one NumPy array of 8-byte integers (checked as an integer column is),
+    the hexadecimal ones as ints. Converting the column to Python strings
+    made new ones each time, a million for a wide frame, after every
+    statement of a loop writing it. Text holds no object. None for any
+    other column, or where Arrow is not at hand."""
+    chunked = attribute_or(attribute_or(column, "array", None), "_pa_array", None)
+    pyarrow = sys.modules.get("pyarrow")
+    compute = sys.modules.get("pyarrow.compute")
+    if chunked is None or pyarrow is None or compute is None:
+        return None
+    try:
+        if not (pyarrow.types.is_string(chunked.type) or pyarrow.types.is_large_string(chunked.type)):
+            return None
+        decimal = compute.filter(chunked, compute.match_substring_regex(chunked, _DECIMAL_TEXT))
+        parts: list[Any] = [compute.cast(decimal, pyarrow.int64()).to_numpy(zero_copy_only=False)]
+        hexadecimal = compute.filter(chunked, compute.match_substring_regex(chunked, _HEX_TEXT))
+        parts.extend(int(text, 16) for text in hexadecimal.to_pylist() if text is not None)
+        return parts
+    except Exception:  # noqa: BLE001 - read as before, through NumPy
+        return None
+
+
+#: `_NUMBER_LINES`' two spellings, each a whole value.
+_DECIMAL_TEXT = r"^[0-9]{7,18}$"
+_HEX_TEXT = r"^0[xX][0-9a-fA-F]{5,16}$"
 
 
 #: The lowest address a 64-bit macOS process maps: ``__PAGEZERO`` covers
@@ -334,7 +410,7 @@ def _mapped(numbers: set[int]) -> set[int]:
     if not sys.platform.startswith("linux"):
         return numbers
     ranges = _MAPPINGS[0]
-    inside = {n for n in numbers if ranges is not None and any(start <= n < end for start, end in ranges)}
+    inside = _inside(numbers, ranges) if ranges is not None else set()
     if len(inside) == len(numbers):
         return inside
     # One outside the mappings read before: a mapping made since may hold
@@ -342,7 +418,15 @@ def _mapped(numbers: set[int]) -> set[int]:
     ranges = _MAPPINGS[0] = _read_mappings()
     if ranges is None:
         return numbers
-    return {n for n in numbers if any(start <= n < end for start, end in ranges)}
+    return _inside(numbers, ranges)
+
+
+def _inside(numbers: set[int], ranges: list[tuple[int, int]]) -> set[int]:
+    """Those of *numbers* inside one of *ranges* (sorted by start, apart):
+    found by a binary search each, not by asking every range (a frame of
+    digits spells a million numbers, and a process maps a thousand ranges)."""
+    starts = [start for start, _ in ranges]
+    return {n for n in numbers if (at := bisect.bisect_right(starts, n) - 1) >= 0 and n < ranges[at][1]}
 
 
 def _read_mappings() -> list[tuple[int, int]] | None:
@@ -358,7 +442,7 @@ def _read_mappings() -> list[tuple[int, int]] | None:
                     ranges.append((int(start, 16), int(end, 16)))
     except (OSError, ValueError):
         return None
-    return ranges
+    return sorted(ranges)
 
 
 #: The mappings `_mapped` read last.
@@ -643,6 +727,9 @@ class _Walk:
         elif _numpy_array(kind):
             if item.dtype.hasobject:
                 items = item.ravel().tolist()
+                # A frame's column of text, read whole whatever its length.
+                if items and self._read_flat(items):
+                    return
             else:
                 if not self.quiet and item.dtype.kind in "iu" and item.dtype.itemsize == 8:
                     self.arrays.append(item)
@@ -690,7 +777,13 @@ class _Walk:
     def _read_flat(self, items: list[Any]) -> bool:
         """Read a big container of leaves, or of tuples of leaves (records),
         at C speed: only its ``int``s matter. False when it holds anything
-        else, to be walked item by item."""
+        else, to be walked item by item. The very items read before in this
+        cell (`_FLAT_READS`) are leaves again, spelling the same numbers."""
+        if not self.quiet:
+            known = _flat_read_before(items)
+            if known is not None:
+                self.numbers.update(known)
+                return True
         kinds = set(map(type, items))
         flat: Any = items
         if not kinds <= _LEAVES:
@@ -702,6 +795,16 @@ class _Walk:
                 return False
         if self.quiet:
             return True
+        if flat is not items or not kinds <= _KEPT_KINDS:
+            self._read_leaves(flat, kinds)
+            return True
+        before = set(self.numbers)
+        self._read_leaves(flat, kinds)
+        _keep_flat_read(items, frozenset(self.numbers - before))
+        return True
+
+    def _read_leaves(self, flat: Any, kinds: set[type]) -> None:
+        """The numbers *flat*, leaves of *kinds*, holds or spells."""
         if str in kinds:
             # The text spelling a number, found by one search of it all.
             texts = flat if kinds == {str} else [item for item in flat if type(item) is str]
@@ -712,14 +815,13 @@ class _Walk:
                 self.numbers.update(map(as_address, _NUMBER_LINES.findall(text)))
                 self.numbers.discard(None)
         if int not in kinds:
-            return True
+            return
         if kinds == {int}:
             # At C speed: row numbers or counts all below any address.
             if max(flat) >= _LOWEST_ADDRESS and min(flat) < _HIGHEST_ADDRESS:
                 self.numbers.update(flat)
         else:
             self.numbers.update(item for item in flat if type(item) is int and item >= _LOWEST_ADDRESS)
-        return True
 
     def _note_ids(self, items: Any) -> None:
         """Keep the ids of *items* for an array's numbers, when looked for."""

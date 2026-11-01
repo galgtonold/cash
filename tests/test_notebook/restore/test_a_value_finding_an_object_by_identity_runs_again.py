@@ -147,6 +147,20 @@ HOLDERS = {
     ),
     "an id as hex text": ("reg = {hex(id(p.child)): 'c'}", "r = reg.get(hex(id(p.child))) == 'c'"),
     "an id as decimal text": ("key = str(id(p.child))", "r = key == str(id(p.child))"),
+    "an id as decimal text in a pandas column of text": (
+        "import pandas as pd\ndf = pd.DataFrame({'key': ['x', str(id(p.child))], 'v': ['a', 'b']})",
+        "r = df['key'][1] == str(id(p.child))",
+    ),
+    "an id as hex text in a pandas series of text": (
+        "import pandas as pd\ns = pd.Series(['y', hex(id(p.child))])",
+        "r = s[1] == hex(id(p.child))",
+    ),
+    "an id as text among 20,000 rows of a wide text frame": (
+        "import pandas as pd\n"
+        "df = pd.DataFrame({f'c{i}': [str(n) for n in range(20_000)] for i in range(5)})\n"
+        "df.loc[19_999, 'c3'] = str(id(p.child))",
+        "r = df['c3'][19_999] == str(id(p.child))",
+    ),
 }
 
 
