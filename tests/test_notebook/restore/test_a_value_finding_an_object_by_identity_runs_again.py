@@ -155,6 +155,18 @@ HOLDERS = {
         "import pandas as pd\ns = pd.Series(['y', hex(id(p.child))])",
         "r = s[1] == hex(id(p.child))",
     ),
+    "an id in a short list of records": (
+        "recs = [(i, 'x') for i in range(9)] + [(id(p.child), 'c')]",
+        "r = recs[-1][0] == id(p.child)",
+    ),
+    "an id of one of its own records in a short list": (
+        "recs = [(i, 'x') for i in range(9)]\nrecs.append((id(recs[0]), 'self'))",
+        "r = recs[-1][0] == id(recs[0])",
+    ),
+    "an id as hex text in a short list": (
+        "keys = ['a'] * 9 + [hex(id(p.child))]",
+        "r = keys[-1] == hex(id(p.child))",
+    ),
     "an id as text among 20,000 rows of a wide text frame": (
         "import pandas as pd\n"
         "df = pd.DataFrame({f'c{i}': [str(n) for n in range(20_000)] for i in range(5)})\n"

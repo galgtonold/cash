@@ -67,6 +67,9 @@ __all__ = ["IdentityHeld", "as_address", "forget_flat_reads", "identity_held_rea
 #: A container with more items is read at C speed when it holds only
 #: leaves or records of them, and walked item by item otherwise.
 _MAX_SCANNED = 10_000
+#: Outside the notebook's walk, a container with at least this many items
+#: is tried at C speed too (`_Walk._read_flat`).
+_SMALL_FLAT = 8
 #: Most objects one walk looks at.
 _MAX_SEEN = 200_000
 #: Restored as themselves, by reference: a weak reference to one stays right.
@@ -767,9 +770,13 @@ class _Walk:
                 if not self.quiet:
                     self.closed.append(item)
                 return
-        if len(items) > _MAX_SCANNED:
+        if len(items) > _MAX_SCANNED or (not self.quiet and len(items) >= _SMALL_FLAT):
+            # A small one too, outside the notebook's walk: a column of
+            # 60,000 lists of 20 records each was walked a tuple and a
+            # string at a time after every statement (student_8).
             if self._read_flat(items):
                 return
+        if len(items) > _MAX_SCANNED:
             if self.quiet:
                 # The notebook's big list of records: an ``id()`` of one
                 # of them is found, not one of what each holds, which
@@ -789,7 +796,8 @@ class _Walk:
         at C speed: only its ``int``s matter. False when it holds anything
         else, to be walked item by item. The very items read before in this
         cell (`_FLAT_READS`) are leaves again, spelling the same numbers."""
-        if not self.quiet:
+        big = len(items) > _MAX_SCANNED
+        if not self.quiet and big:
             known = _flat_read_before(items)
             if known is not None:
                 self.numbers.update(known)
@@ -799,13 +807,17 @@ class _Walk:
         if not kinds <= _LEAVES:
             if not kinds <= _LEAVES | {tuple}:
                 return False
-            flat = list(chain.from_iterable(item for item in items if type(item) is tuple))
+            records = [item for item in items if type(item) is tuple]
+            flat = list(chain.from_iterable(records))
             kinds = set(map(type, flat))
             if not kinds <= _LEAVES:
                 return False
+            if not self.quiet:
+                # Walked, each would be seen: an id() of one is the value's own.
+                self.seen.update(map(id, records))
         if self.quiet:
             return True
-        if flat is not items or not kinds <= _KEPT_KINDS:
+        if not big or flat is not items or not kinds <= _KEPT_KINDS:
             self._read_leaves(flat, kinds)
             return True
         before = set(self.numbers)
