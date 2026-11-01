@@ -880,6 +880,33 @@ class Shadow:
         stale: something its unit ran changed since it was stored?"""
         return pending is not None and pending.get("hit") == "stale_suspect"
 
+    @staticmethod
+    def stale_reason(pending: dict | None) -> str:
+        """Why the check before a lookup found the entry stale (`stale`), for
+        the badge: what of the code it ran changed, or cannot be found again.
+        A refused entry with no reason left the user guessing why a slow
+        statement ran again."""
+        changes = ((pending or {}).get("verify") or {}).get("changed") or []
+        if not changes:
+            return "code it ran when it was stored changed since"
+        # Code before what it reads: an edited function also changes the
+        # global that names it.
+        first = min(changes, key=lambda change: change[0] not in ("code", "class", "gap"))
+        kind, where, now = first[0], ".".join(str(part) for part in first[1:-2]), first[-1]
+        named = f" ({where})" if where else ""
+        if kind == "gap" or now == "unresolved":
+            why = f"code it ran when it was stored{named} cannot be found now, so whether it changed cannot be told"
+        elif kind in ("code", "class") and now == "missing":
+            why = f"code it ran when it was stored{named} was replaced or is gone"
+        elif kind in ("code", "class"):
+            why = f"code it ran changed since it was stored{named}"
+        elif kind == "environ":
+            why = "an environment variable the code it ran reads changed since it was stored"
+        else:
+            why = f"a value the code it ran reads changed since it was stored{named}"
+        more = f" (+{len(changes) - 1} more)" if len(changes) > 1 else ""
+        return why + more
+
     def statement_served(self, run: Any, done: Mapping[str, Any]) -> None:
         from ..cache_status import CacheStatus
 

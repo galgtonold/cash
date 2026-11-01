@@ -1356,12 +1356,17 @@ class StatementProcessor:
                 # Code it ran changed since it was stored: it runs again.
                 run.key_blind = True
                 self._note_refused_entry(run, metadata, cached_data)
+                self._freshness.last_miss_reason = _shadow.SHADOW.stale_reason(run.shadow)
                 cached_data = None
             elif cached_data and run.needs_trace and not _shadow.SHADOW.agreed(run.shadow):
                 # Its key does not name what a string found: only a trace
                 # checked unchanged serves it.
                 run.key_blind = True
                 self._note_refused_entry(run, metadata, cached_data)
+                self._freshness.last_miss_reason = (
+                    "it looks code up by a string, and what that found when it was stored "
+                    "could not be checked unchanged"
+                )
                 cached_data = None
             elif (
                 cached_data
@@ -1370,6 +1375,9 @@ class StatementProcessor:
             ):
                 # Stored before code it ran was seen to change what its
                 # outputs leave out: it runs, and is not stored again.
+                self._freshness.last_miss_reason = (
+                    "code it runs was seen to change something its stored value leaves out"
+                )
                 cached_data = None
             elif not cached_data and _shadow.SHADOW.changed_since_traced(run.cache_key):
                 # No entry (cleared, or a rerun not stored again), and code
