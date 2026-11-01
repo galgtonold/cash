@@ -2650,6 +2650,15 @@ def _variables_holding(
         check_walk_budget()
         if len(frontier) > _INSIDE_MAX_OBJECTS:
             return None
+        if _level and len(frontier) <= _REFERRERS_BY_CALL:
+            held = _module_references(frontier, namespaces)
+            if held is not None:
+                # Nothing but modules' globals holds them (``re``'s caches of
+                # compiled patterns, which a match holds): the read of the
+                # heap below would find only those namespaces, which end the
+                # climb, given up on for the notebook's own object. Each
+                # statement leaving a match read the heap twice (60 ms each).
+                return None if notebook_own and any(held) else names
         args = tuple(frontier)
         stop.add(id(args))
         if _level and notebook_own and len(args) > _REFERRERS_BY_CALL and _held_by_a_module(args, namespaces):
@@ -2683,9 +2692,45 @@ def _variables_holding(
                 continue
             if not _is_cash_own(obj):
                 following.append(obj)
+        # No reference of this frame's left on what the next level counts
+        # (`_module_references`).
+        obj = None
         del referrers, args
         frontier[:] = following
+        del following
     return names if not frontier else None
+
+
+def _module_references(objs: list[Any], namespaces: list[dict]) -> list[int] | None:
+    """How many of *namespaces* (modules' globals) refer to each of *objs*
+    by value, when those references and the list *objs* itself are all the
+    references each one has; None when anything else holds one of them (or
+    holds it uncounted: as a key, or a second time through a name it does
+    not see). Read from the namespaces and the reference counts alone, with
+    no read of the heap."""
+    ids = [id(obj) for obj in objs]
+    counts = dict.fromkeys(ids, 0)
+    wanted = counts.keys()
+    for namespace in namespaces:
+        values = namespace.values()
+        if wanted.isdisjoint(map(id, values)):
+            continue
+        for key in map(id, values):
+            if key in counts:
+                counts[key] += 1
+    refs = _reference_counts(objs)
+    if any(count - _LISTED != counts[key] for count, key in zip(refs, ids, strict=True)):
+        return None
+    return [counts[key] for key in ids]
+
+
+def _reference_counts(objs: list[Any]) -> list[int]:
+    """The reference count of each of *objs*, this function's own included."""
+    return [sys.getrefcount(obj) for obj in objs]
+
+
+#: What `_reference_counts` counts for an object only its list holds.
+_LISTED = _reference_counts([types.SimpleNamespace()])[0]
 
 
 def _held_by_a_module(objs: tuple[Any, ...], namespaces: list[dict]) -> bool:
