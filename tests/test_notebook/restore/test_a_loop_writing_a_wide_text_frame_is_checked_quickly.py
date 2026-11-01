@@ -50,3 +50,16 @@ def test_python_strings_read_before_are_known_by_identity():
     assert identity_holders._flat_read_before([str(n) for n in range(10_000_000, 10_020_000)]) is None
     forget_flat_reads()
     assert identity_holders._flat_read_before(texts) is None
+
+
+def test_an_arrow_column_read_before_is_not_read_again():
+    forget_flat_reads()
+    s = pd.Series(["12345678", "x"])
+    first = identity_holders._arrow_text_spelling_numbers(s)
+    assert identity_holders._arrow_text_spelling_numbers(s) is first
+    # A changed column is a new Arrow array: read again.
+    s2 = s.copy()
+    s2[1] = "87654321"
+    assert sorted(identity_holders._arrow_text_spelling_numbers(s2)[0].tolist()) == [12345678, 87654321]
+    forget_flat_reads()
+    assert identity_holders._arrow_text_spelling_numbers(s) is not first

@@ -109,8 +109,9 @@ _flat_kept = [0]
 
 
 def forget_flat_reads() -> None:
-    """Drop what `_FLAT_READS` keeps: the cell ended."""
+    """Drop what `_FLAT_READS` and `_ARROW_READS` keep: the cell ended."""
     _FLAT_READS.clear()
+    _ARROW_READS.clear()
     _flat_kept[0] = 0
 
 
@@ -362,6 +363,9 @@ def _arrow_text_spelling_numbers(column: Any) -> list[Any] | None:
     compute = sys.modules.get("pyarrow.compute")
     if chunked is None or pyarrow is None or compute is None:
         return None
+    known = _ARROW_READS.get(id(chunked))
+    if known is not None and known[0] is chunked:
+        return known[1]
     try:
         if not (pyarrow.types.is_string(chunked.type) or pyarrow.types.is_large_string(chunked.type)):
             return None
@@ -369,11 +373,17 @@ def _arrow_text_spelling_numbers(column: Any) -> list[Any] | None:
         parts: list[Any] = [compute.cast(decimal, pyarrow.int64()).to_numpy(zero_copy_only=False)]
         hexadecimal = compute.filter(chunked, compute.match_substring_regex(chunked, _HEX_TEXT))
         parts.extend(int(text, 16) for text in hexadecimal.to_pylist() if text is not None)
+        _ARROW_READS[id(chunked)] = (chunked, parts)
         return parts
     except Exception:  # noqa: BLE001 - read as before, through NumPy
         return None
 
 
+#: What `_arrow_text_spelling_numbers` found this cell, by the Arrow array
+#: read (kept, so its id is not reused): Arrow's arrays never change, and a
+#: loop writing one column of a wide frame leaves the others the same
+#: arrays. Cleared when the cell ends (`forget_flat_reads`).
+_ARROW_READS: dict[int, tuple[Any, list[Any]]] = {}
 #: `_NUMBER_LINES`' two spellings, each a whole value.
 _DECIMAL_TEXT = r"^[0-9]{7,18}$"
 _HEX_TEXT = r"^0[xX][0-9a-fA-F]{5,16}$"
