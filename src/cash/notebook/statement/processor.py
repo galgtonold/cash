@@ -1060,6 +1060,11 @@ class StatementProcessor:
         (see :meth:`StatementRandomness.adopt_unseen_seeds`)."""
         self._randomness.adopt_unseen_seeds()
 
+    def unseed_streams_not_seeded_above(self, cells_above: list[str]) -> None:
+        """Count a stream no cell above seeds as unseeded for the cell about
+        to run (see :meth:`StatementRandomness.unseed_streams_not_seeded_above`)."""
+        self._randomness.unseed_streams_not_seeded_above(cells_above)
+
     def begin_cell_rng_observation(self) -> None:
         """Open a fresh per-cell RNG accumulation, before the cell's statements run."""
         self._randomness.begin_cell()

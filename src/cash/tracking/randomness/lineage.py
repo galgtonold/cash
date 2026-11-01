@@ -70,6 +70,7 @@ def publish_seed_epochs(epochs: dict[str, str] | None) -> None:
     """Expose the statement engine's live seed ledger to other front-ends."""
     global _ACTIVE_SEED_EPOCHS
     _ACTIVE_SEED_EPOCHS = epochs
+    _UNSEEDED_ABOVE.clear()
 
 
 def seed_epochs() -> dict[str, str]:
@@ -116,7 +117,20 @@ _SEED_GENERATION: dict[str, int] = {}
 _TORCH_SEEDED: set[str] = set()
 
 
+#: Global streams the notebook counts as unseeded for the cell it runs,
+#: though a seed is in force: no cell above it seeds them, and a cell below
+#: did on an earlier pass (`count_as_unseeded`). A seed set since ends it.
+_UNSEEDED_ABOVE: set[str] = set()
+
+
+def count_as_unseeded(modules: Iterable[str]) -> None:
+    """Have `unseeded_streams` report *modules* as unseeded until a seed of
+    theirs is set again, as after a restart."""
+    _UNSEEDED_ABOVE.update(modules)
+
+
 def _note_seed(module: str, args: tuple, kwargs: dict) -> None:
+    _UNSEEDED_ABOVE.discard(module)
     value = args[0] if args else kwargs.get("seed", kwargs.get("a"))
     seeded = _TORCH_SEEDED if module == "torch" else _PROCESS_SEEDED
     if module != "torch":
@@ -276,7 +290,7 @@ def unseeded_streams(drew: Iterable[str], seeded: Iterable[str] = ()) -> set[str
     so a draw after it is. A seed set before the watch began (before cash saw
     the module imported) is not seen.
     """
-    known = seeded_rng_modules() | _PROCESS_SEEDED | _TORCH_SEEDED | set(seeded)
+    known = (seeded_rng_modules() | _PROCESS_SEEDED | _TORCH_SEEDED) - _UNSEEDED_ABOVE | set(seeded)
     if "torch" in known:
         known.add("torch.cuda")  # `manual_seed` seeds every device
     return {m for m in drew if m not in known}
