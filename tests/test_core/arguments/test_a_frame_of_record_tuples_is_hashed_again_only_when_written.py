@@ -90,3 +90,22 @@ def test_a_record_holding_a_pandas_date_is_read_every_time():
     assert cow_frame_digest(frame) == builtin_hash(frame)
     if builtin_hash(frame) != before:
         assert cow_frame_digest(frame) != before
+
+
+def test_the_records_are_read_once_when_the_frame_is_kept(monkeypatch):
+    """The memo's shallow copy holds a view of the frame's block: the array
+    that owns the memory is read once for both."""
+    frame = _records()
+    reads: list = []
+    real = arg_hashing._plain_scalar_types
+
+    def counting():
+        reads.append(1)
+        return real()
+
+    monkeypatch.setattr(arg_hashing, "_plain_scalar_types", counting)
+    cow_frame_digest(frame)
+    assert len(reads) == 1
+    reads.clear()
+    cow_frame_digest(frame)
+    assert reads == []

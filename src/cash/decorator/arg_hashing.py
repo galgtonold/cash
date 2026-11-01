@@ -635,7 +635,16 @@ def _immutable_records(values: Any, lists: list, kept: dict | None = None) -> bo
     noted in *lists* (`_Records`), once; one in *kept* is taken as one
     without being read again. A pandas date in a tuple can take an
     attribute, which the key reads, so a block holding one is not let
-    through."""
+    through.
+
+    The array that owns the memory is the one read and noted: the shallow
+    copy's block is a view of the frame's, which holds no other items."""
+    import numpy as np
+
+    while type(values.base) is np.ndarray:
+        values = values.base
+    if values.dtype != object:
+        return False
     key = id(values)
     if any(type(noted) is _Records and noted.key == key for noted in lists):
         return True  # the same array, met through the shallow copy
