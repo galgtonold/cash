@@ -32,6 +32,7 @@ a ``classmethod`` or a plain attribute).
 from __future__ import annotations
 
 import functools
+import hashlib
 import logging
 import sys
 import types
@@ -61,8 +62,11 @@ logger = logging.getLogger(__name__)
 _LRU_WRAPPER = attribute_or(functools, "_lru_cache_wrapper", None)
 
 #: A memo holding more answers than this is not read: an entry over it is
-#: never served.
-MAX_KEYED = 256
+#: never served, and the statement says so once (``NOTEBOOK-MEMO-UNREAD``).
+#: Reading one costs about 55 us an answer the first time (0.2 s at the
+#: limit), 2 ms when its answers are unchanged, and 32 characters an answer
+#: in each entry that read it.
+MAX_KEYED = 4096
 
 #: How many ``__wrapped__`` links are followed to find a memo under other
 #: decorators.
@@ -365,6 +369,14 @@ def _key_digest(key: Any) -> str:
     return compute_hash(key)
 
 
+def _pair_digest(key: Any, answer: Any) -> str:
+    """One answer of a memo, its key with it, as 32 hex digits: an entry
+    keeps one per answer it read, and the two full digests were 129
+    characters each -- half a megabyte for a memo of 4,096 answers."""
+    pair = f"{_key_digest(key)}:{compute_hash(answer)}".encode()
+    return hashlib.blake2b(pair, digest_size=16).hexdigest()
+
+
 def _item_digests(memo: Any) -> list[str] | None:
     """``key-digest:answer-digest`` for every answer *memo* holds, or None
     when they cannot be read here."""
@@ -382,7 +394,7 @@ def _item_digests(memo: Any) -> list[str] | None:
     ):
         return known[1]
     try:
-        digests: list[str] | None = sorted({f"{_key_digest(k)}:{compute_hash(v)}" for k, v in items})
+        digests: list[str] | None = sorted({_pair_digest(k, v) for k, v in items})
     except Exception:  # noqa: BLE001 - a key or answer with no digest: unreadable
         digests = None
     _digests[memo] = (flat, digests)
@@ -537,15 +549,17 @@ def used(
     clears: bool = False,
     ns: Mapping[str, Any] | None = None,
     site: tuple[str | None, Any] | None = None,
-) -> tuple[str, str] | list[dict] | None:
-    """After a statement ran: ``(FILLED, why)`` when what it did to a memo
+) -> tuple[str, str, str | None] | list[dict] | None:
+    """After a statement ran: ``(FILLED, why, unread)`` when what it did to a memo
     leaves it otherwise than a served entry would, else each memo it called
     with the answers it held then. *clears*: the code that ran names
     ``cache_clear``, which resets the counters this reads. *ns*: look for
     memos the run made or bound too (a ``def`` in it, a module it imported),
     each taken as empty before it. *site*: ``(code, fn)``, the statement's
     text or the function called, read for the memos whose ``cache_clear``
-    it names, which the warning names first (`_changed_label`)."""
+    it names, which the warning names first (`_changed_label`). *unread*
+    names the memo when the reason is that it holds more than `MAX_KEYED`
+    answers, for the statement's warning, else None."""
     before = list(before or ())
     if ns is not None and _LRU_WRAPPER is not None:
         known = {id(memo) for _, memo, *_ in before}
@@ -565,6 +579,7 @@ def used(
         return None
     out: list[dict] = []
     why: str | None = None
+    unread: str | None = None
     for where, memo, hits, misses, size, held in before:
         try:
             info = memo.cache_info()
@@ -589,6 +604,8 @@ def used(
             why = f"It emptied the helper memo {label}"
         elif items is None or len(items) > MAX_KEYED:
             why = f"It read the helper memo {label}, which holds more answers than cash checks ({MAX_KEYED})"
+            if items is not None:
+                unread = f"{label}, which holds {len(items):,} answers"
         elif moved:
             why = f"It changed an answer the helper memo {label} holds in place"
         elif info.misses != misses:
@@ -608,7 +625,7 @@ def used(
                 pure = calls is not None and all(_fixed(answer) for _, answer in items) and _pure(memo)
                 out.append({"where": where, "items": digests, "pure": pure, "calls": calls if pure else None})
     if why is not None:
-        return FILLED, f"{why} (statement re-executes)"
+        return FILLED, f"{why} (statement re-executes)", unread
     return out or None
 
 
@@ -739,7 +756,7 @@ def _calls_of(memo: Any, items: list[tuple[Any, Any]]) -> list[list[str]] | None
             text = repr(call)
             if not _same(ast.literal_eval(text), call):
                 return None
-            calls.append([f"{_key_digest(key)}:{compute_hash(answer)}", text])
+            calls.append([_pair_digest(key, answer), text])
         except Exception:  # noqa: BLE001 - no text, or none that gives it back
             return None
     return calls

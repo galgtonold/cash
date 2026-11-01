@@ -2407,7 +2407,11 @@ def _held_from_outside(
     # classes of its parts (a TarFile's 20,000 members: 380,000 of the
     # 400,000 objects read): never looked for, by their type alone, as
     # `_read_down` would answer, without a call each.
-    skipped = frozenset({type, *(kind for kind in _PLAIN_SCALARS if issubclass(kind, value_types))})
+    # Nor a bare ``object()``: no state to change, only an identity, held
+    # by everything that uses it as a marker (``functools``' keyword mark,
+    # in every memo of the process: each ``@functools.cache`` warned
+    # NOTEBOOK-SHARE-UNCHECKED).
+    skipped = frozenset({type, object, *(kind for kind in _PLAIN_SCALARS if issubclass(kind, value_types))})
     pops = 0
     while stack:
         parent, root = stack.pop()

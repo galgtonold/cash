@@ -56,7 +56,7 @@ from .._inspect_cache import forget_static_lookups
 from .._memo import CODE_OBJECTS, LruMemo
 from .._paths import is_pseudo_filename
 from .._type_memo import TypeMemo, type_key
-from .._user_attrs import instance_of, own_dict
+from .._user_attrs import attribute_or, instance_of, own_dict
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..source_reading import own_source, wrapper_layers
 from ..tracking.function_tracker import is_local_module
@@ -2359,7 +2359,7 @@ class _Found:
     def _source(self, fn: types.FunctionType, label: str) -> str | None:
         source = _source_of(fn)
         if source is None:
-            self.unreadable.append(f"{label} is handed to a call and its source cannot be read")
+            self.unreadable.append(f"{_unread_label(fn, label)} is handed to a call and its source cannot be read")
             return None
         self.sources.setdefault(source)
         if id(fn) not in self._function_ids:
@@ -3678,3 +3678,19 @@ def _changes_its_first_argument(
         elif method in MUTATING_METHODS or member is None:
             return True
     return False
+
+
+def _unread_label(fn: Any, label: str) -> str:
+    """What the warning calls the function *fn* whose source cannot be
+    read, reached through the variable *label* names: the function itself,
+    not the dict or object holding it (``map(ns["bump"], xs)`` named
+    ``'ns'``), and how it was made when ``exec`` or ``eval`` made it."""
+    name = attribute_or(fn, "__name__", None)
+    code = attribute_or(fn, "__code__", None)
+    made = " made by exec" if code is not None and code.co_filename == "<string>" else ""
+    if not isinstance(name, str):
+        return label
+    what = "a lambda" if name == "<lambda>" else f"the function {name!r}"
+    if label == repr(name) or label == "a function":
+        return f"{what}{made}"
+    return f"{what}{made}, held in {label},"

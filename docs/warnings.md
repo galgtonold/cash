@@ -1819,6 +1819,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-ANALYSIS-FAILED](#notebook-analysis-failed) | notebook | a safety check raised; the statement ran uncached |
 | [NOTEBOOK-BAILOUT](#notebook-bailout) | notebook | an internal error; the cell ran uncached |
 | [NOTEBOOK-CALLABLE-UNREAD](#notebook-callable-unread) | notebook | a function the statement calls or hands over cannot be read, so it runs every time |
+| [NOTEBOOK-MEMO-UNREAD](#notebook-memo-unread) | notebook | a `functools.cache` memo the statement read holds more answers than cash checks, so it runs every time |
 | [NOTEBOOK-CELL-SYNTAX](#notebook-cell-syntax) | notebook | an earlier cell does not parse |
 | [NOTEBOOK-CHANGED-BELOW](#notebook-changed-below) | notebook | a cell re-run on its own reads a value rebuilt without the in-place change a cell below made |
 | [NOTEBOOK-CLASS-KEPT](#notebook-class-kept) | notebook | a class's own state a cell changes could not be put back for a re-run, and another cell changes it too |
@@ -1925,6 +1926,26 @@ time, as plain Python runs it.
 
 **What to do.** Hand over a function defined in the notebook or in a
 module, by its name, so cash can read it.
+
+**When it is safe to ignore.** When the statement is cheap.
+
+### NOTEBOOK-MEMO-UNREAD {#notebook-memo-unread}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_memo_unread @62d11beb -->
+**What happened.** The statement called a helper memoised with
+`functools.cache` or `functools.lru_cache`, and that memo holds more answers
+than cash checks (4,096). A served statement must leave the memo as a real
+run would, so cash compares every answer it holds; past the limit it does
+not, and the statement was not stored. The message names the memo and how
+many answers it holds. It is shown once per statement.
+
+**Why it matters.** Your results are correct: the statement runs every
+time, as plain Python runs it. Only the time is lost.
+
+**What to do.** Keep the memo smaller (`functools.lru_cache(maxsize=4096)` or
+less), or cache the helper with `@cash.cache` instead of `functools`.
 
 **When it is safe to ignore.** When the statement is cheap.
 

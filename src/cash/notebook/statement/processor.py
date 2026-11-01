@@ -689,6 +689,8 @@ class StatementProcessor:
         self._work_running_warned: set[str] = set()
         #: Statements already warned NOTEBOOK-CALLABLE-UNREAD about.
         self._callable_unread_warned: set[str] = set()
+        #: Statements already warned NOTEBOOK-MEMO-UNREAD about.
+        self._memo_unread_warned: set[str] = set()
         self._unseen_warned: set[str] = set()
         #: ``key -> (the entry's timestamp, {output: digest of its stored
         #: value})`` a rerun under that key took (`_changed_from_refused_entry`)
@@ -1625,7 +1627,12 @@ class StatementProcessor:
         if told in self._by_string_told:
             return
         self._by_string_told.add(told)
-        fix = "import what it needs by name (`from wmod import scale`), so the key names the module."
+        if run.source_hash in self._callable_unread_warned:
+            return  # already told it runs every time (NOTEBOOK-CALLABLE-UNREAD)
+        fix = (
+            "import what it needs with an import statement rather than by a string (importlib.import_module, "
+            "globals()[...], eval), so the key names it."
+        )
         log_diagnostic(logger, "KEY-UNTRACKABLE-DEP", reason, fix)
         warn_diagnostic(CashCacheIneffectiveWarning, "KEY-UNTRACKABLE-DEP", reason, fix)
 
@@ -2407,6 +2414,8 @@ class StatementProcessor:
                 run.skip_cache = True
                 run.value_varies = True
                 run.metrics["uncacheable_reasons"].append(memos[1])
+                if memos[2]:
+                    self._warn_memo_unread(run, memos[2])
             else:
                 run.helper_memos = memos
                 run.memo_misses_before = helper_memos.misses_before(memos_before)
@@ -4023,6 +4032,28 @@ class StatementProcessor:
         location = ("<cash>", running_cell_count(self.shell))
         warn_diagnostic(CashWarning, "NOTEBOOK-SHARE-UNCHECKED", what, fix, location=location)
 
+    def _warn_memo_unread(self, run: StatementRun, memo: str) -> None:
+        """Warn, once per statement, that it runs every time because a
+        helper memo it read holds more answers than cash checks
+        (``NOTEBOOK-MEMO-UNREAD``): only the badge said so, and the cell
+        was just slow."""
+        if run.source_hash in self._memo_unread_warned:
+            return
+        self._memo_unread_warned.add(run.source_hash)
+        what = (
+            f"this statement reads the helper memo {memo}; cash checks a memo of up to "
+            f"{helper_memos.MAX_KEYED:,} answers, so this statement runs every time."
+        )
+        fix = (
+            f"keep the memo smaller (functools.lru_cache(maxsize={helper_memos.MAX_KEYED}) or less), "
+            "or cache the helper with @cash.cache instead of functools."
+        )
+        log_diagnostic(logger, "NOTEBOOK-MEMO-UNREAD", what, fix)
+        from cash.notebook.ipython.cell_count import running_cell_count  # the ipython package imports this one
+
+        location = ("<cash>", running_cell_count(self.shell))
+        warn_diagnostic(CashWarning, "NOTEBOOK-MEMO-UNREAD", what, fix, location=location)
+
     def _warn_callable_unread(self, run: StatementRun, why: str) -> None:
         """Warn, once per statement, that it runs every time because a
         callable it calls or hands over cannot be read (``NOTEBOOK-CALLABLE-UNREAD``)."""
@@ -4040,7 +4071,7 @@ class StatementProcessor:
     def _warn_share_unchecked(self, run: StatementRun, outputs: list[str], cost: float) -> None:
         """Warn, once per statement, that the variables sharing an object
         with *outputs* may not all be known (``NOTEBOOK-SHARE-UNCHECKED``)."""
-        if run.source_hash in self._share_unchecked_warned:
+        if run.source_hash in self._share_unchecked_warned or run.source_hash in self._callable_unread_warned:
             return
         self._share_unchecked_warned.add(run.source_hash)
         listed = ", ".join(f"'{name}'" for name in sorted(outputs))
