@@ -2211,6 +2211,8 @@ def _check_group(
             _count_index_data(nodes, inbound, user_ns)
         counted = dict(inbound)
         excess = excess_refs(nodes, inbound, checked)
+        if excess and _count_own_bound_methods(nodes, inbound, excess):
+            excess = excess_refs(nodes, inbound, checked)
         if excess and _count_leaf_attributes(nodes, inbound):
             excess = excess_refs(nodes, inbound, checked)
         if not excess:
@@ -2983,6 +2985,62 @@ def _attributes_in(value: Any, nodes: dict[int, Any], containers: frozenset[type
     if own is None:
         return []
     return [id(attr) for attr in own.values() if id(attr) in nodes]
+
+
+def _count_own_bound_methods(nodes: dict[int, Any], inbound: dict[int, int], keys: Iterable[int]) -> bool:
+    """Count in *inbound* the reference each bound method of a node makes to
+    that node, when the method is kept in the node's own attributes and
+    nothing else holds the method.
+
+    ``pyprind.ProgBar`` keeps ``self._stream_out = self._no_stream``. The
+    walk does not look into a library's own object, so the bar's own
+    methods counted as holders of the bar, and a loop updating it re-ran on
+    every pass. A method held anywhere else as well is still a holder.
+    Only the nodes *keys* are looked at; whether any reference was added."""
+    added = False
+    containers = EXACT_CONTAINER_TYPES
+    for key in list(keys):
+        value = nodes[key]
+        if type(value) in containers:
+            continue
+        own = own_dict(value)
+        if not own:
+            continue
+        # A method the walk read is a node: its reference is counted already.
+        names = [name for name, attr in own.items() if type(attr) is types.MethodType and id(attr) not in nodes]
+        for name in names:
+            if _bound_to_and_held_only_by(own, name, value):
+                inbound[key] += 1
+                added = True
+    return added
+
+
+class _Probe:
+    def method(self) -> None:
+        return None
+
+
+def _calibrate_dict_value() -> int:
+    """`sys.getrefcount` of a value one dict holds, read the way
+    `_bound_to_and_held_only_by` reads it."""
+    probe = _Probe()
+    holder = {"m": probe.method}
+    return _dict_value_refs(holder, "m")
+
+
+def _dict_value_refs(own: dict[str, Any], name: str) -> int:
+    return sys.getrefcount(own[name])
+
+
+def _bound_to_and_held_only_by(own: dict[str, Any], name: str, value: Any) -> bool:
+    method = own.get(name)
+    if type(method) is not types.MethodType or method.__self__ is not value:
+        return False
+    del method
+    return _dict_value_refs(own, name) <= _DICT_VALUE_REFS
+
+
+_DICT_VALUE_REFS = _calibrate_dict_value()
 
 
 def _count_memo(memo: dict[int, list | None], nodes: dict[int, Any], inbound: dict[int, int]) -> None:
