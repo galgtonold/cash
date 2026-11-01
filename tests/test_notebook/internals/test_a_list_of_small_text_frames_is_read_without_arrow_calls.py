@@ -16,14 +16,14 @@ def test_small_text_frames_make_no_arrow_call_or_column(monkeypatch):
     frames = [pd.DataFrame({"user": "u1", "at": ["(1/2/2020)", "(3/4/2020)"], "what": ["a", "b"]}) for _ in range(500)]
     if not hasattr(frames[0]["at"].array, "_pa_array"):
         pytest.skip("this pandas keeps text in Python objects")
-    calls = {"regex": 0, "iloc": 0, "dtypes": 0}
-    regex = pc.match_substring_regex
+    calls = {"arrow": 0, "iloc": 0, "dtypes": 0}
+    length = pc.binary_length
 
-    def counted_regex(*args, **kwargs):
-        calls["regex"] += 1
-        return regex(*args, **kwargs)
+    def counted_length(*args, **kwargs):
+        calls["arrow"] += 1
+        return length(*args, **kwargs)
 
-    monkeypatch.setattr(pc, "match_substring_regex", counted_regex)
+    monkeypatch.setattr(pc, "binary_length", counted_length)
     for name in ("iloc", "dtypes"):
         prop = getattr(pd.DataFrame, name)
 
@@ -34,10 +34,10 @@ def test_small_text_frames_make_no_arrow_call_or_column(monkeypatch):
         monkeypatch.setattr(pd.DataFrame, name, property(counted))
     forget_flat_reads()
     assert identity_held_reason("df_array", frames, {"df_array": frames}) is None
-    assert calls == {"regex": 0, "iloc": 0, "dtypes": 0}
+    assert calls == {"arrow": 0, "iloc": 0, "dtypes": 0}
 
     # A long column still goes to Arrow.
     forget_flat_reads()
     big = pd.DataFrame({"at": ["(1/2/2020)"] * 1000})
     assert identity_held_reason("big", big, {"big": big}) is None
-    assert calls["regex"] > 0
+    assert calls["arrow"] > 0

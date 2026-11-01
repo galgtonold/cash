@@ -50,6 +50,19 @@ def test_a_text_column_in_many_chunks_gives_the_numbers_it_spells():
     forget_flat_reads()
 
 
+def test_only_whole_ascii_numbers_of_number_length_are_read():
+    # Picked by masks, not patterns: other digits, a space, a bad hex digit
+    # or one digit too many spell nothing, as before.
+    texts = ["1234567", "999999999999999999", "1234567890123456789", "\u0661\u0662\u0663\u0664\u0665\u0666\u0667"]
+    texts += ["12 34567", "0x12g456", "0XABCDEF", "0x1234", "abc"]
+    s = pd.Series(texts * 300, dtype="string[pyarrow]")
+    forget_flat_reads()
+    parts = identity_holders._arrow_text_spelling_numbers(s)
+    assert sorted(set(parts[0].tolist())) == [1234567, 999999999999999999]
+    assert set(parts[1:]) == {0xABCDEF}
+    forget_flat_reads()
+
+
 def test_a_text_column_of_no_number_length_gives_no_numbers():
     forget_flat_reads()
     assert identity_holders._arrow_text_spelling_numbers(pd.Series(["a", "bc", "x" * 30])) == []
