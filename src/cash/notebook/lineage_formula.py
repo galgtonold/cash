@@ -536,6 +536,25 @@ def take_rng_reads_at_last_draw(
             virtual_lineage[var] = read[var]
 
 
+def rng_reads_changed(tracking_state: Any, code: str) -> list[str]:
+    """The RNG variables *code* last drew from in this kernel whose lineage
+    is not the one that draw read: the random state its key reads changed.
+
+    Read before the statement's own draw moves the stream on
+    (``_advance_rng``), as the miss reason is. Empty when the statement drew
+    from no seeded stream last time: a first run, or an unseeded draw.
+    """
+    ledger = attribute_or(tracking_state, "rng_read_at_last_draw", None)
+    if not ledger or not code:
+        return []
+    try:
+        read = ledger.get(exact_source_digest(code))
+    except (AttributeError, UnicodeEncodeError):
+        return []
+    current = tracking_state.variable_lineage
+    return sorted(var for var, was in (read or {}).items() if current.get(var) != was)
+
+
 def lineage_hidden_reads(code: str) -> set[str]:
     """Hidden variables the output lineage of *code* reads: only the draws it
     spells. An observed draw stays out: folding it in makes a refit mint a
