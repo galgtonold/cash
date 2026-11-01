@@ -337,6 +337,12 @@ def _aliases_in(value: Any, np: Any, refholder_types: tuple[type, ...]) -> tuple
         # Nothing but values, by exact type: asked at C speed (as `_walk` does).
         if not children or exact.issuperset(map(type, children)):
             continue
+        # Lists and tuples of values, nested (an object column of lists of
+        # ``(name, time)`` records): a level at a time, at C speed, where
+        # the loop below took a Python step per record -- 0.7 s a statement
+        # for 30k sessions of 20 actions.
+        if _plain_data.is_tree(children if type(children) is list else list(children), object_free_leaves()):
+            continue
         for child in children:
             ctype = type(child)
             if ctype in containers:

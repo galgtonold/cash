@@ -167,6 +167,21 @@ HOLDERS = {
         "keys = ['a'] * 9 + [hex(id(p.child))]",
         "r = keys[-1] == hex(id(p.child))",
     ),
+    "an id in a record of a list of sessions": (
+        "sessions = [[(f'a{j}', j) for j in range(20)] for _ in range(300)]\nsessions[-1].append(('c', id(p.child)))",
+        "r = sessions[-1][-1][1] == id(p.child)",
+    ),
+    "an id as text in a record of a column of sessions": (
+        "import pandas as pd\n"
+        "df = pd.DataFrame({'user': ['u'] * 300, 'acts': [[(f'a{j}', j) for j in range(20)] for _ in range(300)]})\n"
+        "df['acts'][299].append((hex(id(p.child)), 0))",
+        "r = df['acts'][299][-1][0] == hex(id(p.child))",
+    ),
+    "an id of one of its own sessions in a list of sessions": (
+        "sessions = [[(f'a{j}', j) for j in range(20)] for _ in range(300)]\n"
+        "sessions[-1].append(('self', id(sessions[0])))",
+        "r = sessions[-1][-1][1] == id(sessions[0])",
+    ),
     "an id as text among 20,000 rows of a wide text frame": (
         "import pandas as pd\n"
         "df = pd.DataFrame({f'c{i}': [str(n) for n in range(20_000)] for i in range(5)})\n"

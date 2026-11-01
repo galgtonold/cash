@@ -928,6 +928,7 @@ def _held_identities(value: Any, value_types: tuple[type, ...]) -> Iterable[tupl
     with None."""
     seen: set[int] = set()
     stack = [value]
+    exact = exact_value_types()
     while stack:
         obj = stack.pop()
         if is_value(obj, value_types) or id(obj) in seen:
@@ -946,7 +947,31 @@ def _held_identities(value: Any, value_types: tuple[type, ...]) -> Iterable[tupl
             # JSON-like data no container of which anything but its parent
             # holds: whatever else holds part of it holds *obj* itself.
             continue
-        stack.extend(children_of(obj) or ())
+        children = children_of(obj)
+        if children and not _values_in_tuples(children, exact):
+            stack.extend(children)
+
+
+def _values_in_tuples(items: Any, exact: frozenset[type]) -> bool:
+    """Do *items* hold nothing but values of the *exact* types, directly
+    or in tuples, nested? Such items have no identity of their own to find
+    (`_held_identities`). Asked a level at a time, at C speed: a list of 30k
+    sessions, each a list of ``(name, time)`` records, cost a Python step per
+    record in every statement's share check."""
+    level = items
+    for _ in range(_TUPLE_LEVELS):
+        kinds = set(map(type, level))
+        if kinds <= exact:
+            return True
+        if not kinds <= exact | {tuple}:
+            return False
+        if len(kinds) > 1:
+            level = itertools.compress(level, map(operator.is_, map(type, level), itertools.repeat(tuple)))
+        level = list(itertools.chain.from_iterable(level))
+    return False
+
+
+_TUPLE_LEVELS = 8
 
 
 def view_bases(value: Any) -> list[int]:

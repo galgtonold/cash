@@ -54,7 +54,7 @@ import re
 import sys
 import types
 import weakref
-from itertools import chain
+from itertools import chain, compress, repeat
 from typing import Any
 
 from cash._user_attrs import attribute_or, builtin_base, builtin_items, own_dict
@@ -70,6 +70,9 @@ _MAX_SCANNED = 10_000
 #: Outside the notebook's walk, a container with at least this many items
 #: is tried at C speed too (`_Walk._read_flat`).
 _SMALL_FLAT = 8
+# Lists and tuples `_read_flat` reads through, a level at a time, and how deep.
+_NESTED = frozenset({list, tuple})
+_NESTED_LEVELS = 8
 #: Most objects one walk looks at.
 _MAX_SEEN = 200_000
 #: Restored as themselves, by reference: a weak reference to one stays right.
@@ -806,7 +809,9 @@ class _Walk:
         flat: Any = items
         if not kinds <= _LEAVES:
             if not kinds <= _LEAVES | {tuple}:
-                return False
+                if self.quiet or not kinds <= _LEAVES | _NESTED:
+                    return False
+                return self._read_nested(items)
             records = [item for item in items if type(item) is tuple]
             flat = list(chain.from_iterable(records))
             kinds = set(map(type, flat))
@@ -823,6 +828,43 @@ class _Walk:
         before = set(self.numbers)
         self._read_leaves(flat, kinds)
         _keep_flat_read(items, frozenset(self.numbers - before))
+        return True
+
+    def _read_nested(self, items: list[Any]) -> bool:
+        """`_read_flat` for lists and tuples of leaves, nested: an object
+        column of 30,000 lists of ``(name, time)`` records (student_8),
+        read a level at a time instead of a list at a time. Each list and
+        tuple is seen, as walking it would see it, and counts against the
+        budget; False, with nothing seen, when a level holds anything else."""
+        level: list[Any] = items
+        nodes: list[Any] = []
+        leaves: list[Any] = []
+        lists = 0
+        for _ in range(_NESTED_LEVELS):
+            kinds = set(map(type, level))
+            if kinds <= _LEAVES:
+                leaves.extend(level)
+                break
+            if not kinds <= _LEAVES | _NESTED:
+                return False
+            if kinds <= _NESTED:
+                inner = level
+            else:
+                is_node = list(map(_NESTED.__contains__, map(type, level)))
+                inner = list(compress(level, is_node))
+                leaves.extend(compress(level, map(operator.not_, is_node)))
+            nodes.extend(inner)
+            # A list counts against the budget as walking it would; a tuple
+            # of leaves is read whole, as `_read_flat` reads records.
+            lists += sum(map(operator.is_, map(type, inner), repeat(list)))
+            if lists > self.budget:
+                return False
+            level = list(chain.from_iterable(inner))
+        else:
+            return False
+        self.budget -= lists
+        self.seen.update(map(id, nodes))
+        self._read_leaves(leaves, set(map(type, leaves)))
         return True
 
     def _read_leaves(self, flat: Any, kinds: set[type]) -> None:

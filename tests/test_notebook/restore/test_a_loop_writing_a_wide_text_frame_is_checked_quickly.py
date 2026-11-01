@@ -63,3 +63,33 @@ def test_an_arrow_column_read_before_is_not_read_again():
     assert sorted(identity_holders._arrow_text_spelling_numbers(s2)[0].tolist()) == [12345678, 87654321]
     forget_flat_reads()
     assert identity_holders._arrow_text_spelling_numbers(s) is not first
+
+
+def test_lists_of_records_are_read_a_level_at_a_time():
+    sessions = [[(f"a{j}", j) for j in range(20)] for _ in range(300)]
+    sessions[-1].append(("c", 0x7F00_1234_5670))
+    sessions[0].append((hex(0x7F00_1234_5680), 0))
+    walk = _Walk({})
+    assert walk._read_flat(sessions)
+    assert {0x7F00_1234_5670, 0x7F00_1234_5680} <= walk.numbers
+    # Each list and record is seen, as a walk would see it; a list counts
+    # against the budget.
+    assert id(sessions[5]) in walk.seen and id(sessions[5][3]) in walk.seen
+    assert walk.budget == _Walk({}).budget - 300
+
+
+def test_lists_holding_anything_but_records_are_walked():
+    sessions = [[("a", 1)] for _ in range(300)]
+    sessions[7].append({"k": 1})
+    walk = _Walk({})
+    assert not walk._read_flat(sessions)
+    assert not walk.seen
+
+
+def test_only_values_in_nested_tuples_have_no_identity_to_find():
+    from cash.notebook.shared_objects import _values_in_tuples, exact_value_types
+
+    exact = exact_value_types()
+    assert _values_in_tuples([("a", 1), ("b", (2.0, None)), "c"], exact)
+    assert not _values_in_tuples([("a", 1), ("b", [2])], exact)
+    assert not _values_in_tuples([("a", {"k": 1})], exact)
