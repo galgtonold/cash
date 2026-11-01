@@ -85,6 +85,8 @@ def closures_sharing(captured_vars: Mapping[str, Any], seconds: float) -> Closur
     is not walked unless a function elsewhere may reach into it, and
     nothing is walked when the outputs hold no function with a closure at
     all (`_holds_a_closure`)."""
+    if _holds_a_closure(captured_vars, seconds) is False:
+        return ClosureCheck([])
     limit = CpuLimit(seconds)
     plain: set[str] = set()
     for name, value in captured_vars.items():
@@ -93,11 +95,6 @@ def closures_sharing(captured_vars: Mapping[str, Any], seconds: float) -> Closur
             return ClosureCheck([], finished=False)
         if found:
             plain.add(name)
-    held = _holds_a_closure([value for name, value in captured_vars.items() if name not in plain], limit)
-    if held is None:
-        return ClosureCheck([], finished=False)
-    if not held:
-        return ClosureCheck([])
     places: set[int] = set()
     functions: list[tuple[str, types.FunctionType]] = []
     for name, value in captured_vars.items():
@@ -137,15 +134,25 @@ def _plain(value: Any, limit: CpuLimit) -> bool | None:
     return True
 
 
-def _holds_a_closure(values: list[Any], limit: CpuLimit) -> bool | None:
-    """Do *values* hold, anywhere, a function with a closure? None when
-    *limit* ran out first. Read as `_walk` reads them, but not below an
-    Arrow array that holds no Python object of its own
-    (`_arrow_type_without_code`), and every object read is kept until the
-    answer, so an id stands for one object only: a frame concatenated from
-    thousands of small ones keeps a chunk per piece, each read through its
-    ``__reduce_ex__``, and none can hold a function. Without one, nothing
-    is shared with a function and the walk is not needed."""
+def _holds_a_closure(captured_vars: Mapping[str, Any], seconds: float) -> bool | None:
+    """Do the outputs hold, anywhere, a function with a closure? None when
+    *seconds* of CPU time ran out first. Read as `_walk` reads them, JSON-
+    like data (`_plain`) aside, but not below an Arrow array that holds no
+    Python object of its own (`_arrow_type_without_code`), and every object
+    read is kept until the answer, so an id stands for one object only: a
+    frame concatenated from thousands of small ones keeps a chunk per
+    piece, each read through its ``__reduce_ex__``, and none can hold a
+    function. Without one, nothing is shared with a function and the walk
+    is not needed; with one, or past the time, the walk runs as it would
+    have, on a clock of its own."""
+    limit = CpuLimit(seconds)
+    values: list[Any] = []
+    for value in captured_vars.values():
+        found = _plain(value, limit)
+        if found is None:
+            return None
+        if not found:
+            values.append(value)
     seen: dict[int, Any] = {}
     level = _fresh([values], seen, limit)
     while level:
