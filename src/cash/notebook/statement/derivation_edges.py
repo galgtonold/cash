@@ -60,6 +60,7 @@ from ..shared_objects import (
     is_value,
     library_value_types,
     object_free_leaves,
+    value_record_lists,
     view_bases,
 )
 
@@ -341,7 +342,11 @@ def _aliases_in(value: Any, np: Any, refholder_types: tuple[type, ...]) -> tuple
         # ``(name, time)`` records): a level at a time, at C speed, where
         # the loop below took a Python step per record -- 0.7 s a statement
         # for 30k sessions of 20 actions.
-        if _plain_data.is_tree(children if type(children) is list else list(children), object_free_leaves()):
+        if value_record_lists(children) or _plain_data.is_tree(
+            children if type(children) is list else list(children), object_free_leaves()
+        ):
+            # Lists of value records, many (a frame's object column of
+            # sessions): what they hold is read once for the look's checks.
             continue
         for child in children:
             ctype = type(child)

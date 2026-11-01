@@ -851,8 +851,68 @@ def _pandas_objects(value: Any) -> list[Any]:
                 _plain_data.note_held_column_once(values, row, 1, held_once)
                 if held_once:
                     continue
-            found.extend(itertools.compress(items, map(operator.not_, map(exact.__contains__, map(type, items)))))
+            cells = list(itertools.compress(items, map(operator.not_, map(exact.__contains__, map(type, items)))))
+            if len(cells) >= _LISTS_AT_ONCE and _plain_data.in_a_look() and set(map(type, cells)) == {list}:
+                # A column of lists (sessions of ``(action, time)``
+                # records): what they hold is read once in this look
+                # (`_values_in_record_lists`), not by each walk.
+                key = _record_lists_key(cells)
+                noted = _plain_data.column_note(key)
+                if noted is None or noted[0] is not values or noted[1][0] != row:
+                    _plain_data.note_on_column(key, values, [row, None, None])
+            found.extend(cells)
     return found
+
+
+def _record_lists_key(lists: list[Any]) -> tuple[Any, ...]:
+    """What `_values_in_record_lists` keeps its answer for *lists* under."""
+    return (_RECORD_LISTS, len(lists), id(lists[0]), id(lists[-1]))
+
+
+_RECORD_LISTS = "record lists"
+
+
+def _values_in_record_lists(lists: list[Any], exact: frozenset[type]) -> bool:
+    """`_values_in_tuples` of what *lists*, each a list, hold. For the cells
+    of a frame's object column (`_pandas_objects`), answered once in a
+    `one_look`: the share walk, the holder search, the view search and the
+    alias check each read the 1.7 million ``(action, time)`` records of
+    87,000 sessions again, a second or more each (student_8). The answer
+    kept is used only for the very lists it was found for, told by
+    identity while the column holding them is alive."""
+    noted = _plain_data.column_note(_record_lists_key(lists)) if len(lists) >= _LISTS_AT_ONCE else None
+    same = noted is not None and _cells_are(noted[0], noted[1][0], lists, exact)
+    if same:
+        note = noted[1]
+        if note[1] is not None and note[2] is exact:
+            return note[1]
+    found = _values_in_tuples(list(itertools.chain.from_iterable(lists)), exact)
+    if same:
+        note[1], note[2] = found, exact
+    return found
+
+
+def _cells_are(column: Any, row: int, lists: list[Any], exact: frozenset[type]) -> bool:
+    """Whether *lists* are, by identity and in order, the cells of row *row*
+    of the object array *column* that are no value of the *exact* types."""
+    rows = column.reshape(-1, column.shape[-1]) if column.ndim > 1 else (column,)
+    items = rows[row].tolist()
+    cells = list(itertools.compress(items, map(operator.not_, map(exact.__contains__, map(type, items)))))
+    return len(cells) == len(lists) and all(map(operator.is_, cells, lists))
+
+
+def value_record_lists(children: Any) -> bool:
+    """Whether *children* are many lists of values and of tuples of values,
+    nested (`_values_in_tuples`): an object column of sessions, each a list
+    of ``(action, time)`` records. Such lists hold nothing but values, and
+    for a frame's column the answer is the look's (`_values_in_record_lists`)."""
+    if (
+        type(children) is not list
+        or len(children) < _LISTS_AT_ONCE
+        or not all(map(operator.is_, map(type, children), itertools.repeat(list)))
+    ):
+        return False
+    return _values_in_record_lists(children, exact_value_types())
 
 
 _LEAF, _DEQUE, _WRAPPING, _ARRAY, _PANDAS = "leaf", "deque", "wrapping", "array", "pandas"
@@ -978,7 +1038,7 @@ def _held_identities(value: Any, value_types: tuple[type, ...]) -> Iterable[tupl
             # once, where each took a step through the stack.
             lists = list(itertools.compress(children, is_list))
             rest = list(itertools.compress(children, map(operator.not_, is_list)))
-            if _values_in_tuples(rest, exact) and _values_in_tuples(list(itertools.chain.from_iterable(lists)), exact):
+            if _values_in_tuples(rest, exact) and _values_in_record_lists(lists, exact):
                 for held in lists:
                     if id(held) not in seen:
                         seen.add(id(held))
@@ -1102,7 +1162,7 @@ def _may_hold_views(children: Any, exact: frozenset[type]) -> Any:
     if sum(is_list) < _LISTS_AT_ONCE:
         return children
     lists = list(itertools.compress(children, is_list))
-    if not _values_in_tuples(list(itertools.chain.from_iterable(lists)), exact):
+    if not _values_in_record_lists(lists, exact):
         return children
     return list(itertools.compress(children, map(operator.not_, is_list)))
 
@@ -3840,9 +3900,7 @@ def _descend(
                     stack.append(child)
             elif meets is not None and owner[ckey] != name:
                 meets.add((owner[ckey], name))
-        if lists and (
-            len(lists) < _LISTS_AT_ONCE or not _values_in_tuples(list(itertools.chain.from_iterable(lists)), exact)
-        ):
+        if lists and (len(lists) < _LISTS_AT_ONCE or not _values_in_record_lists(lists, exact)):
             stack.extend(lists)
 
 

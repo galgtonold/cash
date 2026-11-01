@@ -589,6 +589,9 @@ _WIDER = object()
 #: `held_column_once`'s part of a look's memo, beside each column's id.
 _HELD_COLUMN = object()
 
+#: `note_on_column`'s part of a look's memo, beside each note's key.
+_COLUMN_NOTE = object()
+
 
 def held_column_once(column: Any, row: int, extra: int) -> bool | None:
     """Within a `one_look`, whether `held_items_facts` found the cells of
@@ -616,6 +619,35 @@ def note_held_column_once(column: Any, row: int, extra: int, held_once: bool) ->
         return
 
 
+def column_note(key: Any) -> tuple[Any, Any] | None:
+    """Within a `one_look`, ``(column, note)``: what `note_on_column` kept
+    under *key*, with the array it is about, while that array is alive;
+    None otherwise. A note is about what the cells held when it was made:
+    nothing of the user's runs in the look (`forget_wider_facts`)."""
+    look = _LOOKED.get()
+    if look is None:
+        return None
+    known = look[1].get((key, _COLUMN_NOTE))
+    if known is None:
+        return None
+    column = known[0]()
+    return None if column is None else (column, known[1])
+
+
+def note_on_column(key: Any, column: Any, note: Any) -> None:
+    """Keep *note*, about the object array *column*, for the open
+    `one_look` under *key* (`column_note`). The array is held weakly, and
+    *note* must hold no object of the user's: the checks in the look count
+    references."""
+    look = _LOOKED.get()
+    if look is None:
+        return
+    try:
+        look[1][(key, _COLUMN_NOTE)] = (weakref.ref(column), note)
+    except TypeError:  # no weak reference to it: asked again
+        return
+
+
 def forget_wider_facts() -> None:
     """Drop what the open `one_look` found over wider leaves (`_wider_facts`),
     before code of the user's may run in it and change a value it walked."""
@@ -623,7 +655,11 @@ def forget_wider_facts() -> None:
     if look is None:
         return
     memo = look[1]
-    for key in [key for key in memo if type(key) is tuple and (key[1] is _WIDER or key[1] is _HELD_COLUMN)]:
+    for key in [
+        key
+        for key in memo
+        if type(key) is tuple and (key[1] is _WIDER or key[1] is _HELD_COLUMN or key[1] is _COLUMN_NOTE)
+    ]:
         del memo[key]
 
 
