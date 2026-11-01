@@ -578,7 +578,11 @@ def _has_class_state(cls: type, value_types: tuple[type, ...]) -> bool:
     )
 
 
-#: What a class attribute that keeps no value is.
+#: What a class attribute that keeps no value is. A C type's own methods
+#: (``datetime.now``, ``defaultdict.copy``) are descriptors of its code that
+#: hold nothing: counted as state, ``from datetime import datetime`` made
+#: every later statement that handed a big list to a call search for what
+#: keeps it (student_8: 2 to 4 s for ``print(len(logs))``).
 _NO_STATE = (
     types.FunctionType,
     staticmethod,
@@ -587,6 +591,9 @@ _NO_STATE = (
     type,
     types.MemberDescriptorType,
     types.GetSetDescriptorType,
+    types.MethodDescriptorType,
+    types.ClassMethodDescriptorType,
+    types.WrapperDescriptorType,
 )
 
 

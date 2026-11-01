@@ -835,7 +835,14 @@ def _pandas_objects(value: Any) -> list[Any]:
                 _plain_data.note_held_column_once(values, row, 1, True)
                 continue
             items = column.tolist()
-            if exact.issuperset(set(map(type, items))):
+            if exact.issuperset(set(map(type, items))) or _values_in_tuples(items, exact):
+                # Values, or tuples of values however nested: the ``(action,
+                # time)`` records an ``explode`` leaves, shared with the
+                # sessions they came from. Unchangeable and holding nothing
+                # that can change, a tuple has no identity a holder could
+                # rely on (`_plain_data._without_leaf_tuples`); each check
+                # after a statement walked two million of them one by one
+                # (student_8). An ``id()`` of one is the identity check's.
                 _plain_data.note_held_column_once(values, row, 1, True)
                 continue
             if held_once is None:
@@ -1046,6 +1053,7 @@ def view_base_names(
     views: list[Any] = []
     seen: set[int] = set()
     plain_leaves = object_free_leaves()
+    exact = exact_value_types()
     stack = [value for value in values if not _plain_data.is_tree(value, plain_leaves)]
     pops = 0
     while stack:
@@ -1060,7 +1068,7 @@ def view_base_names(
         if found:
             bases.update(found)
             views.append(obj)
-        stack.extend(children_of(obj) or ())
+        stack.extend(_may_hold_views(children_of(obj) or (), exact))
     del stack, seen
     if not bases or _bases_held_by_views_alone(views):
         return set()
@@ -1079,6 +1087,24 @@ def view_base_names(
         except WalkBudgetExceeded:
             raise ViewBasesCutShort(names) from None
     return names
+
+
+def _may_hold_views(children: Any, exact: frozenset[type]) -> Any:
+    """*children* but what can hold no array: values and tuples of them,
+    and, many lists at once, lists of those, told at C speed. An object
+    column of 87,000 sessions, each a list of 20 ``(action, time)``
+    records, was walked a record at a time (14 s), and cut short by the
+    walk budget it linked the statement to every variable it read
+    (student_8)."""
+    if not children or _values_in_tuples(children, exact):
+        return ()
+    is_list = list(map(operator.is_, map(type, children), itertools.repeat(list)))
+    if sum(is_list) < _LISTS_AT_ONCE:
+        return children
+    lists = list(itertools.compress(children, is_list))
+    if not _values_in_tuples(list(itertools.chain.from_iterable(lists)), exact):
+        return children
+    return list(itertools.compress(children, map(operator.not_, is_list)))
 
 
 def _bases_held_by_views_alone(views: list[Any]) -> bool:
@@ -2394,10 +2420,18 @@ def _opaque_parts(obj: Any) -> tuple[list[Any], bool] | None:
     items = [
         item
         for array in arrays
-        if instance_of(array, np.ndarray) and array.dtype.hasobject
+        if instance_of(array, np.ndarray) and array.dtype.hasobject and not _nothing_to_find(array)
         for item in _items_of(array)
     ]
     return _not_alone(items), False
+
+
+def _nothing_to_find(array: Any) -> bool:
+    """Whether `_pandas_objects` found in this look that no cell of the
+    object block *array* is to be looked for (`held_column_once`): its
+    verdict, where `_not_alone` read the two million cells again."""
+    rows = array.shape[0] if array.ndim > 1 else 1
+    return all(_plain_data.held_column_once(array, row, 1) for row in range(rows))
 
 
 #: What pandas' ``infer_dtype`` names an object array of values only.
@@ -2442,7 +2476,11 @@ def _not_alone(parts: list[Any]) -> list[Any]:
     200,000 token lists read one by one passed `_INSIDE_MAX_OBJECTS` and
     refused the statement."""
     exact = exact_value_types()
-    if exact.issuperset(map(type, parts)):
+    if exact.issuperset(map(type, parts)) or _values_in_tuples(parts, exact):
+        # Tuples of values, nested, are no more than values here: nothing
+        # in them can change (`_read_down` passes each over). Two million
+        # ``(action, time)`` records an ``explode`` shares with the
+        # sessions were each asked so, 48 s a statement (student_8).
         return []
     return [part for part in parts if not _alone(part, exact, _ALONE_COUNT)]
 

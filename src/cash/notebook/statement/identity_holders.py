@@ -73,6 +73,7 @@ _SMALL_FLAT = 8
 # Lists and tuples `_read_flat` reads through, a level at a time, and how deep.
 _NESTED = frozenset({list, tuple})
 _NESTED_LEVELS = 8
+_JUST_TUPLES = frozenset({tuple})
 #: Most objects one walk looks at.
 _MAX_SEEN = 200_000
 #: Restored as themselves, by reference: a weak reference to one stays right.
@@ -834,14 +835,22 @@ class _Walk:
                 if self.quiet or not kinds <= _LEAVES | _NESTED:
                     return False
                 return self._read_nested(items)
-            records = [item for item in items if type(item) is tuple]
+            records = items if kinds == _JUST_TUPLES else [item for item in items if type(item) is tuple]
             flat = list(chain.from_iterable(records))
             kinds = set(map(type, flat))
             if not kinds <= _LEAVES:
+                if not self.quiet and kinds <= _LEAVES | _NESTED:
+                    # Records holding lists of records (``(user, [(action,
+                    # time), ...])``, student_8's 87,000 sessions): read a
+                    # level at a time, where each list took a read of its own.
+                    return self._read_nested(items)
                 return False
             if not self.quiet:
-                # Walked, each would be seen: an id() of one is the value's own.
-                self.seen.update(map(id, records))
+                # Walked, each would be seen: an id() of one is the value's
+                # own. Their ids only when asked (`seen_all`), as
+                # `_read_nested` keeps them: a set of two million ids was a
+                # third of a frame's read.
+                self._unseen.append(records)
         if self.quiet:
             return True
         if not big or flat is not items or not kinds <= _KEPT_KINDS:

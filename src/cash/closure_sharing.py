@@ -17,11 +17,12 @@ seen.
 from __future__ import annotations
 
 import io
+import operator
 import pickle
 import sys
 import types
 from collections.abc import Iterable, Mapping
-from itertools import chain, islice
+from itertools import chain, compress, islice, repeat
 from typing import Any, NamedTuple
 
 from cash._clock import CpuLimit
@@ -173,6 +174,7 @@ def _fresh(held: list[Iterable[Any]], places: set[int], limit: CpuLimit) -> list
     fresh: list = []
     while chunk := list(islice(items, _CHUNK)):
         if not leaves.issuperset(map(type, chunk)):
+            chunk = _without_leaf_records(chunk)
             new = {id(item): item for item in chunk if type(item) not in leaves}
             for key in places.intersection(new):
                 del new[key]
@@ -181,6 +183,20 @@ def _fresh(held: list[Iterable[Any]], places: set[int], limit: CpuLimit) -> list
         if limit.passed():
             return None
     return fresh
+
+
+def _without_leaf_records(chunk: list) -> list:
+    """*chunk* without its tuples, when each of them holds leaves alone:
+    such a tuple holds no function and nothing that can change, so no
+    identity of it a restore must keep, as a leaf has none. Told at C speed;
+    a frame's two million ``(action, time)`` records were each made a place
+    one by one, 2 s a statement (student_8)."""
+    is_tuple = list(map(operator.is_, map(type, chunk), repeat(tuple)))
+    if not any(is_tuple):
+        return chunk
+    if not _LEAVES.issuperset(map(type, chain.from_iterable(compress(chunk, is_tuple)))):
+        return chunk
+    return list(compress(chunk, map(operator.not_, is_tuple)))
 
 
 #: Per class, held weakly: ``(index in its MRO, name)`` of each slot, not
