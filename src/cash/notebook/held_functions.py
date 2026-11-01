@@ -650,8 +650,11 @@ def _walk(
     globals_ids = _globals_ids(namespace)
     functions: dict[int, Any] = {}
     classes: dict[int, type] = {}
-    #: What the walk met, each by `_identity_keys`.
+    #: What the walk met, each by `_identity_keys`. The process's standard
+    #: streams and the IPython shell count as met (`_infrastructure`).
     seen: set[Any] = set(_identity_keys([value], {type(value)}))
+    infrastructure = _infrastructure()
+    seen.update(_identity_keys(infrastructure, set(map(type, infrastructure))))
     #: The objects to visit next, by exact type.
     level: list[tuple[type, list[Any]]] = [(type(value), [value])]
     visited = 0
@@ -678,6 +681,27 @@ def _walk(
                 raise _NoNotebookFunctions
         level = _next_level(children, seen)
     return tuple(functions.values()), tuple(classes.values()), True
+
+
+def _infrastructure() -> list[Any]:
+    """The objects every program's values may lead to without
+    holding the notebook's functions: the standard streams and the IPython
+    shell. ``pbar = pyprind.ProgBar(n, stream=sys.stdout)`` holds the
+    kernel's output stream, whose session leads to the kernel, the shell and
+    its ``user_ns``: the walk found every function of the notebook there,
+    and one using ``globals()``, called or not, made each statement reading
+    ``pbar`` run every time (E10's loop loading 50,000 reviews, 230 s). A
+    namespace a value holds of its own (``box.ns = globals()``) is still
+    walked."""
+    found = [
+        stream for stream in (sys.stdout, sys.stderr, sys.stdin, sys.__stdout__, sys.__stderr__) if stream is not None
+    ]
+    shell_module = sys.modules.get("IPython.core.interactiveshell")
+    shell_class = attribute_or(shell_module, "InteractiveShell", None)
+    shell = attribute_or(shell_class, "_instance", None)
+    if shell is not None:
+        found.append(shell)
+    return found
 
 
 def _next_level(children: list[Any], seen: set[Any]) -> list[tuple[type, list[Any]]]:
