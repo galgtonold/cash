@@ -444,15 +444,6 @@ _HEX_WHOLE = re.compile(r"0[xX][0-9a-fA-F]{5,16}")
 _FEW_TEXTS = 64
 
 
-@functools.cache
-def _no_numbers(numpy: Any) -> Any:
-    """An empty array of 8-byte integers, read only, shared by every few
-    texts that spell no decimal number."""
-    empty = numpy.array([], dtype=numpy.int64)
-    empty.flags.writeable = False
-    return empty
-
-
 def _few_texts_spelling_numbers(texts: list[Any]) -> list[Any]:
     """What `_arrow_text_numbers` finds in a few *texts* (None for a
     missing value), the same way: the decimal numbers as one NumPy array of
@@ -460,7 +451,9 @@ def _few_texts_spelling_numbers(texts: list[Any]) -> list[Any]:
     import numpy
 
     decimal = [int(text) for text in texts if text is not None and _DECIMAL_WHOLE.fullmatch(text)]
-    parts: list[Any] = [numpy.array(decimal, dtype=numpy.int64) if decimal else _no_numbers(numpy)]
+    # An array of its own each time, as Arrow's read makes: each is one
+    # object the walk counts against its budget (`_MAX_SEEN`).
+    parts: list[Any] = [numpy.array(decimal, dtype=numpy.int64)]
     parts.extend(int(text, 16) for text in texts if text is not None and _HEX_WHOLE.fullmatch(text))
     return parts
 
