@@ -92,7 +92,7 @@ from cash.notebook.statement.imports import (
     redundant_import_names,
 )
 from cash.notebook.statement.in_loop import InLoopChanges
-from cash.notebook.statement.input_change import input_change_reason
+from cash.notebook.statement.input_change import input_change_reason, stored_input_change_reason
 from cash.notebook.statement.lineage import StatementLineageBuilder, clear_rebound_edges
 from cash.notebook.statement.miss_guard import GUARD_SKIP_REASON, MissGuard
 from cash.notebook.statement.mutation_routing import MutationRouting
@@ -2722,6 +2722,15 @@ class StatementProcessor:
             metrics, self.cash_instance.backend, run.cache_key, run.code, execution.cost
         ):
             reason = input_change_reason(self.tracking_state, run.inputs, run.outputs)
+            if reason is None:
+                reason = stored_input_change_reason(
+                    self.cash_instance.backend,
+                    run.cache_key,
+                    run.source_hash,
+                    run.inputs or (),
+                    run.outputs or (),
+                    self.tracking_state.variable_lineage,
+                )
             if reason is not None:
                 metrics["miss_reason"] = reason
 

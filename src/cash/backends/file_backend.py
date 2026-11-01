@@ -1191,6 +1191,17 @@ class FileBackend(CacheBackend):
             return None
         return self.evictor.budget()
 
+    def previous_version(self, slot: str, besides: str) -> str | None:
+        """See `CacheBackend.previous_version`: from the version index, one
+        still on disk or queued for it."""
+        try:
+            for key in self._versions.newest_first(slot):
+                if key != besides and (self._writes.has_pending(key) or os.path.exists(self._get_path(key))):
+                    return key
+        except (OSError, CacheBackendError):
+            logger.debug("Could not read the versions of slot %s", slot, exc_info=True)
+        return None
+
     def eviction_note(self, key: str) -> Any:
         """Did this tier's cap evict *key*'s entry (`eviction_log`)?"""
         if self._unusable:

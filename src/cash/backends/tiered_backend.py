@@ -290,6 +290,10 @@ class TieredBackend(CacheBackend):
         """The first tier's note that has one."""
         return next((n for n in (t.eviction_note(key) for t in self.backends) if n is not None), None)
 
+    def previous_version(self, slot: str, besides: str) -> str | None:
+        """The first tier's answer that has one."""
+        return next((k for k in (t.previous_version(slot, besides) for t in self.backends) if k is not None), None)
+
     def take_storage_notices(self) -> list[str]:
         return [n for t in self.backends for n in t.take_storage_notices()]
 

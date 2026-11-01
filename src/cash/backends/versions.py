@@ -164,6 +164,14 @@ class VersionIndex:
             self._append([f"{slot} {key} {int(size)} {float(cost)!r} {float(used)!r}\n"])
             return dict(versions)
 
+    def newest_first(self, slot: str) -> list[str]:
+        """The keys of *slot*'s versions, the most recently used first."""
+        with self._lock:
+            if self._slots is None:
+                self._load()
+            versions = list(self._slots.get(slot, {}).values())
+        return [v.key for v in sorted(versions, key=lambda v: v.used, reverse=True)]
+
     def touch(self, key: str, used: float) -> None:
         """A read of *key*: it becomes its slot's most recently used version."""
         with self._lock:
