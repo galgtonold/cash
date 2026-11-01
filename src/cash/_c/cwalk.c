@@ -914,6 +914,106 @@ cleanup:
 }
 
 /*
+ * held_beyond(value, leaves, limit) -> list | False | None | NotImplemented
+ *
+ * The walk of `_plain_data.held_beyond_parents` in one pass: the exact
+ * dicts, lists and tuples below *value* whose reference count says that
+ * something besides their parent holds them, or their parent more than
+ * once, level by level (a level's containers in order). The walk holds no
+ * references, so a container held by its parent alone has a count of one.
+ * Tuples are listed whatever they hold; the caller drops those holding
+ * leaves alone. False when more than *limit* containers other than tuples
+ * are found, None when *value* is not JSON-like data over *leaves* (as
+ * `tree_levels` raises `_NotPlain`), NotImplemented for a type with a
+ * metaclass of its own.
+ */
+static PyObject *py_held_beyond(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs != 3 || !is_typeset(args[1]) || !PyLong_CheckExact(args[2])) {
+        PyErr_SetString(PyExc_TypeError, "held_beyond(value, leaves, limit)");
+        return NULL;
+    }
+    Py_ssize_t limit = PyLong_AsSsize_t(args[2]);
+    if (limit == -1 && PyErr_Occurred()) return NULL;
+    PyObject *value = args[0];
+    if (!is_node_type(Py_TYPE(value))) Py_RETURN_NONE;
+    TypeSet leaves;
+    ts_init(&leaves, args[1]);
+    PtrVec level = {0}, flat = {0}, found = {0};
+    int notplain = 0, unknown = 0, over = 0;
+    Py_ssize_t others = 0;
+    PyObject *out = NULL;
+    GCPause gp;
+    gc_pause(&gp);
+    Py_INCREF(value);
+    if (pv_push(&level, value) < 0) goto fail;
+    for (int depth = 0;; depth++) {
+        if (depth == MAX_LEVELS) { notplain = 1; goto done; }
+        flat.n = 0;
+        for (Py_ssize_t i = 0; i < level.n; i++) {
+            PyObject *c = level.v[i];
+            if (PyDict_CheckExact(c)) {
+                PyObject *k, *v;
+                Py_ssize_t pos = 0;
+                while (PyDict_Next(c, &pos, &k, &v)) {
+                    int r = ts_has(&leaves, Py_TYPE(k));
+                    if (r == -1) goto fail;
+                    if (r == -2) { unknown = 1; goto done; }
+                    if (!r) { notplain = 1; goto done; }
+                    if (pv_push(&flat, v) < 0) goto fail;
+                }
+            } else {
+                Py_ssize_t n = PySequence_Fast_GET_SIZE(c);
+                PyObject **items = PySequence_Fast_ITEMS(c);
+                for (Py_ssize_t j = 0; j < n; j++)
+                    if (pv_push(&flat, items[j]) < 0) goto fail;
+            }
+        }
+        /* As `tree_levels`: a type among the leaves is a leaf; the level is
+         * the last when all its types are; any other must be a node. */
+        int all_leaves = 1;
+        PyTypeObject *last = NULL;
+        for (Py_ssize_t i = 0; i < flat.n; i++) {
+            PyTypeObject *t = Py_TYPE(flat.v[i]);
+            if (t == last) continue;
+            last = t;
+            int r = ts_has(&leaves, t);
+            if (r == -1) goto fail;
+            if (r == -2) { unknown = 1; goto done; }
+            if (!r) {
+                all_leaves = 0;
+                if (!is_node_type(t)) { notplain = 1; goto done; }
+            }
+        }
+        if (all_leaves) break;
+        level.n = 0;
+        for (Py_ssize_t i = 0; i < flat.n; i++) {
+            PyObject *o = flat.v[i];
+            if (!is_node_type(Py_TYPE(o))) continue;
+            if (pv_push(&level, o) < 0) goto fail;
+            if (Py_REFCNT(o) > 1 && !over) {
+                if (!PyTuple_CheckExact(o) && ++others > limit) over = 1;
+                else if (pv_push(&found, o) < 0) goto fail;
+            }
+        }
+    }
+done:
+    if (!notplain && !unknown) out = over ? Py_NewRef(Py_False) : list_of(&found);
+    goto cleanup;
+fail:
+    notplain = unknown = 0;
+cleanup:
+    pv_free(&level);
+    pv_free(&flat);
+    pv_free(&found);
+    Py_DECREF(value);
+    gc_resume(&gp);
+    if (out) return out;
+    if (PyErr_Occurred()) return NULL;
+    if (unknown) return NOT_IMPL();
+    Py_RETURN_NONE; /* not plain */
+}
+
+/*
  * shared_parts(value, min_rows, max_depth, max_keys, immutable_below) -> dict
  *
  * memory_backend._shared_parts(value): {id(part): part} for the lists and
@@ -1354,6 +1454,8 @@ static PyMethodDef cwalk_methods[] = {
     {"tree_facts", (PyCFunction)(void (*)(void))py_tree_facts, METH_FASTCALL,
      "tree_facts(value, leaves, want_walk, top_extra, picks, mode=0) -> (types, held_once, size, nodes, walk) | None | "
      "NotImplemented"},
+    {"held_beyond", (PyCFunction)(void (*)(void))py_held_beyond, METH_FASTCALL,
+     "held_beyond(value, leaves, limit) -> list | False | None | NotImplemented"},
     {"shared_parts", (PyCFunction)(void (*)(void))py_shared_parts, METH_FASTCALL,
      "shared_parts(dict, min_rows, max_depth, max_keys, immutable_below) -> dict"},
     {"items_estimate", (PyCFunction)(void (*)(void))py_items_estimate, METH_FASTCALL,
