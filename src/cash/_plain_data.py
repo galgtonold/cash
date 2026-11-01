@@ -1257,9 +1257,10 @@ def spine_copy(value: Any, memo: dict[int, Any] | None = None, walk: list | None
 
     *memo*, when given, is the table ``copy.deepcopy`` keeps, ``id(original)
     -> copy``: this adds every container it made, so a value held by two
-    names in one stored entry still comes back as one object; and gives up
-    when a list or dict in *value* is already there -- copied for another
-    name, which must keep sharing it.
+    names in one stored entry still comes back as one object. A list or
+    dict in *value* already there was copied for another name, which must
+    keep sharing it: a list of immutables gets that copy in its place, and
+    anything else makes it give up.
 
     *walk* is `tree_walk` of *value*, when the caller has it.
     """
@@ -1424,6 +1425,24 @@ def _copy_levels(walk: list):
         yield level, flat, types, key_types
 
 
+#: `_premade_for`'s answer when a container in *memo* cannot be taken as it is.
+_NOT_PREMADE: dict[int, Any] = {}
+
+
+def _premade_for(held: list, memo: dict[int, Any]) -> dict[int, Any]:
+    """``id -> copy`` from *memo* for the containers in *held* it has: each
+    must be a list of immutables all the way down (`immutable_below`), or
+    the answer is `_NOT_PREMADE`."""
+    premade: dict[int, Any] = {}
+    for container in compress(held, map(memo.__contains__, map(id, held))):
+        if type(container) is tuple:
+            continue
+        if type(container) is not list or not immutable_below(container):
+            return _NOT_PREMADE
+        premade[id(container)] = memo[id(container)]
+    return premade
+
+
 def _spine_copy(value: list | tuple | dict, memo: dict[int, Any] | None, walk: list | None = None) -> Any:
     # `nodes[k]`: the containers at level k; `flats[k]`: what they hold.
     nodes: list[list] = []
@@ -1449,7 +1468,17 @@ def _spine_copy(value: list | tuple | dict, memo: dict[int, Any] | None, walk: l
         if refs and max(refs) > base:
             held_elsewhere.extend(compress(nodes[k], map(base.__lt__, refs)))
     shared = [id(c) for c in held_elsewhere if type(c) is not tuple]
-    if len(set(shared)) != len(shared) or (memo and not memo.keys().isdisjoint(shared)):
+    if len(set(shared)) != len(shared):
+        return None
+    # Copied for another name already (*memo*): that copy goes in its place,
+    # as a pickle through the memo would put it, when it is a list of
+    # immutables -- nothing below it gets a copy here that a name holding a
+    # part of it would not share. ``for uid, actions in data:`` leaves
+    # ``actions``, the last session's list of ``(name, datetime)`` pairs,
+    # and the loop's entry named it before ``data``: the whole log went
+    # through pickle, 1.5 s against 0.03 s, as often as the loop ran.
+    premade = _premade_for(held_elsewhere, memo) if memo and not memo.keys().isdisjoint(shared) else None
+    if premade is _NOT_PREMADE:
         return None
     for k in range(len(nodes) - 2, -1, -1):
         frozen[k] = frozen[k] and frozen[k + 1]
@@ -1474,13 +1503,18 @@ def _spine_copy(value: list | tuple | dict, memo: dict[int, Any] | None, walk: l
                     _put_at(rebuilt, mask, made)
                     if memo is not None:
                         memo.update(zip(map(id, compress(nodes[k], mask)), made))
+            if premade:
+                for at in compress(range(len(nodes[k])), map(premade.__contains__, map(id, nodes[k]))):
+                    rebuilt[at] = memo[id(nodes[k][at])] = premade[id(nodes[k][at])]
         else:
             rebuilt = []
             at = 0
             for node in nodes[k]:
                 end = at + len(node)
                 kind = type(node)
-                if kind is list:
+                if premade and id(node) in premade:
+                    copied = premade[id(node)]
+                elif kind is list:
                     copied = new_flat[at:end]
                 elif kind is dict:
                     copied = dict(zip(node, new_flat[at:end]))

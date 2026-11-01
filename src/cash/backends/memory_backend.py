@@ -687,10 +687,27 @@ class InMemoryBackend(CacheBackend):
 
     @staticmethod
     def _time_copy(
-        value: Any, key: str, *, required: bool, walk: list | None, premade: dict[int, Any] | None
+        value: Any,
+        key: str,
+        *,
+        required: bool,
+        walk: list | None,
+        premade: dict[int, Any] | None,
+        loads: list | None = None,
     ) -> float | None:
         """Seconds unpickling another copy of *value* takes, the copy thrown
-        away; None when that copy was not a pickle round trip throughout."""
+        away; None when that copy was not a pickle round trip throughout.
+
+        *loads* are the pickles the first copy read (`_UNPICKLED.loads`):
+        when it read every one of them, those same bytes are read again,
+        which is all that is timed. Pickling the value a second time only
+        to make them again took as long as the first copy did (two
+        million rows of tuples and datetimes: a second of a loop's store,
+        for 0.06 s of unpickling)."""
+        if loads is not None:
+            again = _time_loads_again(loads)
+            if again is not None:
+                return again
         fell_back: list[bool] = []
         by_deepcopy: list[bool] = []
         _UNPICKLED.seconds = 0.0
@@ -1029,6 +1046,10 @@ class InMemoryBackend(CacheBackend):
         #: builds for the pickle is freed once written, so the next one could
         #: get its address and be handed the first one's copy.
         alive: list[Any] = []
+        #: Types found to be none of the kinds copied apart below: an object
+        #: of one is only looked up in *memo*. Asked of every tuple and
+        #: datetime of two million rows, the checks were a third of the copy.
+        pickled_as_usual: set[type] = builtins.set()
 
         def persistent_id(obj: Any) -> int | None:
             obj_type = type(obj)
@@ -1037,6 +1058,8 @@ class InMemoryBackend(CacheBackend):
             key = id(obj)
             if key in memo:
                 return key
+            if obj_type in pickled_as_usual:
+                return None
             if obj_type is ndarray and not obj.dtype.hasobject:
                 memo[key] = _copy_array(obj)  # its data alone: no pickling of its dtype and shape
                 alive.append(obj)
@@ -1070,6 +1093,8 @@ class InMemoryBackend(CacheBackend):
                     memo[key] = _copy_polars(obj)
                 alive.append(obj)
                 return key
+            if obj_type is not ndarray:  # an array of objects: asked per array
+                pickled_as_usual.add(obj_type)
             return None
 
         current_names: set[int] = set()
@@ -1104,11 +1129,17 @@ class InMemoryBackend(CacheBackend):
                     buffers=[bytes(b) if memoryview(b).readonly else bytearray(b) for b in buffers],
                 )
                 unpickler.persistent_load = memo.__getitem__
+                loads = getattr(_UNPICKLED, "loads", None)
+                if loads is not None:
+                    loads.append(None)  # a load that raises cannot be read again (`_time_loads_again`)
                 started = time.perf_counter()
                 try:
-                    return unpickler.load()
+                    copied = unpickler.load()
                 finally:
                     _UNPICKLED.seconds = getattr(_UNPICKLED, "seconds", 0.0) + time.perf_counter() - started
+                if loads is not None:
+                    loads[-1] = (stream, buffers, memo)
+                return copied
             except WouldWriteAFile as exc:
                 # Not by deepcopy either: it rebuilds by the same recipe.
                 raise TypeError(f"copying it would {exc.args[0].removeprefix('rebuilding it would ')}") from exc
@@ -1865,6 +1896,7 @@ class InMemoryBackend(CacheBackend):
             by_spine: list[bool] = []
             by_deepcopy: list[bool] = []
             _UNPICKLED.seconds = 0.0
+            _UNPICKLED.loads = loads = []
             _CHECKED.frames = checked = []
             _OWN_COPIES.frames = own_copies = builtins.set()
             try:
@@ -1880,6 +1912,7 @@ class InMemoryBackend(CacheBackend):
                     by_deepcopy=by_deepcopy,
                 )
             finally:
+                _UNPICKLED.loads = None
                 _CHECKED.frames = None
                 _OWN_COPIES.frames = None
             if not (fell_back or by_deepcopy) and size >= _ROUND_TRIP_MIN_BYTES:
@@ -1896,7 +1929,7 @@ class InMemoryBackend(CacheBackend):
                     # and its 1.4 s build was kept nowhere, so a restart
                     # rebuilt it and everything keyed on it. A class that is
                     # slow to load is slow both times.
-                    again = self._time_copy(value, key, required=required, walk=walk, premade=premade)
+                    again = self._time_copy(value, key, required=required, walk=walk, premade=premade, loads=loads)
                     if again is not None:
                         unpickle_seconds = min(unpickle_seconds, again)
                 if _copied_by_round_trip(value, metadata):
@@ -1910,6 +1943,7 @@ class InMemoryBackend(CacheBackend):
                     with self._lock:
                         self._drop(key)
                     return False
+            loads.clear()  # the pickles are not kept past the reading
             holds_bytes = (marshalled_parts or _BYTES in frame_cells.values()) and not fell_back
             if shared and not fell_back:
                 kept = {id(premade[part_id]): premade[part_id] for part_id in shared}
@@ -2942,8 +2976,38 @@ def hit_seconds(value: Any, size_bytes: int) -> float | None:
 
 
 #: Seconds the RAM tier's copies on this thread spent unpickling, since the
-#: store in progress began (`InMemoryBackend.set`).
+#: store in progress began (`InMemoryBackend.set`); and, while a store
+#: copies its value, ``loads``: each pickle that copy read, ``(stream,
+#: buffers, memo)``, or None for one whose load raised.
 _UNPICKLED = threading.local()
+
+
+def _time_loads_again(loads: list) -> float | None:
+    """Seconds reading every pickle in *loads* again takes, the objects
+    thrown away, under the same refusal of file writes as the first
+    reading; None when one of them cannot be read again (its first load
+    raised, or this one does), or there were none."""
+    if not loads or None in loads:
+        return None
+    seconds = 0.0
+    try:
+        with no_file_writes() as no_writes:
+            for stream, buffers, memo in loads:
+                unpickler = pickle.Unpickler(
+                    io.BytesIO(stream),
+                    buffers=[bytes(b) if memoryview(b).readonly else bytearray(b) for b in buffers],
+                )
+                unpickler.persistent_load = memo.__getitem__
+                started = time.perf_counter()
+                try:
+                    unpickler.load()
+                finally:
+                    seconds += time.perf_counter() - started
+    except Exception:  # noqa: BLE001 - the first copy stands; this one only times
+        return None
+    if no_writes.refused is not None:
+        return None
+    return seconds
 
 
 #: Seconds per byte unpickling the tier's copy of an object of a class took

@@ -17,6 +17,7 @@ from __future__ import annotations
 import contextlib
 import copy
 import copyreg
+import datetime
 import functools
 import io
 import itertools
@@ -1058,6 +1059,11 @@ def _pickles(obj: Any) -> bool:
     return True
 
 
+#: The standard library's types (not a subclass of one) whose
+#: ``__reduce_ex__`` is always ``(class, args)``, no state.
+_NO_STATE_TYPES = frozenset({datetime.datetime, datetime.date, datetime.time, datetime.timedelta})
+
+
 class _KeepDict(dict):
     """A pickler's ``dispatch_table``: each type's reducer, decided at its
     first instance. The ordinary ``__reduce_ex__`` for most, so the stream
@@ -1081,7 +1087,12 @@ class _KeepDict(dict):
             # A scalar reduces to its dtype and bytes, no state: no names.
             reducer = _scalar_dtype_apart(self._reducer(t), self._dtypes)
         else:
-            reducer = _names_apart(self._reducer(t), self._names)
+            reducer = self._reducer(t)
+            if t not in _NO_STATE_TYPES or type(reducer) is not operator.methodcaller:
+                # A datetime reduces to its class and its bytes, never a
+                # state: nothing for `_names_apart` to part, and no Python
+                # call per object (two million rows hold as many datetimes).
+                reducer = _names_apart(reducer, self._names)
             if _holds_dtype(t):
                 reducer = _dtypes_apart(reducer, self._dtypes)
         if self._keyed:
