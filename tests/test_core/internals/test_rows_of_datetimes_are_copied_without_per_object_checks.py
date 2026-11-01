@@ -105,12 +105,13 @@ def test_a_datetime_subclass_keeps_its_attributes():
 
 def test_each_row_is_only_looked_up_in_the_memo():
     rows = _sessions()
-    # As a loop leaves them: its variable is the last row's list, held in
-    # the list too, so the entry is copied through pickle.
-    entry = {"variables": {"uid": ROWS - 1, "actions": rows[-1][1], "data": rows}, "stdout": ""}
+    # A variable holding the last row, a list holding a list, which the
+    # list holds too: the entry is copied through pickle.
+    entry = {"variables": {"uid": ROWS - 1, "row": rows[-1], "data": rows}, "stdout": ""}
     backend = InMemoryBackend()
     calls, lines = _lines_in("persistent_id", lambda: backend.set("k", entry, {"execution_time": 1.0}))
 
     assert calls > 2 * ROWS, "the copy did not go through the hook: the test measures nothing"
     assert lines / calls < 7, f"{lines / calls:.1f} lines a call"
-    assert backend.get("k")[1]["variables"]["data"] == rows
+    hit = backend.get("k")[1]["variables"]
+    assert hit["data"] == rows and hit["row"] is hit["data"][-1]
