@@ -1046,6 +1046,10 @@ class InMemoryBackend(CacheBackend):
         #: builds for the pickle is freed once written, so the next one could
         #: get its address and be handed the first one's copy.
         alive: list[Any] = []
+        #: Types found to be none of the kinds copied apart below: an object
+        #: of one is only looked up in *memo*. Asked of every tuple and
+        #: datetime of two million rows, the checks were a third of the copy.
+        pickled_as_usual: set[type] = builtins.set()
 
         def persistent_id(obj: Any) -> int | None:
             obj_type = type(obj)
@@ -1054,6 +1058,8 @@ class InMemoryBackend(CacheBackend):
             key = id(obj)
             if key in memo:
                 return key
+            if obj_type in pickled_as_usual:
+                return None
             if obj_type is ndarray and not obj.dtype.hasobject:
                 memo[key] = _copy_array(obj)  # its data alone: no pickling of its dtype and shape
                 alive.append(obj)
@@ -1087,6 +1093,8 @@ class InMemoryBackend(CacheBackend):
                     memo[key] = _copy_polars(obj)
                 alive.append(obj)
                 return key
+            if obj_type is not ndarray:  # an array of objects: asked per array
+                pickled_as_usual.add(obj_type)
             return None
 
         current_names: set[int] = set()
