@@ -212,6 +212,7 @@ from ..shared_objects import (
     holds_part_of,
     is_value,
     library_value_types,
+    names_reaching,
     note_raw_attribute_writes,
     output_history,
     owners_sharing,
@@ -3995,6 +3996,19 @@ class StatementProcessor:
             except Exception:  # an object of the user's raised: as if cut short
                 logger.debug("[CLASS] holder search failed", exc_info=True)
                 names, complete = set(), False
+        if not complete:
+            # Down from the variables instead, every one of them at once.
+            try:
+                instances = _instances_of(replaced)
+                down = names_reaching(
+                    set(map(id, instances)), user_ns, skip_name=lambda name: instance_of(user_ns.get(name), type)
+                )
+                del instances
+            except Exception:  # an object of the user's raised: as if cut short
+                logger.debug("[CLASS] holder walk failed", exc_info=True)
+                down = None
+            if down is not None:
+                names, complete = down, True
         if not complete:
             value_types = VALUE_TYPES + library_value_types()
             names = {

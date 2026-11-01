@@ -74,7 +74,8 @@ def test_lists_of_records_are_read_a_level_at_a_time():
     assert {0x7F00_1234_5670, 0x7F00_1234_5680} <= walk.numbers
     # Each list and record is seen, as a walk would see it; a list counts
     # against the budget.
-    assert id(sessions[5]) in walk.seen and id(sessions[5][3]) in walk.seen
+    seen = walk.seen_all()
+    assert id(sessions[5]) in seen and id(sessions[5][3]) in seen
     assert walk.budget == _Walk({}).budget - 300
 
 
@@ -108,3 +109,78 @@ def test_lists_of_records_are_each_found_by_identity():
     sessions[4].append([1])
     assert id(sessions[4][-1]) in dict(_held_identities(sessions, VALUE_TYPES))
     assert elsewhere is sessions[5]
+
+
+def test_an_id_of_a_record_inside_a_list_of_records_is_still_found():
+    from cash.notebook.statement.identity_holders import identity_held_reason
+
+    sessions = [[(f"a{j}", j) for j in range(20)] for _ in range(300)]
+    ns = {"sessions": sessions}
+    assert identity_held_reason("sessions", sessions, ns) is None
+    # The id of one of its own records, as an int: the ids of what the
+    # nested read saw are still there to compare with.
+    sessions[3].append(("own", id(sessions[9][2])))
+    assert identity_held_reason("sessions", sessions, ns) is not None
+
+
+def _frame_from_records(n: int = 2_500):
+    ns: dict = {}
+    exec(
+        "import pandas as pd\n"
+        f"logs = [(f'u{{s % 7}}', [(f'a{{a}}', s * 20 + a) for a in range(5)]) for s in range({n})]\n"
+        "df = pd.DataFrame(logs, columns=['user', 'actions'])\n",
+        ns,
+    )
+    return ns
+
+
+def test_a_frame_holding_the_lists_of_a_wide_list_of_records_is_stored_with_it():
+    from cash.notebook.shared_objects import GaveUp, share_group
+
+    # Past the widest list read down and the most targets asked up the
+    # collector's referrers: the frame was refused, and ran every time.
+    ns = _frame_from_records()
+    gave_up = GaveUp()
+    holders, shared = share_group(["df"], ns, ns, gave_up=gave_up)
+    assert set(holders) == {"logs"} and not shared
+
+
+def test_a_frame_holding_the_lists_of_nothing_else_has_no_holder():
+    from cash.notebook.shared_objects import GaveUp, share_group
+
+    ns = _frame_from_records()
+    ns["logs"] = [(user, list(actions)) for user, actions in ns["logs"]]
+    holders, shared = share_group(["df"], ns, ns, gave_up=GaveUp())
+    assert not holders and not shared
+
+
+def test_a_list_of_records_in_a_frame_held_elsewhere_is_found():
+    from cash.notebook.shared_objects import GaveUp, share_group
+
+    ns = _frame_from_records()
+    ns["logs"] = [(user, list(actions)) for user, actions in ns["logs"]]
+    ns["one"] = ns["df"]["actions"].iloc[40]
+    holders, shared = share_group(["df"], ns, ns, gave_up=GaveUp())
+    assert set(holders) == {"one"} and not shared
+
+
+def test_lists_of_records_holding_a_shared_object_are_walked_below():
+    from cash.notebook.shared_objects import GaveUp, share_group
+
+    ns = _frame_from_records()
+    ns["logs"] = [(user, list(actions)) for user, actions in ns["logs"]]
+    ns["df"]["actions"].iloc[40].append(("held", ns.setdefault("box", [1])))
+    holders, shared = share_group(["df"], ns, ns, gave_up=GaveUp())
+    assert set(holders) == {"box"} and not shared
+
+
+def test_repeated_long_texts_are_searched_once_each():
+    # 8,000 log lines of 1 KB repeated through an exploded column: joined
+    # whole, 5 GB of text; each line is read once now.
+    lines = [("x" * 1000) + f"{i}" for i in range(50)]
+    column = lines * 2_000
+    column[777] = hex(0x7F00_1234_5670)
+    column[778] = "first line\n" + str(0x7F00_1234_5680)
+    walk = _Walk({})
+    walk._read_leaves(column, {str})
+    assert {0x7F00_1234_5670, 0x7F00_1234_5680} <= walk.numbers

@@ -821,15 +821,21 @@ def _pandas_objects(value: Any) -> list[Any]:
             # Numbers, an extension array (Arrow text) of no Python objects, or
             # no cells at all (a 0-row frame, which ``reshape(-1, 0)`` refuses).
             continue
-        for column in values.reshape(-1, values.shape[-1]) if values.ndim > 1 else (values,):
+        for row, column in enumerate(values.reshape(-1, values.shape[-1]) if values.ndim > 1 else (values,)):
             # A row of a block is a view: its cells are held by the block
             # and the list alone.
+            held_once = _plain_data.held_column_once(values, row, 1)
+            if held_once:
+                continue
             items = column.tolist()
             if exact.issuperset(set(map(type, items))):
                 continue
-            facts = held_items_facts(items, 1)
-            if facts is not None and facts.held_once:
-                continue
+            if held_once is None:
+                facts = held_items_facts(items, 1)
+                held_once = facts is not None and facts.held_once
+                _plain_data.note_held_column_once(values, row, 1, held_once)
+                if held_once:
+                    continue
             found.extend(itertools.compress(items, map(operator.not_, map(exact.__contains__, map(type, items)))))
     return found
 
@@ -1048,7 +1054,7 @@ def view_base_names(
             views.append(obj)
         stack.extend(children_of(obj) or ())
     del stack, seen
-    if not bases:
+    if not bases or _bases_held_by_views_alone(views):
         return set()
     names: set[str] = set()
     containers: dict[int, list[str]] = {}
@@ -1065,6 +1071,33 @@ def view_base_names(
         except WalkBudgetExceeded:
             raise ViewBasesCutShort(names) from None
     return names
+
+
+def _bases_held_by_views_alone(views: list[Any]) -> bool:
+    """Whether nothing but *views*, and the arrays of their ``.base``
+    chains, holds the arrays those chains reach, told by reference count:
+    ``model.predict(X)`` returns a view of an array made inside it, which
+    no variable can hold. The namespace was walked for one after every such
+    statement, past the share check's budget, and the statement's reads got
+    linked to it (E6: ``model`` to ``housing``, and every fit below them
+    re-ran on the next Run All)."""
+    holders: dict[int, int] = {}
+    arrays: dict[int, Any] = {}
+    for view in views:
+        obj = view
+        while True:
+            base = attribute_or(obj, "base", None)
+            if base is None:
+                break
+            key = id(base)
+            holders[key] = holders.get(key, 0) + 1
+            if key in arrays:
+                break
+            arrays[key] = base
+            obj = base
+    obj = base = None
+    # Beyond *arrays*' own reference and the call's argument.
+    return all(sys.getrefcount(arrays[key]) - 2 <= count for key, count in holders.items())
 
 
 def _may_hold_bases(value: Any, np: Any, plain_leaves: Any) -> bool:
@@ -1096,6 +1129,7 @@ def _holding_bases(
     library's object is, by what the garbage collector sees it hold; and what a weak reference
     points at."""
     view_ids = {id(view) for view in views}
+    exact = exact_value_types()
     parents: dict[int, list[int]] = {key: [] for key in containers}
     stack = [(user_ns[names[0]], key) for key, names in containers.items()]
     expanded: set[int] = set()
@@ -1114,6 +1148,14 @@ def _holding_bases(
             children = children_of(obj)
             if children is None:
                 children = _held_below(obj)
+        if len(children) >= _FLAT_RECORDS_MIN:
+            # Values by exact type left out at C speed: a frame's column of
+            # 16,000 strings was asked one string at a time, past the 0.1 s
+            # budget of a statement holding a view, which then linked what
+            # it read to what it made (E6: ``model`` to ``housing``).
+            children = list(
+                itertools.compress(children, map(operator.not_, map(exact.__contains__, map(type, children))))
+            )
         for child in children:
             if is_value(child, value_types):
                 continue
@@ -1132,6 +1174,87 @@ def _holding_bases(
             parents[ckey] = [key]
             stack.append((child, ckey))
     found: set[str] = set()
+    climb = list(hits)
+    reached: set[int] = set()
+    while climb:
+        key = climb.pop()
+        if key in reached:
+            continue
+        reached.add(key)
+        found.update(containers.get(key, ()))
+        climb.extend(parents.get(key, ()))
+    return found
+
+
+def names_reaching(
+    wanted: set[int],
+    user_ns: Mapping[str, Any],
+    skip_name: Callable[[str], bool] = lambda name: False,
+    max_objects: int = 1_000_000,
+) -> set[str] | None:
+    """The variables of *user_ns* from which an object whose id is in
+    *wanted* is reached at any depth, as `_holding_bases` walks: containers,
+    attributes, object arrays and pandas object columns, closures and
+    defaults, and what the garbage collector sees a library's object hold.
+    One walk down from all of them at once, each object read once; None
+    past *max_objects* objects.
+
+    The search up `gc.get_referrers` (`referring_names`) reads the whole
+    heap once per level, and for the holders of a class's objects after the
+    class cell ran again it ran out of a cheap statement's budget, and every
+    variable holding an object was forgotten: on E6's second Run All each
+    fit below ``class ClusterSimilarity`` ran again."""
+    np = sys.modules.get("numpy")
+    value_types = VALUE_TYPES + library_value_types()
+    exact = exact_value_types()
+    containers: dict[int, list[str]] = {}
+    found: set[str] = set()
+    for name, value in list(user_ns.items()):
+        if skip_name(name) or type(value) in exact:
+            continue
+        if id(value) in wanted:
+            found.add(name)
+        elif not instance_of(value, (type, types.ModuleType)):
+            containers.setdefault(id(value), []).append(name)
+    parents: dict[int, list[int]] = {key: [] for key in containers}
+    stack = [(user_ns[names[0]], key) for key, names in containers.items()]
+    expanded: set[int] = set()
+    hits: set[int] = set()
+    while stack:
+        obj, key = stack.pop()
+        if key in expanded:
+            continue
+        expanded.add(key)
+        if len(expanded) > max_objects:
+            return None
+        children = _object_items(obj, np) if np is not None else None
+        if children is None:
+            children = children_of(obj)
+            if children is None:
+                children = _held_below(obj)
+        if len(children) >= _FLAT_RECORDS_MIN:
+            children = list(
+                itertools.compress(children, map(operator.not_, map(exact.__contains__, map(type, children))))
+            )
+        for child in children:
+            ckey = id(child)
+            if ckey in wanted:
+                hits.add(key)
+                continue
+            if (
+                type(child) in exact
+                or instance_of(child, (type, types.ModuleType))
+                or (np is not None and instance_of(child, np.ndarray) and not child.dtype.hasobject)
+                or is_value(child, value_types)
+            ):
+                continue
+            seen_from = parents.get(ckey)
+            if seen_from is not None:
+                seen_from.append(key)
+                continue
+            parents[ckey] = [key]
+            stack.append((child, ckey))
+    obj = children = child = None
     climb = list(hits)
     reached: set[int] = set()
     while climb:
@@ -2217,6 +2340,10 @@ def _inside_library_objects(
 def _reads_inside(node: Any, value_types: tuple[type, ...]) -> bool:
     """Whether *node* is a library's own object the walk does not read: not
     a value, nor pandas or numpy data (read by their own rules)."""
+    if type(node) in EXACT_CONTAINER_TYPES:
+        # Asked of every node: 30,000 lists of records were each asked
+        # whether they are a value first (student_8).
+        return False
     try:
         if is_value(node, value_types) or issubclass(type(node), _NOT_WITHIN) or children_of(node) is not None:
             return False
@@ -2827,10 +2954,6 @@ _DOWN_DEPTH = 4
 _DOWN_NODES = 5_000
 _DOWN_WIDEST = 2_000
 
-#: Most targets `_holders_from_names` looks for by identity in a list or
-#: tuple wider than `_DOWN_WIDEST`, a pass over its items each.
-_WIDE_TARGETS = 8
-
 
 def _holders_from_names(
     targets: list[Any], internal: set[int], user_ns: Mapping[str, Any], known: set[str]
@@ -2878,9 +3001,8 @@ def _holders_from_names(
                 # points:`` over 200,000 records, which the search up found
                 # with a pass over every object the collector tracks, twice
                 # per statement.
-                if (type(obj) is list or type(obj) is tuple) and len(targets) <= _WIDE_TARGETS:
-                    if any(any(map(operator.is_, obj, itertools.repeat(target))) for target in targets):
-                        hits.add(id(obj))
+                if (type(obj) is list or type(obj) is tuple) and _holds_by_id(obj, wanted):
+                    hits.add(id(obj))
                 continue
             else:
                 children = children_of(obj)
@@ -2916,6 +3038,19 @@ def _holders_from_names(
             found.update(roots[key])
         stack.extend(parents.get(key, ()))
     return found
+
+
+def _holds_by_id(items: list | tuple, wanted: set[int]) -> bool:
+    """Whether the wide list or tuple *items* holds one of the objects whose
+    ids are *wanted*, itself or in a record (a tuple) it holds, told at C
+    speed by id alone: ``logs`` of 30,000 ``(user, actions)`` records, each
+    ``actions`` list held by a frame built from it too (student_8), was
+    searched for up `gc.get_referrers`, which gives up past
+    `_MAX_REFERRER_TARGETS` and refused the frame."""
+    if not wanted.isdisjoint(map(id, items)):
+        return True
+    records = list(itertools.compress(items, map(operator.is_, map(type, items), itertools.repeat(tuple))))
+    return bool(records) and not wanted.isdisjoint(map(id, itertools.chain.from_iterable(records)))
 
 
 def _holders_from_referrers(
@@ -3538,6 +3673,10 @@ def _descend(
         if not pops & 1023:
             check_walk_budget()
         children = children_of(stack.pop())
+        if children is not None and len(children) >= _BIG_CHILDREN:
+            # A frame's column of 30,000 lists is one pop: asked before it
+            # too, or the walk ran on past its budget for a second.
+            check_walk_budget()
         # Nothing but values, by exact type: asked at C speed, where the
         # loop below takes a Python step per item -- 35 ms of storing a
         # list of 200,000 ints.
@@ -3547,6 +3686,11 @@ def _descend(
             left = _records_left(children, value_types, leaves, exact, flat)
             if left is not None:
                 children = left
+        # The lists met, walked below only when they hold more than values
+        # and records of values, asked of them all at once at C speed: a
+        # column of 30,000 sessions, each a list of ``(name, time)``
+        # records, took a Python step per record (student_8).
+        lists: list[Any] = []
         for child in children:
             ctype = type(child)
             if ctype in exact or (ctype not in containers and is_value(child, value_types)):
@@ -3569,10 +3713,21 @@ def _descend(
                     and _took_as_tree(child, name, nodes, inbound, owner, order, value_types, leaves, trees)
                 ):
                     continue
-                stack.append(child)
+                if ctype is list:
+                    lists.append(child)
+                else:
+                    stack.append(child)
             elif meets is not None and owner[ckey] != name:
                 meets.add((owner[ckey], name))
+        if lists and (
+            len(lists) < _LISTS_AT_ONCE or not _values_in_tuples(list(itertools.chain.from_iterable(lists)), exact)
+        ):
+            stack.extend(lists)
 
+
+#: Fewest children of one container before which `_descend` asks whether
+#: its budget is spent.
+_BIG_CHILDREN = 4096
 
 #: Fewest items of a list or dict below a root that `_descend` asks about as
 #: one tree: a smaller one is walked as quickly as it is asked about.

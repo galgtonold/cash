@@ -25,6 +25,7 @@ import operator
 import pickle
 import random
 import sys
+import weakref
 from bisect import bisect_right
 from collections import deque
 from collections.abc import Mapping
@@ -585,6 +586,35 @@ def _wider_facts(look: tuple[Mapping[str, Any], dict], name: str, value: Any, le
 #: `_wider_facts`'s part of a look's memo, beside each value's id.
 _WIDER = object()
 
+#: `held_column_once`'s part of a look's memo, beside each column's id.
+_HELD_COLUMN = object()
+
+
+def held_column_once(column: Any, row: int, extra: int) -> bool | None:
+    """Within a `one_look`, whether `held_items_facts` found the cells of
+    row *row* of the object array *column* (*extra* references each beyond
+    it) a tree held by nothing else; None when not asked yet or no look is
+    open. The share walk, the holder search and the alias check each
+    asked it of a frame's object column, a walk of 600,000 records apiece
+    (student_8). Only the array is remembered, weakly: its cells are counted
+    by reference."""
+    look = _LOOKED.get()
+    if look is None:
+        return None
+    known = look[1].get((id(column), _HELD_COLUMN, row, extra))
+    return known[1] if known is not None and known[0]() is column else None
+
+
+def note_held_column_once(column: Any, row: int, extra: int, held_once: bool) -> None:
+    """Remember for the open `one_look` what `held_column_once` answers."""
+    look = _LOOKED.get()
+    if look is None:
+        return
+    try:
+        look[1][(id(column), _HELD_COLUMN, row, extra)] = (weakref.ref(column), held_once)
+    except TypeError:  # no weak reference to it: asked again
+        return
+
 
 def forget_wider_facts() -> None:
     """Drop what the open `one_look` found over wider leaves (`_wider_facts`),
@@ -593,7 +623,7 @@ def forget_wider_facts() -> None:
     if look is None:
         return
     memo = look[1]
-    for key in [key for key in memo if type(key) is tuple and key[1] is _WIDER]:
+    for key in [key for key in memo if type(key) is tuple and (key[1] is _WIDER or key[1] is _HELD_COLUMN)]:
         del memo[key]
 
 

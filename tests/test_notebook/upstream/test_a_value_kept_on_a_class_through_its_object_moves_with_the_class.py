@@ -301,14 +301,11 @@ def test_past_the_items_cash_reads_it_runs_and_warns(cash_magics, monkeypatch):
             assert cash_magics.shell.user_ns["result"] == expected, f"run {rnd + 1} served a value from before"
 
 
-def test_holders_of_a_class_defined_anew_not_all_found_are_all_rebuilt(cash_magics, monkeypatch, tmp_path):
-    """When the climb to the variables holding an object of the old class is
-    cut short, every variable holding an object is forgotten, and
-    NOTEBOOK-SHARE-UNCHECKED says so."""
+def _cut_the_climb_short(monkeypatch) -> list:
     from cash.notebook.statement import processor
 
     climb = processor.referring_names
-    cut = []
+    cut: list = []
 
     def cut_short(roots, *args, **kwargs):
         names, _complete = climb(roots, *args, **kwargs)
@@ -318,6 +315,32 @@ def test_holders_of_a_class_defined_anew_not_all_found_are_all_rebuilt(cash_magi
         return names, _complete
 
     monkeypatch.setattr(processor, "referring_names", cut_short)
+    return cut
+
+
+def test_holders_of_a_class_defined_anew_are_found_down_when_the_climb_is_cut_short(
+    cash_magics, monkeypatch, tmp_path, recwarn
+):
+    """The climb up from the old class's objects ran out of a cheap class
+    cell's budget, and every variable holding an object was forgotten: on
+    E6's second Run All each fit below the class cell ran again. The walk
+    down from the variables finds the holders instead, with no warning."""
+    cut = _cut_the_climb_short(monkeypatch)
+    test_an_edited_change_through_the_class_is_not_served_from_before(
+        cash_magics, "an object kept from before the class cell ran again", tmp_path, monkeypatch
+    )
+    assert cut, "the climb from the old class's objects never ran"
+    assert not [w for w in recwarn if "NOTEBOOK-SHARE-UNCHECKED" in str(w.message)]
+
+
+def test_holders_of_a_class_defined_anew_not_all_found_are_all_rebuilt(cash_magics, monkeypatch, tmp_path):
+    """When neither the climb to the variables holding an object of the old
+    class nor the walk down from them finishes, every variable holding an
+    object is forgotten, and NOTEBOOK-SHARE-UNCHECKED says so."""
+    from cash.notebook.statement import processor
+
+    cut = _cut_the_climb_short(monkeypatch)
+    monkeypatch.setattr(processor, "names_reaching", lambda *args, **kwargs: None)
     with pytest.warns(Warning, match="NOTEBOOK-SHARE-UNCHECKED"):
         test_an_edited_change_through_the_class_is_not_served_from_before(
             cash_magics, "an object kept from before the class cell ran again", tmp_path, monkeypatch

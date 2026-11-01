@@ -201,7 +201,7 @@ def _held_by_id(name: str, walk: _Walk, user_kinds: dict[type, bool], user_ns: d
                 )
             continue
         target = weakref.ref.__call__(ref)  # not a subclass's own __call__: the user's code
-        if target is not None and id(target) not in walk.seen and not issubclass(type(target), _BY_REFERENCE):
+        if target is not None and id(target) not in walk.seen_all() and not issubclass(type(target), _BY_REFERENCE):
             return IdentityHeld(
                 f"'{name}' holds a weak reference to an object it does not hold; restored, it would "
                 "point at another object, so the statement re-runs every time",
@@ -220,7 +220,7 @@ def _held_by_id(name: str, walk: _Walk, user_kinds: dict[type, bool], user_ns: d
     if candidates or in_arrays:
         from .output_refusals import is_history_name
 
-        held = _Walk(user_kinds, seen=set(walk.seen), quiet=True, candidates=frozenset(candidates))
+        held = _Walk(user_kinds, seen=set(walk.seen_all()), quiet=True, candidates=frozenset(candidates))
         held.id_arrays = [] if in_arrays else None
         held.run([v for k, v in user_ns.items() if k != name and not is_history_name(k)])
         if held.cut and not held.found:
@@ -264,6 +264,12 @@ def _held_by_id(name: str, walk: _Walk, user_kinds: dict[type, bool], user_ns: d
 _DIGITS_AS_ZERO = str.maketrans("123456789", "000000000")
 #: The lines of text `as_address` may read as a number.
 _NUMBER_LINES = re.compile(r"^(?:0[xX][0-9a-fA-F]{5,16}|[0-9]{7,18})$", re.MULTILINE)
+
+#: The longest line `_NUMBER_LINES` matches.
+_LONGEST_NUMBER = 18
+
+#: Texts `_Walk._read_leaves` joins into one string to search.
+_TEXTS_AT_ONCE = 100_000
 
 
 def as_address(text: str) -> int | None:
@@ -364,7 +370,10 @@ def _arrow_text_spelling_numbers(column: Any) -> list[Any] | None:
     made new ones each time, a million for a wide frame, after every
     statement of a loop writing it. Text holds no object. None for any
     other column, or where Arrow is not at hand."""
-    chunked = attribute_or(attribute_or(column, "array", None), "_pa_array", None)
+    # ``_values``, not ``.array``: the frame memo records every ``.array``
+    # handed out as a way to write the column (`watch_array_handles`), so
+    # reading it here made the memo hash the frame afresh after each pass.
+    chunked = attribute_or(attribute_or(column, "_values", None), "_pa_array", None)
     pyarrow = sys.modules.get("pyarrow")
     compute = sys.modules.get("pyarrow.compute")
     if chunked is None or pyarrow is None or compute is None:
@@ -641,6 +650,8 @@ class _Walk:
         self.keep_refs = keep_refs
         self.levels = levels
         self.seen: set[int] = set() if seen is None else seen
+        #: Containers `_read_nested` read, not yet in *seen* (`seen_all`).
+        self._unseen: list[list[Any]] = []
         self.budget = _MAX_SEEN
         self.refs: list[Any] = []
         self.numbers: set[int] = set()
@@ -863,21 +874,48 @@ class _Walk:
         else:
             return False
         self.budget -= lists
-        self.seen.update(map(id, nodes))
+        # Their ids only when asked (`seen_all`): most values hold no
+        # weak reference and no number an id() could be, and a set of
+        # 600,000 ids was half of what reading them cost.
+        self._unseen.append(nodes)
         self._read_leaves(leaves, set(map(type, leaves)))
         return True
+
+    def seen_all(self) -> set[int]:
+        """*seen*, with the containers `_read_nested` read."""
+        unseen = self._unseen
+        while unseen:
+            self.seen.update(map(id, unseen.pop()))
+        return self.seen
 
     def _read_leaves(self, flat: Any, kinds: set[type]) -> None:
         """The numbers *flat*, leaves of *kinds*, holds or spells."""
         if str in kinds:
             # The text spelling a number, found by one search of it all.
-            texts = flat if kinds == {str} else [item for item in flat if type(item) is str]
-            text = "\n".join(texts)
-            # Most text has no run of seven digits and no "0x": found by
-            # plain searches, far quicker than the pattern's.
-            if "0x" in text or "0X" in text or "0000000" in text.translate(_DIGITS_AS_ZERO):
-                self.numbers.update(map(as_address, _NUMBER_LINES.findall(text)))
-                self.numbers.discard(None)
+            texts = flat if kinds == {str} else compress(flat, map(operator.is_, map(type, flat), repeat(str)))
+            # Each text once, and only one a line of could spell a number:
+            # a column of 5 million cells repeating 8,000 log lines of 1 KB
+            # each was joined into one 5 GB string, and the kernel ran out
+            # of memory (student_3's ``explode``).
+            unique = list(dict.fromkeys(texts))
+            texts = list(
+                compress(
+                    unique,
+                    map(
+                        operator.or_,
+                        map(operator.ge, repeat(_LONGEST_NUMBER), map(len, unique)),
+                        map(operator.contains, unique, repeat("\n")),
+                    ),
+                )
+            )
+            del unique
+            for start in range(0, len(texts), _TEXTS_AT_ONCE):
+                text = "\n".join(texts[start : start + _TEXTS_AT_ONCE])
+                # Most text has no run of seven digits and no "0x": found by
+                # plain searches, far quicker than the pattern's.
+                if "0x" in text or "0X" in text or "0000000" in text.translate(_DIGITS_AS_ZERO):
+                    self.numbers.update(map(as_address, _NUMBER_LINES.findall(text)))
+                    self.numbers.discard(None)
         if int not in kinds:
             return
         if kinds == {int}:
@@ -926,7 +964,7 @@ class _Walk:
         """Whether `_open` would look into *item*, or keep it as a weak
         reference, had the walk gone a level deeper."""
         kind = type(item)
-        if kind in (int, str) or kind in _LEAVES or id(item) in self.seen:
+        if kind in (int, str) or kind in _LEAVES or id(item) in self.seen_all():
             return False
         if issubclass(kind, _BY_REFERENCE):
             return self.quiet and bool(_code_parts(item))
