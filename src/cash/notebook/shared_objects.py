@@ -827,8 +827,16 @@ def _pandas_objects(value: Any) -> list[Any]:
             held_once = _plain_data.held_column_once(values, row, 1)
             if held_once:
                 continue
+            if _scalars_only(column):
+                # Strings, numbers and missing cells, told without a list of
+                # them, and remembered for the look: a 10-million-row column
+                # of exploded text was turned into a list by each of the
+                # checks after the statement (student_3).
+                _plain_data.note_held_column_once(values, row, 1, True)
+                continue
             items = column.tolist()
             if exact.issuperset(set(map(type, items))):
+                _plain_data.note_held_column_once(values, row, 1, True)
                 continue
             if held_once is None:
                 facts = held_items_facts(items, 1)
@@ -2393,7 +2401,7 @@ def _opaque_parts(obj: Any) -> tuple[list[Any], bool] | None:
 
 
 #: What pandas' ``infer_dtype`` names an object array of values only.
-_SCALAR_KINDS = frozenset(
+_INFERRED_SCALARS = frozenset(
     {"string", "bytes", "floating", "integer", "mixed-integer-float", "boolean", "complex", "empty"}
 )
 
@@ -2403,15 +2411,28 @@ def _items_of(array: Any) -> list[Any]:
     speed that each is a number, a string or missing: a string column of a
     million rows (pandas before 3.0 keeps them as objects) cost 50 ms a
     statement read one by one."""
+    if _scalars_only(array):
+        return []
+    return array.ravel(order="K").tolist() if array.ndim > 1 else array.tolist()
+
+
+def _scalars_only(array: Any) -> bool:
+    """Whether each item of the object array *array* is a value of an exact
+    type (`exact_value_types`), read without a list of its items. pandas'
+    ``infer_dtype`` tells at C speed when the items are numbers, strings or
+    missing; it counts a subclass of ``str`` too, whose attributes can hold
+    any object, so the types are looked at as well."""
     pd = sys.modules.get("pandas")
     infer = attribute_or(attribute_or(attribute_or(pd, "api", None), "types", None), "infer_dtype", None)
-    if infer is not None:
-        try:
-            if infer(array, skipna=True) in _SCALAR_KINDS:
-                return []
-        except Exception:  # noqa: BLE001 - read item by item instead
-            pass
-    return array.ravel(order="K").tolist() if array.ndim > 1 else array.tolist()
+    if infer is None:
+        return False
+    try:
+        if infer(array, skipna=True) not in _INFERRED_SCALARS:
+            return False
+        flat = array.ravel(order="K") if array.ndim > 1 else array
+        return exact_value_types().issuperset(set(map(type, flat)))
+    except Exception:  # noqa: BLE001 - read item by item instead
+        return False
 
 
 def _not_alone(parts: list[Any]) -> list[Any]:
