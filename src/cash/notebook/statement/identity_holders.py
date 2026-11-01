@@ -449,6 +449,11 @@ _HEX_TEXT = r"^0[xX][0-9a-fA-F]{5,16}$"
 #: end of the text, never before a last newline).
 _DECIMAL_WHOLE = re.compile(r"[0-9]{7,18}")
 _HEX_WHOLE = re.compile(r"0[xX][0-9a-fA-F]{5,16}")
+#: The same, each a whole line of texts joined by line breaks, and a line
+#: of a number's length (7 to 18 characters, of ASCII text: bytes).
+_DECIMAL_LINE = re.compile(r"^[0-9]{7,18}$", re.MULTILINE)
+_HEX_LINE = re.compile(r"^0[xX][0-9a-fA-F]{5,16}$", re.MULTILINE)
+_FITS_LINE = re.compile(r"^.{7,18}$", re.MULTILINE)
 #: An Arrow text array of at most this many values is read in Python: each
 #: Arrow call costs tens of microseconds however short the array, and a
 #: list of thousands of small frames made four per column.
@@ -459,16 +464,26 @@ def _few_texts_spelling_numbers(texts: list[Any]) -> list[Any]:
     """What `_arrow_text_numbers` finds in a few *texts* (None for a
     missing value), the same way: nothing when no value is 7 to 18 bytes
     long, else the decimal numbers as one NumPy array of 8-byte integers,
-    then the hexadecimal ones as ints."""
+    then the hexadecimal ones as ints. ASCII texts with no line break are
+    searched joined, a line each, in three calls."""
     import numpy
 
-    if not any(text is not None and 7 <= len(text.encode()) <= 18 for text in texts):
-        return []
-    decimal = [int(text) for text in texts if text is not None and _DECIMAL_WHOLE.fullmatch(text)]
+    present = [text for text in texts if text is not None]
+    joined = "\n".join(present)
+    if joined.isascii() and joined.count("\n") == len(present) - 1:
+        if not _FITS_LINE.search(joined):
+            return []
+        decimal = _DECIMAL_LINE.findall(joined)
+        hexadecimal = _HEX_LINE.findall(joined)
+    else:
+        if not any(7 <= len(text.encode()) <= 18 for text in present):
+            return []
+        decimal = [text for text in present if _DECIMAL_WHOLE.fullmatch(text)]
+        hexadecimal = [text for text in present if _HEX_WHOLE.fullmatch(text)]
     # An array of its own each time, as Arrow's read makes: each is one
     # object the walk counts against its budget (`_MAX_SEEN`).
-    parts: list[Any] = [numpy.array(decimal, dtype=numpy.int64)]
-    parts.extend(int(text, 16) for text in texts if text is not None and _HEX_WHOLE.fullmatch(text))
+    parts: list[Any] = [numpy.array([int(text) for text in decimal], dtype=numpy.int64)]
+    parts.extend(int(text, 16) for text in hexadecimal)
     return parts
 
 

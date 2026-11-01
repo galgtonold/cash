@@ -31,6 +31,8 @@ TEXTS = [
     "x12345678",
     "12345678\n",  # a last newline is not the end of the text
     "12345678\n87654321",
+    "\r12345678",
+    "12345678 ",
     "١٢٣٤٥٦٧٨",  # Arabic-Indic digits
     None,
 ]
@@ -60,6 +62,7 @@ def test_a_short_text_column_spells_what_a_long_one_does():
 @pytest.mark.parametrize(
     "texts, found",
     [
+        (["abc", "\u00e9" * 3 + "1234567"], [0]),  # not ASCII: read one by one
         (["a", "bc", "x" * 30, None], []),  # no value of a number's length: nothing at all
         (["\u00e9" * 4, "abc"], [0]),  # 8 bytes, as Arrow counts: looked through, an empty array
     ],
