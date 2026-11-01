@@ -1894,6 +1894,8 @@ def _call_handoffs(
         and user_ns.get(func.id, getattr(builtins, func.id)) is getattr(builtins, func.id)
     ):
         return
+    if _maps_a_reading_lambda(call, local, user_ns):
+        return
     arg_names = [arg.id for arg in args if isinstance(arg, ast.Name)]
     if _only_reads(call, arg_names, user_ns if isinstance(user_ns, dict) else dict(user_ns)):
         return
@@ -1903,6 +1905,37 @@ def _call_handoffs(
             for name in argument_roots(arg, iterated)
             if name in local or not _followed_elsewhere(user_ns.get(name))
         )
+
+
+#: Builtins that hand each item of what they iterate to the function they
+#: are handed, and do nothing else with it.
+_ITEM_MAPPING_BUILTINS = frozenset({"map", "filter"})
+
+
+def _maps_a_reading_lambda(call: ast.Call, local: frozenset[str] | set[str], user_ns: Mapping[str, Any]) -> bool:
+    """Whether *call* is ``map(lambda x: x[0], xs)`` or ``filter(lambda r:
+    r[1] > 0, rows)``: the unshadowed builtin handed a ``lambda`` whose body
+    calls nothing. It hands each item to the lambda alone, which reads it;
+    the iterables are only iterated, as ``list(xs)`` iterates (a draw from
+    an iterator is followed as a draw). A lambda that calls something is
+    followed for what it hands on, and the iterables count as handed over,
+    as before. A helper ``in_row(log)`` doing ``list(map(lambda x: x[0],
+    log[1]))`` had its loop's list of 87,000 sessions pickled before and
+    after every run of the loop (student_8)."""
+    func = call.func
+    if not isinstance(func, ast.Name) or func.id not in _ITEM_MAPPING_BUILTINS or func.id in local:
+        return False
+    builtin = getattr(builtins, func.id)
+    if user_ns.get(func.id, builtin) is not builtin:
+        return False
+    if call.keywords or len(call.args) < 2 or not isinstance(call.args[0], ast.Lambda):
+        return False
+    if any(isinstance(arg, ast.Starred) for arg in call.args):
+        return False
+    return not any(
+        isinstance(node, (ast.Call, ast.NamedExpr, ast.Yield, ast.YieldFrom, ast.Await))
+        for node in ast.walk(call.args[0])
+    )
 
 
 def _names_a_class(node: ast.expr, local: frozenset[str] | set[str], user_ns: Mapping[str, Any]) -> bool:
