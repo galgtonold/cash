@@ -323,14 +323,21 @@ def _pandas_parts(pandas: Any, value: Any) -> list[Any]:
         return []
     if isinstance(value, pandas.DataFrame):
         parts: list[Any] = [value.columns, value.index]
+        # The frame's own arrays, and their dtypes: a column, or the
+        # ``dtypes`` series, made for each took longer than reading it, for
+        # a list of thousands of small frames.
+        arrays = _column_arrays(value)
         by_dtype: dict[Any, list[int]] = {}
-        for at, dtype in enumerate(value.dtypes):
+        for at, dtype in enumerate([array.dtype for array in arrays] if arrays else value.dtypes):
             by_dtype.setdefault(dtype, []).append(at)
         for dtype, columns in by_dtype.items():
             if attribute_or(dtype, "kind") == "O":
                 # A column at a time: one a loop rewrote is read again, the
-                # others are the very strings read before (`_FLAT_READS`).
-                parts.extend(_pandas_column(value.iloc[:, at], dtype) for at in columns)
+                # others are the very strings read before (`_FLAT_READS`);
+                # Arrow's text straight from the frame's array.
+                for at in columns:
+                    spelled = _arrow_text_numbers(arrays[at]) if arrays else None
+                    parts.append(spelled if spelled is not None else _pandas_column(value.iloc[:, at], dtype))
                 continue
             column = _pandas_column(value.iloc[:, columns], dtype)
             if column is not None:
@@ -361,6 +368,21 @@ def _pandas_column(column: Any, dtype: Any) -> Any:
     return None
 
 
+def _column_arrays(frame: Any) -> list[Any]:
+    """The arrays *frame* keeps its columns in, by position, read without
+    making a column of each (pandas' own ``_iter_column_arrays``, for
+    reading only); empty where this pandas has no such reader."""
+    try:
+        reader = type(frame)._iter_column_arrays
+    except AttributeError:
+        return []
+    try:
+        arrays = list(reader(frame))
+    except Exception:  # noqa: BLE001 - read a column at a time instead
+        return []
+    return arrays if len(arrays) == frame.shape[1] else []
+
+
 def _arrow_text_spelling_numbers(column: Any) -> list[Any] | None:
     """Of a column of Arrow-backed text (pandas' default ``str``), the only
     thing that could matter: the numbers its values spell as `as_address`
@@ -373,7 +395,13 @@ def _arrow_text_spelling_numbers(column: Any) -> list[Any] | None:
     # ``_values``, not ``.array``: the frame memo records every ``.array``
     # handed out as a way to write the column (`watch_array_handles`), so
     # reading it here made the memo hash the frame afresh after each pass.
-    chunked = attribute_or(attribute_or(column, "_values", None), "_pa_array", None)
+    return _arrow_text_numbers(attribute_or(column, "_values", None))
+
+
+def _arrow_text_numbers(values: Any) -> list[Any] | None:
+    """`_arrow_text_spelling_numbers` of a column's own array (*values*):
+    None unless it is Arrow-backed text."""
+    chunked = attribute_or(values, "_pa_array", None)
     pyarrow = sys.modules.get("pyarrow")
     compute = sys.modules.get("pyarrow.compute")
     if chunked is None or pyarrow is None or compute is None:
@@ -384,6 +412,10 @@ def _arrow_text_spelling_numbers(column: Any) -> list[Any] | None:
     try:
         if not (pyarrow.types.is_string(chunked.type) or pyarrow.types.is_large_string(chunked.type)):
             return None
+        if len(chunked) <= _FEW_TEXTS:
+            parts = _few_texts_spelling_numbers(chunked.to_pylist())
+            _ARROW_READS[id(chunked)] = (chunked, parts)
+            return parts
         decimal = compute.filter(chunked, compute.match_substring_regex(chunked, _DECIMAL_TEXT))
         parts: list[Any] = [compute.cast(decimal, pyarrow.int64()).to_numpy(zero_copy_only=False)]
         hexadecimal = compute.filter(chunked, compute.match_substring_regex(chunked, _HEX_TEXT))
@@ -402,6 +434,35 @@ _ARROW_READS: dict[int, tuple[Any, list[Any]]] = {}
 #: `_NUMBER_LINES`' two spellings, each a whole value.
 _DECIMAL_TEXT = r"^[0-9]{7,18}$"
 _HEX_TEXT = r"^0[xX][0-9a-fA-F]{5,16}$"
+#: The same two, for Python's ``re`` (``fullmatch``: Arrow's ``$`` is the
+#: end of the text, never before a last newline).
+_DECIMAL_WHOLE = re.compile(r"[0-9]{7,18}")
+_HEX_WHOLE = re.compile(r"0[xX][0-9a-fA-F]{5,16}")
+#: An Arrow text array of at most this many values is read in Python: each
+#: Arrow call costs tens of microseconds however short the array, and a
+#: list of thousands of small frames made four per column.
+_FEW_TEXTS = 64
+
+
+@functools.cache
+def _no_numbers(numpy: Any) -> Any:
+    """An empty array of 8-byte integers, read only, shared by every few
+    texts that spell no decimal number."""
+    empty = numpy.array([], dtype=numpy.int64)
+    empty.flags.writeable = False
+    return empty
+
+
+def _few_texts_spelling_numbers(texts: list[Any]) -> list[Any]:
+    """What `_arrow_text_numbers` finds in a few *texts* (None for a
+    missing value), the same way: the decimal numbers as one NumPy array of
+    8-byte integers, then the hexadecimal ones as ints."""
+    import numpy
+
+    decimal = [int(text) for text in texts if text is not None and _DECIMAL_WHOLE.fullmatch(text)]
+    parts: list[Any] = [numpy.array(decimal, dtype=numpy.int64) if decimal else _no_numbers(numpy)]
+    parts.extend(int(text, 16) for text in texts if text is not None and _HEX_WHOLE.fullmatch(text))
+    return parts
 
 
 #: The lowest address a 64-bit macOS process maps: ``__PAGEZERO`` covers
