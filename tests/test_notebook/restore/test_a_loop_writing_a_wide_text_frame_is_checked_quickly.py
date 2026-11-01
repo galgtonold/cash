@@ -93,3 +93,18 @@ def test_only_values_in_nested_tuples_have_no_identity_to_find():
     assert _values_in_tuples([("a", 1), ("b", (2.0, None)), "c"], exact)
     assert not _values_in_tuples([("a", 1), ("b", [2])], exact)
     assert not _values_in_tuples([("a", {"k": 1})], exact)
+
+
+def test_lists_of_records_are_each_found_by_identity():
+    from cash.notebook.shared_objects import VALUE_TYPES, _held_identities
+
+    sessions = [[(f"a{j}", j) for j in range(20)] for _ in range(300)]
+    # Held elsewhere too (as ``pd.DataFrame(logs)`` holds the lists of
+    # ``logs``), so each list is looked at rather than *sessions* alone.
+    elsewhere = sessions[5]
+    found = dict(_held_identities(sessions, VALUE_TYPES))
+    assert {id(sessions), *map(id, sessions)} == set(found)
+    # A list inside one is found too, walked as before.
+    sessions[4].append([1])
+    assert id(sessions[4][-1]) in dict(_held_identities(sessions, VALUE_TYPES))
+    assert elsewhere is sessions[5]

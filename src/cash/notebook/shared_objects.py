@@ -948,8 +948,25 @@ def _held_identities(value: Any, value_types: tuple[type, ...]) -> Iterable[tupl
             # holds: whatever else holds part of it holds *obj* itself.
             continue
         children = children_of(obj)
-        if children and not _values_in_tuples(children, exact):
-            stack.extend(children)
+        if not children or _values_in_tuples(children, exact):
+            continue
+        is_list = list(map(operator.is_, map(type, children), itertools.repeat(list)))
+        if sum(is_list) >= _LISTS_AT_ONCE:
+            # Lists of records (an object column of sessions, each a list of
+            # ``(name, time)``): each list is yielded, what they hold read at
+            # once, where each took a step through the stack.
+            lists = list(itertools.compress(children, is_list))
+            rest = list(itertools.compress(children, map(operator.not_, is_list)))
+            if _values_in_tuples(rest, exact) and _values_in_tuples(list(itertools.chain.from_iterable(lists)), exact):
+                for held in lists:
+                    if id(held) not in seen:
+                        seen.add(id(held))
+                        yield id(held), held
+                continue
+        stack.extend(children)
+
+
+_LISTS_AT_ONCE = 8
 
 
 def _values_in_tuples(items: Any, exact: frozenset[type]) -> bool:
