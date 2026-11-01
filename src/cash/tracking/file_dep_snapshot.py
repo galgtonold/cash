@@ -1067,12 +1067,30 @@ def _loaded_code_module(module_name: str) -> Any:
     return None
 
 
+_CODE_ROOTS: dict[tuple[str, str], str | None] = {}
+
+
 def _code_root(module_name: str, mod: Any) -> str | None:
     """The directory holding the top-level package of *module_name*, whose
-    file is *mod*'s, resolved."""
+    file is *mod*'s, resolved.
+
+    Remembered per module name and file for the life of the process: a worker
+    checks thousands of dependencies against the same loaded code, and
+    resolving its path each time cost a ``realpath`` per check."""
     path = getattr(mod, "__file__", None)
     if not isinstance(path, str) or not path:
         return None
+    key = (module_name, path)
+    try:
+        return _CODE_ROOTS[key]
+    except KeyError:
+        pass
+    root = _resolve_code_root(module_name, path)
+    _CODE_ROOTS[key] = root
+    return root
+
+
+def _resolve_code_root(module_name: str, path: str) -> str | None:
     try:
         root = os.path.dirname(os.path.realpath(path))
     except (OSError, ValueError):
