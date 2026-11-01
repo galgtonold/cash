@@ -168,6 +168,9 @@ def _holds_a_closure(captured_vars: Mapping[str, Any], seconds: float) -> bool |
             elif kind is types.FunctionType:
                 if any(fn.__closure__ for fn in group):
                     return True
+            elif _pandas_time_kind(kind):
+                if kind.__name__ == "Timestamp":
+                    held.append(item.tzinfo for item in group if item.tzinfo is not None)
             elif not issubclass(kind, _OPAQUE):
                 arrow = _arrow_array_kind(kind)
                 for done, item in enumerate(group, 1):
@@ -179,6 +182,15 @@ def _holds_a_closure(captured_vars: Mapping[str, Any], seconds: float) -> bool |
             return None
         level = _fresh(held, seen, limit)
     return None if level is None else False
+
+
+def _pandas_time_kind(kind: type) -> bool:
+    """Is *kind* exactly pandas' ``Timestamp`` or ``Timedelta``? Pickled
+    as numbers and, for a ``Timestamp``, its ``tzinfo``, read on: nothing
+    else of Python's that could hold a function. An object column of a frame
+    concatenated from frames with and without times holds one per row."""
+    pandas = sys.modules.get("pandas")
+    return pandas is not None and (kind is pandas.Timestamp or kind is pandas.Timedelta)
 
 
 def _arrow_array_kind(kind: type) -> bool:
