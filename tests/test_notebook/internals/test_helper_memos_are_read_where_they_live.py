@@ -93,9 +93,10 @@ def test_an_entry_is_not_served_over_a_memo_without_what_it_read(setup, fill, re
 
 def test_a_memo_holding_more_answers_than_are_read_is_never_served_over():
     ns: dict = {}
+    over = helper_memos.MAX_KEYED + 1
     exec("import functools\n@functools.cache\ndef f(n):\n    return n", ns)
-    exec("[f(i) for i in range(300)]", ns)
-    said = _record(ns, "x = [f(i) for i in range(300)]")
+    exec(f"[f(i) for i in range({over})]", ns)
+    said = _record(ns, f"x = [f(i) for i in range({over})]")
     assert said[0] == helper_memos.FILLED and "more answers than cash checks" in said[1], said
 
 
