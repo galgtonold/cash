@@ -83,7 +83,11 @@ def closures_sharing(captured_vars: Mapping[str, Any], seconds: float) -> Closur
     the function behind it unseen, so past the time the answer is
     unfinished and the caller stores nothing. JSON-like data (exact dicts,
     lists and tuples over plain values, `tree_facts`) holds no function and
-    is not walked unless a function elsewhere may reach into it."""
+    is not walked unless a function elsewhere may reach into it, and
+    nothing is walked when the outputs hold no function with a closure at
+    all (`_holds_a_closure`)."""
+    if _holds_a_closure(captured_vars, seconds) is False:
+        return ClosureCheck([])
     limit = CpuLimit(seconds)
     plain: set[str] = set()
     for name, value in captured_vars.items():
@@ -131,6 +135,93 @@ def _plain(value: Any, limit: CpuLimit) -> bool | None:
     return True
 
 
+def _holds_a_closure(captured_vars: Mapping[str, Any], seconds: float) -> bool | None:
+    """Do the outputs hold, anywhere, a function with a closure? None when
+    *seconds* of CPU time ran out first. Read as `_walk` reads them, JSON-
+    like data (`_plain`) aside, but not below an Arrow array that holds no
+    Python object of its own (`_arrow_type_without_code`), and every object
+    read is kept until the answer, so an id stands for one object only: a
+    frame concatenated from thousands of small ones keeps a chunk per
+    piece, each read through its ``__reduce_ex__``, and none can hold a
+    function. Without one, nothing is shared with a function and the walk
+    is not needed; with one, or past the time, the walk runs as it would
+    have, on a clock of its own."""
+    limit = CpuLimit(seconds)
+    values: list[Any] = []
+    for value in captured_vars.values():
+        found = _plain(value, limit)
+        if found is None:
+            return None
+        if not found:
+            values.append(value)
+    seen: dict[int, Any] = {}
+    level = _fresh([values], seen, limit)
+    while level:
+        held: list[Iterable[Any]] = []
+        kinds = set(map(type, level))
+        for kind in kinds:
+            group = level if len(kinds) == 1 else [item for item in level if type(item) is kind]
+            if kind in _SEQUENCES:
+                held.append(chain.from_iterable(group))
+            elif kind is dict:
+                held.append(chain.from_iterable(group))  # the keys
+                held.append(chain.from_iterable(map(dict.values, group)))
+            elif kind is types.FunctionType:
+                if any(fn.__closure__ for fn in group):
+                    return True
+            elif _pandas_time_kind(kind):
+                if kind.__name__ == "Timestamp":
+                    held.append(item.tzinfo for item in group if item.tzinfo is not None)
+            elif not issubclass(kind, _OPAQUE):
+                arrow = _arrow_array_kind(kind)
+                for done, item in enumerate(group, 1):
+                    if done % _CLOCK_EVERY == 0 and limit.passed():
+                        return None
+                    if not (arrow and _arrow_type_without_code(item)):
+                        held.append(_object_parts(item, kind))
+        if limit.passed():
+            return None
+        level = _fresh(held, seen, limit)
+    return None if level is None else False
+
+
+def _pandas_time_kind(kind: type) -> bool:
+    """Is *kind* exactly pandas' ``Timestamp`` or ``Timedelta``? Pickled
+    as numbers and, for a ``Timestamp``, its ``tzinfo``, read on: nothing
+    else of Python's that could hold a function. An object column of a frame
+    concatenated from frames with and without times holds one per row."""
+    pandas = sys.modules.get("pandas")
+    return pandas is not None and (kind is pandas.Timestamp or kind is pandas.Timedelta)
+
+
+def _arrow_array_kind(kind: type) -> bool:
+    """Is *kind* an Arrow array or chunked array class?"""
+    pyarrow = sys.modules.get("pyarrow")
+    return pyarrow is not None and issubclass(kind, (pyarrow.Array, pyarrow.ChunkedArray))
+
+
+def _arrow_type_without_code(array: Any) -> bool:
+    """Does the Arrow *array* hold no Python object but what Arrow makes
+    for it (buffers, types, chunks), never a function? Not with an
+    extension type anywhere in its type: a Python class of the user's or a
+    library's, which can hold anything."""
+    import pyarrow
+
+    try:
+        pending = [array.type]
+        while pending:
+            arrow_type = pending.pop()
+            if isinstance(arrow_type, pyarrow.BaseExtensionType):
+                return False
+            if isinstance(arrow_type, pyarrow.DictionaryType):
+                pending.extend((arrow_type.index_type, arrow_type.value_type))
+                continue
+            pending.extend(arrow_type.field(at).type for at in range(arrow_type.num_fields))
+    except Exception:  # noqa: BLE001 - not known: read below it
+        return False
+    return True
+
+
 def _walk(name: str, value: Any, places: set[int], functions: list, limit: CpuLimit) -> bool:
     """Add to *places* the id of every object *value* holds, and to
     *functions* each function with a closure among them, with *name*;
@@ -164,7 +255,7 @@ def _walk(name: str, value: Any, places: set[int], functions: list, limit: CpuLi
     return True
 
 
-def _fresh(held: list[Iterable[Any]], places: set[int], limit: CpuLimit) -> list | None:
+def _fresh(held: list[Iterable[Any]], places: set[int] | dict[int, Any], limit: CpuLimit) -> list | None:
     """What *held* yields that is not an atom and not in *places*, each
     once, now added to it; None when *limit* ran out first. Taken in
     chunks, each a few passes in C: a level of ten million strings is
@@ -176,7 +267,7 @@ def _fresh(held: list[Iterable[Any]], places: set[int], limit: CpuLimit) -> list
         if not leaves.issuperset(map(type, chunk)):
             chunk = _without_leaf_records(chunk)
             new = {id(item): item for item in chunk if type(item) not in leaves}
-            for key in places.intersection(new):
+            for key in places.keys() & new.keys() if isinstance(places, dict) else places.intersection(new):
                 del new[key]
             places.update(new)
             fresh.extend(new.values())
