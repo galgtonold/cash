@@ -181,6 +181,7 @@ from ..lineage_formula import (
     keep_held_lineage,
     key_hidden_reads,
     no_cache_value_digest,
+    note_rng_read,
     use_lineage_alias_store,
 )
 from ..magic_effects import (
@@ -1000,6 +1001,7 @@ class StatementProcessor:
             drawn = drawn_rng_vars(key_hidden_reads(run.code, state), run.code, state.variable_lineage)
         except (SyntaxError, ValueError, AttributeError, RecursionError):
             return
+        note_rng_read(state, run.code, {var: state.variable_lineage.get(var) for var in drawn})
         key = run.rng_advance_key or run.cache_key
         for var in sorted(drawn):
             state.lineage.record(var, advanced_rng_lineage(key, var))
