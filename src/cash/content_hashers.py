@@ -630,6 +630,8 @@ def fold_arrow_column(h: Any, column: Any) -> None:
         return
     nulls, lengths, values = BulkHasher(), BulkHasher(), BulkHasher()
     pieces = [] if kind == "fixed" and _gathers_pieces(chunks, width) else None
+    if kind != "fixed":
+        chunks = _joined_small_chunks(chunks)
     base = 0
     for chunk in chunks:
         n = len(chunk)
@@ -658,6 +660,51 @@ def fold_arrow_column(h: Any, column: Any) -> None:
         _update_from_pieces(values, pieces)
     h.update(f"|arrow:{column.type}:{kind}:{base}|".encode())
     h.update(nulls.digest() + lengths.digest() + values.digest())
+
+
+#: `_joined_small_chunks` joins chunks of fewer rows than this...
+_SMALL_CHUNK_ROWS = 4096
+#: ...into runs of up to this many rows, once a column has this many chunks.
+_JOINED_ROWS = 1 << 16
+_MANY_CHUNKS = 64
+
+
+def _joined_small_chunks(chunks: list) -> list:
+    """*chunks* with each run of small ones joined into one array
+    (``pa.concat_arrays``, which keeps every value and the bytes under a
+    missing one): `fold_arrow_column` reads the same rows, and so folds the
+    same digest, in fewer calls. ``pd.concat`` of 20,000 small frames keeps
+    a text chunk per frame, each read on its own in several NumPy calls."""
+    if len(chunks) < _MANY_CHUNKS:
+        return chunks
+    import pyarrow as pa
+
+    joined: list = []
+    run: list = []
+    rows = 0
+    for chunk in chunks:
+        n = len(chunk)
+        if n >= _SMALL_CHUNK_ROWS:
+            joined.extend(_joined(pa, run))
+            joined.append(chunk)
+            run, rows = [], 0
+            continue
+        if rows + n > _JOINED_ROWS:
+            joined.extend(_joined(pa, run))
+            run, rows = [], 0
+        run.append(chunk)
+        rows += n
+    joined.extend(_joined(pa, run))
+    return joined
+
+
+def _joined(pa: Any, run: list) -> list:
+    if len(run) < 2:
+        return run
+    try:
+        return [pa.concat_arrays(run)]
+    except Exception:  # noqa: BLE001 - read one by one, as before
+        return run
 
 
 def _gathers_pieces(chunks: list, width: int) -> bool:
