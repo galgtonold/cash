@@ -2989,6 +2989,7 @@ def _holders_from_names(
     one that search would name too. One it misses holds a reference the
     count still sees, which sends the caller up `gc.get_referrers`."""
     wanted = {id(obj) for obj in targets}
+    wanted_types = {type(obj) for obj in targets}
     exact = EXACT_VALUE_TYPES
     roots: dict[int, list[str]] = {}
     for name, value in list(user_ns.items()):
@@ -3022,7 +3023,7 @@ def _holders_from_names(
                 # points:`` over 200,000 records, which the search up found
                 # with a pass over every object the collector tracks, twice
                 # per statement.
-                if (type(obj) is list or type(obj) is tuple) and _holds_by_id(obj, wanted):
+                if (type(obj) is list or type(obj) is tuple) and _holds_by_id(obj, wanted, wanted_types):
                     hits.add(id(obj))
                 continue
             else:
@@ -3061,17 +3062,33 @@ def _holders_from_names(
     return found
 
 
-def _holds_by_id(items: list | tuple, wanted: set[int]) -> bool:
+def _holds_by_id(items: list | tuple, wanted: set[int], wanted_types: set[type]) -> bool:
     """Whether the wide list or tuple *items* holds one of the objects whose
     ids are *wanted*, itself or in a record (a tuple) it holds, told at C
     speed by id alone: ``logs`` of 30,000 ``(user, actions)`` records, each
     ``actions`` list held by a frame built from it too (student_8), was
     searched for up `gc.get_referrers`, which gives up past
-    `_MAX_REFERRER_TARGETS` and refused the frame."""
-    if not wanted.isdisjoint(map(id, items)):
+    `_MAX_REFERRER_TARGETS` and refused the frame.
+
+    The types of the items are read first (*wanted_types* are those of the
+    wanted objects): an item of none of them is none of those objects, and a
+    list with no tuple holds no record. A list of 87,572 strings was read by
+    id and by type for every statement that wrote a frame, 40 ms each time."""
+    if _TYPE_SET is not None and type(items) is list:
+        held_types = _TYPE_SET(items)
+    else:
+        held_types = set(map(type, items))
+    if not wanted_types.isdisjoint(held_types) and not wanted.isdisjoint(map(id, items)):
         return True
+    if tuple not in held_types:
+        return False
     records = list(itertools.compress(items, map(operator.is_, map(type, items), itertools.repeat(tuple))))
     return bool(records) and not wanted.isdisjoint(map(id, itertools.chain.from_iterable(records)))
+
+
+#: ``set(map(type, items))`` of a list, at C speed (``cwalk.c``); None
+#: without the kernels, or in a build from before it had one.
+_TYPE_SET = attribute_or(_native.kernels, "type_set", None)
 
 
 def _holders_from_referrers(
