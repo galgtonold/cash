@@ -33,6 +33,29 @@ def test_an_arrow_text_column_gives_the_numbers_it_spells():
     assert parts[1:] == [0x7F00AA12BC]
 
 
+def test_a_text_column_in_many_chunks_gives_the_numbers_it_spells():
+    # After a ``merge`` the column came in thousands of chunks, and the two
+    # patterns over all of them took 6 s: the values that could spell a
+    # number are picked by length, then searched as one array.
+    import pyarrow
+
+    forget_flat_reads()
+    chunk = [f"w{i}" for i in range(20)]
+    chunks = [pyarrow.array(chunk, type=pyarrow.large_string()) for _ in range(5_000)]
+    chunks[3] = pyarrow.array([*chunk, "12345678", "0x7f00aa12bc", "1" * 19], type=pyarrow.large_string())
+    s = pd.Series(pd.arrays.ArrowExtensionArray(pyarrow.chunked_array(chunks)))
+    parts = identity_holders._arrow_text_spelling_numbers(s)
+    assert parts[0].tolist() == [12345678]
+    assert parts[1:] == [0x7F00AA12BC]
+    forget_flat_reads()
+
+
+def test_a_text_column_of_no_number_length_gives_no_numbers():
+    forget_flat_reads()
+    assert identity_holders._arrow_text_spelling_numbers(pd.Series(["a", "bc", "x" * 30])) == []
+    forget_flat_reads()
+
+
 def test_a_column_of_numbers_is_not_read_as_text():
     assert identity_holders._arrow_text_spelling_numbers(pd.Series([1, 2])) is None
 

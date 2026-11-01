@@ -57,6 +57,21 @@ def test_a_short_text_column_spells_what_a_long_one_does():
     assert _spelled(long) == sorted(_spelled(short) * 20)
 
 
+@pytest.mark.parametrize(
+    "texts, found",
+    [
+        (["a", "bc", "x" * 30, None], []),  # no value of a number's length: nothing at all
+        (["\u00e9" * 4, "abc"], [0]),  # 8 bytes, as Arrow counts: looked through, an empty array
+    ],
+)
+def test_a_short_text_column_is_read_as_a_long_one_is(texts, found):
+    # Each part is one object the walk counts, so a short column gives what
+    # a long one gives, an empty array or nothing at all.
+    short = library_parts(pd.Series(texts, dtype="str"))[0]
+    long = library_parts(pd.Series(texts * 20, dtype="str"))[0]
+    assert [len(part) for part in short] == [len(part) for part in long] == found
+
+
 def test_an_id_in_one_of_many_small_frames_is_found():
     held = object()
     frames = [pd.DataFrame({"user": "u1", "at": ["(1/2/2020)", "(3/4/2020)"], "what": ["a", "b"]}) for _ in range(300)]

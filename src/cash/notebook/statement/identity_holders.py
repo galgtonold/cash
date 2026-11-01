@@ -413,13 +413,24 @@ def _arrow_text_numbers(values: Any) -> list[Any] | None:
         if not (pyarrow.types.is_string(chunked.type) or pyarrow.types.is_large_string(chunked.type)):
             return None
         if len(chunked) <= _FEW_TEXTS:
-            parts = _few_texts_spelling_numbers(chunked.to_pylist())
-            _ARROW_READS[id(chunked)] = (chunked, parts)
-            return parts
-        decimal = compute.filter(chunked, compute.match_substring_regex(chunked, _DECIMAL_TEXT))
-        parts: list[Any] = [compute.cast(decimal, pyarrow.int64()).to_numpy(zero_copy_only=False)]
-        hexadecimal = compute.filter(chunked, compute.match_substring_regex(chunked, _HEX_TEXT))
-        parts.extend(int(text, 16) for text in hexadecimal.to_pylist() if text is not None)
+            few = _few_texts_spelling_numbers(chunked.to_pylist())
+            _ARROW_READS[id(chunked)] = (chunked, few)
+            return few
+        # Only a value of 7 to 18 bytes can spell either number: picked by
+        # its length first, which Arrow reads without the text. A merged
+        # frame's text column came in thousands of chunks, and the two
+        # patterns over all of it took 6 s after one `merge` (p18).
+        length = compute.binary_length(chunked)
+        fits = compute.and_(compute.greater_equal(length, 7), compute.less_equal(length, 18))
+        parts: list[Any] = []
+        if compute.any(fits).as_py():
+            spelled = compute.filter(chunked, fits)
+            if isinstance(spelled, pyarrow.ChunkedArray):
+                spelled = spelled.combine_chunks()
+            decimal = compute.filter(spelled, compute.match_substring_regex(spelled, _DECIMAL_TEXT))
+            parts.append(compute.cast(decimal, pyarrow.int64()).to_numpy(zero_copy_only=False))
+            hexadecimal = compute.filter(spelled, compute.match_substring_regex(spelled, _HEX_TEXT))
+            parts.extend(int(text, 16) for text in hexadecimal.to_pylist() if text is not None)
         _ARROW_READS[id(chunked)] = (chunked, parts)
         return parts
     except Exception:  # noqa: BLE001 - read as before, through NumPy
@@ -446,10 +457,13 @@ _FEW_TEXTS = 64
 
 def _few_texts_spelling_numbers(texts: list[Any]) -> list[Any]:
     """What `_arrow_text_numbers` finds in a few *texts* (None for a
-    missing value), the same way: the decimal numbers as one NumPy array of
-    8-byte integers, then the hexadecimal ones as ints."""
+    missing value), the same way: nothing when no value is 7 to 18 bytes
+    long, else the decimal numbers as one NumPy array of 8-byte integers,
+    then the hexadecimal ones as ints."""
     import numpy
 
+    if not any(text is not None and 7 <= len(text.encode()) <= 18 for text in texts):
+        return []
     decimal = [int(text) for text in texts if text is not None and _DECIMAL_WHOLE.fullmatch(text)]
     # An array of its own each time, as Arrow's read makes: each is one
     # object the walk counts against its budget (`_MAX_SEEN`).
