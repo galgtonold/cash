@@ -225,7 +225,7 @@ from ..shared_objects import (
     walk_budget,
 )
 from ..value_cutoff import LineageAliasStore
-from ..write_observer import children_left_running, kept_writes, observe_writes, process_runs
+from ..write_observer import child_works, children_left_running, kept_writes, observe_writes
 from . import hidden_generators, in_place
 from .lineage import note_own_writes
 from .observed_draws import ObservedDrawStore
@@ -2517,7 +2517,7 @@ class StatementProcessor:
         if execution.children_running:
             if not waived:
                 for child in execution.children_running:
-                    self._thread_reach.left_running(functools.partial(process_runs, child), _process_label(child))
+                    self._thread_reach.left_running(functools.partial(child_works, child), _process_label(child))
             if not run.skip_cache:
                 run.skip_cache = True
                 run.metrics["uncacheable_reasons"].append(

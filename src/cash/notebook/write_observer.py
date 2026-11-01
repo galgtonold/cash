@@ -37,7 +37,7 @@ from cash.purity import is_pure
 from cash.tracking import io_watch
 from cash.tracking.read_classification import is_runtime_cache_path, own_lstat, own_stat
 
-__all__ = ["WrittenPaths", "children_left_running", "kept_writes", "observe_writes", "process_runs"]
+__all__ = ["WrittenPaths", "child_works", "children_left_running", "idle_helper_pids", "kept_writes", "observe_writes", "process_runs"]
 
 _WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_TRUNC
 
@@ -273,9 +273,47 @@ def children_left_running(written: WrittenPaths) -> list[Any]:
         import psutil
 
         with io_watch.own_work():
-            return [child for child in psutil.Process().children() if child.pid not in before and process_runs(child)]
+            return [child for child in psutil.Process().children() if child.pid not in before and child_works(child)]
     except Exception:  # noqa: BLE001 - none cash can see
         return []
+
+
+#: Modules whose ``_resource_tracker`` is a helper process kept for the
+#: life of the program, which runs nothing of the user's.
+_TRACKER_MODULES = (
+    "multiprocessing.resource_tracker",
+    "joblib.externals.loky.backend.resource_tracker",
+    "loky.backend.resource_tracker",
+)
+#: Modules whose ``_executor`` is a process pool kept between jobs: joblib's
+#: default backend, behind ``Parallel(n_jobs=...)`` and scikit-learn's
+#: ``n_jobs=``.
+_REUSED_POOL_MODULES = ("joblib.externals.loky.reusable_executor", "loky.reusable_executor")
+
+
+def idle_helper_pids() -> frozenset[int]:
+    """The child processes that wait, running nothing of the user's: a
+    resource tracker, and the workers of a kept process pool with no work
+    pending. A statement that leaves them alive left nothing running: they
+    write nothing until handed new work, by a statement that then runs."""
+    pids: set[int] = set()
+    for name in _TRACKER_MODULES:
+        pid = attribute_or(attribute_or(sys.modules.get(name), "_resource_tracker", None), "_pid", None)
+        if isinstance(pid, int):
+            pids.add(pid)
+    for name in _REUSED_POOL_MODULES:
+        executor = attribute_or(sys.modules.get(name), "_executor", None)
+        pending = attribute_or(executor, "_pending_work_items", None)
+        processes = attribute_or(executor, "_processes", None)
+        if isinstance(pending, dict) and not pending and isinstance(processes, dict):
+            pids.update(pid for pid in processes if isinstance(pid, int))
+    return frozenset(pids)
+
+
+def child_works(process: Any) -> bool:
+    """Whether *process* still runs work: it runs, and is not a helper
+    waiting idle (`idle_helper_pids`)."""
+    return process_runs(process) and process.pid not in idle_helper_pids()
 
 
 def process_runs(process: Any) -> bool:
