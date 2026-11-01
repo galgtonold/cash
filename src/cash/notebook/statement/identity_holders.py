@@ -339,6 +339,8 @@ def _pandas_parts(pandas: Any, value: Any) -> list[Any]:
                     spelled = _arrow_text_numbers(arrays[at]) if arrays else None
                     parts.append(spelled if spelled is not None else _pandas_column(value.iloc[:, at], dtype))
                 continue
+            if not _may_keep_an_id(dtype):
+                continue  # not taken out of the frame only to be passed over
             column = _pandas_column(value.iloc[:, columns], dtype)
             if column is not None:
                 parts.append(column)
@@ -350,6 +352,13 @@ def _pandas_parts(pandas: Any, value: Any) -> list[Any]:
     if isinstance(value, pandas.Series):
         parts.append(value.index)
     return parts
+
+
+def _may_keep_an_id(dtype: Any) -> bool:
+    """Could values of *dtype* keep an ``id()`` or a weak reference, as
+    `_pandas_column` reads them: objects, or 8-byte integers?"""
+    kind = attribute_or(dtype, "kind")
+    return kind == "O" or (kind in ("i", "u") and attribute_or(dtype, "itemsize") == 8)
 
 
 def _pandas_column(column: Any, dtype: Any) -> Any:
