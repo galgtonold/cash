@@ -951,11 +951,15 @@ class _Walk:
         level: list[Any] = items
         nodes: list[Any] = []
         leaves: list[Any] = []
+        # The leaves' types, as each level's are found: a level of two
+        # million records is not passed over again for them (student_8).
+        leaf_kinds: set[type] = set()
         lists = 0
         for _ in range(_NESTED_LEVELS):
             kinds = set(map(type, level))
             if kinds <= _LEAVES:
                 leaves.extend(level)
+                leaf_kinds |= kinds
                 break
             if not kinds <= _LEAVES | _NESTED:
                 return False
@@ -965,10 +969,15 @@ class _Walk:
                 is_node = list(map(_NESTED.__contains__, map(type, level)))
                 inner = list(compress(level, is_node))
                 leaves.extend(compress(level, map(operator.not_, is_node)))
+                leaf_kinds |= kinds - _NESTED
             nodes.extend(inner)
             # A list counts against the budget as walking it would; a tuple
-            # of leaves is read whole, as `_read_flat` reads records.
-            lists += sum(map(operator.is_, map(type, inner), repeat(list)))
+            # of leaves is read whole, as `_read_flat` reads records. Told
+            # from the level's types when it holds lists or tuples alone.
+            if tuple not in kinds:
+                lists += len(inner)
+            elif list in kinds:
+                lists += sum(map(operator.is_, map(type, inner), repeat(list)))
             if lists > self.budget:
                 return False
             level = list(chain.from_iterable(inner))
@@ -979,7 +988,7 @@ class _Walk:
         # weak reference and no number an id() could be, and a set of
         # 600,000 ids was half of what reading them cost.
         self._unseen.append(nodes)
-        self._read_leaves(leaves, set(map(type, leaves)))
+        self._read_leaves(leaves, leaf_kinds)
         return True
 
     def seen_all(self) -> set[int]:
