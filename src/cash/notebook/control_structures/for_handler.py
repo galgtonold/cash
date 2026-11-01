@@ -597,6 +597,16 @@ class ForLoopHandler:
         work_shares: list[float] = []
         measured = 0
 
+        # The lineages the loop's names had before it ran: when the rest runs
+        # as one unit, how many passes ran first is timed (`passes_were_cheap`),
+        # so what those passes left must not reach the loop's lineages.
+        lineage_now = self.statement_processor.tracking_state.variable_lineage
+        before = (
+            {name: lineage_now.get(name) for name in {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}}
+            if rest_after is not None
+            else {}
+        )
+
         total_iterations = 0
         cached_iterations = 0
         loop_pass = _helpers.LoopPass()
@@ -675,6 +685,24 @@ class ForLoopHandler:
         # After all iterations, update lineage for mutated variables. The
         # rest run as one unit reports no branch it ran, so a variable only an
         # `if` branch changes may have changed there: nothing is left out.
+        also = moved | in_loop.close_watch(loop_code, ran=True)
+        prior_lineages = None
+        if run_rest:
+            # Every name the body binds moves with the loop, and from where
+            # the loop found it: the same loop over the same input then
+            # leaves the same lineages whichever pass the unit took over at.
+            # The E6 notebook's `strat_splits` came out of a split loop with
+            # a lineage that differed between kernels, and after a restart
+            # every fit below it ran again.
+            rebound = _rebound_names(node)
+            also |= {name for name in rebound if name in user_ns}
+            # A name the body binds is what the loop made of it, whatever it
+            # was before; one it changes in place goes on from the lineage it
+            # had before the loop, not from the one the passes left.
+            prior_lineages = {
+                name: "bound in the loop" if name in rebound else (lineage or "unbound")
+                for name, lineage in before.items()
+            }
         _helpers.update_lineage_after_execution(
             self.shell,
             self.statement_processor,
@@ -682,7 +710,9 @@ class ForLoopHandler:
             loop_code,
             body_files=body_files,
             unchanged=set() if run_rest else loop_pass.unchanged(self.shell, self.statement_processor, node),
-            also=moved | in_loop.close_watch(loop_code, ran=True),
+            also=also,
+            prior_lineages=prior_lineages,
+            bound=rebound if run_rest else frozenset(),
             link_shares=_helpers.current_loop_pass(self.dispatcher) is None,
             cost=sum(m.get("execution_time", 0.0) for m in all_metrics),
             held=(iterable,),

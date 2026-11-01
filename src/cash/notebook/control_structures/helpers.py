@@ -279,6 +279,7 @@ def update_lineage_after_execution(
     cost: float = 0.0,
     held: tuple[Any, ...] = (),
     prior_lineages: dict[str, str] | None = None,
+    bound: frozenset[str] | set[str] = frozenset(),
 ) -> None:
     """
     Update lineage for variables that may have been mutated inside the
@@ -312,6 +313,9 @@ def update_lineage_after_execution(
     *prior_lineages* are the lineages some variables had before the
     structure ran, where the structure's own run moved them already: the
     objects a loop run as one unit stores as outputs (``stored_in_place``).
+
+    *bound* names what the structure bound that moves with it even when it
+    holds a number or a string, which an in-place change cannot reach.
     """
     body_nodes = get_body_nodes(node)
     if not body_nodes:
@@ -364,6 +368,7 @@ def update_lineage_after_execution(
             ),
             unit_digest=unit_digest,
             prior_lineages=prior_lineages,
+            bound=bound,
         )
 
 
@@ -615,6 +620,7 @@ def update_mutated_variable_lineages(
     input_lineages: dict[str, str] | None = None,
     unit_digest: str | None = None,
     prior_lineages: dict[str, str] | None = None,
+    bound: frozenset[str] | set[str] = frozenset(),
 ) -> None:
     """Give every variable the control structure mutated a new lineage.
 
@@ -648,8 +654,10 @@ def update_mutated_variable_lineages(
 
         val = shell.user_ns[var_name]
 
-        # Skip immutable scalar types
-        if isinstance(val, (int, float, complex, str, bytes, bool, type(None), frozenset, tuple)):
+        # Skip immutable scalar types, unless the structure bound the name
+        if var_name not in bound and isinstance(
+            val, (int, float, complex, str, bytes, bool, type(None), frozenset, tuple)
+        ):
             continue
 
         try:
