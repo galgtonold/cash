@@ -20,6 +20,7 @@ from typing import Any
 
 from IPython.display import HTML, display
 
+from cash._own_work import own_work
 from cash._user_attrs import attribute_or, has_attribute
 
 from ... import __version__
@@ -193,6 +194,15 @@ class BadgePresenter:
             generation = self._progress_generation
 
         def fire() -> None:
+            # Cash's own work, beside the statement: no code it reaches is
+            # part of what the statement ran. A headless driver's publisher,
+            # a function of its own ``__main__``, was recorded in the trace
+            # of every statement slow enough to show this badge, could not
+            # be found again after a restart, and refused each such entry.
+            with own_work:
+                publish()
+
+        def publish() -> None:
             # Build OUTSIDE the lock: the build can hit disk or the notebook
             # server, and `cancel_progress` on the main thread would block for
             # as long. `metrics` is the executor's live list, read unlocked; a

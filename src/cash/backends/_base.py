@@ -348,6 +348,13 @@ class CacheBackend(ABC):
         no evictions."""
         return None
 
+    def previous_version(self, slot: str, besides: str) -> str | None:
+        """The key of the most recently used version of the statement whose
+        versions share *slot* (``version_slot`` in the metadata) other than
+        *besides*, or None. Asked on a miss, to say what changed since it was
+        stored; the default keeps no record of versions."""
+        return None
+
     def take_storage_notices(self) -> list[str]:
         """Notices about the disk cap not yet shown (the first eviction),
         removed, for a front end that prints them. The default has none."""

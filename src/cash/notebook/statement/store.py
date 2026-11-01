@@ -11,7 +11,6 @@ files it was built from.
 from __future__ import annotations
 
 import ast
-import hashlib
 import logging
 import pickle
 import sys
@@ -37,6 +36,7 @@ from cash.notebook.statement import reducer_writes
 from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.capture import replay_record
 from cash.notebook.statement.carrier_advances import PAYLOAD_FIELD as CARRIERS_FIELD
+from cash.notebook.statement.input_change import version_slot
 from cash.notebook.statement.miss_guard import GUARD_SKIP_REASON
 from cash.notebook.statement.run import ECHO_FIELD
 from cash.sizing import estimate_object_size, pickled_size_estimate
@@ -122,13 +122,6 @@ def _carriers_advanced(run: StatementRun) -> list[str] | None:
     """The generators *run* drew from, for its metadata: the simulation reads
     them after a restart (`carrier_advances`). None when it read none."""
     return None if run.carriers_advanced is None else sorted(run.carriers_advanced)
-
-
-def _version_slot(source_hash: str, outputs: set[str]) -> str:
-    """What makes two stored results versions of one statement: its source and
-    the names it binds. Two cells with the same statement share a slot; a
-    version one of them reads in this process is never pruned for the other."""
-    return hashlib.sha256(f"{source_hash}|{','.join(sorted(outputs))}".encode()).hexdigest()[:32]
 
 
 def _cost_fields(prediction: dict[str, Any] | None) -> dict[str, Any]:
@@ -682,7 +675,7 @@ class StatementStore:
             anchor_holds=run.anchor_holds or None,
             share_edges=sorted([src, dst] for src, dst in run.linked_edges) if run.linked_edges is not None else None,
             ttl=run.effective_ttl,
-            version_slot=_version_slot(run.source_hash, run.outputs),
+            version_slot=version_slot(run.source_hash, run.outputs),
             replay=replay_record(execution.captured),
             **cost_fields,
         )

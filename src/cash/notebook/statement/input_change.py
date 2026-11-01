@@ -2,14 +2,29 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import hashlib
+import logging
+from collections.abc import Iterable, Mapping
+from typing import TYPE_CHECKING, Any
 
 from cash._user_attrs import attribute_or
+
+from ..lineage_formula import resolve_lineage_alias
 
 if TYPE_CHECKING:
     from ..tracking_state import TrackingState
 
-__all__ = ["input_change_reason"]
+__all__ = ["input_change_reason", "stored_input_change_reason", "version_slot"]
+
+logger = logging.getLogger(__name__)
+
+
+def version_slot(source_hash: str, outputs: Iterable[str]) -> str:
+    """What makes two stored results versions of one statement: its source and
+    the names it binds (``version_slot`` in its metadata). Two cells with the
+    same statement share a slot; a version one of them reads in this process
+    is never pruned for the other."""
+    return hashlib.sha256(f"{source_hash}|{','.join(sorted(outputs))}".encode()).hexdigest()[:32]
 
 
 def input_change_reason(tracking_state: TrackingState, inputs, outputs) -> str | None:
@@ -89,3 +104,48 @@ def _budget_cut(state: TrackingState, stale: list[str], current) -> str:
                 "too costly to read, so it counts as changed)"
             )
     return ""
+
+
+def stored_input_change_reason(
+    backend: Any,
+    cache_key: str,
+    source_hash: str,
+    inputs: Iterable[str],
+    outputs: Iterable[str],
+    current: Mapping[str, str],
+) -> str | None:
+    """The miss reason naming the inputs whose lineage differs from the one
+    the statement's last stored version was built from, or None.
+
+    `input_change_reason` reads what this session ran; after a restart it
+    has nothing, and a slow statement whose key changed because an input's
+    lineage did ran again with no reason given. The version stored last
+    (`version_slot`, ``CacheBackend.previous_version``) keeps the lineages
+    of its inputs (``input_lineages``): one metadata read on a miss that
+    runs the statement anyway. Silent when no version is kept, or when no
+    input differs (the key changed for another reason)."""
+    outputs = set(outputs)
+    wanted = {name for name in inputs if isinstance(name, str) and name not in outputs}
+    if not cache_key or not wanted:
+        return None
+    try:
+        previous = backend.previous_version(version_slot(source_hash, outputs), cache_key)
+        metadata = backend.peek_metadata(previous) if previous is not None else None
+    except Exception:  # a miss reason is a diagnostic
+        logger.debug("Could not read the version stored before", exc_info=True)
+        return None
+    was = (metadata or {}).get("input_lineages")
+    if not isinstance(was, Mapping):
+        return None
+    stale = sorted(
+        name
+        for name in wanted
+        if isinstance(was.get(name), str)
+        and name in current
+        and resolve_lineage_alias(current[name]) != resolve_lineage_alias(was[name])
+    )
+    if not stale:
+        return None
+    names = ", ".join(stale[:3])
+    more = f" +{len(stale) - 3} more" if len(stale) > 3 else ""
+    return f"input changed since it was last stored: {names}{more}"
