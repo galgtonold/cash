@@ -37,7 +37,15 @@ from cash.purity import is_pure
 from cash.tracking import io_watch
 from cash.tracking.read_classification import is_runtime_cache_path, own_lstat, own_stat
 
-__all__ = ["WrittenPaths", "child_works", "children_left_running", "idle_helper_pids", "kept_writes", "observe_writes", "process_runs"]
+__all__ = [
+    "WrittenPaths",
+    "child_works",
+    "children_left_running",
+    "idle_helper_pids",
+    "kept_writes",
+    "observe_writes",
+    "process_runs",
+]
 
 _WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_TRUNC
 
