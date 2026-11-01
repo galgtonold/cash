@@ -456,7 +456,11 @@ def frame_borrows_its_data(
     in place, which no reference count shows, so the caller checks them
     item by item against a copy (`FrameDigests`). A list in *kept*, the
     copies, is not read again for what its items are: the check finds the
-    same objects in it or fails.
+    same objects in it or fails. So is a block of tuples of immutable
+    scalars (``explode`` of a column of ``(action, time)`` records,
+    `_immutable_records`), which nothing can change but a write to the
+    block: its array is appended to *lists*, and one in *kept* is not read
+    again.
     """
     if -1 in _EXPOSED:
         return True
@@ -546,7 +550,9 @@ def _frame_memory(
             values = holder.values
             if type(values) is np.ndarray and values.dtype == object and not immutable_items(values):
                 # Python objects change in place: `s[0].append(...)`
-                if lists is None or not _lists_of_immutables(values, lists, kept):
+                if lists is None or not (
+                    _lists_of_immutables(values, lists, kept) or _immutable_records(values, lists, kept)
+                ):
                     return None
             if not reference(values):
                 return None
@@ -606,6 +612,61 @@ def _lists_of_immutables(values: Any, lists: list, kept: dict | None = None) -> 
     ):
         return False
     lists.extend(items)
+    return True
+
+
+class _Records:
+    """A block of records `_immutable_records` let through, as `FrameDigests`
+    keeps it: by its id and a weak reference, so that no reference cash
+    holds counts as someone's handle on the array."""
+
+    __slots__ = ("array", "key")
+
+    def __init__(self, values: Any) -> None:
+        self.key = id(values)
+        self.array = weakref.ref(values)
+
+
+def _immutable_records(values: Any, lists: list, kept: dict | None = None) -> bool:
+    """Whether every item of the object array *values* is a tuple of
+    immutable scalars of exact types no attribute can be set on, or such a
+    scalar itself: nothing but a write to the array, which copy-on-write
+    and the reference counts guard, can change what it holds. The array is
+    noted in *lists* (`_Records`), once; one in *kept* is taken as one
+    without being read again. A pandas date in a tuple can take an
+    attribute, which the key reads, so a block holding one is not let
+    through."""
+    key = id(values)
+    if any(type(noted) is _Records and noted.key == key for noted in lists):
+        return True  # the same array, met through the shallow copy
+    known = kept.get(key) if kept else None
+    if known is not None and type(known[0]) is _Records and known[0].array() is values:
+        lists.append(known[0])
+        return True
+    items = values.ravel(order="K").tolist()
+    plain, _stateful = _plain_scalar_types()
+    kinds = set(map(type, items))
+    if not items or tuple not in kinds or not kinds <= plain | {tuple}:
+        return False
+    tuples = (
+        items
+        if kinds == {tuple}
+        else list(itertools.compress(items, map(operator.is_, map(type, items), itertools.repeat(tuple))))
+    )
+    leaves = list(itertools.chain.from_iterable(tuples))
+    del items, tuples
+    kinds = set(map(type, leaves))
+    if not kinds <= plain:
+        return False
+    zoned, zones = _plain_zones()
+    if not kinds.isdisjoint(zoned):
+        dates = itertools.compress(leaves, map(zoned.__contains__, map(type, leaves)))
+        if not set(map(type, map(_TZINFO, dates))) <= zones:
+            return False
+    try:
+        lists.append(_Records(values))
+    except TypeError:  # no weak reference to it: read every time
+        return False
     return True
 
 
@@ -1337,7 +1398,14 @@ class FrameDigests:
                 return
             # What each list of a block of lists held when the content was
             # hashed, which no copy-on-write guards (`_lists_unchanged`).
-            kept = {id(items): (items, tuple(items), _stateful_of(items)) for items in lists}
+            # A block of records (`_immutable_records`) is kept as itself:
+            # nothing in it can change but through a write to it.
+            kept = {
+                (id(items) if type(items) is list else items.key): (items, tuple(items), _stateful_of(items))
+                if type(items) is list
+                else (items, None, [])
+                for items in lists
+            }
             signature = frame_signature(obj)
             entries = self._entries
             key = id(obj)
@@ -1369,9 +1437,15 @@ def _lists_unchanged(lists: list, kept: dict[int, tuple[list, tuple, list]]) -> 
     unchanged. The same objects, not equal ones: an item
     swapped for an equal one is caught too, as the read would give the
     same bytes either way."""
-    if len({id(items) for items in lists}) != len(kept):
+    if len({id(items) if type(items) is list else items.key for items in lists}) != len(kept):
         return False
     for items in lists:
+        if type(items) is _Records:
+            # A block of records, the very array (`_immutable_records`).
+            known = kept.get(items.key)
+            if known is None or type(known[0]) is not _Records or known[0].array() is not items.array():
+                return False
+            continue
         known = kept.get(id(items))
         if known is None or known[0] is not items:
             return False
