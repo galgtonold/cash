@@ -25,7 +25,7 @@ from cash._user_attrs import attribute_or, has_attribute
 
 from ... import __version__
 from .. import badge_renderer as _badge
-from ..server_discovery import get_notebook_cells
+from ..server_discovery import get_notebook_cells, last_notebook_cells
 from ..statement import ProcessResult
 from .error_display import show_clean_error, show_module_load_error
 
@@ -464,12 +464,15 @@ class BadgePresenter:
             filtered.append(c)
         exec_history = filtered[-6:]
 
-        # --- Notebook source (actual .ipynb cell contents on disk) ---
-        notebook_cells: list[str] = []
-        try:
-            notebook_cells = get_notebook_cells() or []
-        except Exception as e:  # noqa: BLE001 - reads a file or asks the notebook server
-            logger.debug("[BADGE] Could not read the notebook for the bug report: %s", e)
+        # --- Notebook source (the cells the last read of the notebook found) ---
+        # The read this cell's check made: a read of its own scanned every VS
+        # Code backup again, twice a cell, for a link that is rarely followed.
+        notebook_cells: list[str] = last_notebook_cells() or []
+        if not notebook_cells:
+            try:
+                notebook_cells = get_notebook_cells() or []
+            except Exception as e:  # noqa: BLE001 - reads a file or asks the notebook server
+                logger.debug("[BADGE] Could not read the notebook for the bug report: %s", e)
 
         return {
             "version": __version__,

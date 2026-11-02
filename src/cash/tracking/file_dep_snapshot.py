@@ -32,7 +32,7 @@ import os
 import stat as _stat
 import sys
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any, NamedTuple
 
 from cash._memo import FILE_DIGESTS, LruMemo
@@ -954,6 +954,7 @@ def file_dep_is_fresh(
     resolved_path: str,
     stored: dict[str, Any],
     listed: os.stat_result | None = None,
+    taken: os.stat_result | None = None,
 ) -> tuple[bool, str | None]:
     """Return ``(is_fresh, stale_reason)`` for a resolved file dependency.
 
@@ -971,6 +972,11 @@ def file_dep_is_fresh(
     ``'unreadable' | 'size' | 'content' | 'mtime' |
     'appeared' | 'vanished' | 'unresolved' | 'remote-changed' |
     'remote-unresolved'`` for debug attribution.
+
+    *taken* is a stat of *resolved_path* the caller took already, in place
+    of one of its own (`FreshnessMemo.taken`). One with no file identity
+    (``st_ino`` 0) came from a directory listing, and stands in as *listed*
+    does.
 
     **Remote dependencies** short-circuit to :func:`remote_dep_is_fresh`: the
     "path" is a URL, so there is nothing to stat, and the store's own validator
@@ -998,11 +1004,17 @@ def file_dep_is_fresh(
         return False, "unresolved"
     stored_size = stored.get("size")
     stored_hash = stored.get("hash")
+    if taken is not None:
+        if taken.st_ino:
+            listed = None
+            st = taken
+        elif listed is None:
+            listed = taken
     # A listed stat (``stats_from_listings``) stands in for one where content
     # is the authority, not the size or the time the listing reports.
     if listed is not None and stored_hash is not None:
         st = listed
-    else:
+    elif taken is None or not taken.st_ino:
         try:
             st = own_stat(resolved_path)
         except OSError:
@@ -1196,6 +1208,11 @@ class FreshnessMemo:
     (:func:`dep_is_fresh`); ``listed`` holds stats taken from directory
     listings (``stats_from_listings``).
 
+    ``taken``, when set, gives for a snapshot's paths the stats its owner
+    already took of them and may stand in for a stat of each
+    (``{path: stat}``, a path missing from it is stat-ed): the cell run's
+    own stats (`cash.notebook.run_memo`), shared by every check of the run.
+
     The copy is kept apart from the answer: a tuple holding a dict stays
     tracked by the garbage collector, and one per file of a 24,000-file check
     was promoted to the oldest generation every cell, setting off a full
@@ -1203,12 +1220,13 @@ class FreshnessMemo:
     dict of numbers, are not tracked.
     """
 
-    __slots__ = ("answers", "listed", "recorded")
+    __slots__ = ("answers", "listed", "recorded", "taken")
 
-    def __init__(self) -> None:
+    def __init__(self, taken: Callable[[Mapping[str, Any]], Mapping[str, os.stat_result]] | None = None) -> None:
         self.answers: dict[Any, Any] = {}
         self.recorded: dict[str, Any] = {}
         self.listed: dict[str, os.stat_result] = {}
+        self.taken = taken
 
 
 class StaleDep(NamedTuple):
@@ -1240,7 +1258,9 @@ def _memo_key(path: str, recorded: Any) -> Any:
             return None
 
 
-def _check_dep(path: str, recorded: Any, listed: os.stat_result | None) -> tuple[str | None, bool, str | None]:
+def _check_dep(
+    path: str, recorded: Any, listed: os.stat_result | None, taken: os.stat_result | None = None
+) -> tuple[str | None, bool, str | None]:
     if not isinstance(recorded, Mapping):
         return path, False, "unrecorded"
     here = dep_path_for_this_process(path, recorded)
@@ -1248,7 +1268,9 @@ def _check_dep(path: str, recorded: Any, listed: os.stat_result | None) -> tuple
     # also says the file is there, so a dependency costs one syscall, not an
     # ``exists`` and then a stat (a re-run of statements derived from 3,000
     # files made 72,000).
-    is_fresh, reason = file_dep_is_fresh(here, recorded, listed if here == path else None)
+    if here != path:
+        listed = taken = None
+    is_fresh, reason = file_dep_is_fresh(here, recorded, listed, taken)
     if reason != "unreadable" or here != path or recorded.get(_REMOTE_MARKER):
         # A dependency beside the code is checked in THIS install's copy and
         # nowhere else: missing there is a miss.
@@ -1266,6 +1288,7 @@ def dep_is_fresh(
     path: str,
     recorded: Any,
     memo: FreshnessMemo | None = None,
+    taken: os.stat_result | None = None,
 ) -> tuple[str | None, bool, str | None]:
     """``(resolved, is_fresh, stale_reason)`` for one recorded dependency.
 
@@ -1274,10 +1297,11 @@ def dep_is_fresh(
     recorded path, and when that is gone, the moved-project fallbacks of
     :func:`cash._paths.resolve_file_dep_path`. ``resolved`` is None when the
     file is nowhere to be found (reason ``'missing'``). A recorded value that
-    is not a snapshot entry is stale (``'unrecorded'``).
+    is not a snapshot entry is stale (``'unrecorded'``). *taken* is a stat
+    of *path* the caller took already (`FreshnessMemo.taken`).
     """
     if memo is None:
-        return _check_dep(path, recorded, None)
+        return _check_dep(path, recorded, None, taken)
     # Keyed on the path, with a copy of the snapshot it was answered for: a
     # key holding the snapshot's items was nine tuples per file, kept for the
     # run, and the collections they set off were a large part of a check of
@@ -1296,7 +1320,7 @@ def dep_is_fresh(
     else:
         key = path
     copied = dict(recorded) if key is path and isinstance(recorded, Mapping) else None
-    answer = _check_dep(path, recorded, memo.listed.get(path))
+    answer = _check_dep(path, recorded, memo.listed.get(path), taken)
     if key is path:
         if copied is not None:
             memo.recorded[path] = copied
@@ -1320,13 +1344,18 @@ def snapshot_is_fresh(
     """
     if not snap:
         return True, None
-    if memo is not None and len(snap) >= LISTING_MIN_FILES:
+    taken: Mapping[str, os.stat_result] = {}
+    if memo is not None and memo.taken is not None:
+        # The stats the owner's run took already: each file once, whichever
+        # check asks first.
+        taken = memo.taken(snap)
+    elif memo is not None and len(snap) >= LISTING_MIN_FILES:
         # Many files: read their directories once rather than stat each.
         unlisted = [p for p, s in snap.items() if isinstance(s, dict) and "size" in s and p not in memo.listed]
         if len(unlisted) >= LISTING_MIN_FILES:
             memo.listed.update(stats_from_listings(unlisted))
     for path, recorded in snap.items():
-        resolved, is_fresh, reason = dep_is_fresh(path, recorded, memo)
+        resolved, is_fresh, reason = dep_is_fresh(path, recorded, memo, taken.get(path))
         if not is_fresh:
             return False, StaleDep(path, resolved, reason or "changed")
     return True, None
