@@ -33,7 +33,9 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import itertools
 import logging
+import pickle
 import sys
 import types
 import weakref
@@ -93,7 +95,7 @@ _digests: weakref.WeakKeyDictionary[Any, tuple[list[Any], list[str] | None]] = w
 #: changed in place, as the last statement that called the memo left them:
 #: what tells a statement that changed one in place (``f(1).append(5)``)
 #: from one that only read it.
-_answers_seen: weakref.WeakKeyDictionary[Any, dict[int, tuple[Any, str]]] = weakref.WeakKeyDictionary()
+_answers_seen: weakref.WeakKeyDictionary[Any, dict[int, tuple[Any, str | bytes]]] = weakref.WeakKeyDictionary()
 
 #: The types whose values nothing can change in place.
 _FIXED_TYPES = (int, float, complex, str, bytes, bool, type(None), range)
@@ -499,19 +501,39 @@ def _builtin(name: str, globals_: dict) -> Any:
     return table.get(name, _UNSET) if isinstance(table, dict) else _UNSET
 
 
+#: The types an answer's own items may have for `_answer_digest`'s quick form.
+_SCALAR_TYPES = frozenset((int, float, complex, str, bytes, bool, type(None)))
+
+
+def _answer_digest(answer: Any) -> str | bytes:
+    """What `_changed_in_place` compares an answer by, from one statement to
+    the next and only there. A list, set or dict holding only numbers,
+    strings, bytes and None (a Held-Karp memo's segments) is taken by its
+    pickle, which keeps each item's type and exact value: ten times quicker
+    than `compute_hash`, which cost seconds for a memo of thousands of
+    answers cleared and filled by every call. A bytes digest never equals a
+    `compute_hash` one, so an answer that changes form counts as changed."""
+    kind = type(answer)
+    if kind is list or kind is set or kind is dict:
+        parts = itertools.chain(answer.keys(), answer.values()) if kind is dict else answer
+        if all(type(part) in _SCALAR_TYPES for part in parts):
+            return hashlib.blake2b(pickle.dumps(answer, protocol=5), digest_size=16).digest()
+    return compute_hash(answer)
+
+
 def _changed_in_place(memo: Any, items: list[tuple[Any, Any]]) -> bool | None:
     """Whether an answer *memo* holds was changed in place since the last
     statement that called it left it, None when one cannot be told (an
     answer that can change in place and was not seen then); and remember
     them as they are now."""
     seen = _answers_seen.get(memo, {})
-    now: dict[int, tuple[Any, str]] = {}
+    now: dict[int, tuple[Any, str | bytes]] = {}
     verdict: bool | None = False
     for _, answer in items:
         if _fixed(answer):
             continue
         try:
-            digest = compute_hash(answer)
+            digest = _answer_digest(answer)
         except Exception:  # noqa: BLE001 - an answer with no digest
             verdict = None if verdict is False else verdict
             continue

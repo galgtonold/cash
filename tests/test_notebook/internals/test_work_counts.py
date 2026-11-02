@@ -262,3 +262,27 @@ def test_a_statement_over_a_memo_too_big_to_serve_does_not_digest_its_answers(ca
 
     # A few dozen digests today (the key, the lineage); one per answer before.
     assert hashed.calls < n // 4, hashed.calls
+
+
+def test_calls_that_clear_and_refill_a_memo_digest_its_answers_quickly(cash_magics):
+    # Each ``solve`` call empties the memo and fills it again (the TSP
+    # notebook's Held-Karp solver, called per test case): cash remembers
+    # every answer it holds after each call, to tell a later reader that
+    # changes one in place. A list of numbers is remembered by its pickle;
+    # the full value digest of each answer took 10 times as long.
+    from cash.notebook import helper_memos
+
+    # Slow enough that each call is one cash keys and may store.
+    cells = [
+        "import functools\nimport time\n\n\n@functools.cache\ndef seg(n):\n    return [n * 0.5, n + 1j, n]\n\n\n"
+        f"def solve(k):\n    time.sleep({ABOVE_PERSISTENCE_FLOOR_S})\n    seg.cache_clear()\n"
+        "    return [seg(i) for i in range(k)]",
+        "total = sum(len(solve(2000)) for _ in range(5))",
+    ]
+    run_cash_cell(cash_magics, cells[0], cells=cells)
+    with method_calls(helper_memos, "compute_hash") as digests:
+        run_cash_cell(cash_magics, cells[1], cells=cells)
+
+    assert cash_magics.shell.user_ns["total"] == 10_000
+    # None today; one per answer after each call (10,000) before.
+    assert digests.calls < 1000, digests.calls
