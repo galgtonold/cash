@@ -1567,6 +1567,7 @@ def _reached_ids(value: Any, value_types: tuple[type, ...]) -> set[int]:
     rows with ``rebind`` holding ``rows`` itself."""
     found: set[int] = set()
     stack = [value]
+    exact = exact_value_types()
     while stack:
         obj = stack.pop()
         if is_value(obj, value_types) or id(obj) in found:
@@ -1579,8 +1580,35 @@ def _reached_ids(value: Any, value_types: tuple[type, ...]) -> set[int]:
         if children is None:
             opaque = _opaque_parts(obj)
             children = opaque[0] if opaque is not None else ()
-        stack.extend(children)
+        records = _value_records(children, exact)
+        if records is None:
+            stack.extend(children)
+            continue
+        # Values, and tuples of values: each tuple's id, and nothing below
+        # it, as a step through each would find. The 1.3 million floats of
+        # a list a loop filled took 4 s a step at a time (student_8).
+        if records:
+            before = len(found) >> 10
+            found.update(map(id, records))
+            if len(found) >> 10 != before:
+                check_walk_budget()
     return found
+
+
+def _value_records(children: Any, exact: frozenset[type]) -> list[Any] | None:
+    """The tuples among *children* when every child is a value of the
+    *exact* types or a tuple holding such values alone, told at C speed;
+    None otherwise. Neither has anything below it a walk would count."""
+    kinds = set(map(type, children))
+    if kinds <= exact:
+        return []
+    if tuple not in kinds or not kinds <= exact | _JUST_TUPLE:
+        return None
+    records = list(children) if len(kinds) == 1 else [child for child in children if type(child) is tuple]
+    return records if exact.issuperset(map(type, itertools.chain.from_iterable(records))) else None
+
+
+_JUST_TUPLE = frozenset({tuple})
 
 
 def holds_part_of(value: Any, sources: Iterable[Any]) -> bool:
@@ -3919,7 +3947,11 @@ def _descend(
         # Nothing but values, by exact type: asked at C speed, where the
         # loop below takes a Python step per item -- 35 ms of storing a
         # list of 200,000 ints.
-        if not children or exact.issuperset(map(type, children)):
+        if not children or _value_records(children, exact) is not None:
+            # Values, and tuples of values alone (a session's ``(action,
+            # time)`` records): none is a node (`_is_node`), asked of them
+            # all at C speed, where a step each cost 2 s over a list of
+            # 87,000 sessions (student_8).
             continue
         if len(children) >= _FLAT_RECORDS_MIN:
             left = _records_left(children, value_types, leaves, exact, flat)
