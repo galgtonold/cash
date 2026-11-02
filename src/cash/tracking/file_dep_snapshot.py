@@ -1191,15 +1191,23 @@ class FreshnessMemo:
     The caller owns its lifetime and must drop it whenever a file could have
     changed (a statement ran, a new cell started). ``answers`` holds one
     ``(resolved, is_fresh, reason)`` per (path, recorded snapshot): under the
-    path, with a copy of the snapshot, for the first snapshot of a path, and
-    under ``_memo_key`` for any other (:func:`dep_is_fresh`);
-    ``listed`` holds stats taken from directory listings (``stats_from_listings``).
+    path for the first snapshot of a path, with a copy of that snapshot under
+    the path in ``recorded``, and under ``_memo_key`` for any other
+    (:func:`dep_is_fresh`); ``listed`` holds stats taken from directory
+    listings (``stats_from_listings``).
+
+    The copy is kept apart from the answer: a tuple holding a dict stays
+    tracked by the garbage collector, and one per file of a 24,000-file check
+    was promoted to the oldest generation every cell, setting off a full
+    collection every few cells. An answer of strings and booleans, and a
+    dict of numbers, are not tracked.
     """
 
-    __slots__ = ("answers", "listed")
+    __slots__ = ("answers", "listed", "recorded")
 
     def __init__(self) -> None:
         self.answers: dict[Any, Any] = {}
+        self.recorded: dict[str, Any] = {}
         self.listed: dict[str, os.stat_result] = {}
 
 
@@ -1277,10 +1285,10 @@ def dep_is_fresh(
     # A second snapshot of the same path (an entry recorded at another time)
     # is answered under the full key.
     answers = memo.answers
-    known = answers.get(path)
+    known = memo.recorded.get(path)
     if known is not None:
-        if known[0] == recorded:
-            return known[1]
+        if known == recorded:
+            return answers[path]
         key = _memo_key(path, recorded)
         found = answers.get(key) if key is not None else None
         if found is not None:
@@ -1291,7 +1299,8 @@ def dep_is_fresh(
     answer = _check_dep(path, recorded, memo.listed.get(path))
     if key is path:
         if copied is not None:
-            answers[path] = (copied, answer)
+            memo.recorded[path] = copied
+            answers[path] = answer
     elif key is not None:
         answers[key] = answer
     return answer

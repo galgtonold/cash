@@ -7,9 +7,16 @@ checked them before every cell, and the collections those tuples set off
 were a large part of the check. The answer is now kept under the path,
 with a copy of the snapshot it answers; another snapshot of the same path
 is answered on its own.
+
+Kept apart from that copy, the answer is not tracked by the garbage
+collector: a tuple holding the copy was, one per file, promoted to the
+oldest generation each cell and setting off a full collection of the
+kernel's heap every few cells.
 """
 
 from __future__ import annotations
+
+import gc
 
 from cash.tracking.file_dep_snapshot import FreshnessMemo, snapshot_file_deps, snapshot_is_fresh
 
@@ -32,6 +39,18 @@ def test_one_answer_per_file_under_its_path(tmp_path):
     assert snapshot_is_fresh(snap, memo)[0]
     assert snapshot_is_fresh(dict(snap), memo)[0]
     assert set(memo.answers) == set(snap)
+
+
+def test_the_kept_answers_are_not_tracked_by_the_garbage_collector(tmp_path):
+    snap = _snapshot(tmp_path)
+    memo = FreshnessMemo()
+    assert snapshot_is_fresh(snap, memo)[0]
+    gc.collect()  # a tuple of atomic values is untracked on the first pass that sees it
+
+    assert len(memo.answers) == N
+    assert [a for a in memo.answers.values() if gc.is_tracked(a)] == []
+    assert len(memo.recorded) == N
+    assert [r for r in memo.recorded.values() if gc.is_tracked(r)] == []
 
 
 def test_another_snapshot_of_the_same_file_is_answered_on_its_own(tmp_path):
