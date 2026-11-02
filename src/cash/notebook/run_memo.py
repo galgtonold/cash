@@ -7,7 +7,8 @@ all of them again, twice (freshness, then mtime) -- 7-11 s before every cell of
 a notebook that runs in 30 s uncached. So the answers are kept:
 
 * per cache entry, the key of each entry found fresh;
-* per file, each freshness answer and each path's resolution and stat.
+* per file, each freshness answer and each path's resolution and stat;
+* per snapshot, each one found fresh whole, and how old its answers are.
 
 The rule for both: they last for one cell run (``file_dep_snapshot.HASH_EPOCH``)
 and nothing is kept outside a run. Within a run, a statement that writes files
@@ -22,6 +23,8 @@ reads and fills both. Neither side imports the other for it.
 
 from __future__ import annotations
 
+import os
+import time
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -32,10 +35,12 @@ from ..tracking.read_classification import own_stat
 
 __all__ = [
     "file_component_this_run",
+    "fresh_snapshot_this_run",
     "file_state_this_run",
     "forget_file_state_this_run",
     "known_fresh_entry",
     "note_fresh_entry",
+    "note_fresh_snapshot",
     "stats_this_run",
 ]
 
@@ -80,7 +85,7 @@ def file_state_this_run() -> dict | None:
         return None
     if _FILE_STATE_THIS_RUN.get("epoch") != epoch:
         _FILE_STATE_THIS_RUN.clear()
-        _FILE_STATE_THIS_RUN.update(epoch=epoch, memo=FreshnessMemo(), where={})
+        _FILE_STATE_THIS_RUN.update(epoch=epoch, memo=FreshnessMemo(), stat={}, since=time.monotonic())
     return _FILE_STATE_THIS_RUN
 
 
@@ -90,51 +95,82 @@ def forget_file_state_this_run() -> None:
     _FILE_STATE_THIS_RUN.clear()
 
 
-def _locate_files(paths: Iterable[str], run: dict | None) -> dict[str, tuple[str | None, Any]]:
-    """``{path: (resolved or None, stat or None)}`` for *paths*, this run's answers first.
+#: How many snapshots found fresh one run keeps (`note_fresh_snapshot`).
+_FRESH_SNAPSHOTS_KEPT = 16
 
-    A crowded directory is read with one listing (``stats_from_listings``); a
-    listed path is where it was recorded. The rest go through
-    ``resolve_file_dep_path``'s relocation fallbacks.
+
+def note_fresh_snapshot(snap: Mapping[str, Any]) -> None:
+    """Remember that *snap* (a ``file_dependencies`` snapshot) was found fresh
+    whole with this run's per-file answers (``file_state_this_run()["memo"]``).
+
+    Dated by when those answers began to be taken, not by when this check
+    ran: an answer it reused is that old. Kept with them, so a statement that
+    writes files drops it too.
     """
-    where = run["where"] if run is not None else {}
-    paths = list(paths)
-    todo = [p for p in paths if p not in where]
-    listed = stats_from_listings(todo) if len(todo) >= LISTING_MIN_FILES else {}
-    found: dict[str, tuple[str | None, Any]] = {}
-    for p in todo:
-        st = listed.get(p)
-        if st is None and not is_remote_url(p):
-            # Where it was recorded: the stat that finds it is there is the
-            # stat the caller takes next (`resolve_file_dep_path` asked
-            # ``os.path.exists`` first, a stat of its own).
-            try:
-                st = own_stat(p)
-            except (OSError, ValueError):
-                st = None
-        found[p] = (p, st) if st is not None else (resolve_file_dep_path(p), None)
-    if run is not None and len(where) < 200_000:
-        where.update(found)
-    return {p: found[p] if p in found else where[p] for p in paths}
+    run = file_state_this_run()
+    if run is None:
+        return
+    kept = run.setdefault("fresh", [])
+    if len(kept) < _FRESH_SNAPSHOTS_KEPT:
+        kept.append((snap, run["since"]))
+
+
+def fresh_snapshot_this_run(snap: Mapping[str, Any], not_before: float) -> bool:
+    """Was a snapshot equal to *snap* found fresh whole in this run, from
+    answers taken at *not_before* (``time.monotonic()``) or later?
+
+    The upstream check looks up the entry of the cell above, and the statement
+    below then checks its own entry, which inherited the same files: a frame
+    built from 24,000 documents was checked twice in one cell. The caller
+    says how old an answer it takes. Compared as whole dicts, in C.
+    """
+    epoch = _fds.HASH_EPOCH
+    if epoch is None or _FILE_STATE_THIS_RUN.get("epoch") != epoch:
+        return False
+    return any(
+        at >= not_before and len(known) == len(snap) and known == snap
+        for known, at in _FILE_STATE_THIS_RUN.get("fresh", ())
+    )
 
 
 def stats_this_run(paths: Iterable[str]) -> dict[str, tuple[str | None, Any]]:
     """``{path: (resolved or None, stat or None)}``, one stat per path per cell run.
 
-    The resolution is ``resolve_file_dep_path``'s (relocation fallbacks
-    included); the stat is the listing's where the directory was listed.
-    Stat-ed past cash's own wrapper of ``os.stat`` (``own_stat``): the
-    stats are cash's, asked of every file the cells above read before each
-    cell.
+    A path is looked for where it was recorded first; one that is not there
+    goes through ``resolve_file_dep_path``'s relocation fallbacks. A crowded
+    directory is read with one listing (``stats_from_listings``); a listed
+    path is where it was recorded. Stat-ed past cash's own wrapper of
+    ``os.stat`` (``own_stat``): the stats are cash's, asked of every file the
+    cells above read before each cell.
+
+    One pass over the paths, one tuple each: before every cell below a loop
+    over 24,000 documents, the bookkeeping of a stat cost as much as the stat.
     """
     run = file_state_this_run()
     stats = run.setdefault("stat", {}) if run is not None else {}
-    paths = list(paths)
+    if not isinstance(paths, (list, tuple, set, frozenset, dict)):
+        paths = list(paths)
     todo = [p for p in paths if p not in stats]
     if todo:
-        for p, (resolved, listed) in _locate_files(todo, run).items():
-            st = listed
-            if st is None and resolved is not None:
+        listed = stats_from_listings(todo) if len(todo) >= LISTING_MIN_FILES else None
+        stat = os.stat
+        if getattr(stat, "_is_file_tracker_patch", False):
+            stat = stat._original_func  # as `own_stat`, once for the lot
+        for p in todo:
+            st = listed.get(p) if listed else None
+            if st is None and not ("://" in p and is_remote_url(p)):
+                # Where it was recorded: the stat that finds it is there is
+                # the stat it is asked for (`resolve_file_dep_path` asked
+                # ``os.path.exists`` first, a stat of its own).
+                try:
+                    st = stat(p)
+                except (OSError, ValueError):
+                    st = None
+            if st is not None:
+                stats[p] = (p, st)
+                continue
+            resolved = resolve_file_dep_path(p)
+            if resolved is not None:
                 try:
                     st = own_stat(resolved)
                 except OSError:

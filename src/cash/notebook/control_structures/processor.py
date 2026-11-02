@@ -63,6 +63,7 @@ from ..cache_status import CacheStatus
 from ..callee_reach import helper_seeded_modules, reached_user_code
 from ..consumables import is_stream
 from ..lineage_formula import is_cash_instrumentation, statement_environment_reads
+from ..run_memo import file_component_this_run
 from ..statement.carrier_advances import carrier_candidates
 from ..statement.derivation_edges import apply_share_record, logging_edges
 from ..statement.file_deps import compute_file_hash_component
@@ -285,7 +286,10 @@ class ControlStructureProcessor:
                 if reads_before.get(key, (None,))[0] is not local:
                     files.update(local)
 
-            outcome = (entry, left, frozenset(files), compute_file_hash_component(files))
+            # Valued as the simulation values it (`ControlSimulation` compares
+            # with this), from the run's stats: the upstream check built the
+            # same component moments ago for the cell that read the files.
+            outcome = (entry, left, frozenset(files), file_component_this_run(files))
             state.control_outcomes[outcome_key(code, occurrence_index)] = outcome
             # When it read them, for a write of the notebook's after it
             # (`rewritten_by_the_notebook_since`).

@@ -41,6 +41,7 @@ from ...value_types import IMMUTABLE_LEAF_TYPES
 from ..call_refs import resolve_call_refs
 from ..helper_memos import unfilled as memos_unfilled
 from ..restored_var import present_holders
+from ..run_memo import fresh_snapshot_this_run
 from ._metadata import StatementCacheMetadata
 
 if TYPE_CHECKING:
@@ -223,10 +224,20 @@ class CacheFreshnessChecker:
         every iteration carries the same 5,000 dependencies, and building a
         memo key per file per lookup was a million calls, 2.4 s of a 1.1 s
         cell. Comparing the whole set runs in C.
+
+        A set the upstream check found fresh in this cell run counts too
+        (`run_memo.fresh_snapshot_this_run`): ``df = df.sample(...)`` below
+        the loop that read 24,000 documents checked every one of them again,
+        right after the check of the loop's entry had.
         """
-        return len(deps) >= _SET_MEMO_MIN and any(
-            len(known) == len(deps) and known == deps for known in self._fresh_sets
-        )
+        if len(deps) < _SET_MEMO_MIN:
+            return False
+        if any(len(known) == len(deps) and known == deps for known in self._fresh_sets):
+            return True
+        # Or by the upstream check of this cell run, from answers no older
+        # than this checker's own may be (``_ANSWERS_LAST_S``): the entry of
+        # the cell above holds the files a statement below inherited.
+        return isinstance(self._epoch, int) and fresh_snapshot_this_run(deps, time.monotonic() - _ANSWERS_LAST_S)
 
     def _remember_fresh(self, deps: dict) -> None:
         if len(deps) >= _SET_MEMO_MIN and len(self._fresh_sets) < 16:

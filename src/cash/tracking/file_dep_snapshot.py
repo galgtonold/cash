@@ -1190,14 +1190,16 @@ class FreshnessMemo:
 
     The caller owns its lifetime and must drop it whenever a file could have
     changed (a statement ran, a new cell started). ``answers`` holds one
-    ``(resolved, is_fresh, reason)`` per (path, recorded snapshot);
+    ``(resolved, is_fresh, reason)`` per (path, recorded snapshot): under the
+    path, with a copy of the snapshot, for the first snapshot of a path, and
+    under ``_memo_key`` for any other (:func:`dep_is_fresh`);
     ``listed`` holds stats taken from directory listings (``stats_from_listings``).
     """
 
     __slots__ = ("answers", "listed")
 
     def __init__(self) -> None:
-        self.answers: dict[Any, tuple[str | None, bool, str | None]] = {}
+        self.answers: dict[Any, Any] = {}
         self.listed: dict[str, os.stat_result] = {}
 
 
@@ -1266,14 +1268,32 @@ def dep_is_fresh(
     file is nowhere to be found (reason ``'missing'``). A recorded value that
     is not a snapshot entry is stale (``'unrecorded'``).
     """
-    key = _memo_key(path, recorded) if memo is not None else None
-    if key is not None:
-        known = memo.answers.get(key)
-        if known is not None:
-            return known
-    answer = _check_dep(path, recorded, memo.listed.get(path) if memo is not None else None)
-    if key is not None:
-        memo.answers[key] = answer
+    if memo is None:
+        return _check_dep(path, recorded, None)
+    # Keyed on the path, with a copy of the snapshot it was answered for: a
+    # key holding the snapshot's items was nine tuples per file, kept for the
+    # run, and the collections they set off were a large part of a check of
+    # 24,000 files.
+    # A second snapshot of the same path (an entry recorded at another time)
+    # is answered under the full key.
+    answers = memo.answers
+    known = answers.get(path)
+    if known is not None:
+        if known[0] == recorded:
+            return known[1]
+        key = _memo_key(path, recorded)
+        found = answers.get(key) if key is not None else None
+        if found is not None:
+            return found
+    else:
+        key = path
+    copied = dict(recorded) if key is path and isinstance(recorded, Mapping) else None
+    answer = _check_dep(path, recorded, memo.listed.get(path))
+    if key is path:
+        if copied is not None:
+            answers[path] = (copied, answer)
+    elif key is not None:
+        answers[key] = answer
     return answer
 
 
