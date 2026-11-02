@@ -221,7 +221,11 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
             # When the oldest stat the run keeps was taken (`stats_taken_this_run`).
             run["stat_at"] = time.monotonic()
         for p in todo:
+            if p in stats:  # its other spelling's stat, taken just now
+                continue
             st = listed.get(p) if listed else None
+            if st is None and not os.path.isabs(p) and not ("://" in p and is_remote_url(p)):
+                st = _as_spelled_absolute(p, stats, stat)
             if st is None and not ("://" in p and is_remote_url(p)):
                 # Where it was recorded: the stat that finds it is there is
                 # the stat it is asked for (`resolve_file_dep_path` asked
@@ -244,6 +248,33 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
             else:
                 elsewhere[p] = (resolved, st)
     return RunStats(paths, stats, elsewhere)
+
+
+def _as_spelled_absolute(path: str, stats: dict[str, Any], stat: Any) -> os.stat_result | None:
+    """The stat of relative *path* by its absolute spelling in the working
+    directory, which this run took or takes now under that spelling too;
+    None when there is none, or the spellings may not name the same file.
+
+    A file read by a relative path is recorded under both spellings
+    (``FileAccessTracker.track_path``), and every file of a folder of 20,000
+    images was stat-ed twice before each cell. Not for a path through
+    ``..``: spelled out, it goes up from the folder a link is in, where the
+    open goes up from the folder the link points to.
+    """
+    if ".." in path.replace("\\", "/").split("/"):
+        return None
+    try:
+        absolute = normalize_path(os.path.abspath(path))
+    except (OSError, ValueError):
+        return None
+    st = stats.get(absolute)
+    if st is None:
+        try:
+            st = stat(absolute)
+        except (OSError, ValueError):
+            return None
+        stats[absolute] = st
+    return st
 
 
 def stats_taken_this_run(paths: Iterable[str], not_before: float | None = None) -> Mapping[str, os.stat_result]:
