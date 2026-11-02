@@ -369,12 +369,21 @@ def _save_map(fingerprint: dict, by_top: dict[str, list]) -> None:
             for old in list(data)[:-_SAVED_MAPS]:
                 del data[old]
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            temp = f"{path}.{os.getpid()}.tmp"
-            with open(temp, "w", encoding="utf-8") as fh:
-                json.dump(data, fh)
-            os.replace(temp, path)
+            _write_json(path, data)
     except (OSError, TypeError, ValueError):
         pass
+
+
+def _write_json(path: str, data: Any) -> None:
+    """Write *data* to *path* as JSON, by way of a temporary file.
+
+    Encoded in one go: ``json.dump`` to a file takes ``json``'s pure-Python
+    encoder, ~60 ms for the ~1 MB map file where ``json.dumps`` takes 14."""
+    text = json.dumps(data)
+    temp = f"{path}.{os.getpid()}.tmp"
+    with open(temp, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    os.replace(temp, path)
 
 
 def _version(dist: str) -> str | None:
@@ -456,10 +465,7 @@ def _save_records(saved: dict) -> None:
     try:
         with untracked(), io_watch.own_work():  # cash's own file, as `_save_map`'s
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            temp = f"{path}.{os.getpid()}.tmp"
-            with open(temp, "w", encoding="utf-8") as fh:
-                json.dump(saved, fh)
-            os.replace(temp, path)
+            _write_json(path, saved)
     except (OSError, TypeError, ValueError):
         pass
 
