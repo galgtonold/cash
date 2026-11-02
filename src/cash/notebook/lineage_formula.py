@@ -499,7 +499,7 @@ def rng_reads_now(tracking_state: Any, code: str) -> dict[str, str | None]:
     key read."""
     reads = key_hidden_reads(code, tracking_state)
     lineage = tracking_state.variable_lineage
-    return {var: lineage.get(var) for var in drawn_rng_vars(reads, code, dict.fromkeys(reads, ""))}
+    return {var: lineage.get(var) for var in drawn_rng_vars(reads, code, dict.fromkeys(reads, "read"))}
 
 
 def note_rng_read(tracking_state: Any, code: str, read: Mapping[str, str | None]) -> None:
@@ -534,18 +534,31 @@ def take_rng_reads_at_last_draw(
     run had just stored, and ran the fit again. The stream as the draw read
     it is the one the value in memory came from.
     """
-    ledger = attribute_or(tracking_state, "rng_read_at_last_draw", None)
-    if not ledger or not code:
+    if not code:
         return
     try:
-        read = ledger.get(exact_source_digest(code))
+        digest = exact_source_digest(code)
     except (AttributeError, UnicodeEncodeError):
         return
-    if not read:
-        return
+    read = (attribute_or(tracking_state, "rng_read_at_last_draw", None) or {}).get(digest) or {}
+    unseeded = (attribute_or(tracking_state, "rng_unseeded_at_last_draw", None) or {}).get(digest) or ()
     for var in reads:
-        if var not in virtual_lineage and var in read:
+        if var in virtual_lineage:
+            continue
+        if var in read:
             virtual_lineage[var] = read[var]
+        elif var in unseeded:
+            # Unseeded where it drew: no lineage (`UNSEEDED`), not the one a
+            # seed the draw set itself, or one after it, gave the stream
+            # since (``random.seed`` in a helper the statement called).
+            virtual_lineage[var] = UNSEEDED
+
+
+#: What the simulation's lineage holds for an RNG variable a statement
+#: read unseeded (`take_rng_reads_at_last_draw`): no lineage, as the
+#: runtime's had, which keys no input and moves on no draw
+#: (``drawn_rng_vars``).
+UNSEEDED = ""
 
 
 def rng_reads_changed(tracking_state: Any, code: str) -> list[str]:
@@ -571,6 +584,32 @@ def rng_reads_changed(tracking_state: Any, code: str) -> list[str]:
     changed = {var for var, was in read.items() if current.get(var) != was}
     changed |= {var for var in unseeded if current.get(var) is not None}
     return sorted(changed)
+
+
+def note_seeded_unseen(tracking_state: Any, code: str, key: str, adopted: Mapping[str, str]) -> None:
+    """Record that the statement *code*, keyed *key*, left the RNG variables
+    of *adopted* at those lineages through a seed no statement spells (one
+    set inside a function it called), for :func:`seeded_unseen_after`."""
+    if not code or not key or not adopted:
+        return
+    try:
+        digest = exact_source_digest(code)
+    except (AttributeError, UnicodeEncodeError):
+        return
+    tracking_state.rng_seeded_unseen_by.setdefault(digest, {})[key] = dict(adopted)
+
+
+def seeded_unseen_by(tracking_state: Any, code: str) -> Mapping[str, Mapping[str, str]] | None:
+    """``{key: {RNG variable: lineage}}`` the runtime recorded for *code*
+    (:func:`note_seeded_unseen`), or None: cheap, so the simulation builds
+    the statement's key only for one that has some."""
+    ledger = attribute_or(tracking_state, "rng_seeded_unseen_by", None)
+    if not ledger or not code:
+        return None
+    try:
+        return ledger.get(exact_source_digest(code))
+    except (AttributeError, UnicodeEncodeError):
+        return None
 
 
 def lineage_hidden_reads(code: str) -> set[str]:

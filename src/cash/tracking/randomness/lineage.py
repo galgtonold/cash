@@ -8,6 +8,7 @@ in the draws above, re-keys every draw below it.
 from __future__ import annotations
 
 import ast
+import functools
 import hashlib
 import secrets
 import sys
@@ -383,14 +384,57 @@ def hidden_lineage_reads(code: str) -> set[str]:
 
     Folded into the statement's cache key AND its output lineage, so a re-seed
     upstream both re-keys the draw and propagates to everything cached
-    downstream of it.
+    downstream of it. A ``def`` reads only what it evaluates
+    (:func:`runs_when_defined`).
     """
-    return {rng_virtual_var(m) for m in get_drawing_rng_modules(code)}
+    return {rng_virtual_var(m) for m in drawing_modules_now(code)}
 
 
 def hidden_lineage_writes(code: str) -> set[str]:
-    """Virtual variables a statement PRODUCES: a ``seed()`` defines its RNG state."""
-    return {rng_virtual_var(m) for m in get_seeding_rng_modules(code)}
+    """Virtual variables a statement PRODUCES: a ``seed()`` defines its RNG
+    state. A ``def`` seeds nothing (:func:`runs_when_defined`)."""
+    return {rng_virtual_var(m) for m in seeding_modules_now(code)}
+
+
+def drawing_modules_now(code: str) -> set[str]:
+    """The RNG modules the statement *code* draws from as it runs: for a
+    ``def``, only in what it evaluates (:func:`runs_when_defined`)."""
+    return get_drawing_rng_modules(runs_when_defined(code))
+
+
+def seeding_modules_now(code: str) -> set[str]:
+    """The RNG modules the statement *code* seeds as it runs: for a
+    ``def``, only in what it evaluates (:func:`runs_when_defined`)."""
+    return get_seeding_rng_modules(runs_when_defined(code))
+
+
+@functools.lru_cache(maxsize=4096)
+def runs_when_defined(code: str) -> str:
+    """The part of the statement *code* that runs when the statement runs:
+    all of it, but of a function definition only its decorators and
+    defaults. Its body runs when the function is called, and the statement
+    calling it draws or seeds there (observed as it runs, or
+    ``helper_seeded_modules``).
+
+    Read as a draw and a seed, ``@functools.cache def random_cities(n):
+    random.seed(n); ...`` keyed on the stream where it was defined, set the
+    stream's lineage itself, and joined the chain of draws re-run ahead of
+    a draw re-executed below: re-defined, the memo was emptied where a run
+    leaves it filled. A ``class`` body runs when it is defined, so a class
+    statement is read whole.
+    """
+    try:
+        body = ast.parse(textwrap.dedent(code)).body
+    except (SyntaxError, ValueError, RecursionError):
+        return code
+    if len(body) != 1 or not isinstance(body[0], (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return code
+    node = body[0]
+    evaluated = [*node.decorator_list, *node.args.defaults, *(d for d in node.args.kw_defaults if d is not None)]
+    try:
+        return "\n".join(ast.unparse(expr) for expr in evaluated)
+    except (ValueError, TypeError, RecursionError):
+        return code
 
 
 def drawn_rng_vars(reads: Iterable[str], code: str, lineage: Mapping[str, str]) -> set[str]:
@@ -406,7 +450,7 @@ def drawn_rng_vars(reads: Iterable[str], code: str, lineage: Mapping[str, str]) 
     if not rng_reads or _only_defines(code):
         return set()
     rng_reads -= hidden_lineage_writes(code)
-    return {var for var in rng_reads if lineage.get(var) is not None}
+    return {var for var in rng_reads if lineage.get(var)}
 
 
 def _only_defines(code: str) -> bool:

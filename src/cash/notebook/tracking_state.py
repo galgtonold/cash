@@ -182,6 +182,17 @@ class TrackingState:
     # W: StatementProcessor. R: StatementLineage, VirtualLineage.
     rng_read_at_last_draw: dict[str, dict[str, str]] = field(default_factory=dict)
 
+    # sha256(statement source) -> its key -> RNG variable -> the lineage a
+    # seed set inside a function it called, which no statement spells
+    # (``random.seed`` in a ``functools.cache`` helper it filled), gave the
+    # stream once it ran (`adopt_unseen_seeds`, from where the stream stood).
+    # The simulation cannot read that position, so it takes the lineage from
+    # here for the statement with the same key: without it, every draw (and
+    # every ``def`` whose body draws) below keyed on another stream than the
+    # kernel's and was run again before each cell below.
+    # W: StatementRandomness. R: StatementLineage.
+    rng_seeded_unseen_by: dict[str, dict[str, dict[str, str]]] = field(default_factory=dict)
+
     # `pass_slot` (a statement in one pass of the loops around it) -> the
     # lineages its inputs had when it last ran or was served there. The
     # records by output name (`executed_input_lineages`) and the stored
