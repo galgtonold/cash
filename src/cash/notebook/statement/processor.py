@@ -94,6 +94,9 @@ from cash.notebook.statement.imports import (
 from cash.notebook.statement.in_loop import InLoopChanges
 from cash.notebook.statement.input_change import (
     input_change_reason,
+    note_pass_entry,
+    pass_input_change_reason,
+    pass_slot,
     random_state_change_reason,
     stored_input_change_reason,
     version_slot,
@@ -188,6 +191,7 @@ from ..lineage_formula import (
     key_hidden_reads,
     no_cache_value_digest,
     note_rng_read,
+    rng_reads_now,
     use_lineage_alias_store,
 )
 from ..magic_effects import (
@@ -1007,10 +1011,11 @@ class StatementProcessor:
             return  # a magic statement's draw moves it in record_magic
         state = self.tracking_state
         try:
-            drawn = drawn_rng_vars(key_hidden_reads(run.code, state), run.code, state.variable_lineage)
+            read = rng_reads_now(state, run.code)
         except (SyntaxError, ValueError, AttributeError, RecursionError):
             return
-        note_rng_read(state, run.code, {var: state.variable_lineage.get(var) for var in drawn})
+        note_rng_read(state, run.code, read)
+        drawn = {var for var, lineage in read.items() if lineage is not None}
         key = run.rng_advance_key or run.cache_key
         for var in sorted(drawn):
             state.lineage.record(var, advanced_rng_lineage(key, var))
@@ -1343,9 +1348,11 @@ class StatementProcessor:
             run.analysis_budget.tripped = True
         self._settle_budget(run)
         lineage = self.tracking_state.variable_lineage
-        self.tracking_state.statement_entry_lineages[run.code] = {
-            name: lineage[name] for name in run.inputs if name in lineage
-        }
+        entry = {name: lineage[name] for name in run.inputs if name in lineage}
+        self.tracking_state.statement_entry_lineages[run.code] = entry
+        if self._calls.in_loop:
+            run.pass_slot = pass_slot(run.code, self._calls.current_loop_var_digests_for_call_key())
+            run.pass_lineages_before = note_pass_entry(self.tracking_state, run.pass_slot, entry)
         # An UNSEEDED estimator fit routed to caching above is frozen on re-run
         # with no warning -- cash's AST detector cannot see the randomness inside
         # sklearn's compiled .fit(). Warn now (compute time); the same set drives
@@ -2741,10 +2748,20 @@ class StatementProcessor:
         elif not run.skip_cache and not self._evicted.attribute(
             metrics, self.cash_instance.backend, run.cache_key, run.code, execution.cost
         ):
-            reason = input_change_reason(self.tracking_state, run.inputs, run.outputs)
+            if run.pass_slot is not None:
+                # In a loop's pass: the record by output name and a version
+                # stored for the statement both belong to whichever pass ran
+                # last; only the same pass's record says what moved.
+                reason = pass_input_change_reason(
+                    run.pass_lineages_before, self.tracking_state.variable_lineage, run.inputs, run.outputs
+                )
+            else:
+                reason = input_change_reason(self.tracking_state, run.inputs, run.outputs)
             if reason is None:
                 reason = random_state_change_reason(self.tracking_state, run.code)
-            if reason is None:
+            if reason is None and (run.pass_slot is None or has_marker(run.code)):
+                # A statement of a pass carries the pass in its text, and so
+                # in its versions' slot; a loop run as one unit in a pass does not.
                 reason = stored_input_change_reason(
                     self.cash_instance.backend,
                     run.cache_key,

@@ -122,3 +122,40 @@ def test_a_loop_over_tqdm_is_restored(nb_runner):
     assert nb_runner.get_output(3).strip() == "3000 2999"
     assert "RESTORED" in _restart_and_run(nb_runner)
     assert nb_runner.get_output(3).strip() == "3000 2999"
+
+
+NESTED = (
+    "pbar = Bar(sys.stdout)\n"
+    "acc = []\n"
+    "for side in ('x', 'y'):\n"
+    "    for part in ('a', 'b'):\n"
+    "        tag = side + part\n"
+    "        for i in range(1500):\n"
+    "            time.sleep(0.0003)\n"
+    "            acc = acc + [tag]\n"
+    "            pbar.update()"
+)
+UNITS = (
+    "[str(s['status']) for s in get_ipython().magics_manager.registry['CashMagics']._last_cell_metrics['statements'] "
+    "if 'for i in range(1500)' in (s.get('code') or '')]"
+)
+
+
+@pytest.mark.fresh_kernel
+def test_every_pass_of_a_nested_loop_updating_a_bar_made_in_its_cell_is_restored(nb_runner):
+    """mlbook ch08 reads its reviews with ``pbar = pyprind.ProgBar(50000)``
+    and four ``for file in sorted(...)`` loops under ``for s ...: for l ...:``
+    in one cell. The bar is a new object on each run of the cell, and the
+    loops it went through gave it a new lineage from that object: on the next
+    Run All the first loop was restored and the other three ran again."""
+    nb_runner.create_notebook([BAR, NESTED, "print(pbar.cnt, len(acc), acc[-1])"])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert nb_runner.get_output(3).strip().endswith("6000 6000 yb")
+    nb_runner.run_cell(1)
+    nb_runner.run_cell(2)
+    assert nb_runner.peek(UNITS) == str(["RESTORED"] * 4)
+    nb_runner.run_cell(3)
+    assert nb_runner.get_output(3).strip().endswith("6000 6000 yb")
+    assert _restart_and_run(nb_runner, UNITS) == str(["RESTORED"] * 4)
+    assert nb_runner.get_output(3).strip().endswith("6000 6000 yb")

@@ -79,6 +79,10 @@ class StatementCacheMetadata:
     #: carries that tag again, so a cached function given it keys it by
     #: its producer's call, as before the restart and as a script does.
     frozen_tags: dict[str, list[str]] | None = None
+    #: ``{RNG variable: its lineage, "" when unseeded}`` for each global
+    #: random stream the statement's key read: a miss on a later run whose
+    #: inputs are all the same names the random state that moved.
+    rng_reads: dict[str, str] | None = None
     #: The input variables holding a random generator that this statement
     #: drew from, each of which it gave a new lineage
     #: (``advanced_carrier_lineage``); empty when it read one and did not

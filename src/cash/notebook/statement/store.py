@@ -49,6 +49,7 @@ from cash.value_types import IMMUTABLE_LEAF_TYPES
 from ..call_key import TooMuchToLookThrough, holds_a_closure_with_state
 from ..call_refs import DECORATOR_ENTRY, REF_BYTES_FIELD, REFS_FIELD, CallRef
 from ..closed_stream import ClosedStream, stored_form
+from ..lineage_formula import rng_reads_now
 from ..lineage_store import frozen_tag
 
 if TYPE_CHECKING:
@@ -661,6 +662,7 @@ class StatementStore:
             input_lineages=self._lineage_builder.build_input_lineages(
                 self.tracking_state, run.inputs, self.tracking_state.statement_entry_lineages.get(run.code)
             ),
+            rng_reads=self._rng_reads(run),
             frozen_tags=_frozen_tags(captured_vars, run.outputs),
             carriers_advanced=_carriers_advanced(run),
             sparse_ordered=run.sparse_ordered or None,
@@ -933,6 +935,15 @@ class StatementStore:
                 skip_reason = amplified_reason
         return should_skip, skip_reason, prediction
 
+    def _rng_reads(self, run: StatementRun) -> dict[str, str] | None:
+        """The global random streams *run*'s key read, each with its
+        lineage then ("" unseeded), for the miss reason of a later run."""
+        try:
+            read = rng_reads_now(self.tracking_state, run.code)
+        except (SyntaxError, ValueError, AttributeError, RecursionError):
+            return None
+        return {var: lineage or "" for var, lineage in read.items()} or None
+
     def _store_metadata_only(
         self,
         run: StatementRun,
@@ -956,6 +967,7 @@ class StatementStore:
             input_lineages=self._lineage_builder.build_input_lineages(
                 self.tracking_state, run.inputs, self.tracking_state.statement_entry_lineages.get(run.code)
             ),
+            rng_reads=self._rng_reads(run),
             carriers_advanced=_carriers_advanced(run),
             replay=replay_record(execution.captured),
             **cost_fields,

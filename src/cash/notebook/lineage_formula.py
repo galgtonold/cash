@@ -33,7 +33,7 @@ from ..code_digest import module_identity
 from ..effects import ENVIRONMENT_TEXT_MARKERS, environment_component, environment_input
 from ..source_norm import exact_source_digest, unparse_without_docstrings
 from ..tracking.module_symbols import closure_digest, static_attribute_reads
-from ..tracking.randomness import hidden_lineage_reads, observed_rng_reads
+from ..tracking.randomness import drawn_rng_vars, hidden_lineage_reads, observed_rng_reads
 from ..value_hash import budgeted_hash, compute_hash, is_identity_fallback_hash
 from .callee_reach import Reach, reached_user_code
 from .held_code import held_code_digest
@@ -492,20 +492,32 @@ def key_hidden_reads(code: str, tracking_state: Any) -> set[str]:
     return hidden_lineage_reads(code) | observed_rng_reads(tracking_state, code)
 
 
+def rng_reads_now(tracking_state: Any, code: str) -> dict[str, str | None]:
+    """The RNG variables the key of *code* reads that it draws from, each
+    with its lineage now: None for an unseeded stream, which has none. Read
+    before the statement's own draw moves the stream on, this is what its
+    key read."""
+    reads = key_hidden_reads(code, tracking_state)
+    lineage = tracking_state.variable_lineage
+    return {var: lineage.get(var) for var in drawn_rng_vars(reads, code, dict.fromkeys(reads, ""))}
+
+
 def note_rng_read(tracking_state: Any, code: str, read: Mapping[str, str | None]) -> None:
     """Record the lineages the RNG variables *code* drew from had when its
-    key read them (*read*), for :func:`take_rng_reads_at_last_draw`. A
-    statement that drew from no seeded stream drops its record."""
+    key read them (*read*, None for an unseeded stream), for
+    :func:`take_rng_reads_at_last_draw` and :func:`rng_reads_changed`."""
     try:
         digest = exact_source_digest(code)
     except (AttributeError, UnicodeEncodeError):
         return
-    ledger = tracking_state.rng_read_at_last_draw
-    kept = {var: lineage for var, lineage in read.items() if lineage is not None}
-    if kept:
-        ledger[digest] = kept
-    else:
-        ledger.pop(digest, None)
+    for ledger, kept in (
+        (tracking_state.rng_read_at_last_draw, {var: lineage for var, lineage in read.items() if lineage is not None}),
+        (tracking_state.rng_unseeded_at_last_draw, frozenset(var for var, lineage in read.items() if lineage is None)),
+    ):
+        if kept:
+            ledger[digest] = kept
+        else:
+            ledger.pop(digest, None)
 
 
 def take_rng_reads_at_last_draw(
@@ -538,21 +550,27 @@ def take_rng_reads_at_last_draw(
 
 def rng_reads_changed(tracking_state: Any, code: str) -> list[str]:
     """The RNG variables *code* last drew from in this kernel whose lineage
-    is not the one that draw read: the random state its key reads changed.
+    is not the one that draw read: the random state its key read changed.
 
-    Read before the statement's own draw moves the stream on
-    (``_advance_rng``), as the miss reason is. Empty when the statement drew
-    from no seeded stream last time: a first run, or an unseeded draw.
+    A stream it drew from unseeded counts when a seed has given it a
+    lineage since: ``gs.fit(X, y)`` above ``np.random.seed(0)`` draws
+    unseeded on a first Run All and from the seeded stream on the next one
+    when the cells above it are not known. Read before the statement's own
+    draw moves the stream on (``_advance_rng``), as the miss reason is.
+    Empty on a first run.
     """
-    ledger = attribute_or(tracking_state, "rng_read_at_last_draw", None)
-    if not ledger or not code:
+    if not code:
         return []
     try:
-        read = ledger.get(exact_source_digest(code))
+        digest = exact_source_digest(code)
     except (AttributeError, UnicodeEncodeError):
         return []
     current = tracking_state.variable_lineage
-    return sorted(var for var, was in (read or {}).items() if current.get(var) != was)
+    read = (attribute_or(tracking_state, "rng_read_at_last_draw", None) or {}).get(digest) or {}
+    unseeded = (attribute_or(tracking_state, "rng_unseeded_at_last_draw", None) or {}).get(digest) or ()
+    changed = {var for var, was in read.items() if current.get(var) != was}
+    changed |= {var for var in unseeded if current.get(var) is not None}
+    return sorted(changed)
 
 
 def lineage_hidden_reads(code: str) -> set[str]:
