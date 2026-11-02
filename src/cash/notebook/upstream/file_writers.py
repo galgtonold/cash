@@ -228,6 +228,16 @@ class LazyReadPaths:
         return self._found
 
 
+def _plain_read_path(path: object) -> bool:
+    """Whether *path*'s absolute form depends on nothing but the path and
+    the working folder: not a drive-relative path (``D:data.csv``), which
+    Windows takes from a per-drive folder ``os.getcwd`` does not report."""
+    if not isinstance(path, str):
+        return False
+    drive = os.path.splitdrive(path)[0]
+    return not drive or os.path.isabs(path)
+
+
 class FileWriterScheduler:
     """Schedules the upstream file writers whose output is out of date."""
 
@@ -237,6 +247,8 @@ class FileWriterScheduler:
         self.probe = probe
         #: ``(read paths, their count, index)`` -- see ``_read_path_index``.
         self._read_index: tuple[set[str], int, tuple[set[str], list[str], list[str]]] | None = None
+        #: ``(working folder, plain paths, forms, places)`` -- see ``_plain_read_forms``.
+        self._plain_index: tuple[str, frozenset[str], frozenset[str], tuple[str, ...]] | None = None
         #: ``(trace, its length, defs)`` -- see ``_trace_defs``. Holds the
         #: trace itself, so an identity match cannot be a reused id.
         self._trace_defs_memo: tuple[list, int, dict] | None = None
@@ -1067,13 +1079,18 @@ class FileWriterScheduler:
         before one restarted cell. The simulator and the planner ask
         with the same set in one check, so it is kept across passes too; one
         notebook's 10,000 documents were indexed twice per cell, 1.8 s, and each resolved
-        twice."""
+        twice.
+
+        A read file still where it was recorded, and no folder, has forms that
+        depend on its path and the working folder alone: those are kept across
+        cell runs (`_plain_read_forms`)."""
         cached = self._read_index
         if cached is not None and cached[0] is relevant_read_paths and cached[1] == len(relevant_read_paths):
             return cached[2]
         read_forms: set[str] = set()
         read_dirs: list[str] = []
         read_places: list[str] = []
+        plain: list[str] = []
         # The stats the check of each entry's files took this cell run: one
         # look at each file per run, a listing for a crowded folder on Windows.
         try:
@@ -1090,6 +1107,9 @@ class FileWriterScheduler:
                 resolved, st = located[rp]
                 resolved = resolved or rp
                 is_dir = st is not None and stat.S_ISDIR(st.st_mode)
+                if resolved == rp and not is_dir and _plain_read_path(rp):
+                    plain.append(rp)
+                    continue
             else:
                 try:
                     is_dir = stat.S_ISDIR(os.stat(rp).st_mode)
@@ -1111,9 +1131,46 @@ class FileWriterScheduler:
                 # A listed / globbed folder: whatever is written inside it is
                 # read by the next listing.
                 read_dirs.append(os.path.normcase(os.path.abspath(resolved)) + os.sep)
+        if plain:
+            plain_forms, plain_places = self._plain_read_forms(plain)
+            if read_forms or read_places:
+                read_forms |= plain_forms
+                read_places.extend(plain_places)
+            else:
+                # Taken as they are: the consumers only read them.
+                read_forms, read_places = plain_forms, plain_places  # type: ignore[assignment]
         index = (read_forms, read_dirs, read_places)
         self._read_index = (relevant_read_paths, len(relevant_read_paths), index)
         return index
+
+    def _plain_read_forms(self, plain: list[str]) -> tuple[frozenset[str], tuple[str, ...]]:
+        """The forms and places of read files found where they were recorded
+        (`_read_path_index`), kept while the same files are read from the same
+        working folder.
+
+        Each is the file's absolute path and its name, which change only with
+        the path or the folder a relative one is taken from. Before every cell
+        below a loop over 50,000 documents the index took each of them again:
+        100,000 paths in two spellings, an absolute path (a ``getcwd`` on
+        POSIX) twice for each, ~1 s a cell, for the same answer."""
+        try:
+            cwd = os.getcwd()
+        except OSError:
+            cwd = None
+        key = frozenset(plain)
+        kept = self._plain_index
+        if cwd is not None and kept is not None and kept[0] == cwd and kept[1] == key:
+            return kept[2], kept[3]
+        forms: set[str] = set()
+        places: list[str] = []
+        for rp in plain:
+            absolute = os.path.normcase(os.path.abspath(rp))
+            forms.add(absolute)
+            forms.add(os.path.normcase(os.path.basename(rp)))
+            places.append(absolute)
+        result = (frozenset(forms), tuple(places))
+        self._plain_index = (cwd, key, *result) if cwd is not None else None
+        return result
 
     def _writer_output_unread(
         self,
