@@ -716,6 +716,8 @@ class ForLoopHandler:
             link_shares=_helpers.current_loop_pass(self.dispatcher) is None,
             cost=sum(m.get("execution_time", 0.0) for m in all_metrics),
             held=(iterable,),
+            # Every pass served or stored: their entries name what it left.
+            entry=None if run_rest else _helpers.structure_entry(all_metrics, moved),
         )
         return total_iterations, cached_iterations
 

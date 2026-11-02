@@ -17,10 +17,12 @@ import contextlib
 import hashlib
 import logging
 import sys
+import textwrap
 from collections.abc import Callable
 from typing import Any
 
 from cash._user_attrs import attribute_or, has_attribute
+from cash.control_markers import strip_markers
 
 from ...analysis.annotations import (
     CacheAnnotation,
@@ -34,6 +36,7 @@ from ...analysis.mutation_effects import (
     is_module_name,
     loop_target_roots,
 )
+from ...value_hash import is_identity_fallback_hash
 from ...value_types import BUILTIN_NAMES
 from ..cache_status import CacheStatus
 from ..callee_reach import module_state_names, module_state_writes, state_holders
@@ -280,6 +283,7 @@ def update_lineage_after_execution(
     held: tuple[Any, ...] = (),
     prior_lineages: dict[str, str] | None = None,
     bound: frozenset[str] | set[str] = frozenset(),
+    entry: tuple[str, frozenset[str]] | None = None,
 ) -> None:
     """
     Update lineage for variables that may have been mutated inside the
@@ -316,6 +320,9 @@ def update_lineage_after_execution(
 
     *bound* names what the structure bound that moves with it even when it
     holds a number or a string, which an in-place change cannot reach.
+
+    *entry* is the key a loop run as one unit was stored or found under,
+    with the outputs that entry holds (see `update_mutated_variable_lineages`).
     """
     body_nodes = get_body_nodes(node)
     if not body_nodes:
@@ -369,7 +376,67 @@ def update_lineage_after_execution(
             unit_digest=unit_digest,
             prior_lineages=prior_lineages,
             bound=bound,
+            entry=entry,
         )
+
+
+def structure_entry(metrics: list, moved: set[str] | frozenset[str] = frozenset()) -> tuple[str, frozenset[str]] | None:
+    """What names the outcome of a structure whose statements ran with
+    *metrics*: the keys their entries were stored or found under, and the
+    outputs those entries hold that nothing else in it may have changed;
+    None when none has an entry.
+
+    Restored, a statement's entry is the one found under its key. Computed,
+    the store wrote one only when it says where (``storage``) and gives no
+    reason it skipped it. A statement with no entry (one that reads the
+    clock, or one too cheap to keep) may have changed what it binds and
+    what it names, and a body statement run every time for an in-place
+    change (*moved*) what it changed: none of those is named by the
+    entries. One cash refused for a reason it gave may have changed
+    anything, and then nothing is.
+    """
+    keys: list[str] = []
+    outputs: set[str] = set()
+    others: set[str] = set(moved)
+    for m in metrics:
+        key = m.get("cache_key")
+        status = _status(m.get("status"))
+        if key and status == CacheStatus.RESTORED:
+            held = m.get("restored_vars")
+        elif key and status == CacheStatus.COMPUTED and m.get("storage") and not m.get("skipped_reason"):
+            held = m.get("evaluated_vars")
+        else:
+            if m.get("uncacheable_reasons") or status not in (CacheStatus.COMPUTED, CacheStatus.RESTORED):
+                return None
+            named = _names_in(m.get("code"))
+            if named is None:
+                return None
+            others.update(named)
+            others.update(name for name in m.get("evaluated_vars") or () if isinstance(name, str))
+            continue
+        keys.append(str(key))
+        outputs.update(name for name in held or () if isinstance(name, str))
+    if not keys:
+        return None
+    named = keys[0] if len(keys) == 1 else hashlib.sha256(":".join(keys).encode()).hexdigest()
+    return named, frozenset(outputs - others)
+
+
+def _status(status: object) -> object:
+    """A metric's status as a `CacheStatus`, which a stored one may hold as its name."""
+    return CacheStatus[status] if isinstance(status, str) and status in CacheStatus.__members__ else status
+
+
+def _names_in(code: object) -> set[str] | None:
+    """Every name *code* mentions; None when it is not there or does not
+    parse, which could mention any."""
+    if not isinstance(code, str):
+        return None
+    try:
+        tree = ast.parse(textwrap.dedent(strip_markers(code)))
+    except (SyntaxError, ValueError, RecursionError):
+        return None
+    return {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
 
 
 def structure_mutations(shell, statement_processor, node: ast.AST) -> set[str]:
@@ -621,6 +688,7 @@ def update_mutated_variable_lineages(
     unit_digest: str | None = None,
     prior_lineages: dict[str, str] | None = None,
     bound: frozenset[str] | set[str] = frozenset(),
+    entry: tuple[str, frozenset[str]] | None = None,
 ) -> None:
     """Give every variable the control structure mutated a new lineage.
 
@@ -640,6 +708,17 @@ def update_mutated_variable_lineages(
     *unit_digest*, when given, stands in for the value hash: what went into a
     loop whose outcome is a function of its key, which names the value
     without reading it.
+
+    A value with no content hash (a progress bar holding the kernel's
+    output stream, which does not pickle) gets only its identity
+    (`is_identity_fallback_hash`), which is another object on every run of
+    the cell that makes it: the loop that updates it, stored and found
+    again under the same key, left it with a new lineage each time, and
+    every loop after it in the cell missed. When the structure's entry
+    holds the value (*entry*: the key it was stored or found under, and
+    its outputs), that key names it instead: a hit gives it the state the
+    run left under that key. A value the entry does not hold keeps its
+    identity.
 
     Then every other variable bound to, holding or held in what moved
     (``data = raw`` before ``for x in xs: raw.append(x)``) moves on with
@@ -671,6 +750,8 @@ def update_mutated_variable_lineages(
                 value_hash = "artists"
             else:
                 value_hash = statement_processor.compute_hash(val)
+                if entry is not None and var_name in entry[1] and is_identity_fallback_hash(val, value_hash):
+                    value_hash = f"entry={entry[0]}"
 
             # `prev=`: what this variable was before the loop touched it.
             # Before the structure ran: a loop that stores what it changed
