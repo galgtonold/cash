@@ -238,3 +238,39 @@ def test_check_and_reexecute_stores_the_resolved_notebook_path():
         "StalenessTracker.observe always receives notebook_path=None and can "
         "never report staleness"
     )
+
+
+# The indentation an editor leaves on a blank line inside a block: the saved
+# file keeps it, IPython empties the line before the cell runs (E10 c5 on the
+# PC, 2026-11-02: every later cell of the session warned "stale").
+_SAVED = "for f in files:\n    txt = read(f)\n    \n    rows.append(txt)\n"
+_RUN = "for f in files:\n    txt = read(f)\n\n    rows.append(txt)\n"
+
+
+def test_a_blank_line_ipython_emptied_is_not_a_stale_file(tmp_path):
+    from IPython.core.inputtransformer2 import TransformerManager
+
+    assert TransformerManager().transform_cell(_SAVED) == _RUN  # what the kernel runs
+    nb = tmp_path / "nb.ipynb"
+    nb.write_text("{}", encoding="utf-8")
+    tracker = StalenessTracker()
+    tracker.observe(running_code=_RUN, file_code=_SAVED, notebook_path=str(nb))
+    assert tracker.is_stale() is False
+
+
+def test_a_cell_whose_blank_line_ipython_emptied_did_not_run_unsaved(tmp_path):
+    from cash.notebook.upstream.checker import UpstreamChecker
+
+    checker = UpstreamChecker.__new__(UpstreamChecker)
+    checker._ran_unsaved = {}
+    checker._note_how_it_ran(_RUN, "c5", [("c5", _SAVED)], 0)
+    assert checker._ran_unsaved == {}
+
+
+def test_trailing_spaces_on_a_line_of_code_still_differ(tmp_path):
+    """Control: IPython keeps them, so a file that differs there is stale."""
+    nb = tmp_path / "nb.ipynb"
+    nb.write_text("{}", encoding="utf-8")
+    tracker = StalenessTracker()
+    tracker.observe(running_code="x = 1\ny = 2", file_code="x = 1\ny = 3", notebook_path=str(nb))
+    assert tracker.is_stale() is True

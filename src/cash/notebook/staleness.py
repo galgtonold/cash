@@ -74,8 +74,16 @@ def normalise_source(code: str) -> str:
     nbformat and editors disagree about trailing newlines and line endings
     routinely. Firing on those would make the warning noise, and a warning the
     user learns to ignore is worse than no warning.
+
+    IPython also empties every whitespace-only line before it runs a cell
+    (its input transformers), even inside a string, while the saved file
+    keeps the indentation an editor leaves on a blank line inside a block:
+    any such cell read as "differs from the saved copy", and the whole
+    session as stale. Such a line counts as empty here; trailing spaces on a
+    line with code are kept by IPython, and still count.
     """
-    return code.replace("\r\n", "\n").strip()
+    lines = code.replace("\r\n", "\n").split("\n")
+    return "\n".join("" if line.isspace() else line for line in lines).strip()
 
 
 def _mtime(path: str | None) -> float | None:
