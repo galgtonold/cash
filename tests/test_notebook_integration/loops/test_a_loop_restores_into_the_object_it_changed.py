@@ -154,7 +154,7 @@ BUMP = "def bump():\n    import counter_mod\n    counter_mod.k += 1\n"
             "keeps the id()",
         ),
         (
-            P + "p = P()\nbig = [[j] for j in range(20000)]",
+            P + "p = P()\nbig = [lambda j=j: j for j in range(20000)]",
             LOOP,
             "print(len(big), p.n)",
             "too big to look through",
@@ -247,7 +247,7 @@ BUMP = "def bump():\n    import counter_mod\n    counter_mod.k += 1\n"
         "an id as a dict value",
         "a weak reference as a dict key",
         "an id inside a big container of records",
-        "a big container of lists",
+        "a big container of functions",
         "a weak reference on a class",
         "an id key on a class",
         "an id in a deque",

@@ -18,7 +18,7 @@ class P:
 
 def test_the_refusal_names_the_variable():
     p = P()
-    namespace = {"p": p, "small": [1, 2], "big": [[j] for j in range(20000)]}
+    namespace = {"p": p, "small": [1, 2], "big": [lambda j=j: j for j in range(20000)]}
 
     why = refusal(p, namespace)
 

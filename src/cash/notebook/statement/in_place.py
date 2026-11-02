@@ -35,7 +35,8 @@ import sys
 import types
 import weakref
 from collections.abc import Iterable, Mapping
-from itertools import chain
+from itertools import compress
+from operator import not_
 from typing import Any
 
 from cash._referents import get_referents
@@ -298,26 +299,91 @@ def _held_below(
                 if any(type(item) in (int, str) and (item in parts or item in texts) for item in held):
                     return _BY_ID
             if len(held) > _MAX_SCANNED:
-                # Not looked inside: only a container of numbers, strings
-                # and the like, or of tuples of them (records), is known to
-                # keep nothing else; a record's ``id()`` is looked for here.
-                kinds = set(map(type, held))
-                if kinds <= _LEAVES:
+                # Not looked inside one item at a time: a container of
+                # numbers, strings and the like keeps nothing else; what
+                # any other holds is read a level at a time at C speed.
+                if set(map(type, held)) <= _LEAVES:
                     continue
-                if not kinds <= _LEAVES | {tuple}:
-                    return _TOO_MANY
-                fields = list(chain.from_iterable(item for item in held if type(item) is tuple))
-                if not _LEAVES.issuperset(map(type, fields)):
-                    return _TOO_MANY
-                if not parts.isdisjoint(fields) or not texts.isdisjoint(fields):
-                    return _BY_ID
-                continue
+                held = _read_in_bulk(held, parts, texts)
+                if type(held) is str:
+                    return held
             budget[0] -= len(held) + 1
             if budget[0] < 0:
                 return _TOO_MANY
             nxt.extend(held)
         level = [v for v in nxt if type(v) not in IMMUTABLE_LEAF_TYPES]
     return None
+
+
+#: How many objects `_read_in_bulk` may meet, all levels together, and how
+#: many levels below a too-big container it reads before giving up.
+_MAX_BULK = 5_000_000
+_BULK_LEVELS = 4
+#: ``Py_TPFLAGS_HEAPTYPE``: a class made by a ``class`` statement (or by a
+#: C extension's type spec, told apart by its module's file).
+_HEAPTYPE = 1 << 9
+
+
+def _gc_reads_it_all(kind: type) -> bool:
+    """Whether the garbage collector's referents of an object of *kind* are
+    all `_what_it_holds` reads of it: a plain container's items, and an
+    object of a class written in Python its ``__dict__`` and slots (and
+    its class). Not a C type's, whose fields may keep numbers unreported,
+    nor one a library reads in its own way (`library_parts`)."""
+    if kind in _PLAIN:
+        return True
+    found = _GC_READS.get(kind)
+    if found is None:
+        found = kind.__mro__[-1] is object and all(_written_in_python(klass) for klass in kind.__mro__[:-1])
+        _GC_READS[kind] = found
+    return found
+
+
+def _written_in_python(klass: type) -> bool:
+    """Whether *klass* was made by a ``class`` statement in a ``.py`` file."""
+    if not klass.__flags__ & _HEAPTYPE:
+        return False
+    module = sys.modules.get(type.__dict__["__module__"].__get__(klass))
+    path = getattr(module, "__file__", None) if module is not None else None
+    return type(path) is str and path.endswith(".py")
+
+
+_GC_READS: weakref.WeakKeyDictionary[type, bool] = weakref.WeakKeyDictionary()
+
+
+def _read_in_bulk(held: list[Any], parts: set[int], texts: set[str]) -> list[Any] | str:
+    """What the items of *held*, a container too big to walk one item at a
+    time, hold, read a level at a time at C speed: `_BY_ID` when a number
+    or text among them is one of *parts* or *texts*; else the few objects
+    left for `_held_below` to look at itself (classes, functions, weak
+    references, an object of a C type...), or `_TOO_MANY` when they are
+    many. A ``TarFile``'s 100,000 ``TarInfo`` members (mlbook ch08 keeps
+    the archive it extracted) hold numbers, names and empty dicts."""
+    left: dict[int, Any] = {}
+    found = held
+    met = 0
+    for _ in range(_BULK_LEVELS):
+        met += len(found)
+        if met > _MAX_BULK:
+            return _TOO_MANY
+        leaf = list(map(_LEAVES.__contains__, map(type, found)))
+        leaves = list(compress(found, leaf))
+        try:
+            if not parts.isdisjoint(leaves) or not texts.isdisjoint(leaves):
+                return _BY_ID
+        except TypeError:  # an unhashable leaf (a signalling NaN): one at a time
+            if any(type(item) in (int, str) and (item in parts or item in texts) for item in leaves):
+                return _BY_ID
+        level: dict[int, Any] = {}
+        for value in compress(found, map(not_, leaf)):
+            (level if _gc_reads_it_all(type(value)) else left)[id(value)] = value
+        if len(left) > _MAX_SCANNED:
+            return _TOO_MANY
+        if len(level) <= _MAX_SCANNED:
+            left.update(level)
+            return list(left.values())
+        found = get_referents(*level.values())
+    return _TOO_MANY
 
 
 class _Ids:
