@@ -262,7 +262,7 @@ state in the notebook, or pass it in and return it.
 
 ### A helper memoised with `functools.cache`
 
-<!-- claim: cash/notebook/helper_memos.py:unfilled @0deb0715, cash/notebook/helper_memos.py:used @c35b5599, cash/notebook/helper_memos.py:clears @4d3601f2, cash/notebook/helper_memos.py:MAX_KEYED == 4096 -->
+<!-- claim: cash/notebook/helper_memos.py:unfilled @0deb0715, cash/notebook/helper_memos.py:used @c22fda91, cash/notebook/helper_memos.py:clears @4d3601f2, cash/notebook/helper_memos.py:MAX_KEYED == 4096 -->
 A statement served from the cache does not run, so a `@functools.cache` or
 `@functools.lru_cache` helper it calls keeps what it held. A run leaves the
 answers in it, and a later call of the helper uses them without running its
