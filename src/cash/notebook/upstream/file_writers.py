@@ -262,6 +262,8 @@ class FileWriterScheduler:
         #: ``(trace, its length, defs)`` -- see ``_trace_defs``. Holds the
         #: trace itself, so an identity match cannot be a reused id.
         self._trace_defs_memo: tuple[list, int, dict] | None = None
+        #: ``(trace, its length, bindings)`` -- see ``_path_bindings``.
+        self._path_bindings_memo: tuple[list | None, int, dict[str, str]] | None = None
 
     def _user_ns(self) -> dict:
         return self.shell.user_ns
@@ -487,7 +489,7 @@ class FileWriterScheduler:
         candidates = [w for w in self.writer_positions(simulation_trace) if w not in scheduled and w not in chosen]
         if not candidates:
             return list(writer_indices)
-        namespace = {**_literal_path_bindings(simulation_trace), **(self._user_ns() or {})}
+        namespace = {**self._path_bindings(simulation_trace), **(self._user_ns() or {})}
         user_ns = self._user_ns()
 
         def where(path: str) -> str | None:
@@ -909,6 +911,17 @@ class FileWriterScheduler:
             return frozenset()
         return frozenset(called_names(tree))
 
+    def _path_bindings(self, simulation_trace: list | None) -> dict[str, str]:
+        """`_literal_path_bindings` of *simulation_trace*, read once per
+        trace: every writer above the cell asks it of the same trace."""
+        memo = self._path_bindings_memo
+        size = len(simulation_trace or ())
+        if memo is not None and memo[0] is simulation_trace and memo[1] == size:
+            return memo[2]
+        bindings = _literal_path_bindings(simulation_trace)
+        self._path_bindings_memo = (simulation_trace, size, bindings)
+        return bindings
+
     def _trace_defs(self, simulation_trace: list | None) -> dict:
         """``{name: trace entry}`` of the last ``def`` binding each name.
 
@@ -1041,7 +1054,7 @@ class FileWriterScheduler:
         a folder removed by ``shutil.rmtree(OUT)`` leaves no record to fall back on.
         """
         user_ns = self._user_ns()
-        namespace = {**_literal_path_bindings(simulation_trace), **(user_ns or {})}
+        namespace = {**self._path_bindings(simulation_trace), **(user_ns or {})}
         written = statement_written_paths(stmt_code, namespace=namespace)
         if written:
             return written
