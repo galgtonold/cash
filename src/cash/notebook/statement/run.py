@@ -303,6 +303,10 @@ class StatementRun:
     #: variables it found holding them all the same (``shared_objects.GaveUp``),
     #: None when it did not give up.
     share_gave_up: GaveUp | None = None
+    #: The outputs the share check found an object of held by a variable
+    #: of ``holders`` (``shared_objects.share_group``'s rounds), when it
+    #: took holders: only these are linked to them. None when not known.
+    share_owners: frozenset[str] | None = None
     #: The local modules running it was seen rebinding a global of
     #: (``callee_reach.rebound_modules``).
     rebound_modules: frozenset[str] = frozenset()

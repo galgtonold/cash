@@ -1683,6 +1683,50 @@ def history_names(names: Iterable[str], user_ns: Mapping[str, Any]) -> set[str]:
     return {name for name in names if any(user_ns.get(name) is value for value in own)}
 
 
+#: The namespaces as they were before each upstream repair in progress
+#: (`hold_repair_snapshot`), kept to put back if the repair has a gap.
+_REPAIR_SNAPSHOTS: list[dict[str, Any]] = []
+
+
+def hold_repair_snapshot(snapshot: dict[str, Any]) -> None:
+    """Count *snapshot*, a copy of the namespace an upstream repair keeps
+    until it ends, as cash's own references (`output_history`)."""
+    _REPAIR_SNAPSHOTS.append(snapshot)
+
+
+def release_repair_snapshot(snapshot: dict[str, Any]) -> None:
+    """The repair that kept *snapshot* ended."""
+    for i, kept in enumerate(_REPAIR_SNAPSHOTS):
+        if kept is snapshot:
+            del _REPAIR_SNAPSHOTS[i]
+            return
+
+
+def _repair_snapshot_refs(
+    user_ns: Mapping[str, Any],
+) -> tuple[list[Any], list[tuple[Mapping[str, Any], str]]]:
+    """The references the repair snapshots make, as `output_history` gives
+    them: each snapshot's reference to every value, by name, and the values
+    a repair has since rebound, as a container cash holds.
+
+    A repair keeps the namespace from before it, and so the objects it
+    replaces: ``data = []`` restored, the previous ``data`` list and every
+    session's ``actions`` list in it stayed held. The loop's hit then found
+    the ``actions`` it restores over held by another container, and the loop
+    over 10,000 rows ran again. A replaced value something else holds too (a
+    variable bound to it in another cell) is the user's after all
+    (`count_held`), and so is everything inside it."""
+    containers: list[Any] = []
+    named: list[tuple[Mapping[str, Any], str]] = []
+    unbound = object()
+    for snapshot in _REPAIR_SNAPSHOTS:
+        named += [(snapshot, name) for name in snapshot]
+        replaced = {name: value for name, value in snapshot.items() if user_ns.get(name, unbound) is not value}
+        if replaced:
+            containers.append(replaced)
+    return containers, named
+
+
 def output_history(
     user_ns: Mapping[str, Any], shell: Any = None
 ) -> tuple[list[Any], list[tuple[Mapping[str, Any], str]]]:
@@ -1705,9 +1749,10 @@ def output_history(
     left ``df`` held there, and the statement updating ``df`` in place in the
     next cell ran every time.
     """
+    containers, snapshot_named = _repair_snapshot_refs(user_ns) if _REPAIR_SNAPSHOTS else ([], [])
     out = user_ns.get("Out")
     if type(out) is not dict or user_ns.get("_oh") is not out:
-        return [], []
+        return containers, snapshot_named
     shown = {id(v) for v in out.values() if v is not None}
     named = [n for n in ("_", "__", "___") if user_ns.get(n) is not None and id(user_ns.get(n)) in shown]
     named += [f"_{k}" for k, v in out.items() if v is not None and user_ns.get(f"_{k}") is v]
@@ -1721,7 +1766,7 @@ def output_history(
     last = attribute_or(attribute_or(shell, "last_execution_result", None), "__dict__", None)
     if last is not None and id(last.get("result")) in shown:
         held.append((last, "result"))
-    return [out], held
+    return [out, *containers], held + snapshot_named
 
 
 #: How many times `share_group` widens the group before it gives up, and how

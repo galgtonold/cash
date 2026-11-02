@@ -228,16 +228,6 @@ class LazyReadPaths:
         return self._found
 
 
-def _plain_read_path(path: object) -> bool:
-    """Whether *path*'s absolute form depends on nothing but the path and
-    the working folder: not a drive-relative path (``D:data.csv``), which
-    Windows takes from a per-drive folder ``os.getcwd`` does not report."""
-    if not isinstance(path, str):
-        return False
-    drive = os.path.splitdrive(path)[0]
-    return not drive or os.path.isabs(path)
-
-
 class FileWriterScheduler:
     """Schedules the upstream file writers whose output is out of date."""
 
@@ -247,11 +237,9 @@ class FileWriterScheduler:
         self.probe = probe
         #: ``(read paths, their count, index)`` -- see ``_read_path_index``.
         self._read_index: tuple[set[str], int, tuple[set[str], list[str], list[str]]] | None = None
-        #: ``(working folder, plain paths, forms, places)``, and each path's
-        #: ``(absolute form, name)`` from that folder -- see ``_plain_read_forms``.
-        self._plain_index: tuple[str, frozenset[str], frozenset[str], tuple[str, ...]] | None = None
-        self._plain_forms: dict[str, tuple[str, str]] = {}
-        self._plain_cwd: str | None = None
+        #: ``(working directory, {read path: (where it is, its forms, its
+        #: place)})`` -- see ``_read_path_index``.
+        self._read_forms: tuple[str, dict[str, tuple[str, tuple[str, ...], str]]] = ("", {})
         #: ``(trace, its length, defs)`` -- see ``_trace_defs``. Holds the
         #: trace itself, so an identity match cannot be a reused id.
         self._trace_defs_memo: tuple[list, int, dict] | None = None
@@ -1088,16 +1076,27 @@ class FileWriterScheduler:
         notebook's 10,000 documents were indexed twice per cell, 1.8 s, and each resolved
         twice.
 
-        A read file still where it was recorded, and no folder, has forms that
-        depend on its path and the working folder alone: those are kept across
-        cell runs (`_plain_read_forms`)."""
+        Each cell asks with a new set of the same paths, and spelling each
+        path in its comparable forms (absolute, case-folded, its base name)
+        cost more than the stats: 0.2-0.5 s before every cell below a loop
+        over 24,000 documents. A path's forms follow from the path, where
+        this run's stat found it and the working directory, so they are kept
+        from one cell to the next while those three stay the same; whether it
+        is a folder is read from this run's stat each time."""
         cached = self._read_index
         if cached is not None and cached[0] is relevant_read_paths and cached[1] == len(relevant_read_paths):
             return cached[2]
         read_forms: set[str] = set()
         read_dirs: list[str] = []
         read_places: list[str] = []
-        plain: list[str] = []
+        cwd, known = self._read_forms
+        try:
+            here = os.getcwd()
+        except OSError:  # removed from under the kernel: nothing to go by
+            here = ""
+        if not here or cwd != here:
+            known = {}  # a relative path is somewhere else now
+        kept: dict[str, tuple[str, tuple[str, ...], str]] = {}
         # The stats the check of each entry's files took this cell run: one
         # look at each file per run, a listing for a crowded folder on Windows.
         try:
@@ -1114,9 +1113,6 @@ class FileWriterScheduler:
                 resolved, st = located[rp]
                 resolved = resolved or rp
                 is_dir = st is not None and stat.S_ISDIR(st.st_mode)
-                if resolved == rp and not is_dir and _plain_read_path(rp):
-                    plain.append(rp)
-                    continue
             else:
                 try:
                     is_dir = stat.S_ISDIR(os.stat(rp).st_mode)
@@ -1127,68 +1123,28 @@ class FileWriterScheduler:
                     except (OSError, ValueError, TypeError):
                         resolved = rp
                     is_dir = resolved != rp and os.path.isdir(resolved)
-            for candidate in {resolved, rp}:
-                try:
-                    read_forms.add(os.path.normcase(os.path.abspath(candidate)))
-                    read_forms.add(os.path.normcase(os.path.basename(candidate)))
-                except (OSError, ValueError, TypeError):
-                    continue
-            read_places.append(os.path.normcase(os.path.abspath(resolved)))
+            spelled = known.get(rp)
+            if spelled is None or spelled[0] != resolved:
+                forms: list[str] = []
+                for candidate in {resolved, rp}:
+                    try:
+                        forms.append(os.path.normcase(os.path.abspath(candidate)))
+                        forms.append(os.path.normcase(os.path.basename(candidate)))
+                    except (OSError, ValueError, TypeError):
+                        continue
+                spelled = (resolved, tuple(forms), os.path.normcase(os.path.abspath(resolved)))
+            kept[rp] = spelled
+            read_forms.update(spelled[1])
+            read_places.append(spelled[2])
             if is_dir:
                 # A listed / globbed folder: whatever is written inside it is
                 # read by the next listing.
-                read_dirs.append(os.path.normcase(os.path.abspath(resolved)) + os.sep)
-        if plain:
-            plain_forms, plain_places = self._plain_read_forms(plain)
-            if read_forms or read_places:
-                read_forms |= plain_forms
-                read_places.extend(plain_places)
-            else:
-                # Taken as they are: the consumers only read them.
-                read_forms, read_places = plain_forms, plain_places  # type: ignore[assignment]
+                read_dirs.append(spelled[2] + os.sep)
+        # Only the paths of this set: what the cells above read, no more.
+        self._read_forms = (here, kept)
         index = (read_forms, read_dirs, read_places)
         self._read_index = (relevant_read_paths, len(relevant_read_paths), index)
         return index
-
-    def _plain_read_forms(self, plain: list[str]) -> tuple[frozenset[str], tuple[str, ...]]:
-        """The forms and places of read files found where they were recorded
-        (`_read_path_index`), kept while the files are read from the same
-        working folder.
-
-        Each is the file's absolute path and its name, which change only with
-        the path or the folder a relative one is taken from. Before every cell
-        below a loop over 50,000 documents the index took each of them again:
-        100,000 paths in two spellings, an absolute path (a ``getcwd`` on
-        POSIX) twice for each, for the same answer. Kept per path, as cells
-        that need different inputs read different sets of them."""
-        try:
-            cwd = os.getcwd()
-        except OSError:
-            cwd = None
-        key = frozenset(plain)
-        kept = self._plain_index
-        if cwd is not None and kept is not None and kept[0] == cwd and kept[1] == key:
-            return kept[2], kept[3]
-        per_path = self._plain_forms if cwd is not None and cwd == self._plain_cwd else {}
-        if len(per_path) > 2 * len(plain) + 1000:
-            # Paths no cell reads any more: keep the ones read now.
-            per_path = {rp: per_path[rp] for rp in plain if rp in per_path}
-        forms: set[str] = set()
-        places: list[str] = []
-        for rp in plain:
-            known = per_path.get(rp)
-            if known is None:
-                known = (os.path.normcase(os.path.abspath(rp)), os.path.normcase(os.path.basename(rp)))
-                per_path[rp] = known
-            forms.add(known[0])
-            forms.add(known[1])
-            places.append(known[0])
-        result = (frozenset(forms), tuple(places))
-        if cwd is None:
-            self._plain_index, self._plain_forms, self._plain_cwd = None, {}, None
-        else:
-            self._plain_index, self._plain_forms, self._plain_cwd = (cwd, key, *result), per_path, cwd
-        return result
 
     def _writer_output_unread(
         self,

@@ -47,7 +47,7 @@ from ..magic_effects import (
     simulation_cell,
 )
 from ..recorded_reads import REBOUND, one_reading, outside_changes, take_known_as_read, watched_module_data
-from ..run_memo import stats_this_run
+from ..run_memo import stat_keys_this_run, stats_this_run
 from ..statement.lineage import rewritten_by_the_notebook_after
 from ..tracking_state import TrackingState
 from ._types import (
@@ -229,7 +229,13 @@ class VirtualLineage:
         the tuple too. Whether the entry is really stale is the runtime's
         content check; a ``touch`` costs one re-check of the cell.
 
-        One stat per file per cell run (``run_memo.stats_this_run``)."""
+        One stat per file per cell run (``run_memo.stats_this_run``), and
+        one key of each (``run_memo.stat_keys_this_run``): when every file is
+        as recorded, which is most cells, the check is one comparison of the
+        two dicts' items."""
+        if cached_file_deps.items() <= stat_keys_this_run(cached_file_deps).items():
+            if None not in cached_file_deps.values():
+                return False
         current = stats_this_run(cached_file_deps)
         for fpath, stored in cached_file_deps.items():
             resolved, st = current[fpath]
