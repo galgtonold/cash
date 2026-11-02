@@ -624,10 +624,13 @@ class TieredBackend(CacheBackend):
         self._persist_call_refs(stored_metadata.get("call_refs"))
         return self._write_from_memory(key, stored_metadata, rebuild_seconds)
 
-    def _persist_call_refs(self, refs) -> None:
+    def _persist_call_refs(self, refs, *, settled: bool = False) -> None:
         """Write to the persistent tiers the call entries an entry about to be
         written there refers to (``call_refs``), where only the RAM tier
-        holds them.
+        holds them. *settled*: the statement storing that entry has just
+        checked each call's result is still what the call returned
+        (`with_call_refs`), so a RAM copy sharing parts with it is that
+        result now (`_write_from_memory`).
 
         A statement's entry holds a ``CallRef`` in place of a call's result,
         and restoring it reads the call entry. Written without them, the
@@ -642,13 +645,19 @@ class TieredBackend(CacheBackend):
             try:
                 entry = self.backends[0].peek_entry(ref, value=False)
                 if entry is not None and not self._persisted(entry[0].get("storage")):
-                    self._write_from_memory(ref, entry[0], entry[0].get("rebuild_time"))
+                    self._write_from_memory(ref, entry[0], entry[0].get("rebuild_time"), settled=settled)
             except Exception:  # the statement then misses after a restart, never more
                 logger.debug("Could not persist call ref %r", ref, exc_info=True)
 
-    def _write_from_memory(self, key: str, stored_metadata: dict, rebuild_seconds: float | None) -> bool:
+    def _write_from_memory(
+        self, key: str, stored_metadata: dict, rebuild_seconds: float | None, *, settled: bool = False
+    ) -> bool:
         """Write the entry under *key*, whose metadata the RAM tier holds as
-        *stored_metadata*, to the persistent tiers. True when written."""
+        *stored_metadata*, to the persistent tiers. True when written.
+
+        *settled*: the caller knows the value, should the RAM tier's copy
+        share parts with the caller's, is still the value stored, so it is
+        written as it is now, serialized before this returns."""
         size = stored_metadata.get("cost_model_size_bytes", stored_metadata.get("size", 0))
         metadata = {
             k: v
@@ -659,7 +668,8 @@ class TieredBackend(CacheBackend):
             metadata["rebuild_time"] = rebuild_seconds
         serialized = self._stored_payload(key, stored_metadata)
         may_share = getattr(self.backends[0], "may_share_with_caller", None)
-        if serialized is None and may_share is not None and may_share(key):
+        shared = serialized is None and may_share is not None and may_share(key)
+        if shared and not settled:
             # Written now, it would be what the caller has done to the shared
             # parts since: `h, peek = make_helper()` stored with the
             # generator its helpers draw from two draws on, so after a
@@ -680,7 +690,12 @@ class TieredBackend(CacheBackend):
         holds_own_copy = getattr(self.backends[0], "holds_own_copy", None)
         private = not stored_metadata.get("by_reference") and holds_own_copy is not None and bool(holds_own_copy(key))
         value, copied = entry[1], False
-        if not private and serialized is None:
+        if shared:
+            # Serialized on this thread (a tier given neither *private* nor
+            # bytes does so before it returns): the shared parts are as
+            # stored now, and nothing the caller does next reaches the bytes.
+            private = False
+        elif not private and serialized is None:
             # A full copy of it, when one costs about its memory (`_write_copy`).
             made = self._write_copy(key, value, metadata)
             copied = made is not _NO_COPY
@@ -804,7 +819,9 @@ class TieredBackend(CacheBackend):
                     )
                 self._drop_persisted_call_refs(metadata.get("call_refs"))
             if decision.persist:
-                self._persist_call_refs(metadata.get("call_refs"))
+                # Right after the statement, which has just checked each
+                # call's result against what it refers to.
+                self._persist_call_refs(metadata.get("call_refs"), settled=True)
             try:
                 if decision.persist and disk_alone:
                     metadata[DISK_ALONE] = True
