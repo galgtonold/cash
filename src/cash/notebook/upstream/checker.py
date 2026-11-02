@@ -25,6 +25,7 @@ from ..server_discovery import (
     warn_no_live_reader_once,
     warn_notebook_not_found_once,
 )
+from ..shared_objects import hold_repair_snapshot, release_repair_snapshot
 from ..staleness import StalenessTracker, normalise_source
 from ..statement.carrier_advances import reachable_generators
 from ..tracking_state import TrackingState
@@ -740,6 +741,7 @@ class UpstreamChecker:
         Find the cell, vet the notebook, simulate, re-run or restore what the
         simulation found stale, then resync the simulation with what ran.
         """
+        bindings_before: dict[str, Any] | None = None
         try:
             notebook_cells, current_cell_idx = self._load_notebook_and_find_cell(
                 cell_code,
@@ -761,6 +763,9 @@ class UpstreamChecker:
             # What the namespace held before anything was restored or re-run,
             # to put back if the repair turns out to have a gap.
             bindings_before = dict(self.shell.user_ns)
+            # Cash's own references, not a holder of the user's: a statement
+            # the repair restores is not refused for the objects they keep.
+            hold_repair_snapshot(bindings_before)
             lineages_before = dict(self.tracking_state.variable_lineage)
             # The cell's own source goes along: the classifier re-simulates it to
             # tell its own earlier run apart from an upstream edit.
@@ -826,6 +831,9 @@ class UpstreamChecker:
         except (KeyError, TypeError, ValueError, OSError) as e:
             logger.debug("[UPSTREAM] Error in the upstream check: %s", e)
             raise UpstreamStateError(f"Failed to restore or simulate upstream state: {e}") from e
+        finally:
+            if bindings_before is not None:
+                release_repair_snapshot(bindings_before)
 
 
 def _warn_state_not_rebuilt(names: set[str], user_ns: dict[str, Any]) -> None:
