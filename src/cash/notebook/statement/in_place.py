@@ -123,10 +123,12 @@ def _identity_refusal(held: str, it: str | None = None) -> IdentityHeld:
         return IdentityHeld(
             "a container keeps the id() of an object it holds, and a restore would hand it a copy", "", "an id()"
         )
+    name = getattr(held, "name", "")
+    where = f" ('{name}')" if name else ""
     return IdentityHeld(
-        "the notebook holds containers too big to look through for a weak reference to, or the id() "
+        f"the notebook holds containers too big to look through{where} for a weak reference to, or the id() "
         "of, an object it holds",
-        "",
+        name,
         "too many",
     )
 
@@ -236,12 +238,46 @@ def _held_by_the_notebook(parts: set[int], refs: list[Any], namespace: Mapping[s
     ref_ids = {id(ref) for ref in refs}
     # ``hex(id(p.seen))`` or ``str(id(p.seen))``: an id() as text.
     texts = {spell(part) for part in parts for spell in (str, hex)}
-    budget = _MAX_SEEN
+    budget = [_MAX_SEEN]
     seen: set[int] = set()
     ids = _Ids(parts)
-    level = list(namespace.values())
-    if parts.intersection(v for v in level if type(v) is int):
+    if parts.intersection(v for v in namespace.values() if type(v) is int):
         return _BY_ID
+    # One variable at a time, so that a refusal can name the variable whose
+    # value it could not look through.
+    for name, value in list(namespace.items()):
+        found = _held_below(value, parts, texts, ref_ids, ids, seen, budget)
+        if found is None:
+            continue
+        if found == _TOO_MANY:
+            return _TooMany(name)
+        return found
+    return None
+
+
+class _TooMany(str):
+    """`_TOO_MANY`, with the variable whose value could not be looked through."""
+
+    name: str
+
+    def __new__(cls, name: str) -> _TooMany:
+        made = super().__new__(cls, _TOO_MANY)
+        made.name = name
+        return made
+
+
+def _held_below(
+    root: Any,
+    parts: set[int],
+    texts: set[str],
+    ref_ids: set[int],
+    ids: _Ids,
+    seen: set[int],
+    budget: list[int],
+) -> str | None:
+    """`_held_by_the_notebook`'s answer for what *root* holds at any depth;
+    *seen* and *budget* are shared across the variables."""
+    level = [root]
     while level:
         if ref_ids and any(id(v) in ref_ids for v in level):
             return _WEAK
@@ -276,8 +312,8 @@ def _held_by_the_notebook(parts: set[int], refs: list[Any], namespace: Mapping[s
                 if not parts.isdisjoint(fields) or not texts.isdisjoint(fields):
                     return _BY_ID
                 continue
-            budget -= len(held) + 1
-            if budget < 0:
+            budget[0] -= len(held) + 1
+            if budget[0] < 0:
                 return _TOO_MANY
             nxt.extend(held)
         level = [v for v in nxt if type(v) not in IMMUTABLE_LEAF_TYPES]

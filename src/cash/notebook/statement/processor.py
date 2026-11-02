@@ -641,9 +641,10 @@ def _pointed_into(name: str, why: IdentityHeld) -> IdentityHeld:
         )
         return IdentityHeld(why, name, why.kind, what)
     if why.kind == "too many":
+        where = f" ('{why.name}')" if why.name else ""
         found = (
-            "the notebook holds a container too big to look through for a weak reference to, or the id() of, "
-            "an object in it"
+            f"the notebook holds a container too big to look through{where} for a weak reference to, or the "
+            "id() of, an object in it"
         )
     else:
         found = f"the notebook holds {why.kind} of an object in it"
