@@ -436,14 +436,20 @@ def _arrow_text_numbers(values: Any) -> list[Any] | None:
         # or starting ``0x``: each is picked by masks Arrow computes without
         # copying the text, and only those taken out. A merged frame's text
         # column came in thousands of chunks, and two patterns over all of
-        # it took 6 s after one `merge` (p18).
+        # it took 6 s after one `merge` (p18). The patterns are matched on
+        # those values alone, and the prefix as two plain ones: matched
+        # ignoring case, Arrow ran a regular expression over every value.
         length = compute.binary_length(chunked)
         fits = compute.and_(compute.greater_equal(length, 7), compute.less_equal(length, 18))
         parts: list[Any] = []
-        decimal = compute.filter(chunked, compute.and_(fits, compute.ascii_is_decimal(chunked)))
+        candidates = compute.filter(chunked, fits)
+        decimal = compute.filter(candidates, compute.ascii_is_decimal(candidates))
         if len(decimal):
             parts.append(compute.cast(decimal, pyarrow.int64()).to_numpy(zero_copy_only=False))
-        prefixed = compute.filter(chunked, compute.and_(fits, compute.starts_with(chunked, "0x", ignore_case=True)))
+        prefixed = compute.filter(
+            candidates,
+            compute.or_(compute.starts_with(candidates, "0x"), compute.starts_with(candidates, "0X")),
+        )
         if len(prefixed):
             hexadecimal = compute.filter(prefixed, compute.match_substring_regex(prefixed, _HEX_TEXT))
             parts.extend(int(text, 16) for text in hexadecimal.to_pylist() if text is not None)
