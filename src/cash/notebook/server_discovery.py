@@ -864,12 +864,15 @@ class NotebookCellReaders:
         # VS Code backup cells, keyed by notebook path; value is (backup path,
         # backup signature, file signature, cells). See the comment above.
         self._vscode_cells: dict[str, tuple[Path, tuple[int, int], tuple[int, int], tuple[NotebookCell, ...]]] = {}
+        #: What the last read returned (`last_read`).
+        self.last: CellRead | None = None
 
     def invalidate(self) -> None:
         """Forget every cached read (e.g. on notebook switch / %cash_on)."""
         self._file_cells.clear()
         self._colab_cells = None
         self._vscode_cells.clear()
+        self.last = None
 
     def read(self, notebook_path: str | None = None) -> CellRead:
         """The notebook's code cells from the first reader that can answer.
@@ -877,6 +880,10 @@ class NotebookCellReaders:
         *notebook_path* is used only by the VS Code and file readers, and is
         auto-detected when ``None``.
         """
+        self.last = read = self._read(notebook_path)
+        return read
+
+    def _read(self, notebook_path: str | None) -> CellRead:
         # cash's own JupyterLab extension first, when present: it is the most
         # authoritative source (the frontend pushed it moments ago) and checking
         # costs one dict lookup when there is no extension to push anything.
@@ -1076,6 +1083,14 @@ def read_notebook_cells(notebook_path: str | None = None) -> CellRead:
 def invalidate_notebook_cells_cache() -> None:
     """Drop every cached cell read (e.g. on notebook switch / %cash_on)."""
     _readers.invalidate()
+
+
+def last_notebook_cells() -> list[str] | None:
+    """The code cells the last read of the notebook returned, None before
+    the first: for what only shows them, without reading again (a read
+    from the bug report link of each badge cost 2 s on a Windows machine)."""
+    last = _readers.last
+    return last.codes if last is not None else None
 
 
 def get_notebook_cells(notebook_path: str | None = None) -> list[str]:
