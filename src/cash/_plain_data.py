@@ -224,6 +224,17 @@ def is_tree(value: Any, leaves: tuple | None = None) -> bool:
     facts = _looked_at(value, leaves)
     if facts is not _UNKNOWN:
         return facts is not None and facts.leaves_within(leaves)
+    if _K is not None and (leaves is None or _NODES.isdisjoint(leaves)):
+        # The C walk over these very leaves, outside a look: the upstream
+        # simulation asks it of every live receiver and argument of every
+        # statement above the cell, two million parsed records each time,
+        # where `tree_levels` made a list of every level (student_8). A
+        # container type among *leaves* is one `tree_levels` stops at,
+        # which the C walk never does: those are read in Python.
+        with _gc_paused():
+            got = _K.tree_facts(value, _facts_leaves() if leaves is None else frozenset(leaves), False, 0, _picks, 3)
+        if got is not NotImplemented:
+            return got is not None
     try:
         for _level in tree_levels(value, leaves):
             pass
