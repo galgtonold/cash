@@ -1179,9 +1179,18 @@ def size_of(value: Any) -> int | None:
 
 
 def immutable_below(value: Any) -> bool:
-    """The immutable half of `profile`, stopping at the first level that is not."""
-    if type(value) not in PLAIN_SEQS:
+    """The immutable half of `profile`, stopping at the first level that is not.
+
+    Asked of the C kernel when there is one (`_IMMUTABLE_BELOW`), depth
+    first and without a list per level: a frame's column of two million
+    ``(action, time)`` records took 0.9 s a store (student_8)."""
+    kind = type(value)
+    if kind not in PLAIN_SEQS:
         return False
+    if _VALUES_IN_TUPLES is not None:
+        found = _VALUES_IN_TUPLES(value if kind is list else list(value), _IMMUTABLE_LEAVES, MAX_LEVELS)
+        if found is not NotImplemented:
+            return found
     try:
         for _flat, types in _levels(value):
             if not all(t in IMMUTABLE_LEAF_TYPES or t is tuple for t in types):
@@ -1189,6 +1198,16 @@ def immutable_below(value: Any) -> bool:
     except (_NotPlain, TypeError):
         return False
     return True
+
+
+#: The C kernel `immutable_below` asks: whether every item of a list is of
+#: one of the exact types given, or a tuple whose items are so in turn, as
+#: many levels down as `_levels` reads. None without the kernels.
+_VALUES_IN_TUPLES = getattr(_K, "values_in_tuples", None)
+
+#: The leaves `immutable_below` lets through: a clock test double's dates
+#: are leaves of plain data, but not immutable ones.
+_IMMUTABLE_LEAVES = frozenset(IMMUTABLE_LEAF_TYPES)
 
 
 def level_types(value: Any) -> list[set] | None:

@@ -453,11 +453,13 @@ class _TableWithBytes:
         self.columns = (columns, data)
 
     @staticmethod
-    def make(frame: Any, record_cells: dict) -> _TableWithBytes | None:
+    def make(frame: Any, record_cells: dict, below: dict[int, bool] | None = None) -> _TableWithBytes | None:
         """*frame* kept this way, or None when one of its columns of objects
         holds anything but `_plain_data.MARSHAL_TYPES`, or a list or dict that
         something outside its cell also holds (that sharing must survive the
-        copy: the cell copy keeps it), or its labels hold such objects."""
+        copy: the cell copy keeps it), or its labels hold such objects.
+        *below* keeps which object columns hold immutables all the way down
+        (`_immutable_below_at`), for the cell copy asked next."""
         try:
             import numpy as np
 
@@ -470,7 +472,7 @@ class _TableWithBytes:
             lists = (
                 [frame.to_numpy().tolist()] if is_series else [frame.iloc[:, i].to_numpy().tolist() for i in positions]
             )
-            writable = tuple(n for n, cells in enumerate(lists) if not _plain_data.immutable_below(cells))
+            writable = tuple(n for n, cells in enumerate(lists) if not _immutable_below_at(below, positions[n], cells))
             if not writable:
                 return None
             columns = [lists[n] for n in writable]
@@ -909,16 +911,20 @@ class InMemoryBackend(CacheBackend):
         if mutable is None:
             mutable = _holds_mutable_cells(frame)
         copied = None
+        # Which object columns hold immutables all the way down, read once
+        # for both ways of copying cells: a column of two million ``(action,
+        # time)`` records was read twice per store (student_8).
+        below: dict[int, bool] = {}
         if mutable and record_cells is not None:
             # Stored: its columns of lists and dicts kept as bytes, the rest
             # as any other table.
-            kept = _TableWithBytes.make(frame, record_cells)
+            kept = _TableWithBytes.make(frame, record_cells, below)
             if kept is not None:
                 record_cells[id(kept)] = _BYTES
                 return kept
         full = False
         if mutable:
-            copied = InMemoryBackend._copy_cells(frame, memo)
+            copied = InMemoryBackend._copy_cells(frame, memo, below)
             # Cell by cell: the list and dict cells are new, the rest are
             # immutable or copied with their blocks; `attrs` only deepcopied.
             full = copied is not None and not frame.attrs
@@ -1216,7 +1222,7 @@ class InMemoryBackend(CacheBackend):
         return copy.deepcopy(value, before)
 
     @staticmethod
-    def _copy_cells(frame: Any, memo: dict[int, Any] | None = None) -> Any:
+    def _copy_cells(frame: Any, memo: dict[int, Any] | None = None, below: dict[int, bool] | None = None) -> Any:
         """A copy of *frame* whose list cells are new lists, without pickling it.
 
         A column of ``(action, datetime)`` lists is plain data, and a pickle
@@ -1234,7 +1240,9 @@ class InMemoryBackend(CacheBackend):
             positions = [0] if is_series else [i for i, dtype in enumerate(frame.dtypes) if str(dtype) == "object"]
             columns = [frame] if is_series else [frame.iloc[:, i] for i in positions]
             cells = [column.tolist() for column in columns]
-            writable = [n for n, column_cells in enumerate(cells) if not _plain_data.immutable_below(column_cells)]
+            writable = [
+                n for n, column_cells in enumerate(cells) if not _immutable_below_at(below, positions[n], column_cells)
+            ]
             flat = [cell for n in writable for cell in cells[n]]
             copied_flat = _plain_data.spine_copy(flat, memo)
             if memo is not None:
@@ -3419,6 +3427,18 @@ def _is_pandas_frame(value_type: type) -> bool:
         return issubclass(value_type, (pd.DataFrame, pd.Series))  # type: ignore[union-attr]
     except (AttributeError, TypeError):  # no pandas, or one still importing
         return False
+
+
+def _immutable_below_at(below: dict[int, bool] | None, position: int, cells: list) -> bool:
+    """`_plain_data.immutable_below` of *cells*, the object column at
+    *position* of a frame being copied, kept in *below* for the next
+    question about that frame."""
+    if below is None:
+        return _plain_data.immutable_below(cells)
+    known = below.get(position)
+    if known is None:
+        known = below[position] = _plain_data.immutable_below(cells)
+    return known
 
 
 def _holds_mutable_cells(frame: Any) -> bool:
