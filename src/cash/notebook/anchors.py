@@ -63,8 +63,9 @@ class _RefPickler(pickle.Pickler):
         name = self._name_of(obj)
         if name is None and type(obj) is types.FunctionType and kept_state.named_now(obj) is not None:
             # A function whose cell ran again since: pickle refuses it by
-            # name. The copy holds it as the value did.
-            self.kept[id(obj)] = obj
+            # name. The copy holds the one named now when it is the same
+            # definition, else the one the value held (`held_now`).
+            self.kept[id(obj)] = kept_state.held_now(obj)
             return (_KEPT, id(obj))
         return name
 

@@ -41,6 +41,7 @@ __all__ = [
     "by_name",
     "chooses_its_state",
     "defined_again",
+    "held_now",
     "dumps",
     "flatten",
     "left_out_attrs",
@@ -2256,6 +2257,21 @@ def named_now(obj: Any) -> Any:
     if type(obj) is types.FunctionType and type(current) is types.FunctionType:
         return current
     return None
+
+
+def held_now(obj: Any) -> Any:
+    """What a copy of a value holds in place of *obj*, a function whose
+    module names another function now (`named_now`): that one when it is
+    the same definition (`same_definition`), as a stored copy loads it by
+    name (`defined_again`); else *obj* itself, as the value held it.
+
+    A notebook re-running the cell defining ``column_ratio`` makes a new
+    function; a pipeline restored from RAM held the first one, so pickling
+    it (``joblib.dump``) failed as in no plain Python run."""
+    current = named_now(obj)
+    if current is None or type(obj) is not types.FunctionType:
+        return obj
+    return current if same_definition(obj, current) else obj
 
 
 def defined_again(then: Any = None) -> Callable[[Any], Any]:

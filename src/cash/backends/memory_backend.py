@@ -2645,12 +2645,13 @@ def _named_now(obj: Any) -> Any:
     has since named another of (`kept_state.named_now`), or None.
 
     A class is the one named now, which a disk hit also resolves the name
-    to. A function is itself: a copy holds what the value held, as plain
-    Python does, and the function named now may do something else."""
+    to. A function is the one named now when that is the same definition,
+    as a disk hit loads it, else itself (`kept_state.held_now`): the
+    function named now may do something else."""
     current = kept_state.named_now(obj)
     if current is None or instance_of(obj, type):
         return current
-    return obj
+    return kept_state.held_now(obj)
 
 
 def _metadata_held(frame: Any) -> list[str]:
