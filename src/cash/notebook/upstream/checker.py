@@ -264,8 +264,13 @@ class UpstreamChecker:
             matches,
         )
 
+        where = ", ".join(str(i + 1) for i in matches)
         raise AmbiguousCellError(
-            f"Ambiguous cell execution! The current cell content appears {len(matches)} times in the notebook and no cell ID could be resolved. Please ensure cells are unique or save the notebook."
+            f"Ambiguous cell execution: this cell's text is also in another cell (code cells {where}), "
+            "and the editor sent no cell id, so cash cannot tell which one is running. Which one "
+            "decides what the cell must show (the state at that point of a run from the top), so "
+            "cash does not guess. Fix: make the cells differ (a comment is enough), or update "
+            "IPython to 8.3 or newer and save the notebook, so each cell carries its id."
         )
 
     def _callee_globals(self, inputs: set[str]) -> set[str]:

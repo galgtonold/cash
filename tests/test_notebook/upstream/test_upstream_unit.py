@@ -236,8 +236,12 @@ class TestUpstreamFindCellIndex:
         checker = UpstreamChecker(mock_shell)
 
         cells = ["x = 1", "x = 1", "x = 1"]
-        with pytest.raises(AmbiguousCellError, match="Ambiguous cell execution"):
+        with pytest.raises(AmbiguousCellError, match="Ambiguous cell execution") as raised:
             checker._find_current_cell_index("x = 1", cells)
+        # names the cells and the fix, so the user can act on it
+        assert "code cells 1, 2, 3" in str(raised.value)
+        assert "a comment is enough" in str(raised.value)
+        assert "IPython to 8.3" in str(raised.value)
 
 
 class TestForwardProbePopulatesState:

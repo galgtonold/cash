@@ -101,4 +101,4 @@ class TestVSCodeDuplicates:
         executed_code = args[0]
         assert "raise AmbiguousCellError(" in executed_code
         compile(executed_code, "<cash-generated>", "exec")
-        assert "appears 2 times" in executed_code
+        assert "code cells 2, 3" in executed_code

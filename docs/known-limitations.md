@@ -914,8 +914,10 @@ jupyter labextension enable cash-live-cells
 
 <!-- claim: cash/exceptions.py:AmbiguousCellError @cc4cd1fd broad="the claim is about when this exception is raised at all" -->
 Two cells have byte-identical content and cash cannot get a cell ID to tell
-them apart, so it refuses to guess. JupyterLab and VS Code normally supply cell
-IDs. **Fix:** add a comment to one of the cells, or save the notebook.
+them apart, so it refuses to guess: which cell runs decides what it must show
+(the state at that point of a run from the top). JupyterLab and VS Code
+normally supply cell IDs; IPython before 8.3 does not pass them on. **Fix:** add
+a comment to one of the cells, or update IPython and save the notebook.
 
 ### A cell reads a name a later cell binds
 
