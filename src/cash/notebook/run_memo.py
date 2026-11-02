@@ -42,6 +42,7 @@ __all__ = [
     "note_fresh_entry",
     "note_fresh_snapshot",
     "stats_this_run",
+    "RunStats",
 ]
 
 #: This run's cache keys whose file dependencies were found fresh.
@@ -133,7 +134,50 @@ def fresh_snapshot_this_run(snap: Mapping[str, Any], not_before: float) -> bool:
     )
 
 
-def stats_this_run(paths: Iterable[str]) -> dict[str, tuple[str | None, Any]]:
+class RunStats(Mapping):
+    """``{path: (resolved or None, stat or None)}`` over this run's stats,
+    each pair made when it is asked for (`stats_this_run`).
+
+    The run keeps a path found where it was recorded as its bare stat, and
+    any other as its pair, in a second dict: a ``(path, stat)`` tuple is
+    tracked by the garbage collector (a stat result is a collector type), so
+    one per file of a 24,000-file check lived through the cell, was promoted
+    to the oldest generation, and set off a full collection of the kernel's
+    heap every few cells. A bare stat is not tracked.
+    """
+
+    __slots__ = ("_at", "_elsewhere", "_paths")
+
+    def __init__(self, paths: dict[str, None], at: dict, elsewhere: dict) -> None:
+        self._paths = paths
+        self._at = at
+        self._elsewhere = elsewhere
+
+    def __getitem__(self, path: str) -> tuple[str | None, Any]:
+        if path not in self._paths:
+            raise KeyError(path)
+        st = self._at.get(path)
+        return (path, st) if st is not None else self._elsewhere[path]
+
+    def __contains__(self, path: object) -> bool:
+        return path in self._paths
+
+    def __iter__(self):
+        return iter(self._paths)
+
+    def __len__(self) -> int:
+        return len(self._paths)
+
+    def items(self):  # type: ignore[override]
+        # A generator, not a view: one pair alive at a time.
+        at = self._at
+        elsewhere = self._elsewhere
+        for path in self._paths:
+            st = at.get(path)
+            yield path, ((path, st) if st is not None else elsewhere[path])
+
+
+def stats_this_run(paths: Iterable[str]) -> RunStats:
     """``{path: (resolved or None, stat or None)}``, one stat per path per cell run.
 
     A path is looked for where it was recorded first; one that is not there
@@ -143,14 +187,19 @@ def stats_this_run(paths: Iterable[str]) -> dict[str, tuple[str | None, Any]]:
     ``os.stat`` (``own_stat``): the stats are cash's, asked of every file the
     cells above read before each cell.
 
-    One pass over the paths, one tuple each: before every cell below a loop
+    One pass over the paths, one record each: before every cell below a loop
     over 24,000 documents, the bookkeeping of a stat cost as much as the stat.
+    The record is the stat itself for a path found where it was recorded
+    (`RunStats`), so the garbage collector has nothing per file to track.
     """
     run = file_state_this_run()
-    stats = run.setdefault("stat", {}) if run is not None else {}
-    if not isinstance(paths, (list, tuple, set, frozenset, dict)):
-        paths = list(paths)
-    todo = [p for p in paths if p not in stats]
+    if run is not None:
+        stats = run.setdefault("stat", {})
+        elsewhere = run.setdefault("stat_elsewhere", {})
+    else:
+        stats, elsewhere = {}, {}
+    paths = dict.fromkeys(paths)  # the paths as asked, in order, once each
+    todo = [p for p in paths if p not in stats and p not in elsewhere]
     if todo:
         listed = stats_from_listings(todo) if len(todo) >= LISTING_MIN_FILES else None
         stat = os.stat
@@ -167,7 +216,7 @@ def stats_this_run(paths: Iterable[str]) -> dict[str, tuple[str | None, Any]]:
                 except (OSError, ValueError):
                     st = None
             if st is not None:
-                stats[p] = (p, st)
+                stats[p] = st
                 continue
             resolved = resolve_file_dep_path(p)
             if resolved is not None:
@@ -175,8 +224,11 @@ def stats_this_run(paths: Iterable[str]) -> dict[str, tuple[str | None, Any]]:
                     st = own_stat(resolved)
                 except OSError:
                     st = None
-            stats[p] = (resolved, st)
-    return {p: stats[p] for p in paths}
+            if resolved == p and st is not None:
+                stats[p] = st
+            else:
+                elsewhere[p] = (resolved, st)
+    return RunStats(paths, stats, elsewhere)
 
 
 def file_component_this_run(

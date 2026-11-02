@@ -6,10 +6,17 @@ through a lookup helper that kept its own record of the path beside the
 stat's: two tuples and two dictionary slots per file, kept for the cell
 run, and a function call or two more per path. The bookkeeping cost as much
 as the stats. One pass now, one record per file.
+
+The record is the stat itself, which the garbage collector does not track:
+a ``(path, stat)`` pair is tracked (a stat result is a collector type), and
+one per file lived through the cell, was promoted to the oldest generation
+and set off a full collection of the kernel's heap every few cells. The
+pairs the answer hands out are made one at a time, as they are asked for.
 """
 
 from __future__ import annotations
 
+import gc
 import os
 
 import pytest
@@ -51,3 +58,18 @@ def test_one_record_per_file(tmp_path):
     run = run_memo.file_state_this_run()
     records = sum(len(v) for v in run.values() if isinstance(v, dict) and set(paths) <= set(v))
     assert records == N
+
+
+def test_the_records_are_not_tracked_by_the_garbage_collector(tmp_path):
+    paths = _inputs(tmp_path)
+    found = stats_this_run(paths)
+    gc.collect()
+
+    asked = set(paths)
+    run = run_memo.file_state_this_run()
+    records = [v for d in run.values() if isinstance(d, dict) for k, v in d.items() if k in asked]
+    assert len(records) == N
+    assert [r for r in records if gc.is_tracked(r)] == []
+    pairs = [o for o in gc.get_objects() if type(o) is tuple and len(o) == 2 and type(o[0]) is str and o[0] in asked]
+    assert pairs == [], "a pair per file is kept alive"
+    assert dict(found.items()) == {p: (p, run["stat"][p]) for p in paths}
