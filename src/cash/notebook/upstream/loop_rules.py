@@ -12,6 +12,7 @@ import ast
 import logging
 import re
 import types
+from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
 from cash.control_markers import iteration_digest, strip_markers
@@ -20,6 +21,7 @@ from ...analysis.cacheability import analyze_statement
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...lineage_tag import own_tag
 from ...source_norm import exact_source_digest
+from ._types import cell_holds_statement
 from .statement_lineage import unbound_builtin
 
 if TYPE_CHECKING:
@@ -371,18 +373,30 @@ class LoopRules:
         upstream_has_modifications: bool,
         vars_mutated_by_loops: set[str],
         simulation_trace_codes: set[str],
+        own_texts: Iterable[str] = (),
     ) -> bool:
         """Return True if loop-derived variable trust should be overridden.
 
         This happens when a loop-mutated variable was produced by code that is
         NOT in the current simulation trace (unsaved edit or stale execution).
+
+        Code of the running cell itself, as it runs now or as it ran at its
+        previous check (*own_texts*), is neither: it is no statement above
+        the cell. Taken for one, re-running a cell whose loop rebinds a
+        loop-built name (``for uid, actions in data:``) withdrew the trust
+        from every loop above it, and ``data``, built by one, was rebuilt
+        with all its producers before each run of the cell.
         """
         if upstream_has_modifications or not vars_mutated_by_loops:
             return False
+        own_texts = [text for text in own_texts if text]
         for mv in vars_mutated_by_loops:
             if mv not in self.tracking_state.executed_cell_codes:
                 continue
             exec_code = strip_markers(self.tracking_state.executed_cell_codes[mv]).strip()
+            if exec_code and any(cell_holds_statement(text, exec_code) for text in own_texts):
+                logger.debug("[UPSTREAM_DEBUG] Loop-mutated var '%s' was last bound by the running cell itself.", mv)
+                continue
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("[UPSTREAM_DEBUG] Checking loop trust for '%s': exec_code=%s", mv, repr(exec_code[:60]))
                 matching = [sc for sc in simulation_trace_codes if exec_code in sc or sc in exec_code]

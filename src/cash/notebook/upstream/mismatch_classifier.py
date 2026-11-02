@@ -822,6 +822,7 @@ class MismatchClassifier:
                 sim.upstream_has_modifications,
                 sim.vars_mutated_by_loops,
                 trace_codes,
+                own_texts=check.own_texts,
             ),
         )
         loop_var_input_lineages = self.loop_rules.build_loop_var_input_lineages(

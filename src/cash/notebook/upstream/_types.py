@@ -255,6 +255,15 @@ class CellCheck:
     def current_cell_outputs(self) -> set[str] | None:
         return set(self.effects.outputs) if self.effects is not None else None
 
+    @property
+    def own_texts(self) -> tuple[str, ...]:
+        """The cell's text as it runs now and as it ran at its previous
+        check: code of the cell itself, never of a cell above it."""
+        now = self.cell_code
+        if now is None and 0 <= self.current_cell_idx < len(self.notebook_cells):
+            now = self.notebook_cells[self.current_cell_idx]
+        return tuple(text for text in (now, self.earlier_text) if text)
+
 
 @dataclass
 class SimulationResult:
