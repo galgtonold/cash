@@ -237,6 +237,9 @@ class FileWriterScheduler:
         self.probe = probe
         #: ``(read paths, their count, index)`` -- see ``_read_path_index``.
         self._read_index: tuple[set[str], int, tuple[set[str], list[str], list[str]]] | None = None
+        #: ``(working directory, {read path: (where it is, its forms, its
+        #: place)})`` -- see ``_read_path_index``.
+        self._read_forms: tuple[str, dict[str, tuple[str, tuple[str, ...], str]]] = ("", {})
         #: ``(trace, its length, defs)`` -- see ``_trace_defs``. Holds the
         #: trace itself, so an identity match cannot be a reused id.
         self._trace_defs_memo: tuple[list, int, dict] | None = None
@@ -1067,13 +1070,29 @@ class FileWriterScheduler:
         before one restarted cell. The simulator and the planner ask
         with the same set in one check, so it is kept across passes too; one
         notebook's 10,000 documents were indexed twice per cell, 1.8 s, and each resolved
-        twice."""
+        twice.
+
+        Each cell asks with a new set of the same paths, and spelling each
+        path in its comparable forms (absolute, case-folded, its base name)
+        cost more than the stats: 0.2-0.5 s before every cell below a loop
+        over 24,000 documents. A path's forms follow from the path, where
+        this run's stat found it and the working directory, so they are kept
+        from one cell to the next while those three stay the same; whether it
+        is a folder is read from this run's stat each time."""
         cached = self._read_index
         if cached is not None and cached[0] is relevant_read_paths and cached[1] == len(relevant_read_paths):
             return cached[2]
         read_forms: set[str] = set()
         read_dirs: list[str] = []
         read_places: list[str] = []
+        cwd, known = self._read_forms
+        try:
+            here = os.getcwd()
+        except OSError:  # removed from under the kernel: nothing to go by
+            here = ""
+        if not here or cwd != here:
+            known = {}  # a relative path is somewhere else now
+        kept: dict[str, tuple[str, tuple[str, ...], str]] = {}
         # The stats the check of each entry's files took this cell run: one
         # look at each file per run, a listing for a crowded folder on Windows.
         try:
@@ -1100,17 +1119,25 @@ class FileWriterScheduler:
                     except (OSError, ValueError, TypeError):
                         resolved = rp
                     is_dir = resolved != rp and os.path.isdir(resolved)
-            for candidate in {resolved, rp}:
-                try:
-                    read_forms.add(os.path.normcase(os.path.abspath(candidate)))
-                    read_forms.add(os.path.normcase(os.path.basename(candidate)))
-                except (OSError, ValueError, TypeError):
-                    continue
-            read_places.append(os.path.normcase(os.path.abspath(resolved)))
+            spelled = known.get(rp)
+            if spelled is None or spelled[0] != resolved:
+                forms: list[str] = []
+                for candidate in {resolved, rp}:
+                    try:
+                        forms.append(os.path.normcase(os.path.abspath(candidate)))
+                        forms.append(os.path.normcase(os.path.basename(candidate)))
+                    except (OSError, ValueError, TypeError):
+                        continue
+                spelled = (resolved, tuple(forms), os.path.normcase(os.path.abspath(resolved)))
+            kept[rp] = spelled
+            read_forms.update(spelled[1])
+            read_places.append(spelled[2])
             if is_dir:
                 # A listed / globbed folder: whatever is written inside it is
                 # read by the next listing.
-                read_dirs.append(os.path.normcase(os.path.abspath(resolved)) + os.sep)
+                read_dirs.append(spelled[2] + os.sep)
+        # Only the paths of this set: what the cells above read, no more.
+        self._read_forms = (here, kept)
         index = (read_forms, read_dirs, read_places)
         self._read_index = (relevant_read_paths, len(relevant_read_paths), index)
         return index
