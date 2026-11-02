@@ -8,6 +8,7 @@ from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from cash._user_attrs import attribute_or
+from cash.source_norm import exact_source_digest
 from cash.tracking.randomness import rng_virtual_var
 
 from ..lineage_formula import resolve_lineage_alias, rng_reads_changed
@@ -98,9 +99,10 @@ def random_state_change_reason(tracking_state: TrackingState, code: str) -> str 
 
     A draw's key reads the lineage of the stream it draws from (a seed, and
     the draws since). When that alone changed -- a reseed above, a draw added
-    above, a seed below that no longer counts -- the row rendered EXECUTED
-    with no reason, though the cause is known exactly. Read before the
-    statement's own draw moves the stream on.
+    above, a seed below that no longer counts, a seed in force where it last
+    drew unseeded -- the row rendered EXECUTED with no reason, though the
+    cause is known exactly. Read before the statement's own draw moves the
+    stream on.
     """
     try:
         changed = rng_reads_changed(tracking_state, code)
@@ -109,7 +111,14 @@ def random_state_change_reason(tracking_state: TrackingState, code: str) -> str 
     if not changed:
         return None
     prefix = rng_virtual_var("")
-    return "random state changed: " + ", ".join(var.removeprefix(prefix) for var in changed)
+    try:
+        unseeded = tracking_state.rng_unseeded_at_last_draw.get(exact_source_digest(code)) or ()
+    except (AttributeError, UnicodeEncodeError):  # pragma: no cover - defensive
+        unseeded = ()
+    return "random state changed: " + ", ".join(
+        var.removeprefix(prefix) + (" (unseeded when it last drew, seeded now)" if var in unseeded else "")
+        for var in changed
+    )
 
 
 def _budget_cut(state: TrackingState, stale: list[str], current) -> str:
@@ -175,6 +184,9 @@ def stored_input_change_reason(
     # this statement's own (`version_slot`): what it read then.
     stale = moved(read - outputs) or moved(read & outputs)
     if not stale:
+        streams = _streams_moved(metadata.get("rng_reads"), current)
+        if streams:
+            return "random state changed since it was last stored: " + ", ".join(streams)
         if any(isinstance(was.get(name), str) and name in current for name in read):
             return (
                 "stored before under another key, from the same inputs: something else its key "
@@ -184,3 +196,27 @@ def stored_input_change_reason(
     names = ", ".join(stale[:3])
     more = f" +{len(stale) - 3} more" if len(stale) > 3 else ""
     return f"input changed since it was last stored: {names}{more}"
+
+
+def _streams_moved(was: object, current: Mapping[str, str]) -> list[str]:
+    """The global random streams a stored version's key read (*was*, its
+    ``rng_reads``) that stand elsewhere now: seeded since, no longer seeded,
+    or seeded or drawn from otherwise. Each says which way when it was
+    unseeded at one end."""
+    if not isinstance(was, Mapping):
+        return []
+    prefix = rng_virtual_var("")
+    moved = []
+    for var, then in sorted(was.items()):
+        if not isinstance(var, str) or not isinstance(then, str):
+            continue
+        now = current.get(var) or ""
+        if (resolve_lineage_alias(now) if now else "") == (resolve_lineage_alias(then) if then else ""):
+            continue
+        name = var.removeprefix(prefix)
+        if not then:
+            name += " (unseeded then, seeded now)"
+        elif not now:
+            name += " (seeded then, unseeded now)"
+        moved.append(name)
+    return moved

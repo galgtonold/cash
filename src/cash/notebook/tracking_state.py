@@ -182,6 +182,11 @@ class TrackingState:
     # W: StatementProcessor. R: StatementLineage, VirtualLineage.
     rng_read_at_last_draw: dict[str, dict[str, str]] = field(default_factory=dict)
 
+    # sha256(statement source) -> the RNG variables it last drew from while
+    # they were unseeded (no lineage): a seed since moved its random state.
+    # W: StatementProcessor. R: the miss reason (`rng_reads_changed`).
+    rng_unseeded_at_last_draw: dict[str, frozenset[str]] = field(default_factory=dict)
+
     # Variable -> every content hash seen for it.
     # W: StatementLineageBuilder, both restorers. R: UpstreamChecker.
     variable_hashes: dict[str, set[str]] = field(default_factory=dict)

@@ -188,6 +188,7 @@ from ..lineage_formula import (
     key_hidden_reads,
     no_cache_value_digest,
     note_rng_read,
+    rng_reads_now,
     use_lineage_alias_store,
 )
 from ..magic_effects import (
@@ -1007,10 +1008,11 @@ class StatementProcessor:
             return  # a magic statement's draw moves it in record_magic
         state = self.tracking_state
         try:
-            drawn = drawn_rng_vars(key_hidden_reads(run.code, state), run.code, state.variable_lineage)
+            read = rng_reads_now(state, run.code)
         except (SyntaxError, ValueError, AttributeError, RecursionError):
             return
-        note_rng_read(state, run.code, {var: state.variable_lineage.get(var) for var in drawn})
+        note_rng_read(state, run.code, read)
+        drawn = {var for var, lineage in read.items() if lineage is not None}
         key = run.rng_advance_key or run.cache_key
         for var in sorted(drawn):
             state.lineage.record(var, advanced_rng_lineage(key, var))
