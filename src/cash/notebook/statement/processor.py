@@ -16,7 +16,7 @@ import os
 import secrets
 import sys
 import types
-from collections.abc import Callable, Collection, Generator, Iterable, Iterator, Mapping
+from collections.abc import Callable, Collection, Generator, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from typing import Any
 
@@ -2028,7 +2028,7 @@ class StatementProcessor:
         on a miss or a skipped lookup."""
         run.effective_ttl = ttl_floor_from_called_functions(run.inputs, run.effective_ttl, self.shell.user_ns)
         metadata, cached_data, cache_check_time = self._do_cache_lookup(
-            run.skip_cache, run.cache_key, run.effective_ttl, run.inputs
+            run.skip_cache, run.cache_key, run.effective_ttl, run.inputs, run.metrics["uncacheable_reasons"]
         )
         if cached_data is None and not run.skip_cache:
             run.stale_file = self._freshness.last_stale_file
@@ -2955,13 +2955,19 @@ class StatementProcessor:
         cache_key: str,
         ttl: int | None,
         inputs: set[str],
+        reasons: Sequence[str] = (),
     ) -> tuple[StatementCacheMetadata | None, Any | None, float]:
-        """Run cache lookup unless *skip_cache* is set."""
+        """Run cache lookup unless *skip_cache* is set; a skipped lookup is
+        logged with the *reasons* the statement runs every time."""
         if not skip_cache:
             return self._freshness.check_cache(
                 self.tracking_state, cache_key, ttl, inputs, epoch=file_state_epoch(), bound=self.shell.user_ns
             )
-        logger.debug("%s Skipping cache lookup due to missing input lineage or @cash:no-cache", _LOG_ANNOTATION)
+        logger.debug(
+            "%s Skipping cache lookup: %s",
+            _LOG_ANNOTATION,
+            "; ".join(reasons) or "the statement runs every time (@cash:no-cache, or a statement cash never stores)",
+        )
         return None, None, 0.0
 
     def _observe_miss_guard(
