@@ -1325,8 +1325,62 @@ def snapshot_is_fresh(
         unlisted = [p for p, s in snap.items() if isinstance(s, dict) and "size" in s and p not in memo.listed]
         if len(unlisted) >= LISTING_MIN_FILES:
             memo.listed.update(stats_from_listings(unlisted))
+    # A relative read is recorded under both spellings (`snapshot_file_deps`);
+    # its absolute twin's answer, kept here, is the relative one's too.
+    answered: dict[str, tuple[str | None, bool, str | None]] = {}
+    isabs = os.path.isabs
     for path, recorded in snap.items():
-        resolved, is_fresh, reason = dep_is_fresh(path, recorded, memo)
+        if isabs(path):
+            answer = answered.get(path)
+            if answer is None:
+                answer = answered[path] = dep_is_fresh(path, recorded, memo)
+            resolved, is_fresh, reason = answer
+        elif _fresh_as_absolute_twin(snap, path, recorded, memo, answered):
+            continue
+        else:
+            resolved, is_fresh, reason = dep_is_fresh(path, recorded, memo)
         if not is_fresh:
             return False, StaleDep(path, resolved, reason or "changed")
     return True, None
+
+
+def _recorded_alike(absolute: Any, relative: Mapping[str, Any]) -> bool:
+    """Do the two spellings' entries describe the file alike? The absolute
+    one may also say where it lies beside the code (`_CODE_REL`), which
+    only decides where this process looks for it: the twin's answer counts
+    only when it was found at its own path."""
+    if absolute == relative:
+        return True
+    if not isinstance(absolute, Mapping) or _CODE_REL not in absolute:
+        return False
+    return {k: v for k, v in absolute.items() if k not in (_CODE_REL, _CODE_MOD)} == relative
+
+
+def _fresh_as_absolute_twin(
+    snap: Mapping[str, Any],
+    path: str,
+    recorded: Any,
+    memo: FreshnessMemo | None,
+    answered: dict[str, tuple[str | None, bool, str | None]],
+) -> bool:
+    """Is relative *path* fresh by its absolute twin's answer?
+
+    A relative read is recorded under its name and under that name made
+    absolute from the working directory, with the same entry; the check
+    stat'ed (and, past a moved stat, hashed) the file once under each:
+    48,000 stats of p25's all-hit run for 24,000 documents, where on
+    Windows a stat opens the file. While the name still spells the twin's
+    path from this working directory and both entries are alike
+    (`_recorded_alike`), one file answers both -- when it was found fresh at that very path. Any other
+    answer leaves *path* to its own check, as before. *answered* holds the
+    answers for absolute paths this check has asked.
+    """
+    if not isinstance(recorded, Mapping):
+        return False
+    twin = _spelled_absolute(path)
+    if twin is None or twin == path or not _recorded_alike(snap.get(twin), recorded):
+        return False
+    answer = answered.get(twin)
+    if answer is None:
+        answer = answered[twin] = dep_is_fresh(twin, snap[twin], memo)
+    return answer[0] == twin and answer[1]
