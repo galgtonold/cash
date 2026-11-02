@@ -39,7 +39,7 @@ from ...analysis.namespace_effects import (
 )
 from ...tracking.file_dep_snapshot import LISTING_MIN_FILES, snapshot_is_fresh
 from ...tracking.tracker_context import untracked
-from .._trace import trace_event
+from .._trace import is_tracing, trace_event
 from ..cache_key import called_function_globals, write_provenance_key
 from ..cache_status import CacheStatus
 from ..carrier_history import carrier_history_fingerprint
@@ -228,6 +228,16 @@ class LazyReadPaths:
         return self._found
 
 
+def _plain_read_path(path: object) -> bool:
+    """Whether *path*'s absolute form depends on nothing but the path and
+    the working folder: not a drive-relative path (``D:data.csv``), which
+    Windows takes from a per-drive folder ``os.getcwd`` does not report."""
+    if not isinstance(path, str):
+        return False
+    drive = os.path.splitdrive(path)[0]
+    return not drive or os.path.isabs(path)
+
+
 class FileWriterScheduler:
     """Schedules the upstream file writers whose output is out of date."""
 
@@ -237,6 +247,11 @@ class FileWriterScheduler:
         self.probe = probe
         #: ``(read paths, their count, index)`` -- see ``_read_path_index``.
         self._read_index: tuple[set[str], int, tuple[set[str], list[str], list[str]]] | None = None
+        #: ``(working folder, plain paths, forms, places)``, and each path's
+        #: ``(absolute form, name)`` from that folder -- see ``_plain_read_forms``.
+        self._plain_index: tuple[str, frozenset[str], frozenset[str], tuple[str, ...]] | None = None
+        self._plain_forms: dict[str, tuple[str, str]] = {}
+        self._plain_cwd: str | None = None
         #: ``(trace, its length, defs)`` -- see ``_trace_defs``. Holds the
         #: trace itself, so an identity match cannot be a reused id.
         self._trace_defs_memo: tuple[list, int, dict] | None = None
@@ -691,13 +706,17 @@ class FileWriterScheduler:
                 relevant_read_paths_known,
                 simulation_trace,
             )
-            trace_event(
-                "writer_considered",
-                stmt=stmt_code[:80],
-                unread=unread,
-                read_paths_known=relevant_read_paths_known,
-                read_paths=sorted(relevant_read_paths or ())[:20],
-            )
+            if is_tracing():
+                # Sorted for the trace alone: unguarded, the files read above
+                # (100,000 paths below a loop over documents) were sorted for
+                # each writer before every cell, and the record dropped.
+                trace_event(
+                    "writer_considered",
+                    stmt=stmt_code[:80],
+                    unread=unread,
+                    read_paths_known=relevant_read_paths_known,
+                    read_paths=sorted(relevant_read_paths or ())[:20],
+                )
             if unread:
                 if stale_exports is not None:
                     self._note_if_stale(
@@ -1067,13 +1086,18 @@ class FileWriterScheduler:
         before one restarted cell. The simulator and the planner ask
         with the same set in one check, so it is kept across passes too; one
         notebook's 10,000 documents were indexed twice per cell, 1.8 s, and each resolved
-        twice."""
+        twice.
+
+        A read file still where it was recorded, and no folder, has forms that
+        depend on its path and the working folder alone: those are kept across
+        cell runs (`_plain_read_forms`)."""
         cached = self._read_index
         if cached is not None and cached[0] is relevant_read_paths and cached[1] == len(relevant_read_paths):
             return cached[2]
         read_forms: set[str] = set()
         read_dirs: list[str] = []
         read_places: list[str] = []
+        plain: list[str] = []
         # The stats the check of each entry's files took this cell run: one
         # look at each file per run, a listing for a crowded folder on Windows.
         try:
@@ -1090,6 +1114,9 @@ class FileWriterScheduler:
                 resolved, st = located[rp]
                 resolved = resolved or rp
                 is_dir = st is not None and stat.S_ISDIR(st.st_mode)
+                if resolved == rp and not is_dir and _plain_read_path(rp):
+                    plain.append(rp)
+                    continue
             else:
                 try:
                     is_dir = stat.S_ISDIR(os.stat(rp).st_mode)
@@ -1111,9 +1138,57 @@ class FileWriterScheduler:
                 # A listed / globbed folder: whatever is written inside it is
                 # read by the next listing.
                 read_dirs.append(os.path.normcase(os.path.abspath(resolved)) + os.sep)
+        if plain:
+            plain_forms, plain_places = self._plain_read_forms(plain)
+            if read_forms or read_places:
+                read_forms |= plain_forms
+                read_places.extend(plain_places)
+            else:
+                # Taken as they are: the consumers only read them.
+                read_forms, read_places = plain_forms, plain_places  # type: ignore[assignment]
         index = (read_forms, read_dirs, read_places)
         self._read_index = (relevant_read_paths, len(relevant_read_paths), index)
         return index
+
+    def _plain_read_forms(self, plain: list[str]) -> tuple[frozenset[str], tuple[str, ...]]:
+        """The forms and places of read files found where they were recorded
+        (`_read_path_index`), kept while the files are read from the same
+        working folder.
+
+        Each is the file's absolute path and its name, which change only with
+        the path or the folder a relative one is taken from. Before every cell
+        below a loop over 50,000 documents the index took each of them again:
+        100,000 paths in two spellings, an absolute path (a ``getcwd`` on
+        POSIX) twice for each, for the same answer. Kept per path, as cells
+        that need different inputs read different sets of them."""
+        try:
+            cwd = os.getcwd()
+        except OSError:
+            cwd = None
+        key = frozenset(plain)
+        kept = self._plain_index
+        if cwd is not None and kept is not None and kept[0] == cwd and kept[1] == key:
+            return kept[2], kept[3]
+        per_path = self._plain_forms if cwd is not None and cwd == self._plain_cwd else {}
+        if len(per_path) > 2 * len(plain) + 1000:
+            # Paths no cell reads any more: keep the ones read now.
+            per_path = {rp: per_path[rp] for rp in plain if rp in per_path}
+        forms: set[str] = set()
+        places: list[str] = []
+        for rp in plain:
+            known = per_path.get(rp)
+            if known is None:
+                known = (os.path.normcase(os.path.abspath(rp)), os.path.normcase(os.path.basename(rp)))
+                per_path[rp] = known
+            forms.add(known[0])
+            forms.add(known[1])
+            places.append(known[0])
+        result = (frozenset(forms), tuple(places))
+        if cwd is None:
+            self._plain_index, self._plain_forms, self._plain_cwd = None, {}, None
+        else:
+            self._plain_index, self._plain_forms, self._plain_cwd = (cwd, key, *result), per_path, cwd
+        return result
 
     def _writer_output_unread(
         self,
