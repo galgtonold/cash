@@ -22,13 +22,13 @@ reads and fills both. Neither side imports the other for it.
 
 from __future__ import annotations
 
-import os
 from collections.abc import Iterable, Mapping
 from typing import Any
 
 from .._paths import is_remote_url, normalize_path, resolve_file_dep_path
 from ..tracking import file_dep_snapshot as _fds
 from ..tracking.file_dep_snapshot import LISTING_MIN_FILES, FreshnessMemo, stats_from_listings
+from ..tracking.read_classification import own_stat
 
 __all__ = [
     "file_component_this_run",
@@ -109,7 +109,7 @@ def _locate_files(paths: Iterable[str], run: dict | None) -> dict[str, tuple[str
             # stat the caller takes next (`resolve_file_dep_path` asked
             # ``os.path.exists`` first, a stat of its own).
             try:
-                st = os.stat(p)
+                st = own_stat(p)
             except (OSError, ValueError):
                 st = None
         found[p] = (p, st) if st is not None else (resolve_file_dep_path(p), None)
@@ -123,6 +123,9 @@ def stats_this_run(paths: Iterable[str]) -> dict[str, tuple[str | None, Any]]:
 
     The resolution is ``resolve_file_dep_path``'s (relocation fallbacks
     included); the stat is the listing's where the directory was listed.
+    Stat-ed past cash's own wrapper of ``os.stat`` (``own_stat``): the
+    stats are cash's, asked of every file the cells above read before each
+    cell.
     """
     run = file_state_this_run()
     stats = run.setdefault("stat", {}) if run is not None else {}
@@ -133,7 +136,7 @@ def stats_this_run(paths: Iterable[str]) -> dict[str, tuple[str | None, Any]]:
             st = listed
             if st is None and resolved is not None:
                 try:
-                    st = os.stat(resolved)
+                    st = own_stat(resolved)
                 except OSError:
                     st = None
             stats[p] = (resolved, st)
