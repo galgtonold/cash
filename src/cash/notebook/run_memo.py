@@ -220,12 +220,13 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
         if run is not None and "stat_at" not in run:
             # When the oldest stat the run keeps was taken (`stats_taken_this_run`).
             run["stat_at"] = time.monotonic()
+        cwd: list[str] = []  # the working directory, asked once for the lot
         for p in todo:
             if p in stats:  # its other spelling's stat, taken just now
                 continue
             st = listed.get(p) if listed else None
             if st is None and not os.path.isabs(p) and not ("://" in p and is_remote_url(p)):
-                st = _as_spelled_absolute(p, stats, stat)
+                st = _as_spelled_absolute(p, stats, stat, cwd)
             if st is None and not ("://" in p and is_remote_url(p)):
                 # Where it was recorded: the stat that finds it is there is
                 # the stat it is asked for (`resolve_file_dep_path` asked
@@ -250,7 +251,7 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
     return RunStats(paths, stats, elsewhere)
 
 
-def _as_spelled_absolute(path: str, stats: dict[str, Any], stat: Any) -> os.stat_result | None:
+def _as_spelled_absolute(path: str, stats: dict[str, Any], stat: Any, cwd: list[str]) -> os.stat_result | None:
     """The stat of relative *path* by its absolute spelling in the working
     directory, which this run took or takes now under that spelling too;
     None when there is none, or the spellings may not name the same file.
@@ -259,12 +260,17 @@ def _as_spelled_absolute(path: str, stats: dict[str, Any], stat: Any) -> os.stat
     (``FileAccessTracker.track_path``), and every file of a folder of 20,000
     images was stat-ed twice before each cell. Not for a path through
     ``..``: spelled out, it goes up from the folder a link is in, where the
-    open goes up from the folder the link points to.
+    open goes up from the folder the link points to. Nor for a path naming a
+    drive (``C:data.csv``), which is relative to that drive's own folder.
+    *cwd* holds the working directory once asked: ``os.path.abspath`` asks
+    for it again for each of 20,000 paths.
     """
-    if ".." in path.replace("\\", "/").split("/"):
+    if ".." in path.replace("\\", "/").split("/") or os.path.splitdrive(path)[0]:
         return None
     try:
-        absolute = normalize_path(os.path.abspath(path))
+        if not cwd:
+            cwd.append(os.getcwd())
+        absolute = normalize_path(os.path.normpath(os.path.join(cwd[0], path)))
     except (OSError, ValueError):
         return None
     st = stats.get(absolute)
