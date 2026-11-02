@@ -31,7 +31,7 @@ from typing import Any
 from .._paths import is_remote_url, normalize_path, resolve_file_dep_path
 from ..tracking import file_dep_snapshot as _fds
 from ..tracking.file_dep_snapshot import LISTING_MIN_FILES, FreshnessMemo, stats_from_listings
-from ..tracking.read_classification import own_stat
+from ..tracking.read_classification import own_stat, stat_key
 
 __all__ = [
     "file_component_this_run",
@@ -41,6 +41,7 @@ __all__ = [
     "known_fresh_entry",
     "note_fresh_entry",
     "note_fresh_snapshot",
+    "stat_keys_this_run",
     "stats_this_run",
     "RunStats",
 ]
@@ -177,6 +178,11 @@ class RunStats(Mapping):
             yield path, ((path, st) if st is not None else elsewhere[path])
 
 
+def _as_set(paths: dict | set | frozenset):
+    """*paths* as a set-like that a dict's keys compare with in C."""
+    return paths.keys() if isinstance(paths, dict) else paths
+
+
 def stats_this_run(paths: Iterable[str]) -> RunStats:
     """``{path: (resolved or None, stat or None)}``, one stat per path per cell run.
 
@@ -198,8 +204,11 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
         elsewhere = run.setdefault("stat_elsewhere", {})
     else:
         stats, elsewhere = {}, {}
-    paths = dict.fromkeys(paths)  # the paths as asked, in order, once each
-    todo = [p for p in paths if p not in stats and p not in elsewhere]
+    if not isinstance(paths, (dict, set, frozenset)):
+        paths = dict.fromkeys(paths)  # the paths as asked, in order, once each
+    # Asked again by each check of the run: most often every path was
+    # stat-ed already, which the run's own dict tells in C.
+    todo = [] if stats.keys() >= _as_set(paths) else [p for p in paths if p not in stats and p not in elsewhere]
     if todo:
         listed = stats_from_listings(todo) if len(todo) >= LISTING_MIN_FILES else None
         stat = os.stat
@@ -229,6 +238,26 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
             else:
                 elsewhere[p] = (resolved, st)
     return RunStats(paths, stats, elsewhere)
+
+
+def stat_keys_this_run(paths: Iterable[str]) -> Mapping[str, tuple[int, int, int] | None]:
+    """``{path: stat_key or None}`` of this run's stats (`stats_this_run`):
+    the `stat_key` of the stat that found each path, wherever that was, and
+    None for a path found nowhere. Holds every path asked, and may hold more.
+
+    Kept for the rest of the run with the stats: several cached cells above
+    a loop over 24,000 documents carry the same files, and each check made
+    a key of every stat again before every cell. With the keys kept, a
+    check whose files are all as recorded is one comparison of two dicts'
+    items, in C."""
+    run = file_state_this_run()
+    keys = run.setdefault("stat_key", {}) if run is not None else {}
+    if not isinstance(paths, (dict, set, frozenset)):
+        paths = dict.fromkeys(paths)
+    if not keys.keys() >= _as_set(paths):
+        for p, (_resolved, st) in stats_this_run([p for p in paths if p not in keys]).items():
+            keys[p] = stat_key(st) if st is not None else None
+    return keys
 
 
 def file_component_this_run(
