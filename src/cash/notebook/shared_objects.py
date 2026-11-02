@@ -1056,8 +1056,17 @@ def _values_in_tuples(items: Any, exact: frozenset[type]) -> bool:
     (`_held_identities`). Asked a level at a time, at C speed: a list of 30k
     sessions, each a list of ``(name, time)`` records, cost a Python step per
     record in every statement's share check."""
+    if _VALUES_IN_TUPLES is not None and type(items) is list:
+        found = _VALUES_IN_TUPLES(items, exact, _TUPLE_LEVELS)
+        if found is not NotImplemented:
+            return found
+    return _values_in_tuple_levels(items, exact, _TUPLE_LEVELS)
+
+
+def _values_in_tuple_levels(items: Any, exact: frozenset[type], levels: int) -> bool:
+    """`_values_in_tuples` read in Python, *levels* levels deep."""
     level = items
-    for _ in range(_TUPLE_LEVELS):
+    for _ in range(levels):
         kinds = set(map(type, level))
         if kinds <= exact:
             return True
@@ -1070,6 +1079,11 @@ def _values_in_tuples(items: Any, exact: frozenset[type]) -> bool:
 
 
 _TUPLE_LEVELS = 8
+
+#: The C kernel of `_values_in_tuples`, None without it: the level of two
+#: million records of a frame's object column was made a list twice over,
+#: each check of each statement (student_8).
+_VALUES_IN_TUPLES = getattr(_native.kernels, "values_in_tuples", None)
 
 
 def view_bases(value: Any) -> list[int]:
@@ -1567,6 +1581,7 @@ def _reached_ids(value: Any, value_types: tuple[type, ...]) -> set[int]:
     rows with ``rebind`` holding ``rows`` itself."""
     found: set[int] = set()
     stack = [value]
+    exact = exact_value_types()
     while stack:
         obj = stack.pop()
         if is_value(obj, value_types) or id(obj) in found:
@@ -1579,8 +1594,35 @@ def _reached_ids(value: Any, value_types: tuple[type, ...]) -> set[int]:
         if children is None:
             opaque = _opaque_parts(obj)
             children = opaque[0] if opaque is not None else ()
-        stack.extend(children)
+        records = _value_records(children, exact)
+        if records is None:
+            stack.extend(children)
+            continue
+        # Values, and tuples of values: each tuple's id, and nothing below
+        # it, as a step through each would find. The 1.3 million floats of
+        # a list a loop filled took 4 s a step at a time (student_8).
+        if records:
+            before = len(found) >> 10
+            found.update(map(id, records))
+            if len(found) >> 10 != before:
+                check_walk_budget()
     return found
+
+
+def _value_records(children: Any, exact: frozenset[type]) -> list[Any] | None:
+    """The tuples among *children* when every child is a value of the
+    *exact* types or a tuple holding such values alone, told at C speed;
+    None otherwise. Neither has anything below it a walk would count."""
+    kinds = set(map(type, children))
+    if kinds <= exact:
+        return []
+    if tuple not in kinds or not kinds <= exact | _JUST_TUPLE:
+        return None
+    records = list(children) if len(kinds) == 1 else [child for child in children if type(child) is tuple]
+    return records if exact.issuperset(map(type, itertools.chain.from_iterable(records))) else None
+
+
+_JUST_TUPLE = frozenset({tuple})
 
 
 def holds_part_of(value: Any, sources: Iterable[Any]) -> bool:
@@ -3915,7 +3957,11 @@ def _descend(
         # Nothing but values, by exact type: asked at C speed, where the
         # loop below takes a Python step per item -- 35 ms of storing a
         # list of 200,000 ints.
-        if not children or exact.issuperset(map(type, children)):
+        if not children or _value_records(children, exact) is not None:
+            # Values, and tuples of values alone (a session's ``(action,
+            # time)`` records): none is a node (`_is_node`), asked of them
+            # all at C speed, where a step each cost 2 s over a list of
+            # 87,000 sessions (student_8).
             continue
         if len(children) >= _FLAT_RECORDS_MIN:
             left = _records_left(children, value_types, leaves, exact, flat)
@@ -3948,6 +3994,12 @@ def _descend(
                 nodes[ckey] = child
                 owner[ckey] = name
                 order.append(ckey)
+                if ctype is list and _value_records(child, exact) is not None:
+                    # Values and records of values below it, none a node,
+                    # told at C speed: asked as a tree, each of 87,000
+                    # sessions of records an explode shares with a frame
+                    # was read for its records held twice (student_8).
+                    continue
                 if (
                     trees is not None
                     and (ctype is dict or ctype is list)

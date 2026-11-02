@@ -1440,6 +1440,171 @@ static PyObject *py_reduce_dict_apart(PyObject *self, PyObject *const *args, Py_
     return apart;
 }
 
+/*
+ * values_in_tuples(items, exact, levels) -> bool | NotImplemented
+ *
+ * shared_objects._values_in_tuples(items, exact) with _TUPLE_LEVELS =
+ * *levels*: every item of the exact list *items* is of a type in *exact*,
+ * or an exact tuple whose items are so in turn, a tuple at most *levels* - 2
+ * tuples deep (the Python version reads *levels* levels, each a level of
+ * the tuples of the one above). Read depth first: the answer is whether
+ * every item passes, whichever is met first.
+ */
+static int tuples_hold_values(TypeSet *ts, PyObject *obj, int level, int last) {
+    int r = ts_has(ts, Py_TYPE(obj));
+    if (r != 0) return r;
+    if (!PyTuple_CheckExact(obj) || level > last) return 0;
+    Py_ssize_t n = PyTuple_GET_SIZE(obj);
+    for (Py_ssize_t i = 0; i < n; i++) {
+        r = tuples_hold_values(ts, PyTuple_GET_ITEM(obj, i), level + 1, last);
+        if (r != 1) return r;
+    }
+    return 1;
+}
+
+static PyObject *py_values_in_tuples(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs != 3 || !PyList_CheckExact(args[0]) || !is_typeset(args[1]) || !PyLong_CheckExact(args[2])) {
+        PyErr_SetString(PyExc_TypeError, "values_in_tuples(list, set of types, int)");
+        return NULL;
+    }
+    long levels = PyLong_AsLong(args[2]);
+    if (levels < 1 || levels > 64) {
+        PyErr_SetString(PyExc_ValueError, "levels 1..64");
+        return NULL;
+    }
+    PyObject *items = args[0];
+    TypeSet ts;
+    ts_init(&ts, args[1]);
+    GCPause gp;
+    gc_pause(&gp);
+    Py_INCREF(items);
+    int out = 1;
+    for (Py_ssize_t i = 0; i < PyList_GET_SIZE(items) && out == 1; i++)
+        out = tuples_hold_values(&ts, PyList_GET_ITEM(items, i), 0, (int)levels - 2);
+    Py_DECREF(items);
+    gc_resume(&gp);
+    if (out == -1) return NULL;
+    if (out == -2) return NOT_IMPL();
+    return PyBool_FromLong(out);
+}
+
+/*
+ * nested_leaves(items, leaves, levels, longest)
+ *   -> (nodes, texts, ints, kinds, lists) | False | NotImplemented
+ *
+ * identity_holders._Walk._read_nested's read of the exact list *items*, a
+ * level at a time, the containers being exact lists and tuples: False
+ * where a level holds anything but those and types of *leaves*, or where
+ * containers are still met at level *levels* - 1. Else *nodes*: the
+ * containers, level by level, each level's in order; *kinds*: the types
+ * of the leaves; *lists*: how many of the nodes are lists. Of the leaves,
+ * what _read_leaves reads: *texts*, the exact strs of at most *longest*
+ * characters or holding a line break, each once in the order first met
+ * (dict.fromkeys), and *ints*, the exact ints in order.
+ */
+static PyObject *py_nested_leaves(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs != 4 || !PyList_CheckExact(args[0]) || !is_typeset(args[1]) || !PyLong_CheckExact(args[2]) ||
+        !PyLong_CheckExact(args[3])) {
+        PyErr_SetString(PyExc_TypeError, "nested_leaves(list, set of types, int, int)");
+        return NULL;
+    }
+    long levels = PyLong_AsLong(args[2]);
+    Py_ssize_t longest = PyLong_AsSsize_t(args[3]);
+    if (levels < 1 || levels > 64 || longest < 0) {
+        PyErr_SetString(PyExc_ValueError, "levels 1..64, longest >= 0");
+        return NULL;
+    }
+    TypeSet ts;
+    ts_init(&ts, args[1]);
+    PyObject *nodes = PyList_New(0), *texts = PyDict_New(), *ints = PyList_New(0), *kinds = PySet_New(NULL);
+    PyObject *level = Py_NewRef(args[0]), *next = NULL, *out = NULL;
+    Py_ssize_t lists = 0;
+    int verdict = 0; /* 1: read, 0: False, -1: error, -2: NotImplemented */
+    GCPause gp;
+    gc_pause(&gp);
+    if (!nodes || !texts || !ints || !kinds) {
+        verdict = -1;
+        goto done;
+    }
+    for (long at = 0; at < levels; at++) {
+        next = PyList_New(0);
+        if (!next) {
+            verdict = -1;
+            goto done;
+        }
+        Py_ssize_t n = PyList_GET_SIZE(level);
+        int met = 0;
+        for (Py_ssize_t i = 0; i < n; i++) {
+            PyObject *obj = PyList_GET_ITEM(level, i);
+            if (PyList_CheckExact(obj) || PyTuple_CheckExact(obj)) {
+                met = 1;
+                if (PyList_Append(nodes, obj) < 0) {
+                    verdict = -1;
+                    goto done;
+                }
+                if (PyList_CheckExact(obj)) lists++;
+                Py_ssize_t m = PySequence_Fast_GET_SIZE(obj);
+                PyObject **inner = PySequence_Fast_ITEMS(obj);
+                for (Py_ssize_t j = 0; j < m; j++)
+                    if (PyList_Append(next, inner[j]) < 0) {
+                        verdict = -1;
+                        goto done;
+                    }
+                continue;
+            }
+            int r = ts_has(&ts, Py_TYPE(obj));
+            if (r != 1) {
+                verdict = r;
+                goto done;
+            }
+            if (PySet_Add(kinds, (PyObject *)Py_TYPE(obj)) < 0) {
+                verdict = -1;
+                goto done;
+            }
+            if (PyUnicode_CheckExact(obj)) {
+                Py_ssize_t len = PyUnicode_GET_LENGTH(obj);
+                if (len <= longest || PyUnicode_FindChar(obj, '\n', 0, len, 1) >= 0) {
+                    PyObject *had = PyDict_SetDefault(texts, obj, Py_None);
+                    if (!had) {
+                        verdict = -1;
+                        goto done;
+                    }
+                }
+            } else if (PyLong_CheckExact(obj)) {
+                if (PyList_Append(ints, obj) < 0) {
+                    verdict = -1;
+                    goto done;
+                }
+            }
+        }
+        if (!met) {
+            /* this level held leaves alone: the read ends here */
+            verdict = 1;
+            goto done;
+        }
+        Py_SETREF(level, next);
+        next = NULL;
+    }
+    verdict = 0; /* containers still met past the last level */
+done:
+    gc_resume(&gp);
+    Py_XDECREF(next);
+    Py_XDECREF(level);
+    if (verdict == 1) {
+        PyObject *found = PyDict_Keys(texts);
+        if (found) out = Py_BuildValue("(NNOOn)", (PyObject *)nodes, found, ints, kinds, lists), nodes = NULL;
+    } else if (verdict == 0) {
+        out = Py_NewRef(Py_False);
+    } else if (verdict == -2) {
+        out = NOT_IMPL();
+    }
+    Py_XDECREF(nodes);
+    Py_XDECREF(texts);
+    Py_XDECREF(ints);
+    Py_XDECREF(kinds);
+    return out;
+}
+
 static PyMethodDef cwalk_methods[] = {
     {"leaf_items", (PyCFunction)(void (*)(void))py_leaf_items, METH_FASTCALL,
      "leaf_items(group, mode, leaves) -> bool | NotImplemented"},
@@ -1451,6 +1616,10 @@ static PyMethodDef cwalk_methods[] = {
      "split_level(children, skipped, extra) -> [(type, list)] | NotImplemented"},
     {"new_in", (PyCFunction)(void (*)(void))py_new_in, METH_FASTCALL, "new_in(group, by_identity, seen) -> list"},
     {"type_set", py_type_set, METH_O, "type_set(list) -> set(map(type, list))"},
+    {"values_in_tuples", (PyCFunction)(void (*)(void))py_values_in_tuples, METH_FASTCALL,
+     "values_in_tuples(items, exact, levels) -> bool | NotImplemented"},
+    {"nested_leaves", (PyCFunction)(void (*)(void))py_nested_leaves, METH_FASTCALL,
+     "nested_leaves(items, leaves, levels, longest) -> (nodes, texts, ints, kinds, lists) | False | NotImplemented"},
     {"tree_facts", (PyCFunction)(void (*)(void))py_tree_facts, METH_FASTCALL,
      "tree_facts(value, leaves, want_walk, top_extra, picks, mode=0) -> (types, held_once, size, nodes, walk) | None | "
      "NotImplemented"},

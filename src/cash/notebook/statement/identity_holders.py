@@ -57,6 +57,7 @@ import weakref
 from itertools import chain, compress, repeat
 from typing import Any
 
+from cash import _native
 from cash._user_attrs import attribute_or, builtin_base, builtin_items, own_dict
 from cash.closure_sharing import slot_readers
 from cash.install_paths import is_user_code_module
@@ -98,6 +99,11 @@ _HIGHEST_ADDRESS = 1 << 48
 #: and the builtin types on a clang build.
 _ALIGNMENT = 8 if sys.maxsize > 1 << 32 else 4
 
+
+#: The C kernel of `_Walk._read_nested`, None without it: a frame's column of
+#: two million ``(action, time)`` records took a second a statement in
+#: Python (student_8).
+_NESTED_LEAVES = getattr(_native.kernels, "nested_leaves", None)
 
 #: What `_Walk._read_flat` found in a big container of leaves this cell,
 #: by its length: the very items read (held, so none of their ids is
@@ -916,6 +922,11 @@ class _Walk:
                 if self.quiet or not kinds <= _LEAVES | _NESTED:
                     return False
                 return self._read_nested(items)
+            if kinds == _JUST_TUPLES and not self.quiet and _NESTED_LEAVES is not None:
+                # Records alone: what reading them flat finds, `_read_nested`
+                # finds too, and at C speed (student_8's two million
+                # ``(action, time)`` records, a second a statement).
+                return self._read_nested(items)
             records = items if kinds == _JUST_TUPLES else [item for item in items if type(item) is tuple]
             flat = list(chain.from_iterable(records))
             kinds = set(map(type, flat))
@@ -948,6 +959,19 @@ class _Walk:
         read a level at a time instead of a list at a time. Each list and
         tuple is seen, as walking it would see it, and counts against the
         budget; False, with nothing seen, when a level holds anything else."""
+        if _NESTED_LEAVES is not None and type(items) is list:
+            read = _NESTED_LEAVES(items, _LEAVES, _NESTED_LEVELS, _LONGEST_NUMBER)
+            if read is False:
+                return False
+            if read is not NotImplemented:
+                nodes, texts, ints, leaf_kinds, lists = read
+                if lists > self.budget:
+                    return False
+                self.budget -= lists
+                self._unseen.append(nodes)
+                self._read_texts(texts)
+                self._read_ints(ints, leaf_kinds == {int})
+                return True
         level: list[Any] = items
         nodes: list[Any] = []
         leaves: list[Any] = []
@@ -1019,18 +1043,27 @@ class _Walk:
                 )
             )
             del unique
-            for start in range(0, len(texts), _TEXTS_AT_ONCE):
-                text = "\n".join(texts[start : start + _TEXTS_AT_ONCE])
-                # Most text has no run of seven digits and no "0x": found by
-                # plain searches, far quicker than the pattern's.
-                if "0x" in text or "0X" in text or "0000000" in text.translate(_DIGITS_AS_ZERO):
-                    self.numbers.update(map(as_address, _NUMBER_LINES.findall(text)))
-                    self.numbers.discard(None)
-        if int not in kinds:
-            return
-        if kinds == {int}:
+            self._read_texts(texts)
+        if int in kinds:
+            self._read_ints(flat, kinds == {int})
+
+    def _read_texts(self, texts: list[str]) -> None:
+        """The numbers *texts*, each one once and none longer than a number
+        unless it holds a line break, spell (`as_address`)."""
+        for start in range(0, len(texts), _TEXTS_AT_ONCE):
+            text = "\n".join(texts[start : start + _TEXTS_AT_ONCE])
+            # Most text has no run of seven digits and no "0x": found by
+            # plain searches, far quicker than the pattern's.
+            if "0x" in text or "0X" in text or "0000000" in text.translate(_DIGITS_AS_ZERO):
+                self.numbers.update(map(as_address, _NUMBER_LINES.findall(text)))
+                self.numbers.discard(None)
+
+    def _read_ints(self, flat: Any, only: bool) -> None:
+        """The ints of *flat* that could be an id(); with *only*, *flat*
+        holds nothing but ints."""
+        if only:
             # At C speed: row numbers or counts all below any address.
-            if max(flat) >= _LOWEST_ADDRESS and min(flat) < _HIGHEST_ADDRESS:
+            if flat and max(flat) >= _LOWEST_ADDRESS and min(flat) < _HIGHEST_ADDRESS:
                 self.numbers.update(flat)
         else:
             self.numbers.update(item for item in flat if type(item) is int and item >= _LOWEST_ADDRESS)

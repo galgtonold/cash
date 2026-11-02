@@ -3264,6 +3264,11 @@ class StatementProcessor:
         try:
             with walk_budget(budget):
                 cash_held = [*self._calls.held_call_results(), echo, run.metrics, *self._mutations.digests.held()]
+                # Whether the outputs' values passed on their own: the
+                # retry with anchors does not read them again (an identity
+                # and alias check of a frame of two million records, a
+                # second a statement, student_8).
+                values_passed: list[bool] = []
                 reason = unrestorable_output_reason(
                     run.outputs,
                     captured_vars,
@@ -3274,6 +3279,7 @@ class StatementProcessor:
                     gave_up=gave_up,
                     inputs=run.inputs,
                     restored_into=run.metrics.get("stored_in_place") or (),
+                    values_passed=values_passed,
                 )
                 if reason is not None and holders is not None:
                     # Anchors only where holders alone refuse: an anchor binds
@@ -3296,6 +3302,7 @@ class StatementProcessor:
                         anchorable=self._anchorable(run),
                         anchors=anchors,
                         anchor_links=anchor_links,
+                        values_passed=values_passed,
                     )
                     if retry is None and anchors:
                         reason, holders, gave_up = None, retry_holders, retry_gave_up
