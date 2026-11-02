@@ -39,7 +39,7 @@ from ...analysis.namespace_effects import (
 )
 from ...tracking.file_dep_snapshot import LISTING_MIN_FILES, snapshot_is_fresh
 from ...tracking.tracker_context import untracked
-from .._trace import trace_event
+from .._trace import is_tracing, trace_event
 from ..cache_key import called_function_globals, write_provenance_key
 from ..cache_status import CacheStatus
 from ..carrier_history import carrier_history_fingerprint
@@ -703,13 +703,17 @@ class FileWriterScheduler:
                 relevant_read_paths_known,
                 simulation_trace,
             )
-            trace_event(
-                "writer_considered",
-                stmt=stmt_code[:80],
-                unread=unread,
-                read_paths_known=relevant_read_paths_known,
-                read_paths=sorted(relevant_read_paths or ())[:20],
-            )
+            if is_tracing():
+                # Sorted for the trace alone: unguarded, the files read above
+                # (100,000 paths below a loop over documents) were sorted for
+                # each writer before every cell, and the record dropped.
+                trace_event(
+                    "writer_considered",
+                    stmt=stmt_code[:80],
+                    unread=unread,
+                    read_paths_known=relevant_read_paths_known,
+                    read_paths=sorted(relevant_read_paths or ())[:20],
+                )
             if unread:
                 if stale_exports is not None:
                     self._note_if_stale(
