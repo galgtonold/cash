@@ -239,3 +239,26 @@ def test_an_intermediate_cheap_to_copy_is_still_kept(cash_magics, monkeypatch):
     copied, reasons = _cleaning_cell_work(cash_magics, monkeypatch, 1e12)
     assert reasons == [None, None, None], reasons
     assert copied.bytes >= (2 + 2) * 200_000 * 8
+
+
+def test_a_statement_over_a_memo_too_big_to_serve_does_not_digest_its_answers(cash_magics):
+    # A helper memo past ``MAX_KEYED`` answers never lets an entry be
+    # served, so what each answer holds is not read. Digesting all of them
+    # after every statement that filled or could clear the memo cost about
+    # 7 s a statement for the 114,000 lists of a Held-Karp memo.
+    from cash.notebook import helper_memos
+
+    n = helper_memos.MAX_KEYED + 1000
+    cells = [
+        "import functools\n\n\n@functools.cache\ndef seg(n):\n    return [n, n + 1]",
+        f"parts = [seg(i) for i in range({n})]",
+        f"last = seg({n})",
+    ]
+    for cell in cells[:-1]:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    # Still refused, and said so: the answer is unchanged.
+    with hashed_bytes() as hashed, pytest.warns(Warning, match="NOTEBOOK-MEMO-UNREAD"):
+        run_cash_cell(cash_magics, cells[-1], cells=cells)
+
+    # A few dozen digests today (the key, the lineage); one per answer before.
+    assert hashed.calls < n // 4, hashed.calls

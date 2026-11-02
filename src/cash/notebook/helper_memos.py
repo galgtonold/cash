@@ -592,7 +592,15 @@ def used(
             clears = True  # emptied and filled again to the same counts
         label = _label(where)
         items = _items(memo)
-        moved = _changed_in_place(memo, items) if items is not None else None
+        if items is None or len(items) > MAX_KEYED:
+            # Never served over (below), so what its answers hold is not
+            # read: digesting each one cost seconds a statement for a memo of
+            # 100,000 answers. Forgotten too, so a later statement reading it
+            # once it is small again takes its answers as unseen.
+            _answers_seen.pop(memo, None)
+            moved = None
+        else:
+            moved = _changed_in_place(memo, items)
         if why is not None:
             continue  # already told; the rest only remember their answers
         if clears:
