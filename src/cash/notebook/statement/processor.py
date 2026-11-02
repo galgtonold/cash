@@ -229,7 +229,7 @@ from ..shared_objects import (
     view_base_names,
     walk_budget,
 )
-from ..value_cutoff import LineageAliasStore
+from ..value_cutoff import LineageAliasStore, ValueLineageLog, use_value_lineage_log
 from ..write_observer import child_works, children_left_running, kept_writes, observe_writes
 from . import hidden_generators, in_place
 from .lineage import note_own_writes
@@ -816,6 +816,7 @@ class StatementProcessor:
         )
         # Lineages found to name the same value as an earlier one (`value_cutoff`).
         use_lineage_alias_store(LineageAliasStore(_guard_dir) if _guard_dir else None)
+        use_value_lineage_log(ValueLineageLog(_guard_dir) if _guard_dir else None)
         self._hits = CacheHitServer(self.tracking_state, self._stmt_restorer, self._rebuild_cost)
         self._store = StatementStore(
             shell,

@@ -24,7 +24,10 @@ the lineage a restarted kernel computes.
 
 from __future__ import annotations
 
+import logging
+import os
 import sys
+import threading
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -32,15 +35,21 @@ from cash._user_attrs import attribute_or
 
 from .._plain_data import is_plain
 from ..analysis.namespace_effects import is_estimator
+from ..tracking.tracker_context import untracked
 from ..value_hash import digest_via_pickle, is_identity_fallback_hash
 from ..value_types import IMMUTABLE_LEAF_TYPES
 from .lineage_formula import record_lineage_alias, resolve_lineage_alias
 from .versioned_json_store import VersionedJsonStore
 
-__all__ = ["LineageAliasStore", "ValueCutoff"]
+__all__ = ["LineageAliasStore", "ValueCutoff", "ValueLineageLog", "use_value_lineage_log"]
+
+logger = logging.getLogger(__name__)
 
 #: Aliases kept on disk at most; the oldest go first.
 _MAX_ALIASES = 50_000
+
+#: Values kept on disk at most by `ValueLineageLog`; the oldest go first.
+_MAX_VALUES = 50_000
 
 #: The types compared: a frame, series or array, whose content hash covers
 #: everything a reader can see of it, and a networkx graph, whose content
@@ -145,6 +154,103 @@ class LineageAliasStore(VersionedJsonStore[str]):
         while len(self._items) > _MAX_ALIASES:
             del self._items[next(iter(self._items))]
         self._write()
+
+
+class ValueLineageLog:
+    """``content digest -> the lineage of the first value seen with it``, in
+    the cache dir, for the next kernel.
+
+    In a kernel, `ValueCutoff` gives a value recomputed with the content of
+    one seen before that one's lineage. A restarted kernel had seen none
+    but the values it restored, so a value no entry keeps -- the output of
+    a statement that runs every time (``negative_patches = np.vstack(...)``,
+    refused), or one built on it (``positive_patches = faces.images`` after
+    ``faces`` read other files than the run before) -- came out with
+    another lineage after each restart, and every slow statement below it
+    missed (E5: the HOG features, the grid search, the final fit).
+
+    Append-only, one ``digest lineage`` line per value, read once per
+    process; rewritten with the newest `_MAX_VALUES` when it grows past
+    twice that. Lost or stale, it costs a miss, never a value: a digest
+    names the content, so a lineage found by it names the same value.
+    """
+
+    FILENAME = "value_lineages.log"
+
+    def __init__(self, cache_dir: str) -> None:
+        self.path = os.path.join(cache_dir, self.FILENAME)
+        self._items: dict[str, str] | None = None
+        self._lines = 0
+        self._lock = threading.Lock()
+
+    def _load(self) -> dict[str, str]:
+        items: dict[str, str] = {}
+        lines = 0
+        try:
+            with untracked(), open(self.path, encoding="ascii", errors="replace") as fh:
+                for line in fh:
+                    lines += 1
+                    parts = line.split()
+                    if len(parts) == 2:
+                        items.pop(parts[0], None)
+                        items[parts[0]] = parts[1]
+        except FileNotFoundError:
+            pass
+        except OSError:
+            logger.debug("Could not read %s", self.path, exc_info=True)
+        self._lines = lines
+        return items
+
+    def get(self, digest: str) -> str | None:
+        with self._lock:
+            if self._items is None:
+                self._items = self._load()
+            return self._items.get(digest)
+
+    def record(self, digest: str, lineage: str) -> None:
+        if not _token(digest) or not _token(lineage):
+            return
+        with self._lock:
+            if self._items is None:
+                self._items = self._load()
+            if self._items.get(digest) == lineage:
+                return
+            self._items[digest] = lineage
+            try:
+                if self._lines >= 2 * _MAX_VALUES:
+                    self._compact()
+                else:
+                    with untracked(), open(self.path, "a", encoding="ascii") as fh:
+                        fh.write(f"{digest} {lineage}\n")
+                    self._lines += 1
+            except OSError:
+                logger.debug("Could not write %s", self.path, exc_info=True)
+
+    def _compact(self) -> None:
+        items = self._items or {}
+        while len(items) > _MAX_VALUES:
+            del items[next(iter(items))]
+        tmp = f"{self.path}.{os.getpid()}.tmp"
+        with untracked():
+            with open(tmp, "w", encoding="ascii") as fh:
+                fh.write("".join(f"{d} {lin}\n" for d, lin in items.items()))
+            os.replace(tmp, self.path)
+        self._lines = len(items)
+
+
+def _token(text: str) -> bool:
+    return bool(text) and text.isascii() and not any(c.isspace() for c in text)
+
+
+#: The log of this process's cache dir (`use_value_lineage_log`), or None.
+_VALUE_LOG: ValueLineageLog | None = None
+
+
+def use_value_lineage_log(log: ValueLineageLog | None) -> None:
+    """Keep the values first seen in this process in *log*, and find the
+    ones an earlier process saw there."""
+    global _VALUE_LOG
+    _VALUE_LOG = log
 
 
 class ValueCutoff:
@@ -256,9 +362,18 @@ class ValueCutoff:
         if digest is None:
             return lineage
         earlier = self._by_digest.get(digest)
+        log = _VALUE_LOG
+        if earlier is None and log is not None:
+            # Seen by an earlier kernel: after a restart, a value recomputed
+            # with the content it had then is named as it was.
+            earlier = log.get(digest)
+            if earlier is not None:
+                self._by_digest[digest] = resolve_lineage_alias(earlier)
         if earlier is None:
             self._by_digest[digest] = resolve_lineage_alias(lineage)
             self._digest_of[lineage] = digest
+            if log is not None:
+                log.record(digest, resolve_lineage_alias(lineage))
             return lineage
         earlier = resolve_lineage_alias(earlier)
         if earlier != lineage:
