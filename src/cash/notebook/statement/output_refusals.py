@@ -75,6 +75,7 @@ def unrestorable_output_reason(
     anchor_links: set[str] | None = None,
     restored_into: Iterable[str] = (),
     values_passed: list[bool] | None = None,
+    shared_owners: set[str] | None = None,
 ) -> str | None:
     """Why one of *outputs* cannot be cached, the first refusal found; None
     when every captured value can. An output in *restored_into*, a loop's a
@@ -95,7 +96,9 @@ def unrestorable_output_reason(
     value must pass the same checks. *gave_up* gets a `GaveUp` appended when
     the check for those holders ran and found a holder that is not a
     variable: the variables it found holding the outputs' objects all the
-    same, to link though the statement is not stored.
+    same, to link though the statement is not stored. *shared_owners*, when
+    given, gets the names the check found an object of held by another
+    variable (`shared_output_reason`).
 
     ``identity_coupled_reason`` refuses an object identity-coupled to a
     library global: the RAM tier's deep copy of a matplotlib Figure
@@ -110,7 +113,17 @@ def unrestorable_output_reason(
         if reason is None and values_passed is not None:
             values_passed.append(True)
     reason = reason or shared_output_reason(
-        outputs, captured_vars, user_ns, cash_held, shell, holders, gave_up, anchorable, anchors, anchor_links
+        outputs,
+        captured_vars,
+        user_ns,
+        cash_held,
+        shell,
+        holders,
+        gave_up,
+        anchorable,
+        anchors,
+        anchor_links,
+        shared_owners,
     )
     if reason is None and holders:
         reason = _value_refusal(set(holders), holders, user_ns, cash_held)
@@ -179,6 +192,7 @@ def shared_output_reason(
     anchorable: Callable[[str], bool] | None = None,
     anchors: dict[str, Any] | None = None,
     anchor_links: set[str] | None = None,
+    shared_owners: set[str] | None = None,
 ) -> str | None:
     """Nor an output whose object, or one inside it, something else holds too
     (`shared_names`): a restore would bind a copy, and that holder would keep
@@ -194,7 +208,9 @@ def shared_output_reason(
     With *anchorable*, a variable the statement left as it was is first
     asked to be an anchor, which *anchors* gets: its object is not stored
     but bound again on a restore, so nothing else that holds it is looked
-    for (`share_group`).
+    for (`share_group`). *shared_owners*, when given, gets the names whose
+    objects the variables found hold or are held in, round by round: the
+    outputs among them are the ones those variables share an object with.
 
     Asked by reference count, so the frames above must not hold an output's
     value in a local: `unrestorable_output_reason` keeps the per-value loop
@@ -228,6 +244,9 @@ def shared_output_reason(
         holders.update(found)
         del found
         found_holders = partial.names
+        if shared_owners is not None:
+            for owners, _held in partial.links:
+                shared_owners.update(owners)
         if shared and gave_up is not None:
             gave_up.append(partial)
     return _shared_reason(shared, captured_vars, found_holders)

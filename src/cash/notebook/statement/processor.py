@@ -3289,6 +3289,8 @@ class StatementProcessor:
         anchors: dict[str, Any] = {}
         anchor_links: set[str] = set()
         anchor_holds: dict[str, list[str]] = {}
+        # The outputs the holders found share an object with.
+        owners: set[str] = set()
         try:
             with walk_budget(budget):
                 cash_held = [*self._calls.held_call_results(), echo, run.metrics, *self._mutations.digests.held()]
@@ -3308,6 +3310,7 @@ class StatementProcessor:
                     inputs=run.inputs,
                     restored_into=run.metrics.get("stored_in_place") or (),
                     values_passed=values_passed,
+                    shared_owners=owners,
                 )
                 if reason is not None and holders is not None:
                     # Anchors only where holders alone refuse: an anchor binds
@@ -3317,6 +3320,7 @@ class StatementProcessor:
                     # one it was stored from, and the entry would miss).
                     retry_holders: dict[str, Any] = {}
                     retry_gave_up: list[GaveUp] = []
+                    retry_owners: set[str] = set()
                     retry = unrestorable_output_reason(
                         run.outputs,
                         captured_vars,
@@ -3331,9 +3335,10 @@ class StatementProcessor:
                         anchors=anchors,
                         anchor_links=anchor_links,
                         values_passed=values_passed,
+                        shared_owners=retry_owners,
                     )
                     if retry is None and anchors:
-                        reason, holders, gave_up = None, retry_holders, retry_gave_up
+                        reason, holders, gave_up, owners = None, retry_holders, retry_gave_up, retry_owners
                     else:
                         anchors.clear()
                         anchor_links.clear()
@@ -3343,6 +3348,7 @@ class StatementProcessor:
                     reason = self._lazy_frame_refusal(run, captured_vars)
                 if reason is None and holders:
                     found = dict(holders)
+                    run.share_owners = frozenset(owners & run.outputs)
                     reason = self._take_holders(run, captured_vars, holders)
                 if reason is None and anchors:
                     user_ns = self.shell.user_ns
@@ -3501,7 +3507,14 @@ class StatementProcessor:
             return
         complete = True
         if holders is not None:
-            links = [(outputs, set(holders) | run.anchor_links)]
+            # Each holder with the outputs it shares an object with, not with
+            # every output: ``for sid, (uid, actions) in enumerate(data):
+            # rows.append((uid, sid))`` found ``data`` holding ``actions``,
+            # and linking ``rows`` to it too moved ``data`` on with every
+            # append -- so the next cell took the frame built from ``rows``
+            # for one built on an older ``data`` and rebuilt both.
+            sharing = outputs if run.share_owners is None else [o for o in outputs if o in run.share_owners]
+            links = [(sharing, set(holders)), (outputs, set(run.anchor_links))]
         else:
             links, complete = self._holders_of(run, outputs, captured_vars, echo, cost, fallback_floor, held)
         bases, bases_complete = self._view_bases_of(outputs, captured_vars, cost, run.inputs)
@@ -4399,8 +4412,18 @@ class StatementProcessor:
                 f"a restore against, so the statement re-runs every time"
             )
         run.holders = {name: lineage[name] for name in holders}
+        # Only an output that shares an object with them can move them: the
+        # list a loop appends to beside a target taken from ``data`` holds
+        # nothing of ``data``. Nor does a loop target's object say anything:
+        # it is whichever element the last pass took, the same one again
+        # when the loop runs again over the same ``data``, which read as
+        # ``data`` changed in place on every run of the loop.
+        sharing = run.outputs if run.share_owners is None else run.share_owners
+        targets = _loop_targets(run.tree)
         run.moves_holders = any(
-            id(captured_vars[name]) == run.bound_before.get(name) for name in run.outputs if name in captured_vars
+            id(captured_vars[name]) == run.bound_before.get(name)
+            for name in sharing
+            if name in captured_vars and name not in targets
         )
         if run.moves_holders:
             run.holders_unchanged = self._unchanged_holders(holders)
@@ -4926,6 +4949,20 @@ def _open_stream(value: Any) -> bool:
         return not value.closed
     except Exception:  # noqa: BLE001 - a handle that cannot say is taken as open
         return True
+
+
+def _loop_targets(tree: ast.AST | None) -> frozenset[str]:
+    """The names the ``for`` loops of *tree*, a statement's parse, bind
+    their elements to."""
+    if tree is None:
+        return frozenset()
+    return frozenset(
+        name.id
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.For, ast.AsyncFor))
+        for name in ast.walk(node.target)
+        if isinstance(name, ast.Name)
+    )
 
 
 def _is_loop(tree: ast.AST | None) -> bool:
