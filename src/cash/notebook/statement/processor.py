@@ -96,6 +96,7 @@ from cash.notebook.statement.input_change import (
     input_change_reason,
     random_state_change_reason,
     stored_input_change_reason,
+    version_slot,
 )
 from cash.notebook.statement.lineage import StatementLineageBuilder, clear_rebound_edges
 from cash.notebook.statement.miss_guard import GUARD_SKIP_REASON, MissGuard
@@ -118,6 +119,7 @@ from cash.notebook.statement.run import (
     over_the_handed_iterable,
 )
 from cash.notebook.statement.store import StatementStore
+from cash.notebook.statement.unstored import MEMORY_ONLY, UnstoredNotes
 from cash.notebook.tracking_state import TrackingState
 from cash.notebook.versioned_json_store import resolve_cache_dir
 from cash.purity import is_known_pure, is_stateful
@@ -229,7 +231,7 @@ from ..shared_objects import (
     view_base_names,
     walk_budget,
 )
-from ..value_cutoff import LineageAliasStore
+from ..value_cutoff import LineageAliasStore, ValueLineageLog, use_value_lineage_log
 from ..write_observer import child_works, children_left_running, kept_writes, observe_writes
 from . import hidden_generators, in_place
 from .lineage import note_own_writes
@@ -782,6 +784,7 @@ class StatementProcessor:
         except (AttributeError, TypeError):
             _guard_dir = None
         self._miss_guard = MissGuard(_guard_dir)
+        self._unstored = UnstoredNotes(_guard_dir)
         self._randomness.use_draw_store(ObservedDrawStore(_guard_dir) if _guard_dir else None)
         self._evicted = EvictedRecomputes()
 
@@ -816,6 +819,7 @@ class StatementProcessor:
         )
         # Lineages found to name the same value as an earlier one (`value_cutoff`).
         use_lineage_alias_store(LineageAliasStore(_guard_dir) if _guard_dir else None)
+        use_value_lineage_log(ValueLineageLog(_guard_dir) if _guard_dir else None)
         self._hits = CacheHitServer(self.tracking_state, self._stmt_restorer, self._rebuild_cost)
         self._store = StatementStore(
             shell,
@@ -2744,6 +2748,8 @@ class StatementProcessor:
                     run.outputs or (),
                     self.tracking_state.variable_lineage,
                 )
+            if reason is None:
+                reason = self._unstored.reason(run.cache_key, version_slot(run.source_hash, run.outputs))
             if reason is not None:
                 metrics["miss_reason"] = reason
 
@@ -3182,6 +3188,7 @@ class StatementProcessor:
         self._report_saved(run, saved_metadata)
         self._tell_past_budget(run, execution.cost or execution.wall_time or 0.0)
         storage = (saved_metadata.storage if saved_metadata else None) or ()
+        self._note_unstored(run, storage, execution.cost or execution.wall_time or 0.0)
         self._rebuild_cost.note(
             run.cache_key, run.inputs, run.outputs, execution.store_cost, on_disk=any(s != "RAM" for s in storage)
         )
@@ -4567,6 +4574,26 @@ class StatementProcessor:
                 _LOG_ANNOTATION,
                 run.source_hash[:12],
             )
+
+    def _note_unstored(self, run: StatementRun, storage: Iterable[str], cost: float) -> None:
+        """Note why *run*, which took *cost* seconds, left no entry on disk
+        (`UnstoredNotes`), or withdraw the note when there is nothing to say
+        (stored on disk; too quick to matter; never stored by design, as an
+        import): after a restart its miss says so."""
+        if not run.cache_key:
+            return
+        why: str | None = None
+        on_disk = any(s != "RAM" for s in storage)
+        if on_disk or cost < COMPUTE_FLOOR_S:
+            pass
+        elif run.skip_cache:
+            reasons = run.metrics.get("uncacheable_reasons") or ()
+            why = str(reasons[0]) if reasons else None
+        elif storage:
+            why = MEMORY_ONLY
+        else:
+            why = run.metrics.get("skipped_reason")
+        self._unstored.note(run.cache_key, why, version_slot(run.source_hash, run.outputs))
 
     def _report_saved(self, run: StatementRun, saved_metadata: StatementCacheMetadata | None) -> None:
         """Copy what the store decided into *run*'s metrics for the badge."""

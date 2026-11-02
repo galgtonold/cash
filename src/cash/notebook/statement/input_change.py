@@ -143,11 +143,11 @@ def stored_input_change_reason(
     lineage did ran again with no reason given. The version stored last
     (`version_slot`, ``CacheBackend.previous_version``) keeps the lineages
     of its inputs (``input_lineages``): one metadata read on a miss that
-    runs the statement anyway. Silent when no version is kept, or when no
-    input differs (the key changed for another reason)."""
+    runs the statement anyway. When no input differs, it says the key moved
+    for something else it reads; silent when no version is kept."""
     outputs = set(outputs)
-    wanted = {name for name in inputs if isinstance(name, str) and name not in outputs}
-    if not cache_key or not wanted:
+    read = {name for name in inputs if isinstance(name, str)}
+    if not cache_key or not read:
         return None
     try:
         previous = backend.previous_version(version_slot(source_hash, outputs), cache_key)
@@ -158,14 +158,28 @@ def stored_input_change_reason(
     was = (metadata or {}).get("input_lineages")
     if not isinstance(was, Mapping):
         return None
-    stale = sorted(
-        name
-        for name in wanted
-        if isinstance(was.get(name), str)
-        and name in current
-        and resolve_lineage_alias(current[name]) != resolve_lineage_alias(was[name])
-    )
+
+    def moved(names: Iterable[str]) -> list[str]:
+        return sorted(
+            name
+            for name in names
+            if isinstance(was.get(name), str)
+            and name in current
+            and resolve_lineage_alias(current[name]) != resolve_lineage_alias(was[name])
+        )
+
+    # The names it only reads first; then a name it also writes
+    # (``search.fit(X, y)`` fits ``search`` in place). Unlike
+    # `input_change_reason`, whose record is keyed by output name and so
+    # shared with every statement binding it, the version compared here is
+    # this statement's own (`version_slot`): what it read then.
+    stale = moved(read - outputs) or moved(read & outputs)
     if not stale:
+        if any(isinstance(was.get(name), str) and name in current for name in read):
+            return (
+                "stored before under another key, from the same inputs: something else its key "
+                "reads changed (code it calls, a file it reads, a module setting)"
+            )
         return None
     names = ", ".join(stale[:3])
     more = f" +{len(stale) - 3} more" if len(stale) > 3 else ""
