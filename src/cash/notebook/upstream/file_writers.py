@@ -44,6 +44,7 @@ from ..cache_key import called_function_globals, write_provenance_key
 from ..cache_status import CacheStatus
 from ..carrier_history import carrier_history_fingerprint
 from ..consumables import is_write_stream
+from ..run_memo import stats_this_run
 from ._types import key_lineages, latest_producer
 
 if TYPE_CHECKING:
@@ -1073,19 +1074,32 @@ class FileWriterScheduler:
         read_forms: set[str] = set()
         read_dirs: list[str] = []
         read_places: list[str] = []
+        # The stats the check of each entry's files took this cell run: one
+        # look at each file per run, a listing for a crowded folder on Windows.
+        try:
+            located = stats_this_run(relevant_read_paths)
+        except (OSError, ValueError, TypeError):
+            located = {}
         for rp in relevant_read_paths:
             # One stat answers both "is it there" and "is it a folder" for a
             # path that has not moved; only a missing one takes the relocation
             # fallbacks and a second look.
-            try:
-                is_dir = stat.S_ISDIR(os.stat(rp).st_mode)
-                resolved = rp
-            except (OSError, ValueError, TypeError):
+            if rp in located:
+                # Where it was recorded, or where the relocation fallbacks
+                # found it, with the stat of that place.
+                resolved, st = located[rp]
+                resolved = resolved or rp
+                is_dir = st is not None and stat.S_ISDIR(st.st_mode)
+            else:
                 try:
-                    resolved = resolve_file_dep_path(rp) or rp
-                except (OSError, ValueError, TypeError):
+                    is_dir = stat.S_ISDIR(os.stat(rp).st_mode)
                     resolved = rp
-                is_dir = resolved != rp and os.path.isdir(resolved)
+                except (OSError, ValueError, TypeError):
+                    try:
+                        resolved = resolve_file_dep_path(rp) or rp
+                    except (OSError, ValueError, TypeError):
+                        resolved = rp
+                    is_dir = resolved != rp and os.path.isdir(resolved)
             for candidate in {resolved, rp}:
                 try:
                     read_forms.add(os.path.normcase(os.path.abspath(candidate)))
