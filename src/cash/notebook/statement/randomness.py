@@ -158,6 +158,11 @@ class StatementRandomness:
         #: Streams a seeding statement of the notebook gave a lineage
         #: (`record_seeds`): what `unseed_streams_not_seeded_above` may undo.
         self._seeded_by_a_statement: set[str] = set()
+        #: The streams the statements the current cell ran seeded (a branch
+        #: not taken runs none of its statements), and per cell source
+        #: (`cell_key`) what its last complete run seeded.
+        self._cell_seeds: set[str] = set()
+        self._seeds_by_cell: dict[str, frozenset[str]] = {}
         #: `seed_generation` per stream when the statement began.
         self._generation_at_start: dict[str, int] = {}
         #: Where the LAST statement left each global stream it moved or
@@ -325,6 +330,7 @@ class StatementRandomness:
         for module in get_seeding_rng_modules(code) | helper_seeds:
             self.seed_epochs[module] = entropy_write_lineage() if module in entropy_modules else cache_key
             self._seeded_by_a_statement.add(module)
+            self._cell_seeds.add(module)
             self._adopted.discard(module)
 
     def unseed_streams_not_seeded_above(self, cells_above: list[str]) -> None:
@@ -342,6 +348,13 @@ class StatementRandomness:
         so the draw is keyed and served as an unseeded one (frozen, with the
         RANDOM-UNSEEDED pill), and the stream takes no lineage until a seed.
 
+        A cell above that ran in this kernel seeds what its statements
+        seeded when it last ran in full: a seed in a branch it did not take
+        (``else: np.random.seed(0)`` under a pandas version check in mlbook
+        ch08) seeds nothing, after a restart either. A seed outside any branch,
+        loop or function always counts, whatever the record says, and a cell
+        not run yet seeds what it spells.
+
         Only a stream a seeding statement of the notebook gave its lineage:
         one adopted from a seed cash did not read (`adopt_unseen_seeds`)
         may come from a call above that seeds unseen. A cell that does not
@@ -356,10 +369,13 @@ class StatementRandomness:
             return
         seeded_above: set[str] = set()
         for cell in cells_above:
-            if parse_cell_source(cell) is None:
+            tree = parse_cell_source(cell)
+            if tree is None:
                 return
             source = clean_cell_source(cell)
-            seeded_above |= get_seeding_rng_modules(source) | self.helper_seeds(source)
+            spelled = get_seeding_rng_modules(source) | self.helper_seeds(source)
+            ran = self._seeds_by_cell.get(cell_key(cell))
+            seeded_above |= spelled if ran is None else ran | (spelled & unconditional_seeds(tree))
         unseeded = [module for module in candidates if module not in seeded_above]
         for module in unseeded:
             self.tracking_state.lineage.discard(rng_virtual_var(module))
@@ -368,6 +384,11 @@ class StatementRandomness:
             self._seeded_by_a_statement.discard(module)
             self._ledgered_generation[module] = seed_generation(module)
         count_as_unseeded(unseeded)
+
+    def note_cell_seeds(self, raw_cell: str) -> None:
+        """Record what the statements of *raw_cell*, which ran to its end,
+        seeded (see :meth:`unseed_streams_not_seeded_above`)."""
+        self._seeds_by_cell[cell_key(raw_cell)] = frozenset(self._cell_seeds)
 
     def helper_seeds(self, code: str) -> frozenset[str]:
         """The RNG modules *code* seeds through a notebook function it calls
@@ -859,6 +880,7 @@ class StatementRandomness:
 
     def begin_cell(self) -> None:
         """Open a fresh per-cell RNG accumulation, before the cell's statements run."""
+        self._cell_seeds = set()
         self._cell_changed = set()
         self._cell_pre = None
         self._cell_pre_lineage = {}
@@ -1008,3 +1030,33 @@ def _bare_seeds(code: str, helper_seeds: Callable[[str], frozenset[str]] | None 
     if helper_seeds is not None:
         seeded |= helper_seeds(code)
     return seeded
+
+
+def cell_key(cell: str) -> str:
+    """A cell's source as the notebook file and the kernel both have it."""
+    return exact_source_digest(clean_cell_source(cell).strip())
+
+
+_CONDITIONAL = (
+    ast.If,
+    ast.For,
+    ast.AsyncFor,
+    ast.While,
+    ast.Try,
+    ast.Match,
+    ast.FunctionDef,
+    ast.AsyncFunctionDef,
+    ast.ClassDef,
+    ast.With,
+    ast.AsyncWith,
+)
+
+
+def unconditional_seeds(tree: ast.Module) -> set[str]:
+    """The streams a statement at the top of the cell *tree* seeds: one no
+    branch, loop, ``with`` or definition holds, so it runs when the cell does."""
+    seeds: set[str] = set()
+    for stmt in tree.body:
+        if not isinstance(stmt, _CONDITIONAL):
+            seeds |= get_seeding_rng_modules(ast.unparse(stmt))
+    return seeds

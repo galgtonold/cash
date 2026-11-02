@@ -1078,6 +1078,10 @@ class StatementProcessor:
         """Open a fresh per-cell RNG accumulation, before the cell's statements run."""
         self._randomness.begin_cell()
 
+    def note_cell_seeds(self, raw_cell: str) -> None:
+        """Record what the cell *raw_cell*, which ran to its end, seeded."""
+        self._randomness.note_cell_seeds(raw_cell)
+
     def cell_rng_lineage(self) -> dict[str, str]:
         """The RNG variables' lineages where the cell's start position was taken
         (see :meth:`StatementRandomness.cell_pre_lineage`)."""

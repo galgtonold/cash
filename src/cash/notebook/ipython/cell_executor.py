@@ -739,6 +739,7 @@ class CellExecutor:
             state.executed_cell_source_hashes.add(digest)
             state.failed_cells.pop(digest, None)
             state.failed_cell_names.pop(digest, None)
+            self._statement_processor.note_cell_seeds(raw_cell)
             changed, pre, post = self._statement_processor.cell_rng_observation()
             self.record_cell_rng(raw_cell, changed, pre, post, self._statement_processor.cell_rng_lineage())
         except (AttributeError, TypeError):  # pragma: no cover - defensive
