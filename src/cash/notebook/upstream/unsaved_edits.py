@@ -20,7 +20,7 @@ from ..cache_key import (
     statement_source_hash,
 )
 from ..lineage_formula import bound_names, recorded_reads_lineage_component
-from ._types import normalize_stmt
+from ._types import cell_holds_statement, normalize_stmt
 from .statement_lineage import unbound_builtin
 
 if TYPE_CHECKING:
@@ -258,12 +258,20 @@ class UnsavedEdits:
         simulation_trace: list,
         notebook_cells: list[str],
         statements_to_reexecute: list[str],
+        earlier_text: str | None = None,
     ) -> None:
         """Re-apply unsaved extension code for broken variables.
 
         If a broken variable's producing code is NOT in the notebook (unsaved
         extension), schedule it for re-execution — unless the trace already
         updated that variable.
+
+        Nor when that code is a statement of *earlier_text*, the text the
+        running cell had when it last ran (`CellCheck.earlier_text`): the
+        user edited it out of the cell about to run, which is in no
+        notebook above it. Re-run, an edited loop ran its old version first,
+        printing what it printed and doing what it did a second time, and
+        did so again on the next edit.
         """
         all_notebook_stmts = self._collect_notebook_statements(notebook_cells)
 
@@ -283,6 +291,10 @@ class UnsavedEdits:
                 if not is_in_trace:
                     if mem_code.strip() in all_notebook_stmts:
                         logger.debug("[UPSTREAM] Skipping downstream statement for '%s'", var_name)
+                        continue
+
+                    if earlier_text is not None and cell_holds_statement(earlier_text, normalize_stmt(mem_code)):
+                        logger.debug("[UPSTREAM] Skipping the running cell's own earlier statement for '%s'", var_name)
                         continue
 
                     if mem_code not in statements_to_reexecute:

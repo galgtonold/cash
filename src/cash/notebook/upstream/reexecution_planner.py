@@ -21,7 +21,7 @@ from ..cache_key import statement_source_hash
 from ..call_key import TooMuchToLookThrough, holds_a_closure_with_state
 from ..stateful_carriers import carrier_kind_from_producer, stateful_carrier_kind
 from ..statement.mutation_routing import functions_in
-from ._types import ClassificationResult, ReexecutionPlan, SimulationResult, latest_producer
+from ._types import CellCheck, ClassificationResult, ReexecutionPlan, SimulationResult, latest_producer
 from .carrier_fills import fills_carrier
 from .figure_writes import FigureWriteGuard
 from .file_writers import FileWriterScheduler
@@ -126,12 +126,13 @@ class ReexecutionPlanner:
         self,
         sim: SimulationResult,
         result: ClassificationResult,
-        notebook_cells: list[str],
+        check: CellCheck,
         relevant_read_paths: set[str] | None = None,
         relevant_read_paths_known: bool = True,
     ) -> ReexecutionPlan:
         """Pass 3: the statements to re-run, and those restored instead, so the
         names *result* found broken hold what a from-the-top run gives."""
+        notebook_cells = check.notebook_cells
         simulation_trace = sim.trace
         broken_vars = result.broken_vars
         virtual_lineage = sim.virtual_lineage
@@ -283,6 +284,7 @@ class ReexecutionPlanner:
             simulation_trace,
             notebook_cells,
             statements_to_reexecute,
+            earlier_text=check.earlier_text,
         )
 
         return ReexecutionPlan(statements_to_reexecute, restored_statements_info, total_restore_time)

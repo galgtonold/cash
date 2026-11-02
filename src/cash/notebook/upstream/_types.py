@@ -11,11 +11,14 @@ part of the package reads them.
 
 from __future__ import annotations
 
+import ast
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from cash._user_attrs import attribute_or
 from cash.control_markers import strip_markers
+
+from ...analysis.code_analyzer import parse_cell_source
 
 if TYPE_CHECKING:
     from ...analysis.mutation_effects import CellEffects
@@ -24,6 +27,27 @@ if TYPE_CHECKING:
 def normalize_stmt(s: str) -> str:
     """Strip iteration-context comments and whitespace for code comparison."""
     return strip_markers(s).strip()
+
+
+def cell_holds_statement(cell_code: str, code: str) -> bool:
+    """Whether *cell_code* holds the statement *code* (normalized), nested or not."""
+    return code in cell_code or code in statements_of(cell_code)
+
+
+def statements_of(cell_code: str) -> set[str]:
+    """Every statement of *cell_code*, nested ones too, as
+    ``normalize_stmt(ast.unparse(...))`` gives it; empty when it does not parse."""
+    tree = parse_cell_source(cell_code)
+    if tree is None:
+        return set()
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.stmt):
+            try:
+                found.add(normalize_stmt(ast.unparse(node)))
+            except (ValueError, TypeError, RecursionError):
+                continue
+    return found
 
 
 class InputHashes(dict):
@@ -220,6 +244,12 @@ class CellCheck:
 
     cell_code: str | None = None
     """The source actually being run, which may differ from the saved cell."""
+
+    earlier_text: str | None = None
+    """The text the cell ran with the last time it was checked
+    (``TrackingState.cell_text_at``), None when it was not. A statement of
+    it that the cell no longer holds is the cell's own past, never a
+    statement above it."""
 
     @property
     def current_cell_outputs(self) -> set[str] | None:

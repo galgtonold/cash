@@ -310,7 +310,14 @@ class NotebookSimulator:
         *cell_code* is the source being run, when it may differ from the saved
         cell.
         """
-        check = CellCheck(current_cell_idx, notebook_cells, required_inputs, effects, cell_code)
+        check = CellCheck(
+            current_cell_idx,
+            notebook_cells,
+            required_inputs,
+            effects,
+            cell_code,
+            earlier_text=self.tracking_state.cell_text_at.get(current_cell_idx),
+        )
         effects = effects or CellEffects()
         trace_event(
             "simulate_enter",
@@ -485,7 +492,7 @@ class NotebookSimulator:
         plan = self.planner.plan(
             sim,
             result,
-            notebook_cells,
+            check,
             relevant_read_paths=relevant_read_paths,
             relevant_read_paths_known=relevant_read_paths_known,
         )

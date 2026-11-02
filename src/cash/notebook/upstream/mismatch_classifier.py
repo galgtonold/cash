@@ -31,6 +31,7 @@ from ._types import (
     CellCheck,
     ClassificationResult,
     SimulationResult,
+    cell_holds_statement,
     normalize_stmt,
 )
 from .cache_restore import CacheRestorer
@@ -632,12 +633,12 @@ class MismatchClassifier:
         last = self.tracking_state.executed_cell_codes.get(m.var_name)
         code = normalize_stmt(last) if last else ""
         before = self.tracking_state.cell_text_at.get(m.check.current_cell_idx)
-        if not code or before is None or not _holds(before, code):
+        if not code or before is None or not cell_holds_statement(before, code):
             return False
         cells = list(m.check.notebook_cells or [])
         if m.check.cell_code:
             cells.append(m.check.cell_code)
-        return not any(_holds(cell, code) for cell in cells)
+        return not any(cell_holds_statement(cell, code) for cell in cells)
 
     def _keep_valid_extension(self, m: _Mismatch) -> bool:
         """The live value is a valid extension of the notebook's state."""
@@ -1416,27 +1417,6 @@ class MismatchClassifier:
                 )
             logger.debug("[UPSTREAM] Variable '%s' should exist but is missing.", var_name)
             broken_vars.add(var_name)
-
-
-def _holds(cell_code: str, code: str) -> bool:
-    """Whether *cell_code* holds the statement *code* (normalized), nested or not."""
-    return code in cell_code or code in _statements_of(cell_code)
-
-
-def _statements_of(cell_code: str) -> set[str]:
-    """Every statement of *cell_code*, nested ones too, as
-    ``normalize_stmt(ast.unparse(...))`` gives it; empty when it does not parse."""
-    tree = parse_cell_source(cell_code)
-    if tree is None:
-        return set()
-    found: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.stmt):
-            try:
-                found.add(normalize_stmt(ast.unparse(node)))
-            except (ValueError, TypeError, RecursionError):
-                continue
-    return found
 
 
 def _bound_in_cells(check: CellCheck | None) -> set[str]:
