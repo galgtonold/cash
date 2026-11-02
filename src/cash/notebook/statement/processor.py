@@ -3608,11 +3608,20 @@ class StatementProcessor:
             user_ns,
             value_types,
         )
+        before = run.class_state_before
         stateful = (
             [
                 name
                 for name, value in list(user_ns.items())
-                if instance_of(value, type) and name not in around and _has_class_state(value, value_types)
+                if instance_of(value, type)
+                and name not in around
+                and _has_class_state(value, value_types)
+                # One whose state the statement left as it was keeps nothing
+                # new: ``knn.get_feature_names_out()`` on an object holding
+                # an array of strings linked it to every estimator class
+                # the notebook imported, and the next in-place change of a
+                # list holding it moved every pipeline and search on.
+                and (before is None or before.get(name) is None or _class_state(value) != before[name])
             ]
             if unread
             else []
@@ -4017,15 +4026,21 @@ class StatementProcessor:
         bases = _defined_class_bases(run.tree, user_ns)
         if not bases and not _calls_a_method(run.tree):
             return None
-        around, _unread = _classes_with_state(
+        value_types = VALUE_TYPES + library_value_types()
+        around, unread = _classes_with_state(
             [user_ns[name] for name in run.inputs if name in user_ns] if _calls_a_method(run.tree) else [],
             user_ns,
-            VALUE_TYPES + library_value_types(),
+            value_types,
         )
         # Each, an empty ``registry = []`` too: what the new class's
         # creation puts there is not known before it runs.
         named = {id(value): name for name, value in user_ns.items() if instance_of(value, type)}
         derived = {named[id(cls)] for base in bases for cls in base.__mro__ if id(cls) in named}
+        if unread:
+            # Past the items read, any class with state may be the one the
+            # call reaches (`_link_inputs_kept_by`): each one's state now,
+            # to tell the classes it changed from those it left alone.
+            around.update((name, set()) for name in named.values() if _has_class_state(user_ns[name], value_types))
         return {name: _class_state(user_ns[name]) for name in set(around) | derived}
 
     def _warn_classes_unread(self, run: StatementRun) -> None:
