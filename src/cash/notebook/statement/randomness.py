@@ -34,6 +34,7 @@ from cash.tracking.randomness import (
     rng_modules_changed,
     rng_virtual_var,
     seed_generation,
+    seeding_modules_now,
     stream_position,
     unseeded_streams,
     warn_observed_draw,
@@ -51,6 +52,7 @@ from ...exceptions import SOURCE_RETRIEVAL_ERRORS
 from ...source_norm import exact_source_digest
 from ...source_reading import own_source
 from ..callee_reach import helper_seeded_modules, reached_user_code
+from ..lineage_formula import note_seeded_unseen
 from .held_generators import HeldGenerators
 from .observed_draws import ObservedDrawStore
 
@@ -184,7 +186,7 @@ class StatementRandomness:
         state = self.tracking_state
         self._held.before_run(code, self.shell.user_ns, state.running_cell, state.running_cell_rerun)
 
-    def adopt_unseen_seeds(self) -> None:
+    def adopt_unseen_seeds(self) -> dict[str, str]:
         """Put a seed no statement set into the ledger, from where the stream stands.
 
         The ledger learns of a seed from a seeding statement's source. A seed
@@ -200,8 +202,12 @@ class StatementRandomness:
         key, so the simulation and the key read the same lineage. A stream an
         adopted seed stood behind that has since been re-randomised
         (``seed(None)`` cash did not read) takes a lineage fresh per run.
+
+        Returns ``{RNG variable: lineage}`` for each stream it adopted a seed
+        of (from a position, not a fresh one).
         """
         by_a_hit, self._seeded_by_a_hit = self._seeded_by_a_hit, set()
+        adopted: dict[str, str] = {}
         try:
             watch_seeds()
             seeded = process_seeded_streams() | by_a_hit
@@ -226,8 +232,31 @@ class StatementRandomness:
                 self.seed_epochs[module] = lineage
                 self.detector.mark_seeded(module)
                 self._adopted.add(module)
+                adopted[var] = lineage
         except Exception:
             logger.debug("%s could not adopt an unseen seed", _LOG_PROCESSOR, exc_info=True)
+        return adopted
+
+    def adopt_seeds_set_by(self, code: str, key: str, reseeded: Iterable[str] = ()) -> None:
+        """Adopt, right after the statement *code* (keyed *key*) ran or was
+        served, the seeds it set where no statement spells them: *reseeded*,
+        the streams its run seeded, and the ones a hit put back
+        (`adopt_seeds_of_a_hit`).
+
+        The lineage comes from where the stream stands (`adopt_unseen_seeds`),
+        which the upstream simulation cannot read. So it is recorded for
+        the statement's key (`note_seeded_unseen`), and the simulation gives
+        the stream the same lineage after the statement with that key. A
+        ``functools.cache`` helper that calls ``random.seed`` seeds only when
+        the call fills its memo: the record is the run's, and a run that
+        found the answer kept (and so seeded nothing) records nothing.
+        """
+        modules = {m for m in (*reseeded, *self._seeded_by_a_hit) if m in ("random", "numpy.random")}
+        if not modules or not key:
+            return
+        adopted = self.adopt_unseen_seeds()
+        own = {var: lineage for var, lineage in adopted.items() if var in {rng_virtual_var(m) for m in modules}}
+        note_seeded_unseen(self.tracking_state, code, key, own)
 
     def adopt_seeds_of_a_hit(self, reseeded: Iterable[str] | None, code: str) -> None:
         """A hit put back the streams its run seeded as it ran (*reseeded*),
@@ -327,7 +356,7 @@ class StatementRandomness:
             self.tracking_state.lineage.record(
                 var, entropy_write_lineage() if var in entropy_vars else hidden_write_lineage(cache_key)
             )
-        for module in get_seeding_rng_modules(code) | helper_seeds:
+        for module in seeding_modules_now(code) | helper_seeds:
             self.seed_epochs[module] = entropy_write_lineage() if module in entropy_modules else cache_key
             self._seeded_by_a_statement.add(module)
             self._cell_seeds.add(module)
