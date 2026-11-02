@@ -72,27 +72,46 @@ def _literal_path_bindings(simulation_trace: list | None) -> dict[str, str]:
     """
 
     bound: dict[str, str | None] = {}
+    known: dict[str, str] = {}
     for entry in simulation_trace or ():
-        outputs = entry.outputs
-        if not outputs:
+        if not entry.outputs:
             continue
-        value = None
-        try:
-            node = ast.parse(entry.stmt_code).body
-        except (SyntaxError, ValueError, TypeError):
-            node = []
-        outputs = set(outputs) - _changed_in_place_only(node, outputs) if node else outputs
-        if (
-            len(node) == 1
-            and isinstance(node[0], ast.Assign)
-            and len(node[0].targets) == 1
-            and isinstance(node[0].targets[0], ast.Name)
-        ):
-            known = {k: v for k, v in bound.items() if v is not None}
-            value = resolve_literal_path(node[0].value, known)
-        for name in outputs:
-            bound[name] = value if name not in bound or bound[name] == value else None
-    return {name: path for name, path in bound.items() if path is not None}
+        names, value_node = _entry_binding(entry.stmt_code, frozenset(entry.outputs))
+        value = resolve_literal_path(value_node, known) if value_node is not None else None
+        for name in names:
+            new = value if name not in bound or bound[name] == value else None
+            bound[name] = new
+            if new is None:
+                known.pop(name, None)
+            else:
+                known[name] = new
+    return known
+
+
+@functools.lru_cache(maxsize=NOTEBOOK_STATEMENTS)
+def _entry_binding(code: str, outputs: frozenset[str]) -> tuple[frozenset[str], ast.expr | None]:
+    """What one trace entry tells :func:`_literal_path_bindings`: the names
+    of *outputs* it binds (not only changes in place), and the value of its
+    assignment when it is one ``name = value``.
+
+    Memoised by the text: asked of every statement above the cell, once per
+    file writer, on every cell -- a parse and a walk each time cost a
+    Run All of 170 cells tens of seconds.
+    """
+    try:
+        node = ast.parse(code).body
+    except (SyntaxError, ValueError, TypeError):
+        node = []
+    names = frozenset(outputs - _changed_in_place_only(node, outputs)) if node else outputs
+    value = None
+    if (
+        len(node) == 1
+        and isinstance(node[0], ast.Assign)
+        and len(node[0].targets) == 1
+        and isinstance(node[0].targets[0], ast.Name)
+    ):
+        value = node[0].value
+    return names, value
 
 
 def _plain_entry_names(directory: str) -> set[str] | None:
