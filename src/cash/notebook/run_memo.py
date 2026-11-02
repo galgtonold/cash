@@ -23,6 +23,7 @@ reads and fills both. Neither side imports the other for it.
 
 from __future__ import annotations
 
+import operator
 import os
 import time
 from collections.abc import Iterable, Mapping
@@ -84,8 +85,11 @@ def file_state_this_run() -> dict | None:
     if epoch is None:
         return None
     if _FILE_STATE_THIS_RUN.get("epoch") != epoch:
+        # The last run's stats, to hand on where a file is as it was then
+        # (`stats_this_run`); dropped with the rest after a write.
+        last = _FILE_STATE_THIS_RUN.get("stat") or {}
         _FILE_STATE_THIS_RUN.clear()
-        _FILE_STATE_THIS_RUN.update(epoch=epoch, memo=FreshnessMemo(), stat={}, since=time.monotonic())
+        _FILE_STATE_THIS_RUN.update(epoch=epoch, memo=FreshnessMemo(), stat={}, since=time.monotonic(), last=last)
     return _FILE_STATE_THIS_RUN
 
 
@@ -133,6 +137,25 @@ def fresh_snapshot_this_run(snap: Mapping[str, Any], not_before: float) -> bool:
     )
 
 
+#: Every named field of a stat on this platform, beyond the ten its tuple
+#: compares (mode, inode, device, links, owner, group, size and the
+#: whole-second times): the exact times and what the platform adds (blocks,
+#: flags, attributes).
+_STAT_FIELDS = operator.attrgetter(
+    *sorted(
+        name
+        for name in dir(os.stat_result)
+        if name.startswith("st_")
+        and name not in ("st_mode", "st_ino", "st_dev", "st_nlink", "st_uid", "st_gid", "st_size")
+    )
+)
+
+
+def same_stat(a: os.stat_result, b: os.stat_result) -> bool:
+    """Whether stats *a* and *b* agree in every field."""
+    return a == b and _STAT_FIELDS(a) == _STAT_FIELDS(b)
+
+
 def stats_this_run(paths: Iterable[str]) -> dict[str, tuple[str | None, Any]]:
     """``{path: (resolved or None, stat or None)}``, one stat per path per cell run.
 
@@ -145,9 +168,16 @@ def stats_this_run(paths: Iterable[str]) -> dict[str, tuple[str | None, Any]]:
 
     One pass over the paths, one tuple each: before every cell below a loop
     over 24,000 documents, the bookkeeping of a stat cost as much as the stat.
+
+    A file whose stat equals, field for field, the one the last cell run took
+    keeps that run's record: the same values, and no new objects. The records
+    live for the whole run, so new ones reached the collector's oldest
+    generation, 200,000 of them before every cell below a loop over 50,000
+    documents, and set off a full collection of the heap nearly every cell.
     """
     run = file_state_this_run()
     stats = run.setdefault("stat", {}) if run is not None else {}
+    last = run.get("last") if run is not None else None
     if not isinstance(paths, (list, tuple, set, frozenset, dict)):
         paths = list(paths)
     todo = [p for p in paths if p not in stats]
@@ -167,6 +197,17 @@ def stats_this_run(paths: Iterable[str]) -> dict[str, tuple[str | None, Any]]:
                 except (OSError, ValueError):
                     st = None
             if st is not None:
+                if last:
+                    before = last.get(p)
+                    # `same_stat`, inline: it is asked once per file read above.
+                    if (
+                        before is not None
+                        and before[0] == p
+                        and before[1] == st
+                        and _STAT_FIELDS(before[1]) == _STAT_FIELDS(st)
+                    ):
+                        stats[p] = before
+                        continue
                 stats[p] = (p, st)
                 continue
             resolved = resolve_file_dep_path(p)
