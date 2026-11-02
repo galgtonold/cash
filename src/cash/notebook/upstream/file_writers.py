@@ -37,7 +37,8 @@ from ...analysis.namespace_effects import (
     statement_removed_paths,
     statement_written_paths,
 )
-from ...tracking.file_dep_snapshot import snapshot_is_fresh
+from ...tracking.file_dep_snapshot import LISTING_MIN_FILES, snapshot_is_fresh
+from ...tracking.tracker_context import untracked
 from .._trace import trace_event
 from ..cache_key import called_function_globals, write_provenance_key
 from ..cache_status import CacheStatus
@@ -91,6 +92,59 @@ def _literal_path_bindings(simulation_trace: list | None) -> dict[str, str]:
         for name in outputs:
             bound[name] = value if name not in bound or bound[name] == value else None
     return {name: path for name, path in bound.items() if path is not None}
+
+
+def _plain_entry_names(directory: str) -> set[str] | None:
+    """The normcased names of *directory*'s entries that are neither a
+    symbolic link nor a junction, from one listing; None when it cannot be
+    listed. Listed untracked: the listing is cash's, not the user's."""
+    plain: set[str] = set()
+    try:
+        with untracked(), os.scandir(directory or ".") as entries:
+            for entry in entries:
+                is_junction = getattr(entry, "is_junction", None)
+                if entry.is_symlink() or (is_junction is not None and is_junction()):
+                    continue
+                plain.add(os.path.normcase(entry.name))
+    except OSError:
+        return None
+    return plain
+
+
+def any_resolves_to(paths, targets: set[str]) -> bool:
+    """True when ``os.path.realpath`` of one of *paths* is in *targets*, a
+    set of resolved paths.
+
+    The same answer as resolving every path, without resolving most of
+    them. A path whose last part is an entry of its folder and not a link
+    resolves to its folder's resolution joined with that entry's name, so
+    when no target has that name, it is none of them. A crowded folder is
+    listed once to tell which entries are links; a path with a target's
+    name, a link, an entry the listing does not hold (a short name, a
+    missing file) or a folder of few paths is resolved as before.
+
+    Resolving is a walk of every part of a path: 24,000 documents a loop
+    read cost 276,000 ``lstat`` calls before each cell that read the frame
+    built from them, and on Windows, where resolving opens each file, 13 s
+    a cell.
+    """
+    names = {os.path.normcase(os.path.basename(t)) for t in targets}
+    exact: list[str] = []
+    by_dir: dict[str, list[tuple[str, str]]] = {}
+    for p in paths:
+        directory, name = os.path.split(p)
+        key = os.path.normcase(name)
+        if name in ("", ".", "..") or key in names:
+            exact.append(p)
+        else:
+            by_dir.setdefault(directory, []).append((p, key))
+    for directory, group in by_dir.items():
+        plain = _plain_entry_names(directory) if len(group) >= LISTING_MIN_FILES else None
+        if plain is None:
+            exact.extend(p for p, _key in group)
+        else:
+            exact.extend(p for p, key in group if key not in plain)
+    return any(os.path.realpath(p) in targets for p in exact)
 
 
 #: What can bind a name without an assignment to it.
@@ -947,8 +1001,7 @@ class FileWriterScheduler:
         written = self._writer_paths(stmt_code, simulation_trace)
         if not written:
             return False
-        read_real = {os.path.realpath(p) for p in sources}
-        return any(os.path.realpath(p) in read_real for p in written)
+        return any_resolves_to(sources, {os.path.realpath(p) for p in written})
 
     def _writer_paths(self, stmt_code: str, simulation_trace: list | None = None) -> set[str] | None:
         """The paths a writer writes: from its code, else from the record it
