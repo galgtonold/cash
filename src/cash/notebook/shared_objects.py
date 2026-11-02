@@ -1056,8 +1056,17 @@ def _values_in_tuples(items: Any, exact: frozenset[type]) -> bool:
     (`_held_identities`). Asked a level at a time, at C speed: a list of 30k
     sessions, each a list of ``(name, time)`` records, cost a Python step per
     record in every statement's share check."""
+    if _VALUES_IN_TUPLES is not None and type(items) is list:
+        found = _VALUES_IN_TUPLES(items, exact, _TUPLE_LEVELS)
+        if found is not NotImplemented:
+            return found
+    return _values_in_tuple_levels(items, exact, _TUPLE_LEVELS)
+
+
+def _values_in_tuple_levels(items: Any, exact: frozenset[type], levels: int) -> bool:
+    """`_values_in_tuples` read in Python, *levels* levels deep."""
     level = items
-    for _ in range(_TUPLE_LEVELS):
+    for _ in range(levels):
         kinds = set(map(type, level))
         if kinds <= exact:
             return True
@@ -1070,6 +1079,11 @@ def _values_in_tuples(items: Any, exact: frozenset[type]) -> bool:
 
 
 _TUPLE_LEVELS = 8
+
+#: The C kernel of `_values_in_tuples`, None without it: the level of two
+#: million records of a frame's object column was made a list twice over,
+#: each check of each statement (student_8).
+_VALUES_IN_TUPLES = getattr(_native.kernels, "values_in_tuples", None)
 
 
 def view_bases(value: Any) -> list[int]:

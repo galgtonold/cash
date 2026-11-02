@@ -629,3 +629,92 @@ def test_the_heap_read_hands_back_an_id_it_cannot_read():
     assert K.referrers_in([], {"not an id"}) is NotImplemented
     with pytest.raises(TypeError):
         K.referrers_in((), set())
+
+
+def _nested_tuples(rng: random.Random, depth: int) -> object:
+    """A value, or a tuple of them nested up to *depth* deep, with now and
+    then something that is no value: a list, an object, a tuple subclass."""
+    roll = rng.random()
+    if depth > 0 and roll < 0.45:
+        return tuple(_nested_tuples(rng, depth - 1) for _ in range(rng.randint(0, 3)))
+    if roll < 0.47:
+        return [1]
+    if roll < 0.48:
+        return Plain()
+    if roll < 0.49:
+        return collections.namedtuple("Pair", "a b")(1, 2)
+    return rng.choice([1, "a", 2.5, None, b"x", True])
+
+
+@pytest.mark.parametrize("seed", range(40))
+def test_values_in_tuples_matches_the_level_by_level_read(seed):
+    from cash.notebook import shared_objects as so
+
+    rng = random.Random(seed)
+    exact = so.exact_value_types()
+    depth = rng.randint(0, 10)
+    items = [_nested_tuples(rng, depth) for _ in range(rng.randint(0, 30))]
+    for levels in (1, 2, 3, so._TUPLE_LEVELS):
+        python = so._values_in_tuple_levels(items, exact, levels)
+        assert K.values_in_tuples(items, exact, levels) is python
+
+
+def test_values_in_tuples_hands_back_a_class_of_its_own():
+    from cash.notebook import shared_objects as so
+
+    assert K.values_in_tuples([("a", Odd())], so.exact_value_types(), 8) is NotImplemented
+    assert K.values_in_tuples([("a", 1)] * 3, so.exact_value_types(), 8) is True
+
+
+def _nested_cell(rng: random.Random, depth: int) -> object:
+    """A cell of an object column: a leaf, or a list or tuple of cells, with
+    now and then a number or a text that could be an id(), a long text, a
+    line break, or something no leaf."""
+    roll = rng.random()
+    if depth > 0 and roll < 0.4:
+        kind = rng.choice([list, tuple])
+        return kind(_nested_cell(rng, depth - 1) for _ in range(rng.randint(0, 4)))
+    if roll < 0.41:
+        return Plain()
+    return rng.choice(
+        [
+            1,
+            7 << 30,
+            "Action_3",
+            hex(1 << 40),
+            str(1 << 41),
+            "x" * 30,
+            "line\n" + str(1 << 42),
+            2.5,
+            None,
+            b"0x7f0000000000",
+            datetime.datetime(2019, 10, 1),
+        ]
+    )
+
+
+@pytest.mark.parametrize("seed", range(60))
+def test_the_nested_read_finds_what_the_python_read_finds(seed, monkeypatch):
+    from cash.notebook.statement import identity_holders as ih
+
+    rng = random.Random(seed)
+    depth = rng.randint(0, 9)
+    items = [_nested_cell(rng, depth) for _ in range(rng.randint(0, 40))]
+    if seed % 4 == 0:
+        items = [tuple(_nested_cell(rng, 0) for _ in range(2)) for _ in range(rng.randint(1, 40))]
+
+    def read(kernel):
+        monkeypatch.setattr(ih, "_NESTED_LEAVES", kernel)
+        walk = ih._Walk({})
+        walk.budget = rng_budget
+        found = (walk._read_nested(list(items)), walk._read_flat(list(items)) if items else None)
+        return found, walk.numbers, walk.budget, walk.seen_all()
+
+    rng_budget = rng.choice([3, 50, ih._MAX_SEEN])
+    assert read(K.nested_leaves) == read(None)
+
+
+def test_the_nested_read_hands_back_a_class_of_its_own():
+    from cash.notebook.statement import identity_holders as ih
+
+    assert K.nested_leaves([("a", Odd())], ih._LEAVES, 8, 18) is NotImplemented
