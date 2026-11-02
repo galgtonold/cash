@@ -320,20 +320,51 @@ class LoopRules:
             for mv in fully_rerun_mutated
         }
         additional: list[int] = []
+        inits: list[tuple[int, str]] = []
         for idx, entry in enumerate(simulation_trace):
-            if idx in scheduled:
-                continue
             stmt_code, outputs = entry.stmt_code, entry.outputs
             if len(outputs) != 1:
                 continue
             out_var = next(iter(outputs))
             pat = empty_init_patterns.get(out_var)
             if pat is not None and pat.match(stmt_code.strip()):
-                additional.append(idx)
-                scheduled.add(idx)
+                inits.append((idx, out_var))
+                if idx not in scheduled:
+                    additional.append(idx)
+                    scheduled.add(idx)
+        for idx in self._writers_between_init_and_rerun(simulation_trace, scheduled, inits):
+            additional.append(idx)
+            scheduled.add(idx)
         if additional:
             return stmts_to_run_indices + additional
         return stmts_to_run_indices
+
+    @staticmethod
+    def _writers_between_init_and_rerun(
+        simulation_trace: list, scheduled: set[int], inits: list[tuple[int, str]]
+    ) -> list[int]:
+        """The statements that fill an accumulator between its scheduled
+        init and the next scheduled statement changing it, not yet scheduled.
+
+        An init re-run empties the accumulator, so the statement re-run after
+        it must find what every writer between them added, as it does in a
+        run from the top. ``data = []``, then a loop filling it, then
+        ``data.sort(...)``: the sort scheduled with the init and not the loop
+        sorted an empty list, and every cell below read no rows.
+        """
+        found: list[int] = []
+        for init_idx, var in inits:
+            if init_idx not in scheduled:
+                continue
+            between: list[int] = []
+            for j in range(init_idx + 1, len(simulation_trace)):
+                if var not in simulation_trace[j].outputs:
+                    continue
+                if j in scheduled:
+                    found.extend(k for k in between if k not in found)
+                    break
+                between.append(j)
+        return found
 
     def check_loop_derived_trust_override(
         self,
