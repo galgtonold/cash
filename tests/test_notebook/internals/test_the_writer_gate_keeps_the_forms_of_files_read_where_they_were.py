@@ -112,6 +112,22 @@ def test_the_next_cell_takes_the_kept_forms(tmp_path, monkeypatch, abspaths):
     assert _as_built(again) == first
 
 
+def test_a_cell_reading_part_of_them_takes_the_kept_forms(tmp_path, monkeypatch, abspaths):
+    """A cell that needs other inputs reads another set of the same files."""
+    _tree(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    gate = FileWriterScheduler(None, None, None)
+    gate._read_path_index(_reads(tmp_path))
+
+    _next_cell_run()
+    abspaths.clear()
+    part = {p for p in _reads(tmp_path) if not p.endswith("0_7.txt")}
+    index = _as_built(gate._read_path_index(part))
+
+    assert len(abspaths) < N
+    assert index == _reference(part)
+
+
 def test_another_working_folder_indexes_the_relative_reads_again(tmp_path, monkeypatch):
     """The same relative spellings name other files from another folder."""
     _tree(tmp_path)

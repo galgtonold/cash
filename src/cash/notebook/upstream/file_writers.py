@@ -247,8 +247,11 @@ class FileWriterScheduler:
         self.probe = probe
         #: ``(read paths, their count, index)`` -- see ``_read_path_index``.
         self._read_index: tuple[set[str], int, tuple[set[str], list[str], list[str]]] | None = None
-        #: ``(working folder, plain paths, forms, places)`` -- see ``_plain_read_forms``.
+        #: ``(working folder, plain paths, forms, places)``, and each path's
+        #: ``(absolute form, name)`` from that folder -- see ``_plain_read_forms``.
         self._plain_index: tuple[str, frozenset[str], frozenset[str], tuple[str, ...]] | None = None
+        self._plain_forms: dict[str, tuple[str, str]] = {}
+        self._plain_cwd: str | None = None
         #: ``(trace, its length, defs)`` -- see ``_trace_defs``. Holds the
         #: trace itself, so an identity match cannot be a reused id.
         self._trace_defs_memo: tuple[list, int, dict] | None = None
@@ -1149,14 +1152,15 @@ class FileWriterScheduler:
 
     def _plain_read_forms(self, plain: list[str]) -> tuple[frozenset[str], tuple[str, ...]]:
         """The forms and places of read files found where they were recorded
-        (`_read_path_index`), kept while the same files are read from the same
+        (`_read_path_index`), kept while the files are read from the same
         working folder.
 
         Each is the file's absolute path and its name, which change only with
         the path or the folder a relative one is taken from. Before every cell
         below a loop over 50,000 documents the index took each of them again:
         100,000 paths in two spellings, an absolute path (a ``getcwd`` on
-        POSIX) twice for each, ~1 s a cell, for the same answer."""
+        POSIX) twice for each, for the same answer. Kept per path, as cells
+        that need different inputs read different sets of them."""
         try:
             cwd = os.getcwd()
         except OSError:
@@ -1165,15 +1169,25 @@ class FileWriterScheduler:
         kept = self._plain_index
         if cwd is not None and kept is not None and kept[0] == cwd and kept[1] == key:
             return kept[2], kept[3]
+        per_path = self._plain_forms if cwd is not None and cwd == self._plain_cwd else {}
+        if len(per_path) > 2 * len(plain) + 1000:
+            # Paths no cell reads any more: keep the ones read now.
+            per_path = {rp: per_path[rp] for rp in plain if rp in per_path}
         forms: set[str] = set()
         places: list[str] = []
         for rp in plain:
-            absolute = os.path.normcase(os.path.abspath(rp))
-            forms.add(absolute)
-            forms.add(os.path.normcase(os.path.basename(rp)))
-            places.append(absolute)
+            known = per_path.get(rp)
+            if known is None:
+                known = (os.path.normcase(os.path.abspath(rp)), os.path.normcase(os.path.basename(rp)))
+                per_path[rp] = known
+            forms.add(known[0])
+            forms.add(known[1])
+            places.append(known[0])
         result = (frozenset(forms), tuple(places))
-        self._plain_index = (cwd, key, *result) if cwd is not None else None
+        if cwd is None:
+            self._plain_index, self._plain_forms, self._plain_cwd = None, {}, None
+        else:
+            self._plain_index, self._plain_forms, self._plain_cwd = (cwd, key, *result), per_path, cwd
         return result
 
     def _writer_output_unread(
