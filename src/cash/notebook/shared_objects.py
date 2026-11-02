@@ -3912,10 +3912,6 @@ def _descend(
         if not pops & 1023:
             check_walk_budget()
         children = children_of(stack.pop())
-        if children is not None and len(children) >= _BIG_CHILDREN:
-            # A frame's column of 30,000 lists is one pop: asked before it
-            # too, or the walk ran on past its budget for a second.
-            check_walk_budget()
         # Nothing but values, by exact type: asked at C speed, where the
         # loop below takes a Python step per item -- 35 ms of storing a
         # list of 200,000 ints.
@@ -3925,6 +3921,13 @@ def _descend(
             left = _records_left(children, value_types, leaves, exact, flat)
             if left is not None:
                 children = left
+        if len(children) >= _BIG_CHILDREN:
+            # A frame's column of 30,000 lists is one pop: asked before the
+            # step per child too, or the walk ran on past its budget for a
+            # second. Not before `_records_left`, which tells at C speed
+            # what a list of 200,000 records leaves to walk: asked there,
+            # a loop over that list gave up on the step that answers it.
+            check_walk_budget()
         # The lists met, walked below only when they hold more than values
         # and records of values, asked of them all at once at C speed: a
         # column of 30,000 sessions, each a list of ``(name, time)``
