@@ -3977,6 +3977,12 @@ def _descend(
                 nodes[ckey] = child
                 owner[ckey] = name
                 order.append(ckey)
+                if ctype is list and _value_records(child, exact) is not None:
+                    # Values and records of values below it, none a node,
+                    # told at C speed: asked as a tree, each of 87,000
+                    # sessions of records an explode shares with a frame
+                    # was read for its records held twice (student_8).
+                    continue
                 if (
                     trees is not None
                     and (ctype is dict or ctype is list)

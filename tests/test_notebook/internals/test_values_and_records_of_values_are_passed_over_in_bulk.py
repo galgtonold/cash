@@ -76,3 +76,24 @@ def test_a_session_whose_records_hold_a_list_is_walked_below():
     nodes = _descend(logs)
     assert id(held) in nodes and id(logs[7][1][-1]) in nodes
     assert id(logs[7][1][0]) not in nodes
+
+
+def test_long_sessions_of_records_held_twice_are_not_read_as_trees(monkeypatch):
+    """An explode leaves each record held by a frame's column too: a
+    session of 32 records or more was read for the records held beyond
+    their list, a C walk and a Python pass per session."""
+    logs = [(f"@u{i}", [(f"a{j}", T0 + datetime.timedelta(seconds=j)) for j in range(40)]) for i in range(500)]
+    column = [record for _user, session in logs for record in session]
+    asked = []
+    real = shared_objects._plain_data.held_beyond_parents
+
+    def counting(*args, **kwargs):
+        asked.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(shared_objects._plain_data, "held_beyond_parents", counting)
+    nodes: dict = {}
+    shared_objects._descend([logs], "", nodes, {}, {}, [], _value_types(), trees=set())
+    assert len(asked) < 10
+    assert set(nodes) == {*map(id, logs), *(id(session[1]) for session in logs)}
+    del column
