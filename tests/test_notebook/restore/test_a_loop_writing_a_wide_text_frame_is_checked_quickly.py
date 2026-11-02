@@ -18,7 +18,11 @@ from cash.notebook.statement import identity_holders
 from cash.notebook.statement.identity_holders import _inside, _Walk, forget_flat_reads
 
 pd = pytest.importorskip("pandas")
+np = pytest.importorskip("numpy")
 pytest.importorskip("pyarrow")
+
+#: pandas 3's ``str``, Arrow text; pandas 2 keeps text as Python strings unless asked.
+STR = pd.StringDtype("pyarrow", na_value=np.nan)
 
 
 def test_a_number_is_placed_among_sorted_mappings():
@@ -27,7 +31,7 @@ def test_a_number_is_placed_among_sorted_mappings():
 
 
 def test_an_arrow_text_column_gives_the_numbers_it_spells():
-    s = pd.Series(["abc", "12345678", "0x7f00aa12bc", None, "123456789012345678901", "x12345678"])
+    s = pd.Series(["abc", "12345678", "0x7f00aa12bc", None, "123456789012345678901", "x12345678"], dtype=STR)
     parts = identity_holders._arrow_text_spelling_numbers(s)
     assert parts[0].tolist() == [12345678]
     assert parts[1:] == [0x7F00AA12BC]
@@ -65,7 +69,7 @@ def test_only_whole_ascii_numbers_of_number_length_are_read():
 
 def test_a_text_column_of_no_number_length_gives_no_numbers():
     forget_flat_reads()
-    assert identity_holders._arrow_text_spelling_numbers(pd.Series(["a", "bc", "x" * 30])) == []
+    assert identity_holders._arrow_text_spelling_numbers(pd.Series(["a", "bc", "x" * 30], dtype=STR)) == []
     forget_flat_reads()
 
 
@@ -90,7 +94,7 @@ def test_python_strings_read_before_are_known_by_identity():
 
 def test_an_arrow_column_read_before_is_not_read_again():
     forget_flat_reads()
-    s = pd.Series(["12345678", "x"])
+    s = pd.Series(["12345678", "x"], dtype=STR)
     first = identity_holders._arrow_text_spelling_numbers(s)
     assert identity_holders._arrow_text_spelling_numbers(s) is first
     # A changed column is a new Arrow array: read again.

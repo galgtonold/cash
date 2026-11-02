@@ -19,6 +19,9 @@ pd = pytest.importorskip("pandas")
 np = pytest.importorskip("numpy")
 pytest.importorskip("pyarrow")
 
+#: pandas 3's ``str``, Arrow text; pandas 2 keeps text as Python strings unless asked.
+STR = pd.StringDtype("pyarrow", na_value=np.nan)
+
 TEXTS = [
     "abc",
     "12345678",
@@ -53,8 +56,8 @@ def _spelled(column) -> list[int]:
 
 
 def test_a_short_text_column_spells_what_a_long_one_does():
-    short = pd.Series(TEXTS, dtype="str")
-    long = pd.Series(TEXTS * 20, dtype="str")
+    short = pd.Series(TEXTS, dtype=STR)
+    long = pd.Series(TEXTS * 20, dtype=STR)
     assert _spelled(short) == [12345678, 12345678, 0x7F00AA12BC, 0x7F00AA12BC]
     assert _spelled(long) == sorted(_spelled(short) * 20)
 
@@ -70,8 +73,8 @@ def test_a_short_text_column_spells_what_a_long_one_does():
 def test_a_short_text_column_is_read_as_a_long_one_is(texts, found):
     # Each part is one object the walk counts, so a short column gives what
     # a long one gives, an empty array or nothing at all.
-    short = library_parts(pd.Series(texts, dtype="str"))[0]
-    long = library_parts(pd.Series(texts * 20, dtype="str"))[0]
+    short = library_parts(pd.Series(texts, dtype=STR))[0]
+    long = library_parts(pd.Series(texts * 20, dtype=STR))[0]
     assert [len(part) for part in short] == [len(part) for part in long] == found
 
 

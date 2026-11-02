@@ -53,10 +53,13 @@ def test_each_record_and_leaf_of_the_column_is_read_once(monkeypatch):
     forget_flat_reads()
     assert identity_held_reason("df", df, {"df": df, "logs": logs}) is None
     records = SESSIONS * ACTIONS
+    # The column's label too where it is a Python string (pandas 2 keeps
+    # the labels in an object array; pandas 3 in Arrow text).
+    labels = len(df.columns) if df.columns.dtype == object else 0
     # The lists twice (to tell them from flat records first), the records
     # once, and their two leaves each twice: for the level's types, and for
     # the texts among them.
-    assert read[0] <= 2 * SESSIONS + records + 2 * 2 * records
+    assert read[0] <= 2 * SESSIONS + records + 2 * 2 * records + labels
 
 
 def test_an_id_spelled_in_a_record_is_still_found():
