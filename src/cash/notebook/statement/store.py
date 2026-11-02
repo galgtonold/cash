@@ -326,6 +326,7 @@ class StatementStore:
         if attribute_or(execution.result, "skipped", False):
             return None
         if self.inputs_moved(run, execution):
+            run.metrics["skipped_reason"] = "a file it read changed while it ran"
             return None
 
         accessed_files = execution.accessed_files
@@ -628,6 +629,7 @@ class StatementStore:
         if reducer_writes.writes_into(run.reducer_mark, self.shell.user_ns):
             # The checks above pickled a value whose reducer of the user's
             # writes (`StatementProcessor._move_what_reducers_wrote`).
+            run.metrics["skipped_reason"] = "pickling its value ran code of the user's that wrote to a variable"
             return None
 
         metadata = StatementCacheMetadata(
