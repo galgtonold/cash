@@ -23,6 +23,7 @@ reads and fills both. Neither side imports the other for it.
 
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import Iterable, Mapping
 from typing import Any
@@ -84,7 +85,7 @@ def file_state_this_run() -> dict | None:
         return None
     if _FILE_STATE_THIS_RUN.get("epoch") != epoch:
         _FILE_STATE_THIS_RUN.clear()
-        _FILE_STATE_THIS_RUN.update(epoch=epoch, memo=FreshnessMemo(), where={}, since=time.monotonic())
+        _FILE_STATE_THIS_RUN.update(epoch=epoch, memo=FreshnessMemo(), stat={}, since=time.monotonic())
     return _FILE_STATE_THIS_RUN
 
 
@@ -132,51 +133,44 @@ def fresh_snapshot_this_run(snap: Mapping[str, Any], not_before: float) -> bool:
     )
 
 
-def _locate_files(paths: Iterable[str], run: dict | None) -> dict[str, tuple[str | None, Any]]:
-    """``{path: (resolved or None, stat or None)}`` for *paths*, this run's answers first.
-
-    A crowded directory is read with one listing (``stats_from_listings``); a
-    listed path is where it was recorded. The rest go through
-    ``resolve_file_dep_path``'s relocation fallbacks.
-    """
-    where = run["where"] if run is not None else {}
-    paths = list(paths)
-    todo = [p for p in paths if p not in where]
-    listed = stats_from_listings(todo) if len(todo) >= LISTING_MIN_FILES else {}
-    found: dict[str, tuple[str | None, Any]] = {}
-    for p in todo:
-        st = listed.get(p)
-        if st is None and not is_remote_url(p):
-            # Where it was recorded: the stat that finds it is there is the
-            # stat the caller takes next (`resolve_file_dep_path` asked
-            # ``os.path.exists`` first, a stat of its own).
-            try:
-                st = own_stat(p)
-            except (OSError, ValueError):
-                st = None
-        found[p] = (p, st) if st is not None else (resolve_file_dep_path(p), None)
-    if run is not None and len(where) < 200_000:
-        where.update(found)
-    return {p: found[p] if p in found else where[p] for p in paths}
-
-
 def stats_this_run(paths: Iterable[str]) -> dict[str, tuple[str | None, Any]]:
     """``{path: (resolved or None, stat or None)}``, one stat per path per cell run.
 
-    The resolution is ``resolve_file_dep_path``'s (relocation fallbacks
-    included); the stat is the listing's where the directory was listed.
-    Stat-ed past cash's own wrapper of ``os.stat`` (``own_stat``): the
-    stats are cash's, asked of every file the cells above read before each
-    cell.
+    A path is looked for where it was recorded first; one that is not there
+    goes through ``resolve_file_dep_path``'s relocation fallbacks. A crowded
+    directory is read with one listing (``stats_from_listings``); a listed
+    path is where it was recorded. Stat-ed past cash's own wrapper of
+    ``os.stat`` (``own_stat``): the stats are cash's, asked of every file the
+    cells above read before each cell.
+
+    One pass over the paths, one tuple each: before every cell below a loop
+    over 24,000 documents, the bookkeeping of a stat cost as much as the stat.
     """
     run = file_state_this_run()
     stats = run.setdefault("stat", {}) if run is not None else {}
-    paths = list(paths)
+    if not isinstance(paths, (list, tuple, set, frozenset, dict)):
+        paths = list(paths)
     todo = [p for p in paths if p not in stats]
     if todo:
-        for p, (resolved, listed) in _locate_files(todo, run).items():
-            st = listed
-            if st is None and resolved is not None:
+        listed = stats_from_listings(todo) if len(todo) >= LISTING_MIN_FILES else None
+        stat = os.stat
+        if getattr(stat, "_is_file_tracker_patch", False):
+            stat = stat._original_func  # as `own_stat`, once for the lot
+        for p in todo:
+            st = listed.get(p) if listed else None
+            if st is None and not ("://" in p and is_remote_url(p)):
+                # Where it was recorded: the stat that finds it is there is
+                # the stat it is asked for (`resolve_file_dep_path` asked
+                # ``os.path.exists`` first, a stat of its own).
+                try:
+                    st = stat(p)
+                except (OSError, ValueError):
+                    st = None
+            if st is not None:
+                stats[p] = (p, st)
+                continue
+            resolved = resolve_file_dep_path(p)
+            if resolved is not None:
                 try:
                     st = own_stat(resolved)
                 except OSError:

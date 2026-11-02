@@ -136,10 +136,10 @@ def test_a_statement_that_wrote_and_then_failed_drops_the_answers(tmp_path, cash
     then raised."""
     cash_magics.shell.user_ns["out_path"] = str(tmp_path / "out.txt")
     run_cash_cell(cash_magics, "def f():\n    open(out_path, 'w').write('x')\n    raise ValueError('late')\n")
-    run_memo.file_state_this_run()["where"]["kept"] = (None, None)
+    run_memo.file_state_this_run()["stat"]["kept"] = (None, None)
 
     with pytest.raises(ValueError, match="late"):
         run_cash_cell(cash_magics, "f()\n")
 
     assert (tmp_path / "out.txt").exists(), "fixture is wrong: the statement never wrote"
-    assert "kept" not in run_memo.file_state_this_run()["where"], "answers taken before the write survived it"
+    assert "kept" not in run_memo.file_state_this_run()["stat"], "answers taken before the write survived it"
