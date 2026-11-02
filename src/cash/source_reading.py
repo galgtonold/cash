@@ -308,7 +308,25 @@ def _getsourcelines(obj: object) -> tuple[list[str], int]:
         found = _code_source_lines_on_disk(obj)
         if found is not None:
             return found
+        if _compiled_from_no_file(obj):
+            raise OSError("could not get source code")
     return inspect.getsourcelines(obj)  # type: ignore[arg-type]
+
+
+def _compiled_from_no_file(code: types.CodeType) -> bool:
+    """Is *code* compiled from text no file holds and ``linecache`` does not
+    hold either -- a dataclass's generated methods, ``exec`` source? Then
+    ``inspect`` finds no source for it (``OSError``) and no file to name,
+    but only after ``getmodule`` resolved the file of every loaded module
+    (``realpath`` each): with scikit-learn and scipy loaded, 1,700 modules
+    and 20,000 ``stat`` calls on the first key of every script run that
+    hands a cached function a dataclass. The name in angle brackets is
+    what ``inspect`` lets through, and no module's file is such a name."""
+    filename = code.co_filename
+    if not (filename.startswith("<") and filename.endswith(">")) or filename in linecache.cache:
+        return False
+    with untracked():
+        return not os.path.exists(filename)
 
 
 #: The line ``inspect.findsource`` walks a code object's first line back to
@@ -377,6 +395,8 @@ def settled_source_version(obj: object) -> tuple[str, int, int] | None:
     # code was compiled under, and networkx numbers its decorators' names by
     # a process-wide count -- recorded as the running statement's absent
     # file, its lineage changed with each restart.
+    if inspect.iscode(obj) and _compiled_from_no_file(obj):
+        return None
     with untracked():
         try:
             path = inspect.getsourcefile(obj)  # type: ignore[arg-type]
