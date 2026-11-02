@@ -52,6 +52,7 @@ __all__ = [
     "WALK_LIMIT",
     "Held",
     "held_notebook_code",
+    "held_notebook_code_at",
     "module_class_objects_exist",
     "notebook_functions_exist",
 ]
@@ -146,6 +147,14 @@ _NONE_EXISTED = ((), (), True)
 #: is not kept alive by the memo of a value that held one of its objects.
 _MEMO: LruMemo[tuple[int, str], Any] = LruMemo(CODE_OBJECTS)
 
+#: ``lineage`` -> what the walk of the value that had it found, as `_MEMO`
+#: keeps it: the simulation keys a statement whose input a cell below
+#: rebound (``preprocessing = ColumnTransformer([... cluster_simil ...])``
+#: below ``housing_prepared = preprocessing.fit_transform(housing)``), and
+#: must key it with what the value held when it ran, not with what the
+#: name holds now (`held_notebook_code_at`).
+_BY_LINEAGE: LruMemo[str, Any] = LruMemo(CODE_OBJECTS)
+
 
 def _held(found: tuple[tuple[Any, ...], tuple[Any, ...], bool]) -> Any:
     """*found* as `_MEMO` keeps it: weak references to its functions and
@@ -188,9 +197,17 @@ def held_notebook_code(value: Any, namespace: Mapping[str, Any], lineage: str | 
     remembered for it.
     """
     if value is None or type(value) in _leaves() or instance_of(value, types.ModuleType):
+        if lineage:
+            _BY_LINEAGE[lineage] = _NONE_EXISTED
         return _NOTHING
     if type(value) is types.FunctionType and _plain_function(value):
-        return Held((value.__code__,)) if _is_notebook(value, namespace) else _NOTHING
+        if not _is_notebook(value, namespace):
+            if lineage:
+                _BY_LINEAGE[lineage] = _NONE_EXISTED
+            return _NOTHING
+        if lineage:
+            _BY_LINEAGE[lineage] = _held(((value,), (), True))
+        return Held((value.__code__,))
     memo_key = (id(value), lineage) if lineage else None
     found = _unheld(_MEMO.get(memo_key)) if memo_key is not None else None
     if found is _NONE_EXISTED:
@@ -202,10 +219,32 @@ def held_notebook_code(value: Any, namespace: Mapping[str, Any], lineage: str | 
             found = _walk(value, namespace, check_at=EXISTENCE_CHECK_AT)
         except _NoNotebookFunctions:
             if memo_key is not None:
-                _MEMO[memo_key] = _NONE_EXISTED
+                _MEMO[memo_key] = _BY_LINEAGE[memo_key[1]] = _NONE_EXISTED
             return _NOTHING
         if memo_key is not None:
             _MEMO[memo_key] = _held(found)
+    if memo_key is not None:
+        _BY_LINEAGE[memo_key[1]] = _held(found)
+    return _held_of(found, namespace)
+
+
+def held_notebook_code_at(lineage: str, namespace: Mapping[str, Any]) -> Held | None:
+    """What `held_notebook_code` found for the value that had *lineage*,
+    when this kernel walked one: the code it held then, whatever its name
+    holds now. None when none was walked, or what it found is gone; the
+    caller then walks the value the name holds now, and a key built from
+    that may miss -- the statement then runs again, it is never served from
+    another's entry.
+    """
+    kept = _BY_LINEAGE.get(lineage)
+    if kept is _NONE_EXISTED:
+        return _NOTHING
+    found = _unheld(kept)
+    return None if found is None else _held_of(found, namespace)
+
+
+def _held_of(found: tuple[tuple[Any, ...], tuple[Any, ...], bool], namespace: Mapping[str, Any]) -> Held:
+    """The `Held` of the functions and classes a walk *found*."""
     functions, classes, complete = found
     codes: dict[int, types.CodeType] = {}
     for fn in functions:
