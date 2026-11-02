@@ -1298,6 +1298,10 @@ class FrameDigests:
         #: they were made from, and outlive one another. Ids whose entry is
         #: gone are skipped, and dropped once there are many.
         self._columns: dict[tuple, tuple[int, ...]] = {}
+        #: ``(id, entry)`` of the last frame `lookup` found changed, for the
+        #: `hash_frame` that follows to take the pieces of the columns whose
+        #: memory it kept (`_memory_kept`); taken, or replaced, at once.
+        self._changed: tuple[int, tuple] | None = None
 
     def __contains__(self, key: object) -> bool:
         return key in self._entries
@@ -1308,6 +1312,7 @@ class FrameDigests:
     def clear(self) -> None:
         self._entries.clear()
         self._columns.clear()
+        self._changed = None
 
     def hash_frame(self, obj: Any) -> str | None:
         """`builtin_hash` of *obj*, a pandas frame under copy-on-write, kept
@@ -1320,28 +1325,39 @@ class FrameDigests:
         gives. A frame the memo cannot vouch for is read in full.
         """
         since = exposure_mark()
-        pieces = _FramePieces(self)
+        changed, self._changed = self._changed, None
+        pieces = _FramePieces(self, changed if changed is not None and changed[0] == id(obj) else None)
+        del changed
         previous = column_pieces(pieces)
         try:
             digest = builtin_hash(obj)
         finally:
             column_pieces(previous)
+            pieces.forget_changed()  # its copy's references are not the frame's own
         if digest is not None:
             self.store(obj, digest, since, pieces.noted)
         return digest
 
-    def column_piece(self, key: tuple, checked: dict[int, bool]) -> bytes | None:
+    def column_piece(
+        self, key: tuple, checked: dict[int, bool], changed: tuple[int, tuple] | None = None
+    ) -> bytes | None:
         """The bytes the column of memory *key* folds into a digest, from a
-        frame in the memo that is unchanged now; *checked* keeps which
-        frames were looked at during one hash."""
+        frame in the memo that is unchanged now, or from *changed*, the
+        entry `lookup` dropped for the frame being hashed, when the memory
+        it read that column from is unchanged (`_memory_kept`); *checked*
+        keeps which frames were looked at during one hash."""
         for owner in self._columns.get(key, ()):
             entry = self._entries.peek(owner)
             if entry is None:
-                continue
+                if changed is None or changed[0] != owner:
+                    continue
+                entry = changed[1]
             valid = checked.get(owner)
             if valid is None:
                 frame = entry[0]()
-                valid = checked[owner] = frame is not None and self.lookup(frame) is not None
+                valid = checked[owner] = frame is not None and (
+                    self.lookup(frame) is not None or _memory_kept(frame, entry)
+                )
             if valid:
                 piece = entry[5].get(key)
                 if piece is not None:
@@ -1355,13 +1371,18 @@ class FrameDigests:
         if entry is None:
             return None
         wref, held, signature, content_hash, since, _pieces, kept = entry
+        self._changed = None
         lists: list = []
         if frame_borrows_its_data(obj, held, since, lists if kept else None, kept):
             entries.pop(id(obj), None)
             return None
         try:
-            if wref() is obj and frame_signature(obj) == signature and _lists_unchanged(lists, kept):
-                return content_hash
+            if wref() is obj:
+                if frame_signature(obj) == signature and _lists_unchanged(lists, kept):
+                    return content_hash
+                # Changed through pandas: the columns it has not written
+                # may still be the memory the entry read (`hash_frame`).
+                self._changed = (id(obj), entry)
         except Exception:  # noqa: BLE001 - a pandas internals change: just re-hash
             pass
         entries.pop(id(obj), None)
@@ -1438,17 +1459,50 @@ class FrameDigests:
                 columns[column] = (key, *alive)[:_COLUMN_OWNERS]
 
 
-def _lists_unchanged(lists: list, kept: dict[int, tuple[list, tuple, list]]) -> bool:
+def _memory_kept(frame: Any, entry: tuple) -> bool:
+    """Whether the memory *entry*'s columns were read from is unchanged,
+    though *frame*, its owner, has changed since (``df["n"] = 2``): the
+    entry's pieces (`ColumnPieces`) still hold for it.
+
+    The entry's shallow copy has kept that memory alive and made every
+    write through pandas copy first, so a column written since has memory
+    of its own, under a key of its own. What copy-on-write does not see is
+    checked as for an unchanged frame: no handle outside pandas on any
+    array of *frame* or of the copy (`frame_borrows_its_data`), and each
+    list and block of records kept for the entry still there and the same
+    (`_lists_unchanged`). A block *frame* has gained is not the entry's:
+    its columns have no piece in it.
+
+    Reading the frame afresh instead re-read every unchanged column of
+    two million records after ``df["n"] = 2`` (student_8)."""
+    held, since, kept = entry[1], entry[4], entry[6]
+    lists: list = []
+    try:
+        if frame_borrows_its_data(frame, held, since, lists if kept else None, kept):
+            return False
+        return _lists_unchanged(lists, kept, gained=True)
+    except Exception:  # noqa: BLE001 - a pandas internals change: read the column
+        return False
+
+
+def _lists_unchanged(lists: list, kept: dict[int, tuple[list, tuple, list]], gained: bool = False) -> bool:
     """Whether *lists*, the lists a frame's blocks of lists hold now, are
     the ones *kept* when its content was hashed, each still holding the
     same objects, which are immutable (`_lists_of_immutables`), the dates
     among them still with no attribute set: then what they hold is
     unchanged. The same objects, not equal ones: an item
     swapped for an equal one is caught too, as the read would give the
-    same bytes either way."""
-    if len({id(items) if type(items) is list else items.key for items in lists}) != len(kept):
+    same bytes either way.
+
+    With *gained*, *lists* may also hold lists and blocks the frame has
+    gained since, which are not checked: every one *kept* must still be
+    among them."""
+    found = {id(items) if type(items) is list else items.key for items in lists}
+    if (not found >= kept.keys()) if gained else len(found) != len(kept):
         return False
     for items in lists:
+        if gained and (id(items) if type(items) is list else items.key) not in kept:
+            continue
         if type(items) is _Records:
             # A block of records, the very array (`_immutable_records`).
             known = kept.get(items.key)
@@ -1493,15 +1547,19 @@ class _FramePieces(ColumnPieces):
     """`ColumnPieces` for one `FrameDigests.hash_frame`: found in the memo,
     and noted for the frame being hashed."""
 
-    __slots__ = ("_checked", "_memo", "noted")
+    __slots__ = ("_changed", "_checked", "_memo", "noted")
 
-    def __init__(self, memo: FrameDigests) -> None:
+    def __init__(self, memo: FrameDigests, changed: tuple[int, tuple] | None = None) -> None:
         self._memo = memo
+        self._changed = changed
         self._checked: dict[int, bool] = {}
         self.noted: dict[tuple, bytes] = {}
 
+    def forget_changed(self) -> None:
+        self._changed = None
+
     def find(self, key: tuple) -> bytes | None:
-        piece = self._memo.column_piece(key, self._checked)
+        piece = self._memo.column_piece(key, self._checked, self._changed)
         if piece is not None:
             self.noted[key] = piece
         return piece
