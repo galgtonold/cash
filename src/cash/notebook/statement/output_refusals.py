@@ -74,13 +74,20 @@ def unrestorable_output_reason(
     anchors: dict[str, Any] | None = None,
     anchor_links: set[str] | None = None,
     restored_into: Iterable[str] = (),
+    values_passed: list[bool] | None = None,
 ) -> str | None:
     """Why one of *outputs* cannot be cached, the first refusal found; None
     when every captured value can. An output in *restored_into*, a loop's a
     hit restores into the live object (`in_place`), keeps its identity: a
-    weak reference another variable keeps to it still finds it. *cash_held* are containers cash itself
-    holds (the entries of the cell's call results), whose references do not
-    make an output shared.
+    weak reference another variable keeps to it still finds it. *cash_held*
+    are containers cash itself holds (the entries of the cell's call
+    results), whose references do not make an output shared.
+
+    *values_passed*, when given, gets True appended when the outputs' values
+    passed the checks of each one on its own (`_value_refusal`); with True
+    already in it those checks are not taken again. The caller asks a second
+    time, with anchors, over the same values and namespace, and nothing has
+    run in between.
 
     With *holders*, a variable of the notebook that holds an output's object
     too does not refuse the statement: it is added to *holders*, to be
@@ -97,9 +104,12 @@ def unrestorable_output_reason(
     """
     cash_held = list(cash_held)
     inputs = set(inputs)
-    reason = _value_refusal(
-        outputs, captured_vars, user_ns, cash_held, inputs, set(restored_into)
-    ) or shared_output_reason(
+    reason = None
+    if not values_passed:
+        reason = _value_refusal(outputs, captured_vars, user_ns, cash_held, inputs, set(restored_into))
+        if reason is None and values_passed is not None:
+            values_passed.append(True)
+    reason = reason or shared_output_reason(
         outputs, captured_vars, user_ns, cash_held, shell, holders, gave_up, anchorable, anchors, anchor_links
     )
     if reason is None and holders:
