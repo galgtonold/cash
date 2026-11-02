@@ -175,6 +175,13 @@ class TrackingState:
     # W: StatementProcessor. R: the key and lineage builders on both engines.
     observed_rng_statement_draws: dict[str, set[str]] = field(default_factory=dict)
 
+    # sha256(statement source) -> RNG variable -> the lineage the seeded stream
+    # had when the statement last drew from it in this kernel: what its key
+    # read. The simulation reads a stream nothing above sets from here, not
+    # from the live lineage the draw itself (or a later one) moved on.
+    # W: StatementProcessor. R: StatementLineage, VirtualLineage.
+    rng_read_at_last_draw: dict[str, dict[str, str]] = field(default_factory=dict)
+
     # Variable -> every content hash seen for it.
     # W: StatementLineageBuilder, both restorers. R: UpstreamChecker.
     variable_hashes: dict[str, set[str]] = field(default_factory=dict)

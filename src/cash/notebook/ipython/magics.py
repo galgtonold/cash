@@ -210,6 +210,7 @@ class CashMagics(Magics):
         # A statement's analysis budget follows what it last took to run.
         self._statement_processor.expected_run_time = lambda code: self.session.expected_compute(code)
         self._upstream_checker.expected_run_time = lambda code: self.session.expected_compute(code)
+        self._upstream_checker.streams_above = self._statement_processor.unseed_streams_not_seeded_above
 
     def _install_shell_hooks(self, shell: ShellProtocol) -> None:
         """Hook cash into *shell*: its cell events, the live-cell comm, and

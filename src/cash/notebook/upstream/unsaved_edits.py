@@ -19,7 +19,7 @@ from ...analysis.mutation_effects import classify_receivers
 from ..cache_key import (
     statement_source_hash,
 )
-from ..lineage_formula import recorded_reads_lineage_component
+from ..lineage_formula import bound_names, recorded_reads_lineage_component
 from ._types import normalize_stmt
 from .statement_lineage import unbound_builtin
 
@@ -74,12 +74,23 @@ class UnsavedEdits:
         # inputs include a directly-mismatched or already-tainted variable.
         # Directly-mismatched vars themselves stay out of the taint set so the
         # backward scan handles them with proper unsaved-edit trust logic.
+        #
+        # A statement that binds a name anew from nothing tainted (``tfidf =
+        # TfidfVectorizer(...)``) leaves it clean: the old value is gone. Kept
+        # tainted, a setting a cell below changed on an earlier pass
+        # (``np.set_printoptions``) tainted ``tfidf`` through a demo statement
+        # above that printed with numpy, and through the clean rebinding the
+        # pipeline and the grid search built on it, which then ran again.
         vars_tainted: set[str] = set()
         propagation_sources = set(directly_mismatched_vars)
         for entry in simulation_trace:
             if entry.inputs & propagation_sources:
                 vars_tainted.update(entry.outputs - directly_mismatched_vars)
                 propagation_sources.update(entry.outputs)
+            else:
+                rebound = (bound_names(entry.stmt_code) or set()) & (entry.outputs - directly_mismatched_vars)
+                vars_tainted -= rebound
+                propagation_sources -= rebound
 
         if logger.isEnabledFor(logging.DEBUG) and vars_tainted:
             logger.debug(

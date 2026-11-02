@@ -19,6 +19,7 @@ from cash.tracking.randomness import (
     adopted_seed_lineage,
     capture_rng_state,
     check_and_warn_randomness,
+    count_as_unseeded,
     describe_stream,
     entropy_write_lineage,
     get_drawing_rng_modules,
@@ -44,6 +45,7 @@ from cash.tracking.randomness import (
 from cash.tracking.randomness.detect import RandomnessCallInfo, mints_unseeded_generator
 from cash.tracking.randomness.estimator_draws import estimator_draws
 
+from ...analysis.code_analyzer import clean_cell_source, parse_cell_source
 from ...decorator.rng import unseeded_library_calls_in
 from ...exceptions import SOURCE_RETRIEVAL_ERRORS
 from ...source_norm import exact_source_digest
@@ -153,6 +155,9 @@ class StatementRandomness:
         self._ledgered_generation: dict[str, int] = {}
         #: Streams whose lineage `adopt_unseen_seeds` set.
         self._adopted: set[str] = set()
+        #: Streams a seeding statement of the notebook gave a lineage
+        #: (`record_seeds`): what `unseed_streams_not_seeded_above` may undo.
+        self._seeded_by_a_statement: set[str] = set()
         #: `seed_generation` per stream when the statement began.
         self._generation_at_start: dict[str, int] = {}
         #: Where the LAST statement left each global stream it moved or
@@ -319,6 +324,50 @@ class StatementRandomness:
             )
         for module in get_seeding_rng_modules(code) | helper_seeds:
             self.seed_epochs[module] = entropy_write_lineage() if module in entropy_modules else cache_key
+            self._seeded_by_a_statement.add(module)
+            self._adopted.discard(module)
+
+    def unseed_streams_not_seeded_above(self, cells_above: list[str]) -> None:
+        """Count a global stream as unseeded for the cell about to run when
+        no cell above it seeds it, as after a restart.
+
+        A seed in a cell below, run on an earlier pass of the same kernel,
+        leaves the stream seeded when Run All comes round to the draws above
+        it again. Read as seeded, a draw there (``gs.fit(X, y)`` over a
+        solver that draws, ``np.random.seed(0)`` further down) was keyed on
+        the stream that seed left: it missed on every pass but the first, a
+        restart and Run All then missed again, and the value it gave
+        differed from a restart's. Restart and Run All is what a cached
+        notebook must agree with: there the stream is unseeded at the draw,
+        so the draw is keyed and served as an unseeded one (frozen, with the
+        RANDOM-UNSEEDED pill), and the stream takes no lineage until a seed.
+
+        Only a stream a seeding statement of the notebook gave its lineage:
+        one adopted from a seed cash did not read (`adopt_unseen_seeds`)
+        may come from a call above that seeds unseen. A cell that does not
+        parse counts as seeding.
+        """
+        candidates = [
+            module
+            for module in ("random", "numpy.random")
+            if module in self._seeded_by_a_statement and rng_virtual_var(module) in self.tracking_state.variable_lineage
+        ]
+        if not candidates:
+            return
+        seeded_above: set[str] = set()
+        for cell in cells_above:
+            if parse_cell_source(cell) is None:
+                return
+            source = clean_cell_source(cell)
+            seeded_above |= get_seeding_rng_modules(source) | self.helper_seeds(source)
+        unseeded = [module for module in candidates if module not in seeded_above]
+        for module in unseeded:
+            self.tracking_state.lineage.discard(rng_virtual_var(module))
+            self.seed_epochs.pop(module, None)
+            self.detector.seeded_modules.discard(module)
+            self._seeded_by_a_statement.discard(module)
+            self._ledgered_generation[module] = seed_generation(module)
+        count_as_unseeded(unseeded)
 
     def helper_seeds(self, code: str) -> frozenset[str]:
         """The RNG modules *code* seeds through a notebook function it calls

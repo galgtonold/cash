@@ -34,6 +34,7 @@ from ..control_structures import is_control_structure
 from ..lineage_formula import (
     key_hidden_reads,
     statement_environment_component,
+    take_rng_reads_at_last_draw,
 )
 from ..magic_effects import (
     is_magic_statement,
@@ -698,9 +699,10 @@ class VirtualLineage:
             elif inp in self.tracking_state.variable_lineage:
                 input_hashes[inp] = self.tracking_state.variable_lineage[inp]
         callee_lineages = self.callables.callee_lineages(inputs, virtual_lineage, virtual_modules)
+        hidden_reads = key_hidden_reads(stmt_code, self.tracking_state)
+        take_rng_reads_at_last_draw(self.tracking_state, stmt_code, hidden_reads, virtual_lineage)
         hidden_lineages = {
-            var: virtual_lineage.get(var, self.tracking_state.variable_lineage.get(var))
-            for var in key_hidden_reads(stmt_code, self.tracking_state)
+            var: virtual_lineage.get(var, self.tracking_state.variable_lineage.get(var)) for var in hidden_reads
         }
         if callee_lineages or hidden_lineages:
             input_hashes = InputHashes(input_hashes, callee_lineages, hidden_lineages)

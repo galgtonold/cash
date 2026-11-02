@@ -31,7 +31,7 @@ from ..analysis.mutations import repeatable_setting_receiver
 from ..analysis.purity_analyzer import get_analyzer
 from ..code_digest import module_identity
 from ..effects import ENVIRONMENT_TEXT_MARKERS, environment_component, environment_input
-from ..source_norm import unparse_without_docstrings
+from ..source_norm import exact_source_digest, unparse_without_docstrings
 from ..tracking.module_symbols import closure_digest, static_attribute_reads
 from ..tracking.randomness import hidden_lineage_reads, observed_rng_reads
 from ..value_hash import budgeted_hash, compute_hash, is_identity_fallback_hash
@@ -490,6 +490,69 @@ def key_hidden_reads(code: str, tracking_state: Any) -> set[str]:
     it spells consumes, plus any the runtime saw it draw from without
     spelling it (``model.fit()``), so a re-seed re-keys it."""
     return hidden_lineage_reads(code) | observed_rng_reads(tracking_state, code)
+
+
+def note_rng_read(tracking_state: Any, code: str, read: Mapping[str, str | None]) -> None:
+    """Record the lineages the RNG variables *code* drew from had when its
+    key read them (*read*), for :func:`take_rng_reads_at_last_draw`. A
+    statement that drew from no seeded stream drops its record."""
+    try:
+        digest = exact_source_digest(code)
+    except (AttributeError, UnicodeEncodeError):
+        return
+    ledger = tracking_state.rng_read_at_last_draw
+    kept = {var: lineage for var, lineage in read.items() if lineage is not None}
+    if kept:
+        ledger[digest] = kept
+    else:
+        ledger.pop(digest, None)
+
+
+def take_rng_reads_at_last_draw(
+    tracking_state: Any, code: str, reads: Iterable[str], virtual_lineage: dict[str, str]
+) -> None:
+    """Give each RNG variable among *reads* that *virtual_lineage* does not
+    set yet the lineage it had when *code* last drew from it in this kernel.
+
+    The simulation reads a stream no statement above set in its walk from
+    the kernel, where it stands now: moved on by this very draw and any after
+    it. With a stream a seed below the draw seeded on an earlier pass
+    (``np.random.seed(0)`` under ``gs.fit(X, y)``), the check before the next
+    cell keyed the fit on a stream the fit never read, missed the entry the
+    run had just stored, and ran the fit again. The stream as the draw read
+    it is the one the value in memory came from.
+    """
+    ledger = attribute_or(tracking_state, "rng_read_at_last_draw", None)
+    if not ledger or not code:
+        return
+    try:
+        read = ledger.get(exact_source_digest(code))
+    except (AttributeError, UnicodeEncodeError):
+        return
+    if not read:
+        return
+    for var in reads:
+        if var not in virtual_lineage and var in read:
+            virtual_lineage[var] = read[var]
+
+
+def rng_reads_changed(tracking_state: Any, code: str) -> list[str]:
+    """The RNG variables *code* last drew from in this kernel whose lineage
+    is not the one that draw read: the random state its key reads changed.
+
+    Read before the statement's own draw moves the stream on
+    (``_advance_rng``), as the miss reason is. Empty when the statement drew
+    from no seeded stream last time: a first run, or an unseeded draw.
+    """
+    ledger = attribute_or(tracking_state, "rng_read_at_last_draw", None)
+    if not ledger or not code:
+        return []
+    try:
+        read = ledger.get(exact_source_digest(code))
+    except (AttributeError, UnicodeEncodeError):
+        return []
+    current = tracking_state.variable_lineage
+    return sorted(var for var, was in (read or {}).items() if current.get(var) != was)
 
 
 def lineage_hidden_reads(code: str) -> set[str]:

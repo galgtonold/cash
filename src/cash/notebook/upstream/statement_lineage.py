@@ -78,6 +78,7 @@ from ..lineage_formula import (
     recorded_reads_lineage_component,
     setting_output_lineage,
     statement_environment_component,
+    take_rng_reads_at_last_draw,
     value_digests_key,
     without_drawn,
 )
@@ -1077,6 +1078,7 @@ class StatementLineage:
             # RNG state is a hidden lineage variable: a draw reads it,
             # a seed produces it. Kept out of the plain ``inputs``.
             hidden_reads = key_hidden_reads(stmt_code, self.tracking_state)
+            take_rng_reads_at_last_draw(self.tracking_state, stmt_code, hidden_reads, virtual_lineage)
             hidden_writes = hidden_lineage_writes(stmt_code) | self._helper_seed_writes(stmt_code, virtual_lineage)
 
             # A bare ``seed()`` carries no output, so it would return below before
