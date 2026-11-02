@@ -209,6 +209,11 @@ class MutationRouting:
             )
             run.must_run = run.mut_record
             return changed - draw_only - fit_only, draw_only, fit_only
+        # The verdict an earlier kernel learned for this text, as the
+        # simulation reads it (`StatementLineage._mutation_verdict`): without
+        # it the first run after a restart fingerprinted every frame the
+        # statement hands on before its lookup, and a hit threw that away.
+        self._recall_verdict(run.source_hash)
         mut_pre_route, run.mut_observe, run.mut_assumed, run.mut_record = self._classifier.classify(
             tree,
             run.source_hash,
@@ -227,9 +232,10 @@ class MutationRouting:
         return mut_pre_route, set(), set()
 
     def _recall_verdict(self, verdict_hash: str) -> None:
-        """Take in the verdict an earlier kernel recorded for a statement of
-        a loop body, once per text: learnt again after every restart, its
-        first pass would run instead of being restored."""
+        """Take in the verdict an earlier kernel recorded for a statement,
+        once per text: learnt again after every restart, a loop body's first
+        pass would run instead of being restored, and a statement's first
+        lookup would fingerprint what it hands on."""
         verdicts = self.tracking_state.mutation_verdicts
         if verdict_hash in verdicts or verdict_hash in self._unrecorded:
             return
@@ -439,6 +445,7 @@ class MutationRouting:
             verdict_hash = run.verdict_hash or run.source_hash
             self.tracking_state.mutation_verdicts[verdict_hash] = set(run.mut_assumed) | newly_mutated
             self._records.persist_mutation_verdict(verdict_hash, self.tracking_state.mutation_verdicts[verdict_hash])
+            self._unrecorded.discard(verdict_hash)  # recorded now, for after a reset
         elif run.rewatching:
             self._observe_rewatch(run)
         if body and self._in_loop is not None:
