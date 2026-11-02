@@ -32,7 +32,7 @@ from cash.source_norm import exact_source_digest, unparse_without_docstrings
 from cash.tracking.function_tracker import is_local_module
 from cash.tracking.randomness import rng_carrier_kind
 
-from .held_functions import held_notebook_code
+from .held_functions import held_notebook_code, held_notebook_code_at
 from .held_modules import held_data_part, held_module_parts
 from .installed_code import installed_code_parts
 from .lineage_formula import (
@@ -481,6 +481,14 @@ def called_function_dependencies(
     referenced: set[str] = set()
     attribute_only: set[str] = set()
     used_virtual = False
+    # What a name held when the statement ran is remembered for the lineage
+    # it had then (`held_notebook_code_at`): the simulation asks for that
+    # one, not for what the name holds now. ``preprocessing =
+    # ColumnTransformer([... cluster_simil ...])`` below ``housing_prepared
+    # = preprocessing.fit_transform(housing)`` gave the name a notebook
+    # class the value the statement ran on never held, so the simulation
+    # keyed it with that class's code, never found its entry, and every
+    # lineage built from it differed from the run's.
     codes: dict[str, list[types.CodeType]] = {}
     #: ids of the code reached only through what a name holds, not named.
     held_only: set[int] = set()
@@ -489,7 +497,7 @@ def called_function_dependencies(
         nonlocal used_virtual
         if name in codes:
             return codes[name]
-        found = _held_codes(name, user_ns, variable_lineage, unfollowed, module_classes)
+        found = _held_codes(name, user_ns, variable_lineage, unfollowed, module_classes, simulated)
         own = attribute_or(user_ns.get(name), "__code__")
         held_only.update(id(code) for code in _nested_codes_of(c for c in found if c is not own))
         if not found and virtual is not None and name not in user_ns:
@@ -737,11 +745,16 @@ def _held_codes(
     variable_lineage: Mapping[str, str] | None,
     unfollowed: set[str] | None,
     module_classes: dict[int, type] | None = None,
+    simulated: Mapping[str, str] | None = None,
 ) -> list[types.CodeType]:
     """The code *name*'s value runs when called, and the code of the
     notebook functions it holds (`held_notebook_code`). A function of a
     module is walked by its own code, as it always was. The classes of the
-    user's modules the value holds go into *module_classes*, when given."""
+    user's modules the value holds go into *module_classes*, when given.
+
+    *simulated* (simulation only) is the lineage the statement saw: when
+    it is not the one the name has now, what the value that had it held
+    is answered from the walk made then (`held_notebook_code_at`)."""
     if name not in user_ns:
         return []
     value = user_ns.get(name)
@@ -750,8 +763,11 @@ def _held_codes(
     if code_obj is not None:
         found.append(code_obj)
     lineage = variable_lineage.get(name) if variable_lineage is not None else None
+    then = simulated.get(name) if simulated else None
     try:
-        held = held_notebook_code(value, user_ns, lineage)
+        held = held_notebook_code_at(then, user_ns) if then and then != lineage else None
+        if held is None:
+            held = held_notebook_code(value, user_ns, lineage)
     except Exception:  # an object that cannot be walked is not followed
         logger.debug("[CACHE_KEY] Could not walk %r for the functions it holds", name, exc_info=True)
         if unfollowed is not None:
