@@ -27,9 +27,27 @@ from ..tracking_state import TrackingState
 if TYPE_CHECKING:
     from ..statement import ProcessResult
 
-__all__ = ["StatementReplay"]
+__all__ = ["StatementReplay", "UpstreamRepairGap"]
 
 logger = logging.getLogger(__name__)
+
+
+class UpstreamRepairGap(UpstreamStateError):
+    """A statement cash re-ran above the cell failed because cash's plan left
+    out a statement above it that sets what it reads.
+
+    Not the user's failure and not one a run from the top has: cash could not
+    give the statement its inputs as the notebook has them. The upstream
+    check puts back what the repair rebound, and the cell runs as written,
+    uncached, with ``NOTEBOOK-REPAIR-GAP``.
+    """
+
+    def __init__(self, message: str, *, stmt_code: str, error_text: str, producer: str, cell_no: int | None) -> None:
+        super().__init__(message)
+        self.stmt_code = stmt_code
+        self.error_text = error_text
+        self.producer = producer
+        self.cell_no = cell_no
 
 
 @functools.lru_cache(maxsize=NOTEBOOK_VERSIONS)
@@ -242,15 +260,7 @@ class StatementReplay:
                             text = (
                                 f"{type(error).__name__}: {error}" if isinstance(error, BaseException) else str(error)
                             )
-                            raise UpstreamStateError(
-                                self._format_upstream_failure(
-                                    stmt_code,
-                                    text,
-                                    planning_gap=self._planning_gap_for(
-                                        error, statements[:stmt_idx], stmt_code=stmt_code, notebook_cells=notebook_cells
-                                    ),
-                                )
-                            )
+                            raise self._failure(error, text, stmt_code, statements[:stmt_idx], notebook_cells)
             except UpstreamStateError:
                 raise
             except Exception as e:
@@ -269,14 +279,8 @@ class StatementReplay:
                 # cell with the upstream failure instead, like a plain
                 # top-to-bottom run would.
                 logger.error("[ERROR] Failed to auto-execute statement: %s", e)
-                raise UpstreamStateError(
-                    self._format_upstream_failure(
-                        stmt_code,
-                        f"{type(e).__name__}: {e}",
-                        planning_gap=self._planning_gap_for(
-                            e, statements[:stmt_idx], stmt_code=stmt_code, notebook_cells=notebook_cells
-                        ),
-                    )
+                raise self._failure(
+                    e, f"{type(e).__name__}: {e}", stmt_code, statements[:stmt_idx], notebook_cells
                 ) from e
 
             # Report progress after each statement
@@ -288,6 +292,51 @@ class StatementReplay:
                     pass  # Don't let progress reporting break execution
 
         return executed_metrics
+
+    def _failure(
+        self,
+        exc: object,
+        error_text: str,
+        stmt_code: str,
+        already_scheduled: list[str],
+        notebook_cells: list[str] | None,
+    ) -> UpstreamStateError:
+        """The error a failed repair raises: :class:`UpstreamRepairGap` when a
+        statement above, left out of the plan, sets what the failed one
+        reads; else an :class:`UpstreamStateError` naming the statement.
+
+        Only the first is cash's own gap: the statement could not run on its
+        inputs as the notebook has them, so the cell runs as written instead
+        of failing. Any other failure stops the cell, as a run from the top
+        stops at that statement.
+        """
+        producer = self._gap_producer(exc, already_scheduled, stmt_code, notebook_cells)
+        planning_gap = self._planning_gap_for(
+            exc, already_scheduled, stmt_code=stmt_code, notebook_cells=notebook_cells
+        )
+        message = self._format_upstream_failure(stmt_code, error_text, planning_gap=planning_gap)
+        if producer is not None and producer[1] is not None:
+            return UpstreamRepairGap(
+                message, stmt_code=stmt_code, error_text=error_text, producer=producer[0], cell_no=producer[1]
+            )
+        return UpstreamStateError(message)
+
+    def _gap_producer(
+        self,
+        exc: object,
+        already_scheduled: list[str],
+        stmt_code: str | None,
+        notebook_cells: list[str] | None,
+    ) -> tuple[str, int | None] | None:
+        """The statement above, left out of the plan, that sets what *exc*
+        says is missing; ``None`` when there is none or it cannot be told."""
+        try:
+            missing = self._what_is_missing(exc)
+            if missing is None:
+                return None
+            return self._unscheduled_producer(missing[0], missing[1], stmt_code, already_scheduled, notebook_cells)
+        except Exception:  # noqa: BLE001 - a diagnostic must never mask the error
+            return None
 
     def _planning_gap_for(
         self,

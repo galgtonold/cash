@@ -23,6 +23,7 @@ from ...exceptions import (
     ForwardReferenceError,
     UpstreamStateError,
 )
+from ..upstream.replay import UpstreamRepairGap
 from ._types import RunInstead
 
 if TYPE_CHECKING:
@@ -262,6 +263,10 @@ class UpstreamResolution:
         - SyntaxError (a cell above does not parse): run the cell as written.
         - ForwardReferenceError (the cell reads a name only a cell below
           binds): NOTEBOOK-FORWARD-READ, and the cell runs uncached.
+        - UpstreamRepairGap (a statement above, re-run to bring the cell up
+          to date, failed for a statement cash's plan left out; the check
+          put back what the repair rebound): NOTEBOOK-REPAIR-GAP, and the
+          cell runs as written, uncached.
         - RuntimeError / AmbiguousCellError / UpstreamStateError: a fresh
           raise of the same error, run as the cell, so the cell fails loudly
           and IPython attributes it there.
@@ -280,6 +285,28 @@ class UpstreamResolution:
                     "NOTEBOOK-FORWARD-READ",
                     what=f"{caught} This cell ran uncached, on the value in memory.",
                     fix="Move the binding above this cell, or move this cell below it.",
+                )
+            except Exception:  # noqa: BLE001 - a diagnostic must never break a cell
+                pass
+            self._badges.close(badge_display_id, status="BYPASSED")
+            return RunInstead(raw_cell, caught)
+        if isinstance(caught, UpstreamRepairGap):
+            # cash could not give the statement its inputs as the notebook
+            # has them, so it cannot give the cell what a run from the top
+            # gives either. Failing the cell blocked one that runs; it runs
+            # as plain Jupyter runs it instead, uncached, and says why.
+            where = f"cell {caught.cell_no}" if caught.cell_no else "a cell above"
+            try:
+                warn_diagnostic(
+                    CashCacheIneffectiveWarning,
+                    "NOTEBOOK-REPAIR-GAP",
+                    what=(
+                        f"to bring this cell up to date cash re-ran `{caught.stmt_code.splitlines()[0][:60]}`, "
+                        f"which failed ({caught.error_text[:120]}) because cash did not re-run "
+                        f"`{caught.producer.splitlines()[0][:60]}` ({where}) first, so this cell ran as written, "
+                        "on the values in memory, uncached."
+                    ),
+                    fix=f"Run {where} and the cells below it, or Restart & Run All; please report it.",
                 )
             except Exception:  # noqa: BLE001 - a diagnostic must never break a cell
                 pass

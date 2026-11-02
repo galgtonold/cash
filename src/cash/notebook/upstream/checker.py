@@ -29,7 +29,7 @@ from ..staleness import StalenessTracker, normalise_source
 from ..statement.carrier_advances import reachable_generators
 from ..tracking_state import TrackingState
 from .notebook_vetting import NotebookVetter
-from .replay import StatementReplay
+from .replay import StatementReplay, UpstreamRepairGap
 from .rng_rewind import RngRewind
 from .simulator import NotebookSimulator
 
@@ -49,6 +49,9 @@ class UpstreamResult(NamedTuple):
 
 
 logger = logging.getLogger(__name__)
+
+# A name the namespace did not hold (``None`` is a value).
+_UNBOUND = object()
 
 
 @functools.lru_cache(maxsize=NOTEBOOK_CELLS)
@@ -662,6 +665,31 @@ class UpstreamChecker:
                 "cell again."
             )
 
+    def _put_back(self, bindings: dict[str, Any], lineages: dict[str, str]) -> None:
+        """Bind every name the repair restored or re-ran to what it held
+        before, with the lineage it had then.
+
+        A repair that cannot finish leaves some names rebuilt and others not
+        (``data = []`` re-run, the loop that fills it failing): a cell run on
+        that mix reads values neither a plain run nor a run from the top
+        gives. Put back, the cell runs on what plain Jupyter has. A change the
+        repair made inside an object it did not rebind stays.
+        """
+        user_ns = self.shell.user_ns
+        lineage = self.tracking_state.lineage
+        for name in set(user_ns) | set(bindings):
+            before = bindings.get(name, _UNBOUND)
+            if user_ns.get(name, _UNBOUND) is before:
+                continue
+            if before is _UNBOUND:
+                user_ns.pop(name, None)
+            else:
+                user_ns[name] = before
+            if name in lineages:
+                lineage.reset_to(name, lineages[name])
+            else:
+                lineage.discard(name)
+
     def _rebuilt_names(self, statements: list[str], restored_info: list[ProcessResult]) -> set[str]:
         """What the planned re-runs bind, and what the simulation restored."""
         names: set[str] = set()
@@ -730,6 +758,10 @@ class UpstreamChecker:
             self.simulator.restorer.guard = (lambda names: self._refuse_to_undo(unsaved, names)) if unsaved else None
             self.simulator.restorer.lookup_ttl = global_ttl
             records_before = self.simulator.lineage_records()
+            # What the namespace held before anything was restored or re-run,
+            # to put back if the repair turns out to have a gap.
+            bindings_before = dict(self.shell.user_ns)
+            lineages_before = dict(self.tracking_state.variable_lineage)
             # The cell's own source goes along: the classifier re-simulates it to
             # tell its own earlier run apart from an upstream edit.
             statements_to_reexecute, restored_info, total_restore_time = self.simulator.simulate_upstream(
@@ -751,17 +783,21 @@ class UpstreamChecker:
 
             executed_metrics = []
             if statements_to_reexecute:
-                executed_metrics = self.replay.reexecute(
-                    statements_to_reexecute,
-                    process_statement_callback,
-                    global_ttl,
-                    progress_callback=progress_callback,
-                    restored_info=restored_info,
-                    control_structure_callback=control_structure_callback,
-                    annotations=self.replay.statement_directives(notebook_cells),
-                    exec_sources=self.replay.statement_exec_sources(notebook_cells),
-                    notebook_cells=notebook_cells,
-                )
+                try:
+                    executed_metrics = self.replay.reexecute(
+                        statements_to_reexecute,
+                        process_statement_callback,
+                        global_ttl,
+                        progress_callback=progress_callback,
+                        restored_info=restored_info,
+                        control_structure_callback=control_structure_callback,
+                        annotations=self.replay.statement_directives(notebook_cells),
+                        exec_sources=self.replay.statement_exec_sources(notebook_cells),
+                        notebook_cells=notebook_cells,
+                    )
+                except UpstreamRepairGap:
+                    self._put_back(bindings_before, lineages_before)
+                    raise
             self.rng.label_rerun_metrics(executed_metrics, rng_rerun)
             total_execution_time = self.replay.sum_execution_times(executed_metrics)
 

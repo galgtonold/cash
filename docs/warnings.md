@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @63a1c4ee -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @262d6a3f -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -1834,6 +1834,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-NOT-FOUND](#notebook-not-found) | notebook | the notebook's cells cannot be read; cells above the one you run are not re-checked |
 | [NOTEBOOK-REDUCE-WROTE](#notebook-reduce-wrote) | notebook | a value's own `__reduce__` or `__getstate__` changes other values, so cash does not pickle it, and the statement is not stored |
 | [NOTEBOOK-RELOAD-STATE](#notebook-reload-state) | notebook | a reload or restart dropped state cells set on a module, and cash cannot rebuild it |
+| [NOTEBOOK-REPAIR-GAP](#notebook-repair-gap) | notebook | a statement above the cell, re-run to bring it up to date, failed because cash left out a statement it needs, so the cell runs as written, uncached |
 | [NOTEBOOK-SAVEFIG-SKIP](#notebook-savefig-skip) | notebook | a `plt.savefig` was not re-run |
 | [NOTEBOOK-SHARE-UNCHECKED](#notebook-share-unchecked) | notebook | not every variable sharing an object with a statement's outputs was found in time |
 | [NOTEBOOK-SHARED-KEPT](#notebook-shared-kept) | notebook | a value a variable below shares is kept as it is for a cell re-run on its own |
@@ -2086,7 +2087,7 @@ such as a checkpoint read after a restart, never gives this warning.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/notebook/upstream/notebook_vetting.py:NotebookVetter._refuse_forward_references @a173133d, cash/notebook/ipython/upstream_phase.py:UpstreamResolution._step_aside @90bc587e -->
+<!-- claim: cash/notebook/upstream/notebook_vetting.py:NotebookVetter._refuse_forward_references @a173133d, cash/notebook/ipython/upstream_phase.py:UpstreamResolution._step_aside @fbf69e5b -->
 **What happened.** The cell reads, at module level, a name that only a later
 cell binds (`y = x + 1` above `x = 10`). It works now because that cell already
 ran, so the cell runs as plain Jupyter runs it, on the value in memory, but
@@ -2337,6 +2338,26 @@ next time, `import mylib` in a cell above the statements that set it.
 
 **When it is safe to ignore.** When you removed what the statements set on
 purpose and no cell reads it any more.
+
+### NOTEBOOK-REPAIR-GAP {#notebook-repair-gap}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
+
+<!-- claim: cash/notebook/upstream/replay.py:StatementReplay._failure @b2ec7f5b, cash/notebook/upstream/checker.py:UpstreamChecker._put_back @d0bf8f4e, cash/notebook/ipython/upstream_phase.py:UpstreamResolution._step_aside @fbf69e5b -->
+**What happened.** To give the cell what a run from the top gives, cash re-ran
+statements above it, and one of them failed because cash did not re-run first
+a statement above it that sets what it reads. The message names both. Cash put
+back every name the repair had rebound and ran the cell as written, on the
+values in memory, uncached.
+
+**Why it matters.** The cell's result is what plain Jupyter gives, which can
+differ from a run from the top when a cell above was edited.
+
+**What to do.** Run the cell the message names and the cells below it, or
+Restart & Run All. Please report it: it is a gap in cash's plan.
+
+**When it is safe to ignore.** When the cells above have not changed since
+they last ran.
 
 ### NOTEBOOK-SAVEFIG-SKIP {#notebook-savefig-skip}
 

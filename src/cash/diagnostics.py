@@ -342,6 +342,9 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # file and nothing sends unsaved edits; shown once per session
         "NOTEBOOK-NOT-FOUND",  # no notebook cells to read; cells above the one
         # run are not re-checked, statements still cache on their own inputs
+        "NOTEBOOK-REPAIR-GAP",  # a statement above the cell, re-run to bring
+        # it up to date, failed for a statement cash left out; the cell runs
+        # as written, uncached
         "NOTEBOOK-REDUCE-WROTE",  # a value's own __reduce__ / __getstate__,
         # run when cash pickled it, changes other values: they count as
         # changed, and the statement is not stored
