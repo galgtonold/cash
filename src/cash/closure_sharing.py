@@ -16,16 +16,18 @@ seen.
 
 from __future__ import annotations
 
+import bisect
 import io
 import operator
 import pickle
 import sys
 import types
 from collections.abc import Iterable, Mapping
-from itertools import chain, compress, islice, repeat
+from itertools import accumulate, chain, compress, count, islice, repeat
 from typing import Any, NamedTuple
 
 from cash._clock import CpuLimit
+from cash._native import kernels as _KERNELS
 from cash._plain_data import TREE_NODES, in_a_look, tree_facts, tree_levels
 from cash._type_memo import MroMemo, TypeMemo, type_key
 from cash._user_attrs import own_dict
@@ -277,17 +279,52 @@ def _fresh(held: list[Iterable[Any]], places: set[int] | dict[int, Any], limit: 
 
 
 def _without_leaf_records(chunk: list) -> list:
-    """*chunk* without its tuples, when each of them holds leaves alone:
-    such a tuple holds no function and nothing that can change, so no
-    identity of it a restore must keep, as a leaf has none. Told at C speed;
-    a frame's two million ``(action, time)`` records were each made a place
-    one by one, 2 s a statement (student_8)."""
+    """*chunk* without those of its tuples that hold leaves alone: such a
+    tuple holds no function and nothing that can change, so no identity of
+    it a restore must keep, as a leaf has none. Told at C speed; a frame's
+    two million ``(action, time)`` records were each made a place one by
+    one, 2 s a statement (student_8). Each tuple is told on its own: the
+    few that hold more (the state numpy's ``__reduce_ex__`` gives beside an
+    object column's cells) kept every record of their chunk a place, 4 s a
+    statement."""
     is_tuple = list(map(operator.is_, map(type, chunk), repeat(tuple)))
     if not any(is_tuple):
         return chunk
-    if not _LEAVES.issuperset(map(type, chain.from_iterable(compress(chunk, is_tuple)))):
-        return chunk
-    return list(compress(chunk, map(operator.not_, is_tuple)))
+    every = all(is_tuple)
+    tuples = chunk if every else list(compress(chunk, is_tuple))
+    held = [
+        start + at
+        for start in range(0, len(tuples), _RECORDS_AT_ONCE)
+        for at in _tuples_holding_more(tuples[start : start + _RECORDS_AT_ONCE])
+    ]
+    if every:
+        return [tuples[at] for at in held]
+    keep = list(map(operator.not_, is_tuple))
+    position = list(compress(count(), is_tuple))
+    for at in held:
+        keep[position[at]] = True
+    return list(compress(chunk, keep))
+
+
+#: Tuples `_without_leaf_records` asks about at once: a run of records
+#: holding leaves alone is dropped by one question, and the few holding
+#: more are found among this many.
+_RECORDS_AT_ONCE = 4096
+
+
+def _tuples_holding_more(tuples: list) -> list[int]:
+    """The positions in *tuples* of those holding anything but leaves."""
+    if _KERNELS is not None and _KERNELS.leaf_items(tuples, 0, _LEAVES) is True:
+        return []
+    # Of the items of the tuples in a row, the positions of those that are
+    # no leaf: each tells the tuple it is in.
+    beyond = list(
+        compress(count(), map(operator.not_, map(_LEAVES.__contains__, map(type, chain.from_iterable(tuples)))))
+    )
+    if not beyond:
+        return []
+    ends = list(accumulate(map(len, tuples)))
+    return sorted({bisect.bisect_right(ends, position) for position in beyond})
 
 
 #: Per class, held weakly: ``(index in its MRO, name)`` of each slot, not
