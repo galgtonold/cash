@@ -715,6 +715,19 @@ from cash import Cash
             self._save_notebook()
         return self
 
+    def insert_cell(self, cell_num: int, source: str) -> "NotebookTestRunner":
+        """Insert a new code cell so it becomes cell *cell_num* (1-based), and
+        save the notebook.
+
+        The cells from *cell_num* on move down one and keep their ids, as
+        when a user inserts a cell above them in the editor.
+        """
+        cell = nbformat.v4.new_code_cell(source)
+        cell.id = f"inserted_{len(self.nb.cells)}"
+        self.nb.cells.insert(cell_num - 1, cell)
+        self._save_notebook()
+        return self
+
     def run_cell(self, cell_num: int) -> "NotebookTestRunner":
         """Execute a single cell (1-based indexing)."""
         if not self._kernel_started:

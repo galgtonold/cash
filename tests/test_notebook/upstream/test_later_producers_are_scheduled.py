@@ -78,3 +78,17 @@ def test_a_function_reading_an_accumulator_is_not_a_rerun_of_its_loop():
     fully = LoopRules._loop_vars_fully_rescheduled(None, [2], trace, {"results"})
     assert fully == set(), "reading results.items() was taken for re-running the loop"
     assert LoopRules._loop_vars_fully_rescheduled(None, [1], trace, {"results"}) == {"results"}
+
+
+def test_an_init_rerun_for_an_in_place_sort_brings_the_loop_that_fills_it():
+    """``data.sort()`` re-run brings ``data = []`` along so the sort does not
+    act on the list twice; the loop between them must come too, or the sort
+    sorts an empty list."""
+    trace = [
+        _entry("data = []", ("data",)),
+        _entry("for row in raw:\n    data.append(row)", ("data", "row"), ("raw", "data")),
+        _entry("data.sort()", ("data",), ("data",)),
+        _entry("n = len(data)", ("n",), ("data",)),
+    ]
+    rules = LoopRules(types.SimpleNamespace(user_ns={"data": [2, 1], "raw": [1, 2]}), TrackingState())
+    assert sorted(rules.filter_accumulator_reinits([2], trace, {"data"})) == [0, 1, 2]
