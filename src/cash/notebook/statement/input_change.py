@@ -16,7 +16,19 @@ from ..lineage_formula import resolve_lineage_alias, rng_reads_changed
 if TYPE_CHECKING:
     from ..tracking_state import TrackingState
 
-__all__ = ["input_change_reason", "random_state_change_reason", "stored_input_change_reason", "version_slot"]
+__all__ = [
+    "PASS_RECORDS",
+    "input_change_reason",
+    "note_pass_entry",
+    "pass_input_change_reason",
+    "pass_slot",
+    "random_state_change_reason",
+    "stored_input_change_reason",
+    "version_slot",
+]
+
+#: How many statements-in-a-pass `TrackingState.pass_entry_lineages` keeps.
+PASS_RECORDS = 4096
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +39,59 @@ def version_slot(source_hash: str, outputs: Iterable[str]) -> str:
     same statement share a slot; a version one of them reads in this process
     is never pruned for the other."""
     return hashlib.sha256(f"{source_hash}|{','.join(sorted(outputs))}".encode()).hexdigest()[:32]
+
+
+def pass_slot(code: str, loop_var_digests: Mapping[str, str]) -> str:
+    """Which statement *code* is in which pass of the loops around it: the
+    digests of their variables, by depth (`CallRouting`)."""
+    passes = ",".join(f"{name}={digest}" for name, digest in sorted(loop_var_digests.items()))
+    return hashlib.sha256(f"{exact_source_digest(code)}|{passes}".encode()).hexdigest()
+
+
+def note_pass_entry(tracking_state: TrackingState, slot: str, entry: dict[str, str]) -> dict[str, str] | None:
+    """Record *entry*, the lineages a statement's inputs have as it runs in
+    a pass (*slot*); return the ones it had the last time there."""
+    record = tracking_state.pass_entry_lineages
+    before = record.pop(slot, None)
+    record[slot] = entry
+    while len(record) > PASS_RECORDS:
+        del record[next(iter(record))]
+    return before
+
+
+def pass_input_change_reason(
+    before: Mapping[str, str] | None, current: Mapping[str, str], inputs, outputs
+) -> str | None:
+    """The miss reason of a statement run in a loop's pass, against the
+    lineages its inputs had the last time it ran in that same pass
+    (*before*), or None.
+
+    ``for s ...: for l ...: path = ...; for file in sorted(os.listdir(path)):
+    ... pbar.update()``: compared with the last run of the statement,
+    whichever pass that was, the loop's own variables always differ, and
+    the badge said ``input changed: l, path`` where the bar had moved. In
+    the same pass they are the same, and what did move is named: a name it
+    only reads first, then one it also changes.
+    """
+    if not before:
+        return None
+    outputs = set(outputs or ())
+    read = {name for name in inputs or () if isinstance(name, str)}
+
+    def moved(names) -> list[str]:
+        return sorted(
+            name
+            for name in names
+            if name in before
+            and name in current
+            and resolve_lineage_alias(current[name]) != resolve_lineage_alias(before[name])
+        )
+
+    stale = moved(read - outputs) or moved(read & outputs)
+    if not stale:
+        return None
+    more = f" +{len(stale) - 3} more" if len(stale) > 3 else ""
+    return f"input changed: {', '.join(stale[:3])}{more}"
 
 
 def input_change_reason(tracking_state: TrackingState, inputs, outputs) -> str | None:

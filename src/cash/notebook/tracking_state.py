@@ -182,6 +182,15 @@ class TrackingState:
     # W: StatementProcessor. R: StatementLineage, VirtualLineage.
     rng_read_at_last_draw: dict[str, dict[str, str]] = field(default_factory=dict)
 
+    # `pass_slot` (a statement in one pass of the loops around it) -> the
+    # lineages its inputs had when it last ran or was served there. The
+    # records by output name (`executed_input_lineages`) and the stored
+    # versions of a statement are shared by every pass: compared with them,
+    # a miss named the loop variables, which differ from pass to pass.
+    # Bounded (`PASS_RECORDS`), oldest first out.
+    # W: StatementProcessor. R: the miss reason (`pass_input_change_reason`).
+    pass_entry_lineages: dict[str, dict[str, str]] = field(default_factory=dict)
+
     # sha256(statement source) -> the RNG variables it last drew from while
     # they were unseeded (no lineage): a seed since moved its random state.
     # W: StatementProcessor. R: the miss reason (`rng_reads_changed`).

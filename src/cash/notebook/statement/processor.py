@@ -94,6 +94,9 @@ from cash.notebook.statement.imports import (
 from cash.notebook.statement.in_loop import InLoopChanges
 from cash.notebook.statement.input_change import (
     input_change_reason,
+    note_pass_entry,
+    pass_input_change_reason,
+    pass_slot,
     random_state_change_reason,
     stored_input_change_reason,
     version_slot,
@@ -1345,9 +1348,11 @@ class StatementProcessor:
             run.analysis_budget.tripped = True
         self._settle_budget(run)
         lineage = self.tracking_state.variable_lineage
-        self.tracking_state.statement_entry_lineages[run.code] = {
-            name: lineage[name] for name in run.inputs if name in lineage
-        }
+        entry = {name: lineage[name] for name in run.inputs if name in lineage}
+        self.tracking_state.statement_entry_lineages[run.code] = entry
+        if self._calls.in_loop:
+            run.pass_slot = pass_slot(run.code, self._calls.current_loop_var_digests_for_call_key())
+            run.pass_lineages_before = note_pass_entry(self.tracking_state, run.pass_slot, entry)
         # An UNSEEDED estimator fit routed to caching above is frozen on re-run
         # with no warning -- cash's AST detector cannot see the randomness inside
         # sklearn's compiled .fit(). Warn now (compute time); the same set drives
@@ -2743,10 +2748,20 @@ class StatementProcessor:
         elif not run.skip_cache and not self._evicted.attribute(
             metrics, self.cash_instance.backend, run.cache_key, run.code, execution.cost
         ):
-            reason = input_change_reason(self.tracking_state, run.inputs, run.outputs)
+            if run.pass_slot is not None:
+                # In a loop's pass: the record by output name and a version
+                # stored for the statement both belong to whichever pass ran
+                # last; only the same pass's record says what moved.
+                reason = pass_input_change_reason(
+                    run.pass_lineages_before, self.tracking_state.variable_lineage, run.inputs, run.outputs
+                )
+            else:
+                reason = input_change_reason(self.tracking_state, run.inputs, run.outputs)
             if reason is None:
                 reason = random_state_change_reason(self.tracking_state, run.code)
-            if reason is None:
+            if reason is None and (run.pass_slot is None or has_marker(run.code)):
+                # A statement of a pass carries the pass in its text, and so
+                # in its versions' slot; a loop run as one unit in a pass does not.
                 reason = stored_input_change_reason(
                     self.cash_instance.backend,
                     run.cache_key,

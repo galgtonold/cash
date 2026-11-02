@@ -117,6 +117,11 @@ class StatementRun:
 
     metrics: ProcessResult = field(default_factory=dict)  # type: ignore[assignment]
     process_start: float = 0.0
+    #: For a statement run in a loop's pass: which statement in which pass
+    #: (`pass_slot`), and the lineages its inputs had when it last ran or
+    #: was served there (None: not in this kernel), for the miss reason.
+    pass_slot: str | None = None
+    pass_lineages_before: dict[str, str] | None = None
     #: `reducer_writes.runs_now` when the statement began: the reducers of
     #: the user's cash's pickles run from then on are this statement's.
     reducer_mark: int = 0
