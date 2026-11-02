@@ -42,6 +42,7 @@ __all__ = [
     "note_fresh_entry",
     "note_fresh_snapshot",
     "stat_keys_this_run",
+    "stats_taken_this_run",
     "stats_this_run",
     "RunStats",
 ]
@@ -87,7 +88,9 @@ def file_state_this_run() -> dict | None:
         return None
     if _FILE_STATE_THIS_RUN.get("epoch") != epoch:
         _FILE_STATE_THIS_RUN.clear()
-        _FILE_STATE_THIS_RUN.update(epoch=epoch, memo=FreshnessMemo(), stat={}, since=time.monotonic())
+        _FILE_STATE_THIS_RUN.update(
+            epoch=epoch, memo=FreshnessMemo(taken=stats_taken_this_run), stat={}, since=time.monotonic()
+        )
     return _FILE_STATE_THIS_RUN
 
 
@@ -214,6 +217,9 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
         stat = os.stat
         if getattr(stat, "_is_file_tracker_patch", False):
             stat = stat._original_func  # as `own_stat`, once for the lot
+        if run is not None and "stat_at" not in run:
+            # When the oldest stat the run keeps was taken (`stats_taken_this_run`).
+            run["stat_at"] = time.monotonic()
         for p in todo:
             st = listed.get(p) if listed else None
             if st is None and not ("://" in p and is_remote_url(p)):
@@ -238,6 +244,29 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
             else:
                 elsewhere[p] = (resolved, st)
     return RunStats(paths, stats, elsewhere)
+
+
+def stats_taken_this_run(paths: Iterable[str], not_before: float | None = None) -> Mapping[str, os.stat_result]:
+    """``{path: stat}`` of this run's stats of *paths* (`stats_this_run`)
+    for the paths found where they were recorded, taking the missing ones
+    now; outside a run, nothing.
+
+    With *not_before* (``time.monotonic()``), nothing unless every stat the
+    run keeps was taken since: a caller whose answers last no longer than
+    that (``CacheFreshnessChecker``) takes older ones again itself, as
+    before. One time for the lot, not one per file: the run keeps one
+    record per file (`RunStats`).
+
+    What `FreshnessMemo.taken` hands every freshness check of the run: the
+    check of an entry's files, the simulation's and the statement lookup's
+    each stat-ed the same 20,000 files again before a trivial cell."""
+    run = file_state_this_run()
+    if run is None:
+        return {}
+    if not_before is not None and run.get("stat_at", not_before) < not_before:
+        return {}
+    stats_this_run(paths)
+    return run["stat"]
 
 
 def stat_keys_this_run(paths: Iterable[str]) -> Mapping[str, tuple[int, int, int] | None]:

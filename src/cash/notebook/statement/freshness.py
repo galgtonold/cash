@@ -41,7 +41,7 @@ from ...value_types import IMMUTABLE_LEAF_TYPES
 from ..call_refs import resolve_call_refs
 from ..helper_memos import unfilled as memos_unfilled
 from ..restored_var import present_holders
-from ..run_memo import fresh_snapshot_this_run
+from ..run_memo import fresh_snapshot_this_run, stats_taken_this_run
 from ._metadata import StatementCacheMetadata
 
 if TYPE_CHECKING:
@@ -87,6 +87,13 @@ def _without_unbound_holders(
     return metadata, cached_data
 
 
+def _recent_run_stats(paths: Any) -> Any:
+    """This cell run's stats of *paths* that are no older than this
+    checker's answers may be (``_ANSWERS_LAST_S``), the missing ones taken
+    now for the run's other checks too (`run_memo.stats_taken_this_run`)."""
+    return stats_taken_this_run(paths, time.monotonic() - _ANSWERS_LAST_S)
+
+
 class CacheFreshnessChecker:
     """Decide whether a cache entry is still fresh.
 
@@ -113,7 +120,7 @@ class CacheFreshnessChecker:
         #: The file read by the statement itself whose change made the last
         #: lookup a miss, or None.
         self.last_stale_file: str | None = None
-        self._memo = FreshnessMemo()
+        self._memo = FreshnessMemo(taken=_recent_run_stats)
         #: Dependency sets verified fresh whole, while the answers above last.
         self._fresh_sets: list[dict] = []
         self._epoch: Any = None
@@ -141,7 +148,7 @@ class CacheFreshnessChecker:
         reused this one's answers -- a same-size edit made between the two,
         within the window, was served stale.
         """
-        self._memo = FreshnessMemo()
+        self._memo = FreshnessMemo(taken=_recent_run_stats)
         self._fresh_sets = []
         self._epoch = epoch
         self._answered_at = time.monotonic()
