@@ -161,6 +161,8 @@ KNOWN_PURE_METHODS = frozenset(
         "nsmallest",
         "idxmax",
         "idxmin",
+        "argmax",
+        "argmin",
         # pandas / numpy arithmetic summaries (an ``out=`` target is tier-1 on its own)
         "round",
         "abs",
