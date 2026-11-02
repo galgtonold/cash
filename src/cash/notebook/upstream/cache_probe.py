@@ -29,7 +29,7 @@ from ..cache_key import (
     share_edges_key,
 )
 from ..loop_split import is_split_half, loop_source_hash, store_for_backend
-from ..run_memo import file_state_this_run, known_fresh_entry, note_fresh_entry, stats_this_run
+from ..run_memo import file_state_this_run, known_fresh_entry, note_fresh_entry, note_fresh_snapshot, stats_this_run
 from ..statement.derivation_edges import read_share_edges
 
 __all__ = ["CacheProbe", "ControlOutcome"]
@@ -116,6 +116,7 @@ class CacheProbe:
             logger.debug("[UPSTREAM] Forward prop failed: stale file dependency (%s)", stale)
             return False
         note_fresh_entry(memo_key)
+        note_fresh_snapshot(hist_files)
         return True
 
     @staticmethod

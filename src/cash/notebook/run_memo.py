@@ -7,7 +7,8 @@ all of them again, twice (freshness, then mtime) -- 7-11 s before every cell of
 a notebook that runs in 30 s uncached. So the answers are kept:
 
 * per cache entry, the key of each entry found fresh;
-* per file, each freshness answer and each path's resolution and stat.
+* per file, each freshness answer and each path's resolution and stat;
+* per snapshot, each one found fresh whole, and how old its answers are.
 
 The rule for both: they last for one cell run (``file_dep_snapshot.HASH_EPOCH``)
 and nothing is kept outside a run. Within a run, a statement that writes files
@@ -22,6 +23,7 @@ reads and fills both. Neither side imports the other for it.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -32,10 +34,12 @@ from ..tracking.read_classification import own_stat
 
 __all__ = [
     "file_component_this_run",
+    "fresh_snapshot_this_run",
     "file_state_this_run",
     "forget_file_state_this_run",
     "known_fresh_entry",
     "note_fresh_entry",
+    "note_fresh_snapshot",
     "stats_this_run",
 ]
 
@@ -80,7 +84,7 @@ def file_state_this_run() -> dict | None:
         return None
     if _FILE_STATE_THIS_RUN.get("epoch") != epoch:
         _FILE_STATE_THIS_RUN.clear()
-        _FILE_STATE_THIS_RUN.update(epoch=epoch, memo=FreshnessMemo(), where={})
+        _FILE_STATE_THIS_RUN.update(epoch=epoch, memo=FreshnessMemo(), where={}, since=time.monotonic())
     return _FILE_STATE_THIS_RUN
 
 
@@ -88,6 +92,44 @@ def forget_file_state_this_run() -> None:
     """A statement of this cell run wrote files: per-file answers taken before
     it are not answers for entries checked after it."""
     _FILE_STATE_THIS_RUN.clear()
+
+
+#: How many snapshots found fresh one run keeps (`note_fresh_snapshot`).
+_FRESH_SNAPSHOTS_KEPT = 16
+
+
+def note_fresh_snapshot(snap: Mapping[str, Any]) -> None:
+    """Remember that *snap* (a ``file_dependencies`` snapshot) was found fresh
+    whole with this run's per-file answers (``file_state_this_run()["memo"]``).
+
+    Dated by when those answers began to be taken, not by when this check
+    ran: an answer it reused is that old. Kept with them, so a statement that
+    writes files drops it too.
+    """
+    run = file_state_this_run()
+    if run is None:
+        return
+    kept = run.setdefault("fresh", [])
+    if len(kept) < _FRESH_SNAPSHOTS_KEPT:
+        kept.append((snap, run["since"]))
+
+
+def fresh_snapshot_this_run(snap: Mapping[str, Any], not_before: float) -> bool:
+    """Was a snapshot equal to *snap* found fresh whole in this run, from
+    answers taken at *not_before* (``time.monotonic()``) or later?
+
+    The upstream check looks up the entry of the cell above, and the statement
+    below then checks its own entry, which inherited the same files: a frame
+    built from 24,000 documents was checked twice in one cell. The caller
+    says how old an answer it takes. Compared as whole dicts, in C.
+    """
+    epoch = _fds.HASH_EPOCH
+    if epoch is None or _FILE_STATE_THIS_RUN.get("epoch") != epoch:
+        return False
+    return any(
+        at >= not_before and len(known) == len(snap) and known == snap
+        for known, at in _FILE_STATE_THIS_RUN.get("fresh", ())
+    )
 
 
 def _locate_files(paths: Iterable[str], run: dict | None) -> dict[str, tuple[str | None, Any]]:
