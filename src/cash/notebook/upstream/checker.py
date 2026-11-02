@@ -125,6 +125,10 @@ class UpstreamChecker:
         #: What a statement's text last took to run, or None (set by the
         #: magics, as the statement processor's): the cell's analysis budget.
         self.expected_run_time: Callable[[str], float | None] = lambda code: None
+        #: Told the cells above the cell being checked, before the simulation
+        #: (set by the magics, as the statement processor's): a global stream
+        #: none of them seeds is unseeded for the cell, as after a restart.
+        self.streams_above: Callable[[list[str]], None] = lambda cells_above: None
 
         # Proven-stale verdict for the saved .ipynb, held for the session.
         # Populated at the cell-ID match site below, where both the running
@@ -719,6 +723,7 @@ class UpstreamChecker:
             if notebook_cells is None or current_cell_idx is None:
                 return UpstreamResult([], 0.0, 0.0)
             self.vetter.vet(notebook_cells, cell_code, current_cell_idx, required_inputs - self._callee_inputs)
+            self.streams_above(notebook_cells[:current_cell_idx])
             self._simulated = True
 
             unsaved = self._unsaved_bindings(notebook_cells, notebook_path)

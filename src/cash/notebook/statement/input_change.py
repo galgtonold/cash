@@ -8,13 +8,14 @@ from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from cash._user_attrs import attribute_or
+from cash.tracking.randomness import rng_virtual_var
 
-from ..lineage_formula import resolve_lineage_alias
+from ..lineage_formula import resolve_lineage_alias, rng_reads_changed
 
 if TYPE_CHECKING:
     from ..tracking_state import TrackingState
 
-__all__ = ["input_change_reason", "stored_input_change_reason", "version_slot"]
+__all__ = ["input_change_reason", "random_state_change_reason", "stored_input_change_reason", "version_slot"]
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,26 @@ def input_change_reason(tracking_state: TrackingState, inputs, outputs) -> str |
     except (AttributeError, TypeError):  # pragma: no cover - defensive
         return None
     return None
+
+
+def random_state_change_reason(tracking_state: TrackingState, code: str) -> str | None:
+    """The miss reason naming the global random streams whose state changed
+    since the statement last drew from them in this kernel, or None.
+
+    A draw's key reads the lineage of the stream it draws from (a seed, and
+    the draws since). When that alone changed -- a reseed above, a draw added
+    above, a seed below that no longer counts -- the row rendered EXECUTED
+    with no reason, though the cause is known exactly. Read before the
+    statement's own draw moves the stream on.
+    """
+    try:
+        changed = rng_reads_changed(tracking_state, code)
+    except (AttributeError, TypeError):  # pragma: no cover - defensive
+        return None
+    if not changed:
+        return None
+    prefix = rng_virtual_var("")
+    return "random state changed: " + ", ".join(var.removeprefix(prefix) for var in changed)
 
 
 def _budget_cut(state: TrackingState, stale: list[str], current) -> str:

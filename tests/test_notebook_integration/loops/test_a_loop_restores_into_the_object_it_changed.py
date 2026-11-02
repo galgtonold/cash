@@ -374,3 +374,23 @@ def test_an_array_the_notebook_holds_by_identity_runs_the_loop_with_the_warning(
     assert printed == "5998.0 8997000.0"
     assert "RESTORED" not in str(seen)
     assert "NOTEBOOK-IDENTITY-HELD" in _shown(nb_runner, 2)
+
+
+@pytest.mark.fresh_kernel
+def test_an_object_keeping_its_own_bound_method_is_restored_into(nb_runner):
+    """``self._out = self._no_stream``, as pyprind's bar keeps: a copy of
+    the method would call the copy, so the restore binds it to the live
+    object again, and the loop updating the bar is restored, not run."""
+    make = P + "    def quiet(self):\n        return self.n\np = P()\np.out = p.quiet"
+    printed, seen = _run(nb_runner, make, LOOP, "print(p.out.__self__ is p, p.out(), p.n)")
+    assert printed == "True 3000 3000"
+    assert "RESTORED" in str(seen)
+
+
+@pytest.mark.fresh_kernel
+def test_a_bound_method_of_itself_kept_deeper_still_runs_the_loop(nb_runner):
+    """Only the object's own attributes are bound again: a method of it kept
+    inside a list it holds would come back calling the copy."""
+    make = P + "p = P()\np.hooks = [p.update]"
+    _, seen = _run(nb_runner, make, LOOP, "print(p.hooks[0].__self__ is p, p.n)")
+    assert "RESTORED" not in str(seen)

@@ -255,7 +255,10 @@ def _dumps_walked_first(
     pickler raises on other Pythons."""
     reducers, leaf = _KeepDict(protocol, extra, keyed), _held_leaf(_flat_leaf(persistent_id), aliases)
     walk = _Walk(getattr(sink, "walked", None), reducer_override)
-    if _at_most_deep(value, _SAFE_DEPTH, reducers, leaf, walk):
+    # A container too may be taken whole: one the copy has made already
+    # (*persistent_id*), or one the rest of a key holds (*aliases*).
+    held = leaf if persistent_id is not None or type(aliases) is dict else None
+    if _at_most_deep(value, _SAFE_DEPTH, reducers, leaf, walk, held):
         override = walk.override() if walk.reduced else reducer_override
         return _dumps(
             value, protocol, fast, buffer_callback, extra, persistent_id, keyed, aliases, sink, reducers, override
@@ -277,7 +280,9 @@ def _pickler_room() -> int:
     return max(sys.getrecursionlimit() - depth, 0)
 
 
-def _at_most_deep(value: Any, limit: int, reducers: Any, leaf: Any, walk: _Walk | None = None) -> bool:
+def _at_most_deep(
+    value: Any, limit: int, reducers: Any, leaf: Any, walk: _Walk | None = None, held: Any = None
+) -> bool:
     """Is *value* at most *limit* objects deep, as the pickler follows it?
 
     `flatten` made a step for every object to learn the same, and on
@@ -296,6 +301,13 @@ def _at_most_deep(value: Any, limit: int, reducers: Any, leaf: Any, walk: _Walk 
 
     With *walk*, each object's reduce is kept for the pickle that follows
     (`_Walk.override`), so it runs once, and *walk*'s check runs after each.
+
+    *held*, when given, is asked of each builtin container before it is
+    opened, as the pickler asks its persistent id first: one it takes is
+    pickled whole, and nothing below it is followed. Unasked, the walk of a
+    stored entry naming a list the RAM copy had made already opened every
+    record and datetime of it, and asked of each whether it was one: 24,000
+    calls for a log of 3,000 sessions the pickle itself never looked into.
     """
     level = _not_atoms([value])
     seen: set[int] = set()
@@ -317,7 +329,7 @@ def _at_most_deep(value: Any, limit: int, reducers: Any, leaf: Any, walk: _Walk 
                 # way down. `flatten` walks each object once.
                 return False
         alive.append(level)
-        level = _next_level(level, reducers, leaf, walk)
+        level = _next_level(level, reducers, leaf, walk, held)
     return not level
 
 
@@ -327,15 +339,18 @@ def _at_most_deep(value: Any, limit: int, reducers: Any, leaf: Any, walk: _Walk 
 _REWALKED_FREE = 1024
 
 
-def _next_level(level: list, reducers: Any, leaf: Any, walk: _Walk | None = None) -> list:
-    """What the objects of *level* hold that is not an atom."""
+def _next_level(level: list, reducers: Any, leaf: Any, walk: _Walk | None = None, held: Any = None) -> list:
+    """What the objects of *level* hold that is not an atom; not what a
+    builtin container *held* takes holds (`_at_most_deep`)."""
     kinds = list(map(type, level))
     opened = list(map(_OPENED_BY_ITEMS.__contains__, kinds))
     found: list[Any] = []
     containers = list(itertools.compress(level, opened))
+    if containers and held is not None:
+        containers = list(itertools.filterfalse(held, containers))
     if containers:
         found += _not_atoms(list(itertools.chain.from_iterable(containers)))  # a dict's keys too
-        dicts = list(itertools.compress(level, map(_DICT.__contains__, kinds)))
+        dicts = list(itertools.compress(containers, map(_DICT.__contains__, map(type, containers))))
         found += _not_atoms(list(itertools.chain.from_iterable(map(dict.values, dicts))))
     if len(containers) < len(level):
         for obj in itertools.compress(level, map(operator.not_, opened)):

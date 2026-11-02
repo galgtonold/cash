@@ -92,7 +92,7 @@ def refusal(obj: Any, namespace: Mapping[str, Any] | None = None) -> str | None:
         return why if held is None else _identity_refusal(held, it=f"it, {why}")
     parts: set[int] = set()
     weakly: list[Any] = []
-    found = _reaches(_state(obj), obj, seen=parts, weakly=weakly)
+    found = _reaches(_state_without_own_methods(obj), obj, seen=parts, weakly=weakly)
     if found is None:
         return "it holds too many objects to check that it does not hold itself"
     if found:
@@ -401,6 +401,23 @@ def _state(obj: Any) -> list[Any]:
     return [obj.__dict__]
 
 
+def _state_without_own_methods(obj: Any) -> list[Any]:
+    """`_state`, with each attribute bound to a method of *obj* itself
+    replaced by its function: ``self._out = self._no_stream`` (pyprind's
+    bar) does not make a copy hold the copy, since `restore_into` binds
+    such a method to the live object again."""
+    if type(obj) in _CONTAINERS:
+        return _state(obj)
+    state = obj.__dict__
+    return [*state.keys(), *(_unbound(value, obj) for value in state.values())]
+
+
+def _unbound(value: Any, obj: Any) -> Any:
+    if type(value) is types.MethodType and value.__self__ is obj:
+        return value.__func__
+    return value
+
+
 def _reaches(
     roots: Iterable[Any], target: Any, seen: set[int] | None = None, weakly: list[Any] | None = None
 ) -> bool | None:
@@ -448,3 +465,8 @@ def restore_into(live: Any, restored: Any) -> None:
         state = live.__dict__
         state.clear()
         state.update(restored.__dict__)
+        # A method of the copy itself is bound to the live object instead
+        # (`_state_without_own_methods`).
+        for name, value in list(state.items()):
+            if type(value) is types.MethodType and value.__self__ is restored:
+                state[name] = types.MethodType(value.__func__, live)

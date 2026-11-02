@@ -92,7 +92,11 @@ from cash.notebook.statement.imports import (
     redundant_import_names,
 )
 from cash.notebook.statement.in_loop import InLoopChanges
-from cash.notebook.statement.input_change import input_change_reason, stored_input_change_reason
+from cash.notebook.statement.input_change import (
+    input_change_reason,
+    random_state_change_reason,
+    stored_input_change_reason,
+)
 from cash.notebook.statement.lineage import StatementLineageBuilder, clear_rebound_edges
 from cash.notebook.statement.miss_guard import GUARD_SKIP_REASON, MissGuard
 from cash.notebook.statement.mutation_routing import MutationRouting
@@ -181,6 +185,7 @@ from ..lineage_formula import (
     keep_held_lineage,
     key_hidden_reads,
     no_cache_value_digest,
+    note_rng_read,
     use_lineage_alias_store,
 )
 from ..magic_effects import (
@@ -1000,6 +1005,7 @@ class StatementProcessor:
             drawn = drawn_rng_vars(key_hidden_reads(run.code, state), run.code, state.variable_lineage)
         except (SyntaxError, ValueError, AttributeError, RecursionError):
             return
+        note_rng_read(state, run.code, {var: state.variable_lineage.get(var) for var in drawn})
         key = run.rng_advance_key or run.cache_key
         for var in sorted(drawn):
             state.lineage.record(var, advanced_rng_lineage(key, var))
@@ -1057,6 +1063,11 @@ class StatementProcessor:
         """Record a seed no statement set, before the cell's upstream check
         (see :meth:`StatementRandomness.adopt_unseen_seeds`)."""
         self._randomness.adopt_unseen_seeds()
+
+    def unseed_streams_not_seeded_above(self, cells_above: list[str]) -> None:
+        """Count a stream no cell above seeds as unseeded for the cell about
+        to run (see :meth:`StatementRandomness.unseed_streams_not_seeded_above`)."""
+        self._randomness.unseed_streams_not_seeded_above(cells_above)
 
     def begin_cell_rng_observation(self) -> None:
         """Open a fresh per-cell RNG accumulation, before the cell's statements run."""
@@ -2722,6 +2733,8 @@ class StatementProcessor:
             metrics, self.cash_instance.backend, run.cache_key, run.code, execution.cost
         ):
             reason = input_change_reason(self.tracking_state, run.inputs, run.outputs)
+            if reason is None:
+                reason = random_state_change_reason(self.tracking_state, run.code)
             if reason is None:
                 reason = stored_input_change_reason(
                     self.cash_instance.backend,
