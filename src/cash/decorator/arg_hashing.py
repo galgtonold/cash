@@ -381,12 +381,13 @@ def frame_signature(obj: Any) -> tuple:
     Two ways around copy-on-write are closed separately. An Arrow-backed
     array (pandas 3's strings, in a column or an axis) is written by
     swapping the Arrow array it holds, so that array's identity is in the
-    signature. Every other array is written in place through a handle
-    pandas hands out, which is recorded (`watch_array_handles`), or is not
-    memoised at all (`frame_borrows_its_data`).
+    signature, as are a categorical's codes and categories
+    (`_array_signature`). Every other array is written in place through a
+    handle pandas hands out, which is recorded (`watch_array_handles`), or
+    is not memoised at all (`frame_borrows_its_data`).
     """
     mgr = obj._mgr
-    blocks = tuple((id(block.values), id(getattr(block.values, "_pa_array", None))) for block in mgr.blocks)
+    blocks = tuple(_array_signature(block.values) for block in mgr.blocks)
     attrs = pickle.dumps(stable_key_repr(obj.attrs, BUILTIN_CONTENT), protocol=4) if obj.attrs else None
     index = (id(obj.index), _axis_arrays_signature(obj.index), tuple(obj.index.names))
     index += (repr(getattr(obj.index, "freq", None)), attrs)
@@ -397,7 +398,31 @@ def frame_signature(obj: Any) -> tuple:
 
 
 def _axis_arrays_signature(axis: Any) -> tuple:
-    return tuple((id(values), id(getattr(values, "_pa_array", None))) for values in _axis_arrays(axis))
+    return tuple(_array_signature(values) for values in _axis_arrays(axis))
+
+
+def _array_signature(values: Any) -> tuple:
+    """The identities a block's or an axis's array keeps its data in.
+
+    A categorical's are its codes and its dtype, whose categories the
+    content hash reads: by value, ``ordered``, and the identities of the
+    categories and the arrays they keep (`_axis_arrays_signature`). A
+    changed category (``rename_categories``, ``add_categories``,
+    ``set_categories``) is a new dtype on a new categorical; the memo's
+    shallow copy holds the old ones, so no new one can take their ids.
+    """
+    signature: tuple = (id(values), id(getattr(values, "_pa_array", None)))
+    dtype = getattr(values, "dtype", None)
+    if type(dtype).__name__ == "CategoricalDtype":
+        categories = dtype.categories
+        signature += (
+            id(values._ndarray),
+            id(dtype),
+            dtype.ordered,
+            id(categories),
+            _axis_arrays_signature(categories),
+        )
+    return signature
 
 
 def _axis_arrays(axis: Any) -> list:
@@ -438,12 +463,18 @@ def frame_borrows_its_data(
     Memory an ndarray does not own at the end of the chain -- an Arrow
     buffer (``read_parquet``), a memory map, a Python buffer -- can be
     shared in ways no reference count shows, and so can an extension array
-    other than dates, durations and Arrow strings (a categorical or nullable
+    other than dates, durations, Arrow strings and categoricals (a nullable
     array is handed out writable by ``.values``). Such frames are hashed on
     every call. The same goes for a frame some of whose memory a handle has
     reached (`watch_array_handles`) since its content was hashed (*since*,
     an `exposure_mark`), and for a check that cannot run (a pandas
     internals change).
+
+    A categorical's codes are an ndarray, vouched for as a block's is, and
+    its categories an Index, vouched for as an axis is. The categorical
+    itself, which ``.values`` hands out writable, and its codes are reached
+    only through handles that are recorded (`watch_array_handles`); under a
+    pandas where they cannot all be, a categorical is not vouched for.
 
     Called when the memo stores a frame, as well as when it is looked up:
     a caller's array written and then dropped between two calls leaves no
@@ -499,6 +530,7 @@ def _frame_memory(
     # ``storage="python"``) are a numpy array of them too; its items are
     # immutable ``str`` or a missing value, which pandas checks on every write.
     string_array = pd.arrays.StringArray
+    categorical = pd.Categorical
     holders: dict[int, Any] = {}
     todo: list = []
 
@@ -533,6 +565,12 @@ def _frame_memory(
             pandas_refs[key] = 1
             arrays.append(array)
             if isinstance(array, date_arrays) or type(array) is string_array:
+                array = array._ndarray
+            elif type(array) is categorical and _categoricals_watched():
+                # A categorical keeps its values as codes in an ndarray and
+                # its labels in the categories, an Index its dtype holds:
+                # that Index is vouched for as an axis is.
+                hold(array.categories)
                 array = array._ndarray
             elif type(array) is not np.ndarray:
                 return False
@@ -832,6 +870,12 @@ def watch_array_handles() -> None:
     or, for strings held as Python objects, the column's own array, which
     ``.values`` hands out as it is.
 
+    A categorical column is reached the same ways: ``.values`` and
+    ``.array`` hand out the categorical pandas keeps, ``Categorical.codes``
+    and ``CategoricalIndex.codes`` a read-only view of its codes, and
+    ``pd.Categorical(s, copy=False)`` a new categorical over them
+    (`_watch_categorical_constructor`).
+
     A recorded handle that is dropped leaves its write, if any, in the
     frame; it costs the frame one fresh hash (*since* in
     `frame_borrows_its_data`), not the memo for good. One still alive keeps
@@ -845,6 +889,7 @@ def watch_array_handles() -> None:
     from pandas.core.generic import NDFrame
     from pandas.core.indexes.datetimelike import DatetimeIndexOpsMixin, DatetimeTimedeltaMixin
 
+    codes_watched = 0
     for cls, name, outside_only in (
         (pd.Series, "array", False),
         (pd.Index, "array", False),
@@ -858,6 +903,8 @@ def watch_array_handles() -> None:
         (pd.Series, "__array__", _READ_ONLY_VIEW),
         (NDFrame, "__array__", _READ_ONLY_VIEW),
         (pd.Index, "__array__", _READ_ONLY_VIEW),
+        (pd.Categorical, "codes", _READ_ONLY_VIEW),
+        (pd.CategoricalIndex, "codes", _READ_ONLY_VIEW),
     ):
         original = cls.__dict__.get(name)
         if type(original) is types.FunctionType:  # a method: wrapped as it is
@@ -870,6 +917,8 @@ def watch_array_handles() -> None:
         else:
             continue
         setattr(cls, name, property(_noting(getter, outside_only), doc=original.__doc__))
+        if name == "codes":
+            codes_watched += 1
     _watch_callback_handouts()
     original_array = pd.array
     noting_array = _noting(original_array, False)
@@ -880,10 +929,60 @@ def watch_array_handles() -> None:
         return (original_array if copy else noting_array)(*args, **kwargs)
 
     pd.array = array
+    # A categorical is vouched for only once each handle to its codes is
+    # recorded (`_frame_memory`): a pandas whose ``codes`` or constructor
+    # is not what is wrapped here gets its categoricals read every time.
+    _CATEGORICALS_WATCHED[0] = _watch_categorical_constructor(pd) and codes_watched == 2
     _WATCHING = True
 
 
+def _watch_categorical_constructor(pd: Any) -> bool:
+    """Record a categorical built with ``copy=False``: over a column's
+    categorical (``pd.Categorical(df["c"], copy=False)``) it shares the
+    column's codes, and a write to it (``cat[0] = "b"``) lands in the
+    frame, through no accessor `watch_array_handles` records."""
+    categorical = pd.Categorical
+    original = categorical.__dict__.get("__init__")
+    if type(original) is not types.FunctionType:
+        return False
+    try:
+        # Where ``copy`` sits among the positional arguments after ``self``
+        # (pandas 2 has ``fastpath`` before it).
+        at = list(inspect.signature(original).parameters).index("copy") - 1
+    except ValueError:
+        return False
+
+    @functools.wraps(original)
+    def __init__(self: Any, *args: Any, **kwargs: Any) -> None:
+        original(self, *args, **kwargs)
+        if kwargs.get("copy", args[at] if len(args) > at else True):
+            return
+        if sys._getframe(1).f_globals.get("__name__", "").startswith(("pandas.", "cash.")):
+            return  # pandas' own, which it hands out only through what is recorded
+        try:
+            _note_exposed(self)
+        except Exception:  # noqa: BLE001 - recording must never break the user's call
+            _EXPOSED[-1] = (None, sys.maxsize)
+
+    categorical.__init__ = __init__
+    return True
+
+
 _WATCHING = False
+#: Whether every handle to a categorical's codes is recorded
+#: (`watch_array_handles`), so that `_frame_memory` may vouch for one.
+_CATEGORICALS_WATCHED = [False]
+
+
+def _categoricals_watched() -> bool:
+    """Are the handles to a categorical's codes recorded? Starts recording
+    them on the first categorical met, so that whether a frame holding one
+    is checked (`frame_memoable`) does not change once the memo stores a
+    frame: that decides how a key walk keys an object holding it."""
+    if not _WATCHING:
+        watch_array_handles()
+    return _CATEGORICALS_WATCHED[0]
+
 
 #: Set while a pandas method that hands its data to the user's callable
 #: runs (`_watch_callback_handouts`): a read-only view pandas takes there
@@ -1111,7 +1210,7 @@ def _noting(accessor: Callable, outside_only: bool | str) -> Callable:
                 flags = getattr(handle, "flags", None)
                 if caller.startswith("cash."):
                     return handle  # cash's own read
-                if flags.writeable if flags is not None else not _held_string_array(handle):
+                if flags.writeable if flags is not None else not _handed_out_as_kept(handle):
                     return handle  # a copy, or an extension array the memo never vouches for
         try:
             _note_exposed(handle)
@@ -1120,6 +1219,19 @@ def _noting(accessor: Callable, outside_only: bool | str) -> Callable:
         return handle
 
     return noting
+
+
+def _handed_out_as_kept(handle: Any) -> bool:
+    """Is *handle* an extension array the memo vouches for that ``.values``
+    hands out as the very array pandas keeps, writable: strings held as
+    Python objects (`_held_string_array`), or a categorical
+    (``s.values[0] = "b"`` writes the column's codes)?"""
+    return _held_string_array(handle) or _is_categorical(handle)
+
+
+def _is_categorical(handle: Any) -> bool:
+    t = type(handle)
+    return t.__name__ == "Categorical" and (t.__module__ or "").startswith("pandas")
 
 
 def _held_string_array(handle: Any) -> bool:

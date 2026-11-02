@@ -123,8 +123,10 @@ frames are, also when other frames share its data, and a new frame made from
 one (`df.assign(p=...)`) reads only its new columns. A frame whose memory can
 be written without pandas noticing is read in full every time: one built with
 `copy=False` (or `index=`) over a numpy array you still hold, one from
-`read_parquet` (its memory belongs to Arrow), and one with categorical or
-nullable columns.
+`read_parquet` (its memory belongs to Arrow), and one with nullable columns.
+A categorical column is checked like any other; one you wrote through an
+array pandas handed you (`s.values`, `s.array`, `pd.Categorical(s,
+copy=False)`) is read again on the next call.
 
 <!-- claim: cash/canonical_form.py:_object_steps @00d5669c, cash/canonical_form.py:SORTED_SET_MIN == 256 -->
 A frozenset of 256 or more numbers, strings and bytes is put in its sorted
