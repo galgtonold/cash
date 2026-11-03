@@ -568,7 +568,7 @@ def snapshot_file_deps(
     first_relative = len(absolute)
     for i, f in enumerate(todo):
         if relative and i >= first_relative:
-            same = snapshot.get(_spelled_absolute(f))
+            same = snapshot.get(spelled_absolute(f))
             if same is not None and "size" in same:
                 snapshot[f] = dict(same)
                 continue
@@ -633,7 +633,7 @@ def snapshot_file_deps(
     return snapshot
 
 
-def _spelled_absolute(path: str) -> str | None:
+def spelled_absolute(path: str) -> str | None:
     """*path* made absolute from the cwd by its spelling, as a read records
     it, or None when its spelling does not say which file it is: through a
     ``..``, the open goes up from where a linked folder points."""
@@ -1532,7 +1532,7 @@ def _fresh_as_absolute_twin(
     """
     if not isinstance(recorded, Mapping):
         return False
-    twin = _spelled_absolute(path)
+    twin = spelled_absolute(path)
     if twin is None or twin == path or not _recorded_alike(snap.get(twin), recorded):
         return False
     answer = answered.get(twin)

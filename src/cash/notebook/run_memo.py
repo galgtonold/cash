@@ -181,7 +181,7 @@ def _cover_of(watch: Any, paths: Iterable[str], snap: Mapping[str, Any] | None =
             if not isinstance(recorded, Mapping) or "code_rel" in recorded:
                 return None
         if not isabs(p):
-            twin = _fds._spelled_absolute(p)
+            twin = _fds.spelled_absolute(p)
             if twin is None:
                 return None
             p = twin

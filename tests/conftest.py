@@ -283,6 +283,23 @@ from cash.notebook.ipython.magics import CashMagics
 
 
 @pytest.fixture
+def no_file_watch(monkeypatch):
+    """No folder watched (``CASH_FILE_WATCH=0``): every file a check asks
+    about is stat-ed, as on macOS or a network drive. For a test of how
+    the stats themselves are shared and dated."""
+    from cash.notebook import run_memo
+    from cash.tracking import file_watch
+
+    monkeypatch.setenv("CASH_FILE_WATCH", "0")
+    file_watch.reset()
+    run_memo._COVERED_SNAPSHOTS.clear()
+    run_memo._COVERED_COMPONENTS.clear()
+    yield
+    monkeypatch.delenv("CASH_FILE_WATCH")
+    file_watch.reset()
+
+
+@pytest.fixture
 def clean_backend():
     """Provide a fresh InMemoryBackend for each test."""
     backend = InMemoryBackend()
