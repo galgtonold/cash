@@ -2913,7 +2913,10 @@ again with different code: a pipeline built on `column_ratio`, and the cell
 defining `column_ratio` edited and run since. A stored copy could only load
 the `column_ratio` defined now, so the value is not stored. Run the cells
 that build it again. When the cell ran again with the same code, the value is
-stored, and a hit holds the function the name holds when it is read.
+stored, and a hit holds the function the name holds when it is read. So
+does a function whose defaults hold functions whose cells ran again with
+the same code (`def ensemble(c, tsps=(greedy, rep))` after the cells
+defining `greedy` and `rep` ran again).
 
 **When it is safe to ignore.** A one-off on a cheap function.
 

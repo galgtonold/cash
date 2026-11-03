@@ -2353,12 +2353,24 @@ def by_name(module: str, qualname: str) -> Any:
     return found
 
 
-def same_definition(old: types.FunctionType, new: types.FunctionType) -> bool:
+def same_definition(
+    old: types.FunctionType, new: types.FunctionType, _pending: set[tuple[int, int]] | None = None
+) -> bool:
     """Do *old* and *new* do the same, so that a value holding *old* can
     hold *new* instead: the same code (lines aside), the same globals, no
-    closure, and alike defaults, attributes, docstring and annotations."""
+    closure, and alike defaults, attributes, docstring and annotations.
+
+    A default that is a function is alike when its module now names one of
+    the same definition, which a copy loaded from disk holds in its place:
+    ``def ensemble(c, tsps=(greedy, rep_2opt))`` run again after the cells
+    defining ``greedy`` and ``rep_2opt`` holds the new ones, which do what
+    the old ones did. *_pending*: the pairs being compared further up, taken
+    as alike (functions naming each other as defaults)."""
     from cash.decorator.function_identity import code_fingerprint
 
+    pending = set() if _pending is None else _pending
+    if (id(old), id(new)) in pending:
+        return True
     if old.__globals__ is not new.__globals__ or old.__closure__ is not None or new.__closure__ is not None:
         return False
     a, b = old.__code__, new.__code__
@@ -2381,18 +2393,25 @@ def same_definition(old: types.FunctionType, new: types.FunctionType) -> bool:
         # Annotations are made when asked for: compare what makes them.
         if (annotate[0] is None) != (annotate[1] is None):
             return False
-        if annotate[0] is not None and not same_definition(*annotate):
+        if annotate[0] is not None and not same_definition(annotate[0], annotate[1], pending):
             return False
     else:
         pairs.append((old.__annotations__, new.__annotations__))
-    return all(_alike(x, y) for x, y in pairs) and code_fingerprint(a) == code_fingerprint(b)
+    if code_fingerprint(a) != code_fingerprint(b):
+        return False
+    pending.add((id(old), id(new)))
+    try:
+        return all(_alike(x, y, pending) for x, y in pairs)
+    finally:
+        pending.discard((id(old), id(new)))
 
 
 _ALIKE_ATOMS = (str, bytes, int, float, complex, bool, type(None))
 
 
-def _alike(a: Any, b: Any) -> bool:
-    """*a* is *b*, or both are equal plain data (`same_definition`)."""
+def _alike(a: Any, b: Any, pending: set[tuple[int, int]]) -> bool:
+    """*a* is *b*, both are equal plain data, or *a* is a function whose
+    module now names *b*, of the same definition (`same_definition`)."""
     if a is b:
         return True
     t = type(a)
@@ -2401,7 +2420,9 @@ def _alike(a: Any, b: Any) -> bool:
     if t in _ALIKE_ATOMS:
         return a == b
     if t in (tuple, list):
-        return len(a) == len(b) and all(_alike(x, y) for x, y in zip(a, b))
+        return len(a) == len(b) and all(_alike(x, y, pending) for x, y in zip(a, b))
     if t is dict:
-        return a.keys() == b.keys() and all(_alike(v, b[k]) for k, v in a.items())
+        return a.keys() == b.keys() and all(_alike(v, b[k], pending) for k, v in a.items())
+    if t is types.FunctionType:
+        return named_now(a) is b and same_definition(a, b, pending)
     return False

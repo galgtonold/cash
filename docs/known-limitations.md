@@ -262,7 +262,7 @@ state in the notebook, or pass it in and return it.
 
 ### A helper memoised with `functools.cache`
 
-<!-- claim: cash/notebook/helper_memos.py:unfilled @f9113011, cash/notebook/helper_memos.py:used @050da885, cash/notebook/helper_memos.py:clears @bc3fe4e5, cash/notebook/helper_memos.py:MAX_KEYED == 4096 -->
+<!-- claim: cash/notebook/helper_memos.py:unfilled @529d38f0, cash/notebook/helper_memos.py:used @52be5683, cash/notebook/helper_memos.py:clears @bc3fe4e5, cash/notebook/helper_memos.py:MAX_KEYED == 4096, cash/notebook/helper_memos.py:watching_clears @a5f41663 -->
 A statement served from the cache does not run, so a `@functools.cache` or
 `@functools.lru_cache` helper it calls keeps what it held. A run leaves the
 answers in it, and a later call of the helper uses them without running its
@@ -304,7 +304,15 @@ body. So cash follows these rules:
   A statement that empties the memo (`cache_clear` under any name, or seen
   from the keys it holds afterwards) is stored as "emptied, then these
   pairs", served only while the memo holds exactly what it held when the
-  run began, and a hit empties it and puts the pairs in.
+  run began, and a hit empties it and puts the pairs in. When the run
+  emptied it before any call of it (`held_karp_tsp` clearing
+  `shortest_segment` for each new problem), what it held then decided
+  nothing: the statement is served whatever the memo holds, even past the
+  4,096 answers below, as long as what the run leaves in it is not. cash
+  sees such a clear as it happens, through a `cache_clear` it sets on the
+  memo while the statement runs; a clear it cannot see (`clear =
+  f.cache_clear` bound in an earlier cell) is not taken for the first.
+  A hit that cannot put the pairs back says why, and the statement runs.
 - What a hit cannot put back still runs every time: a statement that fills
   a bounded memo (`lru_cache(maxsize=128)`, whose order only its own code
   keeps), fills one with a key that does not come back from a pickle as

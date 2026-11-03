@@ -108,3 +108,31 @@ def test_a_ram_copy_keeps_the_function_the_value_held(module):
     hit = b.get("k")[1]["held"]
     assert hit[0] is held[0]
     assert hit[0](5) == 10
+
+
+ENSEMBLE = (
+    "def greedy(c):\n    return sorted(c)\n\ndef ensemble(c, tsps=(greedy,)):\n    return min(t(c) for t in tsps)\n"
+)
+
+
+def test_a_function_whose_default_is_a_function_defined_again_alike_is_the_same_definition(module):
+    """``ensemble``'s default holds ``greedy``; both cells ran again with the
+    same code. A copy loaded from disk holds the new ``ensemble``, whose
+    default is the new ``greedy``, which does what the old one did."""
+    mod = module(ENSEMBLE)
+    held = [mod.ensemble]
+    module(ENSEMBLE)
+    assert held[0] is not mod.ensemble
+    loaded = pickle.loads(kept_state.dumps(held, protocol=5))
+    assert loaded[0] is mod.ensemble
+    assert loaded[0]([3, 1]) == [1, 3]
+
+
+def test_a_function_whose_default_function_changed_is_not_the_same_definition(module):
+    """Control: ``greedy`` now sorts the other way, so the new ``ensemble``
+    does something else than the one held."""
+    mod = module(ENSEMBLE)
+    held = [mod.ensemble]
+    module(ENSEMBLE.replace("sorted(c)", "sorted(c, reverse=True)"))
+    with pytest.raises(pickle.PicklingError):
+        kept_state.dumps(held, protocol=5)
