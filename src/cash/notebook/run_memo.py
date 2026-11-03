@@ -518,12 +518,13 @@ def file_component_this_run(
             key = None
         if key is not None and key in components:
             return components[key]
+    taken = stats_this_run(paths)  # first: it starts the run's records read below
     listed = run["listed"] if run is not None else None
-    followed = run.get("stat_followed", ()) if run is not None else None
+    followed = run["stat_followed"] if run is not None else None
     stats: Mapping[str, os.stat_result] = {}
     lstats = {}
     isabs = os.path.isabs
-    for p, (resolved, st) in stats_this_run(paths).items():
+    for p, (resolved, st) in taken.items():
         if st is not None and resolved == p and (st.st_ino if listed is None else p not in listed):
             stats[normalize_path(p)] = st
             # By its own spelling only: a relative one was stat-ed from the

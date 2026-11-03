@@ -121,3 +121,15 @@ def test_a_relative_read_is_resolved_as_before(photos, monkeypatch, lstats_of_fi
 
     assert compute_file_hash_component(set(names)) == shared
     assert {realpath_of_read_this_run(n)[0] for n in names} == {os.path.realpath(p) for p in photos}
+
+
+def test_a_link_read_first_by_the_component_is_resolved_to_its_target(photos, linked):
+    """The component is the first to stat the files in this run: what it
+    learns of a link from the pass it starts is what it resolves by."""
+    files = {*photos, linked}
+
+    shared = file_component_this_run(set(files))
+
+    assert realpath_of_read_this_run(linked)[0] == os.path.realpath(linked)
+    _next_cell_run()
+    assert compute_file_hash_component(set(files)) == shared
