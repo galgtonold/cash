@@ -23,7 +23,7 @@ from typing import Any
 from cash import _plain_data, rewrite_in_place, stored_pickle, value_hash
 from cash._active import default_cash
 from cash._clock import perf_counter as _perf_counter
-from cash._user_attrs import attribute_or, instance_of
+from cash._user_attrs import attribute_or, instance_of, is_routine
 from cash.backends import memory_backend
 from cash.backends.persistence_policy import COMPUTE_FLOOR_S, PersistencePolicy
 from cash.control_markers import has_marker
@@ -299,7 +299,7 @@ def _may_hold_memory(value: Any) -> bool:
 def _changed_by_rebinding_only(value: Any) -> bool:
     """Whether *value* is a module, class or function: what a cell does to
     one, as far as a lineage tells, is bind its name again."""
-    return isinstance(value, (types.ModuleType, type)) or callable(value) and hasattr(value, "__code__")
+    return instance_of(value, (types.ModuleType, type)) or is_routine(value)
 
 
 def _fingerprint(value: Any) -> str | None:
