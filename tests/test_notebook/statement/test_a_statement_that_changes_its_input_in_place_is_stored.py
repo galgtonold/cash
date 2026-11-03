@@ -203,7 +203,9 @@ def test_a_view_of_an_array_is_written_through_to_its_base(notebook, tmp_path):
         pytest.param("v = np.array([1, 'a', None], dtype=object)", id="an array of objects"),
         pytest.param("v = [[3], [1], [2]]", id="a list of lists"),
         pytest.param("v = {'n': 1, 'gone': [2], 'k': 'v'}", id="a dict holding a list"),
-        pytest.param("v = pd.Series(['a', 'b', 'c'])", id="a Series of strings"),
+        # An extension dtype, named: pandas 3 gives text one by default, but
+        # pandas 2 keeps it as objects, which a write in place restores.
+        pytest.param("v = pd.Series(['a', 'b', 'c'], dtype='string')", id="a Series of an extension dtype"),
         pytest.param("v = np.linspace(0, 1, 11)\nrows = [v]", id="an array a list holds"),
     ],
 )
