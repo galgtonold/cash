@@ -185,8 +185,9 @@ or each keeps its own cache. See [Deploying](../feature-guides/deploying.md) and
 - **Leave cheap steps undecorated.** Every cached result is written to disk. A
   rename that takes milliseconds isn't worth a 5 GB entry.
 - **Don't change arguments in place.** A step that runs
-  `df.fillna(0, inplace=True)` on its input is not stored, so it runs every
-  time. Copy first, as `normalize` does; see
+  `df.drop(columns=..., inplace=True)` on its input is not stored, so it runs
+  every time; one that only rewrites values in place is stored with the
+  frame's new state, which a hit writes back. Copy first, as `normalize` does; see
   [Results cash refuses to store](../../decorator-limitations.md#results-cash-refuses-to-store).
 - **Create clients at module level.** Database connections, S3 clients and Spark
   sessions are not results. Build them once, outside cached functions.

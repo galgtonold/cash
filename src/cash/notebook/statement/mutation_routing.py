@@ -18,6 +18,7 @@ import types
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
+from ... import rewrite_in_place
 from ..._user_attrs import attribute_or
 from ...analysis.mutation_effects import (
     control_structure_mutations,
@@ -85,6 +86,12 @@ class MutationRouting:
         """Add the receivers *run* mutates to its outputs, and skip-cache it
         where the mutation must really happen on every run."""
         mut_pre_route, draw_only, fit_only = self._classify(run)
+        self._note_shapes(
+            run,
+            mut_pre_route
+            | run.mut_observe
+            | self._classifier.fingerprinted_arguments(run.verdict_hash or run.source_hash),
+        )
         # ``Out[2].set_title('x')`` changes the axes ``Out`` holds, not
         # IPython's history: never an output, watched or evicted
         # (`history_names`).
@@ -373,6 +380,7 @@ class MutationRouting:
         }
         run.mut_provisional = provisional
         skip_pre_route -= set(provisional)
+        skip_pre_route -= self._store_in_place(run, skip_pre_route)
         if skip_pre_route:
             _skip(
                 run,
@@ -382,6 +390,47 @@ class MutationRouting:
         if provisional:
             run.mut_provisional_reason = f"In-place mutation on: {', '.join(sorted(provisional))} (receiver lineage bumped; statement re-executes)"
             _skip(run, run.mut_provisional_reason)
+
+    def _note_shapes(self, run: StatementRun, names: set[str]) -> None:
+        """Take the `rewrite_in_place.Shape` of each of *names* that the
+        statement may change in place and a hit could write into, before
+        it runs (``run.in_place_shapes``)."""
+        if not names or is_control_body(run.code) or _is_structure(run.tree):
+            return
+        user_ns = self.shell.user_ns
+        for name in names:
+            value = user_ns.get(name)
+            if name in user_ns and rewrite_in_place.rewritable_kind(value):
+                try:
+                    run.in_place_shapes[name] = rewrite_in_place.shape_of(value)
+                except Exception:  # no shape: not stored in place
+                    logger.debug("could not take the shape of %s", name, exc_info=True)
+
+    def _store_in_place(self, run: StatementRun, names: set[str]) -> set[str]:
+        """Of *names*, which the statement changes in place, those stored
+        with it instead of making it run every time: a statement (not a loop
+        or branch, whose body is theirs) changing an array, a frame or
+        Series, or a list, dict or set of plain values (`rewrite_in_place`).
+        They are outputs, and a hit writes the state the statement left
+        them in back into the objects they are bound to
+        (``stored_in_place``), which keeps their identity. Whether that
+        holds once it ran is asked again (`_restorable_in_place`)."""
+        if not names or is_control_body(run.code) or _is_structure(run.tree):
+            return set()
+        user_ns = self.shell.user_ns
+        stored = set()
+        for name in names:
+            value = user_ns.get(name)
+            if (
+                name in run.in_place_shapes
+                and run.in_place_shapes[name].kind is type(value)
+                and rewrite_in_place.refusal(value) is None
+            ):
+                stored.add(name)
+        if stored:
+            run.outputs = run.outputs | stored
+            run.metrics["stored_in_place"] = sorted(set(run.metrics.get("stored_in_place", ())) | stored)
+        return stored
 
     def _too_costly(self, names: set[str]) -> str:
         """Which of *names* are assumed changed because a check of them ran
@@ -489,6 +538,9 @@ class MutationRouting:
         run.outputs = run.outputs | changed
         produced = run.metrics.setdefault("evaluated_vars", [])
         produced.extend(n for n in sorted(changed) if n not in produced)
+        changed -= self._store_in_place(run, changed)
+        if not changed:
+            return
         run.skip_cache = True
         run.metrics.setdefault("uncacheable_reasons", []).append(
             f"In-place mutation on: {', '.join(sorted(changed))} (observed; receiver lineage bumped; statement re-executes)"
@@ -520,6 +572,7 @@ class MutationRouting:
         produced = metrics.setdefault("evaluated_vars", [])
         produced.extend(n for n in sorted(newly_mutated) if n not in produced)
         skip_observed = newly_mutated - run.est_fit
+        skip_observed -= self._store_in_place(run, skip_observed)
         if skip_observed:
             run.skip_cache = True
             metrics.setdefault("uncacheable_reasons", []).append(

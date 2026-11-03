@@ -1,9 +1,12 @@
-"""A plain list or tuple changed in place by the body is never stored.
+"""A plain list or tuple changed in place by the body is seen, at any depth.
 
 The check that the body left a plain argument alone compares the identities
 of what it holds instead of hashing it again (`_plain_data.identity_changed`).
-Each change below must still read as a change, at any depth, and a call
-that makes one is not stored, so the warm run makes it again.
+Each change below must still read as a change, at any depth. A call that
+makes one on a list of plain values is stored with the list's new state,
+which a warm hit writes back into the caller's list; one that changes a
+list of lists or a tuple's insides is not stored, so the warm run makes it
+again. Either way the caller's object ends as the uncached call leaves it.
 """
 
 from __future__ import annotations
@@ -45,20 +48,25 @@ def _shrink_and_regrow(rows):
     rows.insert(0, last)
 
 
+#: ``(change, make, written back)``: whether a hit can write the new state
+#: back, so the change is stored from the second call on.
 CASES = [
-    (_sort, lambda: [5, 3, 9, 1, 7]),
-    (_append, lambda: [1, 2, 3, 4]),
-    (_replace_item, lambda: [1.0, 2.0, 3.0, 4.0]),
-    (_swap_equal_items, lambda: [0.0, 1, 2, 3]),
-    (_nested_list, lambda: [[1, "a"], [2, "b"], [3, "c"]]),
-    (_list_under_tuple, lambda: ((["a"], 1), ([["b"]], 2))),
-    (_shrink_and_regrow, lambda: [1, 2, 3]),
+    (_sort, lambda: [5, 3, 9, 1, 7], True),
+    (_append, lambda: [1, 2, 3, 4], True),
+    (_replace_item, lambda: [1.0, 2.0, 3.0, 4.0], True),
+    (_swap_equal_items, lambda: [0.0, 1, 2, 3], True),
+    (_nested_list, lambda: [[1, "a"], [2, "b"], [3, "c"]], False),
+    (_list_under_tuple, lambda: ((["a"], 1), ([["b"]], 2)), False),
+    (_shrink_and_regrow, lambda: [1, 2, 3], True),
 ]
 
 
-@pytest.mark.parametrize("change, make", CASES, ids=[c.__name__.strip("_") for c, _ in CASES])
-def test_a_change_in_place_is_seen_and_made_again_on_the_warm_run(disk_cash, change, make):
+@pytest.mark.parametrize("change, make, written_back", CASES, ids=[c.__name__.strip("_") for c, _, _ in CASES])
+def test_a_change_in_place_is_seen_and_made_again_on_the_warm_run(disk_cash, change, make, written_back):
+    runs = []
+
     def work(rows):
+        runs.append(1)
         change(rows)
         return 1
 
@@ -66,11 +74,13 @@ def test_a_change_in_place_is_seen_and_made_again_on_the_warm_run(disk_cash, cha
     rows = make()
     f(rows)
     without_cash = repr(rows)
-    rows = make()
-    f(rows)
-    assert repr(rows) == without_cash, "the warm run skipped the change"
     outcome = next(o for k, o in disk_cash._misses.outcomes.items() if "work" in k)
     assert "in place" in (outcome.get("not_stored") or ""), outcome
+    for _ in range(2):
+        rows = make()
+        f(rows)
+        assert repr(rows) == without_cash, "the warm run skipped the change"
+    assert len(runs) == (2 if written_back else 3)
 
 
 def test_a_plain_list_beside_a_changed_dict_is_not_stored(disk_cash):

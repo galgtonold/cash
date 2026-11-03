@@ -136,8 +136,13 @@ class StatementRestorer:
             # live one, given the restored objects there. Found before anything
             # is written, so a holder without those places any more fails the
             # restore before it starts.
+            # A holder holding an object restored into (`restored_into`)
+            # itself is given the live object, which keeps its identity.
+            live_outputs = {
+                name: self.shell.user_ns[name] for name in (metadata.restored_into or ()) if metadata is not None
+            }
             patched = {
-                name: apply_patch(self.shell.user_ns[name], value, restored_vars)
+                name: apply_patch(self.shell.user_ns[name], value, restored_vars, live_outputs)
                 for name, value in restored_vars.items()
                 if instance_of(value, HolderPatch)
             }

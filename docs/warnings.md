@@ -878,7 +878,9 @@ behave differently from the first.
 
 <!-- claim: cash/decorator/store.py:ResultStore.refusal @d4f3bed4, cash/decorator/purity_checks.py:PurityChecks.check_argument_mutation @9371bb18 -->
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks.argument_identities @0b1d9a15, cash/_plain_data.py:identity_changed @c64ac6c0 -->
-A call that changes an argument is **not stored**, so it runs every time. The
+A call that changes an argument is **not stored**, so it runs every time,
+unless cash can write the argument's new state back on a hit
+([which arguments](decorator-limitations.md#results-cash-refuses-to-store)). The
 arguments are checked on every miss, whatever their size, except those
 [left out of the key with `ignore=`](decorator.md#leaving-arguments-out-of-the-key),
 which are not checked at all. A plain list or tuple (of numbers, strings,
@@ -2871,7 +2873,7 @@ memo nothing else reads.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/store.py:ResultStore.store @b718811c -->
+<!-- claim: cash/decorator/store.py:ResultStore.store @00a3421c -->
 **What happened.** The result was computed, but writing it to the cache
 failed. The message names the backend and the exception. Whatever the
 exception, the call returns its result; a failed write never fails the call.

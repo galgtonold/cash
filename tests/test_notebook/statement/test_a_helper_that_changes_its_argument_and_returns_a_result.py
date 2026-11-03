@@ -7,7 +7,8 @@ as it was, with no warning. The arguments of any call to a function of the
 user's are now watched like those of a bare call -- in an assignment, nested
 in another call, in a comprehension (whose target is an element of what it
 iterates) and in a loop body -- and a statement that changed one runs every
-time.
+time, unless it can be stored with the argument's new state, which a hit
+writes back into it (`test_a_statement_that_changes_its_input_in_place_is_stored`).
 """
 
 from __future__ import annotations
@@ -59,7 +60,9 @@ def test_a_second_run_all_changes_the_argument_again(cash_magics, case):
 
 
 def test_the_statement_says_what_it_changed(cash_magics, statement_processor):
-    _run_all(cash_magics, [HELPERS, "st = {'n': 0}"])
+    # A dict holding a list: one of plain values is stored with its new
+    # state and written back on a hit instead (`rewrite_in_place`).
+    _run_all(cash_magics, [HELPERS, "st = {'n': 0, 'seen': []}"])
     metrics = statement_processor.process_statement("r = work(st)")
     assert metrics["status"] == CacheStatus.COMPUTED
     assert "st" in metrics["evaluated_vars"], metrics["evaluated_vars"]

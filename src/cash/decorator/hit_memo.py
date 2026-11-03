@@ -984,6 +984,9 @@ class HitMemo:
             or metadata.rng_replay
             or metadata.read_only
             or metadata.env_reads
+            # A hit writes the state the call left its arguments in back
+            # into them: never served without that write.
+            or metadata.args_left
         ):
             return None
         ledger = call.ledger or {}

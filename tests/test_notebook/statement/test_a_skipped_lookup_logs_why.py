@@ -20,12 +20,14 @@ def _skip_lines(caplog) -> list[str]:
 
 
 def test_an_in_place_change_is_named_as_the_reason(cash_magics, caplog):
-    run_cash_cell(cash_magics, "data = [3, 1, 2]")
+    # A list of lists: a list of plain values is stored with its new state
+    # instead (`rewrite_in_place`), and its lookup is not skipped.
+    run_cash_cell(cash_magics, "data = [[3], [1], [2]]")
     with caplog.at_level(logging.DEBUG, logger=LOGGER):
         # Positive control: a statement that is looked up logs no skip.
         run_cash_cell(cash_magics, "y = sorted(data)")
         assert not _skip_lines(caplog)
-        run_cash_cell(cash_magics, "data.sort(key=lambda x: -x)")
+        run_cash_cell(cash_magics, "data.sort(key=lambda x: -x[0])")
     lines = _skip_lines(caplog)
     assert lines, "the in-place sort skips its lookup"
     assert all("missing input lineage" not in line for line in lines)
