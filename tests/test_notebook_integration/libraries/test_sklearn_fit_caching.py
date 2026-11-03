@@ -487,16 +487,20 @@ def test_a_histogram_boosting_fit_caches(nb_runner, imports):
 
 
 def test_non_estimator_mutation_still_refused(nb_runner):
-    """The estimator gate is tight: a bare ``lst.append(x)`` STILL refuses to cache.
+    """The estimator gate is tight: a bare ``dq.append(x)`` STILL refuses to cache.
 
     Proves the ``fit``/``partial_fit`` + ``get_params`` gate did not loosen
-    general in-place-mutation caching.
+    general in-place-mutation caching. A ``deque``, not a list: Philipp
+    decided on 2026-11-03 that a statement changing its input in place is
+    stored, and the input written back in place on a hit, for NumPy
+    arrays, pandas frames and plain lists, dicts and sets, and that
+    anything else keeps running every time. A ``deque`` is anything else.
     """
     nb_runner.create_notebook(
         [
             SETUP,
-            "lst = [1, 2, 3]",
-            "lst.append(4)\nprint('len', len(lst))",
+            "from collections import deque\ndq = deque([1, 2, 3])",
+            "dq.append(4)\nprint('len', len(dq))",
         ]
     )
     nb_runner.start_kernel()
