@@ -142,6 +142,10 @@ def _no_cache(annotation) -> bool:
     return annotation is not None and bool(annotation.no_cache)
 
 
+#: Loops `ForLoopHandler._name_a_moved_iterable` remembers the iterable of.
+_ITERABLE_LINEAGES_KEPT = 4096
+
+
 class ForLoopHandler:
     """Per-iteration caching for ``for`` loops.
 
@@ -161,6 +165,9 @@ class ForLoopHandler:
         self._heavy_store: heavy_loops.HeavyLoopStore | None | object = _UNSET
         #: ``(cell, loop body)`` already warned about with KEY-LOOP-VAR-CHANGED.
         self._warned_target_change: set[tuple[int | None, str]] = set()
+        #: The iterable's lineage each loop last ran over, by the loop and
+        #: its enclosing iteration (`_name_a_moved_iterable`).
+        self._iterable_lineages: dict[tuple[str, str], str | None] = {}
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -681,6 +688,7 @@ class ForLoopHandler:
 
         if probe_n is not None:
             self._split_policy.record_verdict(node, probe_elapsed, probe_n)
+        self._name_a_moved_iterable(node, loop_code, parent_context, iterable_lineage, all_metrics)
 
         # After all iterations, update lineage for mutated variables. The
         # rest run as one unit reports no branch it ran, so a variable only an
@@ -885,6 +893,42 @@ class ForLoopHandler:
             if was_computed:
                 iteration_cached = False
         return iteration_cached
+
+    def _name_a_moved_iterable(
+        self,
+        node: ast.For,
+        loop_code: str,
+        parent_context: dict[str, Any] | None,
+        iterable_lineage: str | None,
+        all_metrics: list,
+    ) -> None:
+        """Give each iteration that ran with no reason of its own the one
+        that holds for them all: the iterable's lineage is not the one the
+        loop last ran over. It is in every iteration's marker
+        (``__iterable_lineage__``), so each one is a statement the cache has
+        not seen, and no record of an earlier run of it names what moved:
+        ``for index, estimator in enumerate(estimators):`` after a cell
+        above moved ``estimators`` showed each pass computed, with no reason
+        given (E8, homl ch07)."""
+        key = (loop_code, compute_context_hash(parent_context) if parent_context else "")
+        last = self._iterable_lineages.pop(key, None)
+        if len(self._iterable_lineages) >= _ITERABLE_LINEAGES_KEPT:
+            self._iterable_lineages.pop(next(iter(self._iterable_lineages)))
+        self._iterable_lineages[key] = iterable_lineage
+        if last is None or iterable_lineage is None or last == iterable_lineage:
+            return
+        user_ns = attribute_or(self.shell, "user_ns", None) or {}
+        names = sorted({n.id for n in ast.walk(node.iter) if isinstance(n, ast.Name) and n.id in user_ns})
+        reason = f"input changed: {', '.join(names)}" if names else "input changed: the loop's iterable"
+        for m in all_metrics:
+            if (
+                isinstance(m, dict)
+                and m.get("status") == CacheStatus.COMPUTED
+                and iteration_digest(m.get("code") or "") is not None
+                and not m.get("miss_reason")
+                and not m.get("uncacheable_reasons")
+            ):
+                m["miss_reason"] = reason
 
     def _execute_loop_body_nested_control(
         self,
