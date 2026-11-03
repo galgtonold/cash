@@ -4,12 +4,15 @@ Before every cell the notebook checks each file the cached statements above
 read, and a check is a stat per file: 19,000 photos in 300 folders cost
 seconds a cell, on Windows most of all, where a stat opens the file. Most
 cells change no file. So cash asks the operating system to report changes
-to each folder it took a stat in (inotify on Linux, ReadDirectoryChangesW on
-Windows), and a stat taken while its folder was watched stands for the file
-(`FileWatch.current`) until the folder reports anything at all: a write, a
-new or deleted name, a rename, a change of attributes. Nothing is decided
-from what an event says, only from which folder sent it, so a short name,
-a dropped detail or a coalesced event cannot hide a change.
+to each folder it took a stat in, and a stat taken while its folder was
+watched stands for the file (`FileWatch.current`) until the folder reports
+anything at all: a write, a new or deleted name, a rename, a change of
+attributes. On Linux each folder has an inotify watch, and only which
+folder sent an event counts, not what it says. On Windows a handle on a
+folder blocks renaming it and every folder above it, so each volume is
+watched once from its root (`_VolumeChanges`), and the reported names say
+which folders changed; a name that may be a short alias, or a lost report,
+counts as a change of every folder it could name.
 
 The rules that keep it safe:
 
@@ -39,6 +42,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import stat as _stat
 import struct
 import sys
@@ -436,6 +440,9 @@ class _Inotify:
     def remove(self, wd: int) -> None:
         self._rm(self.fd, wd)
 
+    def close(self) -> None:
+        os.close(self.fd)
+
     def poll(self) -> list[tuple[int | None, bool]]:
         reported: list[tuple[int | None, bool]] = []
         while True:
@@ -468,7 +475,17 @@ def parse_inotify_events(data: bytes) -> list[tuple[int | None, bool]]:
     return out
 
 
-# -- Windows: ReadDirectoryChangesW ---------------------------------------------
+# -- Windows: one ReadDirectoryChangesW per volume ---------------------------------
+#
+# A handle open on a folder, or on any folder below it, makes Windows refuse
+# to rename or move that folder: a watch per folder blocked a user renaming
+# the project folder in Explorer while a kernel ran. So each volume is
+# watched once, from its root, over the whole tree (``bWatchSubtree``), and
+# the names it reports say which watched folders changed. No handle is held
+# on any folder a user can rename. A thread per volume takes the reports as
+# they come, so a busy system drive rarely fills the buffer; a full buffer,
+# a report that cannot be read, or a name that may be a short (8.3) alias
+# counts as a change of every watched folder it could name.
 
 _FILE_LIST_DIRECTORY = 0x0001
 _FILE_SHARE_ALL = 0x1 | 0x2 | 0x4
@@ -476,19 +493,120 @@ _OPEN_EXISTING = 3
 _FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
 _FILE_FLAG_OVERLAPPED = 0x40000000
 _ERROR_IO_INCOMPLETE = 996
-#: How long removing a folder waits for its cancelled read to end.
+_ERROR_NOTIFY_ENUM_DIR = 1022
+_WAIT_OBJECT_0 = 0
+#: How long stopping a volume's watch waits for its cancelled read to end.
 _CANCEL_WAIT_SECONDS = 1.0
+#: How long the volume's thread waits for a report before looking at its stop flag.
+_THREAD_WAIT_MS = 250
+#: The report buffer of a volume, in bytes.
+_VOLUME_BUFFER = 256 * 1024
 #: FILE_NOTIFY_CHANGE_ FILE_NAME | DIR_NAME | ATTRIBUTES | SIZE | LAST_WRITE |
 #: CREATION | SECURITY.
 _NOTIFY_FILTER = 0x1 | 0x2 | 0x4 | 0x8 | 0x10 | 0x40 | 0x100
 _DRIVE_FIXED = 3
 _DRIVE_RAMDISK = 6
+_NOTIFY_HEADER = struct.Struct("<III")
+
+#: A name a change report gives that may be a short (8.3) alias: a ``~``
+#: and a digit, as in ``PROGRA~1``.
+_SHORT_NAME = re.compile(r"~\d")
+
+#: Every watched folder of a volume (`_FolderIndex.touched`).
+EVERY_FOLDER = None
 
 
-class _DirectoryChanges:
-    """One overlapped ``ReadDirectoryChangesW`` per folder, polled without
-    waiting. Any completion -- changes, an overflow (no bytes), an error --
-    counts as a change; the read is issued again, or the folder is dropped."""
+def parse_notify_information(data: bytes) -> list[str] | None:
+    """The names (below the watched root) in a buffer of
+    ``FILE_NOTIFY_INFORMATION`` records; None when it cannot be read whole."""
+    names: list[str] = []
+    offset = 0
+    size = _NOTIFY_HEADER.size
+    while True:
+        if offset + size > len(data):
+            return None
+        following, _action, length = _NOTIFY_HEADER.unpack_from(data, offset)
+        start = offset + size
+        if length % 2 or start + length > len(data):
+            return None
+        try:
+            names.append(data[start : start + length].decode("utf-16-le"))
+        except UnicodeDecodeError:
+            return None
+        if following == 0:
+            return names
+        if following < size or following % 4:
+            return None
+        offset += following
+
+
+class _FolderIndex:
+    """The watched folders of one volume, by their path below its root
+    (case folded, ``\\``-separated, no leading separator), and which of them
+    a change at a reported name touches (`touched`)."""
+
+    def __init__(self) -> None:
+        self.keys: dict[str, Any] = {}
+        #: Every folder above a watched one, with how many watched ones it holds.
+        self.above: dict[str, int] = {}
+
+    @staticmethod
+    def spelled(name: str) -> str:
+        return name.replace("/", "\\").strip("\\").lower()
+
+    def add(self, below_root: str, key: Any) -> None:
+        below_root = self.spelled(below_root)
+        if below_root in self.keys:
+            return
+        self.keys[below_root] = key
+        for above in self._parents(below_root):
+            self.above[above] = self.above.get(above, 0) + 1
+
+    def remove(self, below_root: str) -> None:
+        below_root = self.spelled(below_root)
+        if self.keys.pop(below_root, None) is None:
+            return
+        for above in self._parents(below_root):
+            left = self.above[above] - 1
+            if left:
+                self.above[above] = left
+            else:
+                del self.above[above]
+
+    @staticmethod
+    def _parents(path: str) -> list[str]:
+        parts = path.split("\\") if path else []
+        return ["\\".join(parts[:i]) for i in range(len(parts))]
+
+    def under(self, prefix: str) -> list[Any]:
+        """The watched folders at or below *prefix* ("" is the root)."""
+        if not prefix:
+            return list(self.keys.values())
+        lead = prefix + "\\"
+        return [key for path, key in self.keys.items() if path == prefix or path.startswith(lead)]
+
+    def touched(self, name: str) -> list[Any]:
+        """The watched folders a change at *name* may have changed: the
+        folder holding it, and, when it is a watched folder or holds one,
+        every watched folder at or below it (a folder renamed, removed or
+        replaced). A name with a component that may be a short alias
+        stands for anything below the folder above that component."""
+        name = self.spelled(name)
+        parts = name.split("\\")
+        for i, part in enumerate(parts):
+            if _SHORT_NAME.search(part):
+                return self.under("\\".join(parts[:i]))
+        touched = []
+        holder = self.keys.get("\\".join(parts[:-1]))
+        if holder is not None:
+            touched.append(holder)
+        if name in self.keys or name in self.above:
+            touched.extend(self.under(name))
+        return touched
+
+
+class _Win32:
+    """The kernel32 calls a volume's watch makes, through ctypes."""
 
     def __init__(self) -> None:
         import ctypes
@@ -506,80 +624,45 @@ class _DirectoryChanges:
         k = ctypes.WinDLL("kernel32", use_last_error=True)
         self._ctypes = ctypes
         self._wintypes = wintypes
-        self._Overlapped = Overlapped
-        self._create = k.CreateFileW
-        self._create.argtypes = [
-            wintypes.LPCWSTR,
-            wintypes.DWORD,
-            wintypes.DWORD,
-            ctypes.c_void_p,
-            wintypes.DWORD,
-            wintypes.DWORD,
-            wintypes.HANDLE,
-        ]
-        self._create.restype = wintypes.HANDLE
-        self._read = k.ReadDirectoryChangesW
-        self._read.argtypes = [
-            wintypes.HANDLE,
-            ctypes.c_void_p,
-            wintypes.DWORD,
-            wintypes.BOOL,
-            wintypes.DWORD,
-            ctypes.c_void_p,
-            ctypes.c_void_p,
-            ctypes.c_void_p,
-        ]
-        self._read.restype = wintypes.BOOL
-        self._result = k.GetOverlappedResult
-        self._result.argtypes = [wintypes.HANDLE, ctypes.c_void_p, ctypes.POINTER(wintypes.DWORD), wintypes.BOOL]
-        self._result.restype = wintypes.BOOL
-        self._cancel = k.CancelIoEx
-        self._cancel.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
-        self._cancel.restype = wintypes.BOOL
-        self._close = k.CloseHandle
-        self._close.argtypes = [wintypes.HANDLE]
-        self._close.restype = wintypes.BOOL
-        self._drive_type = k.GetDriveTypeW
-        self._drive_type.argtypes = [wintypes.LPCWSTR]
-        self._drive_type.restype = wintypes.UINT
+        self.Overlapped = Overlapped
+
+        def fn(name, restype, *argtypes):
+            f = getattr(k, name)
+            f.argtypes = list(argtypes)
+            f.restype = restype
+            return f
+
+        H, D, B, P = wintypes.HANDLE, wintypes.DWORD, wintypes.BOOL, ctypes.c_void_p
+        self._create = fn("CreateFileW", H, wintypes.LPCWSTR, D, D, P, D, D, H)
+        self._read = fn("ReadDirectoryChangesW", B, H, P, D, B, D, P, P, P)
+        self._result = fn("GetOverlappedResult", B, H, P, ctypes.POINTER(D), B)
+        self._cancel = fn("CancelIoEx", B, H, P)
+        self._close = fn("CloseHandle", B, H)
+        self._event = fn("CreateEventW", H, P, B, B, wintypes.LPCWSTR)
+        self._wait = fn("WaitForSingleObject", D, H, D)
+        self._reset = fn("ResetEvent", B, H)
+        self._drive_type = fn("GetDriveTypeW", wintypes.UINT, wintypes.LPCWSTR)
+        self._volume_path = fn("GetVolumePathNameW", B, wintypes.LPCWSTR, wintypes.LPWSTR, D)
+        self._long_path = fn("GetLongPathNameW", D, wintypes.LPCWSTR, wintypes.LPWSTR, D)
         self._invalid = wintypes.HANDLE(-1).value
-        self._open: dict[int, tuple[Any, Any, Any]] = {}
-        #: Folders whose read ended without being issued again.
-        self._idle: set[int] = set()
-        #: Reads that did not end within the wait after a cancel.
-        self._kept: list[tuple[Any, Any, Any]] = []
-        self._next = 0
-        self._drives: dict[str, bool] = {}
 
-    def usable(self, path: str) -> bool:
-        drive, _rest = os.path.splitdrive(path)
-        if not drive or drive.startswith(("\\\\", "//")):
-            return False  # a network share
-        drive = drive.upper()
-        known = self._drives.get(drive)
-        if known is None:
-            known = self._drives[drive] = self._drive_type(drive + "\\") in (_DRIVE_FIXED, _DRIVE_RAMDISK)
-        return known
+    def volume_root(self, path: str) -> str | None:
+        buffer = self._ctypes.create_unicode_buffer(1024)
+        if not self._volume_path(path, buffer, 1024):
+            return None
+        return buffer.value
 
-    def _issue(self, handle: Any, overlapped: Any, buffer: Any) -> bool:
-        ctypes = self._ctypes
-        ctypes.memset(ctypes.byref(overlapped), 0, ctypes.sizeof(overlapped))
-        return bool(
-            self._read(
-                handle,
-                ctypes.byref(buffer),
-                ctypes.sizeof(buffer),
-                False,
-                _NOTIFY_FILTER,
-                None,
-                ctypes.byref(overlapped),
-                None,
-            )
-        )
+    def long_path(self, path: str) -> str | None:
+        buffer = self._ctypes.create_unicode_buffer(32768)
+        n = self._long_path(path, buffer, 32768)
+        return buffer.value if 0 < n < 32768 else None
 
-    def add(self, path: str) -> int | None:
+    def local(self, root: str) -> bool:
+        return self._drive_type(root) in (_DRIVE_FIXED, _DRIVE_RAMDISK)
+
+    def open_root(self, root: str) -> Any:
         handle = self._create(
-            path,
+            root,
             _FILE_LIST_DIRECTORY,
             _FILE_SHARE_ALL,
             None,
@@ -587,64 +670,256 @@ class _DirectoryChanges:
             _FILE_FLAG_BACKUP_SEMANTICS | _FILE_FLAG_OVERLAPPED,
             None,
         )
-        if handle is None or handle == self._invalid:
-            return None
-        overlapped = self._Overlapped()
-        buffer = (self._ctypes.c_uint32 * 1024)()
-        if not self._issue(handle, overlapped, buffer):
-            self._close(handle)
-            return None
-        self._next += 1
-        self._open[self._next] = (handle, overlapped, buffer)
-        return self._next
+        return None if handle is None or handle == self._invalid else handle
 
-    def remove(self, key: int) -> None:
-        held = self._open.pop(key, None)
-        idle = key in self._idle
-        self._idle.discard(key)
-        if held is None:
-            return
-        handle, overlapped, _buffer = held
-        if idle:
-            # No read is pending (it ended with an error, or was not issued
-            # again after the folder went): nothing to cancel or wait for.
-            # Waiting here hung the kernel for good once a watched folder was
-            # deleted and made again.
-            self._close(handle)
-            return
+    def new_event(self) -> Any:
+        return self._event(None, True, False, None)  # manual reset, not set
+
+    def new_read(self) -> tuple[Any, Any]:
+        return self.Overlapped(), (self._ctypes.c_uint32 * (_VOLUME_BUFFER // 4))()
+
+    def issue(self, handle: Any, overlapped: Any, buffer: Any, event: Any) -> bool:
         ctypes = self._ctypes
+        ctypes.memset(ctypes.byref(overlapped), 0, ctypes.sizeof(overlapped))
+        overlapped.hEvent = event
+        self._reset(event)  # set again only when this read ends
+        return bool(
+            self._read(
+                handle,
+                ctypes.byref(buffer),
+                ctypes.sizeof(buffer),
+                True,
+                _NOTIFY_FILTER,
+                None,
+                ctypes.byref(overlapped),
+                None,
+            )
+        )
+
+    def result(self, handle: Any, overlapped: Any) -> tuple[bool, int, int]:
+        """``(ended, bytes, error)`` of the read, asked without waiting."""
         moved = self._wintypes.DWORD()
-        self._cancel(handle, ctypes.byref(overlapped))
-        # Wait for the cancelled read to end -- until then the system may
-        # still write into the buffer and the overlapped block -- but never
-        # for good: asked without waiting, a bounded number of times.
-        deadline = time.monotonic() + _CANCEL_WAIT_SECONDS
-        while not self._result(handle, ctypes.byref(overlapped), ctypes.byref(moved), False):
-            if ctypes.get_last_error() != _ERROR_IO_INCOMPLETE:
-                break  # ended (cancelled or failed): the buffer is free
-            if time.monotonic() >= deadline:
-                # Still not ended: keep the buffer and the block alive for
-                # the process's life rather than free memory the system may
-                # still write into.
-                self._kept.append(held)
-                break
-            time.sleep(0.001)
+        ctypes = self._ctypes
+        if self._result(handle, ctypes.byref(overlapped), ctypes.byref(moved), False):
+            return True, moved.value, 0
+        error = ctypes.get_last_error()
+        return error != _ERROR_IO_INCOMPLETE, 0, error
+
+    def data(self, buffer: Any, n: int) -> bytes:
+        return self._ctypes.string_at(self._ctypes.addressof(buffer), n)
+
+    def wait(self, event: Any, ms: int) -> bool:
+        return self._wait(event, ms) == _WAIT_OBJECT_0
+
+    def cancel(self, handle: Any, overlapped: Any) -> None:
+        self._cancel(handle, self._ctypes.byref(overlapped))
+
+    def close(self, handle: Any) -> None:
         self._close(handle)
 
-    def poll(self) -> list[tuple[int | None, bool]]:
-        ctypes = self._ctypes
-        reported: list[tuple[int | None, bool]] = []
-        moved = self._wintypes.DWORD()
-        for key, (handle, overlapped, buffer) in list(self._open.items()):
-            if self._result(handle, ctypes.byref(overlapped), ctypes.byref(moved), False):
-                if self._issue(handle, overlapped, buffer):
-                    reported.append((key, False))
-                    continue
-            elif ctypes.get_last_error() == _ERROR_IO_INCOMPLETE:
-                continue
-            self._idle.add(key)  # no read pending any more: never waited on
-            reported.append((key, True))  # an error, or no read pending: dropped
+
+class _Volume:
+    """One volume's watch: a handle on its root, one read pending over the
+    whole tree, and the watched folders below it (`_FolderIndex`). Reports
+    are taken (`take`) by its thread as they come and by every poll, under
+    one lock: a poll sees every change reported before it."""
+
+    def __init__(self, kernel: Any, root: str, handle: Any) -> None:
+        self.kernel = kernel
+        self.root = root
+        self.handle = handle
+        self.index = _FolderIndex()
+        self.lock = threading.Lock()
+        self.event = kernel.new_event()
+        self.overlapped, self.buffer = kernel.new_read()
+        #: Keys of folders changed since the last poll; `everything` when all may have.
+        self.changed: set[Any] = set()
+        self.everything = False
+        self.pending = False
+        self.dead = False
+        self.stopping = False
+        #: Reads that did not end within the wait after a cancel, kept alive.
+        self.kept: list[tuple[Any, Any]] = []
+        self.thread: threading.Thread | None = None
+
+    def start(self) -> bool:
+        """Issue the first read: changes from now on are reported."""
+        with self.lock:
+            self.pending = self.kernel.issue(self.handle, self.overlapped, self.buffer, self.event)
+            if not self.pending:
+                return False
+        self.thread = threading.Thread(target=self._run, name="cash-file-watch", daemon=True)
+        self.thread.start()
+        return True
+
+    def _run(self) -> None:
+        while not self.stopping:
+            try:
+                signalled = self.kernel.wait(self.event, _THREAD_WAIT_MS)
+            except Exception:  # noqa: BLE001 - the polls still take every report
+                return
+            if self.stopping:
+                return
+            if signalled:
+                with self.lock:
+                    took = self.take()
+                if not took:
+                    time.sleep(0.01)  # signalled with nothing to take: do not spin
+            if self.dead:
+                return
+
+    def take(self) -> bool:
+        """With the lock held: take the read's report if it ended, and issue
+        the next. False when no read had ended."""
+        if not self.pending or self.dead:
+            return False
+        ended, n, error = self.kernel.result(self.handle, self.overlapped)
+        if not ended:
+            return False
+        self.pending = False
+        if error or n == 0:
+            self.everything = True  # an overflow (none read) or an error: anything changed
+        else:
+            names = parse_notify_information(self.kernel.data(self.buffer, n))
+            if names is None:
+                self.everything = True
+            elif not self.everything:
+                touched = self.index.touched
+                for name in names:
+                    self.changed.update(touched(name))
+        if error and error != _ERROR_NOTIFY_ENUM_DIR:
+            self.dead = True  # the root went (a volume unmounted): stop
+            return True
+        self.pending = self.kernel.issue(self.handle, self.overlapped, self.buffer, self.event)
+        if not self.pending:
+            self.dead = True
+        return True
+
+    def poll(self) -> tuple[list[Any], bool]:
+        """``(changed keys, dead)`` since the last poll."""
+        with self.lock:
+            self.take()
+            if self.everything or self.dead:
+                keys = list(self.index.keys.values())
+            else:
+                keys = list(self.changed)
+            self.changed = set()
+            self.everything = False
+            return keys, self.dead
+
+    def stop(self) -> None:
+        """End the watch, never waiting for good: a cancelled read is waited
+        on for at most ``_CANCEL_WAIT_SECONDS``, and one still running then
+        keeps its buffer alive for the process's life."""
+        self.stopping = True
+        with self.lock:
+            kernel = self.kernel
+            if self.pending:
+                kernel.cancel(self.handle, self.overlapped)
+                deadline = time.monotonic() + _CANCEL_WAIT_SECONDS
+                while True:
+                    ended, _n, _error = kernel.result(self.handle, self.overlapped)
+                    if ended:
+                        break
+                    if time.monotonic() >= deadline:
+                        self.kept.append((self.overlapped, self.buffer))
+                        break
+                    time.sleep(0.001)
+                self.pending = False
+            kernel.close(self.handle)
+        if self.thread is not None and self.thread is not threading.current_thread():
+            self.thread.join(timeout=2 * _THREAD_WAIT_MS / 1000)
+        kernel.close(self.event)
+
+
+class _VolumeChanges:
+    """The Windows backend of `FileWatch`: a folder is watched through its
+    volume's watch (`_Volume`), keyed by its real path, so no handle is
+    open on it or on any folder above it but the volume's root."""
+
+    def __init__(self, kernel: Any = None) -> None:
+        self.kernel = kernel if kernel is not None else _Win32()
+        self._volumes: dict[str, _Volume] = {}
+        self._keys: set[tuple[str, str]] = set()
+        #: Volumes kept alive after a stop that did not end in time.
+        self._stopped: list[_Volume] = []
+
+    def _locate(self, path: str) -> tuple[str, str] | None:
+        """``(volume root, path below it)`` of *path*'s real, long form;
+        None for a network or removable drive, or a path not understood.
+        By the real path: a change is reported under it, not under a
+        junction or a link that leads there."""
+        real = os.path.realpath(path)
+        if real.startswith("\\\\?\\") and not real.upper().startswith("\\\\?\\UNC\\"):
+            real = real[4:]
+        if real.startswith(("\\\\", "//")):
+            return None  # a network share
+        long = self.kernel.long_path(real)
+        if long is None:
+            return None
+        root = self.kernel.volume_root(long)
+        if not root or root.startswith("\\\\") or not self.kernel.local(root):
+            return None
+        if not os.path.normcase(long).startswith(os.path.normcase(root.rstrip("\\"))):
+            return None
+        return root, long[len(root.rstrip("\\")) :]
+
+    def usable(self, path: str) -> bool:
+        return self._locate(path) is not None
+
+    def add(self, path: str) -> Any:
+        located = self._locate(path)
+        if located is None:
+            return None
+        root, below = located
+        key = (os.path.normcase(root), _FolderIndex.spelled(below))
+        volume = self._volumes.get(key[0])
+        if volume is None or volume.dead:
+            handle = self.kernel.open_root(root)
+            if handle is None:
+                return None
+            volume = _Volume(self.kernel, root, handle)
+            if not volume.start():
+                volume.stop()
+                return None
+            self._volumes[key[0]] = volume
+        with volume.lock:
+            volume.index.add(below, key)
+        self._keys.add(key)
+        return key
+
+    def remove(self, key: Any) -> None:
+        if key not in self._keys:
+            return
+        self._keys.discard(key)
+        volume = self._volumes.get(key[0])
+        if volume is None:
+            return
+        with volume.lock:
+            volume.index.remove(key[1])
+            empty = not volume.index.keys
+        if empty:
+            del self._volumes[key[0]]
+            volume.stop()
+            if volume.kept:
+                self._stopped.append(volume)
+
+    def poll(self) -> list[tuple[Any, bool]]:
+        reported: list[tuple[Any, bool]] = []
+        for root, volume in list(self._volumes.items()):
+            keys, dead = volume.poll()
+            reported.extend((key, dead) for key in keys)
+            if dead:
+                self._keys.difference_update(keys)
+                del self._volumes[root]
+                volume.stop()
         return reported
+
+    def close(self) -> None:
+        for volume in list(self._volumes.values()):
+            volume.stop()
+        self._volumes.clear()
+        self._keys.clear()
 
 
 # -- the process's watch ---------------------------------------------------------
@@ -661,7 +936,7 @@ def _backend() -> Any:
     if sys.platform.startswith("linux"):
         return _Inotify()
     if sys.platform == "win32":
-        return _DirectoryChanges()
+        return _VolumeChanges()
     return None  # macOS and others: stat-ed every time
 
 
@@ -705,8 +980,6 @@ def _close(watch: FileWatch) -> None:
     try:
         for key in list(watch._by_key):
             backend.remove(key)
-        fd = getattr(backend, "fd", None)
-        if fd is not None:
-            os.close(fd)
+        backend.close()
     except Exception:  # noqa: BLE001 - closing a watch no longer used
         pass
