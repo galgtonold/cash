@@ -715,7 +715,11 @@ class ForLoopHandler:
             bound=rebound if run_rest else frozenset(),
             link_shares=_helpers.current_loop_pass(self.dispatcher) is None,
             cost=sum(m.get("execution_time", 0.0) for m in all_metrics),
-            held=(iterable,),
+            # The iterations' metrics too: each keeps its loop variables
+            # for the badge (``loop_vars``), and uncounted, every estimator a
+            # loop visited looked held by something else, and the check
+            # searched the heap for it (0.3 s a loop, past its budget).
+            held=(iterable, all_metrics),
             # Every pass served or stored: their entries name what it left.
             entry=None if run_rest else _helpers.structure_entry(all_metrics, moved),
         )
