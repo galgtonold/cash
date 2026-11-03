@@ -415,3 +415,137 @@ def test_a_poll_takes_reports_without_waiting_for_the_volumes_thread(disk):
     time.sleep(0.05)
     assert kernel.waited_in  # the volume's thread waits
     assert threading.current_thread() not in kernel.waited_in
+
+
+# -- a name reported through a short alias -----------------------------------------
+#
+# A change is reported by the name it was made through. A program writing
+# through a short path (``%TEMP%`` is often ``C:\Users\PHILIP~1\AppData\...``)
+# names its files so, and each such name counted as a change of every
+# watched folder below ``C:\Users``: every temporary file any program wrote
+# dropped every stat kept for the notebook, its packages and its data.
+
+
+@pytest.fixture
+def home() -> _FolderIndex:
+    folders = _FolderIndex()
+    for path in ["Users\\Philipp Gergen\\proj\\.venv\\lib\\numpy", "Users\\Philipp Gergen\\proj\\data"]:
+        folders.add(path, path.lower())
+    return folders
+
+
+LONG = {"users\\philip~1": "Users\\Philipp Gergen", "users\\philipp gergen\\proj\\data\\photos~1": None}
+
+
+def test_a_short_alias_put_in_its_long_form_touches_the_folder_it_names_only(home):
+    temp = "Users\\PHILIP~1\\AppData\\Local\\Temp\\tmp123.json"
+    assert home.touched(temp, LONG.get) == []
+    data = "Users\\PHILIP~1\\proj\\data\\a.csv"
+    assert home.touched(data, LONG.get) == ["users\\philipp gergen\\proj\\data"]
+    assert home.moved("Users\\PHILIP~1\\proj\\data", LONG.get) == ["users\\philipp gergen\\proj\\data"]
+
+
+def test_a_short_alias_with_no_long_form_still_touches_everything_below_its_folder(home):
+    # No longer there to be looked up: the alias may have named any folder.
+    assert sorted(home.touched("Users\\XYZ~1\\a.txt", LONG.get)) == sorted(home.keys.values())
+    assert home.touched("Users\\PHILIP~1\\proj\\data\\PHOTOS~1\\a.jpg", LONG.get) == [
+        "users\\philipp gergen\\proj\\data"
+    ]
+    assert sorted(home.touched("Users\\PHILIP~1\\a.txt")) == sorted(home.keys.values())  # none asked
+
+
+def test_a_volumes_reports_through_a_short_alias_are_looked_up_once():
+    kernel = _Disk()
+    kernel.make("C:\\Users\\Philipp Gergen\\AppData\\Local\\Temp", "C:\\Users\\Philipp Gergen\\proj\\data")
+    kernel.aliases["philip~1"] = "Philipp Gergen"
+    v = _Volume(kernel, "C:\\", "root-handle")
+    v.index.add("Users\\Philipp Gergen\\proj\\data", "data")
+    assert v.start()
+    try:
+        for i in range(20):
+            kernel.report(_notify(f"Users\\PHILIP~1\\AppData\\Local\\Temp\\tmp{i}.json"))
+            assert v.poll() == ([], [], False)
+        assert kernel.calls["long_path"] == 1
+        kernel.report(_notify("Users\\PHILIP~1\\proj\\data\\a.csv"))
+        assert v.poll() == (["data"], [], False)
+        # A name gone may free an alias for another file: looked up afresh.
+        kernel.report(_notify("Users\\PHILIP~1\\AppData\\Local\\Temp\\tmp0.json", action=2))
+        v.poll()
+        kernel.report(_notify("Users\\PHILIP~1\\AppData\\Local\\Temp\\tmp1.json"))
+        assert v.poll() == ([], [], False)
+        assert kernel.calls["long_path"] == 2
+    finally:
+        v.stop()
+
+
+# -- a report the volume's thread was told of but has not run ---------------------
+
+
+class _Apc(_Kernel):
+    """kernel32 as it ends a read: the report is made by the writer, but
+    the read shows as ended only once the thread that issued it (the
+    volume's) runs in the kernel again, as an APC queued to it runs then:
+    here, when it enters or leaves a wait."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.queued: tuple[bytes, int] | None = None
+        self.poked = threading.Event()
+
+    def report(self, data: bytes = b"", error: int = 0) -> None:
+        self.queued = (data, error)
+
+    def _run_apcs(self) -> bool:
+        if self.queued is None:
+            return False
+        data, error = self.queued
+        self.queued = None
+        super().report(data, error)
+        return True
+
+    def new_poke(self):
+        return "poke"
+
+    def poke(self, event):
+        self.poked.set()
+
+    def wait_either(self, event, poke, ms):
+        self.waited_in.add(threading.current_thread())
+        if self._run_apcs():
+            return 0
+        poked = self.poked.wait(min(ms, 50) / 1000)
+        self.poked.clear()
+        if self._run_apcs():
+            return 0
+        return 1 if poked else None
+
+
+def test_a_change_reported_before_a_poll_is_in_it_though_the_thread_had_not_run():
+    kernel = _Apc()
+    v = _Volume(kernel, "C:\\", "root-handle")
+    v.index.add("Data\\Photos\\Anna", "anna")
+    assert v.start()
+    try:
+        time.sleep(0.02)  # the thread is in its wait
+        for _ in range(20):
+            kernel.report(_notify("Data\\Photos\\Anna\\a.jpg"))  # the cell wrote a.jpg
+            assert v.poll() == (["anna"], [], False)
+        assert v.counts.get("polls the thread did not answer", 0) == 0
+    finally:
+        v.stop()
+
+
+def test_a_poll_the_thread_does_not_answer_counts_every_folder_changed(monkeypatch):
+    monkeypatch.setattr(file_watch, "_SYNC_SECONDS", 0.05)
+    kernel = _Apc()
+    kernel.poke = lambda event: None  # the thread is never woken early
+    kernel.wait_either = lambda event, poke, ms: time.sleep(0.5)
+    v = _Volume(kernel, "C:\\", "root-handle")
+    v.index.add("Data\\Photos\\Anna", "anna")
+    v.index.add("Work", "work")
+    assert v.start()
+    try:
+        time.sleep(0.02)
+        assert sorted(v.poll()[0]) == ["anna", "work"]
+    finally:
+        v.stop()
