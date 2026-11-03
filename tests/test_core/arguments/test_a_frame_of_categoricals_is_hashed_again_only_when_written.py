@@ -62,6 +62,19 @@ def _flip_and_write(view, value):
     view[0] = value
 
 
+def _write_lands(write, target) -> bool:
+    """Run *write*; False when pandas refuses it as a write to a read-only
+    array. pandas 3.1 hands out an Index's arrays read-only, so a write
+    through an index over a column no longer reaches the column there."""
+    try:
+        write(target)
+    except ValueError as exc:
+        if "read-only" not in str(exc):
+            raise
+        return False
+    return True
+
+
 def test_an_unchanged_frame_of_categoricals_is_read_once(monkeypatch):
     frame = _frame()
     reads = _reads(monkeypatch)
@@ -122,7 +135,9 @@ def test_codes_written_in_place_are_read_again(write):
     frame = _frame()
     before = cow_frame_digest(frame)
     assert cow_frame_digest(frame) == before
-    write(frame)
+    if not _write_lands(write, frame):  # refused: the frame is as it was
+        assert builtin_hash(frame) == before == cow_frame_digest(frame)
+        return
     assert builtin_hash(frame) != before  # the write reached the frame
     assert cow_frame_digest(frame) == builtin_hash(frame)
 
@@ -233,7 +248,9 @@ def test_a_write_to_a_categorical_index_is_read_again(write):
     frame = _frame().set_index("c")
     before = cow_frame_digest(frame)
     assert cow_frame_digest(frame) == before
-    write(frame.index)
+    if not _write_lands(write, frame.index):  # refused: the frame is as it was
+        assert builtin_hash(frame) == before == cow_frame_digest(frame)
+        return
     assert builtin_hash(frame) != before
     assert cow_frame_digest(frame) == builtin_hash(frame)
 
