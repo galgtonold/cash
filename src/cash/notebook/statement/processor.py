@@ -4101,8 +4101,25 @@ class StatementProcessor:
         run.classes_before = {}
         if not replaced:
             return
+        # IPython's own names (``Out``, ``_12``, ``get_ipython``) are not
+        # looked at, nor is the climb taken through its output history: a
+        # displayed object is held there, and from there the climb went on
+        # through the shell until it ran out of time, every time (E16's
+        # ``class Runs``). Forgetting them rebuilds nothing.
+        history, named_history = output_history(user_ns, self.shell)
+        hidden = attribute_or(self.shell, "user_ns_hidden", None) or {}
+        missing = object()
+
+        def skip_name(name: str) -> bool:
+            value = user_ns.get(name)
+            return instance_of(value, type) or hidden.get(name, missing) is value or is_history_name(name)
+
         complete = not heap_unreadable()
         names: set[str] = set()
+        # Searched for once, each search of the heap taking as long as a
+        # level of the climb, and kept until the walk is done: an id of an
+        # object let go may be another's by then.
+        instances: list[Any] | None = None
         if complete:
             try:
                 instances = _instances_of(replaced)
@@ -4112,30 +4129,31 @@ class StatementProcessor:
                     instances,
                     user_ns,
                     share_check_budget(cost),
-                    skip_name=lambda name: instance_of(user_ns.get(name), type),
+                    skip_name=skip_name,
                     ignore=[
                         replaced,
                         run.metrics,
                         *memory_backend.held_entries(attribute_or(self.cash_instance, "backend", None)),
+                        *history,
+                        hidden,
+                        *(mapping for mapping, _name in named_history),
                     ],
                 )
-                del instances
             except Exception:  # an object of the user's raised: as if cut short
                 logger.debug("[CLASS] holder search failed", exc_info=True)
                 names, complete = set(), False
         if not complete:
             # Down from the variables instead, every one of them at once.
             try:
-                instances = _instances_of(replaced)
-                down = names_reaching(
-                    set(map(id, instances)), user_ns, skip_name=lambda name: instance_of(user_ns.get(name), type)
-                )
-                del instances
+                if instances is None:
+                    instances = _instances_of(replaced)
+                down = names_reaching(set(map(id, instances)), user_ns, skip_name=skip_name)
             except Exception:  # an object of the user's raised: as if cut short
                 logger.debug("[CLASS] holder walk failed", exc_info=True)
                 down = None
             if down is not None:
                 names, complete = down, True
+        instances = None
         if not complete:
             value_types = VALUE_TYPES + library_value_types()
             names = {
