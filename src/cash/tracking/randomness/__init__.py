@@ -27,6 +27,7 @@ from .lineage import (
     adopted_seed_lineage,
     advanced_carrier_lineage,
     advanced_rng_lineage,
+    close_seed_watch,
     count_as_unseeded,
     describe_stream,
     drawing_modules_now,
@@ -50,6 +51,7 @@ from .lineage import (
     seeding_modules_now,
     stream_position,
     unseeded_streams,
+    watch_first_seeds,
     watch_seeds,
 )
 from .state import (
@@ -85,6 +87,7 @@ __all__ = [
     "capture_reachable_carrier_states",
     "carriers_put_back",
     "capture_rng_state",
+    "close_seed_watch",
     "carrier_positions",
     "carrier_states_changed",
     "moved_carrier_names",
@@ -126,5 +129,6 @@ __all__ = [
     "warn_stale_estimator_fit",
     "warn_stale_randomness",
     "warn_unseeded_estimator_fit",
+    "watch_first_seeds",
     "watch_seeds",
 ]

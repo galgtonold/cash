@@ -414,6 +414,10 @@ class StatementExecution:
     rng_moved: dict[str, Any] = field(default_factory=dict)
     #: The global streams it seeded as it ran (`reseeded_streams`).
     rng_reseeded: frozenset[str] = frozenset()
+    #: The global streams it seeded before it drew from them
+    #: (`StatementRandomness.seeded_first`): where it left them does not
+    #: depend on the seed in force when it began.
+    rng_seeded_first: frozenset[str] = frozenset()
 
 
 def echoes(code: str, tree: ast.Module | None, is_last: bool) -> bool:

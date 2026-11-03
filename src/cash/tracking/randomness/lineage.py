@@ -144,8 +144,99 @@ def _note_seed(module: str, args: tuple, kwargs: dict) -> None:
         seeded.add(module)
 
 
+# ---------------------------------------------------------------------------
+# Seeded before drawing.
+#
+# A statement whose run seeds a stream before it draws from it (a
+# ``functools.cache`` helper that calls ``random.seed(n)`` and then draws,
+# filled by the statement) draws only from the stream its own seed set: what
+# it computes does not depend on where the stream stood when it began, so its
+# key need not read the stream (`StatementRandomness._record_hidden_draws`).
+# Only the run can tell: the first seed of the statement compares the stream
+# with where it stood when the statement began. A draw in between, a
+# ``seed(None)``, or a ``getstate`` or ``setstate`` before it (a draw put back
+# leaves the position as it was) makes it a read of the stream, as before; so
+# does a ``setstate`` after it (``s = random.getstate(); random.seed(0); ...;
+# random.setstate(s)`` leaves the stream where it began, not where its seed
+# took it).
+# ---------------------------------------------------------------------------
+#: The statement watched now: where each stream stood when it began, for the
+#: streams no seed, set-state or draw seen at a seed has ended the watch of.
+_FIRST_SEED_WATCH: dict[str, object] = {}
+#: The streams the statement watched now seeded with a value before any draw.
+_SEEDED_FIRST: set[str] = set()
+#: The snapshot the watch now was opened with (`watch_first_seeds`).
+_FIRST_SEED_OWNER: list = [None]
+#: The streams this watch covers: the two the notebook's draw ledger keys.
+_FIRST_SEED_STREAMS = ("random", "numpy.random")
+
+
+def watch_first_seeds(start: dict) -> None:
+    """Open the watch of the statement about to run: *start* is where the
+    global streams stand as it begins (`capture_rng_state`). Replaces any
+    watch still open, whose `close_seed_watch` then reports nothing."""
+    _FIRST_SEED_WATCH.clear()
+    _SEEDED_FIRST.clear()
+    _FIRST_SEED_OWNER[0] = start
+    for module in _FIRST_SEED_STREAMS:
+        if module in start:
+            _FIRST_SEED_WATCH[module] = start[module]
+
+
+def close_seed_watch(start: dict) -> frozenset[str]:
+    """Close the watch opened with *start*: the streams the statement seeded
+    with a value before it drew from them. Nothing when another watch was
+    opened since (a statement run inside it)."""
+    if _FIRST_SEED_OWNER[0] is not start:
+        return frozenset()
+    seeded = frozenset(_SEEDED_FIRST)
+    _FIRST_SEED_OWNER[0] = None
+    _FIRST_SEED_WATCH.clear()
+    _SEEDED_FIRST.clear()
+    return seeded
+
+
+def _first_seed(module: str, args: tuple, kwargs: dict) -> None:
+    """At a seed of *module* while a statement is watched: the first one ends
+    the watch of that stream, as seeded before drawing when the stream is
+    still where the statement began and the seed has a value."""
+    start = _FIRST_SEED_WATCH.pop(module, None)
+    value = args[0] if args else kwargs.get("seed", kwargs.get("a"))
+    if start is None or value is None:
+        return
+    try:
+        from .state import _rng_states_equal, capture_rng_state
+
+        now = capture_rng_state().get(module)
+        if now is not None and _rng_states_equal(start, now):
+            _SEEDED_FIRST.add(module)
+    except Exception:  # noqa: BLE001 - unread, it counts as a draw, as before
+        return
+
+
+def _state_wrapper(module: str, original, *, sets: bool):
+    """*original*, ``getstate`` or (*sets*) ``setstate`` of *module*'s global
+    stream, ending the watch of a statement that reads or sets the stream
+    before its first seed, and (*sets*) taking back a seed before a draw."""
+
+    def state(*args, **kwargs):
+        if _FIRST_SEED_WATCH:
+            _FIRST_SEED_WATCH.pop(module, None)
+        if sets:
+            _SEEDED_FIRST.discard(module)
+        return original(*args, **kwargs)
+
+    state.__wrapped__ = original  # type: ignore[attr-defined]
+    state.__cash_seed_watch__ = True  # type: ignore[attr-defined]
+    state.__name__ = getattr(original, "__name__", "setstate" if sets else "getstate")
+    state.__doc__ = getattr(original, "__doc__", None)
+    return state
+
+
 def _seed_wrapper(module: str, original):
     def seed(*args, **kwargs):
+        if _FIRST_SEED_WATCH:
+            _first_seed(module, args, kwargs)
         result = original(*args, **kwargs)
         _note_seed(module, args, kwargs)
         return result
@@ -185,6 +276,16 @@ def _on_stream_module_loaded(module: str) -> None:
     watch_seeds()
 
 
+#: The functions that read or set a global stream's state, wrapped by
+#: `watch_seeds` for the watch of a seed before a draw (`_state_wrapper`).
+_STATE_FUNCTIONS = (
+    ("random", "getstate", False),
+    ("random", "setstate", True),
+    ("numpy.random", "get_state", False),
+    ("numpy.random", "set_state", True),
+)
+
+
 def watch_seeds() -> None:
     """Wrap ``random.seed``, ``numpy.random.seed`` and ``torch.manual_seed``
     (once each, when imported).
@@ -221,6 +322,19 @@ def watch_seeds() -> None:
                 continue
             newly.add(rng)
         _WATCHED.add(rng)
+    for module, attr, sets in _STATE_FUNCTIONS:
+        if module + "." + attr in _WATCHED:
+            continue
+        mod = sys.modules.get(module)
+        original = getattr(mod, attr, None) if mod is not None else None
+        if original is None:
+            continue
+        if not getattr(original, "__cash_seed_watch__", False):
+            try:
+                setattr(mod, attr, _state_wrapper(module, original, sets=sets))
+            except (AttributeError, TypeError):  # pragma: no cover - read-only module
+                continue
+        _WATCHED.add(module + "." + attr)
     unseen = newly - _LOADED_UNDER_WATCH - {"torch"}
     if unseen:
         from .prior_seeds import seeded_before_watch
@@ -316,16 +430,18 @@ def judged_draws() -> int:
 
 def _stream_position(module: str) -> str | None:
     """Digest of *module*'s global stream as it stands, or None."""
+    from .state import _unwatched
+
     try:
         if module == "random":
             import random
 
-            payload = repr(random.getstate()).encode("utf-8")
+            payload = repr(_unwatched(random.getstate)()).encode("utf-8")
         elif module == "numpy.random":
             np_random = sys.modules.get("numpy.random")
             if np_random is None:
                 return None
-            name, keys, pos, has_gauss, cached = np_random.get_state()
+            name, keys, pos, has_gauss, cached = _unwatched(np_random.get_state)()
             payload = b"%s|%d|%d|%r|" % (str(name).encode(), int(pos), int(has_gauss), float(cached))
             payload += keys.tobytes()
         else:

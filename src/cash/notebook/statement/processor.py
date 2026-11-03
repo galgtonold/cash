@@ -2491,6 +2491,7 @@ class StatementProcessor:
                 self._randomness.observe_statement(pre_rng, run.code)
                 execution.rng_moved = self._randomness.moved_streams
                 execution.rng_reseeded = self._randomness.reseeded_streams
+                execution.rng_seeded_first = self._randomness.seeded_first
                 execution.result = ExecutionResult(success=True)
         except Exception as e:  # noqa: BLE001 - broad fallback wrapping arbitrary user code
             execution.result = error_result(e)

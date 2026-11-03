@@ -30,7 +30,7 @@ section when a cell does something you did not expect.
 
 This is the one home for randomness in notebooks; other pages link here.
 
-<!-- claim: cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @c92fc293, cash/tracking/randomness/state.py:restore_rng_state @2e1cc6af, cash/tracking/randomness/state.py:capture_rng_state @421bfe05, cash/notebook/statement/carrier_advances.py:advance_carriers @98d0397f -->
+<!-- claim: cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @c92fc293, cash/tracking/randomness/state.py:restore_rng_state @2e1cc6af, cash/tracking/randomness/state.py:capture_rng_state @ff4dc78c, cash/notebook/statement/carrier_advances.py:advance_carriers @98d0397f -->
 **Symptom:** re-running a cell returns the same random numbers.
 
 An unseeded draw is cached like any other value, so a re-run shows the stored
@@ -75,7 +75,7 @@ its closure (`arr = make_data()`). A draw from the global `random`,
 `np.random` or torch stream inside a helper is flagged once the statement has
 run, by comparing the streams.
 
-<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @421bfe05, cash/notebook/statement/carrier_advances.py:advance_carriers @98d0397f, cash/tracking/randomness/lineage.py:advanced_carrier_lineage @eaa66fca, cash/notebook/upstream/statement_lineage.py:StatementLineage._recorded_draws @3b7507d9, cash/notebook/upstream/statement_lineage.py:StatementLineage._reachable_generators @bb6221ba -->
+<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @ff4dc78c, cash/notebook/statement/carrier_advances.py:advance_carriers @98d0397f, cash/tracking/randomness/lineage.py:advanced_carrier_lineage @eaa66fca, cash/notebook/upstream/statement_lineage.py:StatementLineage._recorded_draws @3b7507d9, cash/notebook/upstream/statement_lineage.py:StatementLineage._reachable_generators @bb6221ba -->
 A statement that draws from a generator held in a variable, or calls a function
 that does (also one the generator is handed to, as in `paths =
 simulate(n, rng)`), counts as changing that variable. It is stored like any

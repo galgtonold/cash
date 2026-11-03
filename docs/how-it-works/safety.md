@@ -307,7 +307,7 @@ draws are reproducible and do not warn. A generator object
 (`rng = np.random.default_rng()`) counts as seeded only if it was built with a
 seed; seeding `np.random` says nothing about it.
 
-<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @421bfe05 -->
+<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @ff4dc78c -->
 A draw too cheap to cache is held too when it comes from the `random`,
 `numpy.random` or `torch` module stream: before a re-run, cash rewinds those
 streams to where the cell started, so the draw repeats. cash does not rewind a

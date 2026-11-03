@@ -1018,8 +1018,11 @@ class StatementStore:
             "rng_reseeded": sorted(execution.rng_reseeded),
             # The seeding regime this state was captured under, so a later
             # restore can tell whether replaying it would clobber a re-seed
-            # rather than continue the stream.
-            "rng_epochs": dict(seed_epochs),
+            # rather than continue the stream. Not for a stream it seeded
+            # before drawing: where it left that one is its own seed's.
+            "rng_epochs": {
+                module: epoch for module, epoch in seed_epochs.items() if module not in execution.rng_seeded_first
+            },
         }
         if run.memo_changes:
             # What it put into the helper memos it filled, in the one pickle

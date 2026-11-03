@@ -20,6 +20,7 @@ from cash.tracking.randomness import (
     adopted_seed_lineage,
     capture_rng_state,
     check_and_warn_randomness,
+    close_seed_watch,
     count_as_unseeded,
     describe_stream,
     entropy_write_lineage,
@@ -42,6 +43,7 @@ from cash.tracking.randomness import (
     warn_stale_estimator_fit,
     warn_stale_randomness,
     warn_unseeded_estimator_fit,
+    watch_first_seeds,
     watch_seeds,
 )
 from cash.tracking.randomness.detect import RandomnessCallInfo, mints_unseeded_generator
@@ -180,6 +182,9 @@ class StatementRandomness:
         self.moved_streams: dict = {}
         #: The streams the LAST statement seeded as it ran.
         self.reseeded_streams: frozenset[str] = frozenset()
+        #: The streams the LAST statement seeded with a value before it drew
+        #: from them (`close_seed_watch`).
+        self.seeded_first: frozenset[str] = frozenset()
         #: Streams a hit put where its run, which seeded them unseen, left
         #: them: adopted as that run's seed was (`adopt_seeds_of_a_hit`).
         self._seeded_by_a_hit: set[str] = set()
@@ -337,6 +342,7 @@ class StatementRandomness:
         self.observed_draw = set()
         self.moved_streams = {}
         self.reseeded_streams = frozenset()
+        self.seeded_first = frozenset()
         self.draw_newly_seen = False
         self.newly_seen_draws = set()
         # A seed set inside a function the statement calls is seen as it is
@@ -345,7 +351,9 @@ class StatementRandomness:
         watch_seeds()
         self._draw_warnings_at_start = judged_draws()
         self._generation_at_start = {m: seed_generation(m) for m in ("random", "numpy.random")}
-        return capture_rng_state()
+        start = capture_rng_state()
+        watch_first_seeds(start)
+        return start
 
     def record_seeds(self, code: str, cache_key: str) -> None:
         """Record what a seeding statement starts, once its key is known.
@@ -839,6 +847,7 @@ class StatementRandomness:
         statement reports no randomness.
         """
         try:
+            seeded_first = self.seeded_first = close_seed_watch(pre_rng)
             post = capture_rng_state()
             changed = rng_modules_changed(pre_rng, post)
             self.observed_draw = {m for m in changed if m in pre_rng}
@@ -847,7 +856,7 @@ class StatementRandomness:
                 self._cell_pre_lineage = self.rng_lineages()
             self._cell_changed |= changed
             self._cell_post = post
-            self._record_hidden_draws(code, self.observed_draw)
+            self._record_hidden_draws(code, self.observed_draw, seeded_first)
             reseeded = {m for m, g in self._generation_at_start.items() if seed_generation(m) != g}
             self.reseeded_streams = frozenset(reseeded)
             if reseeded:
@@ -857,6 +866,7 @@ class StatementRandomness:
             self.observed_draw = set()
             self.moved_streams = {}
             self.reseeded_streams = frozenset()
+            self.seeded_first = frozenset()
 
     def _moved_streams(self, code: str | None, post: dict, moved: set[str]) -> dict:
         """Where the statement *code* left the global streams it moved,
@@ -879,7 +889,9 @@ class StatementRandomness:
             moved.add("torch.cuda")
         return {module: post[module] for module in moved if module in post}
 
-    def _record_hidden_draws(self, code: str | None, drew: set[str]) -> None:
+    def _record_hidden_draws(
+        self, code: str | None, drew: set[str], seeded_first: frozenset[str] = frozenset()
+    ) -> None:
         """Remember that *code* drew from RNG modules its AST does not mention.
 
         ``rf4.fit(X, y)`` spells no ``np.random`` yet consumes the global stream.
@@ -887,6 +899,17 @@ class StatementRandomness:
         statement never read its module's virtual RNG variable and a re-seed
         above it could not reach it -- its consumers kept hitting across a
         stream that no longer existed.
+
+        A stream the run seeded with a value before it drew from it
+        (*seeded_first*, `close_seed_watch`) is not one it read: it drew
+        what its own seed set, wherever the stream stood when it began. So
+        ``benchmarks(exact, test_suite(5, 10))``, whose ``random_cities``
+        seeds and then draws, is not keyed on the stream, and a changed draw
+        above it (an edited solver that samples) does not run it again. A
+        run with the same key does the same up to that seed, which reads
+        nothing of the stream; a run that draws first is recorded as a draw
+        then, and the value it computed is not stored under the key without
+        the stream (`draw_newly_seen`).
 
         Recorded for EVERY statement, including skip-cache ones: a bare
         ``model.fit()`` is not cached itself, but it is exactly the statement
@@ -898,7 +921,7 @@ class StatementRandomness:
             visible = get_drawing_rng_modules(strip_markers(code))
         except (SyntaxError, ValueError, AttributeError, RecursionError):
             return
-        hidden = set(drew) - set(visible) - _bare_seeds(code, self.helper_seeds)
+        hidden = set(drew) - set(visible) - _bare_seeds(code, self.helper_seeds) - seeded_first
         if not hidden:
             return
         digest = exact_source_digest(code)

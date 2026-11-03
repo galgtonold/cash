@@ -2662,7 +2662,7 @@ random source.
 first result is returned from then on, and clearing the cache or running on
 another machine gives a different frozen value.
 
-<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @421bfe05, cash/tracking/randomness/detect.py:RandomnessDetector.analyze_code @4890c3ec -->
+<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @ff4dc78c, cash/tracking/randomness/detect.py:RandomnessDetector.analyze_code @4890c3ec -->
 In a notebook, a draw too cheap to cache is frozen too when it comes from the
 `random`, `numpy.random` or `torch` stream, because cash rewinds those streams
 before a re-run. A cheap draw from a generator held in a variable
