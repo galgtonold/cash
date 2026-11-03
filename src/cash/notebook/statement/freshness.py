@@ -41,7 +41,7 @@ from ...value_types import IMMUTABLE_LEAF_TYPES
 from ..call_refs import resolve_call_refs
 from ..helper_memos import unfilled as memos_unfilled
 from ..restored_var import present_holders
-from ..run_memo import fresh_snapshot_this_run, stats_taken_this_run
+from ..run_memo import fresh_snapshot_this_run, stat_dates_this_run, stats_taken_this_run
 from ._metadata import StatementCacheMetadata
 
 if TYPE_CHECKING:
@@ -49,7 +49,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-#: How long a cell's statements may share the answer for a file (``forget_file_answers``).
+#: How old a stat a cell's statements may share the answer for a file on
+#: (``forget_file_answers``).
 _ANSWERS_LAST_S = 2.0
 
 #: Below this many dependencies the per-file answers are cheap enough.
@@ -87,11 +88,11 @@ def _without_unbound_holders(
     return metadata, cached_data
 
 
-def _recent_run_stats(paths: Any) -> Any:
-    """This cell run's stats of *paths* that are no older than this
-    checker's answers may be (``_ANSWERS_LAST_S``), the missing ones taken
-    now for the run's other checks too (`run_memo.stats_taken_this_run`)."""
-    return stats_taken_this_run(paths, time.monotonic() - _ANSWERS_LAST_S)
+def _answers_memo() -> FreshnessMemo:
+    """Answers dated by the stat each rests on (`FreshnessMemo` *lasts*),
+    from this cell run's stats no older than they may be, the missing ones
+    taken now for the run's other checks too (`run_memo.stats_taken_this_run`)."""
+    return FreshnessMemo(taken=stats_taken_this_run, lasts=_ANSWERS_LAST_S, taken_dates=stat_dates_this_run)
 
 
 class CacheFreshnessChecker:
@@ -120,9 +121,10 @@ class CacheFreshnessChecker:
         #: The file read by the statement itself whose change made the last
         #: lookup a miss, or None.
         self.last_stale_file: str | None = None
-        self._memo = FreshnessMemo(taken=_recent_run_stats)
-        #: Dependency sets verified fresh whole, while the answers above last.
-        self._fresh_sets: list[dict] = []
+        self._memo = _answers_memo()
+        #: Dependency sets verified fresh whole, each with the date of the
+        #: oldest stat the verdict rested on: they last as the answers do.
+        self._fresh_sets: list[tuple[float, dict]] = []
         self._epoch: Any = None
         self._answered_at = 0.0
 
@@ -140,18 +142,31 @@ class CacheFreshnessChecker:
         for a cell served entirely from the cache.
 
         Only inside a cell run (an ``int`` *epoch*: ``file_state_epoch``,
-        which every cell run moves) and for at most ``_ANSWERS_LAST_S``: a
-        file another process or a background thread rewrites mid-cell is seen
-        within that, and a caller outside any cell gets one check per lookup.
+        which every cell run moves), and each answer only while the stat it
+        rests on is at most ``_ANSWERS_LAST_S`` old (`FreshnessMemo` *lasts*):
+        a file another process or a background thread rewrites mid-cell is
+        seen within that, and a caller outside any cell gets one check per
+        lookup.
         Not the shell's ``execution_count``: a cell run without history
         (``shell.run_cell(code)``) leaves it unchanged, and the next cell
         reused this one's answers -- a same-size edit made between the two,
         within the window, was served stale.
         """
-        self._memo = FreshnessMemo(taken=_recent_run_stats)
+        self._memo = _answers_memo()
         self._fresh_sets = []
         self._epoch = epoch
         self._answered_at = time.monotonic()
+
+    def _drop_lapsed_answers(self) -> None:
+        """Drop the answers, and the sets verified whole, that rest on a stat
+        older than ``_ANSWERS_LAST_S``: never given again, and kept they grew
+        for as long as a cell kept checking files. Each lapses on its own;
+        the ones on a recent stat stay."""
+        now = time.monotonic()
+        not_before = now - _ANSWERS_LAST_S
+        self._memo.keep_since(not_before)
+        self._fresh_sets = [(at, deps) for at, deps in self._fresh_sets if at >= not_before]
+        self._answered_at = now
 
     def check_cache(
         self,
@@ -180,8 +195,13 @@ class CacheFreshnessChecker:
         # its inputs, so the two passes below checked every file twice. One
         # answer per (path, snapshot) until a statement executes or the cell
         # changes (``forget_file_answers``); stats from directory listings too.
-        if not isinstance(epoch, int) or epoch != self._epoch or time.monotonic() - self._answered_at > _ANSWERS_LAST_S:
+        if not isinstance(epoch, int) or epoch != self._epoch:
             self.forget_file_answers(epoch)
+        elif time.monotonic() - self._answered_at > _ANSWERS_LAST_S:
+            self._drop_lapsed_answers()
+        # Every answer this lookup gives rests on a stat taken at most
+        # ``_ANSWERS_LAST_S`` before it began: an edit made earlier is seen.
+        self._memo.begin_check()
 
         t3 = _perf_counter()
         raw_metadata, cached_data = self._backend.get(cache_key)
@@ -239,16 +259,19 @@ class CacheFreshnessChecker:
         """
         if len(deps) < _SET_MEMO_MIN:
             return False
-        if any(len(known) == len(deps) and known == deps for known in self._fresh_sets):
+        not_before = self._memo.not_before
+        if any(at >= not_before and len(known) == len(deps) and known == deps for at, known in self._fresh_sets):
             return True
         # Or by the upstream check of this cell run, from answers no older
         # than this checker's own may be (``_ANSWERS_LAST_S``): the entry of
         # the cell above holds the files a statement below inherited.
-        return isinstance(self._epoch, int) and fresh_snapshot_this_run(deps, time.monotonic() - _ANSWERS_LAST_S)
+        return isinstance(self._epoch, int) and fresh_snapshot_this_run(deps, not_before)
 
     def _remember_fresh(self, deps: dict) -> None:
+        """Keep *deps*, just found fresh whole by `snapshot_is_fresh` with
+        this checker's memo, dated by the oldest stat that verdict rested on."""
         if len(deps) >= _SET_MEMO_MIN and len(self._fresh_sets) < 16:
-            self._fresh_sets.append(deps)
+            self._fresh_sets.append((self._memo.oldest, deps))
 
     def _invalidate_if_held_by_reference(self, cached_data: Any) -> Any:
         """Return None if the entry holds a variable's object itself.

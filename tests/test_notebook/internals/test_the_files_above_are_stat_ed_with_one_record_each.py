@@ -12,6 +12,10 @@ a ``(path, stat)`` pair is tracked (a stat result is a collector type), and
 one per file lived through the cell, was promoted to the oldest generation
 and set off a full collection of the kernel's heap every few cells. The
 pairs the answer hands out are made one at a time, as they are asked for.
+
+Beside it the run keeps when each stat was taken, for the checks that take
+only recent ones (``run["stat_date"]``): a slot per file holding one float
+shared by every stat of its chunk, in a dict the collector does not track.
 """
 
 from __future__ import annotations
@@ -56,7 +60,7 @@ def test_one_record_per_file(tmp_path):
         p: (p, os.stat(p).st_size) for p in paths
     }
     run = run_memo.file_state_this_run()
-    records = sum(len(v) for v in run.values() if isinstance(v, dict) and set(paths) <= set(v))
+    records = sum(len(v) for k, v in run.items() if k != "stat_date" and isinstance(v, dict) and set(paths) <= set(v))
     assert records == N
 
 
@@ -67,8 +71,13 @@ def test_the_records_are_not_tracked_by_the_garbage_collector(tmp_path):
 
     asked = set(paths)
     run = run_memo.file_state_this_run()
-    records = [v for d in run.values() if isinstance(d, dict) for k, v in d.items() if k in asked]
+    records = [
+        v for n, d in run.items() if n != "stat_date" and isinstance(d, dict) for k, v in d.items() if k in asked
+    ]
     assert len(records) == N
+    dates = run["stat_date"]
+    assert not gc.is_tracked(dates)
+    assert len({id(dates[p]) for p in paths}) == 1, "one date object per chunk"
     assert [r for r in records if gc.is_tracked(r)] == []
     pairs = [o for o in gc.get_objects() if type(o) is tuple and len(o) == 2 and type(o[0]) is str and o[0] in asked]
     assert pairs == [], "a pair per file is kept alive"

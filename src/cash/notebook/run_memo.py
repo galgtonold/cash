@@ -23,6 +23,8 @@ reads and fills both. Neither side imports the other for it.
 
 from __future__ import annotations
 
+import bisect
+import itertools
 import os
 import time
 from collections.abc import Iterable, Mapping
@@ -43,6 +45,7 @@ __all__ = [
     "note_fresh_snapshot",
     "stat_keys_this_run",
     "stats_taken_this_run",
+    "stat_dates_this_run",
     "stats_this_run",
     "RunStats",
 ]
@@ -200,33 +203,57 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
     over 24,000 documents, the bookkeeping of a stat cost as much as the stat.
     The record is the stat itself for a path found where it was recorded
     (`RunStats`), so the garbage collector has nothing per file to track.
+
+    Dated a chunk at a time (`_STAT_CHUNK` stats): each stat kept is dated
+    by when its chunk began (``run["stat_date"]``, one shared float per
+    chunk), and ``run["stat_chunks"]`` lists ``(date, first index)`` in the
+    order the stats were kept, so `stats_taken_this_run` hands a caller
+    that takes only recent stats the recent ones of a long pass, and the
+    caller takes the older ones again itself.
     """
     run = file_state_this_run()
     if run is not None:
         stats = run.setdefault("stat", {})
         elsewhere = run.setdefault("stat_elsewhere", {})
+        dates = run.setdefault("stat_date", {})
+        chunks = run.setdefault("stat_chunks", [])
     else:
-        stats, elsewhere = {}, {}
+        stats, elsewhere, dates, chunks = {}, {}, {}, []
     if not isinstance(paths, (dict, set, frozenset)):
         paths = dict.fromkeys(paths)  # the paths as asked, in order, once each
     # Asked again by each check of the run: most often every path was
     # stat-ed already, which the run's own dict tells in C.
     todo = [] if stats.keys() >= _as_set(paths) else [p for p in paths if p not in stats and p not in elsewhere]
     if todo:
+        at = time.monotonic()
         listed = stats_from_listings(todo) if len(todo) >= LISTING_MIN_FILES else None
+        if listed:
+            # A listing's stats, dated by when the listing began, kept first:
+            # the dates stay in the order the stats are kept.
+            chunks.append((at, len(stats)))
+            for p in todo:
+                st = listed.get(p)
+                if st is not None and p not in stats:
+                    stats[p] = st
+                    dates[p] = at
         stat = os.stat
         if getattr(stat, "_is_file_tracker_patch", False):
             stat = stat._original_func  # as `own_stat`, once for the lot
-        if run is not None and "stat_at" not in run:
-            # When the oldest stat the run keeps was taken (`stats_taken_this_run`).
-            run["stat_at"] = time.monotonic()
         cwd: list[str] = []  # the working directory, asked once for the lot
+        at = time.monotonic()
+        chunks.append((at, len(stats)))
+        left = _STAT_CHUNK
         for p in todo:
-            if p in stats:  # its other spelling's stat, taken just now
+            if p in stats:  # listed, or its other spelling's stat, taken just now
                 continue
-            st = listed.get(p) if listed else None
-            if st is None and not os.path.isabs(p) and not ("://" in p and is_remote_url(p)):
-                st = _as_spelled_absolute(p, stats, stat, cwd)
+            left -= 1
+            if not left:
+                at = time.monotonic()
+                chunks.append((at, len(stats)))
+                left = _STAT_CHUNK
+            st = None
+            if not os.path.isabs(p) and not ("://" in p and is_remote_url(p)):
+                st = _as_spelled_absolute(p, stats, stat, cwd, dates, at)
             if st is None and not ("://" in p and is_remote_url(p)):
                 # Where it was recorded: the stat that finds it is there is
                 # the stat it is asked for (`resolve_file_dep_path` asked
@@ -237,6 +264,7 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
                     st = None
             if st is not None:
                 stats[p] = st
+                dates[p] = at
                 continue
             resolved = resolve_file_dep_path(p)
             if resolved is not None:
@@ -246,12 +274,20 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
                     st = None
             if resolved == p and st is not None:
                 stats[p] = st
+                dates[p] = at
             else:
                 elsewhere[p] = (resolved, st)
     return RunStats(paths, stats, elsewhere)
 
 
-def _as_spelled_absolute(path: str, stats: dict[str, Any], stat: Any, cwd: list[str]) -> os.stat_result | None:
+def _as_spelled_absolute(
+    path: str,
+    stats: dict[str, Any],
+    stat: Any,
+    cwd: list[str],
+    dates: dict[str, float],
+    at: float,
+) -> os.stat_result | None:
     """The stat of relative *path* by its absolute spelling in the working
     directory, which this run took or takes now under that spelling too;
     None when there is none, or the spellings may not name the same file.
@@ -280,19 +316,25 @@ def _as_spelled_absolute(path: str, stats: dict[str, Any], stat: Any, cwd: list[
         except (OSError, ValueError):
             return None
         stats[absolute] = st
+        dates[absolute] = at
     return st
+
+
+#: How many stats `stats_this_run` dates with one time.
+_STAT_CHUNK = 256
 
 
 def stats_taken_this_run(paths: Iterable[str], not_before: float | None = None) -> Mapping[str, os.stat_result]:
     """``{path: stat}`` of this run's stats of *paths* (`stats_this_run`)
     for the paths found where they were recorded, taking the missing ones
-    now; outside a run, nothing.
+    now; outside a run, nothing. May hold more paths than asked.
 
-    With *not_before* (``time.monotonic()``), nothing unless every stat the
-    run keeps was taken since: a caller whose answers last no longer than
-    that (``CacheFreshnessChecker``) takes older ones again itself, as
-    before. One time for the lot, not one per file: the run keeps one
-    record per file (`RunStats`).
+    With *not_before* (``time.monotonic()``), only the stats taken since,
+    by their chunk's date (`stats_this_run`): a caller whose answers last
+    no longer than that (``CacheFreshnessChecker``) takes the older ones
+    again itself. Dated by the run's oldest stat instead, a lookup after
+    a pass of 20,000 stats that took longer than that stat-ed every file
+    again.
 
     What `FreshnessMemo.taken` hands every freshness check of the run: the
     check of an entry's files, the simulation's and the statement lookup's
@@ -300,10 +342,24 @@ def stats_taken_this_run(paths: Iterable[str], not_before: float | None = None) 
     run = file_state_this_run()
     if run is None:
         return {}
-    if not_before is not None and run.get("stat_at", not_before) < not_before:
-        return {}
     stats_this_run(paths)
-    return run["stat"]
+    stats = run["stat"]
+    chunks = run.get("stat_chunks")
+    if not_before is None or not chunks or chunks[0][0] >= not_before:
+        return stats
+    first = bisect.bisect_left(chunks, not_before, key=lambda chunk: chunk[0])
+    if first == len(chunks):
+        return {}
+    # The stats are kept in the order they were dated: the recent ones are
+    # the last, taken in C.
+    return dict(itertools.islice(stats.items(), chunks[first][1], None))
+
+
+def stat_dates_this_run() -> Mapping[str, float]:
+    """``{path: when}`` (``time.monotonic()``) for this run's stats
+    (`stats_taken_this_run`): when the chunk each was taken in began."""
+    run = file_state_this_run()
+    return run.get("stat_date", {}) if run is not None else {}
 
 
 def stat_keys_this_run(paths: Iterable[str]) -> Mapping[str, tuple[int, int, int] | None]:

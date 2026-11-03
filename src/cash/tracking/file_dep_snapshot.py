@@ -1218,15 +1218,74 @@ class FreshnessMemo:
     was promoted to the oldest generation every cell, setting off a full
     collection every few cells. An answer of strings and booleans, and a
     dict of numbers, are not tracked.
+
+    With *lasts* (seconds), an answer holds only while the stat it rests on
+    is at most that old when the owner's check began (`begin_check`):
+    ``dated`` holds when that stat was taken (``time.monotonic()``), per
+    answer, and an older answer is taken again. *taken* is then called with
+    the oldest date it may hand a stat of (``taken(paths, not_before)``),
+    and *taken_dates* (``{path: when}``) says when each was taken. The
+    answers a check gives from stats of its own are dated by when it began,
+    and each `snapshot_is_fresh` leaves in ``oldest`` the date of the oldest
+    stat its verdict rested on. A whole-memo date by its oldest stat made a
+    lookup after a slow pass of 20,000 stats take every one of them again,
+    the ones a moment old too.
     """
 
-    __slots__ = ("answers", "listed", "recorded", "taken")
+    __slots__ = (
+        "answers",
+        "checked_at",
+        "dated",
+        "lasts",
+        "listed",
+        "not_before",
+        "oldest",
+        "recorded",
+        "taken",
+        "taken_dates",
+    )
 
-    def __init__(self, taken: Callable[[Mapping[str, Any]], Mapping[str, os.stat_result]] | None = None) -> None:
+    def __init__(
+        self,
+        taken: Callable[..., Mapping[str, os.stat_result]] | None = None,
+        lasts: float | None = None,
+        taken_dates: Callable[[], Mapping[str, float]] | None = None,
+    ) -> None:
         self.answers: dict[Any, Any] = {}
         self.recorded: dict[str, Any] = {}
         self.listed: dict[str, os.stat_result] = {}
         self.taken = taken
+        self.lasts = lasts
+        #: When the stat each answer rests on was taken, by its ``answers`` key.
+        self.dated: dict[Any, float] | None = {} if lasts is not None else None
+        self.taken_dates = taken_dates
+        #: Set by each check of a dated memo: answers dated before
+        #: ``not_before`` are taken again; ``checked_at`` dates the stats it takes.
+        self.not_before = self.checked_at = self.oldest = 0.0
+        if lasts is not None:
+            self.begin_check()
+            self.oldest = self.checked_at
+
+    def begin_check(self) -> None:
+        """A check of a dated memo begins: it gives answers resting on stats
+        taken at most ``lasts`` before now, and dates its own stats by now."""
+        self.checked_at = time.monotonic()
+        self.not_before = self.checked_at - (self.lasts or 0.0)
+
+    def keep_since(self, not_before: float) -> None:
+        """Drop the answers of a dated memo resting on a stat taken before
+        *not_before*: they are never given again, and a cell checking files
+        for minutes kept every one."""
+        dated = self.dated
+        if dated is None:
+            return
+        keep = [k for k, at in dated.items() if at >= not_before]
+        if len(keep) == len(dated):
+            return
+        answers, recorded = self.answers, self.recorded
+        self.answers = {k: answers[k] for k in keep}
+        self.recorded = {k: recorded[k] for k in keep if k in recorded}
+        self.dated = {k: dated[k] for k in keep}
 
 
 class StaleDep(NamedTuple):
@@ -1289,6 +1348,7 @@ def dep_is_fresh(
     recorded: Any,
     memo: FreshnessMemo | None = None,
     taken: os.stat_result | None = None,
+    taken_at: float | None = None,
 ) -> tuple[str | None, bool, str | None]:
     """``(resolved, is_fresh, stale_reason)`` for one recorded dependency.
 
@@ -1298,7 +1358,8 @@ def dep_is_fresh(
     :func:`cash._paths.resolve_file_dep_path`. ``resolved`` is None when the
     file is nowhere to be found (reason ``'missing'``). A recorded value that
     is not a snapshot entry is stale (``'unrecorded'``). *taken* is a stat
-    of *path* the caller took already (`FreshnessMemo.taken`).
+    of *path* the caller took already (`FreshnessMemo.taken`), at
+    *taken_at* (``time.monotonic()``) when a dated memo asks.
     """
     if memo is None:
         return _check_dep(path, recorded, None, taken)
@@ -1309,24 +1370,49 @@ def dep_is_fresh(
     # A second snapshot of the same path (an entry recorded at another time)
     # is answered under the full key.
     answers = memo.answers
+    dated = memo.dated
     known = memo.recorded.get(path)
     if known is not None:
         if known == recorded:
-            return answers[path]
-        key = _memo_key(path, recorded)
-        found = answers.get(key) if key is not None else None
-        if found is not None:
-            return found
+            if dated is None:
+                return answers[path]
+            at = dated[path]
+            if at >= memo.not_before:
+                if at < memo.oldest:
+                    memo.oldest = at
+                return answers[path]
+            key = path  # resting on a stat too old: taken again, in its place
+        else:
+            key = _memo_key(path, recorded)
+            found = answers.get(key) if key is not None else None
+            if found is not None:
+                if dated is None:
+                    return found
+                at = dated[key]
+                if at >= memo.not_before:
+                    if at < memo.oldest:
+                        memo.oldest = at
+                    return found
     else:
         key = path
     copied = dict(recorded) if key is path and isinstance(recorded, Mapping) else None
     answer = _check_dep(path, recorded, memo.listed.get(path), taken)
+    if dated is not None:
+        # The stat the answer rests on: the one handed in, or one this
+        # check took (its own, or a listing's) since it began.
+        at = memo.checked_at if taken is None else (taken_at if taken_at is not None else memo.not_before)
+        if at < memo.oldest:
+            memo.oldest = at
     if key is path:
         if copied is not None:
             memo.recorded[path] = copied
             answers[path] = answer
+            if dated is not None:
+                dated[path] = at
     elif key is not None:
         answers[key] = answer
+        if dated is not None:
+            dated[key] = at
     return answer
 
 
@@ -1342,13 +1428,23 @@ def snapshot_is_fresh(
     listings are shared with the caller's other checks for as long as it
     keeps the memo.
     """
+    dated = memo is not None and memo.dated is not None
+    if dated:
+        memo.oldest = memo.checked_at  # lowered by each answer given
     if not snap:
         return True, None
     taken: Mapping[str, os.stat_result] = {}
+    taken_at: Mapping[str, float] = {}
     if memo is not None and memo.taken is not None:
         # The stats the owner's run took already: each file once, whichever
         # check asks first.
-        taken = memo.taken(snap)
+        if dated:
+            # Only the ones as recent as the answers may rest on.
+            taken = memo.taken(snap, memo.not_before)
+            if memo.taken_dates is not None:
+                taken_at = memo.taken_dates()
+        else:
+            taken = memo.taken(snap)
     elif memo is not None and len(snap) >= LISTING_MIN_FILES:
         # Many files: read their directories once rather than stat each.
         unlisted = [p for p, s in snap.items() if isinstance(s, dict) and "size" in s and p not in memo.listed]
@@ -1362,12 +1458,12 @@ def snapshot_is_fresh(
         if isabs(path):
             answer = answered.get(path)
             if answer is None:
-                answer = answered[path] = dep_is_fresh(path, recorded, memo, taken.get(path))
+                answer = answered[path] = dep_is_fresh(path, recorded, memo, taken.get(path), taken_at.get(path))
             resolved, is_fresh, reason = answer
-        elif _fresh_as_absolute_twin(snap, path, recorded, memo, answered, taken):
+        elif _fresh_as_absolute_twin(snap, path, recorded, memo, answered, taken, taken_at):
             continue
         else:
-            resolved, is_fresh, reason = dep_is_fresh(path, recorded, memo, taken.get(path))
+            resolved, is_fresh, reason = dep_is_fresh(path, recorded, memo, taken.get(path), taken_at.get(path))
         if not is_fresh:
             return False, StaleDep(path, resolved, reason or "changed")
     return True, None
@@ -1392,6 +1488,7 @@ def _fresh_as_absolute_twin(
     memo: FreshnessMemo | None,
     answered: dict[str, tuple[str | None, bool, str | None]],
     taken: Mapping[str, os.stat_result],
+    taken_at: Mapping[str, float],
 ) -> bool:
     """Is relative *path* fresh by its absolute twin's answer?
 
@@ -1413,5 +1510,5 @@ def _fresh_as_absolute_twin(
         return False
     answer = answered.get(twin)
     if answer is None:
-        answer = answered[twin] = dep_is_fresh(twin, snap[twin], memo, taken.get(twin))
+        answer = answered[twin] = dep_is_fresh(twin, snap[twin], memo, taken.get(twin), taken_at.get(twin))
     return answer[0] == twin and answer[1]

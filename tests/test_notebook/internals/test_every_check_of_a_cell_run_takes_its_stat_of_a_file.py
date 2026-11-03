@@ -12,6 +12,7 @@ its own answers may be (``_ANSWERS_LAST_S``), and takes an older one again.
 from __future__ import annotations
 
 import os
+import time
 import types
 
 import pytest
@@ -76,10 +77,10 @@ def test_the_check_above_the_simulation_and_the_lookup_stat_each_file_once(docs,
     assert sorted(stats_taken) == sorted(docs)
 
 
-def test_the_lookup_stats_again_a_file_the_run_stat_ed_too_long_ago(docs, stats_taken):
+def test_the_lookup_stats_again_a_file_the_run_stat_ed_too_long_ago(docs, stats_taken, monkeypatch):
     run_memo.stats_this_run(docs)
-    run = run_memo.file_state_this_run()
-    run["stat_at"] -= freshness._ANSWERS_LAST_S + 1
+    real = time.monotonic
+    monkeypatch.setattr(time, "monotonic", lambda: real() + freshness._ANSWERS_LAST_S + 1)
     edited = next(iter(docs))
     with open(edited, "r+b") as f:
         f.write(b"\xff")  # same size, new content
