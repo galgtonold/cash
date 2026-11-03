@@ -954,7 +954,13 @@ class _Walk:
         if known is not None:
             self.numbers.update(known)
             return True
-        witness = _SHAPE_WITNESS(items, _NESTED_LEVELS) if _SHAPE_WITNESS is not None and type(items) is list else None
+        # Lists and tuples only: a column of leaves is known by its very
+        # items (`_FLAT_READS`), and its witness would cost each first read.
+        witness = (
+            _SHAPE_WITNESS(items, _NESTED_LEVELS)
+            if _SHAPE_WITNESS is not None and type(items) is list and type(items[0]) in _NESTED
+            else None
+        )
         if witness is not None:
             read = _SHAPE_READS.get(witness)
             if read is not None and read[1] <= self.budget:
