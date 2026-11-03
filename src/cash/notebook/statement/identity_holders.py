@@ -206,15 +206,18 @@ class IdentityHeld(str):
 
 
 def identity_held_reason(
-    name: str, value: Any, user_ns: dict[str, Any], weak_holders: bool = True
+    name: str, value: Any, user_ns: dict[str, Any], weak_holders: bool = True, more: int = 0
 ) -> IdentityHeld | None:
     """Why *value*, bound to *name*, cannot be restored apart from what it
     points at by identity (see the module docstring), or with *weak_holders*,
     while another variable finds it by one (`_weakly_held`); None when it
     can. Not *weak_holders* for a loop's object a hit restores into: it
-    stays the object those references find."""
+    stays the object those references find. *more*: objects the walk looks
+    at beyond `_MAX_SEEN` (the answers a statement put into a helper memo,
+    as many as the memo holds)."""
     user_kinds: dict[type, bool] = {}
     walk = _Walk(user_kinds, targets=[] if weak_holders else None)
+    walk.budget += more
     walk.run([value])
     found = _held_by_id(name, walk, user_kinds, user_ns)
     if found is None and walk.targets:

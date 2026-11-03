@@ -19,6 +19,7 @@ from ..consumables import is_consumable_unrestorable
 from ..shared_objects import GaveUp, attrs_copied_apart, output_history, refers_back, share_group, shared_names
 from .derivation_edges import is_uncacheable_alias
 from .identity_holders import identity_held_reason
+from .run import MEMO_ANSWERS_NAME
 
 __all__ = ["is_history_name", "live_shared_reason", "unrestorable_output_reason"]
 
@@ -159,7 +160,9 @@ def _value_refusal(
         identity_coupled_reason,
         _consumable_refusal,
         _context_variable_refusal,
-        lambda name, value: identity_held_reason(name, value, user_ns, weak_holders=name not in restored_into),
+        lambda name, value: identity_held_reason(
+            name, value, user_ns, weak_holders=name not in restored_into, more=_answers_budget(name, value)
+        ),
     )
     for refusal in refusals:
         for out in outputs:
@@ -168,6 +171,14 @@ def _value_refusal(
             if reason is not None:
                 return reason
     return None
+
+
+def _answers_budget(name: str, value: Any) -> int:
+    """The objects the identity walk looks at beyond its own budget for the
+    answers a statement put into helper memos: two for each, one answer
+    and what it holds (a Held-Karp memo refilled for 16 cities holds
+    245,760 lists, read a level at a time); none for any other output."""
+    return 2 * len(value) if name == MEMO_ANSWERS_NAME and type(value) is list else 0
 
 
 def _context_variable_refusal(name: str, value: Any) -> str | None:
