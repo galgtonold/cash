@@ -12,6 +12,8 @@ object of a class, so the walk does not go into it.
 
 from __future__ import annotations
 
+import functools
+import time
 import types
 
 from cash.notebook.shared_objects import names_reaching
@@ -103,15 +105,12 @@ def test_beside_a_large_memo_of_values_only_the_holders_are_forgotten(cash_magic
     holding an object was forgotten, with a warning: E16's memos of index
     pairs and segments passed it, and every cell below ``class Runs`` re-ran
     the helpers' defs and every statement that had filled their memos."""
-    import functools
-
     from cash.notebook.statement import processor
 
     # The climb ran out of a cheap class cell's budget, and the walk's
     # limit is lowered to what the test's memo passes.
     monkeypatch.setattr(processor, "referring_names", lambda *args, **kwargs: (set(), False))
     monkeypatch.setattr(processor, "names_reaching", functools.partial(processor.names_reaching, max_objects=1_000))
-    shell = cash_magics.shell
     cells = [
         CLASS,
         "pairs = {n: [(i, i + 2) for i in range(n)] for n in (2_000, 3_000)}",
@@ -126,3 +125,17 @@ def test_beside_a_large_memo_of_values_only_the_holders_are_forgotten(cash_magic
     assert "kept" not in lineage, "the variable holding an object of the old class was not forgotten"
     assert {"pairs", "other"} <= set(lineage)
     assert not [w for w in recwarn if "NOTEBOOK-SHARE-UNCHECKED" in str(w.message)]
+
+
+def test_a_row_held_many_times_is_read_once():
+    """Control: ``[row] * 10_000`` reads ``row`` once, not ten thousand
+    times, and so does a list of short lists repeated over and over."""
+    target = Run()
+    row = [float(i) for i in range(10_000)]
+    short = [1.0]
+    for _ in range(7):
+        short = [short] * 31
+    ns = {"grid": [row] * 10_000, "deep": [short] * 40, "results": [target]}
+    started = time.perf_counter()
+    assert names_reaching({id(target)}, ns) == {"results"}
+    assert time.perf_counter() - started < 5

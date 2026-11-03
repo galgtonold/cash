@@ -50,7 +50,7 @@ import sys
 import types
 import uuid
 import weakref
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from time import perf_counter as _perf_counter
 from typing import Any
 
@@ -727,16 +727,36 @@ def _values_only(value: Any, exact: frozenset[type]) -> bool:
     return False
 
 
-def _values_two_deep(value: Any, exact: frozenset[type]) -> bool:
-    """`_values_only`, or an exact list, tuple, set or frozenset of items
-    each of which is a value of the *exact* types or `_values_only`: a
-    memo's key ``(city, frozenset(cities), city)``."""
-    if _values_only(value, exact):
-        return True
-    kind = type(value)
-    if not (kind is tuple or kind is list or kind is set or kind is frozenset):
-        return False
-    return all(type(item) in exact or _values_only(item, exact) for item in value)
+#: The containers `_values_in_containers` reads into, by exact type.
+_VALUE_CONTAINERS = frozenset({tuple, list, set, frozenset})
+
+
+def _values_in_containers(items: Collection[Any], exact: frozenset[type]) -> bool:
+    """Do *items* hold nothing but values of the *exact* types, directly or
+    in exact tuples, lists, sets and frozensets, nested? `_values_in_tuples`
+    with sets and lists too, read a level at a time: a memo keyed by
+    ``(city, frozenset(cities), city)`` holding lists of cities, 250,000
+    of them in 0.3 s. Only the containers of a level are kept to read the
+    next one, and a long one once however often it is held (``[row] *
+    1000``). False, for the walk to read them instead, past
+    `_FLAT_RECORDS_MIN` items read for each of *items*."""
+    limit = _FLAT_RECORDS_MIN * len(items)
+    level: Iterable[Any] = items
+    read = 0
+    for _ in range(_TUPLE_LEVELS):
+        nested = [item for item in level if type(item) not in exact]
+        if not nested:
+            return True
+        if not _VALUE_CONTAINERS.issuperset(map(type, nested)):
+            return False
+        long = [item for item in nested if len(item) >= _FLAT_RECORDS_MIN]
+        if len(set(map(id, long))) < len(long):
+            nested = list({id(item): item for item in nested}.values())
+        read += sum(map(len, nested))
+        if read > limit:
+            return False
+        level = itertools.chain.from_iterable(nested)
+    return False
 
 
 def children_of(value: Any) -> Iterable[Any] | None:
@@ -1326,12 +1346,12 @@ def names_reaching(
     fit below ``class ClusterSimilarity`` ran again.
 
     *wanted* are objects with an identity of their own, never a value of
-    the exact value types nor a tuple of them, so a container holding only
-    those, directly or in tuples (`_values_in_tuples`, `_values_only`), is
-    not walked: E16's helper memos, a list of 500,000 index pairs and the
-    tuples, sets and lists of 100,000 Held-Karp segments, cost a Python
-    step each, 4-6 s of a cell defining a class, where the user's other
-    variables took milliseconds."""
+    the exact value types nor a plain container of them, so a container
+    holding only those, directly or in tuples, lists, sets and frozensets
+    (`_values_in_tuples`, `_values_in_containers`), is not walked: E16's
+    helper memos, 650,000 index pairs and the 250,000 Held-Karp segments
+    of 16 cities, cost a Python step each, past the million objects, where
+    the user's other variables took milliseconds."""
     np = sys.modules.get("numpy")
     value_types = VALUE_TYPES + library_value_types()
     exact = exact_value_types()
@@ -1361,7 +1381,7 @@ def names_reaching(
             if children is None:
                 children = _held_below(obj)
         if len(children) >= _FLAT_RECORDS_MIN:
-            if _values_in_tuples(children, exact):
+            if _values_in_tuples(children, exact) or _values_in_containers(children, exact):
                 continue
             children = list(
                 itertools.compress(children, map(operator.not_, map(exact.__contains__, map(type, children))))
@@ -1373,7 +1393,12 @@ def names_reaching(
                 continue
             if (
                 type(child) in exact
-                or _values_two_deep(child, exact)
+                or _values_only(child, exact)
+                or (
+                    type(child) in _VALUE_CONTAINERS
+                    and len(child) < _FLAT_RECORDS_MIN
+                    and _values_in_containers(child, exact)
+                )
                 or instance_of(child, (type, types.ModuleType))
                 or (np is not None and instance_of(child, np.ndarray) and not child.dtype.hasobject)
                 or is_value(child, value_types)
