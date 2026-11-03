@@ -30,7 +30,8 @@ def is_control_body(code: str) -> bool:
 
 def is_one_structure(tree: Any) -> bool:
     """Whether the parsed statement *tree* is one loop or branch, run as one unit."""
+    from cash._user_attrs import attribute_or
     from cash.notebook.control_structures.common import is_control_structure
 
-    body = getattr(tree, "body", None) or []
+    body = attribute_or(tree, "body", None) or []
     return len(body) == 1 and is_control_structure(body[0])

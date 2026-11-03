@@ -91,7 +91,7 @@ class CacheHitServer:
             for name in sorted(metadata.restored_into):
                 live = user_ns.get(name)
                 why = in_place.refusal(live, user_ns)
-                if why is None and (statement or rewrite_in_place.rewritable_kind(live)):
+                if why is None and (statement or in_place.written_into(live)):
                     # Checked for every name before any is written into, so
                     # a refused hit leaves them as they are for the run.
                     why = rewrite_in_place.mismatch(live, variables[name])

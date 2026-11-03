@@ -249,3 +249,19 @@ def test_the_upstream_rebuild_writes_into_the_live_object_too(notebook):
     assert _runs(log) == 1
     assert id(ns["v"]) == live, "the rebuild bound v to a copy"
     assert ns["v"].min() == 0.5 and ns["r"] == float(ns["v"].sum())
+
+
+def test_a_refused_store_still_moves_a_container_holding_the_input(notebook):
+    """``config = {'features': features}`` then ``features.append(x)``: the
+    dict holding the list refuses the store, and the statement runs every
+    time as before, its receiver moving ``config`` on, so a cell reading
+    ``config`` misses when the change is edited."""
+    magics, _ = notebook
+    ns = magics.shell.user_ns
+    slow = f"import time\ndef slow(v):\n    time.sleep({ABOVE_PERSISTENCE_FLOOR_S})\n    return repr(v)"
+    cells = [slow, "features = ['age']\nconfig = {'features': features}\nfeatures.append('zip')", "r = slow(config)"]
+    _run_all(magics, cells)
+    assert ns["r"] == "{'features': ['age', 'zip']}"
+    cells[1] = cells[1].replace("zip", "city")
+    _run_all(magics, cells)
+    assert ns["r"] == "{'features': ['age', 'city']}"

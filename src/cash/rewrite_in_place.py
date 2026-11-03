@@ -28,6 +28,7 @@ from __future__ import annotations
 import sys
 from typing import Any
 
+from cash._user_attrs import attribute_or
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
 __all__ = [
@@ -121,7 +122,7 @@ def refusal(obj: Any) -> str | None:
     if kind == "series":
         try:
             return _column_refusal(obj.array, obj.dtype, frame=False)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - a Series that cannot be read is not written
             return "the Series could not be read"
     return f"a {type(obj).__name__} is not put back in place, and a new one would not be that object"
 
@@ -132,7 +133,7 @@ def _same_axis(a: Any, b: Any) -> bool:
         type(a) is type(b)
         and a.dtype == b.dtype
         and list(a.names) == list(b.names)
-        and getattr(a, "freq", None) == getattr(b, "freq", None)
+        and attribute_or(a, "freq", None) == attribute_or(b, "freq", None)
         and a.equals(b)
     )
 
@@ -199,7 +200,7 @@ def mismatch(live: Any, stored: Any) -> str | None:
         return why
     try:
         before = shape_of(live)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - not comparable: not written
         return "it could not be compared with the stored state"
     return shape_change(before, stored)
 

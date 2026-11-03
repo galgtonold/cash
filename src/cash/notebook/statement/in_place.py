@@ -49,7 +49,16 @@ from cash.value_types import IMMUTABLE_LEAF_TYPES
 
 from .identity_holders import IdentityHeld, library_parts
 
-__all__ = ["bound_as_a_copy", "holder_refusal", "memory_refusal", "ready", "refusal", "restorable_kind", "restore_into"]
+__all__ = [
+    "bound_as_a_copy",
+    "holder_refusal",
+    "memory_refusal",
+    "ready",
+    "refusal",
+    "restorable_kind",
+    "restore_into",
+    "written_into",
+]
 
 #: Containers restored by their contents.
 _CONTAINERS = (list, dict, set)
@@ -129,7 +138,7 @@ def _identity_refusal(held: str, it: str | None = None) -> IdentityHeld:
         return IdentityHeld(
             "a container keeps the id() of an object it holds, and a restore would hand it a copy", "", "an id()"
         )
-    name = getattr(held, "name", "")
+    name = attribute_or(held, "name", "")
     where = f" ('{name}')" if name else ""
     return IdentityHeld(
         f"the notebook holds containers too big to look through{where} for a weak reference to, or the id() "
@@ -144,6 +153,14 @@ def restorable_kind(obj: Any) -> bool:
     set, or an object whose ``__dict__`` is its state."""
     kind = type(obj)
     return kind in _CONTAINERS or _default_object(kind)
+
+
+def written_into(obj: Any) -> bool:
+    """Whether *obj* is restored by writing values into its memory: an
+    array, a frame or a Series (`rewrite_in_place`), whose shape a restore
+    must find unchanged. A list, a dict or a set is refilled whatever it
+    holds, as a loop's always was."""
+    return rewrite_in_place.rewritable_kind(obj) and type(obj) not in _CONTAINERS
 
 
 def bound_as_a_copy(obj: Any, namespace: Mapping[str, Any]) -> bool:
@@ -349,7 +366,7 @@ def _written_in_python(klass: type) -> bool:
     if not klass.__flags__ & _HEAPTYPE:
         return False
     module = sys.modules.get(type.__dict__["__module__"].__get__(klass))
-    path = getattr(module, "__file__", None) if module is not None else None
+    path = attribute_or(module, "__file__", None) if module is not None else None
     return type(path) is str and path.endswith(".py")
 
 

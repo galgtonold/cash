@@ -282,7 +282,7 @@ class CacheRestorer:
             live = self.shell.user_ns[var]
             stored = variables_to_restore[var]
             why = in_place.refusal(live, self.shell.user_ns) if type(live) is type(stored) else "another kind"
-            if why is None and rewrite_in_place.rewritable_kind(live):
+            if why is None and in_place.written_into(live):
                 why = rewrite_in_place.mismatch(live, stored)
             if why is not None:
                 logger.debug("[UPSTREAM] Restore failed: cannot restore into %s (%s)", var, why)

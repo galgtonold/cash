@@ -2197,12 +2197,18 @@ class StatementProcessor:
         return last is not None and last < self.persistence_policy().compute_floor_s
 
     def _unstore_in_place(self, run: StatementRun, reason: str) -> None:
-        """Run the loop every time, as before it stored what it changed."""
+        """Run the loop or statement every time, as before it stored what it
+        changed."""
         names = set(run.metrics.pop("stored_in_place"))
         run.restored_into = set()
         run.est_fit = run.est_fit - names
-        run.in_place = run.in_place | names
-        run.outputs = run.outputs - names
+        if is_one_structure(run.tree):
+            run.in_place = run.in_place | names
+            run.outputs = run.outputs - names
+        # A statement's receivers stay its outputs, as on the path that never
+        # tried to store them: their lineage moves on, and through their
+        # edges the variables holding them (``config = {'f': features}``
+        # before ``features.append(x)``) move too, so what reads those misses.
         if run.skip_cache:
             # It runs every time for another reason: named by its key, what
             # it changed would keep the lineage of the run that stored it.
