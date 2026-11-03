@@ -748,9 +748,14 @@ def _change_of(
     Emptied: a key it held is gone, or a counter went back. The lookup then
     asks for exactly the answers it held before (what the run found
     decides what it did before it emptied the memo), and a hit empties it
-    and puts in what the run left. Else the lookup asks for every answer it
-    held before and none of the keys it added: a cell above that filled one
-    makes a run find the answer and skip the body it ran."""
+    and puts in what the run left. Else the lookup asks for none of the
+    keys it added (a cell above that filled one makes a run find the answer
+    and skip the body it ran) and, when the run found an answer the memo
+    held (its hits moved), for every answer it held before: the counter
+    does not say which one it found. A run that found none read none of
+    them, so they decide nothing: ``benchmark`` answers holding timings,
+    computed again above, do not stop a statement that only added its own
+    keys from being served."""
     _, before_items, seen = held
     before_keys = {id(key) for key, _ in before_items}
     hits, misses, size = counts
@@ -766,12 +771,17 @@ def _change_of(
     if not emptied and not added:
         # Only read: the read-only record (`used`), judged on every answer.
         return _changed_in_place(memo, items)
+    if not emptied and misses - misses_before != len(added):
+        # A call missed and kept no answer (it raised): the key it lacked is
+        # one no check asks the memo to lack, so this cannot be put back.
+        return None
     # The answers it held before decide; the ones it added are new.
     verdict = _changed_in_place(memo, items, seen=seen if seen is not None else {}, judged=before_items)
     if verdict is not False:
         return verdict
+    read = emptied or hits != hits_before
     try:
-        before_digests = _digests_of(memo, before_items)
+        before_digests = _digests_of(memo, before_items) if read else []
         keys = [_change_key_digest(key) for key, _ in added]
     except Exception:  # noqa: BLE001 - a key or answer with no digest
         return None
@@ -1120,8 +1130,10 @@ def _change_refused(record: dict, memo: Any, label: str, recorded: set[str], now
     """Why the change a run made to *memo* (a record `used` wrote with
     *changes*) cannot be put back here, or None: the memo must be one a hit
     can fill, hold what it held when the run began (exactly, once the run
-    emptied it), and lack every key the run added (a cell above that filled
-    one makes a run find the answer, and skip what the helper's body did)."""
+    emptied it; the record names none of it when the run found no answer
+    there, `_change_of`), and lack every key the run added (a cell above
+    that filled one makes a run find the answer, and skip what the helper's
+    body did)."""
     if not _unbounded(memo):
         return f"the helper memo {label} is bounded, and cash cannot put answers into it"
     if record.get("emptied"):

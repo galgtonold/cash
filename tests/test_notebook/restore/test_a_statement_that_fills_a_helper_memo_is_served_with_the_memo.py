@@ -110,3 +110,55 @@ def test_an_answer_held_outside_the_entry_runs_every_time(cash_magics, tmp_path,
     assert seen == [["COMPUTED"], ["COMPUTED"]], seen
     assert any("NOTEBOOK-MEMO-SHARED" in str(w.message) for w in caught), [str(w.message) for w in caught]
     assert cash_magics.shell.user_ns["f"](1) is cash_magics.shell.user_ns["L"]
+
+
+STAMP = "@functools.cache\ndef g(n):\n    note('g')\n    return [n, time.perf_counter()]"
+
+
+def _two_passes(magics, below: str) -> list[list[str]]:
+    """Run the cells twice, the cell above edited on the second pass so it
+    runs again and ``g(1)`` gets a different answer; the statuses of the
+    statement below each time."""
+    seen = []
+    for edit in ("", " + []"):
+        cells = [IMPORTS, NOTE, STAMP, f"a = g(1){edit}", below]
+        for cell in cells:
+            run_cash_cell(magics, cell, cells=cells)
+        seen.append(_statuses(magics))
+    return seen
+
+
+def test_a_statement_that_found_no_answer_is_served_when_the_answers_above_differ(cash_magics, tmp_path, monkeypatch):
+    """``g`` answers hold a timing, so an answer computed again above is a
+    different one. The statement below found none of them (it only added
+    its own key), so they decide nothing: it is served, and the memo holds
+    the answer above and its own, as after a run."""
+    monkeypatch.chdir(tmp_path)
+    seen = _two_passes(cash_magics, f"r = (g(2), time.sleep({SLEEP}))[0]")
+    ns = cash_magics.shell.user_ns
+    assert seen[1] == ["RESTORED"], seen
+    assert ns["g"].cache_info().currsize == 2
+    assert ns["g"](2) is ns["r"]
+    assert ns["g"](1)[1] == ns["a"][1]
+
+
+def test_a_statement_that_found_an_answer_that_differs_now_runs_again(cash_magics, tmp_path, monkeypatch):
+    """Control: the statement found ``g(1)`` in the memo, and that answer is
+    a different one now, so a run gives another output: it runs."""
+    monkeypatch.chdir(tmp_path)
+    seen = _two_passes(cash_magics, f"r = (g(2), g(1), time.sleep({SLEEP}))[0:2]")
+    ns = cash_magics.shell.user_ns
+    assert seen[1] == ["COMPUTED"], seen
+    assert ns["r"][1] is ns["g"](1)
+
+
+def test_a_statement_whose_helper_call_raised_runs_every_time(cash_magics, tmp_path, monkeypatch):
+    """A call that raised missed and kept no answer: no check could tell a
+    cell above that put that key in, where a run would find it and not
+    raise. So the statement is not stored and runs every time."""
+    monkeypatch.chdir(tmp_path)
+    risky = "@functools.cache\ndef h(n):\n    note('h')\n    if n < 0:\n        raise ValueError(n)\n    return [n]"
+    attempt = "def attempt(n):\n    try:\n        return h(n)\n    except ValueError:\n        return None"
+    cells = [IMPORTS, NOTE, risky, attempt, f"r = (attempt(-1), attempt(3), time.sleep({SLEEP}))[0:2]"]
+    seen = _passes(cash_magics, cells)
+    assert seen == [["COMPUTED"], ["COMPUTED"]], seen
