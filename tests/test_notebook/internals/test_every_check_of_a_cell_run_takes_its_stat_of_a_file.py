@@ -82,7 +82,9 @@ def test_the_check_above_the_simulation_and_the_lookup_stat_each_file_once(docs,
     assert snapshot_is_fresh(docs, run["memo"]) == (True, None)  # the simulation's
     assert _statement_lookup(docs)
 
-    assert sorted(stats_taken) == sorted(docs)
+    # One stat a file, or none where the run's listing of the folder stands
+    # in for its stats (Windows: `stats_from_listings`).
+    assert sorted(stats_taken) == sorted(p for p in docs if p not in run["listed"])
 
 
 def test_the_lookup_stats_again_a_file_the_run_stat_ed_too_long_ago(docs, stats_taken, monkeypatch):
@@ -93,10 +95,21 @@ def test_the_lookup_stats_again_a_file_the_run_stat_ed_too_long_ago(docs, stats_
     with open(edited, "r+b") as f:
         f.write(b"\xff")  # same size, new content
     stats_taken.clear()
+    listed: list[str] = []
+    real_listings = file_dep_snapshot.stats_from_listings
+
+    def listing(paths):
+        found = real_listings(paths)
+        listed.extend(found)
+        return found
+
+    monkeypatch.setattr(file_dep_snapshot, "stats_from_listings", listing)
 
     assert not _statement_lookup(docs)
 
-    assert edited in stats_taken
+    # Taken again: stat-ed, or listed afresh where a listing of its folder
+    # stands in for stats (Windows: `stats_from_listings`).
+    assert edited in stats_taken or edited in listed
 
 
 def test_a_stat_from_a_directory_listing_decides_only_by_content(tmp_path):

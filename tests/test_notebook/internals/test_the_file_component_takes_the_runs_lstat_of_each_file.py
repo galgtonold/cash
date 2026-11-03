@@ -85,11 +85,17 @@ def lstats_of_files(monkeypatch) -> list[str]:
 
 def test_the_component_after_the_runs_pass_takes_no_lstat_of_a_file(photos, lstats_of_files):
     stats_this_run(photos)  # the cell run's pass over the files above
+    listed = set(run_memo.file_state_this_run()["listed"])
     lstats_of_files.clear()
 
     file_component_this_run(set(photos))
 
-    assert lstats_of_files == []
+    # None of a file the pass took an lstat of. Where the pass read the
+    # folder with one listing instead (Windows, `stats_from_listings`), the
+    # listing has no file identity: the component takes the file's own
+    # stat, once (`_Identifying`), an lstat while the folder is watched.
+    assert [p for p in lstats_of_files if p not in listed] == []
+    assert len(lstats_of_files) == len(set(lstats_of_files))
 
 
 def test_the_component_is_the_one_taken_with_stats_of_its_own(photos, linked):

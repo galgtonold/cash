@@ -15,7 +15,10 @@ pairs the answer hands out are made one at a time, as they are asked for.
 
 Beside it the run keeps when each stat was taken, for the checks that take
 only recent ones (``run["stat_date"]``): a slot per file holding one float
-shared by every stat of its chunk, in a dict the collector does not track.
+shared by every stat of its chunk, in a dict the collector does not track
+where it untracks a dict of untracked values (before Python 3.14; from
+3.14 every dict is tracked, and this one is a single object, nothing per
+file).
 """
 
 from __future__ import annotations
@@ -30,6 +33,14 @@ from cash.notebook.run_memo import stats_this_run
 from cash.tracking import file_dep_snapshot
 
 N = 30
+
+
+def _dicts_of_numbers_are_untracked() -> bool:
+    """Does this collector untrack a dict holding only untracked values?
+    CPython did until 3.14, which tracks every dict."""
+    probe = {"a": 1.0}
+    gc.collect()
+    return not gc.is_tracked(probe)
 
 
 @pytest.fixture(autouse=True)
@@ -76,7 +87,9 @@ def test_the_records_are_not_tracked_by_the_garbage_collector(tmp_path):
     ]
     assert len(records) == N
     dates = run["stat_date"]
-    assert not gc.is_tracked(dates)
+    if _dicts_of_numbers_are_untracked():
+        assert not gc.is_tracked(dates)
+    assert [p for p in paths if gc.is_tracked(dates[p])] == []
     assert len({id(dates[p]) for p in paths}) == 1, "one date object per chunk"
     assert [r for r in records if gc.is_tracked(r)] == []
     pairs = [o for o in gc.get_objects() if type(o) is tuple and len(o) == 2 and type(o[0]) is str and o[0] in asked]

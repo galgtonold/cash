@@ -130,9 +130,12 @@ def test_outside_a_look_or_for_a_value_it_is_not_about_the_checks_walk_as_before
     assert _plain_data.is_tree(records)
     with _plain_data.one_look({"other": [1]}):
         assert _plain_data.held_only_by_parents(records, (int, str))
-    # is_tree outside a look is one C pass (tree_facts), not the level walk;
-    # the check for a value the look is not about walks as before.
-    assert calls == ["tree_levels"]
+    # is_tree outside a look is one C pass (tree_facts), not the level walk,
+    # where the C kernels are built (not before Python 3.12, nor under
+    # CASH_PURE_PYTHON); without them it is the level walk it always was.
+    # The check for a value the look is not about walks as before.
+    walks_for_is_tree = [] if _plain_data._K is not None else ["tree_levels"]
+    assert calls == [*walks_for_is_tree, "tree_levels"]
 
 
 def test_a_look_answers_for_the_object_its_name_binds_now():

@@ -1253,9 +1253,21 @@ class InMemoryBackend(CacheBackend):
             import pandas as pd
 
             offset = 0
+            copies = {}
             for n in writable:
-                values = pd.Series(copied_flat[offset : offset + len(cells[n])], dtype=object).array
+                copies[n] = copied_flat[offset : offset + len(cells[n])]
                 offset += len(cells[n])
+            # Every object column set anew, not only those copied: pandas
+            # keeps object columns in one block, and setting some of them
+            # leaves the others a view of the block's copy, which still held
+            # the caller's lists. The entry then kept them alive and added a
+            # reference to each, which the share check of the caller's frame
+            # took for a holder it could not find (NOTEBOOK-SHARE-UNCHECKED
+            # on each ``df['k'] = 1`` of a frame built from a list of
+            # ``(user, actions)`` records, on pandas 2). A column of
+            # immutables is still shared, its cells as they are.
+            for n in range(len(columns)) if copies else ():
+                values = pd.Series(copies.get(n, cells[n]), dtype=object).array
                 if is_series:
                     # In place: a new Series would drop its attrs, its flags
                     # and a subclass, which a disk hit keeps.

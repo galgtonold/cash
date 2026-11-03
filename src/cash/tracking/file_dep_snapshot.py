@@ -1223,8 +1223,10 @@ class FreshnessMemo:
     The copy is kept apart from the answer: a tuple holding a dict stays
     tracked by the garbage collector, and one per file of a 24,000-file check
     was promoted to the oldest generation every cell, setting off a full
-    collection every few cells. An answer of strings and booleans, and a
-    dict of numbers, are not tracked.
+    collection every few cells. An answer of strings and booleans, and the
+    copy as one tuple of its keys and values (`_snapshot_copy`), are not
+    tracked after a collection; a dict is tracked for good from
+    Python 3.14, however few numbers it holds.
 
     With *lasts* (seconds), an answer holds only while the stat it rests on
     is at most that old when the owner's check began (`begin_check`):
@@ -1286,9 +1288,13 @@ class FreshnessMemo:
 
     def begin_check(self) -> None:
         """A check of a dated memo begins: it gives answers resting on stats
-        taken at most ``lasts`` before now, and dates its own stats by now."""
+        taken at most ``lasts`` before now, and dates its own stats by now.
+        A listing an earlier check took is not one of them: it is taken
+        again, as the stats are."""
         self.checked_at = time.monotonic()
         self.not_before = self.checked_at - (self.lasts or 0.0)
+        if self.listed:
+            self.listed = {}
 
     def keep_since(self, not_before: float) -> None:
         """Drop the answers of a dated memo resting on a stat taken before
@@ -1361,6 +1367,15 @@ def _check_dep(
     return (moved, *file_dep_is_fresh(moved, recorded))
 
 
+def _snapshot_copy(recorded: Mapping[str, Any]) -> tuple[Any, ...]:
+    """*recorded* as one flat tuple, its keys and then its values (one length
+    per key count, so two snapshots give equal tuples only when equal, item
+    by item in order). Of numbers and strings, the first collection that sees
+    it leaves it untracked. A tuple of tuples took a second: a collection
+    looks at a tuple before the tuples it holds, which are still tracked."""
+    return (*recorded.keys(), *recorded.values())
+
+
 def dep_is_fresh(
     path: str,
     recorded: Any,
@@ -1391,7 +1406,7 @@ def dep_is_fresh(
     dated = memo.dated
     known = memo.recorded.get(path)
     if known is not None:
-        if known == recorded:
+        if isinstance(recorded, Mapping) and known == _snapshot_copy(recorded):
             if dated is None:
                 return answers[path]
             at = dated[path]
@@ -1413,7 +1428,7 @@ def dep_is_fresh(
                     return found
     else:
         key = path
-    copied = dict(recorded) if key is path and isinstance(recorded, Mapping) else None
+    copied = _snapshot_copy(recorded) if key is path and isinstance(recorded, Mapping) else None
     answer = _check_dep(path, recorded, memo.listed.get(path), taken)
     if dated is not None:
         # The stat the answer rests on: the one handed in, or one this
@@ -1470,8 +1485,10 @@ def snapshot_is_fresh(
                 taken_at = memo.taken_dates()
         else:
             taken = memo.taken(snap)
-    elif memo is not None and len(snap) >= LISTING_MIN_FILES:
-        # Many files: read their directories once rather than stat each.
+    if memo is not None and not taken and len(snap) >= LISTING_MIN_FILES:
+        # Many files, none of them stat-ed by the owner (a check outside a
+        # cell run, whose owner takes nothing): read their directories once
+        # rather than stat each.
         unlisted = [p for p, s in snap.items() if isinstance(s, dict) and "size" in s and p not in memo.listed]
         if len(unlisted) >= LISTING_MIN_FILES:
             memo.listed.update(stats_from_listings(unlisted))

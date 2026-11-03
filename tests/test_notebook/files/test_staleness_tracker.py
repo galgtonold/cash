@@ -241,8 +241,9 @@ def test_check_and_reexecute_stores_the_resolved_notebook_path():
 
 
 # The indentation an editor leaves on a blank line inside a block: the saved
-# file keeps it, IPython empties the line before the cell runs (E10 c5 on the
-# PC, 2026-11-02: every later cell of the session warned "stale").
+# file keeps it, IPython 9 empties the line before the cell runs (E10 c5 on
+# the PC, 2026-11-02: every later cell of the session warned "stale").
+# IPython 8, the last for Python 3.10, runs the line as saved.
 _SAVED = "for f in files:\n    txt = read(f)\n    \n    rows.append(txt)\n"
 _RUN = "for f in files:\n    txt = read(f)\n\n    rows.append(txt)\n"
 
@@ -250,12 +251,14 @@ _RUN = "for f in files:\n    txt = read(f)\n\n    rows.append(txt)\n"
 def test_a_blank_line_ipython_emptied_is_not_a_stale_file(tmp_path):
     from IPython.core.inputtransformer2 import TransformerManager
 
-    assert TransformerManager().transform_cell(_SAVED) == _RUN  # what the kernel runs
+    ran = TransformerManager().transform_cell(_SAVED)  # what this IPython's kernel runs
+    assert ran in (_RUN, _SAVED)
     nb = tmp_path / "nb.ipynb"
     nb.write_text("{}", encoding="utf-8")
-    tracker = StalenessTracker()
-    tracker.observe(running_code=_RUN, file_code=_SAVED, notebook_path=str(nb))
-    assert tracker.is_stale() is False
+    for running_code in (_RUN, ran):
+        tracker = StalenessTracker()
+        tracker.observe(running_code=running_code, file_code=_SAVED, notebook_path=str(nb))
+        assert tracker.is_stale() is False
 
 
 def test_a_cell_whose_blank_line_ipython_emptied_did_not_run_unsaved(tmp_path):

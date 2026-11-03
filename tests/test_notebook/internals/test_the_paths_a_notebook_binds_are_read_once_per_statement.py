@@ -12,6 +12,7 @@ Counted in parses, not timed.
 from __future__ import annotations
 
 import ast
+import os
 from unittest.mock import patch
 
 from cash.notebook.upstream._types import TraceEntry
@@ -61,5 +62,6 @@ def test_a_second_writer_reads_the_statements_above_without_parsing_them():
     first, _ = _parses(trace)
     again, parses = _parses(list(trace))
 
-    assert first == again == {"OUT": "report", "CHART": "report/chart.png", "KEEP": "k", "SAME": "s"}
+    chart = os.path.join("report", "chart.png")  # report\chart.png on Windows
+    assert first == again == {"OUT": "report", "CHART": chart, "KEEP": "k", "SAME": "s"}
     assert parses == 0, f"{parses} parses for statements already read"

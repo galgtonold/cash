@@ -107,8 +107,17 @@ def test_a_lookup_stats_again_only_the_part_of_the_pass_that_is_too_old(halves, 
     assert sorted(stats_taken) == sorted(old)
 
 
-def test_a_second_lookup_stats_again_only_what_lapsed_since_the_first(halves, clock, stats_taken):
+def test_a_second_lookup_stats_again_only_what_lapsed_since_the_first(halves, clock, stats_taken, monkeypatch):
     old, recent = halves
+    listed: list[str] = []
+    real_listings = file_dep_snapshot.stats_from_listings
+
+    def listing(paths):
+        found = real_listings(paths)
+        listed.extend(found)
+        return found
+
+    monkeypatch.setattr(file_dep_snapshot, "stats_from_listings", listing)
     window = freshness._ANSWERS_LAST_S
     checker = CacheFreshnessChecker(_Backend({**old, **recent}))
     run_memo.stats_this_run(old)
@@ -121,7 +130,13 @@ def test_a_second_lookup_stats_again_only_what_lapsed_since_the_first(halves, cl
 
     assert _lookup(checker, "stmt:b")
 
-    assert sorted(stats_taken) == sorted(recent)
+    # No file of the first half stat-ed again, and each of the second half
+    # taken again: stat-ed, or read from a listing of the folder, which on
+    # Windows stands in for the stats of a lookup the run handed none
+    # (`stats_from_listings`), one read of the folder for the lot.
+    assert set(stats_taken) <= set(recent)
+    assert sorted(set(stats_taken) | (set(listed) & set(recent))) == sorted(recent)
+    assert len(stats_taken) == len(set(stats_taken))
 
 
 def test_a_lookup_soon_after_the_pass_takes_every_stat_of_it(halves, clock, stats_taken):
@@ -139,8 +154,14 @@ def test_a_lookup_soon_after_the_pass_takes_every_stat_of_it(halves, clock, stat
 def test_the_pass_dates_a_long_run_of_stats_a_chunk_at_a_time(tmp_path, monkeypatch):
     """A pass longer than a chunk dates its later stats by when their chunk began."""
     paths = []
+    # Folders too small to list (`stats_from_listings`, Windows: one
+    # listing takes a crowded folder's stats at once, under one date), so
+    # each file is stat-ed in its turn.
+    per_folder = file_dep_snapshot.LISTING_MIN_FILES - 1
     for i in range(3 * run_memo._STAT_CHUNK):
-        p = tmp_path / f"f{i:04d}"
+        folder = tmp_path / f"d{i // per_folder:03d}"
+        folder.mkdir(exist_ok=True)
+        p = folder / f"f{i:04d}"
         p.write_bytes(b"x")
         paths.append(str(p))
     real = time.monotonic
