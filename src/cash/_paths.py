@@ -126,6 +126,16 @@ def _basename_candidates(stored_path: str) -> list[str]:
     return [c for c in candidates if c]
 
 
+def _own_exists(path: str) -> bool:
+    """``os.path.exists`` past cash's own wrapper of it, which records what
+    the user's code asks (`read_classification.own_exists`): these looks
+    are cash's."""
+    fn = os.path.exists
+    if getattr(fn, "_is_file_tracker_patch", False):
+        fn = fn._original_func
+    return fn(path)
+
+
 def resolve_file_dep_path(stored_path: str) -> str | None:
     """Find a recorded file dependency, also after the project moved.
 
@@ -139,14 +149,14 @@ def resolve_file_dep_path(stored_path: str) -> str | None:
     """
     if is_remote_url(stored_path):
         return stored_path
-    if os.path.exists(stored_path):
+    if _own_exists(stored_path):
         return stored_path
 
     # The basename in the current directory, read with either separator: a
     # path stored on Windows has no basename to `os.path.basename` on POSIX.
     for basename in _basename_candidates(stored_path):
         cwd_candidate = os.path.join(os.getcwd(), basename)
-        if os.path.exists(cwd_candidate):
+        if _own_exists(cwd_candidate):
             return normalize_path(os.path.realpath(cwd_candidate))
 
     # Fallback 2: try progressively longer path suffixes relative to CWD.
@@ -157,7 +167,7 @@ def resolve_file_dep_path(stored_path: str) -> str | None:
     for i in range(max(len(parts) - 2, 1), 0, -1):
         suffix = "/".join(parts[i:])
         candidate = os.path.join(os.getcwd(), suffix)
-        if os.path.exists(candidate):
+        if _own_exists(candidate):
             return normalize_path(os.path.realpath(candidate))
 
     return None
