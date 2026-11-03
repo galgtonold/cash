@@ -2091,6 +2091,8 @@ class StatementProcessor:
         )
         hit_result = self._hits.serve(run, cached_data, metadata, self._randomness.seed_epochs)
         if hit_result is None:
+            if self._hits.last_refusal:
+                self._freshness.last_miss_reason = self._hits.last_refusal
             return None
         if metadata is not None and metadata.scalar_identity:
             # Stored where an attribute was set on a pandas scalar: this
@@ -2417,6 +2419,7 @@ class StatementProcessor:
         env_reads: set[str] = set()
         helper_memos.new_statement()
         memos_before = None if run.skip_cache else helper_memos.watched(self.shell.user_ns)
+        memos_cleared: helper_memos.Clears | None = None
         try:
             with (
                 self.watching_reads(run.code),
@@ -2431,6 +2434,7 @@ class StatementProcessor:
                 with (
                     observe_writes() as written_paths,
                     FileAccessTracker(self.shell.user_ns, hash_on_read=not run.skip_cache) as file_tracker,
+                    helper_memos.watching_clears(memos_before) as memos_cleared,
                 ):
                     user_ns = self.shell.user_ns
                     shadowed = user_ns.get(LOOP_ITERABLE_NAME, NO_LOOP_ITERABLE) if handed else None
@@ -2509,7 +2513,9 @@ class StatementProcessor:
             # What it put into a memo is stored with the outputs, unless it
             # reads a memo's counters, which no hit gives back.
             changes: list[dict] | None = None if clears and helper_memos.reads_counters(run.code, user_ns) else []
-            memos = helper_memos.used(memos_before, clears=clears, ns=user_ns, site=(run.code, None), changes=changes)
+            memos = helper_memos.used(
+                memos_before, clears=clears, ns=user_ns, site=(run.code, None), changes=changes, cleared=memos_cleared
+            )
             if isinstance(memos, tuple):
                 # What it returns can differ run to run with the memo's
                 # state, which no key holds: its outputs are keyed by value.

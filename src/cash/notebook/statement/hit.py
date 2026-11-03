@@ -47,6 +47,14 @@ class CacheHitServer:
         self.tracking_state = tracking_state
         self._restorer = restorer
         self._rebuild_cost = rebuild_cost
+        #: Why the last `serve` that gave None did not serve the entry: the
+        #: statement's miss reason, which the badge shows.
+        self.last_refusal: str | None = None
+
+    def _refused(self, reason: str) -> None:
+        """Not served, for *reason*: logged and kept as `last_refusal`."""
+        logger.debug("[CACHE] %s, running it instead.", reason)
+        self.last_refusal = reason
 
     def serve(
         self,
@@ -63,27 +71,25 @@ class CacheHitServer:
         *seed_epochs* is the seeding regime in force now
         (``StatementRandomness.seed_epochs``).
         """
+        self.last_refusal = None
         cache_key, inputs, metrics, process_start = run.cache_key, run.inputs, run.metrics, run.process_start
         holds_echo = isinstance(cached_data, dict) and ECHO_FIELD in cached_data
         if echoes(run.code, run.tree, run.is_last) and not holds_echo:
             # Stored where it was not the cell's result: the entry has no value
             # for IPython's output history (``_``, ``Out``) to take.
-            logger.debug("[CACHE] Entry holds no echoed value for a cell result, running it instead.")
-            return None
+            return self._refused("the entry holds no value for the cell's result")
         if holds_echo and not echoes(run.code, run.tree, run.is_last):
             # The other way round: stored as the cell's last line, it replays
             # the display of its value, which here (``slow(5)`` followed by
             # another statement) a plain run does not show.
-            logger.debug("[CACHE] Entry holds an echoed value this statement does not show, running it instead.")
-            return None
+            return self._refused("the entry shows a value this statement does not show")
         if metadata is not None and metadata.restored_into:
             # Restored into the live objects: each must be one of the kind stored.
             variables = cached_data.get("variables") if isinstance(cached_data, dict) else None
             if not isinstance(variables, dict) or not in_place.ready(
                 variables, metadata.restored_into, self._restorer.shell.user_ns
             ):
-                logger.debug("[CACHE] A name it restores into is bound to another kind of object, running it instead.")
-                return None
+                return self._refused("a name it restores into is bound to another kind of object")
             # A weak reference or an id() key held now finds a copy after the
             # restore, whenever it was made: asked of the live objects, as
             # when the loop was stored.
@@ -97,16 +103,14 @@ class CacheHitServer:
                     # a refused hit leaves them as they are for the run.
                     why = rewrite_in_place.mismatch(live, variables[name])
                 if why is not None:
-                    logger.debug("[CACHE] Not restoring into %s (%s), running it instead.", name, why)
-                    return None
+                    return self._refused(f"it cannot restore into {name} ({why})")
         if metadata is not None and metadata.bound_copies:
             # Bound to the stored copy: a weak reference or an id() made
             # since points at the live object, which the copy is not.
             user_ns = self._restorer.shell.user_ns
             for name in metadata.bound_copies:
                 if name in user_ns and not in_place.bound_as_a_copy(user_ns[name], user_ns):
-                    logger.debug("[CACHE] Something points at %s now, running it instead.", name)
-                    return None
+                    return self._refused(f"something points at {name} now")
         if metadata is not None and metadata.anchors:
             # The variables' objects the entry holds by reference: the live
             # ones, or a miss when one changed (`anchors`).
@@ -119,8 +123,7 @@ class CacheHitServer:
                     metadata.anchor_holds,
                 )
             except (KeyError, pickle.UnpicklingError) as e:
-                logger.debug("[CACHE] %s, running it instead.", e)
-                return None
+                return self._refused(str(e))
         put_back = None
         if metadata is not None and helper_memos.carries_changes(metadata.helper_memos):
             # What the run put into the helper memos it filled goes back into
@@ -128,8 +131,7 @@ class CacheHitServer:
             changes = cached_data.get(MEMO_CHANGES_FIELD) if isinstance(cached_data, dict) else None
             put_back = helper_memos.put_back(metadata.helper_memos, changes, self._restorer.shell.user_ns)
             if isinstance(put_back, str):
-                logger.debug("[CACHE] %s, running it instead.", put_back)
-                return None
+                return self._refused(put_back)
         try:
             self._log_hit(cache_key, inputs, metadata)
             self._restorer.restore_from_cache(
@@ -163,6 +165,7 @@ class CacheHitServer:
             pickle.UnpicklingError,
         ) as e:
             logger.warning("[CACHE] Restoration failed (%s), falling back to execution.", e, exc_info=True)
+            self.last_refusal = f"restoring it failed ({e})"
             return None
 
     def _log_hit(self, cache_key: str, inputs: Any, metadata: StatementCacheMetadata | None) -> None:

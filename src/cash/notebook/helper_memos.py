@@ -51,6 +51,7 @@ from cash.value_hash import compute_hash
 __all__ = [
     "FILLED",
     "MAX_KEYED",
+    "Clears",
     "carries_changes",
     "change_answers",
     "class_memo_record",
@@ -63,6 +64,7 @@ __all__ = [
     "unfilled",
     "used",
     "watched",
+    "watching_clears",
 ]
 
 logger = logging.getLogger(__name__)
@@ -326,6 +328,86 @@ def misses_before(before: list[tuple[list[str], Any, int, int, int, Any]] | None
     """``id(memo) -> its miss count`` in what `watched` saw before a run:
     a memo's count unmoved since, the run did not fill it."""
     return {id(memo): misses for _, memo, _, misses, *_ in before or ()}
+
+
+#: Pairs of a memo kept to tell a clear cash saw from one it did not
+#: (`watching_clears`): one it did not see dropped them all.
+_CLEAR_SAMPLES = 8
+
+
+class Clears:
+    """What `watching_clears` saw of the ``cache_clear`` calls a statement
+    made: ``fired`` holds the ids of the memos it cleared, ``first`` those
+    whose first clear came before any call of the memo in the run."""
+
+    def __init__(self) -> None:
+        self.fired: set[int] = set()
+        self.first: set[int] = set()
+
+
+@contextlib.contextmanager
+def watching_clears(before: list[tuple[list[str], Any, int, int, int, Any]] | None) -> Iterator[Clears]:
+    """While a statement runs: see each ``cache_clear`` call of an unbounded
+    memo it can reach (*before*, `watched`), through a ``cache_clear`` set on
+    the memo for the run that records the call and clears the memo as its
+    own does. Put back as it was after.
+
+    A run that empties a memo before any call of it (``held_karp_tsp``
+    clearing ``shortest_segment`` for a new problem) did nothing what the
+    memo held could change: a hit empties the live memo and puts in what
+    the run left, whatever it held (`used`). The memo's counters cannot say
+    so, as a clear zeroes them. Taken as first only when, at the clear, its
+    counters and size are those it had when the statement began and the
+    pairs kept of it (`_CLEAR_SAMPLES`) are still there: a clear not seen
+    (``type(f).cache_clear(f)``, a ``cache_clear`` bound earlier) drops
+    them. A memo empty then is never taken as first: nothing is left to
+    tell such a clear by."""
+    seen = Clears()
+    installed: list[tuple[Any, Any]] = []
+    try:
+        for _, memo, *_ in before or ():
+            if not _unbounded(memo) or "cache_clear" in attribute_or(memo, "__dict__", {}):
+                continue
+            try:
+                info = memo.cache_info()
+                items = _items(memo) or []
+            except Exception:  # noqa: BLE001 - a wrapper whose counters raise
+                continue
+            start = (info.hits, info.misses, info.currsize)
+            samples = items[:_CLEAR_SAMPLES] if info.currsize else []
+            real = type(memo).cache_clear
+
+            def cache_clear(memo: Any = memo, start: tuple = start, samples: list = samples, real: Any = real) -> None:
+                if id(memo) not in seen.fired:
+                    seen.fired.add(id(memo))
+                    if samples and _untouched(memo, start, samples):
+                        seen.first.add(id(memo))
+                real(memo)
+
+            cache_clear.__doc__ = real.__doc__
+            try:
+                memo.cache_clear = cache_clear
+            except (AttributeError, TypeError):
+                continue
+            installed.append((memo, cache_clear))
+        yield seen
+    finally:
+        for memo, shadow in installed:
+            if attribute_or(memo, "__dict__", {}).get("cache_clear") is shadow:
+                del memo.cache_clear
+
+
+def _untouched(memo: Any, start: tuple[int, int, int], samples: list[tuple[Any, Any]]) -> bool:
+    """*memo*'s counters and size are *start*, and it holds each of the
+    *samples* pairs, the very objects: no call of it, and no clear, since."""
+    try:
+        info = memo.cache_info()
+        if (info.hits, info.misses, info.currsize) != start:
+            return False
+        held = {(id(key), id(answer)) for key, answer in _items(memo) or ()}
+    except Exception:  # noqa: BLE001 - not readable: not taken as untouched
+        return False
+    return all((id(key), id(answer)) in held for key, answer in samples)
 
 
 def _items(memo: Any) -> list[tuple[Any, Any]] | None:
@@ -600,6 +682,7 @@ def used(
     ns: Mapping[str, Any] | None = None,
     site: tuple[str | None, Any] | None = None,
     changes: list[dict] | None = None,
+    cleared: Clears | None = None,
 ) -> tuple[str, str, str | None] | list[dict] | None:
     """After a statement ran: ``(FILLED, why, unread)`` when what it did to a memo
     leaves it otherwise than a served entry would, else each memo it called
@@ -618,7 +701,13 @@ def used(
     record names the pairs it added, or says it emptied the memo first, and
     *changes* gets ``{"emptied": bool, "pairs": [(key, answer), ...]}`` for
     the entry to store with the outputs, at the index the record's
-    ``"delta"`` gives. A hit puts them into the memo (`put_back`)."""
+    ``"delta"`` gives. A hit puts them into the memo (`put_back`).
+
+    *cleared*: what `watching_clears` saw. A memo the run emptied before
+    any call of it is recorded as emptied with what it holds now, whatever
+    it held before, which decided nothing (``"cleared"``); and one it
+    cleared is never taken as untouched, though its counters end as they
+    began."""
     before = list(before or ())
     if ns is not None and _LRU_WRAPPER is not None:
         known = {id(memo) for _, memo, *_ in before}
@@ -644,7 +733,9 @@ def used(
             info = memo.cache_info()
         except Exception:  # noqa: BLE001 - a wrapper whose counters raise
             continue
-        if (info.hits, info.misses, info.currsize) == (hits, misses, size) and not clears:
+        fired = cleared is not None and id(memo) in cleared.fired
+        first = cleared is not None and id(memo) in cleared.first
+        if (info.hits, info.misses, info.currsize) == (hits, misses, size) and not clears and not fired:
             now = _held(memo)
             if held is None or (now is not None and now[0] == held[0]):
                 continue
@@ -660,6 +751,9 @@ def used(
             # once it is small again takes its answers as unseen.
             _answers_seen.pop(memo, None)
             moved = None
+        elif changes is not None and first and why is None:
+            change = _cleared_change(memo, items)
+            moved = change if isinstance(change, bool) or change is None else False
         elif changes is not None and held is not None and why is None:
             change = _change_of(memo, items, held, (info.hits, info.misses, info.currsize), (hits, misses, size))
             moved = change if isinstance(change, bool) or change is None else False
@@ -689,6 +783,7 @@ def used(
                         "calls": None,
                         "keys": change["keys"],
                         "emptied": change["emptied"] or None,
+                        "cleared": change.get("cleared") or None,
                         "delta": len(changes),
                     }
                 )
@@ -791,6 +886,26 @@ def _change_of(
         "keys": keys,
         "pairs": list(added),
         "unportable": not all(_portable_key(key) for key, _ in added),
+    }
+
+
+def _cleared_change(memo: Any, items: list[tuple[Any, Any]]) -> dict | None:
+    """The change a run made to *memo*, which it emptied before any call of
+    it (`watching_clears`): every pair it holds now, the run's own. What it
+    held before is neither recorded nor asked for. None when a key has no
+    digest; the answers are remembered as seen."""
+    _changed_in_place(memo, items)
+    try:
+        keys = [_change_key_digest(key) for key, _ in items]
+    except Exception:  # noqa: BLE001 - a key with no digest
+        return None
+    return {
+        "emptied": True,
+        "cleared": True,
+        "items": [],
+        "keys": keys,
+        "pairs": list(items),
+        "unportable": not all(_portable_key(key) for key, _ in items),
     }
 
 
@@ -1102,6 +1217,12 @@ def unfilled(records: list[dict] | None, ns: Mapping[str, Any], *, refill: bool 
             return f"the helper memo {label} it read is not bound"
         if record.get("unread"):
             return f"the helper memo {label} it read holds more than cash checks"
+        if record.get("cleared"):
+            # Emptied before any call: what it holds now decides nothing.
+            why = _change_refused(record, memo, label, set(), set())
+            if why is not None:
+                return why
+            continue
         now = _item_digests(memo)
         recorded = set(record.get("items") or ())
         if now is None:
@@ -1136,6 +1257,8 @@ def _change_refused(record: dict, memo: Any, label: str, recorded: set[str], now
     body did)."""
     if not _unbounded(memo):
         return f"the helper memo {label} is bounded, and cash cannot put answers into it"
+    if record.get("cleared"):
+        return None
     if record.get("emptied"):
         if recorded != now:
             return f"the helper memo {label} does not hold what it held when the statement emptied it"
