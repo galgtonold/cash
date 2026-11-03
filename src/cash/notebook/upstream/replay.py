@@ -34,7 +34,9 @@ logger = logging.getLogger(__name__)
 
 class UpstreamRepairGap(UpstreamStateError):
     """A statement cash re-ran above the cell failed because cash's plan left
-    out a statement above it that sets what it reads.
+    out a statement above it that sets what it reads, or, found before
+    anything ran (*planned*), would have read a name another statement
+    leaves as a run from the top does not have it there.
 
     Not the user's failure and not one a run from the top has: cash could not
     give the statement its inputs as the notebook has them. The upstream
@@ -42,12 +44,24 @@ class UpstreamRepairGap(UpstreamStateError):
     uncached, with ``NOTEBOOK-REPAIR-GAP``.
     """
 
-    def __init__(self, message: str, *, stmt_code: str, error_text: str, producer: str, cell_no: int | None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        stmt_code: str,
+        error_text: str,
+        producer: str,
+        cell_no: int | None,
+        planned: bool = False,
+    ) -> None:
         super().__init__(message)
         self.stmt_code = stmt_code
         self.error_text = error_text
         self.producer = producer
         self.cell_no = cell_no
+        #: Found in the plan, before anything ran: the statement would have
+        #: read a name at another version than a run from the top gives it.
+        self.planned = planned
 
 
 @functools.lru_cache(maxsize=NOTEBOOK_VERSIONS)

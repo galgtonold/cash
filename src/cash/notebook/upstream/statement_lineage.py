@@ -496,14 +496,23 @@ class StatementLineage:
 
     def _inputs_moved(self, inputs: set[str], virtual_lineage: Mapping[str, str], stmt_code: str = "") -> bool:
         """Whether the simulation gives one of *inputs* another lineage than
-        the one the statement last ran with in this kernel
-        (``statement_entry_lineages``), else than the one the kernel holds
+        each set the statement ran with in this kernel
+        (``statement_entry_history``), else than the one the kernel holds
         it with: the statement then runs on inputs it did not run on. A name
-        with no lineage there (after a restart) says nothing either way."""
-        held = self.tracking_state.statement_entry_lineages.get(stmt_code)
-        if held is None:
-            held = self.tracking_state.variable_lineage
-        return any(name in virtual_lineage and name in held and virtual_lineage[name] != held[name] for name in inputs)
+        with no lineage there (after a restart) says nothing either way.
+
+        Every set, not the last: ``voting_clf.score(X_test, y_test)`` ran in
+        two cells of E8, on two fits. Asked against the second, the first
+        ran on inputs it never had, took ``X_test`` and ``y_test`` for
+        changed, and every cell below re-ran the cells above it."""
+        helds: list[Mapping[str, str]] = list(self.tracking_state.statement_entry_history.get(stmt_code, ()))
+        if not helds:
+            last = self.tracking_state.statement_entry_lineages.get(stmt_code)
+            helds = [self.tracking_state.variable_lineage if last is None else last]
+        return all(
+            any(name in virtual_lineage and name in held and virtual_lineage[name] != held[name] for name in inputs)
+            for held in helds
+        )
 
     def pyplot_draw_outputs(self, stmt_code: str, tree: ast.AST | None) -> frozenset[str]:
         """The names *stmt_code* changed by drawing through pyplot when the

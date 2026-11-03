@@ -16,7 +16,12 @@ from cash.notebook.value_cutoff import ValueCutoff
 if TYPE_CHECKING:
     from cash.notebook.restored_var import HeldObject
 
-__all__ = ["TrackingState", "outcome_key"]
+__all__ = ["ENTRY_HISTORY", "TrackingState", "outcome_key"]
+
+#: How many sets of input lineages ``TrackingState.statement_entry_history``
+#: keeps per statement: as many as the runtime watches a statement on before
+#: it starts over (``MutationClassifier.start_rewatch``).
+ENTRY_HISTORY = 16
 
 
 def outcome_key(code: str, occurrence_index: int = 0) -> str:
@@ -102,6 +107,14 @@ class TrackingState:
     # ``lg.setLevel(...)``) has moved on.
     # W: StatementProcessor. R: StatementLineage._inputs_moved.
     statement_entry_lineages: dict[str, dict[str, str]] = field(default_factory=dict)
+
+    # Code of a statement the runtime keyed this session -> each set of
+    # lineages its inputs had when it ran, the latest last, at most
+    # ``ENTRY_HISTORY`` of them. The same text runs in more than one place
+    # (``clf.score(X_test, y_test)`` in two cells, a call in each pass of a
+    # loop): a run of the first is not one on new inputs because the second
+    # ran last. W: StatementProcessor. R: StatementLineage._inputs_moved.
+    statement_entry_history: dict[str, list[dict[str, str]]] = field(default_factory=dict)
 
     # sha256 of every whole-cell source that ran this session, to tell an
     # edited-but-not-rerun seed() cell from one that ran.

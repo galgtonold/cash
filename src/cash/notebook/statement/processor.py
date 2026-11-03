@@ -123,7 +123,7 @@ from cash.notebook.statement.run import (
 )
 from cash.notebook.statement.store import StatementStore
 from cash.notebook.statement.unstored import MEMORY_ONLY, UnstoredNotes
-from cash.notebook.tracking_state import TrackingState
+from cash.notebook.tracking_state import ENTRY_HISTORY, TrackingState
 from cash.notebook.versioned_json_store import resolve_cache_dir
 from cash.purity import is_known_pure, is_stateful
 from cash.tracking.file_tracker import unrecorded_reads
@@ -1364,6 +1364,12 @@ class StatementProcessor:
         lineage = self.tracking_state.variable_lineage
         entry = {name: lineage[name] for name in run.inputs if name in lineage}
         self.tracking_state.statement_entry_lineages[run.code] = entry
+        history = self.tracking_state.statement_entry_history.setdefault(run.code, [])
+        if entry in history:
+            history.remove(entry)
+        history.append(entry)
+        if len(history) > ENTRY_HISTORY:
+            del history[0]
         if self._calls.in_loop:
             run.pass_slot = pass_slot(run.code, self._calls.current_loop_var_digests_for_call_key())
             run.pass_lineages_before = note_pass_entry(self.tracking_state, run.pass_slot, entry)
