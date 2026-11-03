@@ -843,6 +843,10 @@ def _timestamps_match(st: os.stat_result, stored: dict[str, Any], field: str) ->
     return stored_ns is not None and getattr(st, f"st_{field}_ns", None) == stored_ns
 
 
+#: A snapshot of at least this many files shares its verdict
+#: (`FreshnessMemo.verdicts`).
+VERDICT_MIN_FILES = 64
+
 #: A directory holding at least this many of one lookup's dependencies is read
 #: with one listing rather than a stat per file.
 LISTING_MIN_FILES = 16
@@ -1233,6 +1237,14 @@ class FreshnessMemo:
     stat its verdict rested on. A whole-memo date by its oldest stat made a
     lookup after a slow pass of 20,000 stats take every one of them again,
     the ones a moment old too.
+
+    ``verdicts``, when set, holds verdicts on whole snapshots shared with
+    the owner's other memos (the cell run's, `cash.notebook.run_memo`):
+    ``verdicts.known(snap, not_before)`` gives the date of the stats under
+    a fresh verdict on an equal snapshot no older than *not_before* (any,
+    for None), or None; ``verdicts.note(snap, at)`` keeps one. For a
+    snapshot of at least ``VERDICT_MIN_FILES`` files: thirteen checks of
+    one cell went through the same 19,000 files.
     """
 
     __slots__ = (
@@ -1246,6 +1258,7 @@ class FreshnessMemo:
         "recorded",
         "taken",
         "taken_dates",
+        "verdicts",
     )
 
     def __init__(
@@ -1253,6 +1266,7 @@ class FreshnessMemo:
         taken: Callable[..., Mapping[str, os.stat_result]] | None = None,
         lasts: float | None = None,
         taken_dates: Callable[[], Mapping[str, float]] | None = None,
+        verdicts: Any = None,
     ) -> None:
         self.answers: dict[Any, Any] = {}
         self.recorded: dict[str, Any] = {}
@@ -1262,6 +1276,7 @@ class FreshnessMemo:
         #: When the stat each answer rests on was taken, by its ``answers`` key.
         self.dated: dict[Any, float] | None = {} if lasts is not None else None
         self.taken_dates = taken_dates
+        self.verdicts = verdicts
         #: Set by each check of a dated memo: answers dated before
         #: ``not_before`` are taken again; ``checked_at`` dates the stats it takes.
         self.not_before = self.checked_at = self.oldest = 0.0
@@ -1436,6 +1451,13 @@ def snapshot_is_fresh(
         memo.oldest = memo.checked_at  # lowered by each answer given
     if not snap:
         return True, None
+    verdicts = memo.verdicts if memo is not None and len(snap) >= VERDICT_MIN_FILES else None
+    if verdicts is not None:
+        at = verdicts.known(snap, memo.not_before if dated else None)
+        if at is not None:
+            if dated and at < memo.oldest:
+                memo.oldest = at
+            return True, None
     taken: Mapping[str, os.stat_result] = {}
     taken_at: Mapping[str, float] = {}
     if memo is not None and memo.taken is not None:
@@ -1469,6 +1491,8 @@ def snapshot_is_fresh(
             resolved, is_fresh, reason = dep_is_fresh(path, recorded, memo, taken.get(path), taken_at.get(path))
         if not is_fresh:
             return False, StaleDep(path, resolved, reason or "changed")
+    if verdicts is not None:
+        verdicts.note(snap, memo.oldest if dated else None)
     return True, None
 
 

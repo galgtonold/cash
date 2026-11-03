@@ -66,7 +66,8 @@ def test_both_spellings_of_each_file_take_one_stat(faces, stats_taken, absolute_
 
     stats = run_memo.stats_this_run(paths)
 
-    assert len(stats_taken) == N
+    # The folder's own stats arm its watch (`file_watch`); each file takes one.
+    assert len([p for p in stats_taken if p.endswith(".npy")]) == N
     for rel, absolute in zip(faces, spelled, strict=True):
         assert stats[rel] == (rel, os.stat(absolute))
         assert stats[absolute][1] == os.stat(absolute)

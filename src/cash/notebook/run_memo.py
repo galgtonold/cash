@@ -33,8 +33,9 @@ from typing import Any
 
 from .._paths import is_remote_url, normalize_path, resolve_file_dep_path
 from ..tracking import file_dep_snapshot as _fds
+from ..tracking import file_watch as _fw
 from ..tracking.file_dep_snapshot import LISTING_MIN_FILES, FreshnessMemo, stats_from_listings
-from ..tracking.read_classification import own_stat, stat_key
+from ..tracking.read_classification import own_lstat, own_stat, stat_key
 
 __all__ = [
     "file_component_this_run",
@@ -92,8 +93,17 @@ def file_state_this_run() -> dict | None:
         return None
     if _FILE_STATE_THIS_RUN.get("epoch") != epoch:
         _FILE_STATE_THIS_RUN.clear()
+        # The changes reported since the last run, before any stat is taken
+        # as current (`file_watch`).
+        watch = _fw.watcher()
+        if watch is not None:
+            watch.drain(check_dirs=True)
         _FILE_STATE_THIS_RUN.update(
-            epoch=epoch, memo=FreshnessMemo(taken=stats_taken_this_run), stat={}, since=time.monotonic()
+            epoch=epoch,
+            memo=FreshnessMemo(taken=stats_taken_this_run, verdicts=RUN_VERDICTS),
+            stat={},
+            since=time.monotonic(),
+            watch=watch,
         )
     return _FILE_STATE_THIS_RUN
 
@@ -108,38 +118,131 @@ def forget_file_state_this_run() -> None:
 _FRESH_SNAPSHOTS_KEPT = 16
 
 
-def note_fresh_snapshot(snap: Mapping[str, Any]) -> None:
-    """Remember that *snap* (a ``file_dependencies`` snapshot) was found fresh
-    whole with this run's per-file answers (``file_state_this_run()["memo"]``).
+#: Snapshots found fresh whole while the stat of each of their files was
+#: current under the folder watch (`file_watch.FileWatch.cover`), each with
+#: that cover and the working directory: ``(snapshot, cover, cwd)``. They
+#: outlive the cell run, and hold while no folder of the cover reports a
+#: change.
+_COVERED_SNAPSHOTS: list[tuple[Mapping[str, Any], tuple, str]] = []
 
-    Dated by when those answers began to be taken, not by when this check
-    ran: an answer it reused is that old. Kept with them, so a statement that
-    writes files drops it too.
+#: How many covered snapshots are kept, across runs.
+_COVERED_KEPT = 16
+
+
+def note_fresh_snapshot(snap: Mapping[str, Any], at: float | None = None) -> None:
+    """Remember that *snap* (a ``file_dependencies`` snapshot) was found fresh
+    whole, from answers resting on stats taken at *at* (``time.monotonic()``)
+    or later; by default this run's per-file answers
+    (``file_state_this_run()["memo"]``), dated by when those began to be
+    taken, not by when this check ran: an answer it reused is that old.
+    Kept with them, so a statement that writes files drops it too.
+
+    Kept across runs as well while every file's stat is current under the
+    folder watch (`file_watch`): the verdict then holds until a folder of
+    its files reports a change, and a cell below 19,000 photos checks them
+    as one comparison instead of a stat each.
     """
     run = file_state_this_run()
     if run is None:
         return
     kept = run.setdefault("fresh", [])
-    if len(kept) < _FRESH_SNAPSHOTS_KEPT:
-        kept.append((snap, run["since"]))
+    if len(kept) < _FRESH_SNAPSHOTS_KEPT and not any(known is snap for known, _ in kept):
+        kept.append((snap, run["since"] if at is None else at))
+    watch = run.get("watch")
+    if watch is not None:
+        _note_covered(watch, snap)
 
 
-def fresh_snapshot_this_run(snap: Mapping[str, Any], not_before: float) -> bool:
+def _note_covered(watch: Any, snap: Mapping[str, Any]) -> None:
+    covered = _COVERED_SNAPSHOTS
+    if any(known is snap and watch.still(cover) for known, cover, _cwd in covered):
+        return
+    cover = _cover_of(watch, snap)
+    if cover is None:
+        return
+    try:
+        cwd = os.getcwd()
+    except OSError:
+        return
+    # The ones whose folders changed first, then the oldest.
+    covered[:] = [held for held in covered if watch.still(held[1])][-(_COVERED_KEPT - 1) :]
+    covered.append((snap, cover, cwd))
+
+
+def _cover_of(watch: Any, paths: Iterable[str], snap: Mapping[str, Any] | None = None) -> tuple | None:
+    """The watch's cover (`FileWatch.cover`) of *paths*, a relative one by
+    its absolute spelling; None when one has no current stat, or is checked
+    elsewhere than where it was recorded (beside the code)."""
+    absolute = []
+    isabs = os.path.isabs
+    for p in paths:
+        if snap is not None:
+            recorded = snap[p]
+            if not isinstance(recorded, Mapping) or "code_rel" in recorded:
+                return None
+        if not isabs(p):
+            twin = _fds._spelled_absolute(p)
+            if twin is None:
+                return None
+            p = twin
+        absolute.append(p)
+    return watch.cover(absolute)
+
+
+def fresh_snapshot_this_run(snap: Mapping[str, Any], not_before: float | None) -> bool:
     """Was a snapshot equal to *snap* found fresh whole in this run, from
-    answers taken at *not_before* (``time.monotonic()``) or later?
+    answers taken at *not_before* (``time.monotonic()``) or later, or since
+    under a folder watch that has reported no change of its files?
 
     The upstream check looks up the entry of the cell above, and the statement
     below then checks its own entry, which inherited the same files: a frame
     built from 24,000 documents was checked twice in one cell. The caller
     says how old an answer it takes. Compared as whole dicts, in C.
     """
-    epoch = _fds.HASH_EPOCH
-    if epoch is None or _FILE_STATE_THIS_RUN.get("epoch") != epoch:
-        return False
-    return any(
-        at >= not_before and len(known) == len(snap) and known == snap
-        for known, at in _FILE_STATE_THIS_RUN.get("fresh", ())
-    )
+    return RUN_VERDICTS.known(snap, not_before) is not None
+
+
+class _RunVerdicts:
+    """The verdicts of whole snapshots shared by every check of a cell run
+    (`FreshnessMemo.verdicts`): one check of a snapshot of 19,000 files per
+    cell, where thirteen checks each went through every file."""
+
+    __slots__ = ()
+
+    @staticmethod
+    def known(snap: Mapping[str, Any], not_before: float | None) -> float | None:
+        """When the stats under a fresh verdict on *snap* were taken, if one
+        was given from stats no older than *not_before* (any, for None), or
+        is held by the watch; None otherwise."""
+        run = file_state_this_run()
+        if run is None:
+            return None
+        for known, at in run.get("fresh", ()):
+            if (not_before is None or at >= not_before) and len(known) == len(snap) and known == snap:
+                return at
+        watch = run.get("watch")
+        if watch is None or not _COVERED_SNAPSHOTS:
+            return None
+        watch.drain()
+        cwd = None
+        for known, cover, at_cwd in _COVERED_SNAPSHOTS:
+            if len(known) != len(snap) or not watch.still(cover):
+                continue
+            if cwd is None:
+                try:
+                    cwd = os.getcwd()
+                except OSError:
+                    return None
+            if at_cwd == cwd and (known is snap or known == snap):
+                return watch.confirmed_at
+        return None
+
+    @staticmethod
+    def note(snap: Mapping[str, Any], at: float | None) -> None:
+        note_fresh_snapshot(snap, at)
+
+
+RUN_VERDICTS = _RunVerdicts()
 
 
 class RunStats(Mapping):
@@ -227,13 +330,35 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
         from_listing = run.setdefault("listed", set())
     else:
         stats, elsewhere, dates, chunks, followed, from_listing = {}, {}, {}, [], set(), set()
+    watch = run.get("watch") if run is not None else None
     if not isinstance(paths, (dict, set, frozenset)):
         paths = dict.fromkeys(paths)  # the paths as asked, in order, once each
     # Asked again by each check of the run: most often every path was
     # stat-ed already, which the run's own dict tells in C.
     todo = [] if stats.keys() >= _as_set(paths) else [p for p in paths if p not in stats and p not in elsewhere]
+    if todo and watch is not None:
+        # A stat kept while its folder was watched, with no change reported
+        # since, is the file's stat now (`file_watch`): no stat is taken.
+        watch.drain()
+        at = time.monotonic()
+        chunks.append((at, len(stats)))
+        current = watch.current
+        rest = []
+        for p in todo:
+            st = current(p)
+            if st is None:
+                rest.append(p)
+            elif p not in stats:
+                stats[p] = st
+                dates[p] = at
+                if watch.is_listed(p):
+                    from_listing.add(p)
+        todo = rest
     if todo:
         at = time.monotonic()
+        before = (
+            {p: watch.before_stat(p) for p in todo} if watch is not None and len(todo) >= LISTING_MIN_FILES else None
+        )
         listed = stats_from_listings(todo) if len(todo) >= LISTING_MIN_FILES else None
         if listed:
             # A listing's stats, dated by when the listing began, kept first:
@@ -245,6 +370,8 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
                     stats[p] = st
                     dates[p] = at
                     from_listing.add(p)
+                    if before is not None:
+                        watch.record(before.get(p), p, st, listed=True)
         stat = os.stat
         if getattr(stat, "_is_file_tracker_patch", False):
             stat = stat._original_func  # as `own_stat`, once for the lot
@@ -265,13 +392,13 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
                 left = _STAT_CHUNK
             st = None
             if not os.path.isabs(p) and not ("://" in p and is_remote_url(p)):
-                st = _as_spelled_absolute(p, stats, stat, lstat, cwd, dates, at, followed)
+                st = _as_spelled_absolute(p, stats, stat, lstat, cwd, dates, at, followed, watch)
             if st is None and not ("://" in p and is_remote_url(p)):
                 # Where it was recorded: the stat that finds it is there is
                 # the stat it is asked for (`resolve_file_dep_path` asked
                 # ``os.path.exists`` first, a stat of its own).
                 try:
-                    st = _stat_by_lstat(p, stat, lstat, followed)
+                    st = _stat_by_lstat(p, stat, lstat, followed, watch)
                 except (OSError, ValueError):
                     st = None
             if st is not None:
@@ -297,13 +424,26 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
 _REPARSE_POINT = 0x400
 
 
-def _stat_by_lstat(path: str, stat: Any, lstat: Any, followed: set[str]) -> os.stat_result:
+def _stat_by_lstat(path: str, stat: Any, lstat: Any, followed: set[str], watch: Any = None) -> os.stat_result:
     """``stat(path)``, taken as ``lstat(path)`` unless *path* is a link or
-    reparse point, which is stat-ed as well and noted in *followed*."""
+    reparse point, which is stat-ed as well and noted in *followed*.
+
+    With the folder *watch*, its current stat of *path* when it has one,
+    and otherwise the stat taken is kept by it (`FileWatch.record`), the
+    folder's watch armed first. Not a link's: its target may lie in a
+    folder nobody watches."""
+    token = None
+    if watch is not None:
+        st = watch.current(path)
+        if st is not None:
+            return st
+        token = watch.before_stat(path)
     st = lstat(path)
     if _stat.S_ISLNK(st.st_mode) or getattr(st, "st_file_attributes", 0) & _REPARSE_POINT:
         followed.add(path)
-        st = stat(path)
+        return stat(path)
+    if token is not None:
+        watch.record(token, path, st)
     return st
 
 
@@ -316,6 +456,7 @@ def _as_spelled_absolute(
     dates: dict[str, float],
     at: float,
     followed: set[str],
+    watch: Any = None,
 ) -> os.stat_result | None:
     """The stat of relative *path* by its absolute spelling in the working
     directory, which this run took or takes now under that spelling too;
@@ -341,7 +482,7 @@ def _as_spelled_absolute(
     st = stats.get(absolute)
     if st is None:
         try:
-            st = _stat_by_lstat(absolute, stat, lstat, followed)
+            st = _stat_by_lstat(absolute, stat, lstat, followed, watch)
         except (OSError, ValueError):
             return None
         stats[absolute] = st
@@ -376,12 +517,22 @@ def stats_taken_this_run(paths: Iterable[str], not_before: float | None = None) 
     chunks = run.get("stat_chunks")
     if not_before is not None and chunks and chunks[0][0] < not_before:
         first = bisect.bisect_left(chunks, not_before, key=lambda chunk: chunk[0])
-        if first == len(chunks):
-            stats = {}
-        else:
-            # The stats are kept in the order they were dated: the recent
-            # ones are the last, taken in C.
-            stats = dict(itertools.islice(stats.items(), chunks[first][1], None))
+        older = len(stats) if first == len(chunks) else chunks[first][1]
+        # The stats are kept in the order they were dated: the recent
+        # ones are the last, taken in C.
+        recent = dict(itertools.islice(stats.items(), older, None)) if older < len(stats) else {}
+        watch = run.get("watch")
+        if watch is not None and older:
+            # An older stat the folder watch still holds is as recent as its
+            # last drain (`stat_dates_this_run`): a check of 19,000 files
+            # that took longer than the answers last stat-ed each again.
+            watch.drain()
+            current = watch.current
+            held = {p: st for p, st in itertools.islice(stats.items(), older) if current(p) is st}
+            if held:
+                held.update(recent)
+                recent = held
+        stats = recent
     if run["listed"] and isinstance(paths, Mapping):
         # A listed stat stands in only where content decides
         # (`file_dep_is_fresh`): a folder, or a file that could not be read,
@@ -401,7 +552,50 @@ def stat_dates_this_run() -> Mapping[str, float]:
     """``{path: when}`` (``time.monotonic()``) for this run's stats
     (`stats_taken_this_run`): when the chunk each was taken in began."""
     run = file_state_this_run()
-    return run.get("stat_date", {}) if run is not None else {}
+    if run is None:
+        return {}
+    dates = run.get("stat_date", {})
+    watch = run.get("watch")
+    return dates if watch is None else _WatchedDates(dates, run["stat"], watch)
+
+
+class _WatchedDates(Mapping):
+    """``{path: when}`` over the run's stat dates, in which a stat the
+    folder watch still holds (`FileWatch.current`) is dated by the watch's
+    last drain: no change was reported to its folder up to then."""
+
+    __slots__ = ("_dates", "_stats", "_watch")
+
+    def __init__(self, dates: dict[str, float], stats: dict[str, Any], watch: Any) -> None:
+        self._dates = dates
+        self._stats = stats
+        self._watch = watch
+
+    def get(self, path: str, default: Any = None) -> Any:
+        at = self._dates.get(path)
+        if at is None:
+            return default
+        watch = self._watch
+        if at < watch.confirmed_at:
+            st = self._stats.get(path)
+            if st is not None and watch.current(path) is st:
+                return watch.confirmed_at
+        return at
+
+    def __getitem__(self, path: str) -> float:
+        at = self.get(path)
+        if at is None:
+            raise KeyError(path)
+        return at
+
+    def __contains__(self, path: object) -> bool:
+        return path in self._dates
+
+    def __iter__(self):
+        return iter(self._dates)
+
+    def __len__(self) -> int:
+        return len(self._dates)
 
 
 def _decided_by_time(recorded: Any) -> bool:
@@ -414,8 +608,18 @@ def _identify(run: dict, path: str) -> os.stat_result | None:
     """Replace the run's listed stat of *path* (`stats_from_listings`) by a
     stat of the file itself, which has its identity and its own times;
     None when there is none to take."""
+    watch = run.get("watch")
     try:
-        st = own_stat(path)
+        if watch is not None:
+            # Kept by the folder watch in place of the listing's stat.
+            token = watch.before_stat(path)
+            st = own_lstat(path)
+            if _stat.S_ISLNK(st.st_mode) or getattr(st, "st_file_attributes", 0) & _REPARSE_POINT:
+                st = own_stat(path)
+            else:
+                watch.record(token, path, st)
+        else:
+            st = own_stat(path)
     except OSError:
         return None  # gone since: the check's own stat says so
     run["stat"][path] = st
@@ -503,6 +707,7 @@ def file_component_this_run(
     (`stats_this_run`), handed on as such too: resolving each file's real
     path took one more ``lstat`` of every file the statement read, 19,000 of
     them before a cell below a read of a photo collection."""
+    from .statement import file_deps
     from .statement.file_deps import compute_file_hash_component
 
     run = file_state_this_run()
@@ -519,6 +724,19 @@ def file_component_this_run(
         if key is not None and key in components:
             return components[key]
     taken = stats_this_run(paths)  # first: it starts the run's records read below
+    watch = run.get("watch") if run is not None and key is not None and not probes else None
+    place = None
+    if watch is not None:
+        # Built in an earlier run from stats the folder watch still holds:
+        # the same fields of the same files, so the same component.
+        try:
+            place = (os.getcwd(), file_deps.get_notebook_path())
+        except (OSError, ValueError):
+            watch = None
+        held = _COVERED_COMPONENTS.get(key) if watch is not None else None
+        if held is not None and held[2] == place and watch.still(held[1]):
+            components[key] = held[0]
+            return held[0]
     listed = run["listed"] if run is not None else None
     followed = run["stat_followed"] if run is not None else None
     stats: Mapping[str, os.stat_result] = {}
@@ -536,4 +754,15 @@ def file_component_this_run(
     component = compute_file_hash_component(paths, remote, probes, stats=stats, lstats=lstats)
     if key is not None:
         components[key] = component
+    if watch is not None:
+        cover = _cover_of(watch, paths)
+        if cover is not None:
+            if len(_COVERED_COMPONENTS) >= _COVERED_KEPT and key not in _COVERED_COMPONENTS:
+                _COVERED_COMPONENTS.pop(next(iter(_COVERED_COMPONENTS)))
+            _COVERED_COMPONENTS[key] = (component, cover, place)
     return component
+
+
+#: Components built from stats the folder watch held, across runs:
+#: ``{key: (component, cover, (cwd, notebook path))}`` (`file_component_this_run`).
+_COVERED_COMPONENTS: dict[tuple, tuple[str, tuple, tuple]] = {}
