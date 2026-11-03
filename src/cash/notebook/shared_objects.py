@@ -727,6 +727,18 @@ def _values_only(value: Any, exact: frozenset[type]) -> bool:
     return False
 
 
+def _values_two_deep(value: Any, exact: frozenset[type]) -> bool:
+    """`_values_only`, or an exact list, tuple, set or frozenset of items
+    each of which is a value of the *exact* types or `_values_only`: a
+    memo's key ``(city, frozenset(cities), city)``."""
+    if _values_only(value, exact):
+        return True
+    kind = type(value)
+    if not (kind is tuple or kind is list or kind is set or kind is frozenset):
+        return False
+    return all(type(item) in exact or _values_only(item, exact) for item in value)
+
+
 def children_of(value: Any) -> Iterable[Any] | None:
     """What *value* holds that a restore copies with it, or None for a leaf."""
     if type(value) in _ATTRIBUTED_SCALARS and not _user_attributes(value):
@@ -1311,7 +1323,15 @@ def names_reaching(
     heap once per level, and for the holders of a class's objects after the
     class cell ran again it ran out of a cheap statement's budget, and every
     variable holding an object was forgotten: on E6's second Run All each
-    fit below ``class ClusterSimilarity`` ran again."""
+    fit below ``class ClusterSimilarity`` ran again.
+
+    *wanted* are objects with an identity of their own, never a value of
+    the exact value types nor a tuple of them, so a container holding only
+    those, directly or in tuples (`_values_in_tuples`, `_values_only`), is
+    not walked: E16's helper memos, a list of 500,000 index pairs and the
+    tuples, sets and lists of 100,000 Held-Karp segments, cost a Python
+    step each, 4-6 s of a cell defining a class, where the user's other
+    variables took milliseconds."""
     np = sys.modules.get("numpy")
     value_types = VALUE_TYPES + library_value_types()
     exact = exact_value_types()
@@ -1341,6 +1361,8 @@ def names_reaching(
             if children is None:
                 children = _held_below(obj)
         if len(children) >= _FLAT_RECORDS_MIN:
+            if _values_in_tuples(children, exact):
+                continue
             children = list(
                 itertools.compress(children, map(operator.not_, map(exact.__contains__, map(type, children))))
             )
@@ -1351,6 +1373,7 @@ def names_reaching(
                 continue
             if (
                 type(child) in exact
+                or _values_two_deep(child, exact)
                 or instance_of(child, (type, types.ModuleType))
                 or (np is not None and instance_of(child, np.ndarray) and not child.dtype.hasobject)
                 or is_value(child, value_types)
