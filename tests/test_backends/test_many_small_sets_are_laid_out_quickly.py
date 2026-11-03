@@ -3,8 +3,7 @@
 Each set's elements were sorted by hash with radix tables of 2 MiB, zeroed
 for every set: 200 us a set, 2.4 s for the 11,264 small frozensets a
 Held-Karp memo of 12 cities keys on, and a hit slower than the run. A set
-of a few elements is sorted in place instead; equal hashes keep the order of
-their slots, as the radix sort kept it.
+of up to 64 elements is sorted in place instead, into the same order.
 """
 
 from __future__ import annotations
@@ -26,9 +25,11 @@ def _small_sets(count: int) -> list[frozenset]:
     return [frozenset(r.sample(points, r.randint(2, 14))) for _ in range(count)]
 
 
-def test_small_sets_with_equal_hashes_come_back_in_the_stored_order():
-    # -1 and -2 hash alike, as do the floats and ints equal to them.
-    value = [{-1, -2, 7, 3.5, "a"}, frozenset({-2, -1, 2**61 - 2, 5}), {-1, -2}]
+def test_sets_on_both_sides_of_the_in_place_sort_come_back_in_the_stored_order():
+    r = random.Random(11)
+    value = [set(r.sample(range(1 << 40), n)) for n in (2, 3, 8, 40, 63, 64, 65, 66, 200, 1000)]
+    for s in value:  # dummies in the table too
+        s.discard(next(iter(s)))
     metadata: dict = {}
     set_order.record(value, metadata)
     back = pickle.loads(pickle.dumps(value))
