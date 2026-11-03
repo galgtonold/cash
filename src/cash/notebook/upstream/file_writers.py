@@ -18,7 +18,7 @@ import textwrap
 import types
 from typing import TYPE_CHECKING
 
-from cash._user_attrs import has_attribute, instance_of
+from cash._user_attrs import attribute_or, has_attribute, instance_of
 
 from ..._memo import NOTEBOOK_STATEMENTS, STATEMENTS
 from ..._paths import resolve_file_dep_path
@@ -122,7 +122,7 @@ def _plain_entry_names(directory: str) -> set[str] | None:
     try:
         with untracked(), os.scandir(directory or ".") as entries:
             for entry in entries:
-                is_junction = getattr(entry, "is_junction", None)
+                is_junction = attribute_or(entry, "is_junction", None)
                 if entry.is_symlink() or (is_junction is not None and is_junction()):
                     continue
                 plain.add(os.path.normcase(entry.name))

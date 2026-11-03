@@ -62,7 +62,7 @@ def test_the_cells_above_are_not_run_again(nb_runner, tmp_path, edit):
     nb_runner.start_kernel()
     nb_runner.run_all()
     rows = tmp_path / "rows.log"
-    assert rows.read_text().split() == ["row", "row"]
+    assert rows.read_text(encoding="utf-8").split() == ["row", "row"]
     assert _lines(nb_runner, 4) == ["first u1", "0.5"]
 
     if edit:
@@ -72,4 +72,4 @@ def test_the_cells_above_are_not_run_again(nb_runner, tmp_path, edit):
     word = "second" if edit else "first"
     assert _lines(nb_runner, 4) == [f"{word} u1", "0.5"]
     assert nb_runner.peek("[uid for uid, _ in data]") == "['u1', 'u2']"
-    assert rows.read_text().split() == ["row", "row"], "the loop building data ran again"
+    assert rows.read_text(encoding="utf-8").split() == ["row", "row"], "the loop building data ran again"

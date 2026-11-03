@@ -32,6 +32,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from .._paths import is_remote_url, normalize_path, resolve_file_dep_path
+from .._user_attrs import attribute_or
 from ..tracking import file_dep_snapshot as _fds
 from ..tracking.file_dep_snapshot import LISTING_MIN_FILES, FreshnessMemo, stats_from_listings
 from ..tracking.read_classification import own_stat, stat_key
@@ -246,10 +247,10 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
                     dates[p] = at
                     from_listing.add(p)
         stat = os.stat
-        if getattr(stat, "_is_file_tracker_patch", False):
+        if attribute_or(stat, "_is_file_tracker_patch", False):
             stat = stat._original_func  # as `own_stat`, once for the lot
         lstat = os.lstat
-        if getattr(lstat, "_is_file_tracker_patch", False):
+        if attribute_or(lstat, "_is_file_tracker_patch", False):
             lstat = lstat._original_func
         cwd: list[str] = []  # the working directory, asked once for the lot
         at = time.monotonic()
@@ -301,7 +302,7 @@ def _stat_by_lstat(path: str, stat: Any, lstat: Any, followed: set[str]) -> os.s
     """``stat(path)``, taken as ``lstat(path)`` unless *path* is a link or
     reparse point, which is stat-ed as well and noted in *followed*."""
     st = lstat(path)
-    if _stat.S_ISLNK(st.st_mode) or getattr(st, "st_file_attributes", 0) & _REPARSE_POINT:
+    if _stat.S_ISLNK(st.st_mode) or attribute_or(st, "st_file_attributes", 0) & _REPARSE_POINT:
         followed.add(path)
         st = stat(path)
     return st

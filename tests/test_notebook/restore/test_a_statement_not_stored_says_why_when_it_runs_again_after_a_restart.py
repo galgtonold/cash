@@ -54,7 +54,7 @@ def load(path):
 
 @pytest.fixture
 def loader(tmp_path, monkeypatch):
-    (tmp_path / "e5_loader.py").write_text(_LOADER)
+    (tmp_path / "e5_loader.py").write_text(_LOADER, encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
     yield
     sys.modules.pop("e5_loader", None)

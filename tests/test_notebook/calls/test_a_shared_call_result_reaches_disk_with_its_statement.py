@@ -51,7 +51,7 @@ def _cells(log) -> list[str]:
 
 
 def _runs(log) -> int:
-    return log.read_text().count("run") if log.exists() else 0
+    return log.read_text(encoding="utf-8").count("run") if log.exists() else 0
 
 
 def test_the_statement_is_served_after_a_restart(tiers, tmp_path):

@@ -49,5 +49,5 @@ def test_the_loop_above_does_not_run_again(cash_magics, tmp_path, monkeypatch, w
         cells[3] = CELLS[3].format(word=word)
         run_cash_cell(cash_magics, cells[3], cells=cells)
 
-    assert (tmp_path / "rows.log").read_text().split() == ["row", "row"]
+    assert (tmp_path / "rows.log").read_text(encoding="utf-8").split() == ["row", "row"]
     assert cash_magics.shell.user_ns["k"] == 1

@@ -103,7 +103,7 @@ _ALIGNMENT = 8 if sys.maxsize > 1 << 32 else 4
 #: The C kernel of `_Walk._read_nested`, None without it: a frame's column of
 #: two million ``(action, time)`` records took a second a statement in
 #: Python (student_8).
-_NESTED_LEAVES = getattr(_native.kernels, "nested_leaves", None)
+_NESTED_LEAVES = attribute_or(_native.kernels, "nested_leaves", None)
 
 #: What `_Walk._read_flat` found in a big container of leaves this cell,
 #: by its length: the very items read (held, so none of their ids is
@@ -124,7 +124,7 @@ _flat_kept = [0]
 #: A fingerprint of a big container's content (``shape_witness``), None
 #: without the C kernels: the addresses, types and nesting of everything
 #: in it, and the value of each str and int.
-_SHAPE_WITNESS = getattr(_native.kernels, "shape_witness", None)
+_SHAPE_WITNESS = attribute_or(_native.kernels, "shape_witness", None)
 
 #: What `_Walk._read_flat` found in a big container this cell, by the
 #: witness of its content: the numbers it spelled, the lists it counted

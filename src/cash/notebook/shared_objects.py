@@ -1115,7 +1115,7 @@ _TUPLE_LEVELS = 8
 #: The C kernel of `_values_in_tuples`, None without it: the level of two
 #: million records of a frame's object column was made a list twice over,
 #: each check of each statement (student_8).
-_VALUES_IN_TUPLES = getattr(_native.kernels, "values_in_tuples", None)
+_VALUES_IN_TUPLES = attribute_or(_native.kernels, "values_in_tuples", None)
 
 
 def view_bases(value: Any) -> list[int]:

@@ -124,7 +124,7 @@ def _identity_refusal(held: str, it: str | None = None) -> IdentityHeld:
         return IdentityHeld(
             "a container keeps the id() of an object it holds, and a restore would hand it a copy", "", "an id()"
         )
-    name = getattr(held, "name", "")
+    name = attribute_or(held, "name", "")
     where = f" ('{name}')" if name else ""
     return IdentityHeld(
         f"the notebook holds containers too big to look through{where} for a weak reference to, or the id() "
@@ -344,7 +344,7 @@ def _written_in_python(klass: type) -> bool:
     if not klass.__flags__ & _HEAPTYPE:
         return False
     module = sys.modules.get(type.__dict__["__module__"].__get__(klass))
-    path = getattr(module, "__file__", None) if module is not None else None
+    path = attribute_or(module, "__file__", None) if module is not None else None
     return type(path) is str and path.endswith(".py")
 
 
