@@ -266,7 +266,9 @@ class ReexecutionPlanner:
             stmts_to_run_indices, simulation_trace, sim.vars_mutated_by_loops
         )
         stmts_to_run_indices = self._dedup_sorted_indices(stmts_to_run_indices)
-        gap = self._unclosed_read(stmts_to_run_indices, simulation_trace)
+        gap = self._unclosed_read(stmts_to_run_indices, simulation_trace) or self._overwritten_read(
+            stmts_to_run_indices, simulation_trace, check, virtual_lineage, restored_statements_info
+        )
         if gap is not None:
             raise gap
         restored_statements_info = self._drop_scheduled_from_restored(
@@ -347,6 +349,76 @@ class ReexecutionPlanner:
             imports = import_only(entry.stmt_code)
             for name in entry.outputs or ():
                 holds[name] = None if imports else (entry.produced_lineages or {}).get(name)
+        return None
+
+    @staticmethod
+    def _overwritten_read(
+        stmts_to_run_indices: list[int],
+        simulation_trace: list,
+        check: CellCheck,
+        virtual_lineage: dict[str, str],
+        restored_statements_info: list[dict],
+    ) -> UpstreamRepairGap | None:
+        """The gap, when the plan leaves a name the cell reads at an earlier
+        version than a run from the top hands the cell.
+
+        A re-run statement writes each of its outputs again. A statement
+        below it that writes one of them anew, and that the plan neither
+        re-runs nor restores after it, leaves the cell reading the re-run's
+        version: in E8 a repair re-ran the ``train_test_split`` of the moons
+        data for ``X_test``, not the MNIST split below it, and
+        ``estimator.score(X_test, ...)`` failed on 2 features for 784.
+        Refused only on evidence: a statement below the re-run one makes
+        the version the cell reads.
+        """
+        reads = check.required_inputs or set()
+        if not reads or not stmts_to_run_indices:
+            return None
+        written_at: dict[str, int] = {}
+        for i in stmts_to_run_indices:
+            for name in simulation_trace[i].outputs or ():
+                written_at[name] = i
+        for info in restored_statements_info:
+            position = info.get("position")
+            if isinstance(position, int):
+                for name in info.get("restored_vars") or ():
+                    if written_at.get(name, -1) < position:
+                        written_at[name] = position
+        scheduled = set(stmts_to_run_indices)
+        for name in sorted(reads):
+            at = written_at.get(name)
+            if at is None or at not in scheduled:
+                continue
+            wrote = (simulation_trace[at].produced_lineages or {}).get(name)
+            wants = virtual_lineage.get(name)
+            if wrote is None or wants is None or wrote == wants:
+                continue
+            below = next(
+                (
+                    p
+                    for p in range(len(simulation_trace) - 1, at, -1)
+                    if (simulation_trace[p].produced_lineages or {}).get(name) == wants
+                ),
+                None,
+            )
+            if below is None:
+                continue
+            producer = simulation_trace[below]
+            logger.debug(
+                "[UPSTREAM] Plan not closed: the cell would read %r as [%s] leaves it; not re-running", name, at
+            )
+            return UpstreamRepairGap(
+                f"Cash would leave {name!r} as {simulation_trace[at].stmt_code.splitlines()[0][:60]!r} writes it, "
+                "not as a run from the top hands it to this cell",
+                stmt_code=simulation_trace[at].stmt_code,
+                error_text=(
+                    f"this cell would read {name!r} as that statement leaves it, not as a run from the top has it here"
+                ),
+                producer=producer.stmt_code,
+                cell_no=producer.cell + 1 if producer.cell >= 0 else None,
+                planned=True,
+                after=True,
+            )
         return None
 
     @staticmethod

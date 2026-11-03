@@ -301,7 +301,8 @@ class UpstreamResolution:
             if caught.planned:
                 what = (
                     f"to bring this cell up to date cash would have re-run `{first}`, but {caught.error_text[:120]}: "
-                    f"cash could not re-run `{producer}` ({where}) before it as a run from the top does, so it "
+                    f"cash could not re-run `{producer}` ({where}) {'after' if caught.after else 'before'} it "
+                    "as a run from the top does, so it "
                     "re-ran nothing and this cell ran as written, on the values in memory, uncached."
                 )
             else:

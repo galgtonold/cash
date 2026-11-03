@@ -22,6 +22,7 @@ from ...analysis.ast_util import parse_cached
 from ...analysis.code_analyzer import clean_cell_source, parse_cell_source, statement_code
 from ...exceptions import UpstreamStateError
 from ..control_structures import is_control_structure
+from ..statement.capture import capture_output
 from ..tracking_state import TrackingState
 
 if TYPE_CHECKING:
@@ -36,7 +37,9 @@ class UpstreamRepairGap(UpstreamStateError):
     """A statement cash re-ran above the cell failed because cash's plan left
     out a statement above it that sets what it reads, or, found before
     anything ran (*planned*), would have read a name another statement
-    leaves as a run from the top does not have it there.
+    leaves as a run from the top does not have it there, or would have left
+    the cell such a name (*after*: the statement that makes it as a run from
+    the top has it comes after the re-run one).
 
     Not the user's failure and not one a run from the top has: cash could not
     give the statement its inputs as the notebook has them. The upstream
@@ -53,6 +56,7 @@ class UpstreamRepairGap(UpstreamStateError):
         producer: str,
         cell_no: int | None,
         planned: bool = False,
+        after: bool = False,
     ) -> None:
         super().__init__(message)
         self.stmt_code = stmt_code
@@ -62,6 +66,8 @@ class UpstreamRepairGap(UpstreamStateError):
         #: Found in the plan, before anything ran: the statement would have
         #: read a name at another version than a run from the top gives it.
         self.planned = planned
+        #: *producer* would have had to run after the statement, not before.
+        self.after = after
 
 
 @functools.lru_cache(maxsize=NOTEBOOK_VERSIONS)
@@ -228,13 +234,20 @@ class StatementReplay:
                 if ctrl_node is not None and control_structure_callback is not None:
                     logger.debug("[UPSTREAM] Delegating control structure to per-iteration processor")
                     ctrl_annotation = (annotations or {}).get(stmt_code)
-                    ctrl_result = (
-                        control_structure_callback(
-                            ctrl_node, ttl=global_ttl, silent=True, inherited_annotation=ctrl_annotation
+                    # Its body's output kept, not shown: ``silent`` there still
+                    # streams each body statement's lines (the cell's own
+                    # loop runs that way), and the loop is ANOTHER cell's --
+                    # ``print("Training the", estimator)`` in a training loop
+                    # re-run for ``voting_clf.score(...)`` printed under the
+                    # score, which a plain run of that cell never shows.
+                    with capture_output(stdout=True, stderr=True, display=True):
+                        ctrl_result = (
+                            control_structure_callback(
+                                ctrl_node, ttl=global_ttl, silent=True, inherited_annotation=ctrl_annotation
+                            )
+                            if ctrl_annotation is not None
+                            else control_structure_callback(ctrl_node, ttl=global_ttl, silent=True)
                         )
-                        if ctrl_annotation is not None
-                        else control_structure_callback(ctrl_node, ttl=global_ttl, silent=True)
-                    )
                     for m in ctrl_result.metrics:
                         if m:
                             m["is_upstream"] = True

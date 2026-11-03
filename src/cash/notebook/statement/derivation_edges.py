@@ -751,9 +751,9 @@ def bump_derived_lineages(
     # drops such a name's edges before it records its new ones -- so the
     # edges it had are no reason to bump anything. A bump can cascade
     # (mutating ``a`` bumps view ``v``, which may itself be a base for ``w``).
-    # In name order, not the set's: a name reached from several partners is
-    # moved on by each in turn, and the set's order follows the process's
-    # string hashes -- after a restart the loop variable left over from
+    # In name order, not the set's: the set's order follows the process's
+    # string hashes, and the walk once moved a name on per partner in the
+    # order it met them -- after a restart the loop variable left over from
     # `for est in estimators: est.fit(X, y)` came out with another lineage,
     # and every entry storing it with its outputs missed.
     frontier: list[str] = sorted(o for o in outputs if o in derivation_edges and o in inputs)
@@ -762,17 +762,25 @@ def bump_derived_lineages(
         bound = text_bound_names(code)
         if bound is not None:
             frontier += [o for o in unread if o not in bound]
+    # Every name the change reaches moves on once, by what the statement
+    # changed, however many partners lead to it. Moved on by each partner in
+    # turn, a name's lineage counted the paths to it, and a variable a cell
+    # below binds afresh (``t = clf.named_estimators_.pop("svm")``) that was
+    # still there from the last pass made one more: on a second Run All
+    # ``clf.set_params(svm="drop")`` moved the estimators it holds to other
+    # lineages than the first did, and the cells below re-ran upstream.
+    change = ":".join(lineage_map.get(name, "") for name in sorted(set(frontier)))
     while frontier:
         src = frontier.pop()
         if src in visited:
             continue
         visited.add(src)
-        src_lineage = lineage_map.get(src)
-        if src_lineage is None:
+        if lineage_map.get(src) is None:
             continue
         for target in sorted(derivation_edges.get(src, ())):
-            if target in outputs or target in kept:
-                # An output: the statement gave it its lineage just now.
+            if target in outputs or target in kept or target in bumped:
+                # An output: the statement gave it its lineage just now. One
+                # bumped: moved on by this change already.
                 continue
             if before is not None and target in inputs and not _linked_before(before, src, target):
                 # Creation edge (``v = a[...]``): do NOT bump the base.
@@ -780,7 +788,7 @@ def bump_derived_lineages(
             if not present(target):
                 continue
             old = lineage_map.get(target, "")
-            new_hash = hashlib.sha256(f"{old}:{src_lineage}".encode("utf-8")).hexdigest()
+            new_hash = hashlib.sha256(f"{old}:{change}".encode("utf-8")).hexdigest()
             if new_hash == old:
                 continue
             record(target, new_hash)

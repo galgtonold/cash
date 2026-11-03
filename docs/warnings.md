@@ -1836,7 +1836,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-NOT-FOUND](#notebook-not-found) | notebook | the notebook's cells cannot be read; cells above the one you run are not re-checked |
 | [NOTEBOOK-REDUCE-WROTE](#notebook-reduce-wrote) | notebook | a value's own `__reduce__` or `__getstate__` changes other values, so cash does not pickle it, and the statement is not stored |
 | [NOTEBOOK-RELOAD-STATE](#notebook-reload-state) | notebook | a reload or restart dropped state cells set on a module, and cash cannot rebuild it |
-| [NOTEBOOK-REPAIR-GAP](#notebook-repair-gap) | notebook | a statement above the cell, re-run to bring it up to date, failed or would read a value from below because cash left out a statement it needs, so the cell runs as written, uncached |
+| [NOTEBOOK-REPAIR-GAP](#notebook-repair-gap) | notebook | a statement above the cell, re-run to bring it up to date, failed, would read a value from below, or would leave the cell an earlier value because cash left out a statement it needs, so the cell runs as written, uncached |
 | [NOTEBOOK-SAVEFIG-SKIP](#notebook-savefig-skip) | notebook | a `plt.savefig` was not re-run |
 | [NOTEBOOK-SHARE-UNCHECKED](#notebook-share-unchecked) | notebook | not every variable sharing an object with a statement's outputs was found in time |
 | [NOTEBOOK-SHARED-KEPT](#notebook-shared-kept) | notebook | a value a variable below shares is kept as it is for a cell re-run on its own |
@@ -2345,12 +2345,13 @@ purpose and no cell reads it any more.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/notebook/upstream/replay.py:StatementReplay._failure @b2ec7f5b, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._unclosed_read @9ffb9999, cash/notebook/upstream/checker.py:UpstreamChecker._put_back @d0bf8f4e, cash/notebook/ipython/upstream_phase.py:UpstreamResolution._step_aside @fbf69e5b -->
+<!-- claim: cash/notebook/upstream/replay.py:StatementReplay._failure @b2ec7f5b, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._unclosed_read @9ffb9999, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._overwritten_read @9c2c1ae1, cash/notebook/upstream/checker.py:UpstreamChecker._put_back @d0bf8f4e, cash/notebook/ipython/upstream_phase.py:UpstreamResolution._step_aside @fbf69e5b -->
 **What happened.** To give the cell what a run from the top gives, cash re-ran
 statements above it, and one of them failed because cash did not re-run first
 a statement above it that sets what it reads. Or, found before anything ran,
 one of them would have read a name as a statement further down leaves it,
-not as a run from the top has it there, so cash re-ran nothing. The message
+not as a run from the top has it there, or would have left the cell a name
+that a statement further down writes anew, so cash re-ran nothing. The message
 names both statements. Cash put back every name the repair had rebound and
 ran the cell as written, on the values in memory, uncached.
 
