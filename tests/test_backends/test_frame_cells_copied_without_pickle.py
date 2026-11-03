@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import datetime
 import pickle
+import sys
 
 import pytest
 
@@ -77,6 +78,21 @@ def test_the_copy_holds_new_lists_and_the_same_immutable_pairs(no_pickle):
     for old, new in zip(frame.actions, copied.actions):
         assert new is not old
         assert all(a is b for a, b in zip(old, new))
+
+
+def test_the_copy_keeps_no_reference_to_the_callers_lists(no_pickle):
+    # pandas keeps the object columns in one block: setting the list column
+    # of its copy anew left the column of tuples a view of that copy, which
+    # still held the caller's lists, one reference each. The share check
+    # then took the entry for a holder of the caller's frame it could not
+    # find (NOTEBOOK-SHARE-UNCHECKED on pandas 2, where text is objects).
+    cells = [[i] for i in range(100)]
+    frame = pd.DataFrame({"pair": [(i, i) for i in range(100)], "cells": cells})
+    before = [sys.getrefcount(cell) for cell in cells]
+    copied = InMemoryBackend._copy_frame(frame)
+    assert [sys.getrefcount(cell) for cell in cells] == before
+    assert copied.equals(frame)
+    assert all(new is not old for old, new in zip(cells, copied.cells))
 
 
 def test_a_column_of_tuples_of_immutables_is_shared_whole(no_pickle):
