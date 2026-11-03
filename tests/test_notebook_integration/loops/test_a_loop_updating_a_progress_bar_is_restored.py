@@ -33,10 +33,10 @@ REASONS = (
 )
 
 
-def _printed(nb_runner, cell):
-    """What the cell printed to stdout."""
+def _printed(nb_runner, cell, name="stdout"):
+    """What the cell wrote to the stream *name*."""
     outputs = nb_runner.get_cell(cell).get("outputs", [])
-    return "".join(o.get("text", "") for o in outputs if o.get("name") == "stdout")
+    return "".join(o.get("text", "") for o in outputs if o.get("name") == name)
 
 
 def _restart_and_run(nb_runner, peek=STATUS):
@@ -52,15 +52,19 @@ def _restart_and_run(nb_runner, peek=STATUS):
 @pytest.mark.fresh_kernel
 @pytest.mark.parametrize("stream", ["sys.stdout", "sys.stderr"])
 def test_the_loop_is_restored_and_the_bar_writes_to_the_stream_of_the_process(nb_runner, stream):
+    """Each stream is read on its own: the kernel flushes stdout and stderr
+    apart, and in plain Python a quick cell shows its print before what it
+    wrote to stderr, a slower one the other way round."""
     read = "pbar.out('|')\nprint(pbar.cnt, pbar.stream is " + stream + ")"
+    name = stream.removeprefix("sys.")
     nb_runner.create_notebook([BAR + f"pbar = Bar({stream})", LOOP, read])
     nb_runner.start_kernel()
     nb_runner.run_all()
-    assert nb_runner.get_output(3).strip().endswith("3000 True")
+    assert _printed(nb_runner, 3).strip().endswith("3000 True")
+    assert "|" in _printed(nb_runner, 3, name)
     assert "RESTORED" in _restart_and_run(nb_runner)
-    out = nb_runner.get_output(3)
-    assert out.strip().endswith("3000 True")
-    assert "|" in out
+    assert _printed(nb_runner, 3).strip().endswith("3000 True")
+    assert "|" in _printed(nb_runner, 3, name)
 
 
 @pytest.mark.fresh_kernel
