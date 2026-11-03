@@ -111,7 +111,7 @@ def test_a_changed_file_is_stat_ed_again_and_the_rest_are_not(photos, stats_of):
 def test_a_folder_that_cannot_be_watched_is_stat_ed_every_run(photos, stats_of, monkeypatch):
     watch = file_watch.watcher()
     assert watch is not None
-    monkeypatch.setattr(watch._backend, "usable", lambda path: False)
+    monkeypatch.setattr(watch._backend, "add", lambda path: None)
     stats_this_run(photos)
 
     _next_run()

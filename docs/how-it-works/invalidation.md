@@ -188,7 +188,7 @@ In a notebook, a statement is checked against the files it read itself and
 the files its inputs were built from, so a changed CSV invalidates the whole
 chain that read it.
 
-<!-- claim: cash/tracking/file_watch.py:FileWatch.current @31588dc6, cash/tracking/file_watch.py:FileWatch.record @dc554483, cash/notebook/run_memo.py:stats_this_run @bc8bc3db, cash/tracking/file_watch.py:_VolumeChanges.add @e629d558 -->
+<!-- claim: cash/tracking/file_watch.py:FileWatch.current @31588dc6, cash/tracking/file_watch.py:FileWatch.record @dc554483, cash/notebook/run_memo.py:stats_this_run @bc8bc3db, cash/tracking/file_watch.py:_VolumeChanges.add @bbc71473 -->
 In a notebook, cash also asks the operating system to report changes to each
 folder holding a file it checked (inotify on Linux; on Windows one
 `ReadDirectoryChangesW` per drive, from its root, so no folder of yours is

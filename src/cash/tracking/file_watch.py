@@ -41,6 +41,7 @@ The rules that keep it safe:
 from __future__ import annotations
 
 import logging
+import ntpath
 import os
 import re
 import stat as _stat
@@ -100,8 +101,8 @@ class FileWatch:
     """The stats cash took while their folders were watched, each kept until
     its folder reports a change. *backend* is the operating system's side:
     ``add(path) -> key | None``, ``remove(key)``, ``poll() -> [(key, dead)]``
-    (a key of None: events were lost, every folder changed) and
-    ``usable(path) -> bool``."""
+    (a key of None: events were lost, every folder changed). ``add`` finds
+    out once whether *path* can be watched: None when it cannot."""
 
     def __init__(self, backend: Any) -> None:
         self._backend = backend
@@ -199,8 +200,6 @@ class FileWatch:
             return None
         self._refused.add(folder)  # until armed below
         try:
-            if not self._backend.usable(folder):
-                return None
             before = own_stat(folder)
             if not _stat.S_ISDIR(before.st_mode):
                 return None
@@ -420,7 +419,7 @@ class _Inotify:
         self.fd = fd
         self._buffer = ctypes.create_string_buffer(512)
 
-    def usable(self, path: str) -> bool:
+    def _local(self, path: str) -> bool:
         if self._statfs(os.fsencode(path), self._buffer) != 0:
             return False
         # ``f_type`` is the struct's first field, a native long.
@@ -428,6 +427,10 @@ class _Inotify:
         return f_type in LOCAL_FILE_SYSTEMS
 
     def add(self, path: str) -> int | None:
+        """The watch descriptor of *path*, None when it is not on a local
+        file system or cannot be watched."""
+        if not self._local(path):
+            return None
         wd = self._add(self.fd, os.fsencode(path), _IN_MASK)
         if wd < 0:
             import errno
@@ -507,6 +510,15 @@ _NOTIFY_FILTER = 0x1 | 0x2 | 0x4 | 0x8 | 0x10 | 0x40 | 0x100
 _DRIVE_FIXED = 3
 _DRIVE_RAMDISK = 6
 _NOTIFY_HEADER = struct.Struct("<III")
+#: FILE_ACTION_REMOVED and FILE_ACTION_RENAMED_OLD_NAME: the name is gone.
+_ACTIONS_GONE = frozenset((2, 4))
+_FILE_ATTRIBUTE_DIRECTORY = 0x10
+_FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+_INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF
+#: A folder name whose real long path is its parent's and this name: none
+#: that may be a short alias (any ``~``), that Windows trims (a trailing dot
+#: or space), or that is not one plain component.
+_PLAIN_NAME = re.compile(r"[^~:/\\]*[^~:/\\. ]")
 
 #: A name a change report gives that may be a short (8.3) alias: a ``~``
 #: and a digit, as in ``PROGRA~1``.
@@ -516,21 +528,22 @@ _SHORT_NAME = re.compile(r"~\d")
 EVERY_FOLDER = None
 
 
-def parse_notify_information(data: bytes) -> list[str] | None:
-    """The names (below the watched root) in a buffer of
-    ``FILE_NOTIFY_INFORMATION`` records; None when it cannot be read whole."""
-    names: list[str] = []
+def parse_notify_information(data: bytes) -> list[tuple[int, str]] | None:
+    """The ``(action, name)`` (a name below the watched root) of each record
+    in a buffer of ``FILE_NOTIFY_INFORMATION`` records; None when it cannot
+    be read whole."""
+    names: list[tuple[int, str]] = []
     offset = 0
     size = _NOTIFY_HEADER.size
     while True:
         if offset + size > len(data):
             return None
-        following, _action, length = _NOTIFY_HEADER.unpack_from(data, offset)
+        following, action, length = _NOTIFY_HEADER.unpack_from(data, offset)
         start = offset + size
         if length % 2 or start + length > len(data):
             return None
         try:
-            names.append(data[start : start + length].decode("utf-16-le"))
+            names.append((action, data[start : start + length].decode("utf-16-le")))
         except UnicodeDecodeError:
             return None
         if following == 0:
@@ -584,6 +597,20 @@ class _FolderIndex:
             return list(self.keys.values())
         lead = prefix + "\\"
         return [key for path, key in self.keys.items() if path == prefix or path.startswith(lead)]
+
+    def moved(self, name: str) -> list[Any]:
+        """The watched folders no longer where they were if *name* was
+        removed or renamed: those at or below it, or, when a component of
+        it may be a short alias, everything below the folder above that
+        component."""
+        name = self.spelled(name)
+        parts = name.split("\\")
+        for i, part in enumerate(parts):
+            if _SHORT_NAME.search(part):
+                return self.under("\\".join(parts[:i]))
+        if name in self.keys or name in self.above:
+            return self.under(name)
+        return []
 
     def touched(self, name: str) -> list[Any]:
         """The watched folders a change at *name* may have changed: the
@@ -644,7 +671,17 @@ class _Win32:
         self._drive_type = fn("GetDriveTypeW", wintypes.UINT, wintypes.LPCWSTR)
         self._volume_path = fn("GetVolumePathNameW", B, wintypes.LPCWSTR, wintypes.LPWSTR, D)
         self._long_path = fn("GetLongPathNameW", D, wintypes.LPCWSTR, wintypes.LPWSTR, D)
+        self._attributes = fn("GetFileAttributesW", D, wintypes.LPCWSTR)
         self._invalid = wintypes.HANDLE(-1).value
+
+    def real_path(self, path: str) -> str:
+        return os.path.realpath(path)
+
+    def attributes(self, path: str) -> int | None:
+        """*path*'s attributes, of the entry itself (a junction's, not its
+        target's); None when it cannot be read."""
+        found = self._attributes(path)
+        return None if found == _INVALID_FILE_ATTRIBUTES else found
 
     def volume_root(self, path: str) -> str | None:
         buffer = self._ctypes.create_unicode_buffer(1024)
@@ -729,11 +766,17 @@ class _Volume:
         self.root = root
         self.handle = handle
         self.index = _FolderIndex()
+        #: Folders whose real long path `_VolumeChanges` derives its
+        #: children's from, kept only while no report says one of them or a
+        #: folder above it may have been removed or renamed.
+        self.located = _FolderIndex()
         self.lock = threading.Lock()
         self.event = kernel.new_event()
         self.overlapped, self.buffer = kernel.new_read()
         #: Keys of folders changed since the last poll; `everything` when all may have.
         self.changed: set[Any] = set()
+        #: Keys of folders removed or renamed (or below one that was) since the last poll.
+        self.gone: set[Any] = set()
         self.everything = False
         self.pending = False
         self.dead = False
@@ -777,16 +820,19 @@ class _Volume:
         if not ended:
             return False
         self.pending = False
-        if error or n == 0:
-            self.everything = True  # an overflow (none read) or an error: anything changed
+        records = None if error or n == 0 else parse_notify_information(self.kernel.data(self.buffer, n))
+        if records is None:
+            # An overflow (none read), an error, or a report not read whole:
+            # anything changed, and any folder may have moved.
+            self.everything = True
+            self.located = _FolderIndex()
         else:
-            names = parse_notify_information(self.kernel.data(self.buffer, n))
-            if names is None:
-                self.everything = True
-            elif not self.everything:
-                touched = self.index.touched
-                for name in names:
+            touched = self.index.touched
+            for action, name in records:
+                if not self.everything:
                     self.changed.update(touched(name))
+                if action in _ACTIONS_GONE:
+                    self._went(name)
         if error and error != _ERROR_NOTIFY_ENUM_DIR:
             self.dead = True  # the root went (a volume unmounted): stop
             return True
@@ -795,17 +841,29 @@ class _Volume:
             self.dead = True
         return True
 
-    def poll(self) -> tuple[list[Any], bool]:
-        """``(changed keys, dead)`` since the last poll."""
+    def _went(self, name: str) -> None:
+        """*name* was removed or renamed: a watched folder at or below it is
+        no longer where its key says, and a path derived through it may be
+        wrong."""
+        if self.located.keys and self.located.moved(name):
+            self.located = _FolderIndex()
+        if self.index.keys:
+            self.gone.update(self.index.moved(name))
+
+    def poll(self) -> tuple[list[Any], list[Any], bool]:
+        """``(changed keys, gone keys, dead)`` since the last poll: a gone
+        folder was removed or renamed, or one above it was."""
         with self.lock:
             self.take()
             if self.everything or self.dead:
                 keys = list(self.index.keys.values())
             else:
                 keys = list(self.changed)
+            gone = list(self.gone)
             self.changed = set()
+            self.gone = set()
             self.everything = False
-            return keys, self.dead
+            return keys, gone, self.dead
 
     def stop(self) -> None:
         """End the watch, never waiting for good: a cancelled read is waited
@@ -834,8 +892,18 @@ class _Volume:
 
 class _VolumeChanges:
     """The Windows backend of `FileWatch`: a folder is watched through its
-    volume's watch (`_Volume`), keyed by its real path, so no handle is
-    open on it or on any folder above it but the volume's root."""
+    volume's watch (`_Volume`), keyed by its real long path, so no handle is
+    open on it or on any folder above it but the volume's root.
+
+    Finding a folder's real long path and volume costs milliseconds
+    (``realpath``, ``GetLongPathNameW``, ``GetVolumePathNameW``), and a run
+    watches thousands of folders, most of them installed packages'. So a
+    folder whose name is plain (`_PLAIN_NAME`) and that is no reparse point
+    (no junction, link or mounted volume) takes its parent's place and its
+    own name: one ``GetFileAttributesW``. A parent's place is found once and
+    kept (`_located`) while its volume's watch runs and reports no removal
+    or rename of it or of a folder above it (`_Volume.located`); one found
+    before the volume was watched is not kept."""
 
     def __init__(self, kernel: Any = None) -> None:
         self.kernel = kernel if kernel is not None else _Win32()
@@ -843,13 +911,16 @@ class _VolumeChanges:
         self._keys: set[tuple[str, str]] = set()
         #: Volumes kept alive after a stop that did not end in time.
         self._stopped: list[_Volume] = []
+        #: A folder's path, case folded, that is its real long path -> its
+        #: volume's watch and its path below the root.
+        self._located: dict[str, tuple[_Volume, str]] = {}
 
     def _locate(self, path: str) -> tuple[str, str] | None:
         """``(volume root, path below it)`` of *path*'s real, long form;
         None for a network or removable drive, or a path not understood.
         By the real path: a change is reported under it, not under a
         junction or a link that leads there."""
-        real = os.path.realpath(path)
+        real = self.kernel.real_path(path)
         if real.startswith("\\\\?\\") and not real.upper().startswith("\\\\?\\UNC\\"):
             real = real[4:]
         if real.startswith(("\\\\", "//")):
@@ -860,31 +931,113 @@ class _VolumeChanges:
         root = self.kernel.volume_root(long)
         if not root or root.startswith("\\\\") or not self.kernel.local(root):
             return None
-        if not os.path.normcase(long).startswith(os.path.normcase(root.rstrip("\\"))):
+        if not ntpath.normcase(long).startswith(ntpath.normcase(root.rstrip("\\"))):
             return None
         return root, long[len(root.rstrip("\\")) :]
 
-    def usable(self, path: str) -> bool:
-        return self._locate(path) is not None
+    def _known(self, path: str) -> tuple[_Volume, str] | None:
+        """*path*'s kept place, if its volume's watch still vouches for it."""
+        found = self._located.get(ntpath.normcase(path))
+        if found is None:
+            return None
+        volume, below = found
+        if volume.dead or self._volumes.get(ntpath.normcase(volume.root)) is not volume:
+            del self._located[ntpath.normcase(path)]
+            return None
+        if _FolderIndex.spelled(below) not in volume.located.keys:
+            return None
+        return found
 
-    def add(self, path: str) -> Any:
+    def _place(self, path: str, live: dict[str, tuple[_Volume, _FolderIndex]]) -> tuple[str, str, Any] | None:
+        """``(volume root, path below it, kept places it was derived from)``
+        of the folder *path*; the last is None when any of it was found
+        afresh. A plain-named folder that is no reparse point is its
+        parent's place and its name, and so on up to a kept place; the
+        topmost folder that is not is looked up."""
+        known = self._known(path)
+        if known is not None:
+            return known[0].root, known[1], known[0].located
+        parent, name = ntpath.split(path)
+        if parent and parent != path and _PLAIN_NAME.fullmatch(name):
+            attributes = self.kernel.attributes(path)
+            if (
+                attributes is None
+                or not attributes & _FILE_ATTRIBUTE_DIRECTORY
+                or attributes & _FILE_ATTRIBUTE_REPARSE_POINT
+            ):
+                return self._found(path, live)
+            above = self._place(parent, live)
+            if above is None:
+                return None
+            root, parent_below, basis = above
+            below = parent_below.rstrip("\\") + "\\" + name
+            self._keep(path, root, below, live, basis)
+            return root, below, basis
+        return self._found(path, live)
+
+    def _found(self, path: str, live: dict[str, tuple[_Volume, _FolderIndex]]) -> tuple[str, str, Any] | None:
         located = self._locate(path)
         if located is None:
             return None
-        root, below = located
-        key = (os.path.normcase(root), _FolderIndex.spelled(below))
-        volume = self._volumes.get(key[0])
-        if volume is None or volume.dead:
-            handle = self.kernel.open_root(root)
-            if handle is None:
-                return None
-            volume = _Volume(self.kernel, root, handle)
-            if not volume.start():
-                volume.stop()
-                return None
-            self._volumes[key[0]] = volume
+        self._keep(path, *located, live, None)
+        return (*located, None)
+
+    def _live(self) -> dict[str, tuple[_Volume, _FolderIndex]]:
+        """Each watched volume, with its kept places as they are now."""
+        return {root: (volume, volume.located) for root, volume in self._volumes.items() if not volume.dead}
+
+    def _keep(
+        self,
+        path: str,
+        root: str,
+        below: str,
+        live: dict[str, tuple[_Volume, _FolderIndex]],
+        basis: Any,
+    ) -> None:
+        """Keep *path*'s place when *path* is its real long path, its volume
+        was watched before the place was found, and no report since said a
+        kept place moved: any removal or rename after that is reported."""
+        was = live.get(ntpath.normcase(root))
+        if was is None:
+            return
+        volume, located = was
+        if volume.dead or self._volumes.get(ntpath.normcase(root)) is not volume:
+            return
+        if ntpath.normcase(path).rstrip("\\") != ntpath.normcase(root.rstrip("\\") + below).rstrip("\\"):
+            return  # reached through a junction, a link or a short alias
         with volume.lock:
-            volume.index.add(below, key)
+            if volume.located is not located or (basis is not None and basis is not located):
+                return
+            located.add(below, True)
+        self._located[ntpath.normcase(path)] = (volume, below)
+
+    def add(self, path: str) -> Any:
+        """The key *path* is watched by; None when it cannot be watched."""
+        live = self._live()
+        placed = self._place(path, live)
+        while True:
+            if placed is None:
+                return None
+            root, below, basis = placed
+            key = (ntpath.normcase(root), _FolderIndex.spelled(below))
+            volume = self._volumes.get(key[0])
+            if volume is None or volume.dead:
+                handle = self.kernel.open_root(root)
+                if handle is None:
+                    return None
+                volume = _Volume(self.kernel, root, handle)
+                if not volume.start():
+                    volume.stop()
+                    return None
+                self._volumes[key[0]] = volume
+            with volume.lock:
+                # A place derived from kept ones holds only while none of
+                # them was reported moved, up to the moment it is watched.
+                if basis is None or volume.located is basis:
+                    volume.index.add(below, key)
+                    break
+            located = self._locate(path)
+            placed = None if located is None else (*located, None)
         self._keys.add(key)
         return key
 
@@ -899,20 +1052,26 @@ class _VolumeChanges:
             volume.index.remove(key[1])
             empty = not volume.index.keys
         if empty:
-            del self._volumes[key[0]]
-            volume.stop()
-            if volume.kept:
-                self._stopped.append(volume)
+            self._drop(key[0], volume)
+
+    def _drop(self, root: str, volume: _Volume) -> None:
+        del self._volumes[root]
+        volume.stop()
+        if volume.kept:
+            self._stopped.append(volume)
+        self._located = {path: place for path, place in self._located.items() if place[0] is not volume}
 
     def poll(self) -> list[tuple[Any, bool]]:
         reported: list[tuple[Any, bool]] = []
         for root, volume in list(self._volumes.items()):
-            keys, dead = volume.poll()
-            reported.extend((key, dead) for key in keys)
+            keys, gone, dead = volume.poll()
             if dead:
+                reported.extend((key, True) for key in keys)
                 self._keys.difference_update(keys)
-                del self._volumes[root]
-                volume.stop()
+                self._drop(root, volume)
+                continue
+            reported.extend((key, True) for key in gone)
+            reported.extend((key, False) for key in keys)
         return reported
 
     def close(self) -> None:
@@ -920,6 +1079,7 @@ class _VolumeChanges:
             volume.stop()
         self._volumes.clear()
         self._keys.clear()
+        self._located.clear()
 
 
 # -- the process's watch ---------------------------------------------------------
