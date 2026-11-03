@@ -34,7 +34,7 @@ slow_square(1_000_000)   # cache hit: returns the stored result
 
 That is all the setup there is. A few rules hold for every cached function:
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @d4f3bed4, cash/decorator/store.py:ResultStore.store @b718811c, cash/decorator/store.py:ResultStore.restore_identity @2e52815d -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @d4f3bed4, cash/decorator/store.py:ResultStore.store @00a3421c, cash/decorator/store.py:ResultStore.restore_identity @2e52815d -->
 - **Exceptions are never cached.** If the body raises, nothing is stored and the
   exception reaches you as usual. The next call runs the body again.
 - **A hit does not replay output.** Anything the body printed or logged appears
@@ -760,8 +760,8 @@ ignored arguments and cannot tell whether they differ.
 
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks._checked_arguments @51380d20 -->
 **Ignored arguments are not checked for in-place changes.** On a miss cash
-normally checks that the body did not change an argument in place (a body
-that sorts the list it was handed is not stored). Ignoring a parameter is
+normally checks whether the body changed an argument in place
+([what it does then](decorator-limitations.md#results-cash-refuses-to-store)). Ignoring a parameter is
 your statement that it does not matter to the call, like `assume_safe=True`:
 cash takes your word, so a scratch buffer left out with `ignore=` costs a
 miss nothing, and a body that changes it in place is cached all the same.
@@ -793,7 +793,7 @@ entry. That holds whenever the seed was set: before the function was
 decorated, or before `import cash` in the same script. A function
 whose own body seeds the stream is not keyed by where the caller left it.
 
-<!-- claim: cash/decorator/rng.py:replay_rng_state @42b65738, cash/decorator/runtime.py:CallRunner.finish_miss @dee7d748 -->
+<!-- claim: cash/decorator/rng.py:replay_rng_state @42b65738, cash/decorator/runtime.py:CallRunner.finish_miss @6e9e7867 -->
 The same holds for a generator in a module global that the body draws from
 (`rng = np.random.default_rng(42)` at module level, `rng.normal()` inside): the
 key includes where `rng` stands, and a hit moves `rng` on to where the computed
@@ -969,7 +969,7 @@ property of an object of your class that the body reads by a global name
 (`BAG['k']`, `BAG.value`) is read as a helper: a global it changes is reported
 as one the body changes.
 
-<!-- claim: cash/effect_observer.py:EffectObserver @2a3f8781 broad="the observed-effect contract is the class as a whole", cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @2d8839cd, cash/effect_observer.py:EffectObserver.record_write @659fb0d2 -->
+<!-- claim: cash/effect_observer.py:EffectObserver @8cce17b9 broad="the observed-effect contract is the class as a whole", cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @2d8839cd, cash/effect_observer.py:EffectObserver.record_write @659fb0d2 -->
 cash also **watches the first call**. Library code is not read, so a
 `session.post` or an SDK request is invisible to the analysis above.
 
@@ -985,8 +985,9 @@ LLM or HTTP SDK shows up this way, as a network read
 under `strict=True` it raises unless a `ttl=` is set.
 
 Two observations stop the result from being stored, because a hit could not
-reproduce them: the call changed an argument in place, or it called a
-`unittest.mock` object.
+reproduce them: the call changed an argument in place that cash cannot write
+back ([which ones it can](decorator-limitations.md#results-cash-refuses-to-store)),
+or it called a `unittest.mock` object.
 
 <!-- claim: cash/decorator/runtime.py:KeyBuilder._hands_a_state_changing_callable @1f8f919e -->
 A call that **hands the function one of your functions that changes state**

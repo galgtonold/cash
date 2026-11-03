@@ -272,6 +272,10 @@ class StatementRun:
     #: What the loop changed in place that a hit restores into the live
     #: object (``StatementCacheMetadata.restored_into``, `in_place`).
     restored_into: set[str] = field(default_factory=set)
+    #: The `rewrite_in_place.Shape` of each object a statement may change
+    #: in place, taken before it ran: what it stores is restored into the
+    #: object only while that shape is kept (`_restorable_in_place`).
+    in_place_shapes: dict[str, Any] = field(default_factory=dict)
     #: What the loop only assigns into and a hit binds to the stored copy
     #: (``arr[i] = v``; ``StatementCacheMetadata.bound_copies``).
     bound_copies: set[str] = field(default_factory=set)

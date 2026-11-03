@@ -369,6 +369,14 @@ class EffectObserver:
             return
         self._effects.append((kind, detail))
 
+    def reword(self, kind: str, old: str, new: str) -> None:
+        """Replace *old* by *new* in the effects of *kind* recorded so far."""
+        self._effects[:] = [(k, d.replace(old, new) if k == kind else d) for k, d in self._effects]
+
+    def forget(self, kind: str) -> None:
+        """Take back the effects of *kind* recorded so far."""
+        self._effects[:] = [effect for effect in self._effects if effect[0] != kind]
+
     def note_created_dir(self, path: Any) -> None:
         """A directory the block made (see `effects`)."""
         try:

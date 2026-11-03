@@ -91,11 +91,11 @@ statement is not cached.
 | Augmented assignment | `total += 1` | Cached: `total` is the statement's output |
 | Item or attribute store | `d['k'] = v`, `obj.attr = v` | Cached: `d` or `obj` is the output |
 | pandas in place | `df.dropna(inplace=True)` | Cached: `df` is the output |
-| Known mutating method | `data.append(4)`, `d.update(o)`, `lst.pop()` | Not cached |
-| Other method call that changed its object | `bus.on(fn)` | Not cached |
+| Known mutating method | `data.append(4)`, `d.update(o)`, `lst.pop()` | Not cached, unless cash can write the new state back ([below](#method-calls)) |
+| Other method call that changed its object | `bus.on(fn)` | Not cached, unless cash can write the new state back ([below](#method-calls)) |
 | Estimator fit | `model.fit(X, y)` | Cached: `model` is the output, with the variables that hold it |
-| `del` of an item or attribute | `del d['k']`, `del p.x` | Not cached |
-| numpy `out=` | `np.add(a, 1, out=a)` | Not cached |
+| `del` of an item or attribute | `del d['k']`, `del p.x` | Not cached, unless cash can write the new state back ([below](#method-calls)) |
+| numpy `out=` | `np.add(a, 1, out=a)` | Not cached, unless cash can write the new state back ([below](#method-calls)) |
 
 <!-- claim: cash/analysis/mutations.py:selfref_inplace_write_vars @c8102f53 -->
 The "Cached" rows hold only when the variable was made in the same cell. A
@@ -156,9 +156,27 @@ A method call has no assignment target, so cash classifies its object:
   provably has not changed since it was last read is not read again.
 
 A changed object gets a new lineage from the statement, so everything
-downstream of it misses, and the statement itself is not cached. Restoring it
-would rebind the name to a copy, while every other reference to the object
-kept the unchanged original.
+downstream of it misses. Restoring it by binding the name to a copy would
+leave every other reference to the object with the unchanged original, so
+the statement is cached only when cash can write the stored state back into
+the object itself:
+
+<!-- claim: cash/rewrite_in_place.py:refusal @cece1b9e, cash/rewrite_in_place.py:shape_change @496efe57, cash/notebook/statement/mutation_routing.py:MutationRouting._store_in_place @b4f1f1e6 -->
+- **Stored with the object's new state.** A NumPy array (not of objects), a
+  pandas DataFrame or Series that keeps its index, columns and dtypes (a
+  Series of a NumPy dtype, not pandas' `str` or another extension dtype), or
+  a list, dict or set of numbers, strings and the like.
+  `W, H = fit_nmf(X, k)` with `fit_nmf` writing into `X` is stored with `X`
+  as the call left it. A hit hands back `W` and `H` and writes that state
+  into the object `X` is bound to now, which keeps its identity: another name
+  for it, or a view of the array, sees the change, as after a plain run. The
+  hit happens only when `X` holds what it held when the entry was stored
+  (that is part of the key) and has the same shape.
+- **Not cached, runs every time.** Any other object (an object of your
+  class, a fitted model, a list of lists, an array of objects), a frame the
+  statement gave a new column or a new index, an object a container or
+  another stored variable holds, and an array that shares memory with
+  another variable stored with it.
 
 <!-- claim: cash/value_hash.py:CHANGE_CHECK_BUDGET_S == 0.5, cash/value_hash.py:CHANGE_CHECK_RUN_ON == 2.0, cash/value_hash.py:CHANGE_CHECK_STRETCH == 3.0, cash/value_hash.py:_Check.ask @acbf75d6, cash/notebook/statement/input_change.py:_budget_cut @caef3c88 -->
 A check of a value outside the fingerprints above (its content hash after it

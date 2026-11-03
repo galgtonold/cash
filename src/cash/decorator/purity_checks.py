@@ -1190,6 +1190,12 @@ class PurityChecks:
         normalized = self._args.normalize_call_args(func_name, args, kwargs, signature=cf.signature)
         return keyed_arguments(arg_key, cf.signature, func_name, args, kwargs, normalized)
 
+    def named_checked_arguments(self, func_name: str, args: tuple, kwargs: dict) -> dict[str, Any]:
+        """``{name: value}`` of `PurityChecks._checked_arguments`, named as
+        the in-place-change check names them (``*args[i]`` or the parameter)."""
+        canon_args, canon_kwargs = self._checked_arguments(func_name, args, kwargs)
+        return {**{f"*args[{i}]": v for i, v in enumerate(canon_args)}, **canon_kwargs}
+
     def checked_arguments_hash(self, func_name: str, args: tuple, kwargs: dict) -> str | None:
         """The hash the in-place-change check compares across the body: that
         of `PurityChecks._checked_arguments`, made as the key makes it

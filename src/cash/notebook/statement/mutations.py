@@ -98,6 +98,11 @@ class MutationClassifier:
         # ``set_*`` call is seen changing, by source hash -- see :meth:`classify`.
         self._provisional: dict[str, dict[str, frozenset[str]]] = {}
 
+    def fingerprinted_arguments(self, source_hash: str) -> set[str]:
+        """The arguments :meth:`classify` fingerprinted for the statement
+        *source_hash*, which :meth:`observed_mutations` compares once it ran."""
+        return set(self._arg_snapshots.get(source_hash, ()))
+
     def observed_mutations(self, observe: set[str], source_hash: str) -> set[str]:
         """The receivers and bare-call arguments this statement changed.
 

@@ -171,7 +171,7 @@ the loop runs again. The loop's own working variables (`parts` in
 `for f in files: parts.append(read(f))`) are not stored; a cell that reads
 them runs the loop.
 
-<!-- claim: cash/notebook/statement/mutation_routing.py:MutationRouting._route_unit @7f4c64a9, cash/notebook/statement/processor.py:StatementProcessor._keep_stored_in_place @ced6780e -->
+<!-- claim: cash/notebook/statement/mutation_routing.py:MutationRouting._route_unit @7f4c64a9, cash/notebook/statement/processor.py:StatementProcessor._keep_stored_in_place @36328355 -->
 A long `for` loop that cash runs as one step stores the objects it changes in
 place, such as a progress counter it calls `update()` on, a list from an
 earlier cell it appends to, or an object or dict it assigns into
@@ -180,9 +180,11 @@ puts the stored state back into the object itself, so other names for it, a
 `weakref` to it and a dict keyed by its `id()` still find it, as after a
 plain run.
 
-<!-- claim: cash/notebook/statement/in_place.py:refusal @4357df4e, cash/notebook/statement/in_place.py:_held_by_the_notebook @ec39c561, cash/notebook/statement/processor.py:StatementProcessor._cheap_to_rerun @1a1db567, cash/notebook/statement/in_place.py:bound_as_a_copy @07b8a485 -->
-Only a list, a dict, a set, or an object of your own class pickled the default
-way is restored into. An object of another kind the loop only assigns into
+<!-- claim: cash/notebook/statement/in_place.py:refusal @9e90e3d6, cash/notebook/statement/in_place.py:_held_by_the_notebook @ec39c561, cash/notebook/statement/processor.py:StatementProcessor._cheap_to_rerun @1a1db567, cash/notebook/statement/in_place.py:bound_as_a_copy @07b8a485 -->
+Only a list, a dict, a set, an object of your own class pickled the default
+way, or a NumPy array, DataFrame or Series a call in the loop changes (as for
+[a statement](safety.md#method-calls)) is restored into. An object of another
+kind the loop only assigns into
 (`arr[i] = v` on a NumPy array) is bound to the stored copy, as before, when
 nothing the notebook holds points at it by a `weakref` or its `id()`, asked
 again at each restore. The

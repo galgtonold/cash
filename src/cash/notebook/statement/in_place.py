@@ -39,6 +39,7 @@ from itertools import compress
 from operator import not_
 from typing import Any
 
+from cash import rewrite_in_place
 from cash._referents import get_referents
 from cash._user_attrs import attribute_or, builtin_base, builtin_items, own_dict
 from cash.closure_sharing import slot_readers
@@ -48,7 +49,16 @@ from cash.value_types import IMMUTABLE_LEAF_TYPES
 
 from .identity_holders import IdentityHeld, library_parts
 
-__all__ = ["bound_as_a_copy", "holder_refusal", "ready", "refusal", "restorable_kind", "restore_into"]
+__all__ = [
+    "bound_as_a_copy",
+    "holder_refusal",
+    "memory_refusal",
+    "ready",
+    "refusal",
+    "restorable_kind",
+    "restore_into",
+    "written_into",
+]
 
 #: Containers restored by their contents.
 _CONTAINERS = (list, dict, set)
@@ -84,6 +94,10 @@ def refusal(obj: Any, namespace: Mapping[str, Any] | None = None) -> str | None:
     ``id()`` of one kept in a container of *namespace*, refuses it too
     (`_held_by_the_notebook`)."""
     kind = type(obj)
+    if rewrite_in_place.rewritable_kind(obj) and kind not in _CONTAINERS:
+        # An array, a frame or a Series: written into, so it keeps its
+        # identity, and what it holds is plain values (`rewrite_in_place`).
+        return rewrite_in_place.refusal(obj)
     if not restorable_kind(obj):
         why = f"a {kind.__name__} is not restored into the object it is, and a new one would not be that object"
         # Only a loop's assignments into it (``arr[i] = v``) bring it here,
@@ -139,6 +153,14 @@ def restorable_kind(obj: Any) -> bool:
     set, or an object whose ``__dict__`` is its state."""
     kind = type(obj)
     return kind in _CONTAINERS or _default_object(kind)
+
+
+def written_into(obj: Any) -> bool:
+    """Whether *obj* is restored by writing values into its memory: an
+    array, a frame or a Series (`rewrite_in_place`), whose shape a restore
+    must find unchanged. A list, a dict or a set is refilled whatever it
+    holds, as a loop's always was."""
+    return rewrite_in_place.rewritable_kind(obj) and type(obj) not in _CONTAINERS
 
 
 def bound_as_a_copy(obj: Any, namespace: Mapping[str, Any]) -> bool:
@@ -495,6 +517,38 @@ def holder_refusal(name: str, obj: Any, values: Mapping[str, Any]) -> str | None
     return None
 
 
+def memory_refusal(name: str, obj: Any, values: Mapping[str, Any]) -> str | None:
+    """Why the other *values* (outputs and holders, by name) stop the array
+    *obj*, stored as *name*, from being written into: one of them is an
+    array sharing its memory (its base, or a view of it), which a restore
+    would hand a copy, so that writes to one no longer reach the other.
+    Looked for through what the values hold, up to `_MAX_SEEN` objects."""
+    numpy = sys.modules.get("numpy")
+    if numpy is None or not isinstance(obj, numpy.ndarray):
+        return None
+    module_dicts = {id(vars(m)) for m in list(sys.modules.values()) if isinstance(m, types.ModuleType)}
+    seen: set[int] = {id(obj)}
+    level = [value for other, value in values.items() if other != name]
+    while level:
+        nxt: list[Any] = []
+        for item in level:
+            key = id(item)
+            if key in seen or key in module_dicts or isinstance(item, _OPAQUE) or type(item) in IMMUTABLE_LEAF_TYPES:
+                continue
+            seen.add(key)
+            if len(seen) > _MAX_SEEN:
+                return f"too many objects are stored with '{name}' to check that none shares its memory"
+            if isinstance(item, numpy.ndarray):
+                if numpy.may_share_memory(item, obj):
+                    return f"another array stored with '{name}' shares its memory, and a restore would hand it a copy"
+                if item.base is not None:
+                    nxt.append(item.base)
+                continue
+            nxt.extend(get_referents(item))
+        level = nxt
+    return None
+
+
 def _state(obj: Any) -> list[Any]:
     if type(obj) is dict:
         return [*obj.keys(), *obj.values()]
@@ -560,6 +614,8 @@ def restore_into(live: Any, restored: Any) -> None:
     kind = type(live)
     if kind is list:
         live[:] = restored
+    elif rewrite_in_place.rewritable_kind(live):
+        rewrite_in_place.rewrite(live, restored)
     elif kind is dict or kind is set:
         live.clear()
         live.update(restored)

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from cash.control_markers import has_marker
 
-__all__ = ["is_control_body"]
+__all__ = ["is_control_body", "is_one_structure"]
 
 
 def is_control_body(code: str) -> bool:
@@ -24,3 +26,12 @@ def is_control_body(code: str) -> bool:
     them to silently stop matching.
     """
     return has_marker(code)
+
+
+def is_one_structure(tree: Any) -> bool:
+    """Whether the parsed statement *tree* is one loop or branch, run as one unit."""
+    from cash._user_attrs import attribute_or
+    from cash.notebook.control_structures.common import is_control_structure
+
+    body = attribute_or(tree, "body", None) or []
+    return len(body) == 1 and is_control_structure(body[0])

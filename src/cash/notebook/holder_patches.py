@@ -217,17 +217,26 @@ def _get(obj: Any, step: Step) -> Any:
     return attrs[label] if attrs is not None and label in attrs else getattr(obj, label)
 
 
-def apply_patch(live: Any, patch: HolderPatch, restored: Mapping[str, Any]) -> Any:
+def apply_patch(
+    live: Any, patch: HolderPatch, restored: Mapping[str, Any], live_outputs: Mapping[str, Any] | None = None
+) -> Any:
     """Put the restored objects into *live*, the holder as the namespace
     has it, where *patch* says it held them; the holder's value afterwards
     (*live*, or a restored object for the variable itself).
+
+    *live_outputs* are the outputs a hit writes into the objects they are
+    bound to: a holder holding one of those objects itself is given that
+    object, not its stored copy.
 
     Every place is found before any is set, so a holder that no longer has
     one (KeyError) is left as it was."""
     sets = []
     for path, output, out_path in patch.places:
         try:
-            target = restored[output]
+            if not out_path and live_outputs and output in live_outputs:
+                target = live_outputs[output]
+            else:
+                target = restored[output]
             for step in out_path:
                 target = _get(target, step)
             if not path:

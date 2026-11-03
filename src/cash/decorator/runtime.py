@@ -19,6 +19,7 @@ import weakref
 from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from .. import rewrite_in_place
 from .._active import EXPLAINING as _EXPLAINING
 from .._clock import perf_counter as _perf_counter
 from ..analysis.handed_callables import hands_a_state_changing_callable
@@ -28,6 +29,7 @@ from ..dependency_state import STATE_LEDGER, ledger_note
 from ..exceptions import CashCacheIneffectiveWarning, CashImpureFunctionError, CashImpurityWarning
 from ..handed_digests import Stored
 from ..handed_digests import claim as claim_handed_digests
+from ..mutation_fingerprint import mutation_fingerprint
 from ..tracking.env_reads import environment_digests, environment_unchanged, note_reads
 from ..tracking.env_reads import recording as recording_env_reads
 from ..tracking.file_tracker import FileAccessTracker
@@ -968,8 +970,13 @@ class CallRunner:
         func_name: str,
         ttl: int | None,
         needs_trace: bool = False,
+        arguments: tuple[tuple, dict] | None = None,
     ) -> Any:
         """Return cached_data if valid, else CACHE_MISS sentinel.
+
+        An entry stored with the state the call left its arguments in
+        (`rewrite_in_place.ArgumentsLeft`) is served only when *arguments*,
+        the call's, can take that state, which the hit then writes into them.
 
         Key-presence is determined by ``metadata is not None`` - the
         backend contract is that absent keys return ``(None, None)``,
@@ -983,6 +990,13 @@ class CallRunner:
             return CACHE_MISS
         try:
             verdict = self.entry_verdict(cache_key, metadata, ttl, needs_trace=needs_trace)
+            writes: list[tuple[Any, Any]] = []
+            if verdict is None and isinstance(cached_data, rewrite_in_place.ArgumentsLeft):
+                left = cached_data
+                writes, why = self._arguments_to_write(func_name, left, arguments)
+                if why is not None:
+                    verdict = MissReason(MissKind.ARGS, why)
+                cached_data = left.result
             if verdict is not None:
                 self._misses.note_miss(func_name, cache_key, verdict)
                 return CACHE_MISS
@@ -1031,6 +1045,10 @@ class CallRunner:
                 time_saved=(metadata.saves_seconds if metadata.saves_seconds is not None else metadata.execution_time)
                 or 0.0,
             )
+            # Last, once nothing can turn the hit into a miss: a miss runs
+            # the body on the arguments as the caller handed them in.
+            for live, state in writes:
+                rewrite_in_place.rewrite(live, state)
             return cached_data
         except (TypeError, KeyError) as e:
             self._notices.metadata_invalid(func_name, e)
@@ -1272,6 +1290,7 @@ class CallRunner:
             func_name,
             call.ttl,
             call.needs_trace,
+            (args, kwargs),
         )
         call.cash_overhead = _perf_counter() - overhead_t0
         if hit is not CACHE_MISS:
@@ -1363,11 +1382,113 @@ class CallRunner:
             spec.name,
             call.ttl,
             call.needs_trace,
+            (call.args, call.kwargs),
         )
         if hit is CACHE_MISS:
             return CACHE_MISS
         self._replay_argument_rng(spec.name, call.args, call.kwargs, metadata)
         return self._wrap_iterator_hit(call, metadata, hit)
+
+    def _checked_named(self, func_name: str, args: tuple, kwargs: dict) -> dict[str, Any] | None:
+        """``{parameter: value}`` of the arguments the in-place-change check
+        looks at, named as it names them (`PurityChecks.named_checked_arguments`),
+        or None when they cannot be bound."""
+        try:
+            return self._purity.named_checked_arguments(func_name, args, kwargs)
+        except Exception:  # noqa: BLE001 - unbindable: nothing is written back
+            return None
+
+    def arguments_before(self, spec: CachedFunction, call: Call, args: tuple, kwargs: dict) -> dict[str, tuple]:
+        """For a function seen changing an argument in place, ``{parameter:
+        (value, shape, fingerprint)}`` of each argument a hit could write a
+        stored state back into (`rewrite_in_place`), taken before the body
+        runs. Empty for any other function, so a call that changes nothing
+        pays nothing; a call keyed by ``key=``, or on copies of its
+        arguments, is never stored with them."""
+        if not spec.changes_arguments or call.checked is not None:
+            return {}
+        arg_key = getattr(spec, "arg_key", None)
+        if arg_key is not None and arg_key.key_fn is not None:
+            return {}
+        named = self._checked_named(spec.name, args, kwargs) or {}
+        before: dict[str, tuple] = {}
+        for name, value in named.items():
+            if not rewrite_in_place.rewritable_kind(value) or rewrite_in_place.refusal(value) is not None:
+                continue
+            try:
+                shape = rewrite_in_place.shape_of(value)
+                fingerprint = mutation_fingerprint(value)
+            except Exception:  # noqa: BLE001 - not fingerprinted: not stored with the result
+                continue
+            if fingerprint is not None:
+                before[name] = (value, shape, fingerprint)
+        return before
+
+    def arguments_left(
+        self, spec: CachedFunction, run: BodyRun, arguments: tuple[tuple, dict]
+    ) -> dict[str, tuple[str, Any]] | None:
+        """``{parameter: (fingerprint before, state after)}`` when the body
+        changed arguments in place and every one of them can be written back
+        by a hit (`arguments_before`): the result is then stored with them,
+        and the change no longer refuses the store. None otherwise, and the
+        refusal stands."""
+        observer = run.observer
+        mutated = observer.mutated_args if observer is not None else None
+        if not mutated:
+            return None
+        learnt = not spec.changes_arguments
+        spec.changes_arguments = True
+        before = getattr(run, "args_before", None) or {}
+        if learnt and not before:
+            # Its first change seen: nothing was taken before the body, so
+            # this result is not stored; the next calls are.
+            named = self._checked_named(spec.name, *arguments) or {}
+            values = [named.get(name) for name in mutated]
+            if all(rewrite_in_place.rewritable_kind(v) and rewrite_in_place.refusal(v) is None for v in values):
+                observer.reword(
+                    "argument mutation",
+                    "so this call runs every time",
+                    "so this call ran; from the next call on, the state it leaves the argument in is stored with "
+                    "the result and a hit writes it back",
+                )
+            return None
+        left: dict[str, tuple[str, Any]] = {}
+        for name in mutated:
+            if name not in before:
+                return None
+            value, shape, fingerprint = before[name]
+            if rewrite_in_place.refusal(value) is not None or rewrite_in_place.shape_change(shape, value) is not None:
+                return None
+            try:
+                left[name] = (fingerprint, rewrite_in_place.snapshot(value))
+            except Exception:  # noqa: BLE001 - not copied: not stored
+                return None
+        observer.mutated_args = None
+        observer.forget("argument mutation")
+        return left
+
+    def _arguments_to_write(
+        self, func_name: str, left: rewrite_in_place.ArgumentsLeft, arguments: tuple[tuple, dict] | None
+    ) -> tuple[list[tuple[Any, Any]], str | None]:
+        """``(writes, why)``: the ``(argument, state)`` pairs a hit on *left*
+        writes, or why it cannot: an argument missing, of another shape, or
+        not in the state the entry was stored from. All are checked before
+        any is written."""
+        named = self._checked_named(func_name, *arguments) if arguments is not None else None
+        if named is None:
+            return [], "the arguments it changes in place could not be found"
+        writes: list[tuple[Any, Any]] = []
+        for name, (fingerprint, state) in left.states.items():
+            if name not in named:
+                return [], f"the argument {name!r} it changes in place was not handed in"
+            live = named[name]
+            why = rewrite_in_place.mismatch(live, state)
+            if why is None and mutation_fingerprint(live) != fingerprint:
+                why = "it is not in the state the entry was stored from"
+            if why is not None:
+                return [], f"the state the call left {name!r} in cannot be written back: {why}"
+            writes.append((live, state))
+        return writes, None
 
     def _named_args(self, func_name: str, args: tuple, kwargs: dict) -> list[tuple[str, Any]]:
         """``(parameter, value)`` for each argument of the call, bound to the
@@ -1423,6 +1544,7 @@ class CallRunner:
         # caller's generator on just the same.
         run.arg_carriers_pre = capture_argument_carrier_states(self._named_args(func_name, args, kwargs))
         run.arg_carriers_moved = []
+        run.args_before = self.arguments_before(spec, call, args, kwargs)
         with run.tracker, run.observer:
             threads_at_start = THREADS_IN_CALLS[0]
             # What a call that picks code by name ran, for its trace. Begun
@@ -1519,6 +1641,7 @@ class CallRunner:
             self._purity.check_argument_mutation(
                 func_name, *(call.checked or (args, kwargs)), call.call_args_hash, run.observer
             )
+        args_left = self.arguments_left(spec, run, call.checked or (args, kwargs))
         self._purity.report_observed_effects(func_name, run.observer)
         self._files.credit_remembered_reads(func_name, run.tracker, args, kwargs)
         self._files.warn_unrecorded_reads(func_name, run.tracker)
@@ -1541,6 +1664,13 @@ class CallRunner:
             inputs_moved=self._inputs_moved_check(spec, call),
             cost=execution_time,
         )
+        if refusal is None and args_left and shared:
+            # A hit writes the arguments back and hands the result back as a
+            # copy, which no longer shares their memory as the call's did.
+            refusal = (
+                f"it changed {', '.join(repr(n) for n in args_left)} in place and its result shares an object "
+                f"with what it was handed ({shared}), which a hit would hand back apart"
+            )
         if refusal is None and untraced:
             refusal = self._refuse_untraced(spec, untraced)
         if refusal is None and not replayable(run.carriers_moved + run.arg_carriers_moved):
@@ -1578,6 +1708,7 @@ class CallRunner:
                     # read held: a lookup checks them again (`env_reads`).
                     env_reads=environment_digests(run.env_reads) if run.env_reads else None,
                     shared_result=shared,
+                    args_left=args_left,
                 ),
                 res,
             )

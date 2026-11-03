@@ -131,6 +131,10 @@ class CacheMetadata:
     #: What the result shared with an object outside the call when it was
     #: stored (`PurityChecks.warn_shared_result`): a hit warns as the miss did.
     shared_result: str | None = None
+    #: The parameters the call changed in place, whose state after it the
+    #: entry stores with the result (`rewrite_in_place.ArgumentsLeft`): a
+    #: hit writes it back into the arguments handed in.
+    args_left: list[str] | None = None
 
     force_persist: bool | None = None
     metadata_only: bool | None = None
