@@ -39,6 +39,7 @@ from ...tracking.env_reads import environment_unchanged
 from ...tracking.file_dep_snapshot import FreshnessMemo, snapshot_is_fresh
 from ...value_types import IMMUTABLE_LEAF_TYPES
 from ..call_refs import resolve_call_refs
+from ..helper_memos import carries_changes
 from ..helper_memos import unfilled as memos_unfilled
 from ..restored_var import present_holders
 from ..run_memo import RUN_VERDICTS, fresh_snapshot_this_run, stat_dates_this_run, stats_taken_this_run
@@ -220,6 +221,11 @@ class CacheFreshnessChecker:
                 cached_data = self._invalidate_if_ttl_expired(metadata, cached_data, ttl)
             if cached_data and raw_metadata.get("by_reference"):
                 cached_data = self._invalidate_if_held_by_reference(cached_data)
+                if cached_data and carries_changes(metadata.helper_memos):
+                    # The answers a hit puts into a memo would be the very
+                    # objects the entry keeps, changed with the memo's.
+                    self.last_miss_reason = "the answers it puts into a helper memo are kept by reference"
+                    cached_data = None
             if cached_data and metadata.env_reads and not environment_unchanged(metadata.env_reads):
                 self.last_miss_reason = "an environment variable installed code read changed"
                 cached_data = None

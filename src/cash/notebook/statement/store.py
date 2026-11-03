@@ -38,7 +38,7 @@ from cash.notebook.statement.capture import replay_record
 from cash.notebook.statement.carrier_advances import PAYLOAD_FIELD as CARRIERS_FIELD
 from cash.notebook.statement.input_change import version_slot
 from cash.notebook.statement.miss_guard import GUARD_SKIP_REASON
-from cash.notebook.statement.run import ECHO_FIELD
+from cash.notebook.statement.run import ECHO_FIELD, MEMO_ANSWERS_NAME, MEMO_CHANGES_FIELD
 from cash.sizing import estimate_object_size, pickled_size_estimate
 from cash.tracking import file_dep_snapshot
 from cash.tracking.file_dep_snapshot import snapshot_dependencies
@@ -819,8 +819,11 @@ class StatementStore:
             in_loop=self._calls.in_loop,
             written_later=self.written_later_in_cell,
         )
+        # The answers it put into helper memos are stored and read back with
+        # the outputs, and weigh in as they do.
+        weighed = {**captured_vars, MEMO_ANSWERS_NAME: run.memo_changes} if run.memo_changes else captured_vars
         should_skip, skip_reason, prediction = self.should_skip_large_object_caching(
-            captured_vars,
+            weighed,
             rebuild,
             force_persist,
             has_file_dependencies=reads_files,
@@ -993,9 +996,10 @@ class StatementStore:
         variables = self._filter_safe_vars(captured_vars)
         referenced: dict[str, int] = {}
         decorated = False
-        if not run.holders and not run.anchors:
-            # A reference restores a call's result on its own: with holders
-            # or anchors it would no longer be the object they hold.
+        if not run.holders and not run.anchors and not run.memo_changes:
+            # A reference restores a call's result on its own: with holders,
+            # anchors or answers put back into a memo it would no longer be
+            # the object they hold.
             variables = self._calls.with_call_refs(variables, run.code, referenced)
             variables, decorated = self._with_decorator_ref(variables, run.offered_as)
         payload = {
@@ -1017,6 +1021,11 @@ class StatementStore:
             # rather than continue the stream.
             "rng_epochs": dict(seed_epochs),
         }
+        if run.memo_changes:
+            # What it put into the helper memos it filled, in the one pickle
+            # with the outputs: an answer that is also an output, or held by
+            # one, comes back as one object (`helper_memos.put_back`).
+            payload[MEMO_CHANGES_FIELD] = run.memo_changes
         if referenced or decorated:
             payload[REFS_FIELD] = True  # `has_call_refs`
         # The value the statement echoed as its cell's result, which a hit
@@ -1164,6 +1173,9 @@ def _nestable(payload: dict[str, Any]) -> tuple[Any, list[Any]] | None:
     echo = payload.get(ECHO_FIELD)
     if echo is not None and not _immutable(echo):
         parts.append(echo)
+    changes = payload.get(MEMO_CHANGES_FIELD)
+    if changes:
+        parts.append(changes)
     for found in parts:
         if stored_pickle.kept(found) is not None and all(
             other is found or stored_pickle.apart(found, other) for other in parts

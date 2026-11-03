@@ -114,6 +114,7 @@ from cash.notebook.statement.results import COST_MODEL_KEYS, ProcessResult
 from cash.notebook.statement.run import (
     ECHO_FIELD,
     LOOP_ITERABLE_NAME,
+    MEMO_ANSWERS_NAME,
     NO_LOOP_ITERABLE,
     CodeRunner,
     StatementExecution,
@@ -257,6 +258,13 @@ from .unseen_writes import (
 )
 
 __all__ = ["StatementProcessor", "is_control_body"]
+
+#: Why a statement that put an answer another holder holds into a helper
+#: memo is not stored (``NOTEBOOK-MEMO-SHARED``).
+MEMO_ANSWER_HELD_REASON = (
+    "It filled a helper memo with an answer something outside its outputs holds too: "
+    "served, the memo would get a copy (statement re-executes)"
+)
 
 # Debug log prefixes — module-level constants for filtering and consistency.
 _LOG_PROCESSOR = "[PROCESSOR]"
@@ -709,7 +717,7 @@ class StatementProcessor:
         self._work_running_warned: set[str] = set()
         #: Statements already warned NOTEBOOK-CALLABLE-UNREAD about.
         self._callable_unread_warned: set[str] = set()
-        #: Statements already warned NOTEBOOK-MEMO-UNREAD about.
+        #: Statements already warned NOTEBOOK-MEMO-UNREAD or NOTEBOOK-MEMO-SHARED about.
         self._memo_unread_warned: set[str] = set()
         self._unseen_warned: set[str] = set()
         #: ``key -> (the entry's timestamp, {output: digest of its stored
@@ -2498,7 +2506,10 @@ class StatementProcessor:
             # again. One it made compute is changed, as a list appended to.
             user_ns = self.shell.user_ns
             clears = bool(memos_before) and helper_memos.clears(run.code, user_ns)
-            memos = helper_memos.used(memos_before, clears=clears, ns=user_ns, site=(run.code, None))
+            # What it put into a memo is stored with the outputs, unless it
+            # reads a memo's counters, which no hit gives back.
+            changes: list[dict] | None = None if clears and helper_memos.reads_counters(run.code, user_ns) else []
+            memos = helper_memos.used(memos_before, clears=clears, ns=user_ns, site=(run.code, None), changes=changes)
             if isinstance(memos, tuple):
                 # What it returns can differ run to run with the memo's
                 # state, which no key holds: its outputs are keyed by value.
@@ -2510,6 +2521,7 @@ class StatementProcessor:
             else:
                 run.helper_memos = memos
                 run.memo_misses_before = helper_memos.misses_before(memos_before)
+                run.memo_changes = changes or None
         if not run.skip_cache and execution.written_paths and execution.result.success:
             wrote = self._kept_writes_reason(run, execution)
             if wrote:
@@ -3343,16 +3355,33 @@ class StatementProcessor:
         anchor_holds: dict[str, list[str]] = {}
         # The outputs the holders found share an object with.
         owners: set[str] = set()
+        outputs = run.outputs
+        # The answers it put into helper memos are stored with the outputs:
+        # walked with them, out of the memos while the walk runs.
+        lift = (
+            helper_memos.lifted(run.helper_memos, run.memo_changes, self.shell.user_ns)
+            if run.memo_changes
+            else contextlib.nullcontext()
+        )
         try:
-            with walk_budget(budget):
+            with walk_budget(budget), lift:
                 cash_held = [*self._calls.held_call_results(), echo, run.metrics, *self._mutations.digests.held()]
+                if run.memo_changes:
+                    # Bound in the outputs' own dict for the walk, and held
+                    # by nothing else (a copy of the dict, or a local here,
+                    # would be one more holder); taken out again below.
+                    outputs = run.outputs | {MEMO_ANSWERS_NAME}
+                    captured_vars[MEMO_ANSWERS_NAME] = helper_memos.change_answers(run.memo_changes)
+                    cash_held.extend(helper_memos.held_by_cash())
+                    # The pairs the entry stores, which hold the answers too.
+                    cash_held.extend(pair for change in run.memo_changes for pair in change["pairs"])
                 # Whether the outputs' values passed on their own: the
                 # retry with anchors does not read them again (an identity
                 # and alias check of a frame of two million records, a
                 # second a statement, student_8).
                 values_passed: list[bool] = []
                 reason = unrestorable_output_reason(
-                    run.outputs,
+                    outputs,
                     captured_vars,
                     self.shell.user_ns,
                     cash_held=cash_held,
@@ -3374,7 +3403,7 @@ class StatementProcessor:
                     retry_gave_up: list[GaveUp] = []
                     retry_owners: set[str] = set()
                     retry = unrestorable_output_reason(
-                        run.outputs,
+                        outputs,
                         captured_vars,
                         self.shell.user_ns,
                         cash_held=cash_held,
@@ -3398,6 +3427,12 @@ class StatementProcessor:
                     reason = identity_coupled_reason("the value it echoes", echo[0])
                 if reason is None:
                     reason = self._lazy_frame_refusal(run, captured_vars)
+                if reason is None and run.memo_changes and (holders or anchors):
+                    reason = MEMO_ANSWER_HELD_REASON
+                    self._warn_memo_answer_held(run)
+                    holders = {} if holders is not None else None
+                    anchors.clear()
+                    anchor_links.clear()
                 if reason is None and holders:
                     found = dict(holders)
                     run.share_owners = frozenset(owners & run.outputs)
@@ -3412,6 +3447,8 @@ class StatementProcessor:
         except WalkBudgetExceeded:
             run.share_unchecked = True
             reason = _cut_short_why("finding which other variables hold objects of its outputs", budget)
+        finally:
+            captured_vars.pop(MEMO_ANSWERS_NAME, None)
         if reason is None and anchors:
             run.anchors = {name: self.tracking_state.current_session_hashes[name] for name in anchors}
             run.anchor_links = anchor_links | set(anchors)
@@ -4244,6 +4281,25 @@ class StatementProcessor:
 
         location = ("<cash>", running_cell_count(self.shell))
         warn_diagnostic(CashWarning, "NOTEBOOK-MEMO-UNREAD", what, fix, location=location)
+
+    def _warn_memo_answer_held(self, run: StatementRun) -> None:
+        """Warn, once per statement, that it runs every time because an answer
+        it put into a helper memo is held outside what its entry stores
+        (``NOTEBOOK-MEMO-SHARED``): served, the memo would get a copy, and a
+        change through that holder would not reach it."""
+        if run.source_hash in self._memo_unread_warned:
+            return
+        self._memo_unread_warned.add(run.source_hash)
+        what = (
+            "this statement filled a functools.cache memo with an answer that another variable or object "
+            "holds too; cash would put a copy into the memo, so this statement runs every time."
+        )
+        fix = "return a new object from the memoised helper, or copy the answer before keeping it elsewhere."
+        log_diagnostic(logger, "NOTEBOOK-MEMO-SHARED", what, fix)
+        from cash.notebook.ipython.cell_count import running_cell_count  # the ipython package imports this one
+
+        location = ("<cash>", running_cell_count(self.shell))
+        warn_diagnostic(CashWarning, "NOTEBOOK-MEMO-SHARED", what, fix, location=location)
 
     def _warn_callable_unread(self, run: StatementRun, why: str) -> None:
         """Warn, once per statement, that it runs every time because a

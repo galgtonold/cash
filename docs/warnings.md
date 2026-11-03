@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @262d6a3f -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @11234ae7 -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -1822,6 +1822,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-BAILOUT](#notebook-bailout) | notebook | an internal error; the cell ran uncached |
 | [NOTEBOOK-CALLABLE-UNREAD](#notebook-callable-unread) | notebook | a function the statement calls or hands over cannot be read, so it runs every time |
 | [NOTEBOOK-MEMO-UNREAD](#notebook-memo-unread) | notebook | a `functools.cache` memo the statement read holds more answers than cash checks, so it runs every time |
+| [NOTEBOOK-MEMO-SHARED](#notebook-memo-shared) | notebook | an answer the statement put into a `functools.cache` memo is held outside its outputs too, so it runs every time |
 | [NOTEBOOK-CELL-SYNTAX](#notebook-cell-syntax) | notebook | an earlier cell does not parse |
 | [NOTEBOOK-CHANGED-BELOW](#notebook-changed-below) | notebook | a cell re-run on its own reads a value rebuilt without the in-place change a cell below made |
 | [NOTEBOOK-CLASS-KEPT](#notebook-class-kept) | notebook | a class's own state a cell changes could not be put back for a re-run, and another cell changes it too |
@@ -1949,6 +1950,27 @@ time, as plain Python runs it. Only the time is lost.
 
 **What to do.** Keep the memo smaller (`functools.lru_cache(maxsize=4096)` or
 less), or cache the helper with `@cash.cache` instead of `functools`.
+
+**When it is safe to ignore.** When the statement is cheap.
+
+### NOTEBOOK-MEMO-SHARED {#notebook-memo-shared}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_memo_answer_held @7ad1059f -->
+**What happened.** The statement's run made a helper memoised with
+`functools.cache` compute an answer, and that answer is an object something
+outside the statement's outputs holds too: most often a variable the helper
+returns as it is (`return table`). cash stores what a run puts into a memo
+with the outputs and puts it back on a hit; here the memo would get a copy,
+and a change made through that variable would no longer reach the memo's
+answer. So the statement was not stored. It is shown once per statement.
+
+**Why it matters.** Your results are correct: the statement runs every
+time, as plain Python runs it. Only the time is lost.
+
+**What to do.** Return a new object from the helper (`return list(table)`),
+or copy the answer before keeping it elsewhere.
 
 **When it is safe to ignore.** When the statement is cheap.
 

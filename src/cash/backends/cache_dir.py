@@ -103,7 +103,11 @@ __all__ = [
 #: display hook sends it, with its Out[N] label, on a computed and a served
 #: run alike. An older entry still holds it as a display, and a hit on it
 #: would show the value twice; they are cleared.
-CACHE_FORMAT_VERSION = 9
+#: 10: a statement that filled or emptied a helper's ``functools`` memo is
+#: stored with the pairs it put in, which a hit puts back. An older build
+#: reads such an entry as one that only read the memo, and would serve it
+#: with the memo left as it was; they are cleared.
+CACHE_FORMAT_VERSION = 10
 
 #: The per-directory format stamp. No entry suffix, so entry globs skip it.
 VERSION_FILENAME = "CACHE_VERSION"
