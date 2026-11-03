@@ -68,9 +68,10 @@ _S_IFREG = 0o100000
 
 class _Dir:
     """One watched folder: the stats its watch vouches for (``records``),
-    moved on by every change it reports (``version``)."""
+    the names it vouches are not there (``missing``), moved on by every
+    change it reports (``version``)."""
 
-    __slots__ = ("alive", "ident", "key", "listed", "path", "records", "version")
+    __slots__ = ("alive", "ident", "key", "listed", "missing", "path", "records", "version")
 
     def __init__(self, path: str, key: Any, ident: tuple[int, int]) -> None:
         self.path = path
@@ -78,6 +79,7 @@ class _Dir:
         self.ident = ident
         self.records: dict[str, os.stat_result] = {}
         self.listed: set[str] = set()
+        self.missing: set[str] = set()
         self.version = 0
         self.alive = True
 
@@ -163,9 +165,10 @@ class FileWatch:
             self.confirmed_at = at
 
     def _invalidate(self, d: _Dir) -> None:
-        if d.records or d.listed:
+        if d.records or d.listed or d.missing:
             d.records = {}
             d.listed = set()
+            d.missing = set()
         d.version += 1
         self.changes += 1
 
@@ -275,13 +278,35 @@ class FileWatch:
                 own.records[path] = st
                 self._self[path] = own
             d.records[path] = st
+            d.missing.discard(path)
             self._home[path] = d
             if listed:
                 d.listed.add(path)
             else:
                 d.listed.discard(path)
 
+    def record_absent(self, token: tuple[_Dir, int] | None, path: str) -> None:
+        """Keep that *path* was not there (its ``lstat`` found no such file)
+        after `before_stat` gave *token*, for as long as its folder reports
+        no change: a name made there is a change of the folder."""
+        if token is None:
+            return
+        d, version = token
+        with self._lock:
+            if not d.alive or d.version != version:
+                return
+            d.records.pop(path, None)
+            d.listed.discard(path)
+            d.missing.add(path)
+            self._home[path] = d
+
     # -- answers -----------------------------------------------------------
+
+    def absent(self, path: str) -> bool:
+        """Was *path* found not there while its folder was watched, with no
+        change reported since? As good as a look at the last `drain`."""
+        d = self._home.get(path)
+        return d is not None and path in d.missing
 
     def current(self, path: str) -> os.stat_result | None:
         """The stat of *path* kept while its folder was watched, if no change
@@ -303,8 +328,8 @@ class FileWatch:
 
     def cover(self, paths: Iterable[str]) -> tuple | None:
         """A token that `still` accepts while no folder holding a stat of any
-        of *paths* reported a change; None when one of them has no current
-        stat. The watched folders of *paths* and their versions."""
+        of *paths*, or vouching one is not there, reported a change; None
+        when one of them has neither. The watched folders of *paths* and their versions."""
         dirs: dict[int, tuple[_Dir, int]] = {}
         home = self._home
         own_of = self._self
@@ -314,7 +339,11 @@ class FileWatch:
                 return None
             st = d.records.get(p)
             if st is None:
-                return None
+                if p not in d.missing:
+                    return None
+                if id(d) not in dirs:
+                    dirs[id(d)] = (d, d.version)
+                continue
             if id(d) not in dirs:
                 dirs[id(d)] = (d, d.version)
             if st.st_mode & _S_IFMT == _S_IFDIR:
