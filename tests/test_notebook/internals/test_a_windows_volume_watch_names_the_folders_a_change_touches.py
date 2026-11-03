@@ -529,7 +529,7 @@ def test_a_change_reported_before_a_poll_is_in_it_though_the_thread_had_not_run(
         time.sleep(0.02)  # the thread is in its wait
         for _ in range(20):
             kernel.report(_notify("Data\\Photos\\Anna\\a.jpg"))  # the cell wrote a.jpg
-            assert v.poll() == (["anna"], [], False)
+            assert v.poll(sync=True) == (["anna"], [], False)
         assert v.counts.get("polls the thread did not answer", 0) == 0
     finally:
         v.stop()
@@ -546,6 +546,7 @@ def test_a_poll_the_thread_does_not_answer_counts_every_folder_changed(monkeypat
     assert v.start()
     try:
         time.sleep(0.02)
-        assert sorted(v.poll()[0]) == ["anna", "work"]
+        assert v.poll() == ([], [], False)  # a poll that need not hold every change before it
+        assert sorted(v.poll(sync=True)[0]) == ["anna", "work"]
     finally:
         v.stop()

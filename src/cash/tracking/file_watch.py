@@ -138,7 +138,10 @@ class FileWatch:
         with self._lock:
             at = time.monotonic()
             try:
-                reported = self._backend.poll()
+                backend = self._backend
+                # A run's first drain, or the first after a statement wrote
+                # files, holds every change made before it (`_Volume.sync`).
+                reported = backend.poll(True) if check_dirs and getattr(backend, "syncs", False) else backend.poll()
             except Exception:  # any doubt: everything changed
                 logger.debug("file watch: poll failed", exc_info=True)
                 reported = [(None, True)]
@@ -1087,12 +1090,12 @@ class _Volume:
         self._count("short names put in their long form" if found is not None else "short names not found")
         return found
 
-    def poll(self) -> tuple[list[Any], list[Any], bool]:
+    def poll(self, sync: bool = False) -> tuple[list[Any], list[Any], bool]:
         """``(changed keys, gone keys, dead)`` since the last poll: a gone
-        folder was removed or renamed, or one above it was. Every change
-        made before the poll is in it (`sync`); when that cannot be made
-        sure of, every folder counts as changed."""
-        synced = self.sync()
+        folder was removed or renamed, or one above it was. With *sync*,
+        every change made before the poll is in it (`sync`); when that
+        cannot be made sure of, every folder counts as changed."""
+        synced = self.sync() if sync else True
         with self.lock:
             if not synced and self.poke is not None:
                 self._count("polls the thread did not answer")
@@ -1311,10 +1314,13 @@ class _VolumeChanges:
             self._stopped.append(volume)
         self._located = {path: place for path, place in self._located.items() if place[0] is not volume}
 
-    def poll(self) -> list[tuple[Any, bool]]:
+    #: `poll` takes *sync* (`FileWatch.drain`).
+    syncs = True
+
+    def poll(self, sync: bool = False) -> list[tuple[Any, bool]]:
         reported: list[tuple[Any, bool]] = []
         for root, volume in list(self._volumes.items()):
-            keys, gone, dead = volume.poll()
+            keys, gone, dead = volume.poll(sync)
             if dead:
                 reported.extend((key, True) for key in keys)
                 self._keys.difference_update(keys)
