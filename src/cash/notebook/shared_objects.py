@@ -2093,6 +2093,9 @@ def share_group(
     # round: no code runs between them, so what holds a part of it is the
     # same (`_walk`'s *memo*).
     memo: dict[int, list | None] = {}
+    # And what cash holds, walked once for every round that does not meet
+    # the holders the last one added (`HeldWalk`).
+    held_memo = HeldWalk()
     links: list[tuple[set[str], set[str]]] = []
     partial = GaveUp() if gave_up is not None else None
     leaves = Leaves()
@@ -2101,7 +2104,9 @@ def share_group(
     rounds = anchor_rounds = 0
     while True:
         leaves.met.clear()
-        shared, found = _check_group(group, bindings, cash_held, named_held, None, user_ns, memo, partial, leaves)
+        shared, found = _check_group(
+            group, bindings, cash_held, named_held, None, user_ns, memo, partial, leaves, held_memo
+        )
         if not shared:
             if anchors is not None:
                 anchors.update(_met_anchors(leaves, tried, user_ns))
@@ -2310,6 +2315,7 @@ def _check_group(
     memo: dict[int, list | None] | None = None,
     gave_up: GaveUp | None = None,
     leaves: Leaves | None = None,
+    held_memo: HeldWalk | None = None,
 ) -> tuple[set[str], set[str] | None]:
     """``(shared, found)`` for *group*: the names whose objects are held
     beyond what the group, *bindings*, *cash_held* and *named_held* account
@@ -2317,7 +2323,8 @@ def _check_group(
     group that hold them (`_find_holders`), None when one holder is not such
     a variable (*gave_up* then gets the variables found all the same).
     *memo* is `_walk`'s, kept by the caller across rounds. *leaves* are
-    `_walk`'s."""
+    `_walk`'s. *held_memo* is `count_held`'s, kept by the caller across
+    rounds too."""
     value_types = VALUE_TYPES + library_value_types()
     if memo is None:
         memo = {}
@@ -2338,7 +2345,7 @@ def _check_group(
             return _inside_library_objects(
                 group, nodes, owner, value_types, user_ns, bindings, cash_held, gave_up, leaves
             )
-        internal = count_held(cash_held, nodes, inbound, value_types, named_held, user_ns)
+        internal = count_held(cash_held, nodes, inbound, value_types, named_held, user_ns, held_memo)
         for mapping, key in named_held:
             if id(mapping.get(key)) in nodes:
                 inbound[id(mapping.get(key))] += 1
@@ -3691,6 +3698,7 @@ def count_held(
     value_types: tuple[type, ...],
     named_held: Iterable[tuple[Mapping[str, Any], str]] = (),
     bound_in: Mapping[str, Any] | None = None,
+    memo: HeldWalk | None = None,
 ) -> set[int]:
     """Add to *inbound* the references that the containers in *held*, which
     cash holds itself, and the containers inside them make to *nodes*; the
@@ -3708,29 +3716,90 @@ def count_held(
     is not walked into (`_walk_held`'s *cut*) -- the output history holding
     a displayed list of 400,000 tuples was walked a tuple at a time for
     each statement whose output another variable shares.
+
+    *memo*, kept by `share_group` across its rounds: no code runs between
+    them, so what cash holds is the same, and its walk, which stops at
+    *nodes*, comes out the same as long as it met none of the nodes the
+    round added. Walked again for each round, the output history holding a
+    voting ensemble's fitted forests took 25 ms a round, six rounds for
+    ``voting_clf.estimators_.remove(...)``: past the check's 0.1 s, and the
+    search of the whole heap that follows took a second.
     """
+    if memo is not None and memo.serves(nodes):
+        # A copy: the caller adds its own ids to what it is handed.
+        own, edges = set(memo.own), memo.edges
+    else:
+        own, edges, met = _held_own(held, nodes, value_types, named_held, bound_in)
+        if memo is not None:
+            memo.keep(nodes, set(own), edges, met)
+    for key in own:
+        for child in edges.get(key, ()):
+            if child in nodes:
+                inbound[child] += 1
+    return own
+
+
+class HeldWalk:
+    """What `count_held` found cash's own, kept for the next round of one
+    `share_group`, with the ids its walk met (`HeldWalk.serves`)."""
+
+    __slots__ = ("edges", "met", "nodes", "own")
+
+    def __init__(self) -> None:
+        self.nodes: set[int] | None = None
+        self.own: set[int] = set()
+        self.edges: dict[int, list[int]] = {}
+        self.met: set[int] = set()
+
+    def serves(self, nodes: Mapping[int, Any]) -> bool:
+        """Whether the walk kept is the one *nodes* gives: the nodes it
+        stopped at are still nodes, and it met none of the others."""
+        if self.nodes is None or not self.nodes <= nodes.keys():
+            return False
+        return self.met.isdisjoint(nodes.keys() - self.nodes)
+
+    def keep(self, nodes: Mapping[int, Any], own: set[int], edges: dict[int, list[int]], met: set[int]) -> None:
+        self.nodes, self.own, self.edges, self.met = set(nodes), own, edges, met
+
+
+def _held_own(
+    held: list[Any],
+    nodes: dict[int, Any],
+    value_types: tuple[type, ...],
+    named_held: Iterable[tuple[Mapping[str, Any], str]] = (),
+    bound_in: Mapping[str, Any] | None = None,
+) -> tuple[set[int], dict[int, list[int]], set[int]]:
+    """``(own, edges, met)`` of `count_held`: the ids of cash's own
+    containers, what each refers to, and every id its walk met."""
     roots = {id(obj) for obj in held}
     named_held = list(named_held)
     cut = _bound_trees(bound_in, named_held) if bound_in is not None else None
-    reach, refs, edges = _walk_held(held, nodes, value_types, cut)
+    objects = _variable_objects(bound_in, named_held, value_types) if bound_in is not None else set()
+    reach, refs, edges, met_ids = _walk_held(held, nodes, value_types, (cut or set()) | objects)
     for mapping, key in named_held:
         if id(mapping.get(key)) in reach:
             refs[id(mapping.get(key))] += 1
     users = excess_refs(reach, refs, list(reach))
-    if cut:
-        met = [key for key in cut if key in reach]
-        if met and (
+    if cut or objects:
+        met_objects = [key for key in objects if key in reach]
+        met = [key for key in cut or () if key in reach]
+        if (met or met_objects) and (
             id(bound_in) in edges
-            or not set(met) <= set(users)
+            or not set(met + met_objects) <= set(users)
             or not all(_plain_data.is_tree(reach[key], tree_leaves()) for key in met)
         ):
             # The variables' own mapping is inside what cash holds, so a
             # binding is no proof, or one is no JSON-like data whose parts
             # can be read a level at a time: walked whole, as before.
             del reach, refs, edges, users, met
-            return count_held(held, nodes, inbound, value_types, named_held)
+            return _held_own(held, nodes, value_types, named_held)
         # What is inside a variable's tree is the user's, as the walk below
-        # it would have found: a part also reached another way is too.
+        # it would have found: a part also reached another way is too. A
+        # part of another object a variable is bound to (`_variable_objects`)
+        # needs no reading: a reference from inside it is one the walk did
+        # not count, so a part also reached another way is over its count
+        # and the user's already (`excess_refs`).
+        del met_objects
         others = set(refs).difference(met, users)
         if others:
             under = _parts_under([reach[key] for key in met])
@@ -3743,12 +3812,7 @@ def count_held(
         if key in refs:
             del refs[key]
             users.extend(child for child in edges.get(key, ()) if child in refs)
-    own = roots | set(refs)
-    for key in own:
-        for child in edges.get(key, ()):
-            if child in nodes:
-                inbound[child] += 1
-    return own
+    return roots | set(refs), edges, met_ids
 
 
 def _bound_trees(bound_in: Mapping[str, Any], named_held: list[tuple[Mapping[str, Any], str]]) -> set[int]:
@@ -3757,6 +3821,35 @@ def _bound_trees(bound_in: Mapping[str, Any], named_held: list[tuple[Mapping[str
     counts as cash's own)."""
     skip = {key for mapping, key in named_held if mapping is bound_in}
     return {id(value) for name, value in bound_in.items() if type(value) in _plain_data.TREE_NODES and name not in skip}
+
+
+def _variable_objects(
+    bound_in: Mapping[str, Any], named_held: list[tuple[Mapping[str, Any], str]], value_types: tuple[type, ...]
+) -> set[int]:
+    """The ids of the objects other than lists, dicts and tuples bound to
+    names of *bound_in* (but the *named_held* ones): a variable holds them,
+    so they are the user's and the walk of what cash holds stops at them.
+
+    The output history holds the estimators a notebook displayed, each one
+    bound to a variable too (``voting_clf.fit(X_train, y_train)`` shows
+    ``voting_clf``): walked a tree at a time for each statement whose output
+    another variable shares, the forests of homl ch07 took 40 ms of the
+    share check's 0.1 s, and the search of the whole heap that follows a
+    check past its budget a second, for ``voting_clf.estimators_.remove(t)``
+    and each pass of a loop over the estimators.
+    """
+    skip = {key for mapping, key in named_held if mapping is bound_in}
+    exact = exact_value_types()
+    return {
+        id(value)
+        for name, value in bound_in.items()
+        if name not in skip
+        and value is not None
+        and type(value) not in exact
+        and type(value) not in _plain_data.TREE_NODES
+        and not isinstance(value, (type, types.ModuleType, types.FunctionType, types.BuiltinFunctionType))
+        and not is_value(value, value_types)
+    }
 
 
 def _parts_under(trees: list[Any]) -> set[int]:
@@ -3775,18 +3868,20 @@ _CONTAINER_KINDS = frozenset(_plain_data.TREE_NODES)
 
 def _walk_held(
     held: list[Any], nodes: dict[int, Any], value_types: tuple[type, ...], cut: set[int] | None = None
-) -> tuple[dict[int, Any], dict[int, int], dict[int, list[int]]]:
-    """``(reach, refs, edges)`` for the containers in *held* and inside them:
-    *reach* the containers inside them by id (not *held* itself, nor
+) -> tuple[dict[int, Any], dict[int, int], dict[int, list[int]], set[int]]:
+    """``(reach, refs, edges, met)`` for the containers in *held* and inside
+    them: *reach* the containers inside them by id (not *held* itself, nor
     *nodes*), *refs* how many references the walked containers make to each
     one, *edges* the ids each walked container refers to (*reach* and
-    *nodes* ones, once per reference). Returns before the counts are read,
+    *nodes* ones, once per reference), *met* the id of every object it
+    looked at below *held* (`HeldWalk`). Returns before the counts are read,
     so none of its local references are left to inflate them."""
     roots = {id(obj) for obj in held}
     reach: dict[int, Any] = {}
     refs: dict[int, int] = {}
     edges: dict[int, list[int]] = {}
     seen: set[int] = set()
+    met: set[int] = set()
     stack = list(held)
     exact = exact_value_types()
     containers = EXACT_CONTAINER_TYPES
@@ -3806,6 +3901,7 @@ def _walk_held(
             if ctype in exact or (ctype not in containers and is_value(child, value_types)):
                 continue
             ckey = id(child)
+            met.add(ckey)
             if ckey in nodes:
                 # A walked node: its own references are counted already.
                 out.append(ckey)
@@ -3826,7 +3922,7 @@ def _walk_held(
                 reach[ckey] = child
                 if not cut or ckey not in cut:
                     stack.append(child)
-    return reach, refs, edges
+    return reach, refs, edges, met
 
 
 def _iterator_parts(value: Any) -> list[Any] | None:
