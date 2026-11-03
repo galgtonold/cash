@@ -66,11 +66,20 @@ def test_both_spellings_of_each_file_take_one_stat(faces, stats_taken, absolute_
 
     stats = run_memo.stats_this_run(paths)
 
-    # The folder's own stats arm its watch (`file_watch`); each file takes one.
-    assert len([p for p in stats_taken if p.endswith(".npy")]) == N
+    # The folder's own stats arm its watch (`file_watch`); each file takes
+    # one, or none where a listing of its folder stands in for its stats
+    # (Windows: `stats_from_listings`), under either spelling.
+    listed = run_memo.file_state_this_run()["listed"]
+    assert len([p for p in stats_taken if p.endswith(".npy")]) == len([p for p in spelled if p not in listed])
     for rel, absolute in zip(faces, spelled, strict=True):
-        assert stats[rel] == (rel, os.stat(absolute))
-        assert stats[absolute][1] == os.stat(absolute)
+        st = os.stat(absolute)
+        if absolute in listed:  # a listed stat has no file identity (st_ino 0)
+            assert stats[rel][0] == rel
+            assert (stats[rel][1].st_size, stats[rel][1].st_mtime_ns) == (st.st_size, st.st_mtime_ns)
+            assert (stats[absolute][1].st_size, stats[absolute][1].st_mtime_ns) == (st.st_size, st.st_mtime_ns)
+        else:
+            assert stats[rel] == (rel, st)
+            assert stats[absolute][1] == st
 
 
 def test_a_path_through_dot_dot_is_stat_ed_as_spelled(faces, stats_taken):
