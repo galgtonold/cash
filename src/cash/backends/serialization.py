@@ -14,6 +14,7 @@ from collections.abc import Callable
 from typing import Any
 
 from .. import _cash_views, kept_state
+from .datetime_columns import reduce_datetime_objects
 from .no_file_writes import NoFileWrites, import_what_it_imported, no_file_writes
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,11 @@ __all__ = ["Serializer", "PickleSerializer", "RESTORE_ERRORS", "rebuild", "resto
 #: smaller ones stay in the stream, where a separate part costs more than the
 #: copy it saves.
 OUT_OF_BAND_MIN_BYTES = 64 * 1024
+
+
+#: numpy's object arrays of dates and times as columns of numbers, every
+#: other array as numpy pickles it (`datetime_columns`).
+_DATETIME_OBJECTS = kept_state.Ahead(reduce_datetime_objects)
 
 
 class Serializer(ABC):
@@ -162,9 +168,11 @@ def _rebuild_once(load: Callable[..., Any], args: tuple) -> tuple[Any, Exception
 def stored_reducers(*, for_write: bool = False) -> dict | None:
     """The reducers cash pickles a value it stores with, by exact type
     (`kept_state.dumps` *extra*): `_reduce_polars` for polars' DataFrame
-    and Series, `_reduce_arrow_array` for pandas' Arrow-backed arrays. Each
-    only once its library is imported (a value cannot hold one before). A
-    subclass keeps its own reduce.
+    and Series, `_reduce_arrow_array` for pandas' Arrow-backed arrays, and
+    for numpy's object arrays of dates and times, ahead of numpy's own
+    reduce, their columns (`datetime_columns`). Each only once its library
+    is imported (a value cannot hold one before). A subclass keeps its own
+    reduce.
 
     *for_write*: for the bytes `PickleSerializer` writes, also
     `_reduce_chunked_array` for an Arrow column of chunks. Not for the
@@ -181,6 +189,9 @@ def stored_reducers(*, for_write: bool = False) -> dict | None:
     string_array = getattr(getattr(pd, "arrays", None), "StringArray", None)
     if isinstance(string_array, type):
         reducers[string_array] = _reduce_string_array
+    ndarray = getattr(sys.modules.get("numpy"), "ndarray", None)
+    if isinstance(ndarray, type):
+        reducers[ndarray] = _DATETIME_OBJECTS
     chunked = getattr(sys.modules.get("pyarrow"), "ChunkedArray", None)
     if for_write and isinstance(chunked, type):
         reducers[chunked] = _reduce_chunked_array

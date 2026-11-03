@@ -36,6 +36,7 @@ from ._user_attrs import instance_of
 from .live_state import is_live_stream, live_reduce
 
 __all__ = [
+    "Ahead",
     "DefinedAgain",
     "FlatValue",
     "by_name",
@@ -1080,6 +1081,29 @@ def _pickles(obj: Any) -> bool:
 _NO_STATE_TYPES = frozenset({datetime.datetime, datetime.date, datetime.time, datetime.timedelta})
 
 
+class Ahead:
+    """An *extra* reducer (`dumps`) tried before the type's own: *reduce*
+    gives an object's reduce value, or None for the reducer the table
+    would have used without it (`_KeepDict`), for the objects it leaves
+    as they were."""
+
+    __slots__ = ("reduce",)
+
+    def __init__(self, reduce: Callable[[Any], Any]) -> None:
+        self.reduce = reduce
+
+
+def _ahead_of(first: Callable[[Any], Any], reducer: Any) -> Callable[[Any], Any]:
+    """*first*'s reduce of an object, or *reducer*'s when *first* gives None
+    (`Ahead`)."""
+
+    def reduce(obj: Any) -> Any:
+        reduced = first(obj)
+        return reducer(obj) if reduced is None else reduced
+
+    return reduce
+
+
 class _KeepDict(dict):
     """A pickler's ``dispatch_table``: each type's reducer, decided at its
     first instance. The ordinary ``__reduce_ex__`` for most, so the stream
@@ -1087,7 +1111,10 @@ class _KeepDict(dict):
     reduce drops its instances' ``__dict__`` (`_drops_dict`)."""
 
     def __init__(self, protocol: int, extra: dict | None, keyed: bool = False, watch: list | None = None) -> None:
-        super().__init__(extra or ())
+        extra = dict(extra or ())
+        #: The *extra* reducers tried before the type's own (`Ahead`).
+        self._ahead = {t: extra.pop(t).reduce for t in [t for t, r in extra.items() if type(r) is Ahead]}
+        super().__init__(extra)
         self._protocol = protocol
         self._keyed = keyed
         #: Store bytes only (`dumps_also_keyed`): gets an item when an
@@ -1120,6 +1147,9 @@ class _KeepDict(dict):
             reducer = functools.partial(_stand_in, reducer=reducer, watch=self._watch)
         elif issubclass(t, io.IOBase) or t in _LOCK_TYPES:
             reducer = functools.partial(_or_live, reducer=reducer, watch=self._watch)
+        first = self._ahead.get(t)
+        if first is not None:
+            reducer = _ahead_of(first, reducer)
         self[t] = reducer
         return reducer
 
