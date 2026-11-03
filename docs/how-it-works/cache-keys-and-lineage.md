@@ -230,7 +230,7 @@ does; the library calls inside it that are keyed on the value are served.
 A statement's inputs come from the names it mentions. Two real dependencies
 are not among them, and each has its own part of the key.
 
-<!-- claim: cash/tracking/randomness/lineage.py:hidden_lineage_reads @e9ddd20b, cash/tracking/randomness/lineage.py:hidden_lineage_writes @1369d609, cash/tracking/randomness/lineage.py:advanced_rng_lineage @d2d070a9, cash/tracking/randomness/lineage.py:drawn_rng_vars @e538facc, cash/notebook/callee_reach.py:helper_seeded_modules @8917bd4e -->
+<!-- claim: cash/tracking/randomness/lineage.py:hidden_lineage_reads @e9ddd20b, cash/tracking/randomness/lineage.py:hidden_lineage_writes @1369d609, cash/tracking/randomness/lineage.py:advanced_rng_lineage @d2d070a9, cash/tracking/randomness/lineage.py:drawn_rng_vars @e538facc, cash/notebook/callee_reach.py:helper_seeded_modules @8c4f7c34 -->
 **The random seed.** `x = np.random.rand(3)` mentions no variable, so editing
 `np.random.seed(0)` above it would change nothing. Each global random module
 therefore gets a hidden lineage variable: a `seed()` call writes it, and a draw
