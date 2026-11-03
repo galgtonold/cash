@@ -1190,7 +1190,30 @@ def dep_path_for_this_process(path: str, recorded: Any) -> str:
     root = _code_root(name, mod) if mod is not None else None
     if not root:
         return path
-    return normalize_path(os.path.join(root, *rel.split("/")))
+    here = normalize_path(os.path.join(root, *rel.split("/")))
+    if here != path and _same_place(here, path):
+        # The recorded path in another spelling (``C:/`` for ``C:\``): the
+        # run's stat of the recorded path, and the folder watch's, stand.
+        # Spelled anew, every file of an installed package was stat-ed
+        # again by each check of each cell on Windows.
+        return path
+    return here
+
+
+def code_places(names: Iterable[str]) -> tuple:
+    """Where this process's copy of each module of *names* lies
+    (`dep_path_for_this_process`): an answer about a file beside the code
+    holds while these do."""
+    places = []
+    for name in sorted(names):
+        mod = _loaded_code_module(name)
+        places.append((name, _code_root(name, mod) if mod is not None else None))
+    return tuple(places)
+
+
+def _same_place(here: str, path: str) -> bool:
+    normcase, normpath = os.path.normcase, os.path.normpath
+    return normcase(normpath(here)) == normcase(normpath(path))
 
 
 # ---------------------------------------------------------------------------

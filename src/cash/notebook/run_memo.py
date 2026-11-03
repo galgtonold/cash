@@ -173,21 +173,50 @@ def _note_covered(watch: Any, snap: Mapping[str, Any]) -> None:
 def _cover_of(watch: Any, paths: Iterable[str], snap: Mapping[str, Any] | None = None) -> tuple | None:
     """The watch's cover (`FileWatch.cover`) of *paths*, a relative one by
     its absolute spelling; None when one has no current stat, or is checked
-    elsewhere than where it was recorded (beside the code)."""
+    elsewhere than where it was recorded (beside the code: in this
+    process's copy of that code, `file_dep_snapshot.dep_path_for_this_process`)."""
     absolute = []
     isabs = os.path.isabs
+    here = _fds.dep_path_for_this_process
+    modules: set[str] = set()
     for p in paths:
         if snap is not None:
             recorded = snap[p]
-            if not isinstance(recorded, Mapping) or "code_rel" in recorded:
+            if not isinstance(recorded, Mapping):
                 return None
+            if "code_rel" in recorded:
+                if here(p, recorded) != p:
+                    return None
+                module = recorded.get("code_mod")
+                if isinstance(module, str):
+                    modules.add(module)
         if not isabs(p):
             twin = _fds.spelled_absolute(p)
             if twin is None:
                 return None
             p = twin
         absolute.append(p)
-    return watch.cover(absolute)
+    cover = watch.cover(absolute)
+    if cover is None or not modules:
+        return cover
+    return (*cover, (_CodePlaces(modules), _fds.code_places(modules)))
+
+
+class _CodePlaces:
+    """A part of a cover (`FileWatch.still`) that holds while the modules a
+    snapshot's files lie beside are still loaded from where they were: a
+    file beside the code is checked in this process's copy of it."""
+
+    __slots__ = ("modules",)
+
+    alive = True
+
+    def __init__(self, modules: set[str]) -> None:
+        self.modules = frozenset(modules)
+
+    @property
+    def version(self) -> tuple:
+        return _fds.code_places(self.modules)
 
 
 def fresh_snapshot_this_run(snap: Mapping[str, Any], not_before: float | None) -> bool:
