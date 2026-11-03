@@ -30,7 +30,7 @@ section when a cell does something you did not expect.
 
 This is the one home for randomness in notebooks; other pages link here.
 
-<!-- claim: cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @197e8802, cash/tracking/randomness/state.py:restore_rng_state @2e1cc6af, cash/tracking/randomness/state.py:capture_rng_state @421bfe05, cash/notebook/statement/carrier_advances.py:advance_carriers @98d0397f -->
+<!-- claim: cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @c92fc293, cash/tracking/randomness/state.py:restore_rng_state @2e1cc6af, cash/tracking/randomness/state.py:capture_rng_state @421bfe05, cash/notebook/statement/carrier_advances.py:advance_carriers @98d0397f -->
 **Symptom:** re-running a cell returns the same random numbers.
 
 An unseeded draw is cached like any other value, so a re-run shows the stored
@@ -378,7 +378,7 @@ function a function that calls what it is given (`map(lambda f: f(3), fns)`,
 
 ### Setting state on one of your modules
 
-<!-- claim: cash/notebook/statement/mutation_routing.py:MutationRouting.route @2e5bd139, cash/notebook/callee_reach.py:module_state_writes @db4744c6, cash/notebook/call_unit.py:_rebound_unwatched @2d452d22 -->
+<!-- claim: cash/notebook/statement/mutation_routing.py:MutationRouting.route @6491bb06, cash/notebook/callee_reach.py:module_state_writes @db4744c6, cash/notebook/call_unit.py:_rebound_unwatched @2d452d22 -->
 A statement that sets state on one of your modules runs every time, so that
 after a restart, or an edit of the module's file, the module holds what a
 top-to-bottom run leaves in it. That covers `mylib.K = slow()`,

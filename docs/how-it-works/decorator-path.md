@@ -247,7 +247,7 @@ The [decorator guide](../decorator.md#side-effects) covers
 
 ## Storing and returning
 
-<!-- claim: cash/decorator/store.py:ResultStore.store @b718811c -->
+<!-- claim: cash/decorator/store.py:ResultStore.store @00a3421c -->
 A result is written to the RAM tier and to disk, however cheap it was (a big
 one to disk alone), unless a tier's size cap refuses it or a source it depends on cannot be pickled or
 recorded; see

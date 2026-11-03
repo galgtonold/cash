@@ -316,8 +316,21 @@ paths from the project root or pass absolute paths.
 - A result that can't be pickled is not stored
   ([`STORE-FAILED`](warnings.md#store-failed)), unless the function is
   `frozen=True`.
-- A call that changed its argument in place is not stored, so it runs every
-  time. Return a modified copy instead (`rows = sorted(rows)`).
+<!-- claim: cash/decorator/runtime.py:CallRunner.arguments_left @0d78c0b2, cash/decorator/runtime.py:CallRunner._arguments_to_write @40e35e09, cash/rewrite_in_place.py:refusal @cece1b9e -->
+- A call that changed its argument in place is stored with the state it left
+  the argument in when the argument is a NumPy array (not of objects), a
+  pandas frame or Series whose index, columns and dtypes it kept (a Series of
+  a NumPy dtype, not pandas' `str` dtype), or a list, dict or set of numbers,
+  strings and the like. A hit checks that the
+  argument handed in is in the state the entry was stored from, then writes
+  the stored state into that very object, so your other names for it and the
+  views of an array see the change. The first call seen changing an argument
+  is not stored: from then on, each miss fingerprints those arguments before
+  the body runs. A call keyed with `key=`, one whose result shares memory
+  with the argument (`return X[:2]`), and any other argument (an object of
+  your class, a list of lists, a frame given a new column) are not stored,
+  so they run every time. Return a modified copy instead
+  (`rows = sorted(rows)`).
 - A set in a result comes back with the same items, but a `for` loop may
   meet them in a different order than in the call that made it: Python does
   not keep a set's order. Use `sorted(s)` where the order matters.

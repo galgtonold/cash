@@ -15,7 +15,7 @@ and later runs get them back instead of recomputing them.
 | What the key is built from | Arguments, the function's source, the source of the helpers it calls, files it reads | The statement's code, how its input variables were made, files it reads |
 | Edit a helper function | Recomputes | Recomputes |
 | Change a data file | Recomputes | Recomputes |
-| Change an object in place | A call caught changing its arguments is not stored | Detected: statements below see the change |
+| Change an object in place | Stored with the argument's new state when cash can write it back into an array, frame or plain container; otherwise not stored | Detected: statements below see the change; an array, frame or plain container is stored with its new state |
 | Written to disk | Every result | Results that took more than 0.1 s and reload faster than they recompute |
 | Side effects | Warned about; they run on the first call only | The statement is not cached |
 | Shows what it did | `f.explain()`, `f.cache_info()` | A badge above each cell, `%cash_stats` |
