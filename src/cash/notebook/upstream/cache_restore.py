@@ -17,7 +17,6 @@ from typing import TYPE_CHECKING, Any
 
 from ... import rewrite_in_place
 from ..._clock import perf_counter as _perf_counter
-from ..._paths import resolve_file_dep_path
 from ..._user_attrs import instance_of
 from ...analysis.annotations import get_statement_annotations
 from ...analysis.ast_util import parse_cached
@@ -40,6 +39,7 @@ from ..lineage_formula import (
 )
 from ..lineage_store import restore_frozen_tag, tag_value
 from ..restored_var import FORWARD_PROBE_PLACEHOLDER, HeldObject, apply_held_var, present_holders
+from ..run_memo import stats_this_run
 from ..statement import in_place
 from ..statement._metadata import StatementCacheMetadata
 from ..statement.derivation_edges import record_shared_object_edges
@@ -390,8 +390,13 @@ class CacheRestorer:
         resolved_paths: set[str] = set()
         file_deps_meta = metadata.get("file_dependencies", {})
         if file_deps_meta:
-            for stored_path in file_deps_meta:
-                resolved = resolve_file_dep_path(stored_path)
+            # Found with the run's stats (`run_memo.stats_this_run`): one
+            # look per path per cell run, none while the folder watch vouches
+            # for it, and a path recorded as absent looked for where it was
+            # recorded only. A look of their own at each (`resolve_file_dep_path`)
+            # was 76,000 ``os.path.exists`` in the first cell after a restart.
+            asked = file_deps_meta if isinstance(file_deps_meta, dict) else dict.fromkeys(file_deps_meta)
+            for _path, (resolved, _st) in stats_this_run(asked).items():
                 if resolved is not None:
                     resolved_paths.add(resolved)
 
