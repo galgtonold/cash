@@ -27,6 +27,7 @@ from ..cache_key import (
     virtual_callable_key,
     virtual_namespace,
 )
+from ..lineage_formula import forward_helper
 from ..tracking_state import TrackingState
 from .cache_probe import CacheProbe
 
@@ -183,13 +184,44 @@ class SimulatedCallables:
         imported them.
         """
         user_ns = self.shell.user_ns
+        return {name for name in self.callee_globals(inputs, virtual_lineage, virtual_modules) if name not in user_ns}
+
+    def callee_globals(
+        self,
+        inputs: set[str],
+        virtual_lineage: dict[str, str],
+        virtual_modules: set[str],
+    ) -> set[str]:
+        """Names the callees in *inputs* read, modules included."""
         virtual = (
             virtual_namespace(self.by_lineage, virtual_lineage, self.tracking_state.variable_lineage, virtual_modules)
             if self.by_lineage
             else None
         )
-        names = called_function_globals(inputs, user_ns, virtual, keep_modules=True)
-        return {name for name in names if name not in user_ns}
+        return called_function_globals(inputs, self.shell.user_ns, virtual, keep_modules=True)
+
+    def stale_callee_globals(
+        self,
+        inputs: set[str],
+        virtual_lineage: dict[str, str],
+        virtual_modules: set[str],
+    ) -> set[str]:
+        """Helpers defined below a function (`forward_helper`) that the
+        callees in *inputs* read and the kernel holds with another lineage
+        than the simulation gave them: one edited above and not run yet. The
+        function's lineage does not carry them
+        (`lineage_formula.def_time_names`), so a statement re-run to rebuild
+        a value needs them rebuilt first, as it needs its own inputs."""
+        live = self.tracking_state.variable_lineage
+        user_ns = self.shell.user_ns
+        return {
+            name
+            for name in self.callee_globals(inputs, virtual_lineage, virtual_modules)
+            if name in virtual_lineage
+            and name in live
+            and live[name] != virtual_lineage[name]
+            and forward_helper(name, user_ns)
+        }
 
     def source_hashes(self, inputs: set[str], virtual_lineage: Mapping[str, str]) -> dict[str, str]:
         """``name -> source digest`` for callable inputs the kernel does not hold yet:

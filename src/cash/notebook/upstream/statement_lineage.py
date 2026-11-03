@@ -66,6 +66,7 @@ from ..lineage_formula import (
     call_time_reads,
     callable_source_component,
     changed_module_environment,
+    def_time_names,
     function_identity,
     held_lineage,
     input_lineage,
@@ -680,7 +681,9 @@ class StatementLineage:
         """
         function_tracker = self.function_tracker
         user_ns = self.shell.user_ns
-        func_component = self._func_component(inputs, virtual_lineage)
+        func_component = self._func_component(
+            def_time_names(stmt_code, inputs, user_ns, virtual_modules or (), virtual_lineage or ()), virtual_lineage
+        )
         environment = statement_environment_component(stmt_code, user_ns) if recorded_reads is None else recorded_reads
         lineages: dict[str, str] = {}
         for out in outputs:
@@ -743,7 +746,9 @@ class StatementLineage:
         def_time = self._input_lineages(
             stmt_code, (inputs | lineage_hidden_reads(stmt_code)) - body_only, virtual_lineage, virtual_modules
         )
-        func_component = self._func_component(inputs, virtual_lineage)
+        func_component = self._func_component(
+            def_time_names(stmt_code, inputs, self.shell.user_ns, virtual_modules, virtual_lineage), virtual_lineage
+        )
         for lineage in lineage_by_out.values():
             note_function_identity(
                 lineage,
@@ -1244,7 +1249,16 @@ class StatementLineage:
         before what it changed in place moves the names that share an
         object with it."""
         input_lineage_map = self._input_lineages(
-            stmt_code, inputs | lineage_hidden_reads(stmt_code), virtual_lineage, virtual_modules
+            stmt_code,
+            def_time_names(
+                stmt_code,
+                inputs | lineage_hidden_reads(stmt_code),
+                self.shell.user_ns,
+                virtual_modules,
+                virtual_lineage,
+            ),
+            virtual_lineage,
+            virtual_modules,
         )
         input_lineages_all = list(input_lineage_map.values())
         cache_key = self._key(
@@ -1344,7 +1358,13 @@ class StatementLineage:
             virtual_lineage,
             no_cache_values=no_cache_values,
             recorded_reads=recorded_reads_lineage_component(
-                self.tracking_state, cache_key, stmt_code, self.shell.user_ns, outputs, as_last_run=True
+                self.tracking_state,
+                cache_key,
+                stmt_code,
+                self.shell.user_ns,
+                outputs,
+                as_last_run=True,
+                simulated=virtual_lineage,
             ),
             virtual_modules=virtual_modules,
             input_lineage_map=input_lineage_map,

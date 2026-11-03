@@ -46,6 +46,7 @@ from ..lineage_formula import (
     call_time_reads,
     callable_source_component,
     changed_module_environment,
+    def_time_names,
     function_identity,
     input_lineage,
     lineage_hidden_reads,
@@ -305,7 +306,7 @@ class StatementLineageBuilder:
         # lineage makes the reconstruction re-run the producing fit, which mints
         # yet another model, so a consumer never agrees with the value recorded
         # beside it -- measured, it broke even the first clean run.
-        lineage_inputs = inputs | lineage_hidden_reads(code) | lineage_reads
+        lineage_inputs = def_time_names(code, inputs | lineage_hidden_reads(code) | lineage_reads, user_ns)
         # The environment and the data of the user's modules it read, as its
         # key folds them: a new value is a new lineage, so what is built on an
         # output misses too.
@@ -356,7 +357,9 @@ class StatementLineageBuilder:
         )
         cut_off = rebuilt and len(bound) == 1
 
-        func_component = callable_source_component(self.function_tracker, inputs, user_ns)
+        func_component = callable_source_component(
+            self.function_tracker, def_time_names(code, inputs, user_ns), user_ns
+        )
         # The content digests the cutoff takes of the outputs, kept for the
         # session hash `_record_output` takes of the same values below: a
         # networkx graph has no cheaper digest and no sound "unchanged"

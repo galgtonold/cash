@@ -197,6 +197,24 @@ the chain. You declare no dependencies.
 Files, called functions, local modules, callee globals and the value are left
 out when there are none.
 
+<!-- claim: cash/notebook/lineage_formula.py:def_time_names @e9b6dbb8 -->
+A function whose body calls a helper defined in a cell below keeps one
+lineage, whether the helper was there when the `def` ran (the next Run All
+of the same kernel) or not (a first Run All, or after a restart): its
+lineage leaves that helper out. The helper is looked up when the function
+is called, so it counts in the key of the statement that calls it, as a
+callee global, and what holds the function, such as
+`solvers = (greedy, held_karp)`, is served on the next Run All. A helper
+here is a name the body calls that was not bound when the `def` ran. Any
+other global the body reads stays in the function's lineage as it was when
+the `def` ran.
+
+<!-- claim: cash/notebook/upstream/simulated_callables.py:SimulatedCallables.stale_callee_globals @08ed88a4 -->
+Since the function's lineage leaves such a helper out, an edit to it that
+has not run yet reaches a cell below through the call instead. The upstream
+check keys the helper with the lineage the edited cell gives it, so the
+call's lineage moves, and it re-runs the edited cell before the call.
+
 ```python { .nb-cell }
 a = 1
 b = 2

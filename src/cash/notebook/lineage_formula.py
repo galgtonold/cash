@@ -13,6 +13,7 @@ ingredients they have; this module decides how they combine.
 from __future__ import annotations
 
 import ast
+import builtins
 import hashlib
 import logging
 import os
@@ -659,6 +660,88 @@ def call_time_reads(code: str, user_ns: Mapping[str, Any], virtual_modules: Iter
     )
 
 
+#: A ``def``'s source digest -> the globals its body named that were not
+#: bound when it ran: helpers defined below it (`def_time_names`).
+_FORWARD_HELPERS: LruMemo[str, frozenset[str]] = LruMemo(CODE_OBJECTS)
+#: The names in any entry of `_FORWARD_HELPERS`, for `forward_helper`.
+_FORWARD_NAMES: LruMemo[str, bool] = LruMemo(CODE_OBJECTS)
+
+
+def def_time_names(
+    code: str,
+    names: Iterable[str],
+    user_ns: Mapping[str, Any],
+    virtual_modules: Iterable[str] = (),
+    bound: Iterable[str] = (),
+) -> set[str]:
+    """*names* less the helpers defined below the ``def`` statement *code*:
+    the names whose lineages and sources its function's lineage folds.
+
+    A helper only the body calls is looked up when the function is called,
+    not when the ``def`` runs, and a key reading the function folds it there
+    (``cache_key.called_function_dependencies``). Folded into the lineage as
+    it stood when the ``def`` ran, a helper defined below gave the function
+    another lineage on each Run All: absent on the first, the earlier run's
+    function on the next. What holds the function took those lineages, so a
+    cell reading ``exact = (greedy, held_karp)`` missed on the next Run All,
+    and the upstream check re-ran the ``def`` as broken.
+
+    Only such a helper is left out: a name the body only calls that was not
+    bound when the ``def`` ran -- in the kernel, or for the simulation in
+    *bound*, what it bound above -- and one bound since to a function, plain
+    or wrapped, where this ``def`` had found nothing. Every other global
+    keeps folding as it stood at the ``def``, so the function's lineage
+    moves when one changed. Both engines take the names from here."""
+    names = set(names)
+    called = _called_helpers(code) & call_time_reads(code, user_ns, virtual_modules)
+    if not called:
+        return names
+    bound = set(bound)
+    digest = exact_source_digest(code)
+    seen = _FORWARD_HELPERS.get(digest) or frozenset()
+    absent = frozenset(name for name in called if name not in user_ns and name not in bound)
+    if absent - seen:
+        seen = seen | absent
+        _FORWARD_HELPERS[digest] = seen
+        for name in absent:
+            _FORWARD_NAMES[name] = True
+    forward = absent | {name for name in called & seen if _is_helper(user_ns.get(name))}
+    return names - forward
+
+
+def _called_helpers(code: str) -> frozenset[str]:
+    """Globals the body of the ``def`` statement *code* calls by name,
+    builtins left out: the helpers it may name before they exist."""
+    tree = parse_cached(code)
+    if tree is None or len(tree.body) != 1:
+        return frozenset()
+    node = tree.body[0]
+    if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return frozenset()
+    called = {
+        sub.func.id
+        for stmt in node.body
+        for sub in ast.walk(stmt)
+        if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name)
+    }
+    return frozenset(name for name in called if not hasattr(builtins, name))
+
+
+def _is_helper(value: Any) -> bool:
+    """A function, plain or wrapped (``functools.cache``): what a ``def``
+    below binds. A class is left out: the ``def`` reads its code."""
+    return callable(value) and not isinstance(value, type)
+
+
+def forward_helper(name: str, user_ns: Mapping[str, Any]) -> bool:
+    """Whether *name* may be a helper `def_time_names` leaves out of a
+    function's lineage: a name some ``def`` read before it was bound, and
+    unbound or a function now. A key folds it at the call instead."""
+    if name not in _FORWARD_NAMES:
+        return False
+    return name not in user_ns or _is_helper(user_ns.get(name))
+
+
 #: A notebook function's lineage -> its identity (`function_identity`), for
 #: this process. One entry per ``def`` run; a dropped one only re-keys.
 _FUNCTION_IDENTITIES: LruMemo[str, str] = LruMemo(CODE_OBJECTS)
@@ -973,6 +1056,7 @@ def recorded_reads_lineage_component(
     outputs: Iterable[str] = (),
     *,
     as_last_run: bool = False,
+    simulated: Mapping[str, str] | None = None,
 ) -> str:
     """The environment and the module data the statement keyed *cache_key*
     read, and the globals its called functions reached for, for its
@@ -982,7 +1066,11 @@ def recorded_reads_lineage_component(
     lookup for the runtime (``statement/lineage.py``) and the simulation
     (``upstream/statement_lineage.py``). The simulation passes
     *as_last_run*: the callee globals are then the ones the statement's last
-    run was keyed with, when it ran in this kernel.
+    run was keyed with, when it ran in this kernel, but for the helpers
+    defined below a function that it bound itself above the statement
+    (*simulated*), which it keys as the runtime finds them there: one
+    edited above and not run yet. The function's lineage does not carry
+    them (`def_time_names`).
     """
     reads = attribute_or(tracking_state, "reads", None)
     by_key = attribute_or(reads, "by_key", None)
@@ -995,6 +1083,11 @@ def recorded_reads_lineage_component(
     deps = None
     if as_last_run and by_code and code in by_code:
         deps = by_code[code]
+        own = callees.get(cache_key) if callees and cache_key else None
+        if simulated and own:
+            deps = _edited_since(
+                deps, own, simulated, attribute_or(tracking_state, "variable_lineage", None) or {}, user_ns
+            )
     elif callees and cache_key and cache_key in callees:
         deps = callees[cache_key]
     if deps:
@@ -1007,6 +1100,34 @@ def recorded_reads_lineage_component(
         if kept:
             environment += ":callees:" + hashlib.sha256(":".join(kept).encode("utf-8")).hexdigest()
     return environment
+
+
+def _edited_since(
+    last_run: tuple[str, ...],
+    own: Iterable[str],
+    simulated: Mapping[str, str],
+    live: Mapping[str, str],
+    user_ns: Mapping[str, Any],
+) -> tuple[str, ...]:
+    """*last_run*'s callee globals, but for the helpers defined below a
+    function (`forward_helper`) the simulation gave another lineage than the
+    kernel holds while the kernel holds what the last run read: one edited
+    above and not run yet. Any other global keeps the last run's."""
+    changed = {}
+    for dep in own:
+        name = dep.split(":", 1)[0]
+        if not forward_helper(name, user_ns):
+            continue
+        if name in simulated and name in live and simulated[name] != live[name]:
+            changed[name] = dep
+    kept = []
+    for dep in last_run:
+        name, _, lineage = dep.partition(":")
+        if name in changed and name in live and lineage == function_identity(live[name]):
+            kept.append(changed[name])
+        else:
+            kept.append(dep)
+    return tuple(kept)
 
 
 def callable_source_component(function_tracker: Any, inputs: set[str], user_ns: dict) -> str:
