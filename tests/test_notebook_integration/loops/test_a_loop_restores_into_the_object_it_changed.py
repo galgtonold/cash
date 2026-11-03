@@ -360,20 +360,26 @@ def test_what_points_at_what_it_assigns_into_is_asked_again_at_a_restore(nb_runn
 
 @pytest.mark.fresh_kernel
 @pytest.mark.parametrize(
-    "held",
-    ["import weakref\nheld = weakref.ref(out)", "held = {id(out): 'out'}"],
+    ("held", "found"),
+    [
+        ("import weakref\nheld = weakref.ref(out)", "held() is out"),
+        ("held = {id(out): 'out'}", "held.get(id(out))"),
+    ],
     ids=["a weak reference", "an id key"],
 )
-def test_an_array_the_notebook_holds_by_identity_runs_the_loop_with_the_warning(nb_runner, held):
-    """Bound to the stored copy, an array the notebook finds by a weak
-    reference or its ``id()`` would not be the object it finds: the loop
-    runs every time, and says so."""
+def test_an_array_the_notebook_holds_by_identity_is_restored_into(nb_runner, held, found):
+    """Philipp's decision of 2026-11-03: a change in place is stored, and a
+    hit writes the stored state into the live object, for NumPy arrays,
+    pandas frames and plain lists, dicts and sets. The loop's hit writes
+    into ``out`` itself, never binds it to a copy, so an array the notebook
+    finds by a weak reference or its ``id()`` is still the one it finds,
+    as in plain Python: the loop is restored, with no identity warning."""
     make = f"import time\nimport numpy as np\nout = np.zeros(3000)\n{held}"
     loop = "for i in range(3000):\n    time.sleep(0.0003)\n    out[i] = i * 2"
-    printed, seen = _run(nb_runner, make, loop, "print(out[-1], out.sum())")
-    assert printed == "5998.0 8997000.0"
-    assert "RESTORED" not in str(seen)
-    assert "NOTEBOOK-IDENTITY-HELD" in _shown(nb_runner, 2)
+    printed, seen = _run(nb_runner, make, loop, f"print({found}, out[-1], out.sum())")
+    assert printed == ("True" if "weakref" in held else "out") + " 5998.0 8997000.0"
+    assert "RESTORED" in str(seen)
+    assert "NOTEBOOK-IDENTITY-HELD" not in _shown(nb_runner, 2)
 
 
 @pytest.mark.fresh_kernel
