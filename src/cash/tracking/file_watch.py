@@ -721,7 +721,7 @@ class _FolderIndex:
             if not _SHORT_NAME.search(parts[i]):
                 i += 1
                 continue
-            long = resolve("\\".join(parts[: i + 1])) if resolve is not None else None
+            long = resolve("\\".join(parts[: i + 1]), i == len(parts) - 1) if resolve is not None else None
             if long is None:
                 return parts, i
             # The long form of the components up to here, not looked at again:
@@ -924,10 +924,10 @@ class _Volume:
         #: Keys of folders removed or renamed (or below one that was) since the last poll.
         self.gone: set[Any] = set()
         self.everything = False
-        #: A name below the root that may hold a short (8.3) alias -> its long
-        #: form below the root, or None (`_resolve`); emptied by any report
-        #: that a name went, which may free an alias for another file.
-        self.longs: dict[str, str | None] = {}
+        #: A folder's name below the root ending in a short (8.3) alias -> its
+        #: long form (`_resolve`), both case folded; dropped by a report that
+        #: it, or a folder above it, went, which may free the alias.
+        self.longs: dict[str, str] = {}
         #: What the reports were (`FileWatch.report`).
         self.counts: dict[str, int] = {}
         self.pending = False
@@ -1055,15 +1055,24 @@ class _Volume:
         if self.index.keys:
             self.gone.update(self.index.moved(name, resolve))
         if self.longs:
-            self.longs = {}
+            # An alias freed for another entry is one of a name gone, or below it.
+            gone = _FolderIndex.spelled(name)
+            below = gone + "\\"
+            self.longs = {
+                short: long
+                for short, long in self.longs.items()
+                if not (short == gone or short.startswith(below) or long == gone or long.startswith(below))
+            }
 
     def _count(self, what: str, n: int = 1) -> None:
         self.counts[what] = self.counts.get(what, 0) + n
 
-    def _resolve(self, below: str) -> str | None:
+    def _resolve(self, below: str, last: bool = False) -> str | None:
         """With the lock held: the long form of *below*, a name below the
         root ending in a component that may be a short alias, while it is
-        there; None when it is not, or cannot be read.
+        there; None when it is not, or cannot be read. Kept for a folder
+        above the name reported (not for the *last* component, most often a
+        file come and gone), until a name at or above it is reported gone.
 
         A change is reported by the name it was made through, and a program
         writing through a short path (``C:\\Users\\PHILIP~1\\AppData\\Local\\Temp``,
@@ -1071,7 +1080,7 @@ class _Volume:
         change of every watched folder below the one above the alias: each
         temporary file any program wrote dropped every stat kept below
         ``C:\\Users``, so a cell checked every file again."""
-        if below in self.longs:
+        if not last and below in self.longs:
             found = self.longs[below]
         else:
             found = None
@@ -1083,10 +1092,11 @@ class _Volume:
                 except Exception:  # noqa: BLE001 - taken as not resolved
                     long = None
                 if long is not None and ntpath.normcase(long).startswith(ntpath.normcase(root) + "\\"):
-                    found = long[len(root) + 1 :]
-            if len(self.longs) >= _LONGS_KEPT:
-                self.longs = {}
-            self.longs[below] = found
+                    found = _FolderIndex.spelled(long[len(root) + 1 :])
+            if found is not None and not last:
+                if len(self.longs) >= _LONGS_KEPT:
+                    self.longs = {}
+                self.longs[below] = found
         self._count("short names put in their long form" if found is not None else "short names not found")
         return found
 

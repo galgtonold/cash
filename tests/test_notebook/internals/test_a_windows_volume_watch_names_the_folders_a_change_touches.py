@@ -434,23 +434,25 @@ def home() -> _FolderIndex:
     return folders
 
 
-LONG = {"users\\philip~1": "Users\\Philipp Gergen", "users\\philipp gergen\\proj\\data\\photos~1": None}
+_LONG = {"users\\philip~1": "Users\\Philipp Gergen", "users\\philipp gergen\\proj\\data\\photos~1": None}
+
+
+def _long(below: str, last: bool) -> str | None:
+    return _LONG.get(below)
 
 
 def test_a_short_alias_put_in_its_long_form_touches_the_folder_it_names_only(home):
     temp = "Users\\PHILIP~1\\AppData\\Local\\Temp\\tmp123.json"
-    assert home.touched(temp, LONG.get) == []
+    assert home.touched(temp, _long) == []
     data = "Users\\PHILIP~1\\proj\\data\\a.csv"
-    assert home.touched(data, LONG.get) == ["users\\philipp gergen\\proj\\data"]
-    assert home.moved("Users\\PHILIP~1\\proj\\data", LONG.get) == ["users\\philipp gergen\\proj\\data"]
+    assert home.touched(data, _long) == ["users\\philipp gergen\\proj\\data"]
+    assert home.moved("Users\\PHILIP~1\\proj\\data", _long) == ["users\\philipp gergen\\proj\\data"]
 
 
 def test_a_short_alias_with_no_long_form_still_touches_everything_below_its_folder(home):
     # No longer there to be looked up: the alias may have named any folder.
-    assert sorted(home.touched("Users\\XYZ~1\\a.txt", LONG.get)) == sorted(home.keys.values())
-    assert home.touched("Users\\PHILIP~1\\proj\\data\\PHOTOS~1\\a.jpg", LONG.get) == [
-        "users\\philipp gergen\\proj\\data"
-    ]
+    assert sorted(home.touched("Users\\XYZ~1\\a.txt", _long)) == sorted(home.keys.values())
+    assert home.touched("Users\\PHILIP~1\\proj\\data\\PHOTOS~1\\a.jpg", _long) == ["users\\philipp gergen\\proj\\data"]
     assert sorted(home.touched("Users\\PHILIP~1\\a.txt")) == sorted(home.keys.values())  # none asked
 
 
@@ -468,11 +470,14 @@ def test_a_volumes_reports_through_a_short_alias_are_looked_up_once():
         assert kernel.calls["long_path"] == 1
         kernel.report(_notify("Users\\PHILIP~1\\proj\\data\\a.csv"))
         assert v.poll() == (["data"], [], False)
-        # A name gone may free an alias for another file: looked up afresh.
+        # A file gone frees no folder's alias; the folder gone does: looked up afresh.
         kernel.report(_notify("Users\\PHILIP~1\\AppData\\Local\\Temp\\tmp0.json", action=2))
         v.poll()
+        assert kernel.calls["long_path"] == 1
+        kernel.report(_notify("Users\\Philipp Gergen", action=4))
+        v.poll()
         kernel.report(_notify("Users\\PHILIP~1\\AppData\\Local\\Temp\\tmp1.json"))
-        assert v.poll() == ([], [], False)
+        v.poll()
         assert kernel.calls["long_path"] == 2
     finally:
         v.stop()
