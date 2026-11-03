@@ -759,7 +759,7 @@ reads its content, and if it changed, everything that read it runs again.
 
 ### A change no folder reports
 
-<!-- claim: cash/tracking/file_watch.py:FileWatch.current @31588dc6, cash/tracking/file_watch.py:_Volume.take @4c5eedec -->
+<!-- claim: cash/tracking/file_watch.py:FileWatch.current @31588dc6, cash/tracking/file_watch.py:_Volume.take @b5586eb4 -->
 Between cells, cash takes a file in a watched folder as unchanged while the
 folder's change notifications report nothing
 ([how files are checked](how-it-works/invalidation.md)). A few writes send

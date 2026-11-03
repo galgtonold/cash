@@ -173,7 +173,7 @@ def test_an_edit_in_a_folder_that_cannot_be_watched_is_seen(cash_magics, photos,
     cell = READ.format(path=str(target))
     watch = file_watch.watcher()
     if watch is not None:
-        monkeypatch.setattr(watch._backend, "usable", lambda path: False)
+        monkeypatch.setattr(watch._backend, "add", lambda path: None)
     _cached(cash_magics, cell, "data", "photo 08")
     assert watch is None or watch.watched() == 0
 
