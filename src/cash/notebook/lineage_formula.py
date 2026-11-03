@@ -724,7 +724,7 @@ def _called_helpers(code: str) -> frozenset[str]:
         for sub in ast.walk(stmt)
         if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name)
     }
-    return frozenset(name for name in called if not hasattr(builtins, name))
+    return frozenset(name for name in called if name not in vars(builtins))
 
 
 def _is_helper(value: Any) -> bool:
