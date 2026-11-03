@@ -1189,16 +1189,28 @@ class StatementLineage:
         here, ran or was served: a seed set inside a function it called
         (``random.seed`` in a ``functools.cache`` helper it filled), which
         no statement spells and the runtime takes from where the stream
-        stood (`StatementRandomness.adopt_seeds_set_by`). Empty when its run
-        with this key seeded nothing so, or never ran in this kernel: the
-        stream then moves as a draw moves it, as before."""
+        stood (`StatementRandomness.adopt_seeds_set_by`). Empty when it
+        never ran in this kernel so: the stream then moves as a draw moves
+        it, as before.
+
+        Under a key no run of it recorded (an edited helper it calls),
+        where it leaves a stream another key's run seeded is not known
+        here: the stream moves on from this key, as a draw moves it. A run
+        that seeded before it drew is not in the draw ledger
+        (`_record_hidden_draws`), so nothing else moves the stream, and a
+        draw below, keyed on the lineage the old run adopted, was served
+        the value drawn after the old seed."""
         if is_control_body(stmt_code):
             return {}
         recorded = seeded_unseen_by(self.tracking_state, stmt_code)
         if not recorded:
             return {}
         key = draw_key or self._key(stmt_code, inputs, outputs, virtual_lineage, virtual_modules, occurrence_index)
-        return recorded.get(key) or {}
+        adopted = recorded.get(key)
+        if adopted:
+            return adopted
+        seeded = {var for lineages in recorded.values() for var in lineages}
+        return {var: advanced_rng_lineage(key, var) for var in sorted(seeded)}
 
     @staticmethod
     def _advance_rng(drawn: set[str], draw_key: str | None, virtual_lineage: dict[str, str]) -> None:
