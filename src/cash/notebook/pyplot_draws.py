@@ -93,7 +93,7 @@ def draws_through_pyplot(tree: ast.AST | None, namespace: Mapping[str, Any]) -> 
     or figure (``plt.plot``, ``plt.title``, ``plt.gca().bar(...)``)."""
     if tree is None:
         return False
-    for node in ast.walk(tree):
+    for node in _run_nodes(tree):
         if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
             continue
         receiver = node.func.value
@@ -107,6 +107,26 @@ def draws_through_pyplot(tree: ast.AST | None, namespace: Mapping[str, Any]) -> 
         ):
             return True
     return False
+
+
+def _run_nodes(tree: ast.AST):
+    """The nodes of *tree* that run when it runs: not the body of a function
+    or lambda it defines, which runs only when called. ``def
+    plot_decision_boundary(...)`` with ``plt.contourf`` in its body draws
+    nothing; taken for a draw, the simulation gave the function the lineage
+    of whatever figure was current, and every loop calling it re-ran."""
+    stack = [tree]
+    while stack:
+        node = stack.pop()
+        yield node
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            stack.extend(node.decorator_list)
+            stack.extend(d for d in node.args.defaults + node.args.kw_defaults if d is not None)
+            continue
+        if isinstance(node, ast.Lambda):
+            stack.extend(d for d in node.args.defaults + node.args.kw_defaults if d is not None)
+            continue
+        stack.extend(ast.iter_child_nodes(node))
 
 
 def current_figure_names(namespace: Mapping[str, Any]) -> set[str]:
