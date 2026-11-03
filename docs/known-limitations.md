@@ -262,7 +262,7 @@ state in the notebook, or pass it in and return it.
 
 ### A helper memoised with `functools.cache`
 
-<!-- claim: cash/notebook/helper_memos.py:unfilled @0deb0715, cash/notebook/helper_memos.py:used @c22fda91, cash/notebook/helper_memos.py:clears @4d3601f2, cash/notebook/helper_memos.py:MAX_KEYED == 4096 -->
+<!-- claim: cash/notebook/helper_memos.py:unfilled @f9113011, cash/notebook/helper_memos.py:used @050da885, cash/notebook/helper_memos.py:clears @bc3fe4e5, cash/notebook/helper_memos.py:MAX_KEYED == 4096 -->
 A statement served from the cache does not run, so a `@functools.cache` or
 `@functools.lru_cache` helper it calls keeps what it held. A run leaves the
 answers in it, and a later call of the helper uses them without running its
@@ -282,14 +282,34 @@ body. So cash follows these rules:
   cell shadows a builtin it reads. It is not served while the memo holds
   a different answer for a key the statement read. One thing still
   differs: `h.cache_info()` counts only those calls, not the hits the
-  statement made, so a statement that names `cache_info` (or
-  `cache_clear`) reruns every time.
-- Any other helper: a statement (or a call cash caches) whose run made the
-  memo compute an answer, emptied it (`cache_clear` under any name the
-  statement or a function of yours it calls uses, or seen from the keys
-  the memo holds afterwards), or changed an answer it holds
-  in place (`f(1).append(5)`) changes the memo the way appending to a list
-  does: it reruns every time and is never served.
+  statement made, so a statement that names `cache_info` reruns every
+  time.
+- Any other helper: a statement whose run made an unbounded memo
+  (`functools.cache`, `lru_cache(maxsize=None)`) compute answers is stored
+  with the key and answer pairs it put in, in one pickle with its outputs.
+  Served, cash puts those pairs back into the memo at the statement's
+  place, so a later call finds the answer and does not run the helper's
+  body (which may reseed `random`, print, or take minutes), and an output
+  that is one of those answers is the very object the memo holds, as after
+  a run. It is served only while the memo holds every answer it held when
+  the run began and none of the keys the run computed: once a cell above
+  computes one of them, a run would find it there, so the statement runs.
+  A statement that empties the memo (`cache_clear` under any name, or seen
+  from the keys it holds afterwards) is stored as "emptied, then these
+  pairs", served only while the memo holds exactly what it held when the
+  run began, and a hit empties it and puts the pairs in.
+- What a hit cannot put back still runs every time: a statement that fills
+  a bounded memo (`lru_cache(maxsize=128)`, whose order only its own code
+  keeps), fills one with a key that does not come back from a pickle as
+  the same key (an object of yours compared by identity, a function
+  defined inside another), names `cache_info` (a hit leaves the counters
+  as they were, so `cache_info()` counts fewer calls than a run), changes
+  an answer the memo holds in place (`f(1).append(5)`), or fills it with
+  an answer something outside its outputs holds too, such as a variable
+  the helper returns
+  ([NOTEBOOK-MEMO-SHARED](warnings.md#notebook-memo-shared)). A call cash
+  caches on its own that fills a memo runs every time; the statement
+  around it is stored as above.
 - One that only read answers already there is served only while the memo
   holds every key and answer it read, compared by value. After a kernel
   restart it runs until the memo is filled again, and the first statement

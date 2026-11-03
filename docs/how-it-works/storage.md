@@ -270,7 +270,7 @@ does. cash waits for a write only when something needs it on disk:
 A process this one did not start, reading the same folder at the same time,
 finds a result once its write has finished, and computes it until then.
 
-<!-- claim: cash/backends/memory_backend.py:_snapshot @b77f0d22, cash/backends/tiered_backend.py:TieredBackend._stored_payload @92ed63c1, cash/backends/memory_backend.py:InMemoryBackend.set @6a1fb648, cash/notebook/call_refs.py:digest_and_size @c51197c8, cash/kept_state.py:stored_views @8fe0d16f, cash/stored_pickle.py:keeping @d7836c52, cash/notebook/statement/store.py:_nestable @42c0babb, cash/stored_pickle.py:object_digest @3b287f5e, cash/notebook/statement/processor.py:StatementProcessor._keeping_outputs @0374b627 -->
+<!-- claim: cash/backends/memory_backend.py:_snapshot @b77f0d22, cash/backends/tiered_backend.py:TieredBackend._stored_payload @92ed63c1, cash/backends/memory_backend.py:InMemoryBackend.set @6a1fb648, cash/notebook/call_refs.py:digest_and_size @c51197c8, cash/kept_state.py:stored_views @8fe0d16f, cash/stored_pickle.py:keeping @d7836c52, cash/notebook/statement/store.py:_nestable @c08c0b90, cash/stored_pickle.py:object_digest @3b287f5e, cash/notebook/statement/processor.py:StatementProcessor._keeping_outputs @0374b627 -->
 An object of a class of its own (a fitted model, a graph) is kept in memory
 as the bytes its disk entry holds, made when it is stored: its arrays are
 copied out of it then, so a later change to your object, by Python or by
@@ -423,7 +423,7 @@ stored a new result under the same entry meanwhile, the next read takes the
 new entry as it is on disk, and the counts are dropped rather than written over
 it.
 
-<!-- claim: cash/backends/cache_dir.py:CACHE_FORMAT_VERSION == 9, cash/backends/cache_dir.py:CacheDirStamp.check @7bdce11c -->
+<!-- claim: cash/backends/cache_dir.py:CACHE_FORMAT_VERSION == 10, cash/backends/cache_dir.py:CacheDirStamp.check @7bdce11c -->
 The cache folder records the storage format it was written in. When cash opens
 a folder written in a different format, by an older or newer cash, it logs a
 warning and deletes the old entries, so the first run afterwards recomputes.

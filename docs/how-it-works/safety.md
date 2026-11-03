@@ -282,6 +282,20 @@ which replace the file) from appending ones (`open(p, "a")`,
 `to_csv(p, mode="a")`), so rebuilding does not duplicate rows in an
 append-mode log.
 
+### A memoised helper
+
+<!-- claim: cash/notebook/helper_memos.py:put_back @d1b6a156 -->
+A `@functools.cache` helper keeps the answers a statement's run made it
+compute, and a later call of the helper finds them without running its
+body. So a statement that filled such a memo is stored with the key and
+answer pairs it put in, pickled in one graph with its outputs, and a hit
+puts them back into the live memo at the statement's place: the memo then
+holds what the run left, and an output that was one of its answers is the
+very object the memo holds. The hit happens only while the memo holds what
+it held when the run began and lacks every key the run computed. The full
+rules, and what still runs every time, are in
+[Known limitations](../known-limitations.md#a-helper-memoised-with-functoolscache).
+
 ### Unseeded randomness
 
 <!-- claim: cash/tracking/randomness/detect.py:RANDOM_FUNCTIONS @5801a3eb, cash/tracking/randomness/detect.py:RandomnessDetector.is_seeded @9ff99734 -->
