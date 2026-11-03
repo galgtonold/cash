@@ -30,6 +30,11 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 
+#: Non-zero while cash itself sets the global streams (`restore_rng_state`):
+#: the seed watch does not count that as the statement setting them.
+CASH_SETS_STATE = [0]
+
+
 def _unwatched(fn):
     """*fn* without the wrapper the seed watch put around it
     (`lineage._state_wrapper`): cash reading a stream is not the
@@ -107,6 +112,15 @@ def restore_rng_state(state: dict, displaced: dict | None = None) -> None:
             if module in current:
                 displaced.setdefault(module, current[module])
 
+    CASH_SETS_STATE[0] += 1
+    try:
+        _restore_global_streams(state)
+    finally:
+        CASH_SETS_STATE[0] -= 1
+
+
+def _restore_global_streams(state: dict) -> None:
+    """Put each global stream of *state* where it holds it."""
     # Standard library random
     if "random" in state and "random" in sys.modules:
         try:

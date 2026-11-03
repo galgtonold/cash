@@ -13,7 +13,14 @@ import random
 
 import pytest
 
-from cash.tracking.randomness import capture_rng_state, close_seed_watch, watch_first_seeds, watch_seeds
+from cash.tracking.randomness import (
+    capture_rng_state,
+    close_seed_watch,
+    restore_rng_state,
+    streams_set_by_the_statement,
+    watch_first_seeds,
+    watch_seeds,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -69,3 +76,27 @@ def test_cash_reading_the_stream_is_not_the_statement_reading_it():
         random.seed(3)
 
     assert _watched(body) == {"random"}
+
+
+def _set_by_the_statement(body) -> frozenset[str]:
+    start = capture_rng_state()
+    watch_first_seeds(start)
+    body()
+    try:
+        return streams_set_by_the_statement(start)
+    finally:
+        close_seed_watch(start)
+
+
+def test_a_statement_that_puts_the_stream_back_set_it_itself():
+    def body():
+        s = random.getstate()
+        random.seed(3)
+        random.random()
+        random.setstate(s)
+
+    assert _set_by_the_statement(body) == {"random"}
+
+
+def test_cash_putting_the_stream_back_is_not_the_statement_setting_it():
+    assert _set_by_the_statement(lambda: restore_rng_state(capture_rng_state())) == frozenset()
