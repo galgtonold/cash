@@ -757,6 +757,27 @@ is also kept in the cache folder for the next process.
 **Fix:** after such a write, touch the file (`Path(path).touch()`). cash then
 reads its content, and if it changed, everything that read it runs again.
 
+### A change no folder reports
+
+<!-- claim: cash/tracking/file_watch.py:FileWatch.current @31588dc6, cash/tracking/file_watch.py:_DirectoryChanges.poll @bdf6b327 -->
+Between cells, cash takes a file in a watched folder as unchanged while the
+folder's change notifications report nothing
+([how files are checked](how-it-works/invalidation.md)). A few writes send
+none, and are seen only once something else in that folder changes, or the
+kernel restarts:
+
+- a write through a memory map (`np.memmap(path, mode="r+")`) made by
+  another process, after it opened the file;
+- on **Windows**, a write by a program that still has the file open: Windows
+  may report it only when the program closes the file or flushes it.
+
+While the kernel runs on Windows, a folder holding files a cached cell read
+is kept open to watch it, and Windows may refuse to rename or move a folder
+above it until the kernel stops.
+
+**Fix:** set `CASH_FILE_WATCH=0` before starting the kernel. Every file is
+then checked before every cell, which is slower for many files.
+
 ## Loops
 
 ### A long `for`-append loop can stop caching
