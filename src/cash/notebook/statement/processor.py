@@ -33,6 +33,8 @@ from cash.exceptions import (
     CashCacheIneffectiveWarning,
     CashWarning,
 )
+from cash.lineage_tag import clear_tags, tags_untrusted
+from cash.mutation_fingerprint import mutation_fingerprint
 from cash.notebook import shadow as _shadow
 from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol
 from cash.notebook.cache_key import (
@@ -292,6 +294,20 @@ def _may_hold_memory(value: Any) -> bool:
     if issubclass(type(value), (types.ModuleType, type, types.FunctionType, types.BuiltinFunctionType)):
         return False
     return not isinstance(value, (int, float, complex, str, bool, type(None)))
+
+
+def _changed_by_rebinding_only(value: Any) -> bool:
+    """Whether *value* is a module, class or function: what a cell does to
+    one, as far as a lineage tells, is bind its name again."""
+    return isinstance(value, (types.ModuleType, type)) or callable(value) and hasattr(value, "__code__")
+
+
+def _fingerprint(value: Any) -> str | None:
+    """*value*'s ``mutation_fingerprint``, or None when it cannot be taken."""
+    try:
+        return mutation_fingerprint(value)
+    except Exception:  # noqa: BLE001 - user code in a value's hash or pickle: count it as changed
+        return None
 
 
 def share_check_budget(cost: float) -> float:
@@ -2983,6 +2999,42 @@ class StatementProcessor:
         for var, lineage in magic_rng_advances(node, code, self.tracking_state.variable_lineage).items():
             self.tracking_state.lineage.record(var, lineage)
         return {name: magic_output_lineage(base, digest) for name, digest in digests.items()}
+
+    @contextmanager
+    def running_as_written(self) -> Generator[None, None, None]:
+        """Around a cell IPython runs as written, cash watching none of its
+        statements (the upstream check stepped aside: ``RunInstead``).
+
+        Such a cell changes values in place without moving their lineage or
+        the tag beside the object, so the lineage keyed what the value held
+        before: ``m.data[3]['v'] = 1000; m.total(2)`` served a ``@cash.cache``
+        method the result for ``m`` as it was, and a statement below reading
+        ``m`` its entry from before. While the cell runs, a cached function
+        keys a value by its content, not its tag (`tags_untrusted`). After
+        it, a name it bound again is forgotten (:meth:`forget_rebound`), and
+        so is one whose value it changed in place, by its fingerprint before
+        and after (``mutation_fingerprint``; one that cannot be taken counts
+        as changed): a statement reading it then keys it by what it holds.
+        """
+        ns = self.shell.user_ns
+        before = self.bindings()
+        lineage_before = dict(self.tracking_state.variable_lineage)
+        prints: dict[str, tuple[int, str | None]] = {}
+        for name in lineage_before:
+            if name in ns and not _changed_by_rebinding_only(ns[name]):
+                prints[name] = (id(ns[name]), _fingerprint(ns[name]))
+        try:
+            with tags_untrusted():
+                yield
+        finally:
+            self.forget_rebound(before, lineage_before)
+            for name, (identity, print_before) in prints.items():
+                if name not in ns or id(ns[name]) != identity:
+                    continue  # rebound: forgotten above
+                value = ns[name]
+                if print_before is None or _fingerprint(value) != print_before:
+                    self.forget_variable(name)
+                    clear_tags(value)
 
     def bindings(self) -> dict[str, int]:
         """The identity of every binding in the namespace, for :meth:`forget_rebound`."""

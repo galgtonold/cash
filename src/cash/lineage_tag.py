@@ -15,14 +15,16 @@ attribute itself.
 
 from __future__ import annotations
 
+import contextlib
 import threading
 import types
 import weakref
+from collections.abc import Iterator
 from typing import Any
 
 from cash._user_attrs import instance_of, is_routine, own_dict
 
-__all__ = ["clear_tags", "own_tag", "set_tags", "taggable"]
+__all__ = ["clear_tags", "own_tag", "set_tags", "taggable", "tags_trusted", "tags_untrusted"]
 
 #: Every tag, held BESIDE the value rather than on it:
 #: ``id(value) -> (weakref to value, {name: tag})``. Written onto the object,
@@ -94,3 +96,28 @@ def own_tag(value: Any, name: str = "_cash_lineage_hash") -> Any:
             return entry[1][name]
     own = own_dict(value)
     return None if own is None else own.get(name)
+
+
+#: How many runs of code cash does not watch statement by statement are under
+#: way (`tags_untrusted`).
+_UNTRUSTED = [0]
+
+
+@contextlib.contextmanager
+def tags_untrusted() -> Iterator[None]:
+    """While code runs that cash does not watch statement by statement (a
+    cell the notebook runs as written, through IPython): a statement's tag
+    does not say what the value holds. Such code changes a value in place
+    without moving its tag, and a cached function keying the value by the
+    tag would be served the result for the value as it was."""
+    _UNTRUSTED[0] += 1
+    try:
+        yield
+    finally:
+        _UNTRUSTED[0] -= 1
+
+
+def tags_trusted() -> bool:
+    """Whether a statement's tag still says what its value holds: not while
+    code cash does not watch runs (`tags_untrusted`)."""
+    return _UNTRUSTED[0] == 0

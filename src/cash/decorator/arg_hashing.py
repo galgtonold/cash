@@ -49,7 +49,7 @@ from ..content_hashers import (
 )
 from ..exceptions import CashCacheIneffectiveWarning
 from ..jit_functions import is_jit_type, jit_options, jit_python_function
-from ..lineage_tag import own_tag
+from ..lineage_tag import own_tag, tags_trusted
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, IMMUTABLE_PRIMS, writable_types
 from .cash_key import cash_key_method, cash_key_method_of_type, type_name
 
@@ -2369,7 +2369,8 @@ class ArgHasher:
 
     def _trusted_lineage(self, arg: Any) -> str | None:
         """*arg*'s own lineage tag, when it is one the key may trust: a
-        statement's, or a frozen result's that still passes its audit.
+        statement's, unless code cash does not watch is running
+        (`tags_untrusted`), or a frozen result's that still passes its audit.
 
         The instance's OWN tag: one inherited from a tagged class made
         every instance key alike (see cash.lineage_tag).
@@ -2380,7 +2381,7 @@ class ArgHasher:
             if src == LINEAGE_SRC_FROZEN:
                 if not self._frozen.audit(arg):
                     lineage = None
-            elif src != LINEAGE_SRC_STATEMENT:
+            elif src != LINEAGE_SRC_STATEMENT or not tags_trusted():
                 lineage = None
         return lineage
 
