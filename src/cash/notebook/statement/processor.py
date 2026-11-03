@@ -2091,6 +2091,8 @@ class StatementProcessor:
         )
         hit_result = self._hits.serve(run, cached_data, metadata, self._randomness.seed_epochs)
         if hit_result is None:
+            if self._hits.last_refusal:
+                self._freshness.last_miss_reason = self._hits.last_refusal
             return None
         if metadata is not None and metadata.scalar_identity:
             # Stored where an attribute was set on a pandas scalar: this
