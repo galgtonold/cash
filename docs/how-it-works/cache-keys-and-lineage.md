@@ -230,7 +230,7 @@ does; the library calls inside it that are keyed on the value are served.
 A statement's inputs come from the names it mentions. Two real dependencies
 are not among them, and each has its own part of the key.
 
-<!-- claim: cash/tracking/randomness/lineage.py:hidden_lineage_reads @ea0de309, cash/tracking/randomness/lineage.py:hidden_lineage_writes @4b64944a, cash/tracking/randomness/lineage.py:advanced_rng_lineage @d2d070a9, cash/tracking/randomness/lineage.py:drawn_rng_vars @9ec87297, cash/notebook/callee_reach.py:helper_seeded_modules @8917bd4e, cash/notebook/statement/randomness.py:StatementRandomness.adopt_seeds_set_by @ad8c5e53 -->
+<!-- claim: cash/tracking/randomness/lineage.py:hidden_lineage_reads @ea0de309, cash/tracking/randomness/lineage.py:hidden_lineage_writes @4b64944a, cash/tracking/randomness/lineage.py:advanced_rng_lineage @d2d070a9, cash/tracking/randomness/lineage.py:drawn_rng_vars @9ec87297, cash/notebook/callee_reach.py:helper_seeded_modules @8917bd4e, cash/notebook/statement/randomness.py:StatementRandomness.adopt_seeds_set_by @1ca29ec1 -->
 **The random seed.** `x = np.random.rand(3)` mentions no variable, so editing
 `np.random.seed(0)` above it would change nothing. Each global random module
 therefore gets a hidden lineage variable: a `seed()` call writes it, and a draw
@@ -247,7 +247,18 @@ memo the call fills, writes them too: cash sees the stream seeded and takes
 where it stands as the variable's lineage, right after the statement that set
 it. The upstream check gives the variable the lineage that statement left,
 so the cells below a seeding helper re-run nothing above them on a first Run
-All. A `def` neither seeds nor draws, its decorators and defaults aside: its
+All.
+
+<!-- claim: cash/notebook/statement/randomness.py:StatementRandomness.unseed_streams_not_seeded_above @c93c685a -->
+A seed counts only for the draws below it. On the next Run All of the same
+kernel, the stream a cell further down seeded stands seeded when the draws
+above that cell run again, but a restart and Run All, which a cached notebook
+must agree with, draws them from an unseeded stream. So before each cell cash
+takes a stream as unseeded when no cell above seeds it: one whose seed is
+written out, or whose last complete run seeded it inside a call (a
+`functools.cache` helper reseeding as it fills its memo). A seed inside a call
+cannot be read from the source, so while a cell above has not run in full in
+this kernel the stream stays seeded. A `def` neither seeds nor draws, its decorators and defaults aside: its
 body runs when the function is called, and the statement calling it seeds or
 draws there.
 

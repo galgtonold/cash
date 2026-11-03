@@ -162,6 +162,11 @@ class StatementRandomness:
         #: Streams a seeding statement of the notebook gave a lineage
         #: (`record_seeds`): what `unseed_streams_not_seeded_above` may undo.
         self._seeded_by_a_statement: set[str] = set()
+        #: Streams a statement of the notebook seeded through a call cash
+        #: does not read as seeding (``random.seed`` inside a helper), as
+        #: `adopt_seeds_set_by` adopted it: also what
+        #: `unseed_streams_not_seeded_above` may undo.
+        self._seeded_by_a_call: set[str] = set()
         #: The streams the statements the current cell ran seeded (a branch
         #: not taken runs none of its statements), and per cell source
         #: (`cell_key`) what its last complete run seeded.
@@ -259,6 +264,12 @@ class StatementRandomness:
         adopted = self.adopt_unseen_seeds()
         own = {var: lineage for var, lineage in adopted.items() if var in {rng_virtual_var(m) for m in modules}}
         note_seeded_unseen(self.tracking_state, code, key, own)
+        # The cell seeded these as it ran: a cell below that draws counts
+        # them as seeded above it (`unseed_streams_not_seeded_above`).
+        for module in modules:
+            if rng_virtual_var(module) in own:
+                self._cell_seeds.add(module)
+                self._seeded_by_a_call.add(module)
 
     def adopt_seeds_of_a_hit(self, reseeded: Iterable[str] | None, code: str) -> None:
         """A hit put back the streams its run seeded as it ran (*reseeded*),
@@ -386,15 +397,22 @@ class StatementRandomness:
         loop or function always counts, whatever the record says, and a cell
         not run yet seeds what it spells.
 
-        Only a stream a seeding statement of the notebook gave its lineage:
-        one adopted from a seed cash did not read (`adopt_unseen_seeds`)
-        may come from a call above that seeds unseen. A cell that does not
-        parse counts as seeding.
+        Only a stream a statement of the notebook gave its lineage: a
+        seeding statement, or one whose run seeded it inside a call cash
+        does not read as seeding (``random.seed`` in a ``functools.cache``
+        helper), whose cell then counts as seeding it once it ran in full.
+        Such a seed cannot be read from the source, so while a cell above
+        has not run in full in this kernel the stream stays seeded: that
+        cell may seed it unseen. A stream adopted from a seed set outside
+        the notebook's statements (before ``%cash_on``) is never undone. A
+        cell that does not parse counts as seeding.
         """
+        lineage = self.tracking_state.variable_lineage
         candidates = [
             module
             for module in ("random", "numpy.random")
-            if module in self._seeded_by_a_statement and rng_virtual_var(module) in self.tracking_state.variable_lineage
+            if (module in self._seeded_by_a_statement or module in self._seeded_by_a_call)
+            and rng_virtual_var(module) in lineage
         ]
         if not candidates:
             return
@@ -406,6 +424,9 @@ class StatementRandomness:
             spelled_here, unconditional = written
             spelled = spelled_here | self.helper_seeds(clean_cell_source(cell))
             ran = self._seeds_by_cell.get(cell_key(cell))
+            if ran is None:
+                # Not run in full: a seed inside a call it makes is unseen.
+                seeded_above |= self._seeded_by_a_call
             seeded_above |= spelled if ran is None else ran | (spelled & unconditional)
         unseeded = [module for module in candidates if module not in seeded_above]
         for module in unseeded:
@@ -413,6 +434,8 @@ class StatementRandomness:
             self.seed_epochs.pop(module, None)
             self.detector.seeded_modules.discard(module)
             self._seeded_by_a_statement.discard(module)
+            self._seeded_by_a_call.discard(module)
+            self._adopted.discard(module)
             self._ledgered_generation[module] = seed_generation(module)
         count_as_unseeded(unseeded)
 

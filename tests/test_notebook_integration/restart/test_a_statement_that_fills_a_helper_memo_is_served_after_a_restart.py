@@ -130,3 +130,21 @@ def test_a_cell_above_that_fills_a_key_the_statement_computed_reruns_it(nb_runne
     nb_runner.run_all()
     assert nb_runner.peek("res[0] is first") == "True"
     assert nb_runner.peek("benchmark(tour_a, test_suite(5, 3)) is first") == "True"
+
+
+def test_a_second_run_all_in_the_same_kernel_serves_the_benchmark_cells(nb_runner):
+    """The seed ``random_cities`` sets as it fills its memo, in a cell below
+    on the first pass, does not count above it on the next: nothing above
+    the first benchmark cell seeds ``random``, so it keys as unseeded on
+    both passes, as after a restart, and is served."""
+    plain = _plain()
+    nb_runner.create_notebook(CELLS)
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert _calls(nb_runner) == 3
+    nb_runner.run_all()
+    for cell in (4, 5):
+        assert shows_cached(nb_runner.get_output(cell)), (cell, nb_runner.get_output(cell))
+    assert _calls(nb_runner) == 3
+    assert float(nb_runner.peek("x")) == plain["x"]
+    assert nb_runner.peek("res[0] is benchmark(tour_a, test_suite(5, 3))") == "True"
