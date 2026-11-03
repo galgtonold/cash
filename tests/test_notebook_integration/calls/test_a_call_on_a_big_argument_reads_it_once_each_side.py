@@ -4,8 +4,9 @@ The statement's in-place-change fingerprint and the cached call's own check
 of its arguments each read ``x`` before and after: four reads on a first run,
 19.1 s where plain Python took 0.89 s over a 257 MB frame. When the statement
 is nothing but the call they share one read each side. A callee that changes
-its argument is still seen doing it: it runs again on every run, and the
-argument ends as it would without cash.
+its NumPy argument is stored with the state it leaves the argument in, and a
+hit writes that state back into the live array: the argument ends as it
+would without cash.
 """
 
 import pytest
@@ -32,6 +33,15 @@ COUNT = (
     "    return ch.real_hash_numpy(value, *a, **k)\n"
     "ch.hash_numpy = counting\n"
 )
+# Put back what COUNT replaced: left in a reused kernel, `counting` is a
+# function of the user's whose text cash cannot read, running inside every
+# later statement that hashes an array.
+UNCOUNT = (
+    "import cash.content_hashers as ch\n"
+    "if hasattr(ch, 'real_hash_numpy'):\n"
+    "    ch.hash_numpy = ch.real_hash_numpy\n"
+    "    del ch.real_hash_numpy\n"
+)
 READS = "len(__import__('cash.content_hashers').content_hashers.reads_of_x)"
 
 
@@ -40,16 +50,24 @@ def test_a_first_run_reads_the_argument_once_before_and_once_after(nb_runner):
     nb_runner.start_kernel()
     nb_runner.run_cells([1, 2])
     nb_runner.peek(f"exec({COUNT!r})")
-    nb_runner.run_cell(3)
-    assert nb_runner.peek(READS) == "2"
-    nb_runner.run_cell(4)
-    assert "Y 1.732" in nb_runner.get_output(4)
+    try:
+        nb_runner.run_cell(3)
+        assert nb_runner.peek(READS) == "2"
+        nb_runner.run_cell(4)
+        assert "Y 1.732" in nb_runner.get_output(4)
+    finally:
+        nb_runner.peek(f"exec({UNCOUNT!r})")
 
 
-def test_a_call_changing_its_argument_runs_on_every_run(nb_runner):
-    """Re-running the cell brings ``x`` back from its own cell first (the
-    upstream check), so every run must see ``bump`` make its change again:
-    served from the cache, ``x[0]`` would read 0.0."""
+def test_a_call_changing_its_argument_is_served_and_writes_the_change_back(nb_runner):
+    """Philipp's decision of 2026-11-03: a statement whose call changes its
+    input in place is stored, and a hit writes the state the run left the
+    input in back into the live object, for NumPy arrays, pandas frames and
+    plain lists, dicts and sets; anything else keeps running every time.
+
+    ``x`` is a NumPy array, so ``r = bump(x)`` is served on every run after
+    the first, and ``x[0]`` reads 1.0 as after a run from the top: not 0.0
+    (served without the write) nor 2.0 (bumped twice)."""
     nb_runner.create_notebook([SETUP, DEFS, "r = bump(x)", "print('X0', float(x[0]))"])
     nb_runner.start_kernel()
     nb_runner.run_all()
@@ -57,4 +75,5 @@ def test_a_call_changing_its_argument_runs_on_every_run(nb_runner):
     for _ in range(2):
         nb_runner.run_cells([3, 4])
         assert "X0 1.0" in nb_runner.get_output(4)
-        assert "In-place mutation on: x" in nb_runner.get_output(3)
+        assert "CACHED: r = bump(x)" in nb_runner.get_output(3), nb_runner.get_output(3)
+        assert nb_runner.peek("float(x[0])") == "1.0"
