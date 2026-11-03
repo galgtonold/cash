@@ -10,6 +10,7 @@ Counted in reads of the trace, not timed.
 
 from __future__ import annotations
 
+import os
 import types
 
 from cash.notebook.upstream import file_writers
@@ -46,7 +47,8 @@ def test_the_writers_above_a_cell_share_one_read_of_the_trace(monkeypatch):
     first = scheduler._writer_paths("df.to_csv(OUT / 'a.csv')", trace)
     second = scheduler._writer_paths("fig.savefig(CHART)", trace)
 
-    assert first == {"report/a.csv"} and second == {"report/chart.png"}
+    # Joined as this OS spells a path: report\\a.csv on Windows.
+    assert first == {os.path.join("report", "a.csv")} and second == {os.path.join("report", "chart.png")}
     assert reads == 1, f"the trace was read {reads} times for two writers"
     # A trace that grew is read again.
     trace.append(_entry("OUT = 'elsewhere'", "OUT"))
