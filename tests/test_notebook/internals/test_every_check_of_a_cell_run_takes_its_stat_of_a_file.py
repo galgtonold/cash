@@ -49,14 +49,19 @@ def docs(tmp_path) -> dict[str, dict]:
 
 @pytest.fixture
 def stats_taken(monkeypatch) -> list[str]:
+    """Each ``stat`` or ``lstat`` taken, by path: the run's pass takes an
+    ``lstat`` of anything that is no link (`run_memo.stats_this_run`)."""
     taken: list[str] = []
-    real = os.stat
 
-    def counting(path, *args, **kwargs):
-        taken.append(os.fspath(path))
-        return real(path, *args, **kwargs)
+    def counting(real):
+        def call(path, *args, **kwargs):
+            taken.append(os.fspath(path))
+            return real(path, *args, **kwargs)
 
-    monkeypatch.setattr(os, "stat", counting)
+        return call
+
+    monkeypatch.setattr(os, "stat", counting(os.stat))
+    monkeypatch.setattr(os, "lstat", counting(os.lstat))
     return taken
 
 

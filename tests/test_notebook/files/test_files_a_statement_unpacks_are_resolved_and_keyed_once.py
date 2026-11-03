@@ -67,7 +67,7 @@ def test_both_spellings_of_a_read_are_keyed_as_before_from_one_look(tmp_path, mo
     image.write_bytes(b"jpg")
     looked = []
     real = file_deps.realpath_of_read_this_run
-    monkeypatch.setattr(file_deps, "realpath_of_read_this_run", lambda p: looked.append(p) or real(p))
+    monkeypatch.setattr(file_deps, "realpath_of_read_this_run", lambda p, **k: looked.append(p) or real(p, **k))
 
     component = compute_file_hash_component({str(image), os.path.join("faces", "a.jpg")})
 
