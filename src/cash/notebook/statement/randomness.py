@@ -4,6 +4,7 @@ the seed and draw ledgers a cache key depends on."""
 from __future__ import annotations
 
 import ast
+import functools
 import hashlib
 import logging
 import types
@@ -46,6 +47,7 @@ from cash.tracking.randomness import (
 from cash.tracking.randomness.detect import RandomnessCallInfo, mints_unseeded_generator
 from cash.tracking.randomness.estimator_draws import estimator_draws
 
+from ..._memo import NOTEBOOK_STATEMENTS
 from ...analysis.code_analyzer import clean_cell_source, parse_cell_source
 from ...decorator.rng import unseeded_library_calls_in
 from ...exceptions import SOURCE_RETRIEVAL_ERRORS
@@ -398,13 +400,13 @@ class StatementRandomness:
             return
         seeded_above: set[str] = set()
         for cell in cells_above:
-            tree = parse_cell_source(cell)
-            if tree is None:
+            written = _seeds_written(cell)
+            if written is None:
                 return
-            source = clean_cell_source(cell)
-            spelled = get_seeding_rng_modules(source) | self.helper_seeds(source)
+            spelled_here, unconditional = written
+            spelled = spelled_here | self.helper_seeds(clean_cell_source(cell))
             ran = self._seeds_by_cell.get(cell_key(cell))
-            seeded_above |= spelled if ran is None else ran | (spelled & unconditional_seeds(tree))
+            seeded_above |= spelled if ran is None else ran | (spelled & unconditional)
         unseeded = [module for module in candidates if module not in seeded_above]
         for module in unseeded:
             self.tracking_state.lineage.discard(rng_virtual_var(module))
@@ -1079,6 +1081,21 @@ _CONDITIONAL = (
     ast.With,
     ast.AsyncWith,
 )
+
+
+@functools.lru_cache(maxsize=NOTEBOOK_STATEMENTS)
+def _seeds_written(cell: str) -> tuple[frozenset[str], frozenset[str]] | None:
+    """``(seeded, unconditionally)``: the streams the text of *cell* seeds,
+    and those of them a statement at its top seeds (`unconditional_seeds`);
+    None when it does not parse.
+
+    Memoised by the text: asked of every cell above the one about to run,
+    before each cell.
+    """
+    tree = parse_cell_source(cell)
+    if tree is None:
+        return None
+    return frozenset(get_seeding_rng_modules(clean_cell_source(cell))), frozenset(unconditional_seeds(tree))
 
 
 def unconditional_seeds(tree: ast.Module) -> set[str]:
