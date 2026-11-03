@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 CASH_SETS_STATE = [0]
 
 
-def _unwatched(fn):
+def unwatched(fn):
     """*fn* without the wrapper the seed watch put around it
     (`lineage._state_wrapper`): cash reading a stream is not the
     statement reading it."""
@@ -59,7 +59,7 @@ def capture_rng_state() -> dict:
     # Standard library random
     if "random" in sys.modules:
         try:
-            state["random"] = _unwatched(random.getstate)()
+            state["random"] = unwatched(random.getstate)()
         except (TypeError, AttributeError) as e:
             logger.debug("[RANDOMNESS] Failed to capture random state: %s", e)
 
@@ -68,7 +68,7 @@ def capture_rng_state() -> dict:
         try:
             import numpy as np
 
-            state["numpy.random"] = _unwatched(np.random.get_state)()
+            state["numpy.random"] = unwatched(np.random.get_state)()
         except (ImportError, AttributeError) as e:
             logger.debug("[RANDOMNESS] Failed to capture numpy random state: %s", e)
 
@@ -378,7 +378,7 @@ def moved_carriers(
         except (TypeError, ValueError, AttributeError, NotImplementedError):
             moved.append((where, state, _UNREADABLE))
             continue
-        if state is _UNREADABLE or not _rng_states_equal(_flatten_state(state), _flatten_state(after)):
+        if state is _UNREADABLE or not rng_states_equal(_flatten_state(state), _flatten_state(after)):
             moved.append((where, state, after))
     return moved
 
@@ -464,7 +464,7 @@ def moved_carrier_names(positions: dict[str, tuple[object, object]], user_ns: di
         except (TypeError, ValueError, AttributeError, NotImplementedError):
             moved.add(name)
             continue
-        if not _rng_states_equal(_flatten_state(before), _flatten_state(after)):
+        if not rng_states_equal(_flatten_state(before), _flatten_state(after)):
             moved.add(name)
     return moved
 
@@ -501,7 +501,7 @@ def replay_argument_carriers(moved: list, named: dict[str, object]) -> None:
             kind = rng_carrier_kind(obj)
             if kind is None:
                 continue
-            if not _rng_states_equal(_flatten_state(_carrier_state(obj, kind)), _flatten_state(pre)):
+            if not rng_states_equal(_flatten_state(_carrier_state(obj, kind)), _flatten_state(pre)):
                 continue
             _set_carrier_state(obj, kind, post)
         except (TypeError, ValueError, AttributeError, NotImplementedError) as e:
@@ -521,7 +521,7 @@ def replay_carriers(moved: list) -> None:
             kind = rng_carrier_kind(obj)
             if kind is None:
                 continue
-            if not _rng_states_equal(_flatten_state(_carrier_state(obj, kind)), _flatten_state(pre)):
+            if not rng_states_equal(_flatten_state(_carrier_state(obj, kind)), _flatten_state(pre)):
                 continue
             _set_carrier_state(obj, kind, post)
         except (TypeError, ValueError, AttributeError, NotImplementedError) as e:
@@ -569,12 +569,12 @@ def rng_modules_changed(before: dict, after: dict) -> set[str]:
         b, a = before.get(module), after.get(module)
         if b is None or a is None:
             changed.add(module)
-        elif not _rng_states_equal(b, a):
+        elif not rng_states_equal(b, a):
             changed.add(module)
     return changed
 
 
-def _rng_states_equal(before: object, after: object) -> bool:
+def rng_states_equal(before: object, after: object) -> bool:
     """True when two captured per-module RNG states are identical.
 
     Compares the states DIRECTLY rather than digesting both sides. This is on the
@@ -603,7 +603,7 @@ def _rng_states_equal(before: object, after: object) -> bool:
             # truthiness check ambiguous -- so those fall through to elementwise.
             return bool(before == after)
         except (ValueError, RuntimeError):
-            return all(_rng_states_equal(x, y) for x, y in zip(before, after))
+            return all(rng_states_equal(x, y) for x, y in zip(before, after))
     if isinstance(before, (int, float, complex, str, bytes, bool, type(None))):
         return type(before) is type(after) and before == after
     b_np, a_np = getattr(before, "numpy", None), getattr(after, "numpy", None)
@@ -653,4 +653,4 @@ def object_carrier_state(obj: object) -> object | None:
 
 def same_carrier_state(before: object, after: object) -> bool:
     """Whether two states from :func:`object_carrier_state` are the same position."""
-    return _rng_states_equal(before, after)
+    return rng_states_equal(before, after)

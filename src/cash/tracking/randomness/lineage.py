@@ -220,10 +220,10 @@ def _first_seed(module: str, args: tuple, kwargs: dict) -> None:
     if start is None or value is None:
         return
     try:
-        from .state import _rng_states_equal, capture_rng_state
+        from .state import capture_rng_state, rng_states_equal
 
         now = capture_rng_state().get(module)
-        if now is not None and _rng_states_equal(start, now):
+        if now is not None and rng_states_equal(start, now):
             _SEEDED_FIRST.add(module)
     except Exception:  # noqa: BLE001 - unread, it counts as a draw, as before
         return
@@ -450,18 +450,18 @@ def judged_draws() -> int:
 
 def _stream_position(module: str) -> str | None:
     """Digest of *module*'s global stream as it stands, or None."""
-    from .state import _unwatched
+    from .state import unwatched
 
     try:
         if module == "random":
             import random
 
-            payload = repr(_unwatched(random.getstate)()).encode("utf-8")
+            payload = repr(unwatched(random.getstate)()).encode("utf-8")
         elif module == "numpy.random":
             np_random = sys.modules.get("numpy.random")
             if np_random is None:
                 return None
-            name, keys, pos, has_gauss, cached = _unwatched(np_random.get_state)()
+            name, keys, pos, has_gauss, cached = unwatched(np_random.get_state)()
             payload = b"%s|%d|%d|%r|" % (str(name).encode(), int(pos), int(has_gauss), float(cached))
             payload += keys.tobytes()
         else:
