@@ -186,11 +186,26 @@ static uint64_t blob_check(const unsigned char *p, size_t n) {
     return mix64(h ^ tail);
 }
 
+/* Sets up to this many elements are sorted without the radix tables. */
+#define SMALL_SORT 64
+
 /* Sort by hash, then by slot (so equal hashes keep the table's order): LSD
  * radix on the hash, as unsigned, 16 bits a pass; the slot order is the
  * input order, which radix passes keep. */
 static int sort_items(Item *items, size_t n) {
     if (n < 2) return 0;
+    if (n <= SMALL_SORT) {
+        /* Insertion sort, stable: the radix pass's tables (2 MiB zeroed)
+         * cost 200 us a set, seconds for the 245,760 small frozensets a
+         * Held-Karp memo keys on. */
+        for (size_t i = 1; i < n; i++) {
+            Item it = items[i];
+            size_t j = i;
+            for (; j > 0 && (uint64_t)items[j - 1].hash > (uint64_t)it.hash; j--) items[j] = items[j - 1];
+            items[j] = it;
+        }
+        return 0;
+    }
     Item *tmp = PyMem_Malloc(n * sizeof *items);
     size_t *count = PyMem_Calloc(4 * 65536, sizeof *count);
     if (!tmp || !count) {
