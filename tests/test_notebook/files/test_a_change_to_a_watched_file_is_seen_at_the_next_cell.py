@@ -94,10 +94,14 @@ def test_an_edit_made_right_after_the_files_stat_is_seen_at_the_next_cell(cash_m
     file_watch.reset()  # the next check starts the watch, and stats the file
     real_lstat = os.lstat
     edited: list[bool] = []
+    spelled = os.path.normcase(os.path.normpath(target))
+
+    def same(path) -> bool:  # a recorded path may use forward slashes on Windows
+        return os.path.normcase(os.path.normpath(os.fspath(path))) == spelled
 
     def lstat_then_edit(path, *args, **kwargs):
         st = real_lstat(path, *args, **kwargs)
-        if not edited and os.fspath(path) == str(target):
+        if not edited and same(path):
             edited.append(True)
             with open(target, "w", encoding="utf-8") as f:
                 f.write("PHOTO 03")
