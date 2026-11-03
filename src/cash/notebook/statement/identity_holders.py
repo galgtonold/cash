@@ -121,9 +121,31 @@ _MAX_FLAT_KEPT = 5_000_000
 _flat_kept = [0]
 
 
+#: A fingerprint of a big container's content (``shape_witness``), None
+#: without the C kernels: the addresses, types and nesting of everything
+#: in it, and the value of each str and int.
+_SHAPE_WITNESS = getattr(_native.kernels, "shape_witness", None)
+
+#: What `_Walk._read_flat` found in a big container this cell, by the
+#: witness of its content: the numbers it spelled, the lists it counted
+#: against the budget. A frame changed by each statement of a cell (a
+#: column added) is checked after each one, and its columns it left alone
+#: were read again each time: two million ``(action, time)`` records,
+#: student_8's exploded sessions. The witness is taken again, at C speed
+#: and holding nothing (`_SHAPE_WITNESS`), so the memo keeps no object
+#: alive and adds no reference any other check counts; a container changed
+#: in place, or freed and another built at its address, has another
+#: witness. Cleared when the cell ends (`forget_flat_reads`).
+_SHAPE_READS: dict[tuple[int, int], tuple[frozenset[int], int, bool]] = {}
+#: Most entries `_SHAPE_READS` keeps.
+_MAX_SHAPE_READS = 1024
+
+
 def forget_flat_reads() -> None:
-    """Drop what `_FLAT_READS` and `_ARROW_READS` keep: the cell ended."""
+    """Drop what `_FLAT_READS`, `_SHAPE_READS` and `_ARROW_READS` keep: the
+    cell ended."""
     _FLAT_READS.clear()
+    _SHAPE_READS.clear()
     _ARROW_READS.clear()
     _flat_kept[0] = 0
 
@@ -730,6 +752,15 @@ def _numpy_array(kind: type) -> bool:
     return kind.__name__ == "ndarray" and attribute_or(kind, "__module__") == "numpy"
 
 
+def _nodes_read(items: list[Any]) -> set[int]:
+    """The ids of the containers `_Walk._read_flat` keeps of *items* for
+    `_Walk.seen_all`, read again: what a memo's answer for *items* leaves
+    out."""
+    walk = _Walk({})
+    walk._read_flat_now(items)
+    return walk.seen_all()
+
+
 class _Walk:
     """One look through what objects hold (see the module docstring): the
     ``id()`` of each object met in `seen`, each weak reference in `refs`,
@@ -755,8 +786,9 @@ class _Walk:
         self.keep_refs = keep_refs
         self.levels = levels
         self.seen: set[int] = set() if seen is None else seen
-        #: Containers `_read_nested` read, not yet in *seen* (`seen_all`).
-        self._unseen: list[list[Any]] = []
+        #: Containers `_read_nested` read, not yet in *seen* (`seen_all`),
+        #: or a function giving them.
+        self._unseen: list[Any] = []
         self.budget = _MAX_SEEN
         self.refs: list[Any] = []
         self.numbers: set[int] = set()
@@ -914,13 +946,47 @@ class _Walk:
         """Read a big container of leaves, or of tuples of leaves (records),
         at C speed: only its ``int``s matter. False when it holds anything
         else, to be walked item by item. The very items read before in this
-        cell (`_FLAT_READS`) are leaves again, spelling the same numbers."""
-        big = len(items) > _MAX_SCANNED
-        if not self.quiet and big:
-            known = _flat_read_before(items)
-            if known is not None:
-                self.numbers.update(known)
+        cell (`_FLAT_READS`) are leaves again, spelling the same numbers,
+        and so is a container of the same content (`_SHAPE_READS`)."""
+        if self.quiet or len(items) <= _MAX_SCANNED:
+            return self._read_flat_now(items)
+        known = _flat_read_before(items)
+        if known is not None:
+            self.numbers.update(known)
+            return True
+        # Lists and tuples only: a column of leaves is known by its very
+        # items (`_FLAT_READS`), and its witness would cost each first read.
+        witness = (
+            _SHAPE_WITNESS(items, _NESTED_LEVELS)
+            if _SHAPE_WITNESS is not None and type(items) is list and type(items[0]) in _NESTED
+            else None
+        )
+        if witness is not None:
+            read = _SHAPE_READS.get(witness)
+            if read is not None and read[1] <= self.budget:
+                numbers, lists, nodes = read
+                self.numbers.update(numbers)
+                self.budget -= lists
+                if nodes:
+                    # The containers read, as the read would have kept them.
+                    self._unseen.append(functools.partial(_nodes_read, items))
                 return True
+        # Read into a set of its own: what it finds, all of it, is what it
+        # keeps, numbers met before in this walk too.
+        numbers, budget, unseen = self.numbers, self.budget, len(self._unseen)
+        self.numbers = set()
+        try:
+            done = self._read_flat_now(items)
+        finally:
+            found, self.numbers = self.numbers, numbers
+            numbers |= found
+        if done and witness is not None and len(_SHAPE_READS) < _MAX_SHAPE_READS:
+            _SHAPE_READS[witness] = (frozenset(found), budget - self.budget, len(self._unseen) > unseen)
+        return done
+
+    def _read_flat_now(self, items: list[Any]) -> bool:
+        """`_read_flat`, without its memos."""
+        big = len(items) > _MAX_SCANNED
         kinds = set(map(type, items))
         flat: Any = items
         if not kinds <= _LEAVES:
@@ -1025,7 +1091,8 @@ class _Walk:
         """*seen*, with the containers `_read_nested` read."""
         unseen = self._unseen
         while unseen:
-            self.seen.update(map(id, unseen.pop()))
+            found = unseen.pop()
+            self.seen.update(found() if callable(found) else map(id, found))
         return self.seen
 
     def _read_leaves(self, flat: Any, kinds: set[type]) -> None:

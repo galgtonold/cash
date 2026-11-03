@@ -457,7 +457,13 @@ class _Identifying(Mapping):
         return iter({**self._by_key, **dict.fromkeys(self._pending)})
 
     def __len__(self) -> int:
-        return len(self._by_key.keys() | self._pending.keys())
+        # Asked once per file by a truth test (`stats.get(p) if stats`): the
+        # union of 38,000 keys each time cost 26 s a cell on a photo set.
+        by_key = self._by_key
+        return len(by_key) + sum(1 for key in self._pending if key not in by_key)
+
+    def __bool__(self) -> bool:
+        return bool(self._pending) or bool(self._by_key)
 
     def __bool__(self) -> bool:
         # Not by ``__len__``, which builds the union of the keys: asked for
