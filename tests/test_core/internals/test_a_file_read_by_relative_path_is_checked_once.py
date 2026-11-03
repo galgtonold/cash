@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 
+from cash._paths import normalize_path
 from cash.tracking import file_dep_snapshot
 from cash.tracking.file_dep_snapshot import FreshnessMemo, snapshot_file_deps, snapshot_is_fresh
 
@@ -37,7 +38,7 @@ def _snapshot_both_spellings(tmp_path, monkeypatch):
     for i in range(N):
         relative = os.path.join("docs", f"doc{i:02d}.txt")
         paths.add(relative)
-        paths.add(os.path.abspath(relative))
+        paths.add(normalize_path(os.path.abspath(relative)))  # as the tracker records it: C:/... on Windows
     snap = snapshot_file_deps(paths)
     assert len(snap) == 2 * N, "control: each read recorded under both spellings"
     return project, snap
@@ -63,8 +64,11 @@ def test_each_file_is_stat_ed_once(tmp_path, monkeypatch):
     assert len(stats) == N
 
     stats.clear()
-    assert snapshot_is_fresh(snap, FreshnessMemo()) == (True, None)
-    assert len(stats) == N
+    memo = FreshnessMemo()
+    assert snapshot_is_fresh(snap, memo) == (True, None)
+    # With a memo, a listing of the folder stands in for the stats where
+    # it can (Windows: `stats_from_listings`).
+    assert len(stats) == len([p for p in snap if os.path.isabs(p) and p not in memo.listed])
 
 
 def test_a_changed_file_is_still_stale(tmp_path, monkeypatch):
