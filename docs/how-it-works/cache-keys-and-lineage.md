@@ -40,7 +40,7 @@ value the watchers cannot fully cover is hashed every time.
 
 | Type | Library | What is hashed |
 |------|---------|----------------|
-| `DataFrame`, `Series` | pandas | column and index labels and axis names, dtypes (with a categorical's categories and order), an index's `freq`, `attrs`, and every value: numbers, booleans and dates from their memory, text columns of the Arrow-backed `str` type from their Arrow memory, other Python objects and strings by their pickled form, so `1` and `'1'` differ (a column holding only floats, only bools or only ints as the typed array it converts to) |
+| `DataFrame`, `Series` | pandas | column and index labels and axis names, dtypes (with a categorical's categories and order), an index's `freq`, `attrs`, and every value: numbers, booleans and dates from their memory, text columns of the Arrow-backed `str` type from their Arrow memory, other Python objects and strings by their pickled form, so `1` and `'1'` differ (a column holding only floats, only bools or only ints as the typed array it converts to; lists and tuples of plain values holding dates, such as `(action, datetime)` records, as their values written out with a tag each) |
 | `ndarray` | numpy | shape, dtype, memory order and every byte; an object array by its items, column by column |
 | `DataFrame`, `Series` | polars | schema and every value, each column from its Arrow memory; an `Object` column by its values' content |
 | `LazyFrame` | polars | the serialised plan, including in-memory data; a plan reading a file holds the path, and the decorator records the files it scans as the call's reads |

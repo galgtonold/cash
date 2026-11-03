@@ -63,7 +63,7 @@ from cash.closure_sharing import slot_readers
 from cash.install_paths import is_user_code_module
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
-__all__ = ["IdentityHeld", "as_address", "forget_flat_reads", "identity_held_reason", "library_parts"]
+__all__ = ["IdentityHeld", "as_address", "end_cell_reads", "forget_flat_reads", "identity_held_reason", "library_parts"]
 
 #: A container with more items is read at C speed when it holds only
 #: leaves or records of them, and walked item by item otherwise.
@@ -111,7 +111,7 @@ _NESTED_LEAVES = attribute_or(_native.kernels, "nested_leaves", None)
 #: column of a wide frame per pass checks every column after each pass;
 #: the columns it left are the same strings, found here by identity at C
 #: speed instead of read again (student_5: 113 s for one pass over 60
-#: columns of 20,000 rows). Cleared when the cell ends (`forget_flat_reads`).
+#: columns of 20,000 rows). Cleared when the cell ends (`end_cell_reads`).
 _FLAT_READS: dict[int, list[tuple[list[Any], frozenset[int]]]] = {}
 #: The leaves `_FLAT_READS` keeps: plain values every reference count of
 #: cash's leaves out, so keeping them changes no other check's answer.
@@ -135,19 +135,40 @@ _SHAPE_WITNESS = attribute_or(_native.kernels, "shape_witness", None)
 #: and holding nothing (`_SHAPE_WITNESS`), so the memo keeps no object
 #: alive and adds no reference any other check counts; a container changed
 #: in place, or freed and another built at its address, has another
-#: witness. Cleared when the cell ends (`forget_flat_reads`).
+#: witness. Kept from cell to cell (`end_cell_reads`): a frame's column the
+#: next cell leaves alone has the witness it had, and was read again by
+#: each cell's first statement on the frame, half a second for student_8's
+#: sessions.
 _SHAPE_READS: dict[tuple[int, int], tuple[frozenset[int], int, bool]] = {}
 #: Most entries `_SHAPE_READS` keeps.
 _MAX_SHAPE_READS = 1024
+#: Most numbers an entry of `_SHAPE_READS` may hold to be kept past its
+#: cell: a column of records holding millions of ints keeps them only
+#: while its cell runs.
+_KEPT_SHAPE_NUMBERS = 1024
 
 
 def forget_flat_reads() -> None:
-    """Drop what `_FLAT_READS`, `_SHAPE_READS` and `_ARROW_READS` keep: the
-    cell ended."""
+    """Drop what `_FLAT_READS`, `_SHAPE_READS` and `_ARROW_READS` keep."""
     _FLAT_READS.clear()
     _SHAPE_READS.clear()
     _ARROW_READS.clear()
     _flat_kept[0] = 0
+
+
+def end_cell_reads() -> None:
+    """The cell ended: drop what `_FLAT_READS` and `_ARROW_READS` keep,
+    which hold the very objects read, and the entries of `_SHAPE_READS`
+    holding many numbers; the rest of it, which holds no object, is kept
+    for the next cell until it is half full."""
+    _FLAT_READS.clear()
+    _ARROW_READS.clear()
+    _flat_kept[0] = 0
+    if len(_SHAPE_READS) > _MAX_SHAPE_READS // 2:
+        _SHAPE_READS.clear()
+        return
+    for witness in [witness for witness, read in _SHAPE_READS.items() if len(read[0]) > _KEPT_SHAPE_NUMBERS]:
+        del _SHAPE_READS[witness]
 
 
 def _flat_read_before(items: list[Any]) -> frozenset[int] | None:
@@ -484,7 +505,7 @@ def _arrow_text_numbers(values: Any) -> list[Any] | None:
 #: What `_arrow_text_spelling_numbers` found this cell, by the Arrow array
 #: read (kept, so its id is not reused): Arrow's arrays never change, and a
 #: loop writing one column of a wide frame leaves the others the same
-#: arrays. Cleared when the cell ends (`forget_flat_reads`).
+#: arrays. Cleared when the cell ends (`end_cell_reads`).
 _ARROW_READS: dict[int, tuple[Any, list[Any]]] = {}
 #: `_NUMBER_LINES`' hexadecimal spelling, a whole value (the decimal one,
 #: 7 to 18 digits, is picked by length and `ascii_is_decimal`).

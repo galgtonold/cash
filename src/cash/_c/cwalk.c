@@ -20,6 +20,7 @@
 #include <string.h>
 
 #include "cwalk.h"
+#include "datetime.h"
 
 /* Overflow-checked arithmetic without compiler builtins (MSVC has none):
  * 1 on overflow, else 0 and *out set. */
@@ -1719,6 +1720,196 @@ static PyObject *py_shape_witness(PyObject *self, PyObject *const *args, Py_ssiz
     return Py_BuildValue("(KK)", (unsigned long long)w.a, (unsigned long long)w.b);
 }
 
+
+/*
+ * dated_records(items, probe, levels) -> bytes | None
+ *
+ * dated_records.dated_records_bytes(items, probe, levels): the content of
+ * the exact list *items* as one byte stream, for a column of records that
+ * holds dates (student_8's sessions of ``(action, datetime)``), whose
+ * pickle cost a microsecond and more a datetime. Every value is a tag and
+ * its bytes, little-endian:
+ *
+ *   list    '[' u64 length, then the items    tuple   '(' u64 length, ...
+ *   str     's' u64 n, n bytes of UTF-8 (surrogates passed through)
+ *   int     'i' i64 (an exact int that fits; any other: None)
+ *   float   'f' the 8 bytes of the double     bool    'T' / 'F'
+ *   None    'N'                               bytes   'b' u64 n, the n bytes
+ *   datetime 'D' the 10 bytes pickle keeps of a naive exact datetime: year
+ *           (2, big-endian), month (fold in its top bit), day, hour,
+ *           minute, second, microsecond (3, big-endian)
+ *   date    'd' year (2, big-endian), month, day
+ *
+ * None when anything else is met (a subclass, an aware datetime, a big
+ * int, another type), when a list or tuple is met *levels* deep or more
+ * (items of *items* are at depth 0), and when no datetime or date is among
+ * what the first *probe* items hold: the caller pickles those as before.
+ */
+typedef struct {
+    char *buf;
+    Py_ssize_t len, cap;
+} DRBuf;
+
+static int dr_grow(DRBuf *b, Py_ssize_t more) {
+    if (b->len + more <= b->cap) return 0;
+    Py_ssize_t cap = b->cap ? b->cap : 4096;
+    while (cap < b->len + more) {
+        if (cap > PY_SSIZE_T_MAX / 2) {
+            PyErr_NoMemory();
+            return -1;
+        }
+        cap *= 2;
+    }
+    char *nb = PyMem_Realloc(b->buf, (size_t)cap);
+    if (!nb) {
+        PyErr_NoMemory();
+        return -1;
+    }
+    b->buf = nb;
+    b->cap = cap;
+    return 0;
+}
+
+static inline void dr_u64(char *at, uint64_t v) {
+    for (int k = 0; k < 8; k++) at[k] = (char)((v >> (8 * k)) & 0xFF);
+}
+
+static int dr_tagged(DRBuf *b, char tag, const char *data, Py_ssize_t n, int with_length) {
+    if (dr_grow(b, 1 + (with_length ? 8 : 0) + n) < 0) return -1;
+    b->buf[b->len++] = tag;
+    if (with_length) {
+        dr_u64(b->buf + b->len, (uint64_t)n);
+        b->len += 8;
+    }
+    if (n) memcpy(b->buf + b->len, data, (size_t)n);
+    b->len += n;
+    return 0;
+}
+
+/* 1 written, 0 not this form, -1 error; *dated set when a date was written */
+static int dr_write(DRBuf *b, PyObject *obj, int depth, int levels, int *dated) {
+    PyTypeObject *t = Py_TYPE(obj);
+    if (t == &PyList_Type || t == &PyTuple_Type) {
+        if (depth >= levels) return 0;
+        Py_ssize_t n = PySequence_Fast_GET_SIZE(obj);
+        char head[8];
+        dr_u64(head, (uint64_t)n);
+        if (dr_tagged(b, t == &PyList_Type ? '[' : '(', head, 8, 0) < 0) return -1;
+        PyObject **items = PySequence_Fast_ITEMS(obj);
+        for (Py_ssize_t i = 0; i < n; i++) {
+            int r = dr_write(b, items[i], depth + 1, levels, dated);
+            if (r != 1) return r;
+        }
+        return 1;
+    }
+    if (t == &PyUnicode_Type) {
+        if (PyUnicode_IS_ASCII(obj))
+            return dr_tagged(b, 's', (const char *)PyUnicode_DATA(obj), PyUnicode_GET_LENGTH(obj), 1) < 0 ? -1 : 1;
+        PyObject *utf8 = PyUnicode_AsEncodedString(obj, "utf-8", "surrogatepass");
+        if (!utf8) return -1;
+        int r = dr_tagged(b, 's', PyBytes_AS_STRING(utf8), PyBytes_GET_SIZE(utf8), 1);
+        Py_DECREF(utf8);
+        return r < 0 ? -1 : 1;
+    }
+    if (t == &PyLong_Type) {
+        int overflow = 0;
+        long long v = PyLong_AsLongLongAndOverflow(obj, &overflow);
+        if (v == -1 && PyErr_Occurred()) return -1;
+        if (overflow) return 0;
+        char data[8];
+        dr_u64(data, (uint64_t)v);
+        return dr_tagged(b, 'i', data, 8, 0) < 0 ? -1 : 1;
+    }
+    if (t == &PyFloat_Type) {
+        double d = PyFloat_AS_DOUBLE(obj);
+        uint64_t bits;
+        memcpy(&bits, &d, 8);
+        char data[8];
+        dr_u64(data, bits);
+        return dr_tagged(b, 'f', data, 8, 0) < 0 ? -1 : 1;
+    }
+    if (t == &PyBool_Type) return dr_tagged(b, obj == Py_True ? 'T' : 'F', NULL, 0, 0) < 0 ? -1 : 1;
+    if (obj == Py_None) return dr_tagged(b, 'N', NULL, 0, 0) < 0 ? -1 : 1;
+    if (t == &PyBytes_Type) return dr_tagged(b, 'b', PyBytes_AS_STRING(obj), PyBytes_GET_SIZE(obj), 1) < 0 ? -1 : 1;
+    if (t == PyDateTimeAPI->DateTimeType) {
+        if (PyDateTime_DATE_GET_TZINFO(obj) != Py_None) return 0;
+        int year = PyDateTime_GET_YEAR(obj), us = PyDateTime_DATE_GET_MICROSECOND(obj);
+        char data[10] = {(char)(year >> 8),
+                         (char)(year & 0xFF),
+                         (char)(PyDateTime_GET_MONTH(obj) | (PyDateTime_DATE_GET_FOLD(obj) << 7)),
+                         (char)PyDateTime_GET_DAY(obj),
+                         (char)PyDateTime_DATE_GET_HOUR(obj),
+                         (char)PyDateTime_DATE_GET_MINUTE(obj),
+                         (char)PyDateTime_DATE_GET_SECOND(obj),
+                         (char)(us >> 16),
+                         (char)((us >> 8) & 0xFF),
+                         (char)(us & 0xFF)};
+        *dated = 1;
+        return dr_tagged(b, 'D', data, 10, 0) < 0 ? -1 : 1;
+    }
+    if (t == PyDateTimeAPI->DateType) {
+        int year = PyDateTime_GET_YEAR(obj);
+        char data[4] = {(char)(year >> 8), (char)(year & 0xFF), (char)PyDateTime_GET_MONTH(obj),
+                        (char)PyDateTime_GET_DAY(obj)};
+        *dated = 1;
+        return dr_tagged(b, 'd', data, 4, 0) < 0 ? -1 : 1;
+    }
+    return 0;
+}
+
+static PyObject *py_dated_records(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs != 3 || !PyList_CheckExact(args[0]) || !PyLong_CheckExact(args[1]) || !PyLong_CheckExact(args[2])) {
+        PyErr_SetString(PyExc_TypeError, "dated_records(list, int, int)");
+        return NULL;
+    }
+    Py_ssize_t probe = PyLong_AsSsize_t(args[1]);
+    long levels = PyLong_AsLong(args[2]);
+    if (probe < 0 || levels < 1 || levels > 64) {
+        PyErr_SetString(PyExc_ValueError, "probe >= 0, levels 1..64");
+        return NULL;
+    }
+#if PY_BIG_ENDIAN
+    return NOT_IMPL();
+#endif
+    if (!PyDateTimeAPI) {
+        PyDateTime_IMPORT;
+        if (!PyDateTimeAPI) return NULL;
+    }
+    PyObject *items = args[0];
+    Py_INCREF(items);
+    DRBuf b = {NULL, 0, 0};
+    GCPause gp;
+    gc_pause(&gp);
+    int r = 1, dated = 0;
+    /* The list's own head, then the probe: no date among what its first
+     * items hold, and nothing more is read. */
+    Py_ssize_t n = PyList_GET_SIZE(items);
+    char head[8];
+    dr_u64(head, (uint64_t)n);
+    if (dr_tagged(&b, '[', head, 8, 0) < 0) r = -1;
+    for (Py_ssize_t i = 0; r == 1 && i < n; i++) {
+        if (i == probe && !dated) {
+            r = 0;
+            break;
+        }
+        if (i >= PyList_GET_SIZE(items)) { /* cannot shrink with the GC paused; checked anyway */
+            r = 0;
+            break;
+        }
+        r = dr_write(&b, PyList_GET_ITEM(items, i), 1, (int)levels, &dated);
+    }
+    if (r == 1 && !dated) r = 0;
+    gc_resume(&gp);
+    Py_DECREF(items);
+    PyObject *out = NULL;
+    if (r == 1)
+        out = PyBytes_FromStringAndSize(b.buf, b.len);
+    else if (r == 0)
+        out = Py_NewRef(Py_None);
+    PyMem_Free(b.buf);
+    return out;
+}
+
 static PyMethodDef cwalk_methods[] = {
     {"shape_witness", (PyCFunction)(void (*)(void))py_shape_witness, METH_FASTCALL,
      "shape_witness(items, levels) -> (int, int) | None"},
@@ -1749,6 +1940,8 @@ static PyMethodDef cwalk_methods[] = {
      "referrers_in(heap, ids) -> list | NotImplemented"},
     {"key_alias_id", (PyCFunction)(void (*)(void))py_key_alias_id, METH_FASTCALL,
      "key_alias_id(seen, atoms, by_name, kinds, identityless, outside, obj) -> None | mark"},
+    {"dated_records", (PyCFunction)(void (*)(void))py_dated_records, METH_FASTCALL,
+     "dated_records(items, probe, levels) -> bytes | None | NotImplemented"},
     {"reduce_dict_apart", (PyCFunction)(void (*)(void))py_reduce_dict_apart, METH_FASTCALL,
      "reduce_dict_apart(full, apart, protocol, obj) -> reduce value"},
     {NULL, NULL, 0, NULL}};
