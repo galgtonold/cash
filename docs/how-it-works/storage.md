@@ -339,6 +339,20 @@ stored as its Arrow chunks, written as they are: pandas' own pickle first
 joins a column's chunks into one copy. A short slice of a long column is
 copied down to its rows, so `df.head()` does not write the whole column.
 
+<!-- claim: cash/backends/datetime_columns.py:reduce_datetime_objects @8d8f381c, cash/backends/datetime_columns.py:_encode @0be5b714, cash/backends/datetime_columns.py:_encode_timestamps @73324abc -->
+A pandas column of Python dates and times (object dtype holding
+`datetime.datetime`, `datetime.date` or `pandas.Timestamp` objects, with
+`None` or `NaT` for missing ones) is stored as columns of numbers, the
+fields pickle keeps of each object, and each object is rebuilt from them:
+several times faster to write and to read than pickling a million objects
+one by one. It comes back as it went in: an object column, each item of
+its own type, value, fold and unit, the aware ones in their one shared
+zone. A column this cannot give back exactly is pickled item by item as
+before: a subclass of `datetime`, items in two zones or in a zone other than
+`datetime.timezone` and `zoneinfo.ZoneInfo` (`pytz`, `dateutil`), any other
+item (a `NaN` for missing), Timestamps of two units, or fewer than 1,024
+items.
+
 <!-- claim: cash/backends/serialization.py:_reduce_polars @f7539f57, cash/backends/serialization.py:_polars_from_arrow @654cf355 -->
 A polars `DataFrame` or `Series` is stored as its Arrow data, so its
 buffers are written to disk and read back as they are, as a pandas frame's
