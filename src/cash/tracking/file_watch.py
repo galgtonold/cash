@@ -476,6 +476,8 @@ _OPEN_EXISTING = 3
 _FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
 _FILE_FLAG_OVERLAPPED = 0x40000000
 _ERROR_IO_INCOMPLETE = 996
+#: How long removing a folder waits for its cancelled read to end.
+_CANCEL_WAIT_SECONDS = 1.0
 #: FILE_NOTIFY_CHANGE_ FILE_NAME | DIR_NAME | ATTRIBUTES | SIZE | LAST_WRITE |
 #: CREATION | SECURITY.
 _NOTIFY_FILTER = 0x1 | 0x2 | 0x4 | 0x8 | 0x10 | 0x40 | 0x100
@@ -542,6 +544,10 @@ class _DirectoryChanges:
         self._drive_type.restype = wintypes.UINT
         self._invalid = wintypes.HANDLE(-1).value
         self._open: dict[int, tuple[Any, Any, Any]] = {}
+        #: Folders whose read ended without being issued again.
+        self._idle: set[int] = set()
+        #: Reads that did not end within the wait after a cancel.
+        self._kept: list[tuple[Any, Any, Any]] = []
         self._next = 0
         self._drives: dict[str, bool] = {}
 
@@ -594,15 +600,35 @@ class _DirectoryChanges:
 
     def remove(self, key: int) -> None:
         held = self._open.pop(key, None)
+        idle = key in self._idle
+        self._idle.discard(key)
         if held is None:
             return
         handle, overlapped, _buffer = held
+        if idle:
+            # No read is pending (it ended with an error, or was not issued
+            # again after the folder went): nothing to cancel or wait for.
+            # Waiting here hung the kernel for good once a watched folder was
+            # deleted and made again.
+            self._close(handle)
+            return
         ctypes = self._ctypes
         moved = self._wintypes.DWORD()
         self._cancel(handle, ctypes.byref(overlapped))
-        # Wait for the cancelled read to end: until then the system may
-        # still write into the buffer and the overlapped block.
-        self._result(handle, ctypes.byref(overlapped), ctypes.byref(moved), True)
+        # Wait for the cancelled read to end -- until then the system may
+        # still write into the buffer and the overlapped block -- but never
+        # for good: asked without waiting, a bounded number of times.
+        deadline = time.monotonic() + _CANCEL_WAIT_SECONDS
+        while not self._result(handle, ctypes.byref(overlapped), ctypes.byref(moved), False):
+            if ctypes.get_last_error() != _ERROR_IO_INCOMPLETE:
+                break  # ended (cancelled or failed): the buffer is free
+            if time.monotonic() >= deadline:
+                # Still not ended: keep the buffer and the block alive for
+                # the process's life rather than free memory the system may
+                # still write into.
+                self._kept.append(held)
+                break
+            time.sleep(0.001)
         self._close(handle)
 
     def poll(self) -> list[tuple[int | None, bool]]:
@@ -616,6 +642,7 @@ class _DirectoryChanges:
                     continue
             elif ctypes.get_last_error() == _ERROR_IO_INCOMPLETE:
                 continue
+            self._idle.add(key)  # no read pending any more: never waited on
             reported.append((key, True))  # an error, or no read pending: dropped
         return reported
 
