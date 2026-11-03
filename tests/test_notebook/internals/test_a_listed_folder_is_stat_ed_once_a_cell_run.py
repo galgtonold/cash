@@ -24,6 +24,9 @@ from cash.notebook.statement.freshness import CacheFreshnessChecker
 from cash.tracking import file_dep_snapshot
 from cash.tracking.file_dep_snapshot import snapshot_file_deps, snapshot_is_fresh
 
+# The stats every check shares, where no folder is watched (`file_watch`).
+pytestmark = pytest.mark.usefixtures("no_file_watch")
+
 N = 24  # folders in one directory: more than a listing is taken for
 
 

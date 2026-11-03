@@ -188,6 +188,23 @@ In a notebook, a statement is checked against the files it read itself and
 the files its inputs were built from, so a changed CSV invalidates the whole
 chain that read it.
 
+<!-- claim: cash/tracking/file_watch.py:FileWatch.current @31588dc6, cash/tracking/file_watch.py:FileWatch.record @dc554483, cash/notebook/run_memo.py:stats_this_run @bc8bc3db -->
+In a notebook, cash also asks the operating system to report changes to each
+folder holding a file it checked (inotify on Linux, `ReadDirectoryChangesW`
+on Windows). Before each cell it takes the changes reported so far, and a
+file whose folder reported nothing since its last check is not checked
+again: the cell below a read of thousands of photos does not look at each
+photo before every cell. Any change in the folder (a write, a new, deleted or
+renamed file, new attributes) makes cash check that folder's files again,
+and so does a lost notification, or a folder whose path now leads somewhere
+else. Files cash cannot rely on the notifications for are checked before
+every cell as described above: on macOS, on a network drive or another
+file system without local notifications, through a symbolic link, with a
+second hard link, and past about 8,000 watched folders. Set
+`CASH_FILE_WATCH=0` to check every file before every cell. What the
+notifications miss is listed under
+[a change no folder reports](../known-limitations.md#a-change-no-folder-reports).
+
 ## In a notebook
 
 ### Lineage propagation

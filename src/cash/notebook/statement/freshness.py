@@ -41,7 +41,7 @@ from ...value_types import IMMUTABLE_LEAF_TYPES
 from ..call_refs import resolve_call_refs
 from ..helper_memos import unfilled as memos_unfilled
 from ..restored_var import present_holders
-from ..run_memo import fresh_snapshot_this_run, stat_dates_this_run, stats_taken_this_run
+from ..run_memo import RUN_VERDICTS, fresh_snapshot_this_run, stat_dates_this_run, stats_taken_this_run
 from ._metadata import StatementCacheMetadata
 
 if TYPE_CHECKING:
@@ -92,7 +92,9 @@ def _answers_memo() -> FreshnessMemo:
     """Answers dated by the stat each rests on (`FreshnessMemo` *lasts*),
     from this cell run's stats no older than they may be, the missing ones
     taken now for the run's other checks too (`run_memo.stats_taken_this_run`)."""
-    return FreshnessMemo(taken=stats_taken_this_run, lasts=_ANSWERS_LAST_S, taken_dates=stat_dates_this_run)
+    return FreshnessMemo(
+        taken=stats_taken_this_run, lasts=_ANSWERS_LAST_S, taken_dates=stat_dates_this_run, verdicts=RUN_VERDICTS
+    )
 
 
 class CacheFreshnessChecker:

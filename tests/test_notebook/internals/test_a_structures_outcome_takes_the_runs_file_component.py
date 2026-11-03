@@ -16,6 +16,9 @@ from cash.notebook.control_structures import processor as control_processor
 from cash.notebook.statement import file_deps
 from tests._cell_driver import run_cash_cell
 
+# The stats every check shares, where no folder is watched (`file_watch`).
+pytestmark = pytest.mark.usefixtures("no_file_watch")
+
 N = 40
 
 

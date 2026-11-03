@@ -465,7 +465,7 @@ After an edit like this, `f.explain(...)` names the helper that changed and
 the call whose result `f` could be passed instead
 ([Methods on a cached function](#methods-on-a-cached-function)).
 
-<!-- claim: cash/tracking/file_dep_snapshot.py:snapshot_is_fresh @959623d2 -->
+<!-- claim: cash/tracking/file_dep_snapshot.py:snapshot_is_fresh @1bef4411 -->
 Hand an intermediate result on the same way, as a value, rather than writing
 it to a file and reading it back: a file written again can get new bytes
 although its data is the same (an Excel file records when it was saved), and
