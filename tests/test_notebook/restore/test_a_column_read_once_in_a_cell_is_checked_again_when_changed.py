@@ -1,5 +1,6 @@
 """The identity check keeps what it read of a big column for the rest of the
-cell (``test_notebook/internals/test_a_column_left_alone_by_each_statement_of_a_cell_is_read_once.py``),
+cell and the cells after it
+(``test_notebook/internals/test_a_column_left_alone_by_each_statement_of_a_cell_is_read_once.py``),
 and gives every statement the answer a fresh read gives.
 
 A column changed in place -- through the frame, through the list it was
@@ -7,7 +8,7 @@ built from, through a name bound to one of its sessions in a later
 statement or cell -- is read again, and an ``id()`` put there is found as
 before; one whose holder went away is answered as before. The memo keeps
 nothing alive: the frame is freed as soon as nothing else holds it, inside
-the cell, and the memo is empty once the cell ends.
+the cell, and what the memo keeps past the cell is numbers.
 """
 
 from __future__ import annotations
@@ -34,38 +35,38 @@ MAKE = (
 )
 
 #: Cells run after ``MAKE``; whether the identity check refuses ``df``;
-#: how often the sessions column is read: before the change, after it,
-#: and where an ``id()`` was put, once more for the ids of its containers
-#: when the next statement's check, answered by the memo, looks for the
-#: object (`identity_holders._nodes_read`).
+#: how often the sessions column is read: after the change (before it, the
+#: reading ``MAKE``'s check kept answers), and where an ``id()`` was put,
+#: once more for the ids of its containers when the next statement's check,
+#: answered by the memo, looks for the object (`identity_holders._nodes_read`).
 CHANGES = {
     "an id appended through the frame": (
         ["df['k1'] = 1\ndf['actions'][5].append(('c', hex(id(p))))\ndf['k2'] = 2"],
         True,
-        3,
+        2,
     ),
     "an id appended through the list it was built from": (
         ["df['k1'] = 1\nrecs[5][1].append(('c', str(id(p))))\ndf['k2'] = 2"],
         True,
-        3,
+        2,
     ),
-    "an id written over a record in place": (["df['k1'] = 1\nrecs[3][1][1] = ('c', id(p))\ndf['k2'] = 2"], True, 3),
+    "an id written over a record in place": (["df['k1'] = 1\nrecs[3][1][1] = ('c', id(p))\ndf['k2'] = 2"], True, 2),
     "a new alias in a later statement": (
         ["df['k1'] = 1\nalias = df['actions'][3]\nalias.append(('c', id(p)))\ndf['k2'] = 2"],
         True,
-        3,
+        2,
     ),
     "a new alias in a later cell": (
         ["df['k1'] = 1", "alias = df['actions'][3]\nalias.append(('c', id(p)))\ndf['k2'] = 2"],
         True,
-        3,
+        2,
     ),
-    "a holder dropped": (["df['k1'] = 1\ndel recs\ndf['k2'] = 2\ndf['k3'] = 3"], False, 1),
+    "a holder dropped": (["df['k1'] = 1\ndel recs\ndf['k2'] = 2\ndf['k3'] = 3"], False, 0),
     # The very records again, in the very list: nothing to read again.
     "a session given its own records again": (
         ["df['k1'] = 1\nrecs[3][1][:] = list(recs[3][1])\ndf['k2'] = 2"],
         False,
-        1,
+        0,
     ),
 }
 
@@ -120,5 +121,9 @@ def test_the_memo_keeps_no_object_alive(cash_magics):
     # The memo had the column's reading while the frame went away.
     assert ns["kept"]
     assert ns["freed"] is True
-    assert identity_holders._SHAPE_READS == {}
+    # Past the cell, the memo keeps numbers alone: no object of the cell's.
+    assert all(
+        type(numbers) is frozenset and all(type(n) is int for n in (*witness, *numbers, lists))
+        for witness, (numbers, lists, _nodes) in identity_holders._SHAPE_READS.items()
+    )
     gc.collect()

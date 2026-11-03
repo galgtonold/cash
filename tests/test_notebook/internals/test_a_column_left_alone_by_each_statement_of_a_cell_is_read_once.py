@@ -1,6 +1,6 @@
 """A frame's big column of sessions, left as it was by each statement of a
-cell that adds a column, is read for ids once in the cell, not after every
-statement.
+cell that adds a column, is read for ids once, not after every statement,
+and not again by the next cell.
 
 Each ``df['k'] = ...`` changes ``df`` in place, so its value is checked for
 an ``id()`` or a weak reference again after each one (the identity check),
@@ -51,15 +51,43 @@ def _count_reads(monkeypatch) -> dict[str, int]:
 
 
 def test_the_column_is_read_once_in_a_cell_of_four_statements(cash_magics, monkeypatch):
-    run_cash_cell(cash_magics, MAKE)
     reads = _count_reads(monkeypatch)
+    run_cash_cell(cash_magics, MAKE)
+    assert reads == {"column": 1, "recs": 1}
     run_cash_cell(cash_magics, ADDS)
     assert reads == {"column": 1, "recs": 1}
 
 
-def test_a_changed_column_is_read_again(cash_magics, monkeypatch):
-    run_cash_cell(cash_magics, MAKE)
+def test_the_column_is_not_read_again_by_the_next_cells(cash_magics, monkeypatch):
     reads = _count_reads(monkeypatch)
+    run_cash_cell(cash_magics, MAKE)
+    run_cash_cell(cash_magics, "df['k1'] = 1")
+    run_cash_cell(cash_magics, "df['k2'] = 2")
+    assert reads == {"column": 1, "recs": 1}
+
+
+def test_a_changed_column_is_read_again(cash_magics, monkeypatch):
+    reads = _count_reads(monkeypatch)
+    run_cash_cell(cash_magics, MAKE)
     run_cash_cell(cash_magics, "df['k1'] = 1\nrecs[5][1].append(('b', t0))\ndf['k2'] = 2\ndf['k3'] = 3")
-    # Before the change, and once after it: the list changed is in both.
+    # When made, and once after the change: the list changed is in both.
     assert reads == {"column": 2, "recs": 2}
+
+
+def test_a_column_changed_in_a_later_cell_is_read_again(cash_magics, monkeypatch):
+    reads = _count_reads(monkeypatch)
+    run_cash_cell(cash_magics, MAKE)
+    run_cash_cell(cash_magics, "recs[5][1].append(('b', t0))")
+    run_cash_cell(cash_magics, "df['k1'] = 1")
+    assert reads["column"] == 2
+
+
+def test_a_reading_of_many_numbers_is_kept_for_its_cell_alone():
+    identity_holders.forget_flat_reads()
+    # Numbers as big as an address: each one read is kept.
+    rows = [[(identity_holders._LOWEST_ADDRESS + i, 1)] for i in range(12_000)]
+    identity_holders.identity_held_reason("rows", rows, {"rows": rows})
+    kept = identity_holders._KEPT_SHAPE_NUMBERS
+    assert any(len(numbers) > kept for numbers, _lists, _nodes in identity_holders._SHAPE_READS.values())
+    identity_holders.end_cell_reads()
+    assert all(len(numbers) <= kept for numbers, _lists, _nodes in identity_holders._SHAPE_READS.values())
