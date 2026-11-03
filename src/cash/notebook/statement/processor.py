@@ -4110,6 +4110,10 @@ class StatementProcessor:
 
         complete = not heap_unreadable()
         names: set[str] = set()
+        # Searched for once, each search of the heap taking as long as a
+        # level of the climb, and kept until the walk is done: an id of an
+        # object let go may be another's by then.
+        instances: list[Any] | None = None
         if complete:
             try:
                 instances = _instances_of(replaced)
@@ -4129,21 +4133,21 @@ class StatementProcessor:
                         *(mapping for mapping, _name in named_history),
                     ],
                 )
-                del instances
             except Exception:  # an object of the user's raised: as if cut short
                 logger.debug("[CLASS] holder search failed", exc_info=True)
                 names, complete = set(), False
         if not complete:
             # Down from the variables instead, every one of them at once.
             try:
-                instances = _instances_of(replaced)
+                if instances is None:
+                    instances = _instances_of(replaced)
                 down = names_reaching(set(map(id, instances)), user_ns, skip_name=skip_name)
-                del instances
             except Exception:  # an object of the user's raised: as if cut short
                 logger.debug("[CLASS] holder walk failed", exc_info=True)
                 down = None
             if down is not None:
                 names, complete = down, True
+        instances = None
         if not complete:
             value_types = VALUE_TYPES + library_value_types()
             names = {
