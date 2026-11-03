@@ -323,6 +323,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # cannot be read, so it runs uncached every time
         "NOTEBOOK-MEMO-UNREAD",  # a helper memo the statement read holds more
         # answers than cash checks, so it runs every time
+        "NOTEBOOK-MEMO-SHARED",  # an answer the statement put into a helper memo
+        # is held outside its outputs too, so it runs every time
         "NOTEBOOK-CELL-SYNTAX",  # an upstream cell does not parse, so cells that
         # depend on it stop being tracked
         "NOTEBOOK-CLASS-KEPT",  # a class's own state a cell changes is kept

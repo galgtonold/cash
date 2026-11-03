@@ -15,13 +15,14 @@ from typing import TYPE_CHECKING, Any
 from cash import rewrite_in_place
 from cash._clock import perf_counter as _perf_counter
 from cash.exceptions import CacheBackendError, CacheSerializationError
+from cash.notebook import helper_memos
 from cash.notebook.anchors import resolve_anchors
 from cash.notebook.cache_status import CacheStatus
 from cash.notebook.statement import in_place
 from cash.notebook.statement.control_body import is_one_structure
 from cash.notebook.statement.derivation_edges import record_shared_object_edges
 from cash.notebook.statement.results import COST_MODEL_KEYS
-from cash.notebook.statement.run import ECHO_FIELD, echoes
+from cash.notebook.statement.run import ECHO_FIELD, MEMO_CHANGES_FIELD, echoes
 
 if TYPE_CHECKING:
     from cash.notebook.statement._metadata import StatementCacheMetadata
@@ -120,6 +121,15 @@ class CacheHitServer:
             except (KeyError, pickle.UnpicklingError) as e:
                 logger.debug("[CACHE] %s, running it instead.", e)
                 return None
+        put_back = None
+        if metadata is not None and helper_memos.carries_changes(metadata.helper_memos):
+            # What the run put into the helper memos it filled goes back into
+            # them once the outputs are restored, as one graph with them.
+            changes = cached_data.get(MEMO_CHANGES_FIELD) if isinstance(cached_data, dict) else None
+            put_back = helper_memos.put_back(metadata.helper_memos, changes, self._restorer.shell.user_ns)
+            if isinstance(put_back, str):
+                logger.debug("[CACHE] %s, running it instead.", put_back)
+                return None
         try:
             self._log_hit(cache_key, inputs, metadata)
             self._restorer.restore_from_cache(
@@ -130,6 +140,8 @@ class CacheHitServer:
                 process_start,
                 seed_epochs=seed_epochs,
             )
+            if put_back is not None:
+                put_back()
 
             if metadata is not None and metadata.anchor_links:
                 user_ns = self._restorer.shell.user_ns

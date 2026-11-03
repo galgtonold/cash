@@ -24,6 +24,16 @@ def _statuses(magics) -> list[str]:
     return [str(m.get("status")) for m in magics.cash_status("dict")["last_cell"]["statements"]]
 
 
+def _memo_as_a_run_leaves_it(magics) -> None:
+    """The memo holds 4 (the cell above) and 3 (put back by the served
+    statement, as its run computes it): a call finds 3 and runs no body."""
+    square = magics.shell.user_ns["square"]
+    assert square.cache_info().currsize == 2
+    misses = square.cache_info().misses
+    assert square(3) == 9 and square(4) == 16
+    assert square.cache_info().misses == misses
+
+
 def test_bounded_lru_returning_a_dict_other_key_after_restart(cash_magics):
     # lru_cache(maxsize=N): gc.get_referents yields the linked list's
     # results before the cache dict; `_cache_dict` takes the result dict
@@ -39,17 +49,17 @@ def test_bounded_lru_returning_a_dict_other_key_after_restart(cash_magics):
 
 
 def test_cache_clear_then_refill_other_keys_same_session(cash_magics):
-    # CONTROL (passes): a top-level `square.cache_clear()` statement moves
-    # square's lineage, so the stale stamp is never consulted. The two
-    # variants below clear from inside a function and are served.
     # cache_clear() resets misses: after a refill with as many other keys,
-    # (currsize, misses) equals the stamp `_digests` holds and the stale
-    # digests of the run's keys are reused.
+    # (currsize, misses) equals the stamp `_digests` holds. The statement
+    # computed square(3), and the memo lacks it again: served, it puts the
+    # answer back, so the memo ends as a run leaves it. The two variants
+    # below clear from inside a function.
     square = "@functools.cache\ndef square(n):\n    print('BODY', n)\n    return n * n"
     fill = f"x = (square(3), time.sleep({ABOVE_PERSISTENCE_FLOOR_S}))[0]"
     for code in [IMPORTS, square, fill, "square.cache_clear()", "other = square(4)", fill]:
         run_cash_cell(cash_magics, code)
-    assert _statuses(cash_magics) == ["COMPUTED"], "memo holds 4, not 3: must rerun"
+    assert _statuses(cash_magics) == ["RESTORED"]
+    _memo_as_a_run_leaves_it(cash_magics)
 
 
 def test_memo_under_another_decorator_after_restart(cash_magics):
@@ -154,7 +164,8 @@ def test_clear_via_function(cash_magics, monkeypatch):
         ],
         monkeypatch,
     )
-    assert seen[-1] == ["COMPUTED"]
+    assert seen[-1] == ["RESTORED"]
+    _memo_as_a_run_leaves_it(cash_magics)
 
 
 def test_clear_in_module(cash_magics, monkeypatch, tmp_path):
@@ -173,4 +184,5 @@ def test_clear_in_module(cash_magics, monkeypatch, tmp_path):
         import sys
 
         sys.modules.pop("memo_rev_mod", None)
-    assert seen[-1] == ["COMPUTED"]
+    assert seen[-1] == ["RESTORED"]
+    _memo_as_a_run_leaves_it(cash_magics)

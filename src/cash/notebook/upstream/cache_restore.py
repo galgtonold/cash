@@ -31,6 +31,7 @@ from ..cache_key import compute_cache_key
 from ..cache_status import CacheStatus
 from ..call_refs import resolve_call_refs
 from ..control_structures import is_control_structure
+from ..helper_memos import carries_changes
 from ..helper_memos import unfilled as memos_unfilled
 from ..holder_patches import HolderPatch, apply_patch
 from ..lineage_formula import (
@@ -166,6 +167,13 @@ class CacheRestorer:
             # Extract saved execution time
             saved_time = metadata.get("execution_time", 0.0) if metadata else 0.0
 
+            if metadata and carries_changes(metadata.get("helper_memos")):
+                # What it put into a helper memo goes back at the statement's
+                # place (`CacheHitServer.serve`), where its lookup checks the
+                # memo: restored here, out of order, a statement between
+                # would find the memo filled where a run finds it empty.
+                logger.debug("[UPSTREAM] Restore failed: it put answers into a helper memo")
+                return set(), _perf_counter() - start_time, 0.0
             if metadata and cached_data is not None:
                 # 3. Check file dependencies (Critical!)
                 file_deps = metadata.get("file_dependencies", {})

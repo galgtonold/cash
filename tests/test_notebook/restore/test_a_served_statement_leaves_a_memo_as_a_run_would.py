@@ -93,7 +93,9 @@ def test_a_statement_stored_when_its_memo_missed_is_not_served_where_it_hits(cas
     assert cash_magics.shell.user_ns["bench"] == plain["bench"], _statuses(cash_magics)
 
 
-def test_a_memo_as_full_but_with_other_answers_does_not_serve(cash_magics):
+def test_a_memo_with_another_answer_is_filled_as_the_run_fills_it(cash_magics):
+    # The statement computed square(3); the memo holds only another key,
+    # so a run computes it again. Served, the hit puts the run's answer in.
     square = "@functools.cache\ndef square(n):\n    print('BODY', n)\n    return n * n"
     fill = f"x = (square(3), time.sleep({ABOVE_PERSISTENCE_FLOOR_S}))[0]"
     for code in [IMPORTS, square, fill]:
@@ -101,7 +103,25 @@ def test_a_memo_as_full_but_with_other_answers_does_not_serve(cash_magics):
     _restart(cash_magics, ["functools", "random", "time", "square", "x"])
     for code in [IMPORTS, square, "other = square(4)", fill]:
         run_cash_cell(cash_magics, code)
-    assert _statuses(cash_magics) == ["COMPUTED"], "one answer, for another key"
+    assert _statuses(cash_magics) == ["RESTORED"]
+    memo = cash_magics.shell.user_ns["square"]
+    assert memo.cache_info().currsize == 2
+    misses = memo.cache_info().misses
+    memo(3)
+    assert memo.cache_info().misses == misses
+
+
+def test_a_memo_that_already_holds_what_the_statement_computed_does_not_serve(cash_magics):
+    # A cell above computed square(3): a run finds it and does not run the
+    # body (no BODY printed), which the entry's replay would show.
+    square = "@functools.cache\ndef square(n):\n    print('BODY', n)\n    return n * n"
+    fill = f"x = (square(3), time.sleep({ABOVE_PERSISTENCE_FLOOR_S}))[0]"
+    for code in [IMPORTS, square, fill]:
+        run_cash_cell(cash_magics, code)
+    _restart(cash_magics, ["functools", "random", "time", "square", "x"])
+    for code in [IMPORTS, square, "other = square(3)", fill]:
+        run_cash_cell(cash_magics, code)
+    assert _statuses(cash_magics) == ["COMPUTED"], "the key it computed is filled above"
 
 
 def test_a_statement_that_only_read_the_memo_reruns_until_it_is_filled_again(cash_magics):
@@ -117,8 +137,12 @@ def test_a_statement_that_only_read_the_memo_reruns_until_it_is_filled_again(cas
         run_cash_cell(cash_magics, code)
     run_cash_cell(cash_magics, look)
     assert _statuses(cash_magics) == ["COMPUTED"]
+    # That run computed the answer, and its entry puts it into a memo that
+    # lacks it; here the memo holds it, so a run reads it: it runs once more.
     run_cash_cell(cash_magics, look)
-    assert _statuses(cash_magics) == ["RESTORED"], "filled again by its own run"
+    assert _statuses(cash_magics) == ["COMPUTED"], "the memo holds the key its entry computed"
+    run_cash_cell(cash_magics, look)
+    assert _statuses(cash_magics) == ["RESTORED"], "stored as a reader of the memo"
 
 
 def test_a_pure_helper_filled_by_a_loop_is_served_after_a_restart(cash_magics):

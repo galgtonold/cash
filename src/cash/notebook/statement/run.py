@@ -37,6 +37,8 @@ __all__ = [
     "ECHO_FIELD",
     "LOOP_ITERABLE_NAME",
     "NO_LOOP_ITERABLE",
+    "MEMO_ANSWERS_NAME",
+    "MEMO_CHANGES_FIELD",
     "CodeRunner",
     "StatementExecution",
     "StatementRun",
@@ -48,6 +50,15 @@ __all__ = [
 #: The key that carries the value a cell's last expression echoed: in a
 #: statement's metrics, and in the cache entry that replays it on a hit.
 ECHO_FIELD = "echo_value"
+
+#: The key of a cache entry that carries what the statement put into the
+#: helper memos it filled (`StatementRun.memo_changes`).
+MEMO_CHANGES_FIELD = "memo_changes"
+
+#: The name the answers it put into helper memos go by in the checks that
+#: weigh and walk the outputs (the restore budget, the share check): never a
+#: variable, an output or part of a key.
+MEMO_ANSWERS_NAME = "<helper memo answers>"
 
 #: The name a loop run as one unit iterates when its header was evaluated
 #: before the unit ran (``StatementRun.loop_iterable``). Bound only while the
@@ -240,6 +251,9 @@ class StatementRun:
     helper_memos: list[dict] | None = None
     #: ``id(memo) -> its miss count`` before it ran (`helper_memos.misses_before`).
     memo_misses_before: dict[int, int] | None = None
+    #: What it put into the helper memos it filled or emptied, stored with
+    #: the outputs and put back on a hit (`helper_memos.used`'s *changes*).
+    memo_changes: list[dict] | None = None
     #: For a statement that runs a magic or a shell command: the identity of
     #: every binding in the namespace before it ran (``calls_ipython``).
     ipython_bindings: dict[str, int] | None = None
