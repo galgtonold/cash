@@ -358,11 +358,15 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
         chunks = run.setdefault("stat_chunks", [])
         followed = run.setdefault("stat_followed", set())
         from_listing = run.setdefault("listed", set())
+        missing = run.setdefault("missing", set())
     else:
-        stats, elsewhere, dates, chunks, followed, from_listing = {}, {}, {}, [], set(), set()
+        stats, elsewhere, dates, chunks, followed, from_listing, missing = {}, {}, {}, [], set(), set(), set()
     watch = run.get("watch") if run is not None else None
     if not isinstance(paths, (dict, set, frozenset)):
         paths = dict.fromkeys(paths)  # the paths as asked, in order, once each
+    # The snapshot's entries, when asked with them: one recorded as absent is
+    # looked for where it was recorded only.
+    recorded_of = paths if isinstance(paths, Mapping) and not isinstance(paths, RunStats) else None
     # Asked again by each check of the run: most often every path was
     # stat-ed already, which the run's own dict tells in C.
     todo = [] if stats.keys() >= _as_set(paths) else [p for p in paths if p not in stats and p not in elsewhere]
@@ -373,10 +377,17 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
         at = time.monotonic()
         chunks.append((at, len(stats)))
         current = watch.current
+        absent = watch.absent
         rest = []
         for p in todo:
             st = current(p)
             if st is None:
+                if recorded_of is not None and absent(p) and _fds.is_absent_entry(recorded_of.get(p)):
+                    # Vouched not there: an entry recorded as absent asks
+                    # nothing more (`_looked_for_where_recorded`).
+                    elsewhere[p] = (None, None)
+                    missing.add(p)
+                    continue
                 rest.append(p)
             elif p not in stats:
                 stats[p] = st
@@ -421,6 +432,14 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
                 chunks.append((at, len(stats)))
                 left = _STAT_CHUNK
             st = None
+            if recorded_of is not None and _fds.is_absent_entry(recorded_of.get(p)):
+                found = _looked_for_where_recorded(p, stat, lstat, followed, watch, missing)
+                if found is None:
+                    elsewhere[p] = (None, None)
+                else:
+                    stats[p] = found
+                    dates[p] = at
+                continue
             if not os.path.isabs(p) and not ("://" in p and is_remote_url(p)):
                 st = _as_spelled_absolute(p, stats, stat, lstat, cwd, dates, at, followed, watch)
             if st is None and not ("://" in p and is_remote_url(p)):
@@ -454,6 +473,38 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
 _REPARSE_POINT = 0x400
 
 
+def _looked_for_where_recorded(
+    path: str, stat: Any, lstat: Any, followed: set[str], watch: Any, missing: set[str]
+) -> os.stat_result | None:
+    """The stat of *path*, an entry recorded as absent, or None when it is
+    still not there. Looked for only where it was recorded, as its check
+    looks (`file_dep_is_fresh`): the moved-project fallbacks of
+    ``resolve_file_dep_path`` asked ``os.path.exists`` of several more
+    paths for each of them, and a notebook over installed packages records
+    thousands (the import system's probes). With the folder *watch*, a path
+    not there is kept as such (`FileWatch.record_absent`) and handed on as
+    `file_dep_snapshot.MISSING` (`stats_taken_this_run`)."""
+    token = watch.before_stat(path) if watch is not None else None
+    try:
+        st = lstat(path)
+    except FileNotFoundError:
+        if token is not None:
+            watch.record_absent(token, path)
+            missing.add(path)
+        return None
+    except (OSError, ValueError):
+        return None
+    if _stat.S_ISLNK(st.st_mode) or attribute_or(st, "st_file_attributes", 0) & _REPARSE_POINT:
+        followed.add(path)
+        try:
+            return stat(path)
+        except (OSError, ValueError):
+            return None
+    if token is not None:
+        watch.record(token, path, st)
+    return st
+
+
 def _stat_by_lstat(path: str, stat: Any, lstat: Any, followed: set[str], watch: Any = None) -> os.stat_result:
     """``stat(path)``, taken as ``lstat(path)`` unless *path* is a link or
     reparse point, which is stat-ed as well and noted in *followed*.
@@ -468,7 +519,14 @@ def _stat_by_lstat(path: str, stat: Any, lstat: Any, followed: set[str], watch: 
         if st is not None:
             return st
         token = watch.before_stat(path)
-    st = lstat(path)
+    try:
+        st = lstat(path)
+    except FileNotFoundError:
+        if token is not None:
+            # Not there, which a component built over it rests on too
+            # (`FileWatch.cover`); the caller still looks elsewhere.
+            watch.record_absent(token, path)
+        raise
     if _stat.S_ISLNK(st.st_mode) or attribute_or(st, "st_file_attributes", 0) & _REPARSE_POINT:
         followed.add(path)
         return stat(path)
@@ -544,6 +602,7 @@ def stats_taken_this_run(paths: Iterable[str], not_before: float | None = None) 
         return {}
     stats_this_run(paths)
     stats = run["stat"]
+    missing = run.get("missing")
     chunks = run.get("stat_chunks")
     if not_before is not None and chunks and chunks[0][0] < not_before:
         first = bisect.bisect_left(chunks, not_before, key=lambda chunk: chunk[0])
@@ -574,8 +633,53 @@ def stats_taken_this_run(paths: Iterable[str], not_before: float | None = None) 
         # listing's, which only makes it lapse early.
         by_time = {p for p in run["listed"].intersection(paths.keys()) if _decided_by_time(paths[p])}
         if by_time:
-            return _Identifying(run, {p: p for p in by_time}, stats)
+            stats = _Identifying(run, {p: p for p in by_time}, stats)
+    if missing:
+        watch = run.get("watch")
+        if watch is None:
+            return stats
+        if not_before is not None:
+            # As recent as the caller asks: still vouched for after a drain.
+            watch.drain()
+            missing = {p for p in missing if watch.absent(p)}
+        return _WithMissing(stats, missing)
     return stats
+
+
+class _WithMissing(Mapping):
+    """The run's stats, and `file_dep_snapshot.MISSING` for each path the
+    folder watch vouches is not there (`_looked_for_where_recorded`)."""
+
+    __slots__ = ("_missing", "_stats")
+
+    def __init__(self, stats: Mapping[str, Any], missing: set[str]) -> None:
+        self._stats = stats
+        self._missing = missing
+
+    def get(self, key: str, default: Any = None) -> Any:
+        st = self._stats.get(key)
+        if st is not None:
+            return st
+        return _fds.MISSING if key in self._missing else default
+
+    def __getitem__(self, key: str) -> Any:
+        st = self.get(key)
+        if st is None:
+            raise KeyError(key)
+        return st
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._stats or key in self._missing
+
+    def __iter__(self):
+        yield from self._stats
+        yield from (p for p in self._missing if p not in self._stats)
+
+    def __len__(self) -> int:
+        return len(self._stats) + sum(1 for p in self._missing if p not in self._stats)
+
+    def __bool__(self) -> bool:
+        return bool(self._stats) or bool(self._missing)
 
 
 def stat_dates_this_run() -> Mapping[str, float]:
@@ -715,7 +819,12 @@ def stat_keys_this_run(paths: Iterable[str]) -> Mapping[str, tuple[int, int, int
     if not isinstance(paths, (dict, set, frozenset)):
         paths = dict.fromkeys(paths)
     if not keys.keys() >= _as_set(paths):
-        for p, (_resolved, st) in stats_this_run([p for p in paths if p not in keys]).items():
+        asked = (
+            {p: entry for p, entry in paths.items() if p not in keys}
+            if isinstance(paths, dict)
+            else [p for p in paths if p not in keys]
+        )
+        for p, (_resolved, st) in stats_this_run(asked).items():
             keys[p] = stat_key(st) if st is not None else None
     return keys
 
@@ -753,20 +862,23 @@ def file_component_this_run(
             key = None
         if key is not None and key in components:
             return components[key]
-    taken = stats_this_run(paths)  # first: it starts the run's records read below
     watch = run.get("watch") if run is not None and key is not None and not probes else None
     place = None
     if watch is not None:
         # Built in an earlier run from stats the folder watch still holds:
-        # the same fields of the same files, so the same component.
+        # the same fields of the same files, so the same component. Asked
+        # before any stat of them: a stat of each was the cost it saves.
         try:
             place = (os.getcwd(), file_deps.get_notebook_path())
         except (OSError, ValueError):
             watch = None
         held = _COVERED_COMPONENTS.get(key) if watch is not None else None
-        if held is not None and held[2] == place and watch.still(held[1]):
-            components[key] = held[0]
-            return held[0]
+        if held is not None and held[2] == place:
+            watch.drain()
+            if watch.still(held[1]):
+                components[key] = held[0]
+                return held[0]
+    taken = stats_this_run(paths)  # it starts the run's records read below
     listed = run["listed"] if run is not None else None
     followed = run["stat_followed"] if run is not None else None
     stats: Mapping[str, os.stat_result] = {}

@@ -42,7 +42,7 @@ from cash.remote_source import RemoteFileDataSource, addressing_options, read_op
 from cash.tracking.digest_table import current_table
 from cash.tracking.file_versions import note_same_content
 from cash.tracking.pending_digest import MOVED, DeferredDigest
-from cash.tracking.read_classification import own_lstat, own_stat, stat_key
+from cash.tracking.read_classification import own_exists, own_lstat, own_stat, stat_key
 from cash.tracking.tracker_context import untracked
 from cash.tracking.written_in_place import is_written_in_place
 
@@ -633,13 +633,53 @@ def snapshot_file_deps(
     return snapshot
 
 
+class _Missing:
+    """`MISSING`: a caller's answer that a path is not there."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "MISSING"
+
+
+#: In place of a stat in `FreshnessMemo.taken`: the path was looked for and
+#: is not there (``run_memo`` hands it on only while the folder watch vouches
+#: for it). An entry recorded as absent is then fresh with no look of its own.
+MISSING: Any = _Missing()
+
+
+def is_absent_entry(recorded: Any) -> bool:
+    """Is *recorded* a snapshot entry for a path found not there?"""
+    return isinstance(recorded, Mapping) and bool(recorded.get(_ABSENT_MARKER))
+
+
 def spelled_absolute(path: str) -> str | None:
     """*path* made absolute from the cwd by its spelling, as a read records
     it, or None when its spelling does not say which file it is: through a
     ``..``, the open goes up from where a linked folder points."""
-    if ".." in path.replace("\\", "/").split("/"):
-        return None
-    return normalize_path(os.path.abspath(path))
+    cwd = os.getcwd()
+    memo = _SPELLED
+    if memo.get(_SPELLED_IN) != cwd:
+        memo.clear()
+        memo[_SPELLED_IN] = cwd
+    elif len(memo) > _SPELLED_KEPT:
+        memo.clear()
+        memo[_SPELLED_IN] = cwd
+    try:
+        return memo[path]
+    except KeyError:
+        pass
+    spelled = None if ".." in path.replace("\\", "/").split("/") else normalize_path(os.path.abspath(path))
+    memo[path] = spelled
+    return spelled
+
+
+#: `spelled_absolute`'s answers in the working directory they were given in
+#: (under the key `_SPELLED_IN`): asked of each relative dependency by each
+#: check, 361,000 times before one cell.
+_SPELLED: dict[Any, str | None] = {}
+_SPELLED_IN = object()
+_SPELLED_KEPT = 200_000
 
 
 def snapshot_absent_deps(paths: Iterable[str]) -> dict[str, dict[str, Any]]:
@@ -654,7 +694,7 @@ def snapshot_absent_deps(paths: Iterable[str]) -> dict[str, dict[str, Any]]:
     snapshot: dict[str, dict[str, Any]] = {}
     for path in paths:
         try:
-            if os.path.exists(path):
+            if own_exists(path):
                 continue
         except (OSError, ValueError):
             continue
@@ -705,7 +745,7 @@ def probe_state_parts(probes: Mapping[str, str] | None) -> list[str]:
     parts: list[str] = []
     for path, asked in sorted((probes or {}).items()):
         try:
-            there = os.path.exists(path) if asked == _ABSENT_MARKER else _is_present(path, asked)
+            there = own_exists(path) if asked == _ABSENT_MARKER else _is_present(path, asked)
         except (OSError, ValueError):
             there = False
         parts.append(f"?{path}:{int(there)}")
@@ -983,12 +1023,17 @@ def file_dep_is_fresh(
     *taken* is a stat of *resolved_path* the caller took already, in place
     of one of its own (`FreshnessMemo.taken`). One with no file identity
     (``st_ino`` 0) came from a directory listing, and stands in as *listed*
-    does.
+    does. `MISSING` says the caller found nothing there: it answers an
+    entry recorded as absent.
 
     **Remote dependencies** short-circuit to :func:`remote_dep_is_fresh`: the
     "path" is a URL, so there is nothing to stat, and the store's own validator
     answers the question instead.
     """
+    if taken is MISSING:
+        if stored.get(_ABSENT_MARKER):
+            return True, None  # still not there, by the caller's look
+        taken = None
     if stored.get(_REMOTE_MARKER):
         return remote_dep_is_fresh(resolved_path, stored)
     if stored.get(_ABSENT_MARKER):
@@ -997,7 +1042,7 @@ def file_dep_is_fresh(
         # input, whether it appeared because someone created it or because the
         # same relative name now resolves into a different directory.
         try:
-            return (not os.path.exists(resolved_path)), "appeared"
+            return (not own_exists(resolved_path)), "appeared"
         except (OSError, ValueError):
             return False, "appeared"
     if _PRESENT_MARKER in stored:

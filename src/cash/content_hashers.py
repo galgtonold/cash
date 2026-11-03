@@ -34,6 +34,7 @@ from ._memo import ARROW_VALUES, LruMemo
 from ._type_memo import per_type
 from .bulk_digest import DIRECT_MAX_BYTES, LEAF_BYTES, BulkHasher, fold_buffer, hashing_threads
 from .canonical_form import ContentHashing, canonical_bytes
+from .dated_records import dated_records_bytes
 from .kept_state import packed_records
 from .sizing import SPARSE_PARTS, held_values
 from .value_types import LEAF_TYPES
@@ -861,7 +862,14 @@ def _fold_object_array(h: Any, value: Any) -> None:
 def _object_items_bytes(items: list) -> bytes:
     """The bytes a list of Python objects keys on: plain data pickled as it
     is (`_plain_data`, C speed), anything else in its canonical form
-    (`stable_key_repr`), so sets and dicts inside are in a stable order."""
+    (`stable_key_repr`), so sets and dicts inside are in a stable order.
+    Records holding dates are written as their content (`dated_records`):
+    pickled, each ``datetime`` cost a microsecond and more, three seconds
+    of hashing a frame of two million ``(action, time)`` records built in
+    0.2 s (student_8)."""
+    dated = dated_records_bytes(items)
+    if dated is not None:
+        return b"R" + dated
     if _plain_data.is_plain(items):
         return b"P" + _plain_data.pickle_unshared(items)
     # The array or column holds each item besides *items*.

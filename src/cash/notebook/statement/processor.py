@@ -2089,8 +2089,19 @@ class StatementProcessor:
             and rng_replay_is_current(cached_data, self._randomness.seed_epochs)
             else None
         )
+        # The streams the hit puts back, which the cell's observation counts.
+        replayed = (
+            set(cached_data.get("rng_state") or ())
+            if isinstance(cached_data, dict) and rng_replay_is_current(cached_data, self._randomness.seed_epochs)
+            else set()
+        )
+        before_hit = self._randomness.before_hit() if replayed else None
         hit_result = self._hits.serve(run, cached_data, metadata, self._randomness.seed_epochs)
+        if hit_result is not None and before_hit is not None:
+            self._randomness.observe_hit(before_hit, replayed)
         if hit_result is None:
+            if self._hits.last_refusal:
+                self._freshness.last_miss_reason = self._hits.last_refusal
             return None
         if metadata is not None and metadata.scalar_identity:
             # Stored where an attribute was set on a pandas scalar: this
@@ -2417,6 +2428,7 @@ class StatementProcessor:
         env_reads: set[str] = set()
         helper_memos.new_statement()
         memos_before = None if run.skip_cache else helper_memos.watched(self.shell.user_ns)
+        memos_cleared: helper_memos.Clears | None = None
         try:
             with (
                 self.watching_reads(run.code),
@@ -2431,6 +2443,7 @@ class StatementProcessor:
                 with (
                     observe_writes() as written_paths,
                     FileAccessTracker(self.shell.user_ns, hash_on_read=not run.skip_cache) as file_tracker,
+                    helper_memos.watching_clears(memos_before) as memos_cleared,
                 ):
                     user_ns = self.shell.user_ns
                     shadowed = user_ns.get(LOOP_ITERABLE_NAME, NO_LOOP_ITERABLE) if handed else None
@@ -2478,6 +2491,7 @@ class StatementProcessor:
                 self._randomness.observe_statement(pre_rng, run.code)
                 execution.rng_moved = self._randomness.moved_streams
                 execution.rng_reseeded = self._randomness.reseeded_streams
+                execution.rng_seeded_first = self._randomness.seeded_first
                 execution.result = ExecutionResult(success=True)
         except Exception as e:  # noqa: BLE001 - broad fallback wrapping arbitrary user code
             execution.result = error_result(e)
@@ -2509,7 +2523,9 @@ class StatementProcessor:
             # What it put into a memo is stored with the outputs, unless it
             # reads a memo's counters, which no hit gives back.
             changes: list[dict] | None = None if clears and helper_memos.reads_counters(run.code, user_ns) else []
-            memos = helper_memos.used(memos_before, clears=clears, ns=user_ns, site=(run.code, None), changes=changes)
+            memos = helper_memos.used(
+                memos_before, clears=clears, ns=user_ns, site=(run.code, None), changes=changes, cleared=memos_cleared
+            )
             if isinstance(memos, tuple):
                 # What it returns can differ run to run with the memo's
                 # state, which no key holds: its outputs are keyed by value.
@@ -3374,7 +3390,7 @@ class StatementProcessor:
                     captured_vars[MEMO_ANSWERS_NAME] = helper_memos.change_answers(run.memo_changes)
                     cash_held.extend(helper_memos.held_by_cash())
                     # The pairs the entry stores, which hold the answers too.
-                    cash_held.extend(pair for change in run.memo_changes for pair in change["pairs"])
+                    cash_held.extend(helper_memos.change_holders(run.memo_changes))
                 # Whether the outputs' values passed on their own: the
                 # retry with anchors does not read them again (an identity
                 # and alias check of a frame of two million records, a

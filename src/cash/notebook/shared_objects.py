@@ -1039,6 +1039,19 @@ def _identities(value: Any, value_types: tuple[type, ...]) -> Iterable[int]:
 def _held_identities(value: Any, value_types: tuple[type, ...]) -> Iterable[tuple[int, Any]]:
     """`_identities`, each id with its object: a view's bases (`view_bases`)
     with None."""
+    for found in _held_identity_groups(value, value_types):
+        if type(found) is dict:
+            yield from found.items()
+        else:
+            yield found
+
+
+def _held_identity_groups(value: Any, value_types: tuple[type, ...]) -> Iterable[tuple[int, Any] | dict[int, Any]]:
+    """`_held_identities`, the lists of a column of records handed over as
+    one ``{id: list}`` dict, each of the others as its ``(id, object)``:
+    `referring_names` takes the 87,000 sessions of a frame's column in a
+    few passes in C, where a step each cost a second a statement
+    (student_8)."""
     seen: set[int] = set()
     stack = [value]
     exact = exact_value_types()
@@ -1071,10 +1084,12 @@ def _held_identities(value: Any, value_types: tuple[type, ...]) -> Iterable[tupl
             lists = list(itertools.compress(children, is_list))
             rest = list(itertools.compress(children, map(operator.not_, is_list)))
             if _values_in_tuples(rest, exact) and _values_in_record_lists(lists, exact):
-                for held in lists:
-                    if id(held) not in seen:
-                        seen.add(id(held))
-                        yield id(held), held
+                group = dict(zip(map(id, lists), lists))
+                for key in seen.intersection(group):
+                    del group[key]
+                seen.update(group)
+                if group:
+                    yield group
                 continue
         stack.extend(children)
 
@@ -1943,11 +1958,19 @@ def referring_names(
     try:
         with walk_budget(seconds):
             for root in roots:
-                for key, obj in _held_identities(root, value_types):
-                    names.update(by_id.get(key, ()))
-                    if obj is not None:
-                        held[key] = obj
+                for found in _held_identity_groups(root, value_types):
+                    if type(found) is dict:
+                        # A column's lists: none of them None.
+                        names.update(itertools.chain.from_iterable(filter(None, map(by_id.get, found))))
+                        held.update(found)
+                    else:
+                        key, obj = found
+                        names.update(by_id.get(key, ()))
+                        if obj is not None:
+                            held[key] = obj
                     check_walk_budget()
+                # Not a referrer of what it held, for the climb below.
+                found = None
     except WalkBudgetExceeded:
         return names, False
     if len(held) > _REFERRER_OBJECTS:

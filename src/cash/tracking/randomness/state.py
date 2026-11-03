@@ -30,6 +30,13 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 
+def _unwatched(fn):
+    """*fn* without the wrapper the seed watch put around it
+    (`lineage._state_wrapper`): cash reading a stream is not the
+    statement reading it."""
+    return fn.__wrapped__ if getattr(fn, "__cash_seed_watch__", False) else fn
+
+
 def capture_rng_state() -> dict:
     """
     Capture the current state of the global RNGs cash can restore.
@@ -47,7 +54,7 @@ def capture_rng_state() -> dict:
     # Standard library random
     if "random" in sys.modules:
         try:
-            state["random"] = random.getstate()
+            state["random"] = _unwatched(random.getstate)()
         except (TypeError, AttributeError) as e:
             logger.debug("[RANDOMNESS] Failed to capture random state: %s", e)
 
@@ -56,7 +63,7 @@ def capture_rng_state() -> dict:
         try:
             import numpy as np
 
-            state["numpy.random"] = np.random.get_state()
+            state["numpy.random"] = _unwatched(np.random.get_state)()
         except (ImportError, AttributeError) as e:
             logger.debug("[RANDOMNESS] Failed to capture numpy random state: %s", e)
 

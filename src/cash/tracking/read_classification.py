@@ -100,6 +100,17 @@ def own_lstat(path: Any) -> os.stat_result:
     return fn(path)
 
 
+def own_exists(path: Any) -> bool:
+    """``os.path.exists(path)`` for cash itself, past cash's own wrapper of
+    it, which records what the user's code asks: cash's own look for a
+    missing dependency is neither the user's read nor worth the wrapper,
+    75,954 looks before one cell of a notebook over installed packages."""
+    fn = os.path.exists
+    if getattr(fn, "_is_file_tracker_patch", False):
+        fn = fn._original_func
+    return fn(path)
+
+
 def regular_file_stat_result(path: str) -> os.stat_result | None:
     """The stat of *path* when it is a regular file, None otherwise."""
 

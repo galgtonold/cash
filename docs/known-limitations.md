@@ -30,7 +30,7 @@ section when a cell does something you did not expect.
 
 This is the one home for randomness in notebooks; other pages link here.
 
-<!-- claim: cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @c92fc293, cash/tracking/randomness/state.py:restore_rng_state @2e1cc6af, cash/tracking/randomness/state.py:capture_rng_state @421bfe05, cash/notebook/statement/carrier_advances.py:advance_carriers @98d0397f -->
+<!-- claim: cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @c92fc293, cash/tracking/randomness/state.py:restore_rng_state @2e1cc6af, cash/tracking/randomness/state.py:capture_rng_state @ff4dc78c, cash/notebook/statement/carrier_advances.py:advance_carriers @98d0397f -->
 **Symptom:** re-running a cell returns the same random numbers.
 
 An unseeded draw is cached like any other value, so a re-run shows the stored
@@ -75,7 +75,7 @@ its closure (`arr = make_data()`). A draw from the global `random`,
 `np.random` or torch stream inside a helper is flagged once the statement has
 run, by comparing the streams.
 
-<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @421bfe05, cash/notebook/statement/carrier_advances.py:advance_carriers @98d0397f, cash/tracking/randomness/lineage.py:advanced_carrier_lineage @eaa66fca, cash/notebook/upstream/statement_lineage.py:StatementLineage._recorded_draws @3b7507d9, cash/notebook/upstream/statement_lineage.py:StatementLineage._reachable_generators @bb6221ba -->
+<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @ff4dc78c, cash/notebook/statement/carrier_advances.py:advance_carriers @98d0397f, cash/tracking/randomness/lineage.py:advanced_carrier_lineage @eaa66fca, cash/notebook/upstream/statement_lineage.py:StatementLineage._recorded_draws @3b7507d9, cash/notebook/upstream/statement_lineage.py:StatementLineage._reachable_generators @bb6221ba -->
 A statement that draws from a generator held in a variable, or calls a function
 that does (also one the generator is handed to, as in `paths =
 simulate(n, rng)`), counts as changing that variable. It is stored like any
@@ -262,7 +262,7 @@ state in the notebook, or pass it in and return it.
 
 ### A helper memoised with `functools.cache`
 
-<!-- claim: cash/notebook/helper_memos.py:unfilled @f9113011, cash/notebook/helper_memos.py:used @050da885, cash/notebook/helper_memos.py:clears @bc3fe4e5, cash/notebook/helper_memos.py:MAX_KEYED == 4096 -->
+<!-- claim: cash/notebook/helper_memos.py:unfilled @529d38f0, cash/notebook/helper_memos.py:used @21c4d2f1, cash/notebook/helper_memos.py:clears @bc3fe4e5, cash/notebook/helper_memos.py:MAX_KEYED == 4096, cash/notebook/helper_memos.py:watching_clears @a5f41663, cash/notebook/helper_memos.py:_cleared_change @db1300a1, cash/notebook/helper_memos.py:_plain_keys @b1c572b1 -->
 A statement served from the cache does not run, so a `@functools.cache` or
 `@functools.lru_cache` helper it calls keeps what it held. A run leaves the
 answers in it, and a later call of the helper uses them without running its
@@ -304,7 +304,22 @@ body. So cash follows these rules:
   A statement that empties the memo (`cache_clear` under any name, or seen
   from the keys it holds afterwards) is stored as "emptied, then these
   pairs", served only while the memo holds exactly what it held when the
-  run began, and a hit empties it and puts the pairs in.
+  run began, and a hit empties it and puts the pairs in. When the run
+  emptied it before any call of it (`held_karp_tsp` clearing
+  `shortest_segment` for each new problem), what it held then decided
+  nothing: the statement is served whatever the memo holds, and however
+  many answers the run leaves in it (245,760 for a 16-city Held-Karp,
+  about 15 MB on disk), when every key is a plain value (numbers,
+  strings, bytes, None, and tuples and frozensets of those) that comes
+  back from a pickle equal; with any other key, only up to the 4,096
+  answers below. cash sees such a clear as it happens, through a
+  `cache_clear` it sets on the memo while the statement runs; a clear it
+  cannot see (`clear = f.cache_clear` bound in an earlier cell) is not
+  taken for the first, and neither is one of a memo that was empty
+  already (the first statement after the helper is defined). Such an
+  entry is still weighed like any other, so one that would take longer
+  to read back than to compute is not stored.
+  A hit that cannot put the pairs back says why, and the statement runs.
 - What a hit cannot put back still runs every time: a statement that fills
   a bounded memo (`lru_cache(maxsize=128)`, whose order only its own code
   keeps), fills one with a key that does not come back from a pickle as
@@ -327,7 +342,8 @@ body. So cash follows these rules:
 
 Nothing to do: the results are the ones a run gives, at the cost of those
 runs. cash reads a memo's answers only when it holds at most 4,096 of them;
-a statement over a bigger memo reruns every time, and says so ([NOTEBOOK-MEMO-UNREAD](warnings.md#notebook-memo-unread)). It sees a
+a statement over a bigger memo reruns every time, and says so ([NOTEBOOK-MEMO-UNREAD](warnings.md#notebook-memo-unread)),
+unless it emptied the memo before any call of it, as above. It sees a
 memo bound in the notebook or at the top of one of your modules (a
 `reload` included), under other decorators that set `__wrapped__`, and on
 one of your classes (a `staticmethod`, a `classmethod` or a plain

@@ -195,7 +195,8 @@ folder holding a file it checked (inotify on Linux; on Windows one
 held open and you can rename or move any of them while the kernel runs).
 Before each cell it takes the changes reported so far, and a
 file whose folder reported nothing since its last check is not checked
-again: the cell below a read of thousands of photos does not look at each
+again, nor is a path that was not there (one Python's imports looked for):
+the cell below a read of thousands of photos does not look at each
 photo before every cell. Any change in the folder (a write, a new, deleted or
 renamed file, new attributes) makes cash check that folder's files again,
 and so does a lost notification, or a folder whose path now leads somewhere
