@@ -316,7 +316,11 @@ class ReexecutionPlanner:
         of a loop in cell 23 and failed the cell. Refused only on evidence:
         the version it would read is one a statement of the notebook made
         (the kernel's lineage of a loop's names may be one no statement
-        makes, and says nothing). A def reads nothing when it runs.
+        makes, and says nothing). A def reads nothing when it runs. A name
+        an import re-run binds holds the module (or what it holds) as a run
+        from the top has it there, whatever lineage the simulation gave the
+        import: a reloaded module's import was keyed on the edited file
+        while the statements below read the module the kernel holds.
         """
         made: dict[str, set[str]] = {}
         for entry in simulation_trace:
@@ -340,8 +344,9 @@ class ReexecutionPlanner:
                     if have is None or have == consumed:
                         continue
                     return self._gap(simulation_trace, i, name, consumed)
+            imports = import_only(entry.stmt_code)
             for name in entry.outputs or ():
-                holds[name] = (entry.produced_lineages or {}).get(name)
+                holds[name] = None if imports else (entry.produced_lineages or {}).get(name)
         return None
 
     @staticmethod
