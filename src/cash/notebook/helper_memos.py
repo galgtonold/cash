@@ -54,6 +54,7 @@ __all__ = [
     "Clears",
     "carries_changes",
     "change_answers",
+    "change_holders",
     "class_memo_record",
     "held_by_cash",
     "lifted",
@@ -701,7 +702,11 @@ def used(
     record names the pairs it added, or says it emptied the memo first, and
     *changes* gets ``{"emptied": bool, "pairs": [(key, answer), ...]}`` for
     the entry to store with the outputs, at the index the record's
-    ``"delta"`` gives. A hit puts them into the memo (`put_back`).
+    ``"delta"`` gives; for keys that are plain values (`_cleared_change`)
+    ``{"emptied": True, "keys": <their pickle>, "answers": [...]}``: no
+    tuple of a key and its answer for the share check to walk, and keys
+    that the tiers store and copy as bytes. A hit puts them into the memo
+    (`put_back`).
 
     *cleared*: what `watching_clears` saw. A memo the run emptied before
     any call of it is recorded as emptied with what it holds now, whatever
@@ -744,16 +749,18 @@ def used(
         label = _label(where)
         items = _items(memo)
         change = None
-        if items is None or len(items) > MAX_KEYED:
+        if changes is not None and first and why is None and items is not None:
+            # Emptied before any call: stored whatever its size when its
+            # keys are plain values (`_cleared_change`).
+            change = _cleared_change(memo, items)
+            moved = change if isinstance(change, bool) or change is None else False
+        elif items is None or len(items) > MAX_KEYED:
             # Never served over (below), so what its answers hold is not
             # read: digesting each one cost seconds a statement for a memo of
             # 100,000 answers. Forgotten too, so a later statement reading it
             # once it is small again takes its answers as unseen.
             _answers_seen.pop(memo, None)
             moved = None
-        elif changes is not None and first and why is None:
-            change = _cleared_change(memo, items)
-            moved = change if isinstance(change, bool) or change is None else False
         elif changes is not None and held is not None and why is None:
             change = _change_of(memo, items, held, (info.hits, info.misses, info.currsize), (hits, misses, size))
             moved = change if isinstance(change, bool) or change is None else False
@@ -784,10 +791,15 @@ def used(
                         "keys": change["keys"],
                         "emptied": change["emptied"] or None,
                         "cleared": change.get("cleared") or None,
+                        "plain": change.get("plain") or None,
+                        "marked": change.get("marked") or None,
                         "delta": len(changes),
                     }
                 )
-                changes.append({"emptied": change["emptied"], "pairs": change["pairs"]})
+                if change.get("plain"):
+                    changes.append({"emptied": True, "keys": change["keys_pickle"], "answers": change["answers"]})
+                else:
+                    changes.append({"emptied": change["emptied"], "pairs": change["pairs"]})
             continue
         if clears and changes is None:
             named = _memos_cleared_by(site[0], ns, site[1]) if site is not None else set()
@@ -892,21 +904,99 @@ def _change_of(
 def _cleared_change(memo: Any, items: list[tuple[Any, Any]]) -> dict | None:
     """The change a run made to *memo*, which it emptied before any call of
     it (`watching_clears`): every pair it holds now, the run's own. What it
-    held before is neither recorded nor asked for. None when a key has no
-    digest; the answers are remembered as seen."""
-    _changed_in_place(memo, items)
+    held before is neither recorded nor asked for.
+
+    Keys that are plain values (`_plain_key`) and come back from a pickle
+    equal are taken as they are, at any count (a Held-Karp memo refilled
+    for 16 cities holds 245,760): a hit puts back the very keys the entry
+    holds, so no digest of each is recorded (``"plain"``). Any other key
+    takes a digest, up to `MAX_KEYED` of them; over it the change is
+    unportable. None when a key has no digest. The answers are remembered
+    as seen, up to `MAX_KEYED` of them (`used` forgets them over it)."""
+    if len(items) <= MAX_KEYED:
+        _changed_in_place(memo, items)
+    else:
+        _answers_seen.pop(memo, None)
+    keys = [key for key, _ in items]
+    plain = _plain_keys(keys)
+    if plain is not None:
+        return {
+            "emptied": True,
+            "cleared": True,
+            "plain": True,
+            "marked": plain[1],
+            "items": [],
+            "keys": None,
+            "keys_pickle": plain[0],
+            "answers": [answer for _, answer in items],
+            "unportable": False,
+        }
+    if len(items) > MAX_KEYED:
+        return {"emptied": True, "cleared": True, "items": [], "keys": None, "pairs": [], "unportable": True}
     try:
-        keys = [_change_key_digest(key) for key, _ in items]
+        digests = [_change_key_digest(key) for key in keys]
     except Exception:  # noqa: BLE001 - a key with no digest
         return None
     return {
         "emptied": True,
         "cleared": True,
         "items": [],
-        "keys": keys,
+        "keys": digests,
         "pairs": list(items),
-        "unportable": not all(_portable_key(key) for key, _ in items),
+        "unportable": not all(_portable_key(key) for key in keys),
     }
+
+
+#: The types a plain key (`_plain_key`) is made of besides tuples and
+#: frozensets: what a pickle gives back as an equal value of the same type.
+_PLAIN_TYPES = frozenset((int, float, complex, str, bytes, bool, type(None)))
+
+
+def _plain_key(key: Any) -> bool:
+    """*key* is a plain value (`_plain_value`), or a tuple of plain values
+    and ``functools``' keyword marker, put back as the live one
+    (`_live_key`)."""
+    if type(key) is tuple:
+        for part in key:
+            kind = type(part)
+            if kind not in _PLAIN_TYPES and kind is not object and not _plain_value(part, 3):
+                return False
+        return True
+    return _plain_value(key, 4)
+
+
+def _plain_value(value: Any, depth: int) -> bool:
+    """*value* is a number, string, bytes or None, or a tuple or frozenset
+    of those nested up to *depth*."""
+    kind = type(value)
+    if kind in _PLAIN_TYPES:
+        return True
+    if (kind is not tuple and kind is not frozenset) or depth <= 0:
+        return False
+    if _PLAIN_TYPES.issuperset(map(type, value)):
+        return True
+    return all(_plain_value(part, depth - 1) for part in value)
+
+
+def _plain_keys(keys: list[Any]) -> tuple[bytes, bool] | None:
+    """The pickle of *keys*, and whether one holds ``functools``' keyword
+    marker, when every one is plain (`_plain_key`) and comes back from that
+    pickle equal (not NaN, which equals nothing): what a hit puts back is
+    then the run's keys. None otherwise. About a second for the 245,760
+    keys of a Held-Karp memo of 16 cities, where a digest of each took
+    14 s."""
+    if not all(map(_plain_key, keys)):
+        return None
+    try:
+        data = pickle.dumps(keys, protocol=5)
+        back = pickle.loads(data)
+    except Exception:  # noqa: BLE001 - not pickled or not read back: not plain
+        return None
+    mark = _live_mark()
+    marked = mark is not None and any(type(key) is tuple and mark in key for key in keys)
+    if marked:
+        back = [_live_key(key) for key in back]
+    return (data, marked) if back == keys else None
 
 
 def _digests_of(memo: Any, items: list[tuple[Any, Any]]) -> list[str]:
@@ -1344,7 +1434,7 @@ def put_back(records: list[dict] | None, changes: Any, ns: Mapping[str, Any]) ->
     outputs are restored, or a string saying why it cannot be done (the
     entry is then not served). Each key comes back as the run's: its digest
     is the one recorded."""
-    plans: list[tuple[Any, bool, list[tuple[Any, Any]]]] = []
+    plans: list[tuple[Any, bool, Any]] = []
     for record in records or ():
         index = record.get("delta")
         if index is None:
@@ -1354,8 +1444,18 @@ def put_back(records: list[dict] | None, changes: Any, ns: Mapping[str, Any]) ->
         memo = _resolve(where, ns) if where else None
         try:
             change = changes[index]
-            pairs = [(_live_key(key), answer) for key, answer in change["pairs"]]
-            same = [_change_key_digest(key) for key, _ in pairs] == list(record.get("keys") or ())
+            if record.get("plain"):
+                # Checked plain, and equal after a pickle, when stored
+                # (`_plain_keys`): the keys are the run's. Only as many as
+                # stored, none taken for another.
+                keys, answers = pickle.loads(change["keys"]), change["answers"]
+                if record.get("marked"):
+                    keys = [_live_key(key) for key in keys]
+                pairs: Any = dict(zip(keys, answers, strict=True))
+                same = len(pairs) == len(keys)
+            else:
+                pairs = [(_live_key(key), answer) for key, answer in change["pairs"]]
+                same = [_change_key_digest(key) for key, _ in pairs] == list(record.get("keys") or ())
         except Exception:  # noqa: BLE001 - an entry this cannot read
             return f"the answers it put into the helper memo {label} cannot be read back"
         if not _is_user_memo(memo) or not _unbounded(memo) or _answers_dict(memo) is None:
@@ -1373,13 +1473,14 @@ def put_back(records: list[dict] | None, changes: Any, ns: Mapping[str, Any]) ->
             cache = _answers_dict(memo)
             if cache is None:
                 continue
-            for key, answer in pairs:
-                cache[key] = answer
+            cache.update(pairs)
             # Seen as the run left them: the next statement reading one
             # compares with these.
             items = _items(memo)
             if items is not None and len(items) <= MAX_KEYED:
                 _changed_in_place(memo, items)
+            else:
+                _answers_seen.pop(memo, None)
 
     return apply
 
@@ -1392,7 +1493,7 @@ def lifted(records: list[dict] | None, changes: list[dict] | None, ns: Mapping[s
     memo's reference to an answer the outputs hold is no holder. An answer
     anything else holds -- one an earlier statement put in the memo, a
     variable -- still is. Put back as they were after."""
-    lifted_out: list[tuple[dict, list[tuple[Any, Any]]]] = []
+    lifted_out: list[tuple[dict, list[tuple[Any, Any]], Any, list[int]]] = []
     try:
         for record in records or ():
             index = record.get("delta")
@@ -1402,22 +1503,51 @@ def lifted(records: list[dict] | None, changes: list[dict] | None, ns: Mapping[s
             cache = _answers_dict(memo) if _is_user_memo(memo) else None
             if cache is None:
                 continue
-            taken = []
-            for pair in changes[index]["pairs"]:  # the pairs themselves: no other tuple holds an answer
-                if cache.get(pair[0], _UNSET) is pair[1]:
-                    del cache[pair[0]]
-                    taken.append(pair)
-            lifted_out.append((cache, taken))
+            change = changes[index]
+            if "pairs" in change:
+                # The pairs themselves: no other tuple holds an answer.
+                taken: list[Any] = []
+                for pair in change["pairs"]:
+                    if cache.get(pair[0], _UNSET) is pair[1]:
+                        del cache[pair[0]]
+                        taken.append(pair)
+                lifted_out.append((cache, taken, None, []))
+                continue
+            # Emptied first, the memo holds the answers in the order the
+            # change lists them: taken by position, and no tuple of a key
+            # and its answer is made, one more holder of the answer.
+            keys, answers = list(cache), change["answers"]
+            at = [i for i, key in enumerate(keys[: len(answers)]) if cache[key] is answers[i]]
+            for i in at:
+                del cache[keys[i]]
+            lifted_out.append((cache, [], (keys, answers), at))
         yield
     finally:
-        for cache, taken in lifted_out:
+        for cache, taken, change, at in lifted_out:
             for key, answer in taken:
                 cache.setdefault(key, answer)
+            for i in at:
+                cache.setdefault(change[0][i], change[1][i])
 
 
 def change_answers(changes: list[dict] | None) -> list[Any]:
     """The answers of *changes* (`used`), in one list for the share check."""
-    return [pair[1] for change in changes or () for pair in change["pairs"]]
+    out: list[Any] = []
+    for change in changes or ():
+        out.extend(change["answers"] if "answers" in change else (pair[1] for pair in change["pairs"]))
+    return out
+
+
+def change_holders(changes: list[dict] | None) -> list[Any]:
+    """The containers of *changes* (`used`) that hold its answers: cash's
+    own, which the share check does not count as another holder."""
+    out: list[Any] = []
+    for change in changes or ():
+        if "answers" in change:
+            out.append(change["answers"])
+        else:
+            out.extend(change["pairs"])
+    return out
 
 
 def held_by_cash() -> list[Any]:

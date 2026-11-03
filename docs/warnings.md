@@ -1943,7 +1943,10 @@ module, by its name, so cash can read it.
 than cash checks (4,096). A served statement must leave the memo as a real
 run would, so cash compares every answer it holds; past the limit it does
 not, and the statement was not stored. The message names the memo and how
-many answers it holds. It is shown once per statement.
+many answers it holds. It is shown once per statement. A statement that
+empties the memo before any call of it (`f.cache_clear()` first) is stored
+however many answers it holds, so it does not get this warning for that
+memo.
 
 **Why it matters.** Your results are correct: the statement runs every
 time, as plain Python runs it. Only the time is lost.
@@ -2131,7 +2134,7 @@ the top.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/statement/identity_holders.py:identity_held_reason @37b0f53c, cash/notebook/statement/processor.py:StatementProcessor._warn_identity_held @a5aa8bda, cash/notebook/statement/processor.py:_pointed_into @41961608 -->
+<!-- claim: cash/notebook/statement/identity_holders.py:identity_held_reason @db97719f, cash/notebook/statement/processor.py:StatementProcessor._warn_identity_held @a5aa8bda, cash/notebook/statement/processor.py:_pointed_into @41961608 -->
 **What happened.** A value the statement binds finds another object by
 identity, not by holding it: a weak reference (`wr = weakref.ref(p.child)`,
 a `WeakValueDictionary`) to an object the value does not hold, or an `int`

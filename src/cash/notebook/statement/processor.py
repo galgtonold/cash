@@ -3380,7 +3380,7 @@ class StatementProcessor:
                     captured_vars[MEMO_ANSWERS_NAME] = helper_memos.change_answers(run.memo_changes)
                     cash_held.extend(helper_memos.held_by_cash())
                     # The pairs the entry stores, which hold the answers too.
-                    cash_held.extend(pair for change in run.memo_changes for pair in change["pairs"])
+                    cash_held.extend(helper_memos.change_holders(run.memo_changes))
                 # Whether the outputs' values passed on their own: the
                 # retry with anchors does not read them again (an identity
                 # and alias check of a frame of two million records, a

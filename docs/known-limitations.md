@@ -262,7 +262,7 @@ state in the notebook, or pass it in and return it.
 
 ### A helper memoised with `functools.cache`
 
-<!-- claim: cash/notebook/helper_memos.py:unfilled @529d38f0, cash/notebook/helper_memos.py:used @52be5683, cash/notebook/helper_memos.py:clears @bc3fe4e5, cash/notebook/helper_memos.py:MAX_KEYED == 4096, cash/notebook/helper_memos.py:watching_clears @a5f41663 -->
+<!-- claim: cash/notebook/helper_memos.py:unfilled @529d38f0, cash/notebook/helper_memos.py:used @21c4d2f1, cash/notebook/helper_memos.py:clears @bc3fe4e5, cash/notebook/helper_memos.py:MAX_KEYED == 4096, cash/notebook/helper_memos.py:watching_clears @a5f41663, cash/notebook/helper_memos.py:_cleared_change @db1300a1, cash/notebook/helper_memos.py:_plain_keys @b1c572b1 -->
 A statement served from the cache does not run, so a `@functools.cache` or
 `@functools.lru_cache` helper it calls keeps what it held. A run leaves the
 answers in it, and a later call of the helper uses them without running its
@@ -307,11 +307,18 @@ body. So cash follows these rules:
   run began, and a hit empties it and puts the pairs in. When the run
   emptied it before any call of it (`held_karp_tsp` clearing
   `shortest_segment` for each new problem), what it held then decided
-  nothing: the statement is served whatever the memo holds, even past the
-  4,096 answers below, as long as what the run leaves in it is not. cash
-  sees such a clear as it happens, through a `cache_clear` it sets on the
-  memo while the statement runs; a clear it cannot see (`clear =
-  f.cache_clear` bound in an earlier cell) is not taken for the first.
+  nothing: the statement is served whatever the memo holds, and however
+  many answers the run leaves in it (245,760 for a 16-city Held-Karp,
+  about 15 MB on disk), when every key is a plain value (numbers,
+  strings, bytes, None, and tuples and frozensets of those) that comes
+  back from a pickle equal; with any other key, only up to the 4,096
+  answers below. cash sees such a clear as it happens, through a
+  `cache_clear` it sets on the memo while the statement runs; a clear it
+  cannot see (`clear = f.cache_clear` bound in an earlier cell) is not
+  taken for the first, and neither is one of a memo that was empty
+  already (the first statement after the helper is defined). Such an
+  entry is still weighed like any other, so one that would take longer
+  to read back than to compute is not stored.
   A hit that cannot put the pairs back says why, and the statement runs.
 - What a hit cannot put back still runs every time: a statement that fills
   a bounded memo (`lru_cache(maxsize=128)`, whose order only its own code
@@ -335,7 +342,8 @@ body. So cash follows these rules:
 
 Nothing to do: the results are the ones a run gives, at the cost of those
 runs. cash reads a memo's answers only when it holds at most 4,096 of them;
-a statement over a bigger memo reruns every time, and says so ([NOTEBOOK-MEMO-UNREAD](warnings.md#notebook-memo-unread)). It sees a
+a statement over a bigger memo reruns every time, and says so ([NOTEBOOK-MEMO-UNREAD](warnings.md#notebook-memo-unread)),
+unless it emptied the memo before any call of it, as above. It sees a
 memo bound in the notebook or at the top of one of your modules (a
 `reload` included), under other decorators that set `__wrapped__`, and on
 one of your classes (a `staticmethod`, a `classmethod` or a plain
