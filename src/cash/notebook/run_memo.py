@@ -465,12 +465,6 @@ class _Identifying(Mapping):
     def __bool__(self) -> bool:
         return bool(self._pending) or bool(self._by_key)
 
-    def __bool__(self) -> bool:
-        # Not by ``__len__``, which builds the union of the keys: asked for
-        # each file of a component (``if stats``), that was quadratic in
-        # the files, tens of seconds before a cell below 19,000 photos.
-        return bool(self._by_key) or bool(self._pending)
-
 
 def stat_keys_this_run(paths: Iterable[str]) -> Mapping[str, tuple[int, int, int] | None]:
     """``{path: stat_key or None}`` of this run's stats (`stats_this_run`):
