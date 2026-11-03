@@ -1288,9 +1288,13 @@ class FreshnessMemo:
 
     def begin_check(self) -> None:
         """A check of a dated memo begins: it gives answers resting on stats
-        taken at most ``lasts`` before now, and dates its own stats by now."""
+        taken at most ``lasts`` before now, and dates its own stats by now.
+        A listing an earlier check took is not one of them: it is taken
+        again, as the stats are."""
         self.checked_at = time.monotonic()
         self.not_before = self.checked_at - (self.lasts or 0.0)
+        if self.listed:
+            self.listed = {}
 
     def keep_since(self, not_before: float) -> None:
         """Drop the answers of a dated memo resting on a stat taken before
@@ -1481,8 +1485,10 @@ def snapshot_is_fresh(
                 taken_at = memo.taken_dates()
         else:
             taken = memo.taken(snap)
-    elif memo is not None and len(snap) >= LISTING_MIN_FILES:
-        # Many files: read their directories once rather than stat each.
+    if memo is not None and not taken and len(snap) >= LISTING_MIN_FILES:
+        # Many files, none of them stat-ed by the owner (a check outside a
+        # cell run, whose owner takes nothing): read their directories once
+        # rather than stat each.
         unlisted = [p for p, s in snap.items() if isinstance(s, dict) and "size" in s and p not in memo.listed]
         if len(unlisted) >= LISTING_MIN_FILES:
             memo.listed.update(stats_from_listings(unlisted))
