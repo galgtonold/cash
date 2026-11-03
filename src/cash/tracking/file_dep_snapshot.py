@@ -1535,12 +1535,22 @@ def snapshot_is_fresh(
     if not snap:
         return True, None
     verdicts = memo.verdicts if memo is not None and len(snap) >= VERDICT_MIN_FILES else None
+    checking = snap
     if verdicts is not None:
         at = verdicts.known(snap, memo.not_before if dated else None)
         if at is not None:
             if dated and at < memo.oldest:
                 memo.oldest = at
             return True, None
+        partly = getattr(verdicts, "partly", None)
+        held = partly(snap, memo.not_before if dated else None) if partly is not None else None
+        if held is not None:
+            # Fresh but for the files the watch no longer vouches for: only
+            # those are checked (`run_memo._RunVerdicts.partly`).
+            at, unsure = held
+            if dated and at < memo.oldest:
+                memo.oldest = at
+            checking = {p: snap[p] for p in unsure}
     taken: Mapping[str, os.stat_result] = {}
     taken_at: Mapping[str, float] = {}
     if memo is not None and memo.taken is not None:
@@ -1548,23 +1558,23 @@ def snapshot_is_fresh(
         # check asks first.
         if dated:
             # Only the ones as recent as the answers may rest on.
-            taken = memo.taken(snap, memo.not_before)
+            taken = memo.taken(checking, memo.not_before)
             if memo.taken_dates is not None:
                 taken_at = memo.taken_dates()
         else:
-            taken = memo.taken(snap)
-    if memo is not None and not taken and len(snap) >= LISTING_MIN_FILES:
+            taken = memo.taken(checking)
+    if memo is not None and not taken and len(checking) >= LISTING_MIN_FILES:
         # Many files, none of them stat-ed by the owner (a check outside a
         # cell run, whose owner takes nothing): read their directories once
         # rather than stat each.
-        unlisted = [p for p, s in snap.items() if isinstance(s, dict) and "size" in s and p not in memo.listed]
+        unlisted = [p for p, s in checking.items() if isinstance(s, dict) and "size" in s and p not in memo.listed]
         if len(unlisted) >= LISTING_MIN_FILES:
             memo.listed.update(stats_from_listings(unlisted))
     # A relative read is recorded under both spellings (`snapshot_file_deps`);
     # its absolute twin's answer, kept here, is the relative one's too.
     answered: dict[str, tuple[str | None, bool, str | None]] = {}
     isabs = os.path.isabs
-    for path, recorded in snap.items():
+    for path, recorded in checking.items():
         if isabs(path):
             answer = answered.get(path)
             if answer is None:

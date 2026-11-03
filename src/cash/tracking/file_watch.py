@@ -49,7 +49,7 @@ import struct
 import sys
 import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from .read_classification import own_lstat, own_stat
@@ -121,6 +121,8 @@ class FileWatch:
         self.pid = os.getpid()
         #: How many times a folder's stats were dropped, ever.
         self.changes = 0
+        #: Why stats were not kept, by reason (`report`).
+        self.unkept: dict[str, int] = {}
         #: When the last drain began (``time.monotonic()``): a stat still
         #: current is as good as one taken then.
         self.confirmed_at = 0.0
@@ -258,11 +260,14 @@ class FileWatch:
         kind = st.st_mode & _S_IFMT
         if kind == _S_IFREG:
             if st.st_nlink > 1:
+                self._unkept("a second hard link")
                 return
         elif kind != _S_IFDIR:
+            self._unkept("neither a file nor a folder")
             return
         with self._lock:
             if not d.alive or d.version != version:
+                self._unkept("its folder changed while it was stat-ed")
                 return
             if kind == _S_IFDIR:
                 own = self._arm(path)
@@ -299,6 +304,24 @@ class FileWatch:
             d.listed.discard(path)
             d.missing.add(path)
             self._home[path] = d
+
+    def _unkept(self, why: str) -> None:
+        self.unkept[why] = self.unkept.get(why, 0) + 1
+
+    def report(self) -> dict[str, Any]:
+        """What the watch holds, and why it holds no more: for finding out
+        on a machine why a cell still checks files one by one."""
+        with self._lock:
+            return {
+                "folders watched": len(self._dirs),
+                "folders that cannot be watched": len(self._refused),
+                "some of those": sorted(self._refused)[:10],
+                "watch limit reached": self._full,
+                "stats kept": sum(len(d.records) for d in self._dirs.values()),
+                "paths kept as not there": sum(len(d.missing) for d in self._dirs.values()),
+                "folder changes taken": self.changes,
+                "stats not kept, by why": dict(self.unkept),
+            }
 
     # -- answers -----------------------------------------------------------
 
@@ -353,6 +376,51 @@ class FileWatch:
                 if id(own) not in dirs:
                     dirs[id(own)] = (own, own.version)
         return tuple(dirs.values())
+
+    def cover_by_folder(self, paths: Mapping[str, str]) -> tuple[list[tuple[_Dir, int, list[str]]], list[str]]:
+        """``(parts, loose)`` for *paths* (``{key: path}``): each watched
+        folder vouching for some of them, with its version and their keys,
+        and the keys of those none vouches for. A change in one folder then
+        asks again only of the files in it (`changed_in`), where a `cover`
+        lapsed whole: a snapshot of 8,000 files was checked file by file
+        before every cell because one of its folders (the notebook's own,
+        written by every save) reported a change, or one file could not be
+        vouched for."""
+        parts: dict[int, tuple[_Dir, int, list[str]]] = {}
+        loose: list[str] = []
+        home = self._home
+        own_of = self._self
+        for key, p in paths.items():
+            d = home.get(p)
+            st = d.records.get(p) if d is not None else None
+            if st is None:
+                if d is None or p not in d.missing:
+                    loose.append(key)
+                    continue
+            elif st.st_mode & _S_IFMT == _S_IFDIR:
+                own = own_of.get(p)
+                if own is None or own.records.get(p) is not st:
+                    loose.append(key)
+                    continue
+                part = parts.get(id(own))
+                if part is None:
+                    part = parts[id(own)] = (own, own.version, [])
+                part[2].append(key)
+            part = parts.get(id(d))
+            if part is None:
+                part = parts[id(d)] = (d, d.version, [])
+            part[2].append(key)
+        return list(parts.values()), loose
+
+    @staticmethod
+    def changed_in(parts: list[tuple[_Dir, int, list[str]]]) -> list[str]:
+        """The keys of `cover_by_folder`'s *parts* whose folder reported a
+        change since (or whose watch ended)."""
+        changed: list[str] = []
+        for d, version, keys in parts:
+            if not d.alive or d.version != version:
+                changed.extend(keys)
+        return changed
 
     @staticmethod
     def still(cover: tuple) -> bool:

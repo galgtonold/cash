@@ -124,7 +124,7 @@ _FRESH_SNAPSHOTS_KEPT = 16
 #: that cover and the working directory: ``(snapshot, cover, cwd)``. They
 #: outlive the cell run, and hold while no folder of the cover reports a
 #: change.
-_COVERED_SNAPSHOTS: list[tuple[Mapping[str, Any], tuple, str]] = []
+_COVERED_SNAPSHOTS: list[tuple[Mapping[str, Any], "_Held", str]] = []
 
 #: How many covered snapshots are kept, across runs.
 _COVERED_KEPT = 16
@@ -156,18 +156,75 @@ def note_fresh_snapshot(snap: Mapping[str, Any], at: float | None = None) -> Non
 
 def _note_covered(watch: Any, snap: Mapping[str, Any]) -> None:
     covered = _COVERED_SNAPSHOTS
-    if any(known is snap and watch.still(cover) for known, cover, _cwd in covered):
+    if any(known is snap and held.unsure() == [] for known, held, _cwd in covered):
         return
-    cover = _cover_of(watch, snap)
-    if cover is None:
+    held = _held_of(watch, snap)
+    if held is None:
         return
     try:
         cwd = os.getcwd()
     except OSError:
         return
-    # The ones whose folders changed first, then the oldest.
-    covered[:] = [held for held in covered if watch.still(held[1])][-(_COVERED_KEPT - 1) :]
-    covered.append((snap, cover, cwd))
+    # This one's earlier verdict, then the oldest, make room.
+    covered[:] = [entry for entry in covered if entry[0] is not snap][-(_COVERED_KEPT - 1) :]
+    covered.append((snap, held, cwd))
+
+
+class _Held:
+    """What the folder watch vouches for of a snapshot found fresh
+    (`FileWatch.cover_by_folder`): its files by folder, the ones no folder
+    vouches for (``loose``), and where the modules lie that files beside
+    the code are checked in (`_CodePlaces`)."""
+
+    __slots__ = ("code", "loose", "parts")
+
+    def __init__(self, parts: list, loose: list[str], code: tuple | None) -> None:
+        self.parts = parts
+        self.loose = loose
+        self.code = code
+
+    def unsure(self) -> list[str] | None:
+        """The snapshot's paths to check again: those in a folder that
+        reported a change since, and the loose ones; None for all of them."""
+        if self.code is not None and _fds.code_places(self.code[0]) != self.code[1]:
+            return None
+        changed = _fw.FileWatch.changed_in(self.parts)
+        if not changed:
+            return list(self.loose)
+        return list(dict.fromkeys(changed + self.loose)) if self.loose else list(dict.fromkeys(changed))
+
+
+def _held_of(watch: Any, snap: Mapping[str, Any]) -> _Held | None:
+    """`_Held` for *snap*, a relative path by its absolute spelling; None
+    when a file is checked elsewhere than where it was recorded (beside the
+    code: in this process's copy of that code), or most files are loose."""
+    by_key: dict[str, str] = {}
+    loose: list[str] = []
+    isabs = os.path.isabs
+    here = _fds.dep_path_for_this_process
+    modules: set[str] = set()
+    for p, recorded in snap.items():
+        if not isinstance(recorded, Mapping):
+            return None
+        if "code_rel" in recorded:
+            if here(p, recorded) != p:
+                return None
+            module = recorded.get("code_mod")
+            if isinstance(module, str):
+                modules.add(module)
+        if isabs(p):
+            by_key[p] = p
+        else:
+            twin = _fds.spelled_absolute(p)
+            if twin is None:
+                loose.append(p)
+            else:
+                by_key[p] = twin
+    parts, unvouched = watch.cover_by_folder(by_key)
+    loose += unvouched
+    if 2 * len(loose) > len(snap):
+        return None
+    return _Held(parts, loose, (frozenset(modules), _fds.code_places(modules)) if modules else None)
 
 
 def _cover_of(watch: Any, paths: Iterable[str], snap: Mapping[str, Any] | None = None) -> tuple | None:
@@ -250,21 +307,39 @@ class _RunVerdicts:
         for known, at in run.get("fresh", ()):
             if (not_before is None or at >= not_before) and len(known) == len(snap) and known == snap:
                 return at
+        held = _RunVerdicts.partly(snap, not_before)
+        return held[0] if held is not None and not held[1] else None
+
+    @staticmethod
+    def partly(snap: Mapping[str, Any], not_before: float | None) -> tuple[float, list[str]] | None:
+        """``(when, unsure)`` for *snap* found fresh in an earlier check,
+        held by the folder watch but for the paths *unsure* names, which the
+        caller checks itself; None when no such verdict is kept."""
+        run = file_state_this_run()
+        if run is None:
+            return None
         watch = run.get("watch")
         if watch is None or not _COVERED_SNAPSHOTS:
             return None
-        watch.drain()
         cwd = None
-        for known, cover, at_cwd in _COVERED_SNAPSHOTS:
-            if len(known) != len(snap) or not watch.still(cover):
+        drained = False
+        for known, held, at_cwd in _COVERED_SNAPSHOTS:
+            if len(known) != len(snap):
                 continue
             if cwd is None:
                 try:
                     cwd = os.getcwd()
                 except OSError:
                     return None
-            if at_cwd == cwd and (known is snap or known == snap):
-                return watch.confirmed_at
+            if at_cwd != cwd or not (known is snap or known == snap):
+                continue
+            if not drained:
+                watch.drain()
+                drained = True
+            unsure = held.unsure()
+            if unsure is None:
+                return None
+            return watch.confirmed_at, unsure
         return None
 
     @staticmethod
@@ -369,7 +444,15 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
     recorded_of = paths if isinstance(paths, Mapping) and not isinstance(paths, RunStats) else None
     # Asked again by each check of the run: most often every path was
     # stat-ed already, which the run's own dict tells in C.
-    todo = [] if stats.keys() >= _as_set(paths) else [p for p in paths if p not in stats and p not in elsewhere]
+    if stats.keys() >= _as_set(paths):
+        todo = []
+    else:
+        # Set differences, in C: a snapshot holding paths not there (kept in
+        # ``elsewhere``) went through this per path on every check.
+        left = _as_set(paths) - stats.keys()
+        if elsewhere:
+            left -= elsewhere.keys()
+        todo = [p for p in paths if p in left] if left else []
     if todo and watch is not None:
         # A stat kept while its folder was watched, with no change reported
         # since, is the file's stat now (`file_watch`): no stat is taken.
