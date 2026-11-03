@@ -17,11 +17,13 @@ from ...analysis.ast_util import parse_cached
 from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source
 from ...source_norm import exact_source_digest
 from ...tracking.randomness import (
+    drawing_modules_now,
     get_drawing_rng_modules,
     get_seeding_rng_modules,
     restore_rng_state,
     rng_lineage_fingerprint,
     seed_cells_not_yet_run,
+    seeding_modules_now,
 )
 from ...value_types import BUILTIN_NAMES
 from .._protocols import ShellProtocol
@@ -150,8 +152,8 @@ class RngRewind:
             drawn: set[str] = set()
             seeded_in_plan: set[str] = set()
             for stmt in statements:
-                drawn |= get_drawing_rng_modules(stmt)
-                seeded_in_plan |= get_seeding_rng_modules(stmt)
+                drawn |= drawing_modules_now(stmt)
+                seeded_in_plan |= seeding_modules_now(stmt)
             # Only modules whose draw re-executes but whose seed is NOT already
             # being re-run need their chain re-established.
             missing = drawn - seeded_in_plan
@@ -175,8 +177,8 @@ class RngRewind:
                     except (ValueError, TypeError):
                         continue
                     all_stmts.append(stmt)
-                    draws = get_drawing_rng_modules(stmt) & missing
-                    seeds = get_seeding_rng_modules(stmt) & missing
+                    draws = drawing_modules_now(stmt) & missing
+                    seeds = seeding_modules_now(stmt) & missing
                     if draws or seeds:
                         rng_positions.append((len(all_stmts) - 1, bool(draws)))
 

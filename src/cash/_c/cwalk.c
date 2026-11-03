@@ -1605,7 +1605,123 @@ done:
     return out;
 }
 
+/*
+ * shape_witness(items, levels) -> (int, int) | None
+ *
+ * A fingerprint of what the exact list *items* holds, for a memo whose
+ * answer depends on that content alone (identity_holders._read_flat's
+ * read, kept across the statements of a cell). It holds no reference to
+ * anything it read: two equal witnesses mean the same objects at the same
+ * addresses, of the same types, nested the same way, and every str and int
+ * among them of the same value.
+ *
+ * Every item, at every depth, adds its address and its type's; an exact
+ * list or tuple its length, then its items (so a list changed in place, or
+ * one freed and another built at its address, differs); an exact str its
+ * length and hash, an exact int its value: an object of another type at
+ * the same address (one freed, another made there) is told apart by type,
+ * and a str or int by value. Anything else is taken as it is: the memo's
+ * answer is kept only for immutable leaves, whose type alone is what the
+ * answer reads of them.
+ *
+ * None when a list or tuple is met at depth *levels* - 1 or below (the
+ * read gives up there too), or when an exact list or tuple is not what an
+ * item claims to be. Two 64-bit lanes, mixed apart: a change that left the
+ * witness equal would take a 128-bit collision.
+ */
+#define SW_P1 0x9E3779B97F4A7C15ULL
+#define SW_P2 0xC2B2AE3D27D4EB4FULL
+typedef struct {
+    uint64_t a, b;
+} Witness;
+static inline void sw_mix(Witness *w, uint64_t v) {
+    w->a = (w->a ^ v) * SW_P1;
+    w->a ^= w->a >> 29;
+    w->b = (w->b + v + 0x165667B19E3779F9ULL) * SW_P2;
+    w->b = (w->b << 31) | (w->b >> 33);
+}
+
+static PyObject *py_shape_witness(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs != 2 || !PyList_CheckExact(args[0]) || !PyLong_CheckExact(args[1])) {
+        PyErr_SetString(PyExc_TypeError, "shape_witness(list, int)");
+        return NULL;
+    }
+    long levels = PyLong_AsLong(args[1]);
+    if (levels < 1 || levels > 64) {
+        PyErr_SetString(PyExc_ValueError, "levels 1..64");
+        return NULL;
+    }
+    struct {
+        PyObject *seq;
+        Py_ssize_t at;
+    } stack[64];
+    Witness w = {0x243F6A8885A308D3ULL, 0x13198A2E03707344ULL};
+    PyObject *items = args[0];
+    Py_INCREF(items);
+    int depth = 0;
+    stack[0].seq = items;
+    stack[0].at = 0;
+    sw_mix(&w, (uint64_t)PyList_GET_SIZE(items));
+    int ok = 1;
+    while (depth >= 0) {
+        PyObject *seq = stack[depth].seq;
+        Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
+        if (stack[depth].at >= n) {
+            depth--;
+            if (depth >= 0) sw_mix(&w, 0xFFFFFFFFFFFFFFFFULL); /* the end of a container */
+            continue;
+        }
+        PyObject *obj = PySequence_Fast_ITEMS(seq)[stack[depth].at++];
+        PyTypeObject *t = Py_TYPE(obj);
+        sw_mix(&w, (uint64_t)(uintptr_t)obj);
+        sw_mix(&w, (uint64_t)(uintptr_t)t);
+        if (t == &PyList_Type || t == &PyTuple_Type) {
+            /* items of *items* are at level 0: a container on level levels - 1 is past the read */
+            if (depth + 1 >= levels) {
+                ok = 0;
+                break;
+            }
+            sw_mix(&w, (uint64_t)PySequence_Fast_GET_SIZE(obj));
+            depth++;
+            stack[depth].seq = obj;
+            stack[depth].at = 0;
+        } else if (t == &PyUnicode_Type) {
+            Py_hash_t h = PyObject_Hash(obj); /* an exact str: cached, never Python code */
+            if (h == -1) {
+                ok = -1;
+                break;
+            }
+            sw_mix(&w, (uint64_t)PyUnicode_GET_LENGTH(obj));
+            sw_mix(&w, (uint64_t)h);
+        } else if (t == &PyLong_Type) {
+            int overflow = 0;
+            long long v = PyLong_AsLongLongAndOverflow(obj, &overflow);
+            if (v == -1 && PyErr_Occurred()) {
+                ok = -1;
+                break;
+            }
+            if (overflow) {
+                Py_hash_t h = PyObject_Hash(obj);
+                if (h == -1) {
+                    ok = -1;
+                    break;
+                }
+                sw_mix(&w, (uint64_t)overflow);
+                sw_mix(&w, (uint64_t)h);
+            } else {
+                sw_mix(&w, (uint64_t)v);
+            }
+        }
+    }
+    Py_DECREF(items);
+    if (ok < 0) return NULL;
+    if (!ok) Py_RETURN_NONE;
+    return Py_BuildValue("(KK)", (unsigned long long)w.a, (unsigned long long)w.b);
+}
+
 static PyMethodDef cwalk_methods[] = {
+    {"shape_witness", (PyCFunction)(void (*)(void))py_shape_witness, METH_FASTCALL,
+     "shape_witness(items, levels) -> (int, int) | None"},
     {"leaf_items", (PyCFunction)(void (*)(void))py_leaf_items, METH_FASTCALL,
      "leaf_items(group, mode, leaves) -> bool | NotImplemented"},
     {"seq_children", (PyCFunction)(void (*)(void))py_seq_children, METH_FASTCALL,

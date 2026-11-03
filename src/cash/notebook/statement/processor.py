@@ -1020,6 +1020,16 @@ class StatementProcessor:
         for var in sorted(drawn):
             state.lineage.record(var, advanced_rng_lineage(key, var))
 
+    def _adopt_seeds_it_set(self, run: StatementRun, reseeded: frozenset[str] = frozenset()) -> None:
+        """Adopt the seeds *run*'s statement set where no statement spells
+        them (*reseeded*, or put back by its hit) now, keyed by the key its
+        draws move the streams on from, so the simulation can give the
+        streams the same lineage after it (`adopt_seeds_set_by`). Not for a
+        loop or branch body, whose seeds the next statement adopts."""
+        if not run.cache_key or is_control_body(run.code) or run.magic_reads is not None:
+            return
+        self._randomness.adopt_seeds_set_by(run.code, run.rng_advance_key or run.cache_key, reseeded)
+
     def _reads_a_stream(self, run: StatementRun) -> bool:
         """Whether *run* reads, itself or through the functions it calls, a
         random generator or an iterator a variable holds: computing it
@@ -1198,6 +1208,7 @@ class StatementProcessor:
                 if shadow is not None:
                     shadow.statement_served(run, done)
                 self._advance_rng(run)
+                self._adopt_seeds_it_set(run)
                 self._move_what_reducers_wrote(run)
                 return done
             with self._executing(run) as runner:
@@ -1215,6 +1226,7 @@ class StatementProcessor:
             return result
         finally:
             self._advance_rng(run)
+            self._adopt_seeds_it_set(run, runner.execution.rng_reseeded)
             self._move_what_reducers_wrote(run)
 
     @staticmethod
@@ -1288,6 +1300,7 @@ class StatementProcessor:
                 if shadow is not None:
                     shadow.statement_served(run, done)
                 self._advance_rng(run)
+                self._adopt_seeds_it_set(run)
                 self._move_what_reducers_wrote(run)
                 return done
             with self._executing(run) as runner:
@@ -1303,6 +1316,7 @@ class StatementProcessor:
             return result
         finally:
             self._advance_rng(run)
+            self._adopt_seeds_it_set(run, runner.execution.rng_reseeded)
             self._move_what_reducers_wrote(run)
 
     def _prepare(self, run: StatementRun) -> ProcessResult | None:
