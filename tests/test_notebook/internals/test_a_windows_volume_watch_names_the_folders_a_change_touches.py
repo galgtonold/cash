@@ -13,6 +13,7 @@ they run on every OS.
 from __future__ import annotations
 
 import struct
+import threading
 import time
 
 import pytest
@@ -103,6 +104,7 @@ class _Kernel:
         self.cancelled = 0
         self.closed: list = []
         self.never_ends = False
+        self.waited_in: set = set()
 
     def report(self, data: bytes = b"", error: int = 0) -> None:
         self.payload = data
@@ -129,6 +131,7 @@ class _Kernel:
         return self.payload[:n]
 
     def wait(self, event, ms):
+        self.waited_in.add(threading.current_thread())
         time.sleep(0.005)
         return False
 
@@ -398,3 +401,17 @@ def test_a_parent_reported_moved_while_its_child_is_placed_places_the_child_afre
 
     kernel.attributes = moved_meanwhile
     assert changes.add("C:\\Proj\\Data\\B") == ("c:\\", "moved\\b")
+
+
+def test_a_poll_takes_reports_without_waiting_for_the_volumes_thread(disk):
+    # The cell's thread takes what ended itself, under the volume's lock: it
+    # never waits on the report event, which only the volume's thread does.
+    kernel, changes = disk
+    kernel.make("C:\\Proj\\Data")
+    changes.add("C:\\Proj\\Data")
+    for _ in range(20):
+        kernel.report(_notify("Proj\\Data\\a.txt"))
+        assert changes.poll() == [(("c:\\", "proj\\data"), False)]
+    time.sleep(0.05)
+    assert kernel.waited_in  # the volume's thread waits
+    assert threading.current_thread() not in kernel.waited_in
