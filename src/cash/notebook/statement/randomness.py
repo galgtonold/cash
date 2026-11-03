@@ -959,6 +959,33 @@ class StatementRandomness:
         """
         return set(self._cell_changed), self._cell_pre, self._cell_post
 
+    def before_hit(self) -> tuple[dict, dict[str, str]]:
+        """Where the streams and the RNG variables' lineages stand before a
+        hit replays its run's streams (`observe_hit`)."""
+        return capture_rng_state(), self.rng_lineages()
+
+    def observe_hit(self, before: tuple[dict, dict[str, str]], replayed: Iterable[str]) -> None:
+        """Count the streams a hit put back where its run left them
+        (*replayed*) in the cell's observation, as its run's statement
+        counted them (`observe_statement`): the cell is then one a draw below
+        rewinds to (``RngRewind``). Left out, a cell above that seeded the
+        same stream stood nearest, and the draw below started from its
+        position, not the hit's: after a restart, a served cell filling a
+        memo helper that reseeds (``random_cities(9)``) under one that
+        called it first (``random_cities(5)``) drew as if it had not run."""
+        moved = set(replayed)
+        if not moved:
+            return
+        try:
+            post = capture_rng_state()
+            changed = rng_modules_changed(before[0], post) | {m for m in moved if m in post}
+            if self._cell_pre is None:
+                self._cell_pre, self._cell_pre_lineage = before
+            self._cell_changed |= changed
+            self._cell_post = post
+        except (TypeError, AttributeError):  # pragma: no cover - defensive
+            return
+
     def flag_observed_hidden_draw(
         self,
         metrics: "ProcessResult",

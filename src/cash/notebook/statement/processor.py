@@ -2089,7 +2089,16 @@ class StatementProcessor:
             and rng_replay_is_current(cached_data, self._randomness.seed_epochs)
             else None
         )
+        # The streams the hit puts back, which the cell's observation counts.
+        replayed = (
+            set(cached_data.get("rng_state") or ())
+            if isinstance(cached_data, dict) and rng_replay_is_current(cached_data, self._randomness.seed_epochs)
+            else set()
+        )
+        before_hit = self._randomness.before_hit() if replayed else None
         hit_result = self._hits.serve(run, cached_data, metadata, self._randomness.seed_epochs)
+        if hit_result is not None and before_hit is not None:
+            self._randomness.observe_hit(before_hit, replayed)
         if hit_result is None:
             if self._hits.last_refusal:
                 self._freshness.last_miss_reason = self._hits.last_refusal
