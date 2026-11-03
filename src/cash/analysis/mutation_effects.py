@@ -881,12 +881,15 @@ def comprehension_watch_candidates(
     watched as a loop body's statement is (:func:`loop_watch_candidates`); a
     comprehension target counts as what it iterates. Not the statement's
     other calls: a library call whose result is kept returns its answer
-    (``call_arguments`` decides those)."""
+    (``call_arguments`` decides those). The body of a function the
+    statement defines runs when it is called, not now: a comprehension
+    there iterates its own parameters (``def total(points): return
+    sum(p.scaled() for p in points)``), not the notebook's ``points``."""
     if tree is None:
         return frozenset()
     names = _LoopNames(is_module, namespace, resolve_source)
     found: set[str] = set()
-    for node in ast.walk(tree):
+    for node in _runs_now(tree):
         if isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp)):
             parts = [node.elt]
         elif isinstance(node, ast.DictComp):
@@ -911,6 +914,31 @@ def comprehension_watch_candidates(
         for name in roots
         if _watchable(name, namespace, is_module) and rng_carrier_kind(namespace.get(name)) is None
     )
+
+
+def _runs_now(tree: ast.AST) -> Iterable[ast.AST]:
+    """*tree* and every node under it that runs when it runs: of a function
+    it defines, the decorators, defaults and annotations, not the body. A
+    class body runs when it is defined, so it is walked (its methods'
+    bodies are not)."""
+    pending = [tree]
+    while pending:
+        node = pending.pop()
+        yield node
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            args = node.args
+            pending.extend(node.decorator_list)
+            pending.extend(args.defaults)
+            pending.extend(d for d in args.kw_defaults if d is not None)
+            pending.extend(
+                a.annotation
+                for a in (*args.posonlyargs, *args.args, *args.kwonlyargs, args.vararg, args.kwarg)
+                if a is not None and a.annotation is not None
+            )
+            if node.returns is not None:
+                pending.append(node.returns)
+            continue
+        pending.extend(ast.iter_child_nodes(node))
 
 
 def _watch_statements(stmts: list[ast.stmt], names: _LoopNames, found: set[str], targets: dict[str, set[str]]) -> None:
