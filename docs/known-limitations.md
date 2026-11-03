@@ -291,9 +291,16 @@ body. So cash follows these rules:
   place, so a later call finds the answer and does not run the helper's
   body (which may reseed `random`, print, or take minutes), and an output
   that is one of those answers is the very object the memo holds, as after
-  a run. It is served only while the memo holds every answer it held when
-  the run began and none of the keys the run computed: once a cell above
-  computes one of them, a run would find it there, so the statement runs.
+  a run. It is served only while the memo holds none of the keys the run
+  computed: once a cell above computes one of them, a run would find it
+  there, so the statement runs. When the run also found an answer already
+  in the memo, it is served only while the memo holds every answer it
+  held when the run began (the counters do not say which one it found).
+  A run that found none read none of them, so an answer a cell above
+  computed again differently (one holding a timing) does not stop it. A
+  statement in which a call of the helper raised is not stored: a cell
+  above that later puts that key in would make a run find the answer
+  where the stored run raised.
   A statement that empties the memo (`cache_clear` under any name, or seen
   from the keys it holds afterwards) is stored as "emptied, then these
   pairs", served only while the memo holds exactly what it held when the
