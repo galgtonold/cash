@@ -26,6 +26,7 @@ from .carrier_fills import fills_carrier
 from .figure_writes import FigureWriteGuard
 from .file_writers import FileWriterScheduler
 from .mismatch_classifier import import_only
+from .replay import UpstreamRepairGap
 
 if TYPE_CHECKING:
     from .._protocols import ShellProtocol
@@ -210,8 +211,18 @@ class ReexecutionPlanner:
         # behind ``OUT.mkdir()``, and ran without its ``def`` -- a NameError.
         # Inputs back, later producers forward, until neither adds anything: a
         # producer brought in for an input may itself be followed by writes.
+        # A statement any of these brings in reads a name bound twice at the
+        # version it read then, as one the backward scan found does: the
+        # append that goes on filling a re-run list reads the ``k = 5`` above
+        # it, not the ``k = 100`` of a cell below.
         while True:
             before = len(stmts_to_run_indices)
+            stmts_to_run_indices = self._complete_shadowed_var_producers(
+                stmts_to_run_indices,
+                simulation_trace,
+                virtual_lineage,
+                loop_vars=sim.vars_mutated_by_loops | sim.vars_derived_from_loops | sim.loop_target_vars,
+            )
             stmts_to_run_indices = self._complete_inputs_produced_before(
                 stmts_to_run_indices,
                 simulation_trace,
@@ -255,6 +266,9 @@ class ReexecutionPlanner:
             stmts_to_run_indices, simulation_trace, sim.vars_mutated_by_loops
         )
         stmts_to_run_indices = self._dedup_sorted_indices(stmts_to_run_indices)
+        gap = self._unclosed_read(stmts_to_run_indices, simulation_trace)
+        if gap is not None:
+            raise gap
         restored_statements_info = self._drop_scheduled_from_restored(
             simulation_trace,
             stmts_to_run_indices,
@@ -288,6 +302,75 @@ class ReexecutionPlanner:
         )
 
         return ReexecutionPlan(statements_to_reexecute, restored_statements_info, total_restore_time)
+
+    def _unclosed_read(self, stmts_to_run_indices: list[int], simulation_trace: list) -> UpstreamRepairGap | None:
+        """The gap, when a statement of the plan would read a name at
+        another version than a run from the top gives it there.
+
+        The plan runs its statements in notebook order. A name a statement
+        reads then holds what the last re-run statement above it wrote, or
+        else what the kernel holds. Either must be the version the statement
+        read in the simulation (``input_hashes``); one that is not, re-run,
+        computes on values a run from the top never has: in E8, the
+        ``accuracy_score(y_test, y_pred)`` of cell 16 ran on the ``y_pred``
+        of a loop in cell 23 and failed the cell. Refused only on evidence:
+        the version it would read is one a statement of the notebook made
+        (the kernel's lineage of a loop's names may be one no statement
+        makes, and says nothing). A def reads nothing when it runs.
+        """
+        made: dict[str, set[str]] = {}
+        for entry in simulation_trace:
+            for name, lineage in (entry.produced_lineages or {}).items():
+                made.setdefault(name, set()).add(lineage)
+        live = self.tracking_state.variable_lineage
+        holds: dict[str, str | None] = {}
+        for i in stmts_to_run_indices:
+            entry = simulation_trace[i]
+            if not _is_definition(entry.stmt_code):
+                for name in sorted(entry.inputs or ()):
+                    consumed = (entry.input_hashes or {}).get(name)
+                    if consumed is None:
+                        continue
+                    if name in holds:
+                        have = holds[name]
+                    else:
+                        have = live.get(name)
+                        if have not in made.get(name, ()):
+                            continue
+                    if have is None or have == consumed:
+                        continue
+                    return self._gap(simulation_trace, i, name, consumed)
+            for name in entry.outputs or ():
+                holds[name] = (entry.produced_lineages or {}).get(name)
+        return None
+
+    @staticmethod
+    def _gap(simulation_trace: list, i: int, name: str, consumed: str) -> UpstreamRepairGap:
+        """The :class:`UpstreamRepairGap` for statement *i* reading *name*
+        at another version than *consumed*, naming the statement that
+        makes that version."""
+        entry = simulation_trace[i]
+        producer = next(
+            (
+                simulation_trace[p]
+                for p in range(i - 1, -1, -1)
+                if (simulation_trace[p].produced_lineages or {}).get(name) == consumed
+            ),
+            None,
+        )
+        producer_code = producer.stmt_code if producer is not None else name
+        cell_no = producer.cell + 1 if producer is not None and producer.cell >= 0 else None
+        error_text = f"it would read {name!r} as another statement leaves it, not as a run from the top has it there"
+        logger.debug("[UPSTREAM] Plan not closed: [%s] would read %r at another version; not re-running", i, name)
+        return UpstreamRepairGap(
+            f"Cash would re-run {entry.stmt_code.splitlines()[0][:60]!r} on a {name!r} a run from the top "
+            "does not give it there",
+            stmt_code=entry.stmt_code,
+            error_text=error_text,
+            producer=producer_code,
+            cell_no=cell_no,
+            planned=True,
+        )
 
     def _schedule_consumable_producer_touches(
         self,

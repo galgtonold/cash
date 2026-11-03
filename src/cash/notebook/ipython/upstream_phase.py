@@ -296,16 +296,26 @@ class UpstreamResolution:
             # gives either. Failing the cell blocked one that runs; it runs
             # as plain Jupyter runs it instead, uncached, and says why.
             where = f"cell {caught.cell_no}" if caught.cell_no else "a cell above"
+            first = caught.stmt_code.splitlines()[0][:60]
+            producer = caught.producer.splitlines()[0][:60]
+            if caught.planned:
+                what = (
+                    f"to bring this cell up to date cash would have re-run `{first}`, but {caught.error_text[:120]}: "
+                    f"cash could not re-run `{producer}` ({where}) before it as a run from the top does, so it "
+                    "re-ran nothing and this cell ran as written, on the values in memory, uncached."
+                )
+            else:
+                what = (
+                    f"to bring this cell up to date cash re-ran `{first}`, "
+                    f"which failed ({caught.error_text[:120]}) because cash did not re-run "
+                    f"`{producer}` ({where}) first, so this cell ran as written, "
+                    "on the values in memory, uncached."
+                )
             try:
                 warn_diagnostic(
                     CashCacheIneffectiveWarning,
                     "NOTEBOOK-REPAIR-GAP",
-                    what=(
-                        f"to bring this cell up to date cash re-ran `{caught.stmt_code.splitlines()[0][:60]}`, "
-                        f"which failed ({caught.error_text[:120]}) because cash did not re-run "
-                        f"`{caught.producer.splitlines()[0][:60]}` ({where}) first, so this cell ran as written, "
-                        "on the values in memory, uncached."
-                    ),
+                    what=what,
                     fix=f"Run {where} and the cells below it, or Restart & Run All; please report it.",
                 )
             except Exception:  # noqa: BLE001 - a diagnostic must never break a cell

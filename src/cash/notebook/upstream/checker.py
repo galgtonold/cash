@@ -774,13 +774,20 @@ class UpstreamChecker:
             lineages_before = dict(self.tracking_state.variable_lineage)
             # The cell's own source goes along: the classifier re-simulates it to
             # tell its own earlier run apart from an upstream edit.
-            statements_to_reexecute, restored_info, total_restore_time = self.simulator.simulate_upstream(
-                current_cell_idx,
-                notebook_cells,
-                required_inputs,
-                effects,
-                cell_code=cell_code,
-            )
+            try:
+                statements_to_reexecute, restored_info, total_restore_time = self.simulator.simulate_upstream(
+                    current_cell_idx,
+                    notebook_cells,
+                    required_inputs,
+                    effects,
+                    cell_code=cell_code,
+                )
+            except UpstreamRepairGap:
+                # A plan that would run a statement on values a run from the
+                # top does not give it: nothing re-runs, and what the backward
+                # scan restored goes back too.
+                self._put_back(bindings_before, lineages_before)
+                raise
             logger.debug(
                 "[UPSTREAM_DEBUG] Simulation result: %s stmts to re-execute, %s stmts restored from cache",
                 len(statements_to_reexecute),
