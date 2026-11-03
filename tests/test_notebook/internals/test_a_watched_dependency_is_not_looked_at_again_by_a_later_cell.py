@@ -151,9 +151,9 @@ def test_a_later_cell_takes_one_stat_per_watched_folder(snap, looks, monkeypatch
 
     # Each watched folder's own stat (`FileWatch.drain`), and nothing per file.
     report = file_watch.watcher().report()
-    assert looks["stat"] <= FOLDERS, report
-    assert looks["lstat"] == 0, report
-    assert looks["exists"] == 0, report
+    assert looks["stat"] <= FOLDERS, f"{report}"
+    assert looks["lstat"] == 0, f"{report}"
+    assert looks["exists"] == 0, f"{report}"
 
 
 def test_a_path_made_where_one_was_not_is_seen(snap, tmp_path):
@@ -173,10 +173,15 @@ def test_a_component_kept_under_the_watch_is_taken_before_any_stat(snap, looks):
     paths = set(snap)
     first = run_memo.file_component_this_run(paths)
     _next_run()
+    # The reports of the files just written may come after their folders are
+    # watched (Windows): taken by the next run's first drain, they drop what
+    # was kept, and this run keeps it again.
+    assert run_memo.file_component_this_run(paths) == first
+    _next_run()
     looks.start()
 
     assert run_memo.file_component_this_run(paths) == first
-    assert looks["stat"] <= FOLDERS and looks["lstat"] == 0 and looks["exists"] == 0, file_watch.watcher().report()
+    assert looks["stat"] <= FOLDERS and looks["lstat"] == 0 and looks["exists"] == 0, f"{file_watch.watcher().report()}"
 
 
 # -- a folder that changes, a file no folder vouches for --------------------------
@@ -211,8 +216,8 @@ def test_a_change_in_one_folder_checks_again_only_the_files_in_it(snap, looks, m
     # The folders' own stats, and pkg3's files and the paths not there in it:
     # each answered once, where every file of the snapshot was.
     report = file_watch.watcher().report()
-    assert looks["stat"] + looks["lstat"] + looks["exists"] <= FOLDERS + 2 * (FILES + MISSING), report
-    assert looks["answers"] == FILES + MISSING, report
+    assert looks["stat"] + looks["lstat"] + looks["exists"] <= FOLDERS + 2 * (FILES + MISSING), f"{report}"
+    assert looks["answers"] == FILES + MISSING, f"{report}"
 
 
 def test_a_file_no_folder_vouches_for_is_checked_alone(snap, looks, tmp_path):
@@ -231,8 +236,8 @@ def test_a_file_no_folder_vouches_for_is_checked_alone(snap, looks, tmp_path):
     _snapshot_check(deps)
 
     report = file_watch.watcher().report()
-    assert looks["stat"] + looks["lstat"] + looks["exists"] <= FOLDERS + 1 + 4, report  # its stat, its real path's
-    assert looks["answers"] == 1, report
+    assert looks["stat"] + looks["lstat"] + looks["exists"] <= FOLDERS + 1 + 4, f"{report}"  # its stat, its real path's
+    assert looks["answers"] == 1, f"{report}"
     # And the watch says why (`FileWatch.report`).
     assert report["stats not kept, by why"]["a second hard link"] >= 1
 
@@ -257,6 +262,7 @@ def test_a_restore_finds_its_files_with_the_runs_stats(snap, looks, tmp_path):
     from cash.notebook.upstream.cache_restore import CacheRestorer
 
     _cell(snap)
+    _cell(snap)  # past the reports of the files just written (see above)
     state = TrackingState()
     restorer = CacheRestorer(None, state, None, None)
     looks.start()
@@ -266,4 +272,4 @@ def test_a_restore_finds_its_files_with_the_runs_stats(snap, looks, tmp_path):
     found = state.executed_file_deps["frame"]
     assert found == {p for p, entry in snap.items() if not entry.get("absent")}
     assert looks["exists"] == 0
-    assert looks["stat"] + looks["lstat"] <= FOLDERS, file_watch.watcher().report()
+    assert looks["stat"] + looks["lstat"] <= FOLDERS, f"{file_watch.watcher().report()}"
