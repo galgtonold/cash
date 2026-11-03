@@ -682,7 +682,7 @@ class StatementLineage:
         function_tracker = self.function_tracker
         user_ns = self.shell.user_ns
         func_component = self._func_component(
-            def_time_names(stmt_code, inputs, user_ns, virtual_modules or ()), virtual_lineage
+            def_time_names(stmt_code, inputs, user_ns, virtual_modules or (), virtual_lineage or ()), virtual_lineage
         )
         environment = statement_environment_component(stmt_code, user_ns) if recorded_reads is None else recorded_reads
         lineages: dict[str, str] = {}
@@ -747,7 +747,7 @@ class StatementLineage:
             stmt_code, (inputs | lineage_hidden_reads(stmt_code)) - body_only, virtual_lineage, virtual_modules
         )
         func_component = self._func_component(
-            def_time_names(stmt_code, inputs, self.shell.user_ns, virtual_modules), virtual_lineage
+            def_time_names(stmt_code, inputs, self.shell.user_ns, virtual_modules, virtual_lineage), virtual_lineage
         )
         for lineage in lineage_by_out.values():
             note_function_identity(
@@ -1250,7 +1250,13 @@ class StatementLineage:
         object with it."""
         input_lineage_map = self._input_lineages(
             stmt_code,
-            def_time_names(stmt_code, inputs | lineage_hidden_reads(stmt_code), self.shell.user_ns, virtual_modules),
+            def_time_names(
+                stmt_code,
+                inputs | lineage_hidden_reads(stmt_code),
+                self.shell.user_ns,
+                virtual_modules,
+                virtual_lineage,
+            ),
             virtual_lineage,
             virtual_modules,
         )

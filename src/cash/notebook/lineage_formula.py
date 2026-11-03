@@ -13,6 +13,7 @@ ingredients they have; this module decides how they combine.
 from __future__ import annotations
 
 import ast
+import builtins
 import hashlib
 import logging
 import os
@@ -667,7 +668,11 @@ _FORWARD_NAMES: LruMemo[str, bool] = LruMemo(CODE_OBJECTS)
 
 
 def def_time_names(
-    code: str, names: Iterable[str], user_ns: Mapping[str, Any], virtual_modules: Iterable[str] = ()
+    code: str,
+    names: Iterable[str],
+    user_ns: Mapping[str, Any],
+    virtual_modules: Iterable[str] = (),
+    bound: Iterable[str] = (),
 ) -> set[str]:
     """*names* less the helpers defined below the ``def`` statement *code*:
     the names whose lineages and sources its function's lineage folds.
@@ -681,25 +686,45 @@ def def_time_names(
     cell reading ``exact = (greedy, held_karp)`` missed on the next Run All,
     and the upstream check re-ran the ``def`` as broken.
 
-    Only such a helper is left out: a body-only read not bound when the
-    ``def`` ran, and one bound since to a function, plain or wrapped, where
-    this ``def`` had found nothing. Every other global keeps folding as it
-    stood at the ``def``, so the function's lineage moves when one changed.
-    Both engines take the names from here."""
+    Only such a helper is left out: a name the body only calls that was not
+    bound when the ``def`` ran -- in the kernel, or for the simulation in
+    *bound*, what it bound above -- and one bound since to a function, plain
+    or wrapped, where this ``def`` had found nothing. Every other global
+    keeps folding as it stood at the ``def``, so the function's lineage
+    moves when one changed. Both engines take the names from here."""
     names = set(names)
-    reads = call_time_reads(code, user_ns, virtual_modules)
-    if not reads:
+    called = _called_helpers(code) & call_time_reads(code, user_ns, virtual_modules)
+    if not called:
         return names
+    bound = set(bound)
     digest = exact_source_digest(code)
     seen = _FORWARD_HELPERS.get(digest) or frozenset()
-    absent = frozenset(name for name in reads if name not in user_ns)
+    absent = frozenset(name for name in called if name not in user_ns and name not in bound)
     if absent - seen:
         seen = seen | absent
         _FORWARD_HELPERS[digest] = seen
         for name in absent:
             _FORWARD_NAMES[name] = True
-    forward = absent | {name for name in reads & seen if _is_helper(user_ns.get(name))}
+    forward = absent | {name for name in called & seen if _is_helper(user_ns.get(name))}
     return names - forward
+
+
+def _called_helpers(code: str) -> frozenset[str]:
+    """Globals the body of the ``def`` statement *code* calls by name,
+    builtins left out: the helpers it may name before they exist."""
+    tree = parse_cached(code)
+    if tree is None or len(tree.body) != 1:
+        return frozenset()
+    node = tree.body[0]
+    if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return frozenset()
+    called = {
+        sub.func.id
+        for stmt in node.body
+        for sub in ast.walk(stmt)
+        if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name)
+    }
+    return frozenset(name for name in called if not hasattr(builtins, name))
 
 
 def _is_helper(value: Any) -> bool:
