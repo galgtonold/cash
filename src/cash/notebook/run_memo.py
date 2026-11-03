@@ -615,7 +615,7 @@ def _identify(run: dict, path: str) -> os.stat_result | None:
             # Kept by the folder watch in place of the listing's stat.
             token = watch.before_stat(path)
             st = own_lstat(path)
-            if _stat.S_ISLNK(st.st_mode) or getattr(st, "st_file_attributes", 0) & _REPARSE_POINT:
+            if _stat.S_ISLNK(st.st_mode) or attribute_or(st, "st_file_attributes", 0) & _REPARSE_POINT:
                 st = own_stat(path)
             else:
                 watch.record(token, path, st)
