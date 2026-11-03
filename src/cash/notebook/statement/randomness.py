@@ -4,6 +4,7 @@ the seed and draw ledgers a cache key depends on."""
 from __future__ import annotations
 
 import ast
+import functools
 import hashlib
 import logging
 import types
@@ -34,6 +35,7 @@ from cash.tracking.randomness import (
     rng_modules_changed,
     rng_virtual_var,
     seed_generation,
+    seeding_modules_now,
     stream_position,
     unseeded_streams,
     warn_observed_draw,
@@ -45,12 +47,14 @@ from cash.tracking.randomness import (
 from cash.tracking.randomness.detect import RandomnessCallInfo, mints_unseeded_generator
 from cash.tracking.randomness.estimator_draws import estimator_draws
 
+from ..._memo import NOTEBOOK_STATEMENTS
 from ...analysis.code_analyzer import clean_cell_source, parse_cell_source
 from ...decorator.rng import unseeded_library_calls_in
 from ...exceptions import SOURCE_RETRIEVAL_ERRORS
 from ...source_norm import exact_source_digest
 from ...source_reading import own_source
 from ..callee_reach import helper_seeded_modules, reached_user_code
+from ..lineage_formula import note_seeded_unseen
 from .held_generators import HeldGenerators
 from .observed_draws import ObservedDrawStore
 
@@ -184,7 +188,7 @@ class StatementRandomness:
         state = self.tracking_state
         self._held.before_run(code, self.shell.user_ns, state.running_cell, state.running_cell_rerun)
 
-    def adopt_unseen_seeds(self) -> None:
+    def adopt_unseen_seeds(self) -> dict[str, str]:
         """Put a seed no statement set into the ledger, from where the stream stands.
 
         The ledger learns of a seed from a seeding statement's source. A seed
@@ -200,8 +204,12 @@ class StatementRandomness:
         key, so the simulation and the key read the same lineage. A stream an
         adopted seed stood behind that has since been re-randomised
         (``seed(None)`` cash did not read) takes a lineage fresh per run.
+
+        Returns ``{RNG variable: lineage}`` for each stream it adopted a seed
+        of (from a position, not a fresh one).
         """
         by_a_hit, self._seeded_by_a_hit = self._seeded_by_a_hit, set()
+        adopted: dict[str, str] = {}
         try:
             watch_seeds()
             seeded = process_seeded_streams() | by_a_hit
@@ -226,8 +234,31 @@ class StatementRandomness:
                 self.seed_epochs[module] = lineage
                 self.detector.mark_seeded(module)
                 self._adopted.add(module)
+                adopted[var] = lineage
         except Exception:
             logger.debug("%s could not adopt an unseen seed", _LOG_PROCESSOR, exc_info=True)
+        return adopted
+
+    def adopt_seeds_set_by(self, code: str, key: str, reseeded: Iterable[str] = ()) -> None:
+        """Adopt, right after the statement *code* (keyed *key*) ran or was
+        served, the seeds it set where no statement spells them: *reseeded*,
+        the streams its run seeded, and the ones a hit put back
+        (`adopt_seeds_of_a_hit`).
+
+        The lineage comes from where the stream stands (`adopt_unseen_seeds`),
+        which the upstream simulation cannot read. So it is recorded for
+        the statement's key (`note_seeded_unseen`), and the simulation gives
+        the stream the same lineage after the statement with that key. A
+        ``functools.cache`` helper that calls ``random.seed`` seeds only when
+        the call fills its memo: the record is the run's, and a run that
+        found the answer kept (and so seeded nothing) records nothing.
+        """
+        modules = {m for m in (*reseeded, *self._seeded_by_a_hit) if m in ("random", "numpy.random")}
+        if not modules or not key:
+            return
+        adopted = self.adopt_unseen_seeds()
+        own = {var: lineage for var, lineage in adopted.items() if var in {rng_virtual_var(m) for m in modules}}
+        note_seeded_unseen(self.tracking_state, code, key, own)
 
     def adopt_seeds_of_a_hit(self, reseeded: Iterable[str] | None, code: str) -> None:
         """A hit put back the streams its run seeded as it ran (*reseeded*),
@@ -327,7 +358,7 @@ class StatementRandomness:
             self.tracking_state.lineage.record(
                 var, entropy_write_lineage() if var in entropy_vars else hidden_write_lineage(cache_key)
             )
-        for module in get_seeding_rng_modules(code) | helper_seeds:
+        for module in seeding_modules_now(code) | helper_seeds:
             self.seed_epochs[module] = entropy_write_lineage() if module in entropy_modules else cache_key
             self._seeded_by_a_statement.add(module)
             self._cell_seeds.add(module)
@@ -369,13 +400,13 @@ class StatementRandomness:
             return
         seeded_above: set[str] = set()
         for cell in cells_above:
-            tree = parse_cell_source(cell)
-            if tree is None:
+            written = _seeds_written(cell)
+            if written is None:
                 return
-            source = clean_cell_source(cell)
-            spelled = get_seeding_rng_modules(source) | self.helper_seeds(source)
+            spelled_here, unconditional = written
+            spelled = spelled_here | self.helper_seeds(clean_cell_source(cell))
             ran = self._seeds_by_cell.get(cell_key(cell))
-            seeded_above |= spelled if ran is None else ran | (spelled & unconditional_seeds(tree))
+            seeded_above |= spelled if ran is None else ran | (spelled & unconditional)
         unseeded = [module for module in candidates if module not in seeded_above]
         for module in unseeded:
             self.tracking_state.lineage.discard(rng_virtual_var(module))
@@ -1050,6 +1081,21 @@ _CONDITIONAL = (
     ast.With,
     ast.AsyncWith,
 )
+
+
+@functools.lru_cache(maxsize=NOTEBOOK_STATEMENTS)
+def _seeds_written(cell: str) -> tuple[frozenset[str], frozenset[str]] | None:
+    """``(seeded, unconditionally)``: the streams the text of *cell* seeds,
+    and those of them a statement at its top seeds (`unconditional_seeds`);
+    None when it does not parse.
+
+    Memoised by the text: asked of every cell above the one about to run,
+    before each cell.
+    """
+    tree = parse_cell_source(cell)
+    if tree is None:
+        return None
+    return frozenset(get_seeding_rng_modules(clean_cell_source(cell))), frozenset(unconditional_seeds(tree))
 
 
 def unconditional_seeds(tree: ast.Module) -> set[str]:

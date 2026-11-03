@@ -1223,21 +1223,15 @@ def helper_seeded_modules(
     """
     if not code or (not namespace and def_source is None):
         return frozenset()
-    tree = parse_cached(code)
-    if tree is None:
+    names = _called_outside_definitions(code)
+    if not names:
         return frozenset()
     namespace = namespace or {}
     found: set[str] = set()
     followed: set[str] = set()
-    pending: list[ast.AST] = list(tree.body)
+    pending = list(names)
     while pending:
-        node = pending.pop()
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
-            continue
-        pending.extend(ast.iter_child_nodes(node))
-        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
-            continue
-        name = node.func.id
+        name = pending.pop()
         if name in followed:
             continue
         followed.add(name)
@@ -1246,8 +1240,33 @@ def helper_seeded_modules(
             continue
         seeded, calls = _seeds_and_calls(source)
         found |= seeded
-        pending.extend(ast.Call(func=ast.Name(id=called, ctx=ast.Load()), args=[], keywords=[]) for called in calls)
+        pending.extend(calls)
     return frozenset(found)
+
+
+@functools.lru_cache(maxsize=NOTEBOOK_STATEMENTS)
+def _called_outside_definitions(code: str) -> tuple[str, ...]:
+    """The plain names *code* calls outside a ``def``, ``lambda`` or class
+    body (whose calls run only when it is called); none when it does not
+    parse.
+
+    Memoised by the text: before each cell, every cell above it is asked
+    what it seeds through a notebook function, and walking each one's tree
+    again made that grow with the square of the notebook.
+    """
+    tree = parse_cached(code)
+    if tree is None:
+        return ()
+    names: set[str] = set()
+    pending: list[ast.AST] = list(tree.body)
+    while pending:
+        node = pending.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+            continue
+        pending.extend(ast.iter_child_nodes(node))
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            names.add(node.func.id)
+    return tuple(sorted(names))
 
 
 def _notebook_function_source(

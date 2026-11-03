@@ -76,6 +76,7 @@ from ..lineage_formula import (
     note_function_identity,
     output_lineage,
     recorded_reads_lineage_component,
+    seeded_unseen_by,
     setting_output_lineage,
     statement_environment_component,
     take_rng_reads_at_last_draw,
@@ -1105,6 +1106,9 @@ class StatementLineage:
                 if drawn and not is_control_body(stmt_code)
                 else None
             )
+            seeded_unseen = self._seeded_unseen(
+                stmt_code, draw_key, inputs | hidden_reads, outputs, virtual_lineage, virtual_modules, occurrence_index
+            )
 
             if not outputs:
                 # A bare call can still keep what it is handed on a class
@@ -1117,6 +1121,7 @@ class StatementLineage:
                     stmt_code, inputs, hidden_reads, virtual_lineage, virtual_modules, occurrence_index
                 )
                 self._advance_rng(drawn, draw_key, virtual_lineage)
+                virtual_lineage.update(seeded_unseen)
                 return StatementOutcome(advanced, 0.0, False, {})
 
             # Its outputs are bound when its edges are linked, as after a
@@ -1139,6 +1144,7 @@ class StatementLineage:
                 own_edges,
             )
             self._advance_rng(drawn, draw_key, virtual_lineage)
+            virtual_lineage.update(seeded_unseen)
             return outcome
         except (KeyError, TypeError, ValueError, OSError) as e:
             logger.error("[UPSTREAM] Error simulating statement '%s...': %s", stmt_code[:20], e)
@@ -1154,6 +1160,31 @@ class StatementLineage:
         except (SyntaxError, ValueError, AttributeError, RecursionError, TypeError):
             return set()
         return {rng_virtual_var(m) for m in modules}
+
+    def _seeded_unseen(
+        self,
+        stmt_code: str,
+        draw_key: str | None,
+        inputs: set[str],
+        outputs: set[str],
+        virtual_lineage: dict[str, str],
+        virtual_modules: set[str],
+        occurrence_index: int,
+    ) -> Mapping[str, str]:
+        """The RNG lineages the runtime adopted after *stmt_code*, keyed as
+        here, ran or was served: a seed set inside a function it called
+        (``random.seed`` in a ``functools.cache`` helper it filled), which
+        no statement spells and the runtime takes from where the stream
+        stood (`StatementRandomness.adopt_seeds_set_by`). Empty when its run
+        with this key seeded nothing so, or never ran in this kernel: the
+        stream then moves as a draw moves it, as before."""
+        if is_control_body(stmt_code):
+            return {}
+        recorded = seeded_unseen_by(self.tracking_state, stmt_code)
+        if not recorded:
+            return {}
+        key = draw_key or self._key(stmt_code, inputs, outputs, virtual_lineage, virtual_modules, occurrence_index)
+        return recorded.get(key) or {}
 
     @staticmethod
     def _advance_rng(drawn: set[str], draw_key: str | None, virtual_lineage: dict[str, str]) -> None:

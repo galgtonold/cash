@@ -260,7 +260,7 @@ which calls change their receiver is under
 
 ### Randomness: re-seeding invalidates the draws below it
 
-<!-- claim: cash/tracking/randomness/lineage.py:hidden_lineage_writes @1369d609 -->
+<!-- claim: cash/tracking/randomness/lineage.py:hidden_lineage_writes @4b64944a -->
 Three rules keep random draws right when you edit a seed:
 
 - **A seed is an input.** A `seed()` call sets a hidden lineage variable that

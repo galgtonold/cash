@@ -224,8 +224,9 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
         dates = run.setdefault("stat_date", {})
         chunks = run.setdefault("stat_chunks", [])
         followed = run.setdefault("stat_followed", set())
+        from_listing = run.setdefault("listed", set())
     else:
-        stats, elsewhere, dates, chunks, followed = {}, {}, {}, [], set()
+        stats, elsewhere, dates, chunks, followed, from_listing = {}, {}, {}, [], set(), set()
     if not isinstance(paths, (dict, set, frozenset)):
         paths = dict.fromkeys(paths)  # the paths as asked, in order, once each
     # Asked again by each check of the run: most often every path was
@@ -243,6 +244,7 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
                 if st is not None and p not in stats:
                     stats[p] = st
                     dates[p] = at
+                    from_listing.add(p)
         stat = os.stat
         if getattr(stat, "_is_file_tracker_patch", False):
             stat = stat._original_func  # as `own_stat`, once for the lot
@@ -372,14 +374,27 @@ def stats_taken_this_run(paths: Iterable[str], not_before: float | None = None) 
     stats_this_run(paths)
     stats = run["stat"]
     chunks = run.get("stat_chunks")
-    if not_before is None or not chunks or chunks[0][0] >= not_before:
-        return stats
-    first = bisect.bisect_left(chunks, not_before, key=lambda chunk: chunk[0])
-    if first == len(chunks):
-        return {}
-    # The stats are kept in the order they were dated: the recent ones are
-    # the last, taken in C.
-    return dict(itertools.islice(stats.items(), chunks[first][1], None))
+    if not_before is not None and chunks and chunks[0][0] < not_before:
+        first = bisect.bisect_left(chunks, not_before, key=lambda chunk: chunk[0])
+        if first == len(chunks):
+            stats = {}
+        else:
+            # The stats are kept in the order they were dated: the recent
+            # ones are the last, taken in C.
+            stats = dict(itertools.islice(stats.items(), chunks[first][1], None))
+    if run["listed"] and isinstance(paths, Mapping):
+        # A listed stat stands in only where content decides
+        # (`file_dep_is_fresh`): a folder, or a file that could not be read,
+        # is decided by its time, which a listing may report late, and each
+        # check took a stat of its own of each: the 5,700 folders of a photo
+        # set, before every check. The file's own stat instead, taken once
+        # for the run's other checks too, when a check first asks for it.
+        # Taken now, it is as recent as any caller asks: its date stays the
+        # listing's, which only makes it lapse early.
+        by_time = {p for p in run["listed"].intersection(paths.keys()) if _decided_by_time(paths[p])}
+        if by_time:
+            return _Identifying(run, {p: p for p in by_time}, stats)
+    return stats
 
 
 def stat_dates_this_run() -> Mapping[str, float]:
@@ -387,6 +402,62 @@ def stat_dates_this_run() -> Mapping[str, float]:
     (`stats_taken_this_run`): when the chunk each was taken in began."""
     run = file_state_this_run()
     return run.get("stat_date", {}) if run is not None else {}
+
+
+def _decided_by_time(recorded: Any) -> bool:
+    """Is *recorded* a snapshot entry judged by its size and time, with no
+    digest to decide by (`file_dep_is_fresh`)?"""
+    return isinstance(recorded, Mapping) and "size" in recorded and recorded.get("hash") is None
+
+
+def _identify(run: dict, path: str) -> os.stat_result | None:
+    """Replace the run's listed stat of *path* (`stats_from_listings`) by a
+    stat of the file itself, which has its identity and its own times;
+    None when there is none to take."""
+    try:
+        st = own_stat(path)
+    except OSError:
+        return None  # gone since: the check's own stat says so
+    run["stat"][path] = st
+    run["listed"].discard(path)
+    return st
+
+
+class _Identifying(Mapping):
+    """``{key: stat}`` over the run's stats (``run["stat"]``) in which the
+    paths *pending* names (``{key: path}``), listed so far, are each
+    stat-ed themselves when first asked for (`_identify`) and the run
+    keeps that stat. Asked for, not up front: a check answers most
+    relative spellings by their absolute twins and never asks for them."""
+
+    __slots__ = ("_by_key", "_pending", "_run")
+
+    def __init__(self, run: dict, pending: dict[str, str], by_key: Mapping[str, Any] | None = None) -> None:
+        self._run = run
+        self._pending = pending
+        self._by_key = run["stat"] if by_key is None else by_key
+
+    def get(self, key: str, default: Any = None) -> Any:
+        path = self._pending.pop(key, None)
+        if path is not None and path in self._run["listed"]:
+            st = _identify(self._run, path)
+            return default if st is None else st
+        return self._by_key.get(key, default)
+
+    def __getitem__(self, key: str) -> Any:
+        st = self.get(key)
+        if st is None:
+            raise KeyError(key)
+        return st
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._pending or key in self._by_key
+
+    def __iter__(self):
+        return iter({**self._by_key, **dict.fromkeys(self._pending)})
+
+    def __len__(self) -> int:
+        return len(self._by_key.keys() | self._pending.keys())
 
 
 def stat_keys_this_run(paths: Iterable[str]) -> Mapping[str, tuple[int, int, int] | None]:
@@ -417,7 +488,10 @@ def file_component_this_run(
     fields of the same file in the same run, so the same component; and the
     component itself kept for the rest of the run, as the stats are. A
     directory listing's stat is not handed on (it has no file identity, and
-    can lag a file edited through another hard link).
+    can lag a file edited through another hard link): the file's own stat
+    is taken in its place when the component asks for it, once for the run
+    (`_Identifying`), where each component built in the run took one of
+    its own.
 
     The run's stat of a file that is no link is an ``lstat``
     (`stats_this_run`), handed on as such too: resolving each file's real
@@ -438,17 +512,20 @@ def file_component_this_run(
             key = None
         if key is not None and key in components:
             return components[key]
-    stats = {}
-    lstats = {}
+    listed = run["listed"] if run is not None else None
     followed = run.get("stat_followed", ()) if run is not None else None
+    stats: Mapping[str, os.stat_result] = {}
+    lstats = {}
     isabs = os.path.isabs
     for p, (resolved, st) in stats_this_run(paths).items():
-        if st is not None and resolved == p and st.st_ino:
+        if st is not None and resolved == p and (st.st_ino if listed is None else p not in listed):
             stats[normalize_path(p)] = st
             # By its own spelling only: a relative one was stat-ed from the
             # working directory of the pass.
             if followed is not None and p not in followed and isabs(p):
                 lstats[p] = st
+    if listed and not listed.isdisjoint(paths):
+        stats = _Identifying(run, {normalize_path(p): p for p in listed.intersection(paths)}, stats)
     component = compute_file_hash_component(paths, remote, probes, stats=stats, lstats=lstats)
     if key is not None:
         components[key] = component

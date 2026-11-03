@@ -230,7 +230,7 @@ does; the library calls inside it that are keyed on the value are served.
 A statement's inputs come from the names it mentions. Two real dependencies
 are not among them, and each has its own part of the key.
 
-<!-- claim: cash/tracking/randomness/lineage.py:hidden_lineage_reads @e9ddd20b, cash/tracking/randomness/lineage.py:hidden_lineage_writes @1369d609, cash/tracking/randomness/lineage.py:advanced_rng_lineage @d2d070a9, cash/tracking/randomness/lineage.py:drawn_rng_vars @e538facc, cash/notebook/callee_reach.py:helper_seeded_modules @8917bd4e -->
+<!-- claim: cash/tracking/randomness/lineage.py:hidden_lineage_reads @ea0de309, cash/tracking/randomness/lineage.py:hidden_lineage_writes @4b64944a, cash/tracking/randomness/lineage.py:advanced_rng_lineage @d2d070a9, cash/tracking/randomness/lineage.py:drawn_rng_vars @9ec87297, cash/notebook/callee_reach.py:helper_seeded_modules @8917bd4e, cash/notebook/statement/randomness.py:StatementRandomness.adopt_seeds_set_by @ad8c5e53 -->
 **The random seed.** `x = np.random.rand(3)` mentions no variable, so editing
 `np.random.seed(0)` above it would change nothing. Each global random module
 therefore gets a hidden lineage variable: a `seed()` call writes it, and a draw
@@ -241,10 +241,15 @@ or a draw cell inserted, removed or moved. A draw from a stream no seed set
 leaves the variable unset, so an unseeded draw stays frozen. A seed set
 through a function defined in the notebook (`set_seed(42)`, whose body calls
 `random.seed` and `np.random.seed`) writes the variables as the calls written
-out would. A seed no statement shows, set before `%cash_on` or inside a
-function of an imported module, writes them too: cash sees the stream seeded
-and takes where it stands as the variable's lineage, before the next cell's
-upstream check.
+out would. A seed no statement shows, set before `%cash_on`, inside a
+function of an imported module, or inside a `functools.cache` helper whose
+memo the call fills, writes them too: cash sees the stream seeded and takes
+where it stands as the variable's lineage, right after the statement that set
+it. The upstream check gives the variable the lineage that statement left,
+so the cells below a seeding helper re-run nothing above them on a first Run
+All. A `def` neither seeds nor draws, its decorators and defaults aside: its
+body runs when the function is called, and the statement calling it seeds or
+draws there.
 
 <!-- claim: cash/notebook/statement/processor.py:StatementProcessor._key_a_newly_seen_draw @0ff7f4ba -->
 A draw inside a function the statement calls (`X = make_data(1000)`) names no
