@@ -49,7 +49,7 @@ import struct
 import sys
 import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from .read_classification import own_lstat, own_stat
@@ -121,6 +121,8 @@ class FileWatch:
         self.pid = os.getpid()
         #: How many times a folder's stats were dropped, ever.
         self.changes = 0
+        #: Why stats were not kept, by reason (`report`).
+        self.unkept: dict[str, int] = {}
         #: When the last drain began (``time.monotonic()``): a stat still
         #: current is as good as one taken then.
         self.confirmed_at = 0.0
@@ -136,7 +138,10 @@ class FileWatch:
         with self._lock:
             at = time.monotonic()
             try:
-                reported = self._backend.poll()
+                backend = self._backend
+                # A run's first drain, or the first after a statement wrote
+                # files, holds every change made before it (`_Volume.sync`).
+                reported = backend.poll(True) if check_dirs and getattr(backend, "syncs", False) else backend.poll()
             except Exception:  # any doubt: everything changed
                 logger.debug("file watch: poll failed", exc_info=True)
                 reported = [(None, True)]
@@ -258,11 +263,14 @@ class FileWatch:
         kind = st.st_mode & _S_IFMT
         if kind == _S_IFREG:
             if st.st_nlink > 1:
+                self._unkept("a second hard link")
                 return
         elif kind != _S_IFDIR:
+            self._unkept("neither a file nor a folder")
             return
         with self._lock:
             if not d.alive or d.version != version:
+                self._unkept("its folder changed while it was stat-ed")
                 return
             if kind == _S_IFDIR:
                 own = self._arm(path)
@@ -299,6 +307,32 @@ class FileWatch:
             d.listed.discard(path)
             d.missing.add(path)
             self._home[path] = d
+
+    def _unkept(self, why: str) -> None:
+        self.unkept[why] = self.unkept.get(why, 0) + 1
+
+    def report(self) -> dict[str, Any]:
+        """What the watch holds, and why it holds no more: for finding out
+        on a machine why a cell still checks files one by one."""
+        with self._lock:
+            return {
+                "folders watched": len(self._dirs),
+                "folders that cannot be watched": len(self._refused),
+                "some of those": sorted(self._refused)[:10],
+                "watch limit reached": self._full,
+                "stats kept": sum(len(d.records) for d in self._dirs.values()),
+                "paths kept as not there": sum(len(d.missing) for d in self._dirs.values()),
+                "folder changes taken": self.changes,
+                "stats not kept, by why": dict(self.unkept),
+                "reports": self._backend_report(),
+            }
+
+    def _backend_report(self) -> dict[str, int]:
+        report = getattr(self._backend, "report", None)
+        try:
+            return dict(report()) if report is not None else {}
+        except Exception:  # noqa: BLE001 - a diagnostic only
+            return {}
 
     # -- answers -----------------------------------------------------------
 
@@ -353,6 +387,51 @@ class FileWatch:
                 if id(own) not in dirs:
                     dirs[id(own)] = (own, own.version)
         return tuple(dirs.values())
+
+    def cover_by_folder(self, paths: Mapping[str, str]) -> tuple[list[tuple[_Dir, int, list[str]]], list[str]]:
+        """``(parts, loose)`` for *paths* (``{key: path}``): each watched
+        folder vouching for some of them, with its version and their keys,
+        and the keys of those none vouches for. A change in one folder then
+        asks again only of the files in it (`changed_in`), where a `cover`
+        lapsed whole: a snapshot of 8,000 files was checked file by file
+        before every cell because one of its folders (the notebook's own,
+        written by every save) reported a change, or one file could not be
+        vouched for."""
+        parts: dict[int, tuple[_Dir, int, list[str]]] = {}
+        loose: list[str] = []
+        home = self._home
+        own_of = self._self
+        for key, p in paths.items():
+            d = home.get(p)
+            st = d.records.get(p) if d is not None else None
+            if st is None:
+                if d is None or p not in d.missing:
+                    loose.append(key)
+                    continue
+            elif st.st_mode & _S_IFMT == _S_IFDIR:
+                own = own_of.get(p)
+                if own is None or own.records.get(p) is not st:
+                    loose.append(key)
+                    continue
+                part = parts.get(id(own))
+                if part is None:
+                    part = parts[id(own)] = (own, own.version, [])
+                part[2].append(key)
+            part = parts.get(id(d))
+            if part is None:
+                part = parts[id(d)] = (d, d.version, [])
+            part[2].append(key)
+        return list(parts.values()), loose
+
+    @staticmethod
+    def changed_in(parts: list[tuple[_Dir, int, list[str]]]) -> list[str]:
+        """The keys of `cover_by_folder`'s *parts* whose folder reported a
+        change since (or whose watch ended)."""
+        changed: list[str] = []
+        for d, version, keys in parts:
+            if not d.alive or d.version != version:
+                changed.extend(keys)
+        return changed
 
     @staticmethod
     def still(cover: tuple) -> bool:
@@ -529,8 +608,12 @@ _ERROR_NOTIFY_ENUM_DIR = 1022
 _WAIT_OBJECT_0 = 0
 #: How long stopping a volume's watch waits for its cancelled read to end.
 _CANCEL_WAIT_SECONDS = 1.0
+#: How long a poll waits for the volume's thread to pass through a wait (`_Volume.sync`).
+_SYNC_SECONDS = 1.0
 #: How long the volume's thread waits for a report before looking at its stop flag.
 _THREAD_WAIT_MS = 250
+#: How many short names a volume keeps the long forms of (`_Volume._resolve`).
+_LONGS_KEPT = 4096
 #: The report buffer of a volume, in bytes.
 _VOLUME_BUFFER = 256 * 1024
 #: FILE_NOTIFY_CHANGE_ FILE_NAME | DIR_NAME | ATTRIBUTES | SIZE | LAST_WRITE |
@@ -627,31 +710,51 @@ class _FolderIndex:
         lead = prefix + "\\"
         return [key for path, key in self.keys.items() if path == prefix or path.startswith(lead)]
 
-    def moved(self, name: str) -> list[Any]:
+    def _long_parts(self, name: str, resolve: Any) -> tuple[list[str], int | None]:
+        """*name*'s components, case folded, with each that may be a short
+        alias put in its long form by *resolve* (the long name below the
+        root of a name below it, or None); and the index of the first one
+        still left as it was reported (None when there is none)."""
+        parts = self.spelled(name).split("\\")
+        i = 0
+        while i < len(parts):
+            if not _SHORT_NAME.search(parts[i]):
+                i += 1
+                continue
+            long = resolve("\\".join(parts[: i + 1]), i == len(parts) - 1) if resolve is not None else None
+            if long is None:
+                return parts, i
+            # The long form of the components up to here, not looked at again:
+            # a long name may hold a ``~1`` of its own.
+            lead = self.spelled(long).split("\\")
+            parts = lead + parts[i + 1 :]
+            i = len(lead)
+        return parts, None
+
+    def moved(self, name: str, resolve: Any = None) -> list[Any]:
         """The watched folders no longer where they were if *name* was
         removed or renamed: those at or below it, or, when a component of
-        it may be a short alias, everything below the folder above that
-        component."""
-        name = self.spelled(name)
-        parts = name.split("\\")
-        for i, part in enumerate(parts):
-            if _SHORT_NAME.search(part):
-                return self.under("\\".join(parts[:i]))
+        it may be a short alias that *resolve* cannot put in its long form,
+        everything below the folder above that component."""
+        parts, cut = self._long_parts(name, resolve)
+        if cut is not None:
+            return self.under("\\".join(parts[:cut]))
+        name = "\\".join(parts)
         if name in self.keys or name in self.above:
             return self.under(name)
         return []
 
-    def touched(self, name: str) -> list[Any]:
+    def touched(self, name: str, resolve: Any = None) -> list[Any]:
         """The watched folders a change at *name* may have changed: the
         folder holding it, and, when it is a watched folder or holds one,
         every watched folder at or below it (a folder renamed, removed or
-        replaced). A name with a component that may be a short alias
-        stands for anything below the folder above that component."""
-        name = self.spelled(name)
-        parts = name.split("\\")
-        for i, part in enumerate(parts):
-            if _SHORT_NAME.search(part):
-                return self.under("\\".join(parts[:i]))
+        replaced). A name with a component that may be a short alias, and
+        that *resolve* cannot put in its long form, stands for anything
+        below the folder above that component."""
+        parts, cut = self._long_parts(name, resolve)
+        if cut is not None:
+            return self.under("\\".join(parts[:cut]))
+        name = "\\".join(parts)
         touched = []
         holder = self.keys.get("\\".join(parts[:-1]))
         if holder is not None:
@@ -696,6 +799,8 @@ class _Win32:
         self._close = fn("CloseHandle", B, H)
         self._event = fn("CreateEventW", H, P, B, B, wintypes.LPCWSTR)
         self._wait = fn("WaitForSingleObject", D, H, D)
+        self._wait_many = fn("WaitForMultipleObjects", D, D, P, B, D)
+        self._set = fn("SetEvent", B, H)
         self._reset = fn("ResetEvent", B, H)
         self._drive_type = fn("GetDriveTypeW", wintypes.UINT, wintypes.LPCWSTR)
         self._volume_path = fn("GetVolumePathNameW", B, wintypes.LPCWSTR, wintypes.LPWSTR, D)
@@ -777,6 +882,18 @@ class _Win32:
     def wait(self, event: Any, ms: int) -> bool:
         return self._wait(event, ms) == _WAIT_OBJECT_0
 
+    def new_poke(self) -> Any:
+        return self._event(None, False, False, None)  # auto reset, not set
+
+    def poke(self, event: Any) -> None:
+        self._set(event)
+
+    def wait_either(self, event: Any, poke: Any, ms: int) -> int | None:
+        """0 when *event* is set, 1 when *poke* is, None when *ms* passed."""
+        handles = (self._wintypes.HANDLE * 2)(event, poke)
+        found = self._wait_many(2, handles, False, ms)
+        return found - _WAIT_OBJECT_0 if found in (_WAIT_OBJECT_0, _WAIT_OBJECT_0 + 1) else None
+
     def cancel(self, handle: Any, overlapped: Any) -> None:
         self._cancel(handle, self._ctypes.byref(overlapped))
 
@@ -807,12 +924,24 @@ class _Volume:
         #: Keys of folders removed or renamed (or below one that was) since the last poll.
         self.gone: set[Any] = set()
         self.everything = False
+        #: A folder's name below the root ending in a short (8.3) alias -> its
+        #: long form (`_resolve`), both case folded; dropped by a report that
+        #: it, or a folder above it, went, which may free the alias.
+        self.longs: dict[str, str] = {}
+        #: What the reports were (`FileWatch.report`).
+        self.counts: dict[str, int] = {}
         self.pending = False
         self.dead = False
         self.stopping = False
         #: Reads that did not end within the wait after a cancel, kept alive.
         self.kept: list[tuple[Any, Any]] = []
         self.thread: threading.Thread | None = None
+        #: `sync`: how many polls asked the thread to pass through a wait,
+        #: and how many of those it did; None when the kernel cannot be poked.
+        self.poke = kernel.new_poke() if hasattr(kernel, "wait_either") else None
+        self.asked = 0
+        self.answered = 0
+        self.passed = threading.Condition(threading.Lock())
 
     def start(self) -> bool:
         """Issue the first read: changes from now on are reported."""
@@ -825,20 +954,62 @@ class _Volume:
         return True
 
     def _run(self) -> None:
-        while not self.stopping:
-            try:
-                signalled = self.kernel.wait(self.event, _THREAD_WAIT_MS)
-            except Exception:  # noqa: BLE001 - the polls still take every report
-                return
-            if self.stopping:
-                return
-            if signalled:
+        try:
+            while not self.stopping:
+                seen = self.asked  # before the wait: see `sync`
+                try:
+                    if self.poke is not None:
+                        which = self.kernel.wait_either(self.event, self.poke, _THREAD_WAIT_MS)
+                    else:
+                        which = 0 if self.kernel.wait(self.event, _THREAD_WAIT_MS) else None
+                except Exception:  # noqa: BLE001 - the polls still take every report
+                    return
+                if self.stopping:
+                    return
                 with self.lock:
                     took = self.take()
-                if not took:
+                if self.asked != self.answered:
+                    with self.passed:
+                        self.answered = max(self.answered, seen)
+                        self.passed.notify_all()
+                if which == 0 and not took:
                     time.sleep(0.01)  # signalled with nothing to take: do not spin
-            if self.dead:
-                return
+                if self.dead:
+                    return
+        finally:
+            with self.passed:
+                self.answered = -1  # no more answers: `sync` waits for none
+                self.passed.notify_all()
+
+    def sync(self) -> bool:
+        """Have the thread pass through a wait, so that every report of a
+        change made before this call is taken by the next `poll`; False when
+        it did not within ``_SYNC_SECONDS`` (or cannot be asked).
+
+        The read a report ends is the thread's: Windows ends it by an APC
+        queued to the thread that issued it, which runs when that thread
+        next runs in the kernel. A file written and closed by the cell
+        itself, its report already made, could so still show as not ended
+        to a poll right after: the cell would take the file's kept stat,
+        from before the write. The thread reads `asked` before each wait
+        and passes the value on after it; an APC queued before the poll
+        asked runs before that wait returns."""
+        thread = self.thread
+        if self.poke is None or thread is None or thread is threading.current_thread() or self.dead:
+            return thread is threading.current_thread()
+        with self.passed:
+            if self.answered < 0:
+                return False
+            self.asked += 1
+            mine = self.asked
+        try:
+            self.kernel.poke(self.poke)
+        except Exception:  # noqa: BLE001 - not synced: taken as anything changed
+            return False
+        with self.passed:
+            return self.passed.wait_for(lambda: self.answered >= mine or self.answered < 0, _SYNC_SECONDS) and (
+                self.answered >= mine
+            )
 
     def take(self) -> bool:
         """With the lock held: take the read's report if it ended, and issue
@@ -853,13 +1024,17 @@ class _Volume:
         if records is None:
             # An overflow (none read), an error, or a report not read whole:
             # anything changed, and any folder may have moved.
+            self._count("whole-volume reports (an overflow, or one not read)")
             self.everything = True
             self.located = _FolderIndex()
+            self.longs = {}
         else:
+            self._count("names reported", len(records))
             touched = self.index.touched
+            resolve = self._resolve
             for action, name in records:
                 if not self.everything:
-                    self.changed.update(touched(name))
+                    self.changed.update(touched(name, resolve))
                 if action in _ACTIONS_GONE:
                     self._went(name)
         if error and error != _ERROR_NOTIFY_ENUM_DIR:
@@ -874,15 +1049,67 @@ class _Volume:
         """*name* was removed or renamed: a watched folder at or below it is
         no longer where its key says, and a path derived through it may be
         wrong."""
-        if self.located.keys and self.located.moved(name):
+        resolve = self._resolve
+        if self.located.keys and self.located.moved(name, resolve):
             self.located = _FolderIndex()
         if self.index.keys:
-            self.gone.update(self.index.moved(name))
+            self.gone.update(self.index.moved(name, resolve))
+        if self.longs:
+            # An alias freed for another entry is one of a name gone, or below it.
+            gone = _FolderIndex.spelled(name)
+            below = gone + "\\"
+            self.longs = {
+                short: long
+                for short, long in self.longs.items()
+                if not (short == gone or short.startswith(below) or long == gone or long.startswith(below))
+            }
 
-    def poll(self) -> tuple[list[Any], list[Any], bool]:
+    def _count(self, what: str, n: int = 1) -> None:
+        self.counts[what] = self.counts.get(what, 0) + n
+
+    def _resolve(self, below: str, last: bool = False) -> str | None:
+        """With the lock held: the long form of *below*, a name below the
+        root ending in a component that may be a short alias, while it is
+        there; None when it is not, or cannot be read. Kept for a folder
+        above the name reported (not for the *last* component, most often a
+        file come and gone), until a name at or above it is reported gone.
+
+        A change is reported by the name it was made through, and a program
+        writing through a short path (``C:\\Users\\PHILIP~1\\AppData\\Local\\Temp``,
+        as ``%TEMP%`` often is) names its files so. Such a name counted as a
+        change of every watched folder below the one above the alias: each
+        temporary file any program wrote dropped every stat kept below
+        ``C:\\Users``, so a cell checked every file again."""
+        if not last and below in self.longs:
+            found = self.longs[below]
+        else:
+            found = None
+            long_path = getattr(self.kernel, "long_path", None)
+            root = self.root.rstrip("\\")
+            if long_path is not None:
+                try:
+                    long = long_path(root + "\\" + below)
+                except Exception:  # noqa: BLE001 - taken as not resolved
+                    long = None
+                if long is not None and ntpath.normcase(long).startswith(ntpath.normcase(root) + "\\"):
+                    found = _FolderIndex.spelled(long[len(root) + 1 :])
+            if found is not None and not last:
+                if len(self.longs) >= _LONGS_KEPT:
+                    self.longs = {}
+                self.longs[below] = found
+        self._count("short names put in their long form" if found is not None else "short names not found")
+        return found
+
+    def poll(self, sync: bool = False) -> tuple[list[Any], list[Any], bool]:
         """``(changed keys, gone keys, dead)`` since the last poll: a gone
-        folder was removed or renamed, or one above it was."""
+        folder was removed or renamed, or one above it was. With *sync*,
+        every change made before the poll is in it (`sync`); when that
+        cannot be made sure of, every folder counts as changed."""
+        synced = self.sync() if sync else True
         with self.lock:
+            if not synced and self.poke is not None:
+                self._count("polls the thread did not answer")
+                self.everything = True
             self.take()
             if self.everything or self.dead:
                 keys = list(self.index.keys.values())
@@ -899,6 +1126,11 @@ class _Volume:
         on for at most ``_CANCEL_WAIT_SECONDS``, and one still running then
         keeps its buffer alive for the process's life."""
         self.stopping = True
+        if self.poke is not None:
+            try:
+                self.kernel.poke(self.poke)  # out of its wait now
+            except Exception:  # noqa: BLE001 - it ends at the wait's end
+                pass
         with self.lock:
             kernel = self.kernel
             if self.pending:
@@ -917,6 +1149,8 @@ class _Volume:
         if self.thread is not None and self.thread is not threading.current_thread():
             self.thread.join(timeout=2 * _THREAD_WAIT_MS / 1000)
         kernel.close(self.event)
+        if self.poke is not None:
+            kernel.close(self.poke)
 
 
 class _VolumeChanges:
@@ -1090,10 +1324,13 @@ class _VolumeChanges:
             self._stopped.append(volume)
         self._located = {path: place for path, place in self._located.items() if place[0] is not volume}
 
-    def poll(self) -> list[tuple[Any, bool]]:
+    #: `poll` takes *sync* (`FileWatch.drain`).
+    syncs = True
+
+    def poll(self, sync: bool = False) -> list[tuple[Any, bool]]:
         reported: list[tuple[Any, bool]] = []
         for root, volume in list(self._volumes.items()):
-            keys, gone, dead = volume.poll()
+            keys, gone, dead = volume.poll(sync)
             if dead:
                 reported.extend((key, True) for key in keys)
                 self._keys.difference_update(keys)
@@ -1102,6 +1339,15 @@ class _VolumeChanges:
             reported.extend((key, True) for key in gone)
             reported.extend((key, False) for key in keys)
         return reported
+
+    def report(self) -> dict[str, int]:
+        """What the volumes' reports were, summed (`FileWatch.report`)."""
+        counts: dict[str, int] = {"volumes watched": len(self._volumes)}
+        for volume in list(self._volumes.values()):
+            with volume.lock:
+                for what, n in volume.counts.items():
+                    counts[what] = counts.get(what, 0) + n
+        return counts
 
     def close(self) -> None:
         for volume in list(self._volumes.values()):

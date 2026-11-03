@@ -95,7 +95,8 @@ def snap(tmp_path) -> dict:
 
 @pytest.fixture
 def looks(monkeypatch, tmp_path) -> collections.Counter:
-    """Each stat, lstat and existence look at a path under *tmp_path*, by kind."""
+    """Each stat, lstat and existence look at a path under *tmp_path*, by
+    kind, and each answer about one dependency (``answers``)."""
     seen: collections.Counter = collections.Counter()
     root = str(tmp_path)
 
@@ -103,11 +104,19 @@ def looks(monkeypatch, tmp_path) -> collections.Counter:
         def call(path, *args, **kwargs):
             if os.fspath(path).startswith(root):
                 seen[kind] += 1
+
             return real(path, *args, **kwargs)
 
         return call
 
+    real_answer = file_dep_snapshot.dep_is_fresh
+
+    def answer(path, *args, **kwargs):
+        seen["answers"] += 1
+        return real_answer(path, *args, **kwargs)
+
     def start():
+        monkeypatch.setattr(file_dep_snapshot, "dep_is_fresh", answer)
         monkeypatch.setattr(os, "stat", counting("stat", os.stat))
         monkeypatch.setattr(os, "lstat", counting("lstat", os.lstat))
         monkeypatch.setattr(os.path, "exists", counting("exists", os.path.exists))
@@ -141,9 +150,10 @@ def test_a_later_cell_takes_one_stat_per_watched_folder(snap, looks, monkeypatch
     _cell(snap)
 
     # Each watched folder's own stat (`FileWatch.drain`), and nothing per file.
-    assert looks["stat"] <= FOLDERS
-    assert looks["lstat"] == 0
-    assert looks["exists"] == 0
+    report = file_watch.watcher().report()
+    assert looks["stat"] <= FOLDERS, f"{report}"
+    assert looks["lstat"] == 0, f"{report}"
+    assert looks["exists"] == 0, f"{report}"
 
 
 def test_a_path_made_where_one_was_not_is_seen(snap, tmp_path):
@@ -163,7 +173,103 @@ def test_a_component_kept_under_the_watch_is_taken_before_any_stat(snap, looks):
     paths = set(snap)
     first = run_memo.file_component_this_run(paths)
     _next_run()
+    # The reports of the files just written may come after their folders are
+    # watched (Windows): taken by the next run's first drain, they drop what
+    # was kept, and this run keeps it again.
+    assert run_memo.file_component_this_run(paths) == first
+    _next_run()
     looks.start()
 
     assert run_memo.file_component_this_run(paths) == first
-    assert looks["stat"] <= FOLDERS and looks["lstat"] == 0 and looks["exists"] == 0
+    assert looks["stat"] <= FOLDERS and looks["lstat"] == 0 and looks["exists"] == 0, f"{file_watch.watcher().report()}"
+
+
+# -- a folder that changes, a file no folder vouches for --------------------------
+#
+# The verdict on a snapshot lapsed whole when one of its folders reported a
+# change, or when one file could not be vouched for: on Windows a snapshot
+# of 8,000 files was checked file by file before every cell (113,948
+# answers, 56,974 stats), its notebook's own folder being written by every
+# save. Now only the files of the folders that changed, and the loose ones,
+# are checked again.
+
+
+def _snapshot_check(deps: dict) -> None:
+    run_memo.stat_keys_this_run(deps)
+    run = run_memo.file_state_this_run()
+    assert snapshot_is_fresh(deps, run["memo"]) == (True, None)
+    _next_run()
+
+
+@pytest.mark.parametrize("listed", [False, True], ids=["stat-ed", "listed as on Windows"])
+def test_a_change_in_one_folder_checks_again_only_the_files_in_it(snap, looks, monkeypatch, tmp_path, listed):
+    if listed:
+        monkeypatch.setattr(file_dep_snapshot, "stats_from_listings", _windows_listing)
+        monkeypatch.setattr(run_memo, "stats_from_listings", _windows_listing)
+    _snapshot_check(snap)
+    _snapshot_check(snap)
+    (tmp_path / "pkg3" / "notebook.ipynb").write_text("{}", encoding="utf-8")  # a save, in one folder
+    looks.start()
+
+    _snapshot_check(snap)
+
+    # The folders' own stats, and pkg3's files and the paths not there in it:
+    # each answered once, where every file of the snapshot was.
+    report = file_watch.watcher().report()
+    assert looks["stat"] + looks["lstat"] + looks["exists"] <= FOLDERS + 2 * (FILES + MISSING), f"{report}"
+    assert looks["answers"] == FILES + MISSING, f"{report}"
+
+
+def test_a_file_no_folder_vouches_for_is_checked_alone(snap, looks, tmp_path):
+    # A file with a second link, stat-ed (a listing on Windows gives no link
+    # count): a change through the other link is no change of its folder.
+    lone = tmp_path / "lone"
+    lone.mkdir()
+    linked = lone / "linked.py"
+    linked.write_text("Y = 1\n", encoding="utf-8")
+    os.link(linked, tmp_path / "elsewhere.py")
+    deps = {**snap, **snapshot_file_deps({str(linked)})}
+    _snapshot_check(deps)
+    _snapshot_check(deps)
+    looks.start()
+
+    _snapshot_check(deps)
+
+    report = file_watch.watcher().report()
+    assert looks["stat"] + looks["lstat"] + looks["exists"] <= FOLDERS + 1 + 4, f"{report}"  # its stat, its real path's
+    assert looks["answers"] == 1, f"{report}"
+    # And the watch says why (`FileWatch.report`).
+    assert report["stats not kept, by why"]["a second hard link"] >= 1
+
+
+def test_an_edit_in_the_folder_that_changed_is_seen(snap, tmp_path):
+    _snapshot_check(snap)
+    _snapshot_check(snap)
+    edited = tmp_path / "pkg3" / "m11.py"
+    edited.write_text("X = 'eleven'\n", encoding="utf-8")
+
+    run_memo.stat_keys_this_run(snap)
+    run = run_memo.file_state_this_run()
+    fresh, stale = snapshot_is_fresh(snap, run["memo"])
+    assert not fresh and stale.path == str(edited)
+
+
+def test_a_restore_finds_its_files_with_the_runs_stats(snap, looks, tmp_path):
+    # A statement restored after a restart records the files it read as
+    # running it would: each found with a look of its own, 76,000
+    # ``os.path.exists`` in the first cell after a restart on Windows.
+    from cash.notebook.tracking_state import TrackingState
+    from cash.notebook.upstream.cache_restore import CacheRestorer
+
+    _cell(snap)
+    _cell(snap)  # past the reports of the files just written (see above)
+    state = TrackingState()
+    restorer = CacheRestorer(None, state, None, None)
+    looks.start()
+
+    restorer._update_tracking_after_restore({"frame"}, {"file_dependencies": snap}, {})
+
+    found = state.executed_file_deps["frame"]
+    assert found == {p for p, entry in snap.items() if not entry.get("absent")}
+    assert looks["exists"] == 0
+    assert looks["stat"] + looks["lstat"] <= FOLDERS, f"{file_watch.watcher().report()}"
