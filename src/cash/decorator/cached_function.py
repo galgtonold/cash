@@ -278,6 +278,10 @@ class CachedFunction:
     #: Naming a changed argument cost more than its budget and is off (the
     #: check that some argument changed still runs).
     argument_naming_retired: bool = False
+    #: A call of it was seen changing an argument in place: from then on the
+    #: arguments a hit could write a stored state back into are fingerprinted
+    #: before its body runs (`CallRunner.arguments_before`).
+    changes_arguments: bool = False
     #: The ``key=`` function has been watched for file reads (`KeyBuilder.key_arguments`).
     key_reads_checked: bool = False
     #: Its fast hits (`hit_memo.HitMemo`), made on the first ordinary hit.
@@ -305,3 +309,4 @@ class CachedFunction:
         self.arg_cost = previous.arg_cost
         self.rng_modules = previous.rng_modules
         self.argument_naming_retired = previous.argument_naming_retired
+        self.changes_arguments = previous.changes_arguments

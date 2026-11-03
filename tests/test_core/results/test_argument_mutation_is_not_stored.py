@@ -10,6 +10,12 @@ Decided 2026-09-11: such a call is not stored -- it runs every time, which is
 what the code means -- and the warning names the argument. Only an object can
 change this way: an int or str rebound inside the body is invisible to the
 caller and must not trigger it.
+
+Decided 2026-11-03: an array, a frame or Series, or a list, dict or set of
+plain values is stored with the state the call left it in, from the second
+call on, and a hit writes that state back into the caller's object
+(`test_a_call_that_changes_its_argument_in_place_is_stored`). Every warm
+call still leaves the caller's array as the uncached call does.
 """
 
 from __future__ import annotations
@@ -53,7 +59,7 @@ IDIOMS = [_in_place_minus_mean, _in_place_double, _clip_out, _shuffle, _mask_ass
 
 
 @pytest.mark.parametrize("body", IDIOMS, ids=lambda f: f.__name__.lstrip("_"))
-def test_a_call_that_changes_an_array_argument_runs_every_time(tmp_path, body):
+def test_a_call_that_changes_an_array_argument_leaves_it_as_an_uncached_call_does(tmp_path, body):
     c = Cash(cache_dir=str(tmp_path / "cache"))
     runs = []
 
@@ -70,7 +76,9 @@ def test_a_call_that_changes_an_array_argument_runs_every_time(tmp_path, body):
             body(expected)  # what the uncached call does to it
             cached(a)
             assert np.array_equal(a, expected), "the caller's array was left unchanged"
-    assert len(runs) == 3, "a result was stored and served without changing the argument"
+    # The first call learns that it changes its argument, the second is
+    # stored with the array's new state, the third is a hit that writes it.
+    assert len(runs) == 2
     named = [w for w in rec if "'a'" in str(w.message) and "in place" in str(w.message)]
     assert named, "no warning named the argument"
 

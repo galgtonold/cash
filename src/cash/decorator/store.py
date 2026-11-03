@@ -28,6 +28,7 @@ from ..effect_observer import EffectObserver
 from ..exceptions import CacheBackendError, CashCacheIneffectiveWarning, CashCacheStoreFailedWarning
 from ..kept_state import ReducerNotRun
 from ..lineage_tag import own_tag, set_tags
+from ..rewrite_in_place import ArgumentsLeft
 from ..sizing import estimate_object_size
 from ..tracking.randomness import CashRandomnessWarning
 from ..value_types import IMMUTABLE_PRIMS
@@ -177,6 +178,10 @@ class StoreRequest:
     #: What the result shared with an object outside the call, as the
     #: warning said it (`PurityChecks.warn_shared_result`): a hit says it too.
     shared_result: str | None = None
+    #: ``{parameter: (fingerprint before, state after)}`` of the arguments
+    #: the call changed in place (`CallRunner.arguments_left`): stored with
+    #: the result, written back into the arguments on a hit.
+    args_left: dict[str, tuple[str, Any]] | None = None
 
 
 @dataclass
@@ -723,6 +728,7 @@ class ResultStore:
                 code_trace=[list(item) for item in request.code_trace] if request.code_trace is not None else None,
                 env_reads=request.env_reads,
                 shared_result=request.shared_result,
+                args_left=sorted(request.args_left) if request.args_left else None,
                 **(request.manifest or {}),
             )
 
@@ -731,9 +737,12 @@ class ResultStore:
             meta_dict = meta.to_dict()
             if dynamic is not None:
                 self._store_sources(dynamic)
-            self._backend_slot.backend.set(cache_key, result, meta_dict, serializer=serializer)
+            stored = ArgumentsLeft(result, request.args_left) if request.args_left else result
+            self._backend_slot.backend.set(cache_key, stored, meta_dict, serializer=serializer)
             call.stored_in = (
-                None if meta_dict.get("result_ref") or meta_dict.get("held_refs") else meta_dict.get("storage")
+                None
+                if meta_dict.get("result_ref") or meta_dict.get("held_refs") or meta_dict.get("args_left")
+                else meta_dict.get("storage")
             )
             if dynamic is not None:
                 remember_sources(cache_key, dynamic)
