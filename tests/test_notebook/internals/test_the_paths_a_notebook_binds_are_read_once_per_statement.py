@@ -62,6 +62,6 @@ def test_a_second_writer_reads_the_statements_above_without_parsing_them():
     first, _ = _parses(trace)
     again, parses = _parses(list(trace))
 
-    chart = os.path.join("report", "chart.png")  # report\\chart.png on Windows
+    chart = os.path.join("report", "chart.png")  # report\chart.png on Windows
     assert first == again == {"OUT": "report", "CHART": chart, "KEEP": "k", "SAME": "s"}
     assert parses == 0, f"{parses} parses for statements already read"
