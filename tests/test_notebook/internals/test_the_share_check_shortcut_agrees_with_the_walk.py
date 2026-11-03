@@ -298,9 +298,9 @@ def test_an_output_another_variable_shares_does_not_walk_a_displayed_list(monkey
     real = shared_objects._walk_held
 
     def walk_held(*args, **kwargs):
-        reach, refs, edges = real(*args, **kwargs)
+        reach, refs, edges, met = real(*args, **kwargs)
         walked.append(len(edges))
-        return reach, refs, edges
+        return reach, refs, edges, met
 
     monkeypatch.setattr(shared_objects, "_walk_held", walk_held)
 
