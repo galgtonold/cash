@@ -6,7 +6,8 @@ unparsed each top-level statement of each cell above, and walked each one's
 tree for a call to a notebook function that seeds, before every cell: in a
 174-cell notebook, 15,000 cells read per Run All, a second of it.
 
-Counted in unparses and tree walks, not timed.
+Counted in unparses and in the parses the walk for a seeding function
+starts from, not timed.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from __future__ import annotations
 import ast
 from unittest.mock import patch
 
+from cash.notebook import callee_reach
 from tests._cell_driver import run_cash_cell
 
 
@@ -27,7 +29,7 @@ def _reads_for_the_last_cell(magics, n: int, tag: str) -> int:
     cells += [f"{tag}{i} = base + {i}\nprint({tag}{i})" for i in range(n)]
     for cell in cells[:-1]:
         run_cash_cell(magics, cell, cells=cells)
-    unparse, children = ast.unparse, ast.iter_child_nodes
+    unparse, parse = ast.unparse, callee_reach.parse_cached
     calls = 0
 
     def counting_unparse(*args, **kwargs):
@@ -35,12 +37,12 @@ def _reads_for_the_last_cell(magics, n: int, tag: str) -> int:
         calls += 1
         return unparse(*args, **kwargs)
 
-    def counting_children(*args, **kwargs):
+    def counting_parse(*args, **kwargs):
         nonlocal calls
         calls += 1
-        return children(*args, **kwargs)
+        return parse(*args, **kwargs)
 
-    with patch.object(ast, "unparse", counting_unparse), patch.object(ast, "iter_child_nodes", counting_children):
+    with patch.object(ast, "unparse", counting_unparse), patch.object(callee_reach, "parse_cached", counting_parse):
         run_cash_cell(magics, cells[-1], cells=cells)
     return calls
 
@@ -50,4 +52,4 @@ def test_the_last_cell_reads_the_cells_above_no_more_in_a_long_notebook(cash_mag
     long = _reads_for_the_last_cell(cash_magics, 60, "long")
 
     assert short > 0, "nothing was read; the cell never reached the checks"
-    assert long <= short + 20, f"{long} reads at 60 cells against {short} at 10"
+    assert long <= short + 5, f"{long} reads at 60 cells against {short} at 10"
