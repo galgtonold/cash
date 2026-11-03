@@ -178,7 +178,7 @@ def _remember_realpath(key: tuple[str, str], resolved: str) -> None:
 
 
 def realpath_of_read_this_run(
-    path: str, folders: dict[tuple[str, str], str] | None = None
+    path: str, folders: dict[tuple[str, str], str] | None = None, lstat: os.stat_result | None = None
 ) -> tuple[str, os.stat_result | None]:
     """:func:`realpath_this_run` for a file about to be read, and its stat when
     that is what answered.
@@ -197,6 +197,9 @@ def realpath_of_read_this_run(
     run to remember answers for; *folders*, when given, is the calling
     block's own memo of its folders' real paths, used the same way for as
     long as the block runs. Without either, the path is resolved in full.
+
+    *lstat* is the caller's ``lstat`` of *path*, taken in this cell run, in
+    place of one taken here: the same answer from the same facts.
     """
 
     epoch = HASH_EPOCH
@@ -230,7 +233,7 @@ def realpath_of_read_this_run(
         and ".." not in path.replace("\\", "/").split("/")
     ):
         try:
-            st = own_lstat(absolute)
+            st = lstat if lstat is not None else own_lstat(absolute)
         except FileNotFoundError:
             # Not there yet, as at an open for writing: ``realpath`` answers
             # its directory's real path plus the name too. Resolved in full,

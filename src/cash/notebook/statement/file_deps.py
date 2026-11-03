@@ -51,13 +51,17 @@ def compute_file_hash_component(
     accessed_remote: set[str] | None = None,
     probes: Mapping[str, str] | None = None,
     stats: Mapping[str, os.stat_result] | None = None,
+    lstats: Mapping[str, os.stat_result] | None = None,
 ) -> str:
     """Compute a hash component from accessed file paths and their stats.
 
     *stats* maps a resolved path to a stat taken of it since the statement
     ran (the check that no input moved, `FileAccessTracker.checked_stats`):
     taken in place of a stat of its own. The same fields, so the same
-    component, as a stat taken here.
+    component, as a stat taken here. *lstats* maps a path of
+    *accessed_files*, as spelled there, to an ``lstat`` of it taken in this
+    cell run, which resolves its real path in place of one taken here
+    (`realpath_of_read_this_run`).
 
     *probes* are the existence checks the statement made without reading
     (``{path: answer}``, :func:`probe_answers`): each adds whether the path is
@@ -108,7 +112,7 @@ def compute_file_hash_component(
             # Through the directory, with the lstat that shows the file is not
             # a link as its stat: a statement over a frame read from 5,000
             # files resolved every path again per lineage.
-            resolved, stat = realpath_of_read_this_run(f)
+            resolved, stat = realpath_of_read_this_run(f, lstat=lstats.get(f) if lstats else None)
             canonical_path = normalize_path(resolved)
             if stat is None and stats:
                 stat = stats.get(canonical_path)

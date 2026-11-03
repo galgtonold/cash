@@ -26,6 +26,7 @@ from __future__ import annotations
 import bisect
 import itertools
 import os
+import stat as _stat
 import time
 from collections.abc import Iterable, Mapping
 from typing import Any
@@ -210,6 +211,11 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
     order the stats were kept, so `stats_taken_this_run` hands a caller
     that takes only recent stats the recent ones of a long pass, and the
     caller takes the older ones again itself.
+
+    Taken with ``lstat``, and with ``stat`` only for a link or reparse point
+    (``run["stat_followed"]`` names those): for anything else the two are
+    the same, and the ``lstat`` also tells `file_component_this_run` the
+    file is no link, which it took one more ``lstat`` per file to learn.
     """
     run = file_state_this_run()
     if run is not None:
@@ -217,8 +223,9 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
         elsewhere = run.setdefault("stat_elsewhere", {})
         dates = run.setdefault("stat_date", {})
         chunks = run.setdefault("stat_chunks", [])
+        followed = run.setdefault("stat_followed", set())
     else:
-        stats, elsewhere, dates, chunks = {}, {}, {}, []
+        stats, elsewhere, dates, chunks, followed = {}, {}, {}, [], set()
     if not isinstance(paths, (dict, set, frozenset)):
         paths = dict.fromkeys(paths)  # the paths as asked, in order, once each
     # Asked again by each check of the run: most often every path was
@@ -239,6 +246,9 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
         stat = os.stat
         if getattr(stat, "_is_file_tracker_patch", False):
             stat = stat._original_func  # as `own_stat`, once for the lot
+        lstat = os.lstat
+        if getattr(lstat, "_is_file_tracker_patch", False):
+            lstat = lstat._original_func
         cwd: list[str] = []  # the working directory, asked once for the lot
         at = time.monotonic()
         chunks.append((at, len(stats)))
@@ -253,13 +263,13 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
                 left = _STAT_CHUNK
             st = None
             if not os.path.isabs(p) and not ("://" in p and is_remote_url(p)):
-                st = _as_spelled_absolute(p, stats, stat, cwd, dates, at)
+                st = _as_spelled_absolute(p, stats, stat, lstat, cwd, dates, at, followed)
             if st is None and not ("://" in p and is_remote_url(p)):
                 # Where it was recorded: the stat that finds it is there is
                 # the stat it is asked for (`resolve_file_dep_path` asked
                 # ``os.path.exists`` first, a stat of its own).
                 try:
-                    st = stat(p)
+                    st = _stat_by_lstat(p, stat, lstat, followed)
                 except (OSError, ValueError):
                     st = None
             if st is not None:
@@ -275,18 +285,35 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
             if resolved == p and st is not None:
                 stats[p] = st
                 dates[p] = at
+                followed.add(p)
             else:
                 elsewhere[p] = (resolved, st)
     return RunStats(paths, stats, elsewhere)
+
+
+#: ``FILE_ATTRIBUTE_REPARSE_POINT``: a symlink or junction on Windows.
+_REPARSE_POINT = 0x400
+
+
+def _stat_by_lstat(path: str, stat: Any, lstat: Any, followed: set[str]) -> os.stat_result:
+    """``stat(path)``, taken as ``lstat(path)`` unless *path* is a link or
+    reparse point, which is stat-ed as well and noted in *followed*."""
+    st = lstat(path)
+    if _stat.S_ISLNK(st.st_mode) or getattr(st, "st_file_attributes", 0) & _REPARSE_POINT:
+        followed.add(path)
+        st = stat(path)
+    return st
 
 
 def _as_spelled_absolute(
     path: str,
     stats: dict[str, Any],
     stat: Any,
+    lstat: Any,
     cwd: list[str],
     dates: dict[str, float],
     at: float,
+    followed: set[str],
 ) -> os.stat_result | None:
     """The stat of relative *path* by its absolute spelling in the working
     directory, which this run took or takes now under that spelling too;
@@ -312,7 +339,7 @@ def _as_spelled_absolute(
     st = stats.get(absolute)
     if st is None:
         try:
-            st = stat(absolute)
+            st = _stat_by_lstat(absolute, stat, lstat, followed)
         except (OSError, ValueError):
             return None
         stats[absolute] = st
@@ -390,7 +417,12 @@ def file_component_this_run(
     fields of the same file in the same run, so the same component; and the
     component itself kept for the rest of the run, as the stats are. A
     directory listing's stat is not handed on (it has no file identity, and
-    can lag a file edited through another hard link)."""
+    can lag a file edited through another hard link).
+
+    The run's stat of a file that is no link is an ``lstat``
+    (`stats_this_run`), handed on as such too: resolving each file's real
+    path took one more ``lstat`` of every file the statement read, 19,000 of
+    them before a cell below a read of a photo collection."""
     from .statement.file_deps import compute_file_hash_component
 
     run = file_state_this_run()
@@ -406,12 +438,18 @@ def file_component_this_run(
             key = None
         if key is not None and key in components:
             return components[key]
-    stats = {
-        normalize_path(p): st
-        for p, (resolved, st) in stats_this_run(paths).items()
-        if st is not None and resolved == p and st.st_ino
-    }
-    component = compute_file_hash_component(paths, remote, probes, stats=stats)
+    stats = {}
+    lstats = {}
+    followed = run.get("stat_followed", ()) if run is not None else None
+    isabs = os.path.isabs
+    for p, (resolved, st) in stats_this_run(paths).items():
+        if st is not None and resolved == p and st.st_ino:
+            stats[normalize_path(p)] = st
+            # By its own spelling only: a relative one was stat-ed from the
+            # working directory of the pass.
+            if followed is not None and p not in followed and isabs(p):
+                lstats[p] = st
+    component = compute_file_hash_component(paths, remote, probes, stats=stats, lstats=lstats)
     if key is not None:
         components[key] = component
     return component
