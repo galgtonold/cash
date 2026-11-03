@@ -118,10 +118,12 @@ class TestMutationAwareCaching:
     def test_pure_mutation_skips_cache(self, statement_processor, mock_shell):
         """Statement that only mutates an existing variable should skip cache."""
 
-        # Set up existing list in namespace
-        mock_shell.user_ns["data"] = [1, 2, 3]
+        # Set up existing list in namespace. A list of lists: one of plain
+        # values is stored with its new state and written back on a hit
+        # (`rewrite_in_place`), which a list holding lists is not.
+        mock_shell.user_ns["data"] = [[1], [2], [3]]
 
-        code = "data.append(4)"
+        code = "data.append([4])"
         metrics = statement_processor.process_statement(code)
         assert metrics["status"] == CacheStatus.COMPUTED
 

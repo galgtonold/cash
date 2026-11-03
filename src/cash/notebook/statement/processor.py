@@ -20,7 +20,7 @@ from collections.abc import Callable, Collection, Generator, Iterable, Iterator,
 from contextlib import contextmanager
 from typing import Any
 
-from cash import _plain_data, stored_pickle, value_hash
+from cash import _plain_data, rewrite_in_place, stored_pickle, value_hash
 from cash._active import default_cash
 from cash._clock import perf_counter as _perf_counter
 from cash._user_attrs import attribute_or, instance_of
@@ -69,7 +69,7 @@ from cash.notebook.statement.carrier_advances import (
     carrier_candidates,
     carriers_an_entry_advanced,
 )
-from cash.notebook.statement.control_body import is_control_body
+from cash.notebook.statement.control_body import is_control_body, is_one_structure
 from cash.notebook.statement.derivation_edges import (
     apply_share_record,
     bound_names,
@@ -2121,6 +2121,10 @@ class StatementProcessor:
         stored and its outcome is all it did (`unit_outcome_trusted`); else
         it runs every time, as before, and the structure's lineage update
         names those objects by their values."""
+        if not is_one_structure(run.tree):
+            # A statement's other effects (a draw, the clock, a file) are
+            # weighed by its own checks, as for any output it stores.
+            return
         trusted = self.unit_outcome_trusted
         if not run.skip_cache and trusted is not None and trusted(run.code, run.inputs):
             return
@@ -2140,15 +2144,33 @@ class StatementProcessor:
         every time, with the reason."""
         names = sorted(run.metrics["stored_in_place"])
         values = {**captured_vars, **(holders or {})}
+        statement = not is_one_structure(run.tree)
         for name in names:
             obj = captured_vars.get(name)
-            why = in_place.refusal(obj, self.shell.user_ns) or in_place.holder_refusal(name, obj, values)
+            why = (
+                (self._rewrite_refusal(run, name, obj) if statement else None)
+                or in_place.refusal(obj, self.shell.user_ns)
+                or in_place.holder_refusal(name, obj, values)
+                or in_place.memory_refusal(name, obj, values)
+            )
             if isinstance(why, IdentityHeld):
                 self._warn_identity_held(run, _pointed_into(name, why))
             if why is not None:
                 self._unstore_in_place(run, f"In-place mutation on: {name} ({why}; statement re-executes)")
                 return
         run.restored_into = set(names)
+
+    @staticmethod
+    def _rewrite_refusal(run: StatementRun, name: str, obj: Any) -> str | None:
+        """Why the state a statement left *obj* in (*name*'s) cannot be
+        written back into the object on a hit: not of a kind written into
+        (`rewrite_in_place.refusal`), or the statement changed what a write
+        in place cannot (a column added, an array reshaped), so no hit could
+        put it back."""
+        shape = run.in_place_shapes.get(name)
+        if shape is None:
+            return "its state before the statement ran was not taken"
+        return rewrite_in_place.refusal(obj) or rewrite_in_place.shape_change(shape, obj)
 
     def _cheap_to_rerun(self, run: StatementRun) -> bool:
         """Whether a loop last ran in less than the cost model's compute
@@ -3194,7 +3216,11 @@ class StatementProcessor:
                         seed_epochs=self._randomness.seed_epochs,
                     )
                 else:
-                    logger.debug("%s Skipping cache save due to @cash:no-cache", _LOG_ANNOTATION)
+                    logger.debug(
+                        "%s Skipping cache save: %s",
+                        _LOG_ANNOTATION,
+                        "; ".join(run.metrics.get("uncacheable_reasons") or ()) or "@cash:no-cache",
+                    )
         moved = self._move_holders(run, saved_metadata)
         # After the save: the entry records each input's lineage as the
         # statement read it, before its draw moved it on.

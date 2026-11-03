@@ -15,6 +15,7 @@ import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from ... import rewrite_in_place
 from ..._clock import perf_counter as _perf_counter
 from ..._paths import resolve_file_dep_path
 from ..._user_attrs import instance_of
@@ -38,9 +39,11 @@ from ..lineage_formula import (
 )
 from ..lineage_store import restore_frozen_tag, tag_value
 from ..restored_var import FORWARD_PROBE_PLACEHOLDER, HeldObject, apply_held_var, present_holders
+from ..statement import in_place
 from ..statement._metadata import StatementCacheMetadata
 from ..statement.derivation_edges import record_shared_object_edges
 from ..statement.directives import statement_directives, ttl_floor_from_called_functions
+from ..statement.in_place import restore_into
 from ._types import key_inputs, key_lineages
 from .cache_probe import CacheProbe
 
@@ -269,18 +272,39 @@ class CacheRestorer:
             # The outputs and the variables stored with them hold one another's
             # objects: restored in part, they would not.
             return restored_vars
+        # What the statement changed in place goes into the live object, as
+        # at a hit (`StatementRestorer.restore_from_cache`): checked for every
+        # name before any is written.
+        live_outputs: dict[str, Any] = {}
+        for var in metadata.get("restored_into") or ():
+            if var not in variables_to_restore or var not in self.shell.user_ns:
+                continue
+            live = self.shell.user_ns[var]
+            stored = variables_to_restore[var]
+            why = in_place.refusal(live, self.shell.user_ns) if type(live) is type(stored) else "another kind"
+            if why is None and rewrite_in_place.rewritable_kind(live):
+                why = rewrite_in_place.mismatch(live, stored)
+            if why is not None:
+                logger.debug("[UPSTREAM] Restore failed: cannot restore into %s (%s)", var, why)
+                return restored_vars
+            live_outputs[var] = live
         try:
             # A holder stored by where it holds the outputs' objects
             # (`holder_patches`): the live one, given the restored objects.
             patched = {
-                var: apply_patch(self.shell.user_ns[var], val, variables_to_restore)
+                var: apply_patch(self.shell.user_ns[var], val, variables_to_restore, live_outputs)
                 for var, val in variables_to_restore.items()
                 if instance_of(val, HolderPatch)
             }
         except KeyError as e:
             logger.debug("[UPSTREAM] Restore failed: a variable stored with the outputs lost its place (%s)", e)
             return restored_vars
+        live_for: dict[int, Any] = {}
+        for var, live in live_outputs.items():
+            restore_into(live, variables_to_restore[var])
+            live_for[id(variables_to_restore[var])] = live
         for var, val in variables_to_restore.items():
+            val = live_for.get(id(val), val)
             if var in holders:
                 val = patched.get(var, val)
                 self.shell.user_ns[var] = val

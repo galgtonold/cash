@@ -12,11 +12,13 @@ import pickle
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
+from cash import rewrite_in_place
 from cash._clock import perf_counter as _perf_counter
 from cash.exceptions import CacheBackendError, CacheSerializationError
 from cash.notebook.anchors import resolve_anchors
 from cash.notebook.cache_status import CacheStatus
 from cash.notebook.statement import in_place
+from cash.notebook.statement.control_body import is_one_structure
 from cash.notebook.statement.derivation_edges import record_shared_object_edges
 from cash.notebook.statement.results import COST_MODEL_KEYS
 from cash.notebook.statement.run import ECHO_FIELD, echoes
@@ -30,6 +32,7 @@ if TYPE_CHECKING:
     from cash.notebook.tracking_state import TrackingState
 
 logger = logging.getLogger(__name__)
+
 
 __all__ = ["CacheHitServer"]
 
@@ -84,8 +87,14 @@ class CacheHitServer:
             # restore, whenever it was made: asked of the live objects, as
             # when the loop was stored.
             user_ns = self._restorer.shell.user_ns
+            statement = not is_one_structure(run.tree)
             for name in sorted(metadata.restored_into):
-                why = in_place.refusal(user_ns.get(name), user_ns)
+                live = user_ns.get(name)
+                why = in_place.refusal(live, user_ns)
+                if why is None and (statement or rewrite_in_place.rewritable_kind(live)):
+                    # Checked for every name before any is written into, so
+                    # a refused hit leaves them as they are for the run.
+                    why = rewrite_in_place.mismatch(live, variables[name])
                 if why is not None:
                     logger.debug("[CACHE] Not restoring into %s (%s), running it instead.", name, why)
                     return None
