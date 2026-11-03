@@ -44,6 +44,11 @@ def _n(log):
     return len(log.read_text(encoding="utf-8").splitlines()) if log.exists() else 0
 
 
+# Two append statements on a deque: not a kind whose in-place change is
+# stored, so each statement runs every time and only its call can be served.
+_DEQUE_APPENDS = "import collections\nout = collections.deque()\nout.append(compute(1))\nout.append(compute(2))"
+
+
 def test_append_loop_caches_the_call_with_no_directive(nb_runner, tmp_path):
     """No directive anywhere -- interception is on by default."""
     log = tmp_path / "calls.log"
@@ -139,20 +144,39 @@ def test_no_cache_calls_from_the_cell_header_covers_every_statement(nb_runner, t
     above it -- it does not see past an intervening statement like ``out =
     []``. Plain top-level statements are what ``leading_cell_annotation``
     actually guarantees reaches every one of, per its own docstring.
+
+    The appends go into a ``deque``, not a list. Philipp decided on
+    2026-11-03 that a statement changing its input in place is stored, and
+    its input written back in place on a hit, for NumPy arrays, pandas
+    frames and plain lists, dicts and sets; anything else keeps running
+    every time. ``out.append(compute(1))`` on a list is therefore served
+    whole, with or without the directive, and says nothing about whether
+    the directive reached its call. On a ``deque`` the statement still runs
+    every time, so only call interception could skip ``compute``.
     """
     log = tmp_path / "calls.log"
-    nb_runner.create_notebook(
-        [
-            _helpers(log),
-            ("# @cash:no-cache-calls\nout = []\nout.append(compute(1))\nout.append(compute(2))"),
-        ]
-    )
+    nb_runner.create_notebook([_helpers(log), "# @cash:no-cache-calls\n" + _DEQUE_APPENDS])
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert _n(log) == 2, "baseline did not run both calls"
 
     nb_runner.run_cell(2)
     assert _n(log) == 4, "the header opt-out did not reach the second append statement -- it only covered the first"
+    assert nb_runner.peek("list(out)") == "[2, 3]"
+
+
+def test_without_the_header_both_append_statements_serve_their_calls(nb_runner, tmp_path):
+    """The control: the same cell with no directive serves ``compute`` in
+    both statements, so the count above comes from the directive."""
+    log = tmp_path / "calls.log"
+    nb_runner.create_notebook([_helpers(log), _DEQUE_APPENDS])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert _n(log) == 2, "baseline did not run both calls"
+
+    nb_runner.run_cell(2)
+    assert _n(log) == 2, "interception did not serve the calls of the two append statements"
+    assert nb_runner.peek("list(out)") == "[2, 3]"
 
 
 def test_badge_names_the_mechanism_that_cached_the_call(nb_runner, tmp_path):
