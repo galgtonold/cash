@@ -39,11 +39,22 @@ def _cells(extra: str = "") -> list[str]:
 
 
 #: Counts, in the kernel, the searches up the heap for a holder.
+#: Self-contained (nothing of it in the notebook's globals) and undone by
+#: `UNDO`: a kernel reused by the next test keeps its modules.
 COUNT = (
-    "import cash.notebook.shared_objects as _so\n"
-    "_so._climbs = []\n"
-    "_so._real_climb = getattr(_so, '_real_climb', _so._holders_from_referrers)\n"
-    "_so._holders_from_referrers = lambda *a, **k: (_so._climbs.append(1), _so._real_climb(*a, **k))[1]"
+    "def _cash_test_count(so=__import__('cash.notebook.shared_objects', fromlist=['_'])):\n"
+    "    real = so.__dict__.setdefault('_real_climb', so._holders_from_referrers)\n"
+    "    so._climbs = []\n"
+    "    def counting(*a, **k):\n"
+    "        so._climbs.append(1)\n"
+    "        return real(*a, **k)\n"
+    "    so._holders_from_referrers = counting\n"
+    "_cash_test_count()\n"
+    "del _cash_test_count"
+)
+UNDO = (
+    "(lambda so: setattr(so, '_holders_from_referrers', so.__dict__.pop('_real_climb', so._holders_from_referrers)))"
+    "(__import__('cash.notebook.shared_objects', fromlist=['_']))"
 )
 
 
@@ -63,18 +74,23 @@ def _climbs_in_the_loop(nb_runner, cells: list[str]) -> int:
     for cell in range(1, 5):
         nb_runner.run_cell(cell)
     nb_runner.peek(f"exec({COUNT!r})")
-    nb_runner.run_cell(5)
-    climbs = int(nb_runner.peek("len(__import__('cash.notebook.shared_objects', fromlist=['_'])._climbs)"))
+    try:
+        nb_runner.run_cell(5)
+        climbs = int(nb_runner.peek("len(__import__('cash.notebook.shared_objects', fromlist=['_'])._climbs)"))
+    finally:
+        nb_runner.peek(UNDO)
     nb_runner.run_cell(6)
     assert nb_runner.get_output(6).strip() == _plain(cells), nb_runner.get_output(6)
     assert "SHARE-UNCHECKED" not in nb_runner.get_raw_output(5), nb_runner.get_raw_output(5)
     return climbs
 
 
+@pytest.mark.fresh_kernel
 def test_the_last_estimator_is_not_searched_for(nb_runner):
     assert _climbs_in_the_loop(nb_runner, _cells()) == 0
 
 
+@pytest.mark.fresh_kernel
 def test_an_estimator_a_class_also_holds_still_is(nb_runner):
     """The control: a holder that is no variable is still searched for."""
     extra = "\nclass Keep:\n    items = []\nKeep.items.append(b)"

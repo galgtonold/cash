@@ -41,15 +41,23 @@ def _cells(shown: str) -> list[str]:
 
 
 #: Counts, in the kernel, the containers the walk of what cash holds reads.
+#: Self-contained (nothing of it in the notebook's globals) and undone by
+#: `UNDO`: a kernel reused by the next test keeps its modules.
 COUNT = (
-    "import cash.notebook.shared_objects as _so\n"
-    "_so._walked = []\n"
-    "_so._real_walk_held = getattr(_so, '_real_walk_held', _so._walk_held)\n"
-    "def _counting(*a, **k):\n"
-    "    out = _so._real_walk_held(*a, **k)\n"
-    "    _so._walked.append(len(out[2]))\n"
-    "    return out\n"
-    "_so._walk_held = _counting"
+    "def _cash_test_count(so=__import__('cash.notebook.shared_objects', fromlist=['_'])):\n"
+    "    real = so.__dict__.setdefault('_real_walk_held', so._walk_held)\n"
+    "    so._walked = []\n"
+    "    def counting(*a, **k):\n"
+    "        out = real(*a, **k)\n"
+    "        so._walked.append(len(out[2]))\n"
+    "        return out\n"
+    "    so._walk_held = counting\n"
+    "_cash_test_count()\n"
+    "del _cash_test_count"
+)
+UNDO = (
+    "(lambda so: setattr(so, '_walk_held', so.__dict__.pop('_real_walk_held', so._walk_held)))"
+    "(__import__('cash.notebook.shared_objects', fromlist=['_']))"
 )
 
 
@@ -69,19 +77,24 @@ def _walked_by_the_share_check(nb_runner, cells: list[str]) -> int:
     for cell in range(1, 6):
         nb_runner.run_cell(cell)
     nb_runner.peek(f"exec({COUNT!r})")
-    nb_runner.run_cell(6)
-    walked = int(nb_runner.peek("sum(__import__('cash.notebook.shared_objects', fromlist=['_'])._walked)"))
+    try:
+        nb_runner.run_cell(6)
+        walked = int(nb_runner.peek("sum(__import__('cash.notebook.shared_objects', fromlist=['_'])._walked)"))
+    finally:
+        nb_runner.peek(UNDO)
     nb_runner.run_cell(7)
     assert nb_runner.get_output(7).strip() == _plain(cells), nb_runner.get_output(7)
     assert "SHARE-UNCHECKED" not in nb_runner.get_raw_output(6), nb_runner.get_raw_output(6)
     return walked
 
 
+@pytest.mark.fresh_kernel
 def test_a_shown_object_a_variable_holds_is_not_walked(nb_runner):
     walked = _walked_by_the_share_check(nb_runner, _cells("forest.fit()"))
     assert walked < 1_000, f"walked {walked} containers of what cash holds"
 
 
+@pytest.mark.fresh_kernel
 def test_one_no_variable_holds_still_is(nb_runner):
     """The control: shown and bound to no variable, it is cash's own, and
     the walk reads into it."""
