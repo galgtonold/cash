@@ -230,7 +230,7 @@ does; the library calls inside it that are keyed on the value are served.
 A statement's inputs come from the names it mentions. Two real dependencies
 are not among them, and each has its own part of the key.
 
-<!-- claim: cash/tracking/randomness/lineage.py:hidden_lineage_reads @ea0de309, cash/tracking/randomness/lineage.py:hidden_lineage_writes @4b64944a, cash/tracking/randomness/lineage.py:advanced_rng_lineage @d2d070a9, cash/tracking/randomness/lineage.py:drawn_rng_vars @9ec87297, cash/notebook/callee_reach.py:helper_seeded_modules @8917bd4e, cash/notebook/statement/randomness.py:StatementRandomness.adopt_seeds_set_by @1ca29ec1, cash/notebook/statement/randomness.py:StatementRandomness._record_hidden_draws @89bd0e14, cash/tracking/randomness/lineage.py:close_seed_watch @61e2f90b -->
+<!-- claim: cash/tracking/randomness/lineage.py:hidden_lineage_reads @ea0de309, cash/tracking/randomness/lineage.py:hidden_lineage_writes @4b64944a, cash/tracking/randomness/lineage.py:advanced_rng_lineage @d2d070a9, cash/tracking/randomness/lineage.py:drawn_rng_vars @9ec87297, cash/notebook/callee_reach.py:helper_seeded_modules @8917bd4e, cash/notebook/statement/randomness.py:StatementRandomness.adopt_seeds_set_by @1ca29ec1, cash/notebook/statement/randomness.py:StatementRandomness._record_hidden_draws @89bd0e14, cash/tracking/randomness/lineage.py:close_seed_watch @81f78688, cash/tracking/randomness/lineage.py:streams_set_by_the_statement @9492d857 -->
 **The random seed.** `x = np.random.rand(3)` mentions no variable, so editing
 `np.random.seed(0)` above it would change nothing. Each global random module
 therefore gets a hidden lineage variable: a `seed()` call writes it, and a draw
@@ -251,7 +251,11 @@ All. A statement whose run seeds a stream before it draws from it (that
 helper filling its memo, then the draws it makes) draws only what its own
 seed set, so it does not read the variable: a change in the draws above it
 does not run it again. A draw, or a read or reset of the stream's state,
-before that seed makes it a read as usual.
+before that seed makes it a read as usual. A statement that sets the
+stream's state itself (`s = random.getstate(); random.seed(5); ...;
+random.setstate(s)`) reads and moves the variable as a draw does, even when
+it leaves the stream where it found it: the draws below it then follow the
+draws above it.
 
 <!-- claim: cash/notebook/statement/randomness.py:StatementRandomness.unseed_streams_not_seeded_above @c93c685a -->
 A seed counts only for the draws below it. On the next Run All of the same

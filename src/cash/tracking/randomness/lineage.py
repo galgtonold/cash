@@ -165,6 +165,10 @@ def _note_seed(module: str, args: tuple, kwargs: dict) -> None:
 _FIRST_SEED_WATCH: dict[str, object] = {}
 #: The streams the statement watched now seeded with a value before any draw.
 _SEEDED_FIRST: set[str] = set()
+#: The streams the statement watched now set the state of itself
+#: (``setstate``, not cash's own restores): where it leaves them depends on
+#: a state it held, which it may have read from the stream as it began.
+_STATE_SET: set[str] = set()
 #: The snapshot the watch now was opened with (`watch_first_seeds`).
 _FIRST_SEED_OWNER: list = [None]
 #: The streams this watch covers: the two the notebook's draw ledger keys.
@@ -177,10 +181,20 @@ def watch_first_seeds(start: dict) -> None:
     watch still open, whose `close_seed_watch` then reports nothing."""
     _FIRST_SEED_WATCH.clear()
     _SEEDED_FIRST.clear()
+    _STATE_SET.clear()
     _FIRST_SEED_OWNER[0] = start
     for module in _FIRST_SEED_STREAMS:
         if module in start:
             _FIRST_SEED_WATCH[module] = start[module]
+
+
+def streams_set_by_the_statement(start: dict) -> frozenset[str]:
+    """The streams the statement watched with *start* set the state of
+    itself (``random.setstate``), asked before `close_seed_watch`. Nothing
+    when another watch was opened since."""
+    if _FIRST_SEED_OWNER[0] is not start:
+        return frozenset()
+    return frozenset(_STATE_SET)
 
 
 def close_seed_watch(start: dict) -> frozenset[str]:
@@ -193,6 +207,7 @@ def close_seed_watch(start: dict) -> frozenset[str]:
     _FIRST_SEED_OWNER[0] = None
     _FIRST_SEED_WATCH.clear()
     _SEEDED_FIRST.clear()
+    _STATE_SET.clear()
     return seeded
 
 
@@ -224,6 +239,11 @@ def _state_wrapper(module: str, original, *, sets: bool):
             _FIRST_SEED_WATCH.pop(module, None)
         if sets:
             _SEEDED_FIRST.discard(module)
+            if _FIRST_SEED_OWNER[0] is not None:
+                from .state import CASH_SETS_STATE
+
+                if not CASH_SETS_STATE[0]:
+                    _STATE_SET.add(module)
         return original(*args, **kwargs)
 
     state.__wrapped__ = original  # type: ignore[attr-defined]

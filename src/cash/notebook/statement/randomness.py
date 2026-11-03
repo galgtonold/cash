@@ -38,6 +38,7 @@ from cash.tracking.randomness import (
     seed_generation,
     seeding_modules_now,
     stream_position,
+    streams_set_by_the_statement,
     unseeded_streams,
     warn_observed_draw,
     warn_stale_estimator_fit,
@@ -847,6 +848,7 @@ class StatementRandomness:
         statement reports no randomness.
         """
         try:
+            set_itself = streams_set_by_the_statement(pre_rng)
             seeded_first = self.seeded_first = close_seed_watch(pre_rng)
             post = capture_rng_state()
             changed = rng_modules_changed(pre_rng, post)
@@ -856,7 +858,14 @@ class StatementRandomness:
                 self._cell_pre_lineage = self.rng_lineages()
             self._cell_changed |= changed
             self._cell_post = post
-            self._record_hidden_draws(code, self.observed_draw, seeded_first)
+            # A stream the statement set the state of itself is a read and
+            # a move of it, as a draw is, even when it ends where it began:
+            # ``s = random.getstate(); random.seed(5); ...; random.setstate(s)``
+            # leaves it where it came in, so a hit must not put it back where
+            # the stored run found it, and the draws below read the draws
+            # above it, not the statement's seed.
+            drew = self.observed_draw | {m for m in set_itself if m in pre_rng}
+            self._record_hidden_draws(code, drew, seeded_first)
             reseeded = {m for m, g in self._generation_at_start.items() if seed_generation(m) != g}
             self.reseeded_streams = frozenset(reseeded)
             if reseeded:
