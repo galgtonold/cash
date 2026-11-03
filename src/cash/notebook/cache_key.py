@@ -37,6 +37,7 @@ from .held_modules import held_data_part, held_module_parts
 from .installed_code import installed_code_parts
 from .lineage_formula import (
     bound_names,
+    forward_helper,
     function_identity,
     is_cash_instrumentation,
     is_module_like,
@@ -579,8 +580,14 @@ def called_function_dependencies(
     else:
 
         def lineage(ref: str) -> str:
-            if simulated and ref in simulated and rng_carrier_kind(user_ns.get(ref)) is not None:
-                return simulated[ref]
+            if simulated and ref in simulated:
+                if rng_carrier_kind(user_ns.get(ref)) is not None:
+                    return simulated[ref]
+                # A helper defined below the function, as the simulation
+                # bound it: the function's own lineage does not carry it
+                # (`lineage_formula.def_time_names`).
+                if forward_helper(ref, user_ns):
+                    return as_keyed(ref, simulated[ref])
             return as_keyed(ref, variable_lineage.get(ref, "ABSENT"))
 
     return sorted(f"{ref}:{'ABSENT' if ref in attribute_only else lineage(ref)}" for ref in referenced)

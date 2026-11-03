@@ -1159,8 +1159,12 @@ class MismatchClassifier:
         if trace_inputs:
             stmt_inputs = [*stmt_inputs, *sorted(set(trace_inputs) - set(stmt_inputs))]
         # A callee's globals are inputs too, once the statement runs; the ones
-        # missing from the kernel must be rebuilt first (absent_callee_globals).
-        callee_names = self.callables.absent_callee_globals(set(stmt_inputs), sim.virtual_lineage, sim.virtual_modules)
+        # missing from the kernel must be rebuilt first (absent_callee_globals),
+        # and so must the ones the simulation gave another lineage
+        # (stale_callee_globals).
+        callee_names = self.callables.absent_callee_globals(
+            set(stmt_inputs), sim.virtual_lineage, sim.virtual_modules
+        ) | self.callables.stale_callee_globals(set(stmt_inputs), sim.virtual_lineage, sim.virtual_modules)
         for inp in [*stmt_inputs, *sorted(callee_names - set(stmt_inputs))]:
             if inp in scan.resolved or inp in scan.needed:
                 continue
