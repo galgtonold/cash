@@ -3870,7 +3870,7 @@ def _variable_objects(
         and value is not None
         and type(value) not in exact
         and type(value) not in _plain_data.TREE_NODES
-        and not isinstance(value, (type, types.ModuleType, types.FunctionType, types.BuiltinFunctionType))
+        and not issubclass(type(value), (type, types.ModuleType, types.FunctionType, types.BuiltinFunctionType))
         and not is_value(value, value_types)
     }
 
