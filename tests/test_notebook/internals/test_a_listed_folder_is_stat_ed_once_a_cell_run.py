@@ -162,3 +162,29 @@ def test_the_lookup_takes_its_own_stats_when_the_run_s_are_too_old(folders, stat
 
     assert not _statement_lookup(folders)
     assert changed in stats_of
+
+
+def test_a_component_of_listed_files_does_not_size_the_run_s_stats_per_file(tmp_path, monkeypatch):
+    """Each file whose real path the run had resolved already asked whether
+    the stats handed to the component were empty, and the answer built the
+    union of every key the run had stat-ed: quadratic in the files, 30-60 s
+    before a trivial cell below 19,000 photos on Windows."""
+    folder = tmp_path / "photos"
+    folder.mkdir()
+    files = set()
+    for i in range(3 * file_dep_snapshot.LISTING_MIN_FILES):
+        p = folder / f"img{i:03d}.npy"
+        p.write_bytes(bytes([i]) * 16)
+        files.add(str(p))
+    sized: list[int] = []
+    real_len = run_memo._Identifying.__len__
+    monkeypatch.setattr(run_memo._Identifying, "__len__", lambda self: sized.append(1) or real_len(self))
+    file_dep_snapshot.begin_file_state_epoch()
+    run_memo.stats_this_run(files)  # listed
+    for f in files:  # resolved earlier in the run, as a statement's lineage does
+        file_dep_snapshot.realpath_of_read_this_run(f)
+
+    component = run_memo.file_component_this_run(files)
+
+    assert component
+    assert len(sized) <= 1

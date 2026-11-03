@@ -114,7 +114,7 @@ def compute_file_hash_component(
             # files resolved every path again per lineage.
             resolved, stat = realpath_of_read_this_run(f, lstat=lstats.get(f) if lstats else None)
             canonical_path = normalize_path(resolved)
-            if stat is None and stats:
+            if stat is None and stats is not None:
                 stat = stats.get(canonical_path)
             if stat is None:
                 stat = os.stat(canonical_path)
