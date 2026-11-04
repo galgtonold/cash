@@ -1,8 +1,10 @@
 """A ``functools.cache`` helper that reseeds ``random`` as it fills its memo
 (``random_cities`` in Norvig's TSP notebook), called by the cells below it.
 
-A statement that fills such a memo is never stored, so it runs every time;
-on a first run in order the cells below have nothing to replay. Yet before
+A statement that fills such a memo is stored with what it put into the
+memo only when it took longer than the store floor, which a quick one does
+on a loaded machine; on a first run in order the cells below have nothing
+to replay. Yet before
 each cell the upstream check found the stream's lineage moved and re-ran
 statements above: the ``def`` of the helper counted as a draw and a seed
 (its body runs when it is called, not when it is defined), the first call
@@ -88,13 +90,25 @@ def test_a_first_run_in_order_runs_each_cell_once(cash_magics, tmp_path, monkeyp
     assert {name: ns[name] for name in NAMES} == _plain(CELLS)
 
 
+def _statuses(magics) -> list[str]:
+    return [str(s["status"]) for s in magics.cash_status("dict")["last_cell"]["statements"]]
+
+
 def test_a_second_run_all_replays_nothing_either(cash_magics, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    for _ in range(2):
+    second: list[str] = []
+    for run_all in range(2):
         for cell in CELLS:
             run_cash_cell(cash_magics, cell, cells=CELLS)
+            if run_all and "bench(tsps" in cell:
+                second += _statuses(cash_magics)
     ns = cash_magics.shell.user_ns
-    assert _bench_calls() == 4
+    # Each `bench(...)` cell runs once more on the second Run All, unless it
+    # was served: whether it was stored at all hangs on how long it took
+    # against the store floor (10 ms), which a loaded machine crosses. A
+    # statement above replayed would call `bench` again on top of that.
+    assert set(second) <= {"COMPUTED", "RESTORED"}, second
+    assert _bench_calls() == 2 + second.count("COMPUTED"), second
     assert {name: ns[name] for name in NAMES} == _plain(CELLS)
 
 
