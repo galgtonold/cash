@@ -102,6 +102,8 @@ jobs:
       # 120 s on one test, and timeout-minutes ends the step (the slowest,
       # a whole macOS run, took up to 19.5 min, so every OS now runs in shards).
       # A Windows 3.14 shard reached 20 min of tests on 2026-10-29: 30 leaves room.
+      # --durations lists the slowest tests, so a shard creeping up on the
+      # limit shows which tests took the time.
       - name: Run unit tests
         timeout-minutes: 30
         run: |
@@ -111,7 +113,7 @@ jobs:
             --ignore=tests/docs \
             -m "not perf" \
             -p tools.test_selection.shard --shard=${{ matrix.shard }} \
-            -n auto --tb=short -q -rs \
+            -n auto --tb=short -q -rs --durations=40 \
             -o faulthandler_timeout=120
         # Windows defaults to pwsh, where `\` does not continue a line.
         shell: bash
