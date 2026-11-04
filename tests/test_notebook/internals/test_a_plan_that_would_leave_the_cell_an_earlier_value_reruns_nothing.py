@@ -13,6 +13,7 @@ schedules, and switching off the completion that would bring it back.
 
 from __future__ import annotations
 
+import ast
 import warnings
 from unittest.mock import patch
 
@@ -57,7 +58,10 @@ def test_nothing_reruns_over_the_later_y(cash_magics, mock_shell):
     assert isinstance(result, RunInstead) and result.source == EDITED[-1], result
     assert mock_shell.user_ns["Y"] == [7], mock_shell.user_ns["Y"]
     assert mock_shell.user_ns["X"] == [1], "the repair was not put back"
-    assert "X, Y = ([base]" in str(told[0]) and "Y = [7]" in str(told[0]) and "after it" in str(told[0]), told[0]
+    # The statement as cash keys it, ``ast.unparse``'s text: Python 3.10
+    # writes the targets in parentheses, ``(X, Y) = ([base], [10, 20])``.
+    rerun = ast.unparse(ast.parse(CELLS[1]))
+    assert f"`{rerun}`" in str(told[0]) and "`Y = [7]`" in str(told[0]) and "after it" in str(told[0]), told[0]
 
 
 def test_with_the_completion_the_cell_reads_y_as_it_is_below(cash_magics, mock_shell):
