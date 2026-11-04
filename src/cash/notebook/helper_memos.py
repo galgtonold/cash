@@ -52,6 +52,7 @@ __all__ = [
     "FILLED",
     "MAX_KEYED",
     "Clears",
+    "bodies_run",
     "carries_changes",
     "change_answers",
     "change_holders",
@@ -329,6 +330,32 @@ def misses_before(before: list[tuple[list[str], Any, int, int, int, Any]] | None
     """``id(memo) -> its miss count`` in what `watched` saw before a run:
     a memo's count unmoved since, the run did not fill it."""
     return {id(memo): misses for _, memo, _, misses, *_ in before or ()}
+
+
+def bodies_run(
+    before: list[tuple[list[str], Any, int, int, int, Any]] | None, cleared: Clears | None = None
+) -> dict[types.CodeType, tuple[dict, str]]:
+    """After a statement ran: the code of the function under each memo of
+    *before* (`watched`) whose body ran in it, as a trace records what ran
+    (code -> its globals and module), for `unseen_writers` where there is no
+    trace (Python 3.10 and 3.11). A body ran when the memo's miss count
+    moved, or may have when the run cleared the memo (*cleared*), which
+    resets the count. A memo whose counters raise is taken to have run."""
+    fired = cleared.fired if cleared is not None else ()
+    out: dict[types.CodeType, tuple[dict, str]] = {}
+    for _, memo, _, misses, *_ in before or ():
+        try:
+            ran = memo.cache_info().misses != misses or id(memo) in fired
+        except Exception:  # noqa: BLE001 - a wrapper whose counters raise
+            ran = True
+        if not ran:
+            continue
+        fn = attribute_or(memo, "__wrapped__", None)
+        code = attribute_or(fn, "__code__", None)
+        globals_ = attribute_or(fn, "__globals__", None)
+        if isinstance(code, types.CodeType) and isinstance(globals_, dict):
+            out[code] = (globals_, str(globals_.get("__name__", "")))
+    return out
 
 
 #: Pairs of a memo kept to tell a clear cash saw from one it did not

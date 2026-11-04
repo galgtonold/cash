@@ -1560,22 +1560,39 @@ class StatementProcessor:
         run.value_varies = True
         run.metrics["uncacheable_reasons"].append(run.unless_it_draws)
 
-    def _refuse_unseen_writes(self, run: StatementRun, execution: StatementExecution) -> None:
+    def _refuse_unseen_writes(
+        self,
+        run: StatementRun,
+        execution: StatementExecution,
+        memos_before: list | None = None,
+        memos_cleared: helper_memos.Clears | None = None,
+    ) -> None:
         """Refuse *run* when a function of the user's that ran in it changes
         something its outputs leave out (`unseen_writes`): a served entry
-        would not change it. Said once for each function."""
+        would not change it. Said once for each function. *memos_before*
+        and *memos_cleared* (`helper_memos.watched`, `watching_clears`): the
+        memos it could call, whose bodies that ran are read where no trace
+        recorded them."""
         unit = run.trace_unit
         if run.skip_cache or not execution.result.success:
             return
         if attribute_or(run.annotation, "assume_safe", False):
             return
         ns = self.shell.user_ns
+        ran = unit is not None
         if unit is None:
-            # No record of what ran: what the statement's objects could
-            # run instead (`writers_without_a_trace`).
+            # No record of what ran. The body of a memo whose miss count
+            # moved did run: read as the trace reads it, as a served entry
+            # would put the memo's answer back without running it
+            # (``next(_ctr)`` inside it, the counter left behind). Else what
+            # the statement's objects could run (`writers_without_a_trace`).
             too_big: set[str] = set()
             try:
-                found = writers_without_a_trace(run.code, ns, run.outputs, too_big)
+                bodies = helper_memos.bodies_run(memos_before, memos_cleared)
+                found = unseen_writers(bodies, (), run.outputs, ns, run.code) if bodies else []
+                ran = bool(found)
+                if not found:
+                    found = writers_without_a_trace(run.code, ns, run.outputs, too_big)
             except Exception:
                 logger.debug("unseen writer walk failed", exc_info=True)
                 found = [("?", (UNREADABLE,))]
@@ -1594,7 +1611,7 @@ class StatementProcessor:
         elif targets == (UNREADABLE,):
             what = UNREADABLE_REASON
         else:
-            if unit is not None:
+            if ran:
                 reason = UNSEEN_WRITES_REASON
             else:
                 reason = COULD_RUN_TOO_BIG_REASON if fn in too_big else COULD_RUN_REASON
@@ -2518,7 +2535,7 @@ class StatementProcessor:
             unshown_output(e, execution.captured, run.silent, run.stream_output)
             raise
         self._refuse_if_it_drew(run, execution)
-        self._refuse_unseen_writes(run, execution)
+        self._refuse_unseen_writes(run, execution, memos_before, memos_cleared)
         if (
             figures_before is not None
             and not run.skip_cache

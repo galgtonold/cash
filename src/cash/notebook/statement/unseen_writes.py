@@ -121,7 +121,7 @@ def unseen_writers(
     inside = {c for code in codes for c in code.co_consts if isinstance(c, types.CodeType)}
     found: list[tuple[str, tuple[str, ...]]] = []
     for code, (globals_, _module) in list(codes.items()):
-        if code in own or code in inside or code.co_qualname == "<module>" or library_made(code, globals_):
+        if code in own or code in inside or code.co_name == "<module>" or library_made(code, globals_):
             continue
         writes = own_writes(code) | set(_method_writes(code, globals_))
         if not writes:
@@ -158,7 +158,9 @@ def _held_as(code: types.CodeType, spaces: Iterable[Mapping[str, Any]]) -> str:
                     member = member.__func__
                 if type(member) is types.FunctionType and member.__code__ is code:
                     return f"{_CLASS_QUALNAME(cls)}.{attr}"
-    return code.co_qualname
+    # No ``co_qualname`` before 3.11, where a memo's body is read without a
+    # trace (`helper_memos.bodies_run`): its own name then.
+    return attribute_or(code, "co_qualname", code.co_name)
 
 
 def live_writers(
