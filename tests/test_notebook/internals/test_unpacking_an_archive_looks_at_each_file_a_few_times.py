@@ -7,9 +7,10 @@ statement unpacking 100,000 files paid ~12 looks per file where plain Python
 pays one: the per-run memo of real paths filled up after ~20,000 files and
 every later file had its whole path resolved, a component at a time, three
 times; each file opened to write was stat-ed to rule out a folder, which
-``open()`` cannot write; its stat was taken again after an ``lstat`` that
-had already found it; and every written path was ``lstat``-ed to learn
-whether *any* was still there. On Windows each look opens the file.
+only ``O_TMPFILE`` opens to write and Windows has none; its stat was taken
+again after an ``lstat`` that had already found it; and every written path
+was ``lstat``-ed to learn whether *any* was still there. On Windows each
+look opens the file.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ import tarfile
 
 import pytest
 
+from cash.notebook import write_observer
 from cash.tracking import file_dep_snapshot
 from tests._cell_driver import run_cash_cell
 
@@ -45,6 +47,9 @@ def archive(tmp_path, monkeypatch):
 def test_each_file_unpacked_is_looked_at_a_few_times(cash_magics, archive, tmp_path, monkeypatch):
     # Fills the memo of real paths many times over, as 100,000 files do.
     monkeypatch.setattr(file_dep_snapshot, "_REALPATH_KEPT", 300, raising=False)
+    # As on Windows, where each look opens the file: no ``O_TMPFILE``, so no
+    # file opened to write can be a folder.
+    monkeypatch.setattr(write_observer, "_O_TMPFILE", 0, raising=False)
     run_cash_cell(cash_magics, "import tarfile")
     looks: collections.Counter = collections.Counter()
     root = str(tmp_path / "set")

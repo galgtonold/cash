@@ -208,11 +208,16 @@ def _on_open(args: tuple) -> None:
         written = isinstance(flags, int) and bool(flags & _WRITE_FLAGS)
         # ``O_APPEND`` from the user's own code is an append like ``open(p, "a")``.
         appends = written and bool(flags & os.O_APPEND) and not flags & os.O_TRUNC and not _appended_by_user_code()
-    # Only ``os.open`` can open a folder to write (``O_TMPFILE``): ``open()``
-    # of one fails, so its path is not stat-ed, a stat per file a statement
-    # unpacking an archive writes.
-    if written and (isinstance(mode, str) or not _names_a_folder(path)):
+    # A folder is opened to write only with ``O_TMPFILE`` (``TemporaryFile``
+    # opens it through ``open()`` with an opener): where there is no such
+    # flag, the path is not stat-ed, a stat per file a statement unpacking
+    # an archive writes, and on Windows each opens the file.
+    if written and not (_O_TMPFILE and _names_a_folder(path)):
         _record(sinks, path, appends)
+
+
+#: ``os.O_TMPFILE``, 0 where there is none (Windows, macOS).
+_O_TMPFILE = getattr(os, "O_TMPFILE", 0)
 
 
 def _on_move(args: tuple) -> None:
