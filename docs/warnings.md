@@ -2370,15 +2370,17 @@ purpose and no cell reads it any more.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/notebook/upstream/replay.py:StatementReplay._failure @b2ec7f5b, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._unclosed_read @9ffb9999, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._overwritten_read @9c2c1ae1, cash/notebook/upstream/checker.py:UpstreamChecker._put_back @d0bf8f4e, cash/notebook/ipython/upstream_phase.py:UpstreamResolution._step_aside @fbf69e5b -->
+<!-- claim: cash/notebook/upstream/replay.py:StatementReplay._failure @b2ec7f5b, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._unclosed_read @9ffb9999, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._overwritten_read @9c2c1ae1, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._reopen_drawn_inputs @9261f967, cash/notebook/upstream/checker.py:UpstreamChecker._put_back @d0bf8f4e, cash/notebook/ipython/upstream_phase.py:UpstreamResolution._step_aside @fbf69e5b -->
 **What happened.** To give the cell what a run from the top gives, cash re-ran
 statements above it, and one of them failed because cash did not re-run first
 a statement above it that sets what it reads. Or, found before anything ran,
 one of them would have read a name as a statement further down leaves it,
 not as a run from the top has it there, or would have left the cell a name
-that a statement further down writes anew, so cash re-ran nothing. The message
-names both statements. Cash put back every name the repair had rebound and
-ran the cell as written, on the values in memory, uncached.
+that a statement further down writes anew, or would have read an open file,
+a generator or an iterator that had already been read and that no statement
+above makes again, so cash re-ran nothing. The message names both
+statements. Cash put back every name the repair had rebound and ran the cell
+as written, on the values in memory, uncached.
 
 **Why it matters.** The cell's result is what plain Jupyter gives, which can
 differ from a run from the top when a cell above was edited.

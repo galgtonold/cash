@@ -19,6 +19,7 @@ from ...analysis.mutations import consumed_input_names
 from .._trace import trace_event
 from ..cache_key import statement_source_hash
 from ..call_key import TooMuchToLookThrough, holds_a_closure_with_state
+from ..consumables import is_consumable_unrestorable, is_write_stream
 from ..stateful_carriers import carrier_kind_from_producer, stateful_carrier_kind
 from ..statement.mutation_routing import functions_in
 from ._types import CellCheck, ClassificationResult, ReexecutionPlan, SimulationResult, latest_producer
@@ -241,6 +242,10 @@ class ReexecutionPlanner:
                 stmts_to_run_indices,
                 simulation_trace,
             )
+            stmts_to_run_indices = self._reopen_drawn_inputs(
+                stmts_to_run_indices,
+                simulation_trace,
+            )
             if len(stmts_to_run_indices) == before:
                 break
 
@@ -448,6 +453,83 @@ class ReexecutionPlanner:
             cell_no=cell_no,
             planned=True,
         )
+
+    def _reopen_drawn_inputs(self, stmts_to_run_indices: list[int], simulation_trace: list) -> list[int]:
+        """Schedule the statement that made each open file, generator or
+        iterator a scheduled statement draws from, and every statement
+        between them that draws from it too.
+
+        Such a value moves as it is read and cannot be put back. The kernel's
+        one has already been read by the statement's earlier run, so the
+        statement run again alone reads what is left: ``lines =
+        f.readlines()`` re-run without ``f = open(path)`` read no lines, and
+        every cell below ran on an empty list. A run from the top opens the
+        file again first, so the plan does too.
+
+        A value no statement above makes afresh cannot be had as a run from
+        the top has it: the plan is refused (:class:`UpstreamRepairGap`) and
+        the cell runs as written. A stream open for writing is left alone:
+        making it again would empty its file.
+        """
+        if not stmts_to_run_indices:
+            return stmts_to_run_indices
+        user_ns = self._user_ns()
+        scheduled = set(stmts_to_run_indices)
+        for i in sorted(stmts_to_run_indices):
+            entry = simulation_trace[i]
+            inputs = set(entry.inputs or ())
+            if not inputs:
+                continue
+            drawn = {name for name in inputs if _drawn_in_place(user_ns.get(name, None))}
+            if not drawn:
+                continue
+            try:
+                drawn &= consumed_input_names(parse_cached(textwrap.dedent(entry.stmt_code)))
+            except (SyntaxError, ValueError, TypeError):
+                continue
+            for name in sorted(drawn):
+                if any(name in (simulation_trace[j].outputs or ()) for j in scheduled if j < i):
+                    continue
+                producer = next(
+                    (
+                        j
+                        for j in range(i - 1, -1, -1)
+                        if name in (simulation_trace[j].outputs or ())
+                        and name not in (simulation_trace[j].inputs or ())
+                    ),
+                    None,
+                )
+                if producer is None:
+                    raise UpstreamRepairGap(
+                        f"Cash would re-run {entry.stmt_code.splitlines()[0][:60]!r} on a {name!r} already read",
+                        stmt_code=entry.stmt_code,
+                        error_text=(
+                            f"it reads {name!r}, which moves as it is read and which no statement above makes again"
+                        ),
+                        producer=name,
+                        cell_no=None,
+                        planned=True,
+                    )
+                added = [producer]
+                for j in range(producer + 1, i):
+                    if j in scheduled or name not in (simulation_trace[j].inputs or ()):
+                        continue
+                    try:
+                        between = consumed_input_names(parse_cached(textwrap.dedent(simulation_trace[j].stmt_code)))
+                    except (SyntaxError, ValueError, TypeError):
+                        between = frozenset({name})
+                    if name in between:
+                        added.append(j)
+                new = [j for j in added if j not in scheduled]
+                if new:
+                    logger.debug(
+                        "[UPSTREAM] [%s] draws from %r, already read: re-running %s with it", i, name, sorted(new)
+                    )
+                    trace_event("reopen_drawn_input", stmt=entry.stmt_code[:80], name=name, added=sorted(new))
+                    scheduled.update(new)
+        if len(scheduled) == len(stmts_to_run_indices):
+            return stmts_to_run_indices
+        return sorted(scheduled)
 
     def _schedule_consumable_producer_touches(
         self,
@@ -1249,6 +1331,18 @@ def _rebuilds_of_what_it_changes(simulation_trace: list, index: int, consumables
             return None
         rebuilds.update(writers)
     return rebuilds
+
+
+def _drawn_in_place(value: Any) -> bool:
+    """Whether *value* moves as it is read and cannot be put back (an open
+    file read from, a generator, an iterator): a statement reading it again
+    reads only what is left."""
+    if value is None:
+        return False
+    try:
+        return is_consumable_unrestorable(value) and not is_write_stream(value)
+    except Exception:  # noqa: BLE001 - a user object's lookups may raise
+        return False
 
 
 def _holds_it(names: Iterable[str], user_ns: Mapping[str, Any], fn: Any) -> bool:
