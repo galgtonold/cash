@@ -58,23 +58,29 @@ REPORT = ENTRY_BYTES_REPORT
 
 
 def test_a_big_value_that_rebuilds_quickly_does_not_reach_disk(nb_runner):
-    """~96 MB built in about 0.17 s: over 500 MiB per compute-second.
+    """~96 MB built in about 0.4 s: over 200 MiB per compute-second.
 
     The reported shape -- 48 MiB entries whose recorded compute was 0.00 s, 72 of
     them, 3.5 GB. Nothing this cheap is worth that much disk.
 
-    The sleep keeps the compute above the 0.1 s persistence floor, and the
-    refusal must name the bytes ceiling, so nothing else can be what keeps it
-    off disk. The value is twice the reported size so the ceiling (128 MiB per
-    compute-second) is crossed only past ~0.72 s of recorded compute, about
-    four times the ~0.17 s it takes. At 48 MB it was crossed at ~0.36 s, which
-    a loaded machine can reach, and then the value is written for a
-    legitimate reason.
+    The refusal must name the bytes ceiling, so nothing else can be what keeps
+    it off disk, and two other rules refuse this value first when its recorded
+    compute is too SMALL: the 0.1 s persistence floor, and the write rule
+    (`pays_for_its_write`): one re-run must save more than the write costs.
+    Its write is priced by the cost model (the statement refers to the call
+    entry holding the array), ~0.145 s, and its restore ~0.072 s, so below
+    ~0.22 s of recorded compute it is refused for the write, with no
+    CACHE-NOT-WORTH-BYTES. The ceiling (128 MiB per compute-second) is crossed
+    only past ~0.72 s. The sleep puts the compute near the middle of that
+    window: at 0.15 s it recorded 0.18-0.29 s, either side of the write
+    threshold, and on a warm, loaded test kernel failed one run in four.
+    A machine loaded enough to stretch it past ~0.72 s writes the value for a
+    legitimate reason, which the test accepts below.
     """
     nb_runner.create_notebook(
         [
             "import numpy as np\nimport time",
-            "def make_frame():\n    time.sleep(0.15)\n    return np.arange(12_000_000, dtype='float64')",
+            "def make_frame():\n    time.sleep(0.33)\n    return np.arange(12_000_000, dtype='float64')",
             "big = make_frame()\nprint(f'shape={big.shape[0]}')",
             REPORT,
         ]
