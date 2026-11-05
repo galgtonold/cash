@@ -8,7 +8,7 @@ from tests._miss_reason_audit import audit
 
 
 def _row(code: str = "y = f(x)", status=CacheStatus.COMPUTED, **extra) -> dict:
-    return {"code": code, "status": status, **extra}
+    return {"code": code, "status": status, "uncacheable_reasons": [], **extra}
 
 
 def test_a_first_run_without_a_reason_is_not_flagged():
@@ -56,3 +56,11 @@ def test_the_loop_markers_in_a_statements_text_are_ignored():
     seen: set[str] = set()
     audit([_row(mark_iteration("t += v", "aaa"), loop_vars={"v": 1})], seen)
     assert len(audit([_row(mark_iteration("t += v", "bbb"), loop_vars={"v": 1})], seen)) == 1
+
+
+def test_a_row_the_processor_did_not_make_is_left_alone():
+    """A session-stats test hands record_cell rows of its own."""
+    seen: set[str] = set()
+    made = {"code": "m = fit(x)", "status": CacheStatus.COMPUTED}
+    audit([made], seen)
+    assert audit([made], seen) == []

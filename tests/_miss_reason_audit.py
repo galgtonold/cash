@@ -57,7 +57,10 @@ def audit(metrics: Iterable[Mapping[str, Any]], seen: set[str]) -> list[dict[str
     *seen* produced without a reason; every row's statement joins *seen*."""
     found = []
     for m in metrics:
-        if not isinstance(m, Mapping):
+        # Only rows the statement processor made: it always starts the
+        # list of uncacheable reasons. A test that hands the session stats
+        # rows of its own leaves it out.
+        if not isinstance(m, Mapping) or "uncacheable_reasons" not in m:
             continue
         ident = _identity(m)
         repeat = ident in seen
