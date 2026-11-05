@@ -76,7 +76,7 @@ takes a backend instance or a backend type name (`backend="sqlite"`). See the
 
 ## Where results are stored
 
-<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @e3aa6741, cash/backends/tiered_backend.py:TieredBackend.set @1cf8c4c4 -->
+<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @f269c827, cash/backends/tiered_backend.py:TieredBackend.set @d0ef54da -->
 **Every result is written to disk.** However cheap the call was, a decorated
 result goes to the RAM tier and to the disk tier, so the next process finds it.
 A big result, of which the RAM tier would have to copy 64 MB or more, goes to
