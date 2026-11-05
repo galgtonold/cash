@@ -113,7 +113,16 @@ class TestSkippedTimingAfterRestart:
                 f"df = pd.read_csv('{csv_path_str}')",
                 "df = df.sort_values(by=['Ticker', 'Date'])",
                 "df['Date'] = pd.to_datetime(df['Date'])",
-                "import time; time.sleep(1.5)\ndf['SMA'] = df.groupby('Ticker')['Close'].transform(lambda x: x.rolling(20).mean())",
+                # The sleep is in the statement that binds the final ``df``, so
+                # its entry is what a restart restores: cash stores a notebook
+                # statement by its OWN compute time, and a separate
+                # ``time.sleep(1.5)`` line left the SMA transform at 5-15 ms,
+                # around the 10 ms store floor. In a warm test kernel (pandas
+                # already exercised by an earlier test) it measured ~5 ms, got
+                # no entry, and the restart recomputed it from the to_datetime
+                # entry, so nothing upstream was skipped.
+                "import time\n"
+                "df['SMA'] = df.groupby('Ticker')['Close'].transform(lambda x: x.rolling(20).mean()) + (time.sleep(1.5) or 0)",
                 "print(len(df))",
             ]
         )
