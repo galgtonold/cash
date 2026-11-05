@@ -101,11 +101,12 @@ jobs:
       # faulthandler_timeout dumps every thread's stack into the log after
       # 120 s on one test, and timeout-minutes ends the step (the slowest,
       # a whole macOS run, took up to 19.5 min, so every OS now runs in shards).
-      # A Windows 3.14 shard reached 20 min of tests on 2026-10-29: 30 leaves room.
+      # A Windows 3.14 shard reached 20 min of tests on 2026-10-29 and 28-30 min
+      # by 2026-11-05 (every test uniformly slower than on macOS): 40 leaves room.
       # --durations lists the slowest tests, so a shard creeping up on the
       # limit shows which tests took the time.
       - name: Run unit tests
-        timeout-minutes: 30
+        timeout-minutes: 40
         run: |
           python -m pytest tests/ \
             --ignore=tests/test_notebook_integration \
