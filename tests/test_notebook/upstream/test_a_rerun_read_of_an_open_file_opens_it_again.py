@@ -25,7 +25,7 @@ COUNT = "n = len(lines)"
 @pytest.fixture
 def log_file(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "log.txt").write_text("".join(f"@User{i}: Action_1 -> Action_2\n" for i in range(50)))
+    (tmp_path / "log.txt").write_text("".join(f"@User{i}: Action_1 -> Action_2\n" for i in range(50)), encoding="utf-8")
 
 
 def test_a_run_all_reads_every_line(cash_magics, log_file):
