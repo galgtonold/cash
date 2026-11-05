@@ -22,6 +22,7 @@ from ..cache_key import (
 from ..lineage_formula import bound_names, recorded_reads_lineage_component
 from ._types import cell_holds_statement, normalize_stmt
 from .statement_lineage import unbound_builtin
+from .virtual_lineage import _trace_codes
 
 if TYPE_CHECKING:
     from ..tracking_state import TrackingState
@@ -83,8 +84,10 @@ class UnsavedEdits:
         # pipeline and the grid search built on it, which then ran again.
         vars_tainted: set[str] = set()
         propagation_sources = set(directly_mismatched_vars)
-        for entry in simulation_trace:
-            if entry.inputs & propagation_sources:
+        for at, entry in enumerate(simulation_trace):
+            if entry.inputs & propagation_sources and not self._built_on_this_version(
+                at, simulation_trace, entry.inputs & propagation_sources, directly_mismatched_vars
+            ):
                 vars_tainted.update(entry.outputs - directly_mismatched_vars)
                 propagation_sources.update(entry.outputs)
             else:
@@ -100,6 +103,56 @@ class UnsavedEdits:
                 vars_tainted,
             )
         return vars_tainted
+
+    def _built_on_this_version(
+        self, at: int, simulation_trace: list, read: set[str], directly_mismatched: set[str]
+    ) -> bool:
+        """Whether what memory holds of the outputs of statement *at* was
+        built on the version of each name in *read* that a run from the top
+        gives it.
+
+        A name is directly mismatched by its LAST version: the kernel holds
+        another one than the last statement above makes. A statement before
+        that one reads an earlier version, and memory can hold what it built
+        from exactly that version. ``lines = f.readlines()``, ``lines =
+        split(lines)`` and the frame built from ``lines``, then the read again
+        in a cell below that has not run since a restart: the kernel's
+        ``lines`` is the split one and the simulation's the read one, so
+        every value the frame fed was taken as stale and built again before
+        each cell that read one, on every run, although a run from the top
+        builds them from the same lines.
+
+        Only a name mismatched directly is judged so: one tainted through it
+        has a lineage that does not show it. An output memory last took from
+        a statement further down that binds it anew without reading it is
+        that statement's to answer for.
+        """
+        if not read <= directly_mismatched:
+            return False
+        entry = simulation_trace[at]
+        outputs = entry.outputs - directly_mismatched
+        if not outputs:
+            return False
+        state = self.tracking_state
+        own = set(_trace_codes(entry.stmt_code))
+        for out in outputs:
+            made_by = state.executed_cell_codes.get(out)
+            if made_by is None:
+                return False
+            made_by = strip_markers(made_by).strip()
+            if made_by not in own:
+                if not any(
+                    made_by in _trace_codes(later.stmt_code) and out not in later.inputs
+                    for later in simulation_trace[at + 1 :]
+                ):
+                    return False
+                continue
+            built_on = state.executed_input_lineages.get(out) or {}
+            for name in read:
+                version = entry.input_hashes.get(name)
+                if version is None or built_on.get(name) != version:
+                    return False
+        return True
 
     def _find_directly_mismatched_vars(
         self,
