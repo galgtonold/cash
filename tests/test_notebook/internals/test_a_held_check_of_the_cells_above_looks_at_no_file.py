@@ -18,6 +18,7 @@ import pytest
 
 from cash.notebook import run_memo
 from cash.tracking import file_dep_snapshot, file_watch
+from cash.tracking.file_dep_snapshot import LISTING_MIN_FILES
 from cash.tracking.read_classification import stat_key
 
 pytestmark = pytest.mark.skipif(sys.platform == "darwin", reason="folders are not watched on macOS")
@@ -94,6 +95,40 @@ def test_a_later_check_looks_at_no_file(recorded, looks):
     assert _ask(recorded)
 
     # Each watched folder's own stat before the run (`FileWatch.drain`), no file.
+    assert looks["stat"] <= FOLDERS, looks
+    assert looks["lstat"] == 0, looks
+    assert looks["current"] == 0, looks
+
+
+def _listed(paths) -> dict:
+    """`file_dep_snapshot.stats_from_listings` as on Windows, where a
+    crowded folder's files are stat-ed by listing it: a relative path's
+    folder is listed by its relative spelling."""
+    by_dir: dict = {}
+    for p in paths:
+        folder, name = os.path.split(p)
+        by_dir.setdefault(folder, {})[name] = p
+    found = {}
+    for folder, wanted in by_dir.items():
+        if len(wanted) >= LISTING_MIN_FILES:
+            with os.scandir(folder or ".") as entries:
+                for entry in entries:
+                    if entry.name in wanted:
+                        found[wanted[entry.name]] = entry.stat()
+    return found
+
+
+def test_a_later_check_looks_at_no_listed_file(recorded, looks, monkeypatch):
+    """Files stat-ed by a listing are held too, a relative path's by its
+    absolute spelling: kept by the relative one, which names no watched
+    folder, every check before a cell on Windows listed them again."""
+    assert len(recorded) // (2 * FOLDERS) >= LISTING_MIN_FILES, "no folder is listed: the case is not reached"
+    monkeypatch.setattr(run_memo, "stats_from_listings", _listed)
+    assert _ask(recorded) and _ask(recorded)
+    looks.start()
+
+    assert _ask(recorded)
+
     assert looks["stat"] <= FOLDERS, looks
     assert looks["lstat"] == 0, looks
     assert looks["current"] == 0, looks

@@ -488,8 +488,17 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
         todo = rest
     if todo:
         at = time.monotonic()
+        # The watch keeps a listed stat of a relative path by its absolute
+        # spelling, as `_as_spelled_absolute` keeps a stat of one: kept by
+        # the relative spelling, which names no folder, it was never kept,
+        # and every check before a cell listed those files again.
+        watched_as = (
+            {p: _watched_spelling(p) for p in todo} if watch is not None and len(todo) >= LISTING_MIN_FILES else None
+        )
         before = (
-            {p: watch.before_stat(p) for p in todo} if watch is not None and len(todo) >= LISTING_MIN_FILES else None
+            {p: watch.before_stat(twin) for p, twin in watched_as.items() if twin is not None}
+            if watched_as is not None
+            else None
         )
         listed = stats_from_listings(todo) if len(todo) >= LISTING_MIN_FILES else None
         if listed:
@@ -502,8 +511,8 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
                     stats[p] = st
                     dates[p] = at
                     from_listing.add(p)
-                    if before is not None:
-                        watch.record(before.get(p), p, st, listed=True)
+                    if before is not None and p in before:
+                        watch.record(before[p], watched_as[p], st, listed=True)
         stat = os.stat
         if attribute_or(stat, "_is_file_tracker_patch", False):
             stat = stat._original_func  # as `own_stat`, once for the lot
@@ -558,6 +567,20 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
             else:
                 elsewhere[p] = (resolved, st)
     return RunStats(paths, stats, elsewhere)
+
+
+def _watched_spelling(path: str) -> str | None:
+    """The spelling the folder watch keeps *path*'s stat by: itself when
+    absolute, a relative one by its absolute spelling (`_as_spelled_absolute`'s
+    rules: not through ``..``, not naming a drive), and None for a remote URL
+    or a path with no such spelling."""
+    if os.path.isabs(path):
+        return path
+    if "://" in path and is_remote_url(path):
+        return None
+    if os.path.splitdrive(path)[0]:
+        return None
+    return _fds.spelled_absolute(path)
 
 
 #: ``FILE_ATTRIBUTE_REPARSE_POINT``: a symlink or junction on Windows.
