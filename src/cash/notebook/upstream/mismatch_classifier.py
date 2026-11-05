@@ -40,7 +40,7 @@ from .library_rules import self_call_resets_lineage
 from .loop_rules import LoopRules
 from .simulated_callables import SimulatedCallables
 from .unsaved_edits import UnsavedEdits
-from .virtual_lineage import VirtualLineage, copy_edges
+from .virtual_lineage import VirtualLineage, _trace_codes, copy_edges
 
 __all__ = ["MismatchClassifier"]
 
@@ -403,6 +403,14 @@ class MismatchClassifier:
                         var_name,
                         exec_code,
                     )
+                elif _rebound_below(var_name, normalized_exec_code, sim.trace):
+                    # Made by a statement above that a later one above rebinds
+                    # anew, and that one has not run since: a run from the top
+                    # hands the cell the later binding. A frame built in a
+                    # loop, then `df = pd.DataFrame({'time': ...})` in a cell
+                    # below it, then the loop cell run again: the cell under
+                    # both read the loop's frame.
+                    overwritten_downstream = True
 
             if not overwritten_downstream:
                 input_lineages_for_var = loop_var_input_lineages.get(var_name, {})
@@ -1443,3 +1451,17 @@ def _bound_in_cells(check: CellCheck | None) -> set[str]:
         except (SyntaxError, ValueError):
             continue
     return bound
+
+
+def _rebound_below(name: str, made_by: str, trace: list) -> bool:
+    """Whether the last statement of *trace* that binds *name* without
+    reading it comes after every statement whose code is *made_by*, the
+    statement memory's *name* came from."""
+    for entry in reversed(trace):
+        if name not in entry.outputs:
+            continue
+        if made_by in _trace_codes(entry.stmt_code):
+            return False
+        if name not in entry.inputs:
+            return True
+    return False
