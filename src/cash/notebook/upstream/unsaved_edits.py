@@ -20,7 +20,7 @@ from ..cache_key import (
     statement_source_hash,
 )
 from ..lineage_formula import bound_names, recorded_reads_lineage_component
-from ._types import cell_holds_statement, normalize_stmt
+from ._types import TraceEntry, cell_holds_statement, normalize_stmt
 from .statement_lineage import unbound_builtin
 from .virtual_lineage import _trace_codes
 
@@ -138,9 +138,12 @@ class UnsavedEdits:
         Only a name mismatched directly, and only when the kernel holds a
         version a statement above makes (*behind*), is judged so: after an
         unsaved edit the kernel's version is the one the cells below must
-        see, and one tainted through it has a lineage that does not show it. An output memory last took from
-        a statement further down that binds it anew without reading it is
-        that statement's to answer for.
+        see, and one tainted through it has a lineage that does not show it.
+
+        An output memory last took from a statement further down is that
+        statement's to answer for: one that binds it anew, or one that read
+        it, and those names, at the versions the cells above give it there
+        (``parsed = sorted(parsed)`` below ``parsed = parse(lines)``).
         """
         if not read <= behind:
             return False
@@ -155,18 +158,17 @@ class UnsavedEdits:
             if made_by is None:
                 return False
             made_by = strip_markers(made_by).strip()
-            if made_by not in own:
-                if not any(
-                    made_by in _trace_codes(later.stmt_code) and out not in later.inputs
-                    for later in simulation_trace[at + 1 :]
-                ):
+            built_on = state.executed_input_lineages.get(out) or {}
+            if made_by in own:
+                if not _read_as_above(built_on, entry, read):
                     return False
                 continue
-            built_on = state.executed_input_lineages.get(out) or {}
-            for name in read:
-                version = entry.input_hashes.get(name)
-                if version is None or built_on.get(name) != version:
-                    return False
+            if not any(
+                made_by in _trace_codes(later.stmt_code)
+                and (out not in later.inputs or _read_as_above(built_on, later, {out} | (read & later.inputs)))
+                for later in simulation_trace[at + 1 :]
+            ):
+                return False
         return True
 
     def _find_directly_mismatched_vars(
@@ -389,3 +391,13 @@ class UnsavedEdits:
             except (SyntaxError, ValueError):
                 logger.debug("Failed to parse notebook cell for unsaved extension check")
         return all_notebook_stmts
+
+
+def _read_as_above(built_on: dict[str, str], entry: TraceEntry, names: set[str]) -> bool:
+    """Whether a value built on the input versions *built_on* read each of
+    *names* at the version the simulation gives *entry*."""
+    for name in names:
+        version = entry.input_hashes.get(name)
+        if version is None or built_on.get(name) != version:
+            return False
+    return True

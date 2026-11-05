@@ -44,8 +44,10 @@ PARSE = (
     "parsed = []\n"
     "for line in lines:\n"
     "    name, rest = line.split(':')\n"
-    "    parsed.append((name, [(a.split('=')[0], int(a.split('=')[1])) for a in rest.split('|')]))"
+    "    parsed.append((name, [(a.split('=')[0], int(a.split('=')[1])) for a in rest.split('|')]))\n"
+    "parsed = list(filter(lambda x: len(x[1]) > 0, parsed))"
 )
+SORT = "parsed = sorted(parsed, key=lambda x: x[1][0][1])"
 FRAME = (
     "import pandas as pd\n\n"
     "session_num = dict()\n"
@@ -75,8 +77,8 @@ DELTAS = (
 LEN = "print('LEN', len(deltas))"
 QUANTILE = "import numpy as np\n\nprint('Q', np.quantile(deltas, 0.95))"
 
-CELLS = [SETUP, WRITE_LOG, READ, SPLIT, PARSE, FRAME, READ_AGAIN, DELTAS, LEN, QUANTILE]
-DELTAS_CELL, LEN_CELL, QUANTILE_CELL = 8, 9, 10
+CELLS = [SETUP, WRITE_LOG, READ, SPLIT, PARSE, SORT, FRAME, READ_AGAIN, DELTAS, LEN, QUANTILE]
+DELTAS_CELL, LEN_CELL, QUANTILE_CELL = 9, 10, 11
 
 
 def _run_all_plain(cells, tmp_path):
@@ -110,7 +112,7 @@ def _after_a_restart_without_the_read_again(nb_runner):
     nb_runner.start_kernel()
     nb_runner.run_cells(list(range(2, len(CELLS) + 1)))
     nb_runner.restart()
-    nb_runner.run_cells([1, 2, 3, 4, 5, 6, DELTAS_CELL])
+    nb_runner.run_cells([1, 2, 3, 4, 5, 6, 7, DELTAS_CELL])
 
 
 def test_the_cells_below_the_loop_do_not_run_it_again(nb_runner, tmp_path):

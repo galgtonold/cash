@@ -123,3 +123,19 @@ def test_after_an_unsaved_edit_what_was_built_before_it_is_tainted():
     state = _memory()
     state.lineage.record("lines", "split-as-edited")
     assert _tainted(state) >= {"lines2", "parsed", "df"}
+
+
+def test_an_output_a_statement_below_changed_from_the_version_above_is_not_tainted():
+    # ``parsed = sorted(parsed)`` below made memory's ``parsed`` from the
+    # ``parsed`` the cells above give it there.
+    state = _memory()
+    state.executed_cell_codes["parsed"] = "parsed = sorted(parsed)"
+    state.executed_input_lineages["parsed"] = {"parsed": "parsed-as-parsed", "sorted": "s"}
+    trace = _trace()
+    trace.insert(
+        5,
+        TraceEntry(
+            "parsed = sorted(parsed)", {"parsed"}, {"parsed", "sorted"}, {"parsed": "parsed-as-parsed"}, {}, False
+        ),
+    )
+    assert _tainted(state, trace) == set()
