@@ -69,6 +69,69 @@ def _no_flush_when_streams_idle(pub: Any):
             del pub._flush_streams
 
 
+class _ProgressClock:
+    """The one thread that publishes the deferred progress badges.
+
+    A ``threading.Timer`` a statement started a thread of its own, through
+    cash's own patch of ``Thread.start``: ~0.5 ms of a trivial statement,
+    for a badge published only by the rare statement slower than
+    `BadgePresenter.MIN_RENDER_INTERVAL`. One daemon thread, started when
+    the first badge is armed (and again in a forked child, where it is
+    gone), waits for the earliest of the badges armed, one per presenter,
+    and calls it once due. Cancelling only takes it off the list: a call
+    already under way is the presenter's to make harmless
+    (`BadgePresenter.cancel_progress`)."""
+
+    def __init__(self) -> None:
+        self._cond = threading.Condition()
+        #: ``id(presenter) -> (when it is due, on time.monotonic, what to call)``.
+        self._due: dict[int, tuple[float, Any]] = {}
+        self._thread: threading.Thread | None = None
+
+    def call_later(self, owner: int, delay: float, fn: Any) -> None:
+        """Call *fn* on the clock's thread in *delay* seconds, in place of
+        what *owner* armed before. Raises ``RuntimeError`` when no thread
+        can be started."""
+        with self._cond:
+            thread = self._thread
+            if thread is None or not thread.is_alive():
+                thread = threading.Thread(target=self._run, name="cash-badge-progress", daemon=True)
+                thread.start()
+                self._thread = thread
+            self._due[owner] = (time.monotonic() + delay, fn)
+            self._cond.notify()
+
+    def cancel(self, owner: int) -> None:
+        """Forget what *owner* armed, if it is not already being called."""
+        with self._cond:
+            self._due.pop(owner, None)
+
+    def _next(self) -> Any:
+        """Wait for the earliest armed call to be due, and take it."""
+        with self._cond:
+            while True:
+                if not self._due:
+                    self._cond.wait()
+                    continue
+                owner, (due, fn) = min(self._due.items(), key=lambda item: item[1][0])
+                left = due - time.monotonic()
+                if left <= 0:
+                    del self._due[owner]
+                    return fn
+                self._cond.wait(left)
+
+    def _run(self) -> None:
+        while True:
+            fn = self._next()
+            try:
+                fn()
+            except Exception as e:  # a badge must never end the clock
+                logger.debug("[BADGE PROGRESS ERROR] %s", e, exc_info=True)
+
+
+_PROGRESS_CLOCK = _ProgressClock()
+
+
 class BadgePresenter:
     """Draws a cell's badge, throttling progress updates, and its errors.
 
@@ -86,7 +149,8 @@ class BadgePresenter:
         #: 'html' (interactive badge), 'print' (text summary) or 'off'.
         self.mode = "html"
         self._last_render_time = 0.0
-        self._progress_timer: threading.Timer | None = None
+        #: Whether a progress badge is armed on `_PROGRESS_CLOCK`.
+        self._progress_armed = False
         # Guards the race between `cancel_progress` (main thread) and a timer's
         # `fire()` (background thread): `_progress_generation` is bumped on
         # every cancel, and `fire()` re-checks it after acquiring
@@ -218,8 +282,8 @@ class BadgePresenter:
             if not html:
                 return
 
-            # `Timer.cancel()` cannot stop a timer already running its
-            # callback. Under the lock `cancel_progress` takes, a cancel made
+            # Cancelling cannot stop a badge the clock is already
+            # calling. Under the lock `cancel_progress` takes, a cancel made
             # before this point turns the publish into a no-op, and a cancel
             # made during it waits for it, so the caller's own DONE badge is
             # always published last.
@@ -229,13 +293,11 @@ class BadgePresenter:
                 self._publish_html(html, display_id=display_id, _from_thread=True, publisher=publisher)
 
         try:
-            timer = threading.Timer(self.MIN_RENDER_INTERVAL, fire)
-            timer.daemon = True
-            timer.start()
+            _PROGRESS_CLOCK.call_later(id(self), self.MIN_RENDER_INTERVAL, fire)
         except RuntimeError as e:  # no thread to spare; the cell goes without a progress badge
             logger.debug("[BADGE ARM ERROR] %s", e, exc_info=True)
             return
-        self._progress_timer = timer
+        self._progress_armed = True
 
     def cancel_progress(self) -> None:
         """Stop a pending progress badge. Safe to call when none is armed.
@@ -246,10 +308,9 @@ class BadgePresenter:
         """
         with self._progress_lock:
             self._progress_generation += 1
-            timer = self._progress_timer
-            if timer is not None:
-                timer.cancel()
-                self._progress_timer = None
+            if self._progress_armed:
+                _PROGRESS_CLOCK.cancel(id(self))
+                self._progress_armed = False
 
     @staticmethod
     def _is_capturing_display_pub(pub: Any) -> bool:

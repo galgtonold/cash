@@ -152,6 +152,25 @@ def test_a_fast_cell_draws_its_badge_twice(cash_magics, monkeypatch):
     assert renders.calls == 2, renders.calls
 
 
+def test_a_cell_starts_no_thread_to_time_its_progress_badges(cash_magics, monkeypatch):
+    """Each statement armed its progress badge on a ``threading.Timer`` of
+    its own: a thread started, through cash's own ``Thread.start`` patch,
+    for a badge only a statement slower than the interval publishes, ~0.5 ms
+    of a trivial statement. One clock thread, started once, arms them all."""
+    import threading
+
+    from cash.notebook.ipython.badges import BadgePresenter
+
+    monkeypatch.setattr(BadgePresenter, "MIN_RENDER_INTERVAL", 60.0)
+    cash_magics._cell_executor._badges.mode = "html"
+    run_cash_cell(cash_magics, "base = 1")
+    with method_calls(threading.Thread, "start") as starts:
+        run_cash_cell(cash_magics, "a = base + 1\nb = a + 1\nc = b + 1")
+
+    # Three before: one Timer a statement.
+    assert starts.calls == 0, starts.calls
+
+
 def test_a_cell_adding_columns_to_a_table_copies_each_column_once(cash_magics):
     """``df["hour"] = ...`` statement after statement: each stores the table
     again, and the RAM tier copied all of it each time (440 MB a statement
