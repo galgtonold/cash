@@ -41,10 +41,20 @@ def _identity(m: Mapping[str, Any]) -> str:
     from cash.control_markers import strip_markers
 
     loop_vars = m.get("loop_vars")
-    passes = repr(sorted((str(k), repr(v)[:200]) for k, v in loop_vars.items())) if isinstance(loop_vars, dict) else ""
+    passes = repr(sorted((str(k), _value(v)) for k, v in loop_vars.items())) if isinstance(loop_vars, dict) else ""
     where = (m.get("loop_header_chain") or m.get("loop_header") or "", m.get("body_index_chain") or "")
     raw = f"{strip_markers(str(m.get('code') or ''))}\x00{passes}\x00{where}"
     return hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()
+
+
+def _value(value: Any) -> str:
+    """A loop variable's value, for telling passes apart. Only plain values
+    are read: a ``repr`` of the user's object would run their code, which a
+    test counting calls sees. Any other object counts by identity, so two
+    runs over new objects never count as one pass run again."""
+    if value is None or type(value) in (bool, int, float, str, bytes):
+        return repr(value)[:200]
+    return f"{type(value).__qualname__}@{id(value)}"
 
 
 def _status(m: Mapping[str, Any]) -> str:
@@ -72,7 +82,9 @@ def audit(metrics: Iterable[Mapping[str, Any]], seen: set[str]) -> list[dict[str
         found.append(
             {
                 "code": str(m.get("code") or "")[:400],
-                "loop_vars": repr(m.get("loop_vars"))[:200] if m.get("loop_vars") else None,
+                "loop_vars": {str(k): _value(v) for k, v in m["loop_vars"].items()}
+                if isinstance(m.get("loop_vars"), dict)
+                else None,
                 "is_upstream": bool(m.get("is_upstream")),
                 "execution_time": m.get("execution_time"),
                 "cache_key": str(m.get("cache_key") or "")[:24],
