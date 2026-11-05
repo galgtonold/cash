@@ -39,7 +39,6 @@ def test_a_read_credited_again_goes_into_the_codes_entry():
 def test_a_new_code_on_a_gone_codes_id_gets_its_own_entry():
     """Code equal to a live code is credited, then goes; a new, unequal code
     takes its id. Its reads are its own, not the live code's entry."""
-    reused = 0
     for i in range(300):
         source = f"k = {i}\n"
         kept = compile(source, "<kept>", "exec")
@@ -47,18 +46,22 @@ def test_a_new_code_on_a_gone_codes_id_gets_its_own_entry():
         equal = compile(source, "<kept>", "exec")
         read_credit._record_read(equal, "/data/equal.csv", ("equal",))
         gone = id(equal)
+        entry = read_credit._found_reads[gone]  # the lookup's: *kept*'s reads
         del equal
-        # Unequal code of the same size, made until one takes the gone id:
-        # which freed block the allocator hands out next differs by platform.
+        # Unequal code of the same size, made until one takes the gone id.
         held = []
         for j in range(64):
             new = compile(f"k = {100_000 + j}\n", "<new>", "exec")
             if id(new) == gone:
                 break
             held.append(new)
-        reused += id(new) == gone
+        if id(new) != gone:
+            # Which freed block the allocator hands out next differs by
+            # platform and by what ran before (on macOS, 3.14, none of 300
+            # took it once): the entry is put where a reuse of the id leaves it.
+            read_credit._found_reads[id(new)] = entry
+        assert read_credit._found_reads[id(new)] is entry  # the case
         read_credit._record_read(new, "/data/new.csv", ("new",))
         assert read_credit.credited_reads(new) == {"/data/new.csv": ("new",)}
         assert "/data/new.csv" not in read_credit.credited_reads(kept)
-        del kept, new, held
-    assert reused, "no new code took a gone code's id: the case is not reached"
+        del kept, new, held, entry
