@@ -58,7 +58,7 @@ from itertools import chain, compress, repeat
 from typing import Any
 
 from cash import _native
-from cash._user_attrs import attribute_or, builtin_base, builtin_items, own_dict
+from cash._user_attrs import attribute_or, builtin_base, builtin_items, has_attribute, own_dict
 from cash.closure_sharing import slot_readers
 from cash.install_paths import is_user_code_module
 from cash.value_types import IMMUTABLE_LEAF_TYPES
@@ -424,7 +424,11 @@ def _pandas_column(column: Any, dtype: Any) -> Any:
         if spelled is not None:
             return spelled
         values = attribute_or(column, "_values", None)
-        if attribute_or(column, "ndim", 0) == 1 and hasattr(values, "to_numpy") and not hasattr(values, "flags"):
+        if (
+            attribute_or(column, "ndim", 0) == 1
+            and has_attribute(values, "to_numpy")
+            and not has_attribute(values, "flags")
+        ):
             # An extension array (strings held as Python objects): read
             # from it, not through ``column.to_numpy()``, which goes by
             # ``.array`` -- a handle the frame memo records, so the frame

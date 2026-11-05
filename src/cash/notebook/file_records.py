@@ -31,6 +31,7 @@ from dataclasses import replace
 from typing import Any, NamedTuple
 
 from cash._memo import FILE_RECORDS, LruMemo
+from cash._user_attrs import attribute_or
 from cash.tracking.file_dep_snapshot import unfold_relative_twins
 
 __all__ = [
@@ -110,7 +111,7 @@ def records_token(stored: Mapping[str, Any]) -> str:
 def _field(meta: Any, name: str) -> Any:
     if isinstance(meta, Mapping):
         return meta.get(name)
-    return getattr(meta, name, None)
+    return attribute_or(meta, name, None)
 
 
 def own_records(meta: Any, key: str | None = None) -> Records | None:
@@ -134,7 +135,7 @@ def own_records(meta: Any, key: str | None = None) -> Records | None:
 
 
 def _peek(backend: Any, key: str) -> Any:
-    peek = getattr(backend, "peek_metadata", None) or getattr(backend, "get_metadata", None)
+    peek = attribute_or(backend, "peek_metadata", None) or attribute_or(backend, "get_metadata", None)
     if peek is None:
         return None
     try:

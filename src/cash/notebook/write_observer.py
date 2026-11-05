@@ -217,7 +217,7 @@ def _on_open(args: tuple) -> None:
 
 
 #: ``os.O_TMPFILE``, 0 where there is none (Windows, macOS).
-_O_TMPFILE = getattr(os, "O_TMPFILE", 0)
+_O_TMPFILE = attribute_or(os, "O_TMPFILE", 0)
 
 
 def _on_move(args: tuple) -> None:
