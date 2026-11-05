@@ -1098,12 +1098,14 @@ class StatementRandomness:
                 after = position_after(code, rng_virtual_var(module), came_from)
                 keys.append(after)
                 self.tracking_state.rng_position_inputs[after] = dict(inputs or {})
+                self.tracking_state.rng_position_names[after] = held
             for key in keys:
                 store[key] = part
                 store.move_to_end(key)
         while len(store) > RNG_POSITIONS_KEPT:
             dropped, _ = store.popitem(last=False)
             self.tracking_state.rng_position_inputs.pop(dropped, None)
+            self.tracking_state.rng_position_names.pop(dropped, None)
 
     def flag_observed_hidden_draw(
         self,

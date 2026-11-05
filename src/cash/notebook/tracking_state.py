@@ -193,6 +193,14 @@ class TrackingState:
     # W: StatementRandomness. R: RngRewind.
     rng_position_inputs: dict[tuple, dict[str, str]] = field(default_factory=dict)
 
+    # A ``position_after`` key of ``rng_states_by_lineage`` -> the lineage
+    # the run gave the stream it left there. The simulation can name that
+    # place otherwise (it forwards a lineage an earlier run left, while a
+    # hidden seed or memo moved the stream elsewhere this run), so a stream
+    # put back from this key takes this name, never the simulation's.
+    # W: StatementRandomness. R: RngRewind.
+    rng_position_names: dict[tuple, str] = field(default_factory=dict)
+
     # The global streams the upstream check could not put where a run from
     # the top has them (``RANDOM-STREAM-UNRESTORED``): a draw from one is
     # not stored and its position not kept, until a seed or a hit places it.

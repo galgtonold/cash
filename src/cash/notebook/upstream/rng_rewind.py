@@ -340,7 +340,12 @@ class RngRewind:
                 after = position_after(source.code, var, came_from)
                 recorded = self.tracking_state.rng_states_by_lineage.get(after)
                 if recorded is not None and left_under_these_inputs(after, above):
-                    put_back(key, module, recorded, target_lineage)
+                    # Named as the run that left it there named it: the
+                    # simulation's lineage can name where an earlier run
+                    # left the stream (a memo filled then, a seed in a call
+                    # skipped now), and a draw keyed on it is served that
+                    # run's value.
+                    put_back(key, module, recorded, self.tracking_state.rng_position_names.get(after))
                     return True
             if target_lineage is not None:
                 # A recorded state is the stream itself; the live lineage is
