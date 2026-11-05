@@ -531,9 +531,11 @@ def _frame_memory(
     # ``storage="python"``) are a numpy array of them too; its items are
     # immutable ``str`` or a missing value, which pandas checks on every write.
     string_array = pd.arrays.StringArray
+    numpy_wrapper = pd.arrays.NumpyExtensionArray
     categorical = pd.Categorical
     holders: dict[int, Any] = {}
     todo: list = []
+    caches: set[int] = set()
 
     def hold(holder: Any) -> None:
         if id(holder) not in holders:
@@ -550,9 +552,11 @@ def _frame_memory(
     arrays: list = []
     pandas_refs: dict[int, int] = {}
 
-    def reference(array: Any) -> bool:
+    def reference(array: Any, wrapper: bool = False) -> bool:
         """Count one reference pandas holds to *array*, then the ones it
-        holds itself; False when some of that memory cannot be vouched for."""
+        holds itself; False when some of that memory cannot be vouched for.
+        With *wrapper*, *array* may also be the thin wrapper ``Index.array``
+        puts around a numpy-backed index's labels."""
         while True:
             key = id(array)
             if key in pandas_refs:
@@ -566,6 +570,8 @@ def _frame_memory(
             pandas_refs[key] = 1
             arrays.append(array)
             if isinstance(array, date_arrays) or type(array) is string_array:
+                array = array._ndarray
+            elif wrapper and type(array) is numpy_wrapper:
                 array = array._ndarray
             elif type(array) is categorical and _categoricals_watched():
                 # A categorical keeps its values as codes in an ndarray and
@@ -618,7 +624,19 @@ def _frame_memory(
                 return None  # labels that are Python objects change in place too
             if not reference(values):
                 return None
-            engine = holder._cache.get("_engine")
+            cache = holder._cache
+            handed = cache.get("array")
+            if handed is not None and id(cache) not in caches:
+                # ``Index.array`` keeps what it hands out in the cache: the
+                # labels' own array, or (pandas 3.1) a read-only view of it.
+                # The cache is pandas' reference; each hand-out to a caller
+                # is recorded (`watch_array_handles`), and a caller still
+                # holding one is a reference more. Indexes made by ``_view``
+                # share the cache, so it is counted once.
+                caches.add(id(cache))
+                if not reference(handed, wrapper=True):
+                    return None
+            engine = cache.get("_engine")
             if engine is not None:
                 # pandas' lookup table for the labels; indexes made from this
                 # one by ``_view`` share it, so it is counted once, as a holder.
@@ -857,10 +875,14 @@ def watch_array_handles() -> None:
     identity stays, so the memo's content hash would no longer describe the
     frame. So does ``pd.Index(df["a"]).array[0] = 100.0``, since the index
     shares the column's memory. The handle is usually gone by the next
-    call, so the only trace is the one left here. pandas does not call
-    ``.array`` or ``pd.array`` itself, so an ordinary workload records
-    nothing; it reads ``asi8`` (``resample``, ``rolling``), so that one is
-    recorded only when code outside pandas asks for it.
+    call, so the only trace is the one left here. pandas calls ``.array``
+    itself only in ``to_numpy()`` of an extension array (text held as
+    Python strings), which can hand out that array's own memory, so that
+    is recorded too; cash reads such text past it (`library_parts`). An
+    index keeps what ``.array`` gave in its cache, a reference
+    `frame_borrows_its_data` counts as pandas'. pandas reads ``asi8``
+    (``resample``, ``rolling``), so that one is recorded only when code
+    outside pandas asks for it.
 
     The read-only views ``.values``, ``to_numpy()`` and ``np.asarray`` give
     of a numpy-backed column or index are handles too: numpy lets
