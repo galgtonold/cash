@@ -2,11 +2,25 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from cash.exceptions import AmbiguousCellError
+
 # Patch locations where get_notebook_cells is used (upstream module only)
 PATCH_TARGETS = {
     "upstream_cells": "cash.notebook.upstream.checker.get_notebook_cells",
     "upstream_cells_ids": "cash.notebook.upstream.checker.get_notebook_cells_with_ids",
 }
+
+
+def _raised_by(code: str) -> AmbiguousCellError:
+    """Run the stand-in cell cash wrote, as IPython would, and return what
+    it raised. Its spelling is cash's own (it raises the class through
+    ``__import__`` so the user's namespace gains no name); what it raises is
+    what the user sees."""
+    namespace: dict = {}
+    with pytest.raises(AmbiguousCellError) as raised:
+        exec(compile(code, "<cash-generated>", "exec"), namespace)
+    assert "AmbiguousCellError" not in namespace
+    return raised.value
 
 
 class TestVSCodeDuplicates:
@@ -20,7 +34,7 @@ class TestVSCodeDuplicates:
     @patch(PATCH_TARGETS["upstream_cells_ids"])
     @patch(PATCH_TARGETS["upstream_cells"])
     def test_duplicate_cells_vscode(self, mock_upstream_cells, mock_upstream_ids):
-        """Test that duplicate cells raise RuntimeError when in VS Code env."""
+        """Test that duplicate cells raise AmbiguousCellError when in VS Code env."""
         self.shell.user_ns = {"__vsc_ipynb_file__": "/path/to/notebook.ipynb"}
 
         cell_content = "print('hello')"
@@ -31,12 +45,11 @@ class TestVSCodeDuplicates:
 
         self.magics._execute_cell(cell_content)
 
-        # Verify original run_cell was called with code that raises RuntimeError
+        # Verify original run_cell was called with code that raises AmbiguousCellError
         self.magics._original_run_cell.assert_called_once()
         args, _ = self.magics._original_run_cell.call_args
         executed_code = args[0]
-        assert "raise AmbiguousCellError" in executed_code
-        assert "Ambiguous cell execution" in executed_code
+        assert "Ambiguous cell execution" in str(_raised_by(executed_code))
 
     @patch(PATCH_TARGETS["upstream_cells_ids"])
     @patch(PATCH_TARGETS["upstream_cells"])
@@ -87,7 +100,8 @@ class TestVSCodeDuplicates:
         a message ending in a quote closed the literal early and the cell died
         with `SyntaxError: unterminated string literal` from code cash wrote.
         It is built with repr() now, so what is pinned here is the property that
-        mattered all along: the generated code compiles and carries the message.
+        mattered all along: the generated code compiles, raises
+        AmbiguousCellError and carries the message.
         """
         self.shell.user_ns = {"__vsc_ipynb_file__": "/path/to/notebook.ipynb"}
         cell_content = "print('duplicate')"
@@ -99,6 +113,4 @@ class TestVSCodeDuplicates:
 
         args, _ = self.magics._original_run_cell.call_args
         executed_code = args[0]
-        assert "raise AmbiguousCellError(" in executed_code
-        compile(executed_code, "<cash-generated>", "exec")
-        assert "code cells 2, 3" in executed_code
+        assert "code cells 2, 3" in str(_raised_by(executed_code))
