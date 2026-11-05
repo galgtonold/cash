@@ -53,7 +53,7 @@ from ...tracking.randomness.detect import get_value_seeding_rng_modules
 from ...value_types import BUILTIN_NAMES
 from .._protocols import ShellProtocol
 from ..callee_reach import helper_seeded_modules
-from ..lineage_formula import seeded_unseen_by
+from ..lineage_formula import UNSEEDED, seeded_unseen_by
 from ..statement.randomness import position_after
 from ..tracking_state import TrackingState
 
@@ -240,7 +240,9 @@ class RngRewind:
     ) -> tuple[list[str], set[str]]:
         cell_modules = set() if self._opts_out_of_rng_rewind(cell_code) else self._cell_draws_before_seeding(cell_code)
         simulated = self.tracking_state.simulated_lineage
-        seeded_at_cell = {m for m in cell_modules if simulated.get(rng_virtual_var(m)) is not None}
+        # A stream the simulation reads unseeded (`UNSEEDED`, no lineage) has
+        # no position a run from the top fixes: the frozen rule takes it.
+        seeded_at_cell = {m for m in cell_modules if simulated.get(rng_virtual_var(m)) not in (None, UNSEEDED)}
         if not any(self._draws(code) for code in statements):
             # Nothing re-run draws: only the cell's streams can need moving,
             # and none does where the plan leaves it and the kernel holds it
@@ -274,6 +276,8 @@ class RngRewind:
             if read is None:
                 return True, None  # not simulated: its lineage is not known
             lineage = read.get(rng_virtual_var(module))
+            if lineage == UNSEEDED:
+                return False, None  # drawn unseeded there: nothing fixes its position
             return lineage is not None, lineage
 
         def settle(module: str, target_pos: int, target_lineage: str | None, key: tuple) -> bool:

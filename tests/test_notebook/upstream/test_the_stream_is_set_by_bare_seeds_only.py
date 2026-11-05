@@ -152,3 +152,28 @@ def test_a_draw_whose_names_change_below_is_not_run_again():
     cells = [*CHAIN[:3], "n = 4", "b = np.random.rand(2)"]
     out, _, codes = _plan(_checker({"np": numpy, "n": 4}), cells, ["b = np.random.rand(2)"])
     assert out == ["b = np.random.rand(2)"]
+
+
+def test_a_stream_drawn_unseeded_above_runs_nothing_again():
+    """Nothing above seeds the stream: the simulation reads it unseeded
+    (``UNSEEDED``, no lineage), so no position a run from the top fixes it
+    and the draws above are not run again for it -- the cell's draw takes
+    the frozen rule. Read as a lineage, the empty one pulled the frozen draw
+    and a ``no-cache`` draw above into the plan, and the frozen one came out
+    another number on every Run All."""
+    from cash.notebook.lineage_formula import UNSEEDED
+
+    cells = ["import numpy as np", "a = np.random.rand(3)", "# @cash:no-cache\nr = np.random.rand(1)"]
+    checker = _checker({"np": object()})
+    checker.tracking_state.simulated_lineage[NP] = UNSEEDED
+    trace = [
+        TraceEntry("import numpy as np", {"np"}, set(), InputHashes({}, None, {}), {}, False, cell=0),
+        TraceEntry("a = np.random.rand(3)", {"a"}, {"np"}, InputHashes({}, None, {NP: UNSEEDED}), {}, False, cell=1),
+        TraceEntry("r = np.random.rand(1)", {"r"}, {"np"}, InputHashes({}, None, {NP: UNSEEDED}), {}, False, cell=2),
+    ]
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        out, added = checker.rng.with_rng_chain("b = np.random.rand(2)", cells, len(cells), [], trace)
+    assert (out, added) == ([], set())
+    assert "RANDOM-STREAM-UNRESTORED" not in [getattr(w.message, "code", None) for w in caught]
+    assert not checker.rng._cell_settled, "an unseeded stream is left to the frozen rule"
