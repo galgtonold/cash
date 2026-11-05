@@ -37,7 +37,7 @@ def _columns(nb_runner, name):
 
 @pytest.fixture
 def notebook(nb_runner):
-    (nb_runner.work_dir / "elo_helper.py").write_text(HELPER)
+    (nb_runner.work_dir / "elo_helper.py").write_text(HELPER, encoding="utf-8")
     nb_runner.create_notebook(CELLS)
     nb_runner.start_kernel()
     nb_runner.run_all()

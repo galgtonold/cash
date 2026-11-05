@@ -46,7 +46,7 @@ def _run(nb_runner, n):
 
 def test_the_filled_dict_and_its_report_are_kept(nb_runner):
     work = nb_runner.work_dir
-    (work / "data.csv").write_text("k,x\n1,1\n1,2\n2,3\n")
+    (work / "data.csv").write_text("k,x\n1,1\n1,2\n2,3\n", encoding="utf-8")
     nb_runner.create_notebook(CELLS)
     nb_runner.start_kernel()
     for n in [2, 3, 4, 5]:
@@ -55,14 +55,14 @@ def test_the_filled_dict_and_its_report_are_kept(nb_runner):
     for n in [7, 6, 8, 9]:
         _run(nb_runner, n)
     assert nb_runner.peek("repr(globals()['nps'])") == "'{1: 3, 2: 3}'"
-    report = (work / "out" / "summary.json").read_text()
+    report = (work / "out" / "summary.json").read_text(encoding="utf-8")
 
-    (work / "data.csv").write_text("k,x\n1,1\n1,2\n2,3\n2,7\n")
+    (work / "data.csv").write_text("k,x\n1,1\n1,2\n2,3\n2,7\n", encoding="utf-8")
     _run(nb_runner, 3)
     _run(nb_runner, 10)
 
     assert nb_runner.peek("repr(globals()['nps'])") == "'{1: 3, 2: 3}'"
-    assert (work / "out" / "summary.json").read_text() == report
+    assert (work / "out" / "summary.json").read_text(encoding="utf-8") == report
     assert json.loads(report)["nps"] == {"1": 3, "2": 3}
     assert "NOTEBOOK-REPAIR-GAP" in nb_runner.get_raw_output(10)
     assert nb_runner.peek("globals()['daily'].tolist()") == "[2, 2]"
