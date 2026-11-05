@@ -15,6 +15,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
+from tests import _miss_reason_audit
+
 # Warm-kernel reuse: each xdist worker keeps ONE long-lived kernel alive and
 # resets its state between tests instead of paying the ~2.3s boot every time.
 # The suite booted 4008 kernels for 4102 tests while a trivial test's own work
@@ -42,6 +44,9 @@ DEFAULT_KERNEL_NAME = "python3"
 _IPYTHON_DIR = tempfile.mkdtemp(prefix="cash-test-ipython-")
 os.environ["IPYTHONDIR"] = _IPYTHON_DIR
 atexit.register(shutil.rmtree, _IPYTHON_DIR, ignore_errors=True)
+# With CASH_TEST_AUDIT_MISS_REASONS set, each kernel checks that a statement
+# run again says why (tests/_miss_reason_audit.py).
+_miss_reason_audit.startup_file(_IPYTHON_DIR)
 
 # A CASH_CACHE_DIR in the developer's shell would reach every test kernel, and
 # all tests on a worker would then share one cache instead of each notebook's

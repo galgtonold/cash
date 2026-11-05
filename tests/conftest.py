@@ -777,6 +777,11 @@ def pytest_configure(config):
     from cash.notebook.statement import processor
 
     processor.HINT_ERROR_LEVEL = logging.WARNING
+    # With CASH_TEST_AUDIT_MISS_REASONS set, check that a statement run again
+    # says why (tests/_miss_reason_audit.py).
+    from tests import _miss_reason_audit
+
+    _miss_reason_audit.install()
     config.addinivalue_line("markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')")
     config.addinivalue_line("markers", "integration: marks tests as integration tests")
     config.addinivalue_line("markers", "requires_ipython: marks tests that require IPython")
