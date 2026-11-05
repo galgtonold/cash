@@ -820,6 +820,7 @@ def used(
                         "cleared": change.get("cleared") or None,
                         "plain": change.get("plain") or None,
                         "marked": change.get("marked") or None,
+                        "kd": KEY_DIGESTS,
                         "delta": len(changes),
                     }
                 )
@@ -1042,12 +1043,26 @@ def _digests_of(memo: Any, items: list[tuple[Any, Any]]) -> list[str]:
     return sorted({_pair_digest(key, answer) for key, answer in items})
 
 
+#: How a change record's key digests (`_change_key_digest`) are made, kept
+#: in the record (``"kd"``): a record whose digests were made otherwise is
+#: never compared with the live memo's, as a key it holds would then read
+#: as one the memo lacks.
+KEY_DIGESTS = 2
+
+
 def _change_key_digest(key: Any) -> str:
     """A digest of one memo key a change records (`used`), the same for
-    keys a memo takes as one (``1``, ``1.0`` and ``True``) and in every
-    process. Keys of numbers, strings, bytes and None in tuples are read
+    keys a memo takes as one (``1``, ``1.0`` and ``True``, two equal
+    frozensets whatever order they iterate in) and in every process. Keys
+    of numbers, strings, bytes and None in tuples and frozensets are read
     directly, as a filled Held-Karp memo holds thousands of them; any other
-    goes through `_key_digest`."""
+    part of a tuple goes through `_key_digest` on its own, and any other
+    key whole.
+
+    A frozenset's order is its hash table's, which a pickle rebuilds
+    otherwise: digested in that order, a key put back from an entry came
+    back as another, and an equal key built in another order as one the
+    memo lacks."""
     canon = _canonical_key(key, 4)
     if canon is _UNSET:
         return _key_digest(key)
@@ -1072,7 +1087,16 @@ def _canonical_key(key: Any, depth: int) -> Any:
         return ("<kwd_mark>",)
     if kind is tuple and depth > 0:
         parts = tuple(_canonical_key(part, depth - 1) for part in key)
-        return _UNSET if any(part is _UNSET for part in parts) else ("t", parts)
+        if any(part is _UNSET for part in parts):
+            parts = tuple(
+                ("d", _key_digest(part)) if canon is _UNSET else canon for part, canon in zip(key, parts, strict=True)
+            )
+        return ("t", parts)
+    if kind is frozenset and depth > 0:
+        members = [_canonical_key(part, depth - 1) for part in key]
+        if any(part is _UNSET for part in members):
+            return _UNSET
+        return ("fs", tuple(sorted(members, key=repr)))
     return _UNSET
 
 
@@ -1374,6 +1398,8 @@ def _change_refused(record: dict, memo: Any, label: str, recorded: set[str], now
     body did)."""
     if not _unbounded(memo):
         return f"the helper memo {label} is bounded, and cash cannot put answers into it"
+    if record.get("keys") and record.get("kd") != KEY_DIGESTS:
+        return f"the keys it put into the helper memo {label} were recorded by another version of cash"
     if record.get("cleared"):
         return None
     if record.get("emptied"):
@@ -1482,7 +1508,7 @@ def put_back(records: list[dict] | None, changes: Any, ns: Mapping[str, Any]) ->
                 same = len(pairs) == len(keys)
             else:
                 pairs = [(_live_key(key), answer) for key, answer in change["pairs"]]
-                same = [_change_key_digest(key) for key, _ in pairs] == list(record.get("keys") or ())
+                same = record.get("kd") == KEY_DIGESTS and [_change_key_digest(key) for key, _ in pairs] == list(record.get("keys") or ())
         except Exception:  # noqa: BLE001 - an entry this cannot read
             return f"the answers it put into the helper memo {label} cannot be read back"
         if not _is_user_memo(memo) or not _unbounded(memo) or _answers_dict(memo) is None:
