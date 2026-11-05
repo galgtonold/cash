@@ -711,6 +711,29 @@ class CellExecutor:
             badge_render_time=badge_render_time,
         )
 
+    def note_ran_as_written(self, raw_cell: str, run: RunInstead, outcome: Any) -> None:
+        """After IPython ran *raw_cell* as written in place of cash (*run*,
+        a ``RunInstead``): when it ran whole, its last run raised no more.
+
+        ``failed_cells`` stops the simulation of a cell where its last run
+        raised, and only a run cash makes of the cell cleared it. A cell
+        that raised once (``for v, g in sv.groupby(...)`` before the cell
+        binding ``sv`` ran) and then ran through on the name in memory
+        (NOTEBOOK-FORWARD-READ, uncached) was still taken for one that stops
+        at the loop, and a repair re-ran its ``nps = {}`` without the loop
+        that fills it. A run that raised again, or the stand-in ``raise`` of
+        an error cash found, leaves the record as it is.
+        """
+        if run.source != raw_cell or attribute_or(outcome, "success", False) is not True:
+            return
+        try:
+            state = self.tracking_state
+            digest = exact_source_digest(raw_cell)
+            state.failed_cells.pop(digest, None)
+            state.failed_cell_names.pop(digest, None)
+        except (AttributeError, TypeError):  # pragma: no cover - defensive
+            pass
+
     def _record_executed_cell_hash(self, raw_cell: str) -> None:
         """Remember that this exact cell source ran, so the upstream checker can
         tell an edited-but-not-rerun seed() cell from one that actually ran.
