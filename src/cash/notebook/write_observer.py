@@ -189,7 +189,8 @@ def _write_waived() -> bool:
 
 def _names_a_folder(path: object) -> bool:
     """Is the *path* being opened to write a folder already? Then it is an
-    ``O_TMPFILE`` open (``tempfile.TemporaryFile``): a file with no name,
+    ``O_TMPFILE`` open, or ``tempfile.TemporaryFile`` opening its folder
+    through an opener that makes the file: a file with no name,
     which nothing after the block can find. A folder that only appears later
     (moved into place) is kept. Asked past cash's own wrapper of ``os.stat``
     (`own_stat`): the question is cash's, not a probe of the user's."""
@@ -212,16 +213,28 @@ def _on_open(args: tuple) -> None:
         written = isinstance(flags, int) and bool(flags & _WRITE_FLAGS)
         # ``O_APPEND`` from the user's own code is an append like ``open(p, "a")``.
         appends = written and bool(flags & os.O_APPEND) and not flags & os.O_TRUNC and not _appended_by_user_code()
-    # A folder is opened to write only with ``O_TMPFILE`` (``TemporaryFile``
-    # opens it through ``open()`` with an opener): where there is no such
-    # flag, the path is not stat-ed, a stat per file a statement unpacking
-    # an archive writes, and on Windows each opens the file.
-    if written and not (_O_TMPFILE and _names_a_folder(path)):
+    # A folder is opened to write with ``O_TMPFILE``, or by ``tempfile``:
+    # ``TemporaryFile`` (and ``NamedTemporaryFile``) hand ``open()`` the
+    # folder and an opener that makes the file, so the event names the
+    # folder on every platform. Elsewhere the path is not stat-ed, a stat
+    # per file a statement unpacking an archive writes, and on Windows each
+    # opens the file.
+    if written and not ((_O_TMPFILE or _opened_by_tempfile()) and _names_a_folder(path)):
         _record(sinks, path, appends)
 
 
 #: ``os.O_TMPFILE``, 0 where there is none (Windows, macOS).
 _O_TMPFILE = attribute_or(os, "O_TMPFILE", 0)
+
+
+def _opened_by_tempfile() -> bool:
+    """Is the open being audited ``tempfile``'s own call of ``open()``?
+    Asked from `_on_open`, one frame below the consumer."""
+    try:
+        frame = sys._getframe(io_watch.CALLER_DEPTH + 1)
+    except ValueError:
+        return False
+    return frame.f_globals.get("__name__") == "tempfile"
 
 
 def _on_move(args: tuple) -> None:

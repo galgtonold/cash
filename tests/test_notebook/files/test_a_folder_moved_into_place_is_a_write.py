@@ -5,7 +5,8 @@ The files under the temporary folder are gone by the end (taken for
 temporary files), and the move's destination was dropped as a folder, a rule
 meant for ``O_TMPFILE`` opens. The statement was stored, and the next Run All
 left the release folder missing. A folder opened to write (a file with no
-name) still leaves nothing.
+name) still leaves nothing, whether ``tempfile`` opened its folder with
+``O_TMPFILE`` (Linux) or through an opener (macOS, Windows).
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import os
 import tempfile
 from pathlib import Path
 
+from cash.notebook import write_observer
 from cash.notebook.write_observer import kept_writes, observe_writes
 from tests._cell_driver import run_cash_cell
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
@@ -30,6 +32,17 @@ def test_the_destination_is_kept(tmp_path):
 def test_a_file_with_no_name_leaves_nothing(tmp_path):
     with observe_writes() as written, tempfile.TemporaryFile(dir=tmp_path) as fh:
         fh.write(b"x")
+    assert kept_writes(written, None, written.appended) == []
+
+
+def test_a_file_with_no_name_leaves_nothing_without_o_tmpfile(tmp_path, monkeypatch):
+    # As on macOS and Windows: no ``O_TMPFILE``, so ``TemporaryFile`` hands
+    # ``open()`` the folder and an opener that makes (and unlinks) a named file.
+    monkeypatch.setattr(tempfile, "_O_TMPFILE_WORKS", False, raising=False)
+    monkeypatch.setattr(write_observer, "_O_TMPFILE", 0)
+    with observe_writes() as written, tempfile.TemporaryFile(dir=tmp_path) as fh:
+        fh.write(b"x")
+    assert os.path.abspath(tmp_path) not in written
     assert kept_writes(written, None, written.appended) == []
 
 
