@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from cash.control_markers import strip_markers
 
-from ..._memo import NOTEBOOK_VERSIONS
+from ..._memo import NOTEBOOK_CELLS, NOTEBOOK_VERSIONS
 from ...analysis.annotations import get_statement_annotations
 from ...analysis.ast_util import parse_cached
 from ...analysis.code_analyzer import clean_cell_source, parse_cell_source, statement_code
@@ -70,28 +70,47 @@ class UpstreamRepairGap(UpstreamStateError):
         self.after = after
 
 
-@functools.lru_cache(maxsize=NOTEBOOK_VERSIONS)
-def _statement_order(notebook_cells: tuple[str, ...]) -> dict[str, int]:
-    """``{statement code: its place}`` across *notebook_cells*; read it, never
-    change it.
+@functools.lru_cache(maxsize=NOTEBOOK_CELLS)
+def _cell_statement_codes(cell: str) -> tuple[tuple[tuple[str, ...], ...], int]:
+    """The statement codes of one cell, per top-level statement: its own
+    code first, then those of the statements nested in it; and how many
+    top-level statements the cell has. Read it, never change it.
 
-    Memoised per notebook version: the check of every cell run in a settled
-    notebook asks again, and unparsing every statement above made each cell
-    cost more the longer the notebook grew.
+    Memoised per cell text, so an edit to one cell unparses that cell
+    alone, not every cell above the one being run.
+    """
+    tree = parse_cell_source(cell)
+    if tree is None:
+        return (), 0
+    per_node = []
+    for node in tree.body:
+        # A restored loop pass is keyed by its body statement.
+        codes = [ast.unparse(node)]
+        codes += [ast.unparse(sub) for sub in ast.walk(node) if sub is not node and isinstance(sub, ast.stmt)]
+        per_node.append(tuple(codes))
+    return tuple(per_node), len(tree.body)
+
+
+@functools.lru_cache(maxsize=NOTEBOOK_VERSIONS)
+def _statement_order(notebook_cells: tuple[str, ...]) -> tuple[dict[str, int], int]:
+    """``{statement code: its place}`` across *notebook_cells*, and a place
+    after all of them; read it, never change it.
+
+    A code takes the place of the top-level statement it first appears in
+    (a nested statement that of the statement holding it). Memoised per
+    notebook version, and each cell's codes per cell text: the check of
+    every cell run asks again, and unparsing every statement above made each
+    cell cost more the longer the notebook grew.
     """
     order: dict[str, int] = {}
+    place = 0
     for cell in notebook_cells:
-        tree = parse_cell_source(cell)
-        if tree is None:
-            continue
-        for node in tree.body:
-            at = len(order)
-            order.setdefault(ast.unparse(node), at)
-            # A restored loop pass is keyed by its body statement.
-            for sub in ast.walk(node):
-                if sub is not node and isinstance(sub, ast.stmt):
-                    order.setdefault(ast.unparse(sub), at)
-    return order
+        per_node, count = _cell_statement_codes(cell)
+        for at, codes in enumerate(per_node, start=place):
+            for code in codes:
+                order.setdefault(code, at)
+        place += count
+    return order, place
 
 
 class StatementReplay:
@@ -113,8 +132,9 @@ class StatementReplay:
         by ``reexecute``) and keep their order. A metric whose
         statement is not found keeps its place after the ones that are.
         """
-        order = _statement_order(tuple(notebook_cells or ()))
-        end = len(order)
+        if len(metrics) < 2:
+            return list(metrics)
+        order, end = _statement_order(tuple(notebook_cells or ()))
 
         def place(item):
             i, m = item
