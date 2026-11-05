@@ -7,6 +7,7 @@ identity -- and forgotten when the statement ends or cash sees it write."""
 from __future__ import annotations
 
 import os
+import sys
 
 from cash.notebook.write_observer import observe_writes
 from cash.tracking import file_dep_snapshot
@@ -44,10 +45,12 @@ def test_a_change_of_stat_reads_it_again(tmp_path):
         before = file_content_hash(path)
         st = os.stat(path)
         # Same size, and the modification time put back: the change time
-        # still moves.
+        # still moves. On Windows ``st_ctime`` is the creation time, so no
+        # stat sees such an edit (a documented limit): the mtime moves on.
         with open(path, "r+", encoding="utf-8") as f:
             f.write("x")
-        os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+        moved = 1_000_000_000 if sys.platform == "win32" else 0
+        os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + moved))
         assert os.stat(path).st_size == st.st_size
         assert file_content_hash(path) != before
 
