@@ -143,7 +143,9 @@ def test_the_call_entries_it_refers_to_are_written_with_it():
 
 
 @pytest.fixture
-def tiers(tmp_path):
+def tiers(tmp_path, monkeypatch):
+    # Measured, as in use: the suite pins every queue's rate otherwise.
+    monkeypatch.delenv(write_cost.PIN_ENV, raising=False)
     disk = FileBackend(str(tmp_path / "cache"), flush_interval=0)
     backend = TieredBackend([InMemoryBackend(), disk])
     yield backend, disk
@@ -175,3 +177,20 @@ def test_a_disk_measured_slow_keeps_a_quick_large_entry_in_ram(tiers):
     # The same entry from a long compute repays its write.
     long = _set(backend, "long", 5.0)
     assert "DISK" in long["storage"]
+
+
+def test_a_pinned_rate_is_not_moved_by_the_writes(tmp_path, monkeypatch):
+    # What the suite sets so its store decisions do not depend on the load.
+    monkeypatch.setenv(write_cost.PIN_ENV, "10")
+    disk = FileBackend(str(tmp_path / "cache"), flush_interval=0)
+    backend = TieredBackend([InMemoryBackend(), disk])
+    try:
+        meta = _set(backend, "long", 5.0)  # 20 MiB at 10 MiB/s: 2 s, repaid by 5 s
+        disk._writes.wait_all()
+        assert "DISK" in meta["storage"]
+        assert disk._writes.rates.per_byte("ndarray_dense") == pytest.approx(1 / (10 * MiB))
+        quick = _set(backend, "quick", 1.0)
+        assert quick["persist_skipped"] == "write"
+    finally:
+        disk._writes.wait_all()
+        disk.shutdown()

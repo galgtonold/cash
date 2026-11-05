@@ -31,6 +31,7 @@ computed again on the next run, never served wrong.
 
 from __future__ import annotations
 
+import os
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -41,11 +42,13 @@ from .. import cost_model
 __all__ = [
     "MEASURED_FROM_BYTES",
     "OBJECTS_KIND",
+    "PIN_ENV",
     "WRITE_KIND",
     "WriteRates",
     "WriteSample",
     "current_sample",
     "on_this_thread",
+    "rates_for_queue",
     "sampling",
     "write_kind",
 ]
@@ -108,6 +111,42 @@ class WriteRates:
         if per_byte is None or nbytes < MEASURED_FROM_BYTES:
             return assumed
         return nbytes * per_byte
+
+
+class PinnedRates(WriteRates):
+    """A rate fixed by `PIN_ENV`, whatever the writes take: the store
+    decisions of a test suite do not then depend on how loaded the machine
+    running it is."""
+
+    def __init__(self, per_byte: float) -> None:
+        super().__init__()
+        self._pinned = per_byte
+
+    def record(self, kind: str, nbytes: int, seconds: float) -> None:
+        return None
+
+    def per_byte(self, kind: str) -> float | None:
+        return self._pinned
+
+    def slowest_per_byte(self) -> float | None:
+        return self._pinned
+
+
+#: MiB per second every write queue made while it is set takes its writes to
+#: run at, instead of measuring them. For test suites (cash's own sets it for
+#: every test and test kernel), never needed in use.
+PIN_ENV = "CASH_TEST_WRITE_MIB_PER_S"
+
+
+def rates_for_queue() -> WriteRates:
+    """The rates a new write queue keeps: measured, or pinned by `PIN_ENV`."""
+    try:
+        mib_per_s = float(os.environ.get(PIN_ENV) or 0)
+    except ValueError:
+        mib_per_s = 0.0
+    if mib_per_s > 0:
+        return PinnedRates(1.0 / (mib_per_s * 1024 * 1024))
+    return WriteRates()
 
 
 class WriteSample:

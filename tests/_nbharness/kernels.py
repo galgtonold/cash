@@ -58,6 +58,12 @@ os.environ.pop("CASH_CACHE_DIR", None)
 # 0.3 s HistGradientBoosting fit took 20-60 s and its cell timed out.
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 
+# Every test kernel takes its disk writes to run at one fixed rate instead of
+# measuring them (`cash.backends.write_cost.PIN_ENV`): whether an entry
+# reaches disk then does not depend on how loaded the machine is. Fast, so a
+# write is rarely what decides; a test about the write cost pins its own.
+os.environ.setdefault("CASH_TEST_WRITE_MIB_PER_S", "1024")
+
 
 def kernelspec_mismatch(argv, executable) -> str | None:
     """The kernelspec comparison, split out so it is directly testable.

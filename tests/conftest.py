@@ -20,6 +20,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
+# Write queues take their writes to run at one fixed rate instead of measuring
+# them (`cash.backends.write_cost.PIN_ENV`), so a test's store decisions do not
+# depend on how loaded the machine is. Set before cash makes any queue; the
+# test kernels get the same (`tests/_nbharness/kernels.py`).
+os.environ.setdefault("CASH_TEST_WRITE_MIB_PER_S", "1024")
+
 # ---------------------------------------------------------------------------
 # Crash visibility (ALL workers): dump a C-level traceback when a worker dies
 # silently. This lives in the ROOT conftest so every xdist worker enables it at

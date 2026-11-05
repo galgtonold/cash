@@ -394,7 +394,7 @@ class PendingWrites:
         #: What an entry's write costs here, per kind of value, for the
         #: persistence rule (`write_cost`): the writes made inside
         #: `write_cost.sampling` are timed into it.
-        self.rates = write_cost.WriteRates()
+        self.rates = write_cost.rates_for_queue()
         # Called by `wait_all` before it waits: a submitter that holds work
         # back for a while (a timer) submits it now, so a drain still covers it.
         self._drain_hooks: list[Callable[[], None]] = []

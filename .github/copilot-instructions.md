@@ -247,6 +247,11 @@ format is cleared on first open.
   debug. Integration workers reuse one warm kernel per worker; mark a test
   `fresh_kernel` when it needs a real restart, or set `CASH_TEST_REUSE_KERNEL=0`
   to rule out cross-test contamination.
+- Whether an entry reaches disk weighs the time its write takes, which cash
+  measures. The suite pins that rate instead (`CASH_TEST_WRITE_MIB_PER_S`,
+  1024 MiB/s, set by `tests/conftest.py` and every test kernel), so a loaded
+  machine does not change what is stored. A test about the write cost sets
+  its own rate, or deletes the variable to measure.
 - `perf` marks wall-clock threshold tests; CI's unit job skips them.
 - CI (`ci.yml`) has two tiers: pushes to `claude/**` and `cext/**` run a
   smaller, sharded matrix that fits the free runner limits; `main`, pull
