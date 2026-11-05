@@ -1042,7 +1042,8 @@ class StatementProcessor:
         if is_control_body(run.code) or run.magic_reads is not None:
             return
         read = self._rng_read[1] if self._rng_read is not None and self._rng_read[0] == run.code else None
-        self._randomness.remember_positions(code=run.code, read=read)
+        inputs = self.tracking_state.statement_entry_lineages.get(run.code)
+        self._randomness.remember_positions(code=run.code, read=read, inputs=inputs)
 
     def _advance_rng(self, run: StatementRun) -> None:
         """Move on the RNG variables *run*'s statement drew from, once it ran

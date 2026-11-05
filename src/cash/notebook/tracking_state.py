@@ -186,6 +186,13 @@ class TrackingState:
     # W: StatementRandomness. R: RngRewind.
     rng_states_by_lineage: OrderedDict[tuple[str, str], Any] = field(default_factory=OrderedDict)
 
+    # A ``position_after`` key of ``rng_states_by_lineage`` -> the lineages
+    # the statement's inputs had when it left the stream there. The number
+    # of draws can follow an input (``rng.rand(h)``, ``Model(hidden)``):
+    # the position is where the statement leaves the stream only under them.
+    # W: StatementRandomness. R: RngRewind.
+    rng_position_inputs: dict[tuple, dict[str, str]] = field(default_factory=dict)
+
     # The global streams the upstream check could not put where a run from
     # the top has them (``RANDOM-STREAM-UNRESTORED``): a draw from one is
     # not stored and its position not kept, until a seed or a hit places it.
