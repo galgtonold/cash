@@ -70,11 +70,17 @@ def recorded(tmp_path, monkeypatch) -> dict:
 
 
 def _same_size_edit(path) -> None:
+    """An edit that keeps the size, with the mtime put back (as ``cp -p``):
+    a stat sees it by the inode change time alone. On Windows ``st_ctime``
+    is the creation time, so no stat can see such an edit (a documented
+    limit, `stat_key`); there the mtime moves on a second instead, which a
+    stat sees once something looks."""
     before = os.stat(path)
     text = open(path, encoding="utf-8").read()
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(text.upper())
-    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))  # mtime put back, as ``cp -p``
+    mtime_ns = before.st_mtime_ns + (1_000_000_000 if sys.platform == "win32" else 0)
+    os.utime(path, ns=(before.st_atime_ns, mtime_ns))
 
 
 def test_an_unchanged_set_holds(recorded):
@@ -138,14 +144,15 @@ def test_a_file_edited_through_a_second_hard_link_is_seen(recorded, tmp_path):
 
 
 @pytest.mark.xfail(
-    sys.platform.startswith("linux"),
     strict=True,
     reason="a second name made for a file after its stat was kept is reported to no watched folder",
 )
 def test_a_file_linked_and_edited_elsewhere_after_its_stat_was_kept_is_seen(recorded, tmp_path):
-    """Known gap of the folder watch itself (`file_watch`): the link and the
-    write through it are reported to the other folder only, so the kept
-    stat of the first name stands."""
+    """Known gap of the folder watch itself (`file_watch`), on Linux and on
+    Windows alike (known-limitations, "A change no folder reports"): the
+    link and the write through it are reported to the other folder only (by
+    inotify there, under the name written through by the volume's watch),
+    so the kept stat of the first name stands."""
     target = tmp_path / "set0" / "f00.txt"
     outside = tmp_path / "elsewhere"
     outside.mkdir()

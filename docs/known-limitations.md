@@ -813,9 +813,9 @@ kernel restarts:
   another process, after it opened the file;
 - on **Windows**, a write by a program that still has the file open: Windows
   may report it only when the program closes the file or flushes it;
-- on **Linux**, a write through a second name (a hard link) made for the file
-  in another folder after cash checked it: the link and the write are
-  reported to that other folder only.
+- on **Linux** and **Windows**, a write through a second name (a hard link)
+  made for the file in another folder after cash checked it: the link and the
+  write are reported to that other folder only.
 
 **Fix:** set `CASH_FILE_WATCH=0` before starting the kernel. Every file is
 then checked before every cell, which is slower for many files.
