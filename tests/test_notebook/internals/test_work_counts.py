@@ -137,7 +137,9 @@ def test_a_rerun_restores_built_records_without_a_step_per_item(cash_magics, cas
 
 def test_a_fast_cell_draws_its_badge_twice(cash_magics, monkeypatch):
     """RUNNING, then the final badge: a progress render between them, for a
-    statement that finished at once, was ~2 ms of a trivial cell."""
+    statement that finished at once, was ~2 ms of a trivial cell. And only
+    the final one is built for the cell: the RUNNING badge it opens with has
+    no rows, and is built once (``_opening_html``)."""
     from cash.notebook.ipython.badges import BadgePresenter
 
     # Fast however busy the machine: a cell past the interval earns its
@@ -145,11 +147,16 @@ def test_a_fast_cell_draws_its_badge_twice(cash_magics, monkeypatch):
     monkeypatch.setattr(BadgePresenter, "MIN_RENDER_INTERVAL", 60.0)
     cash_magics._cell_executor._badges.mode = "html"
     run_cash_cell(cash_magics, "base = 1")
-    with method_calls(BadgePresenter, "render") as renders:
+    with (
+        method_calls(BadgePresenter, "_publish_html") as published,
+        method_calls(BadgePresenter, "_build_html") as built,
+    ):
         run_cash_cell(cash_magics, "a = base + 1\nb = a + 1\nc = b + 1")
 
     # Three before: RUNNING, the first statement's progress, DONE.
-    assert renders.calls == 2, renders.calls
+    assert published.calls == 2, published.calls
+    # Two before: RUNNING, built again for each cell, and DONE.
+    assert built.calls == 1, built.calls
 
 
 def test_a_cell_starts_no_thread_to_time_its_progress_badges(cash_magics, monkeypatch):

@@ -164,6 +164,8 @@ class BadgePresenter:
         # installed -- see `_uncaptured_display_pub`.
         self._display_pub: Any = None
         self._uncaptured_display_pub()
+        #: ``(key, html)`` of the opening RUNNING badge (`_opening_html`).
+        self._opening: tuple[Any, str | None] | None = None
         #: ``(execution_count, context)`` of the last bug-report context read.
         self._bug_report_context_cache: tuple[Any, dict] | None = None
 
@@ -174,8 +176,42 @@ class BadgePresenter:
         no progress render between (each is ~2 ms of a trivial cell)."""
         self._last_render_time = 0.0
         if self.mode == "html":
-            self.render([], display_id=display_id, status="RUNNING", update_existing=False)
+            html = self._opening_html()
+            if html:
+                self._publish_html(html, display_id=display_id, update_existing=False)
             self._last_render_time = time.time()
+
+    def _opening_html(self) -> str | None:
+        """The RUNNING badge a cell opens with: no rows yet, so the same for
+        every cell while the tiers and the environment are, and built once.
+        Its bug-report link names the environment only: the notebook's
+        source and history, read and quoted into the link afresh for every
+        cell (~0.5 ms of a trivial one), are in every badge after it -- a
+        progress badge once a statement runs past
+        :attr:`MIN_RENDER_INTERVAL`, and the final one."""
+        backend = attribute_or(self._cash, "backend", None)
+        context = {
+            "version": __version__,
+            "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+            "backend": type(backend).__name__ if backend else "unknown",
+        }
+        key = (self._configured_tier_labels(), tuple(context.items()))
+        kept = self._opening
+        if kept is not None and kept[0] == key:
+            return kept[1]
+        try:
+            html = _badge.render_interactive_badge(
+                metrics_list=[],
+                badge_mode="html",
+                status="RUNNING",
+                bug_report_context=context,
+                configured_tiers=key[0],
+            )
+        except Exception as e:
+            logger.debug("[BADGE RENDER ERROR] %s", e, exc_info=True)
+            return None
+        self._opening = (key, html or None)
+        return html or None
 
     def close(self, display_id: str, status: str = "DONE") -> None:
         """End a cell's badge with no rows, for a cell cash did not run."""
