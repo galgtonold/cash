@@ -353,6 +353,21 @@ before: a subclass of `datetime`, items in two zones or in a zone other than
 item (a `NaN` for missing), Timestamps of two units, or fewer than 1,024
 items.
 
+<!-- claim: cash/backends/text_columns.py:encode @31f23856, cash/backends/text_columns.py:encode_column @d8db128e, cash/backends/serialization.py:_reduce_text_for_write @72acdb39, cash/backends/serialization.py:reduce_text_objects @840b0ff4 -->
+A pandas column of Python strings (pandas 3's `str` columns without
+`pyarrow`, `string[python]`, or an object column holding only strings and
+missing values) is stored as its strings joined in one UTF-8 buffer, with
+its missing values apart: several times faster to write than pickling each
+string on its own. A column whose rows hold the same string objects again
+and again, as a CSV reader leaves them, is stored as each string once and a
+code per row, and a hit shares them as the column did. It comes back as it
+went in: its dtype, each missing value of its kind (`nan`, `None`,
+`pd.NA`), every string. A column holding a string UTF-8 cannot encode (a
+lone surrogate) or a NUL character, or with fewer than 8,192 items, is
+pickled item by item as before. A column stored again, unchanged (each
+result of a loop holding its input's columns), is not converted or read
+again.
+
 <!-- claim: cash/backends/serialization.py:_reduce_polars @f7539f57, cash/backends/serialization.py:_polars_from_arrow @654cf355 -->
 A polars `DataFrame` or `Series` is stored as its Arrow data, so its
 buffers are written to disk and read back as they are, as a pandas frame's

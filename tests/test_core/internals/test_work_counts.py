@@ -66,6 +66,15 @@ def _pickle_size(value) -> int:
     return len(pickle.dumps(value, protocol=5))
 
 
+def _written_size(value) -> int:
+    """The bytes a disk entry holds *value* in: fewer than pickle's own for
+    a column of Python strings (`cash.backends.text_columns`)."""
+    from cash.backends.serialization import PickleSerializer
+
+    stream, buffers = PickleSerializer().serialize_split(value)
+    return len(stream) + sum(memoryview(b).nbytes for b in buffers)
+
+
 @pytest.mark.parametrize("fn", VALUES, ids=lambda fn: fn.__name__)
 def test_a_miss_pickles_its_value_about_once(disk_cash, fn):
     f = disk_cash.cache(fn)
@@ -78,7 +87,7 @@ def test_a_miss_pickles_its_value_about_once(disk_cash, fn):
     # 1.0x today, 2.0x for the dataclass list (stored, and copied into RAM by
     # a pickle round trip); the bound catches one more pickle of the value.
     factor = 2.5 if fn is dataclass_list else 1.5
-    assert pickled.bytes >= size, "the value was never pickled: is it stored?"
+    assert pickled.bytes >= min(size, _written_size(fn(1))), "the value was never pickled: is it stored?"
     assert pickled.bytes <= factor * size + 16 * KB, (pickled.bytes, size)
 
 
