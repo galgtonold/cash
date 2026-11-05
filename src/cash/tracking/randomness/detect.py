@@ -1535,7 +1535,9 @@ def get_entropy_reseed_modules(code: str) -> set[str]:
 def get_value_seeding_rng_modules(code: str) -> set[str]:
     """Modules *code* seeds with a value: :func:`get_seeding_rng_modules`
     less a module only re-seeded from entropy (``seed(None)``) there."""
-    return {module for module, node in _rng_scan(code).seed_calls if not _is_entropy_seed(node)}
+    scan = _rng_scan(code)
+    entropy = set(scan.entropy_seed_calls)
+    return {module for module, line in scan.seed_calls if (module, line) not in entropy}
 
 
 def get_seeding_rng_modules(code: str) -> set[str]:
