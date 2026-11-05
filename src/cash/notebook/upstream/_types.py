@@ -12,6 +12,7 @@ part of the package reads them.
 from __future__ import annotations
 
 import ast
+import functools
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, NamedTuple
 
@@ -34,12 +35,16 @@ def cell_holds_statement(cell_code: str, code: str) -> bool:
     return code in cell_code or code in statements_of(cell_code)
 
 
-def statements_of(cell_code: str) -> set[str]:
+@functools.lru_cache(maxsize=1024)
+def statements_of(cell_code: str) -> frozenset[str]:
     """Every statement of *cell_code*, nested ones too, as
-    ``normalize_stmt(ast.unparse(...))`` gives it; empty when it does not parse."""
+    ``normalize_stmt(ast.unparse(...))`` gives it; empty when it does not parse.
+
+    Memoised per cell text: a check asks it of every cell above or below for
+    each name it looks up."""
     tree = parse_cell_source(cell_code)
     if tree is None:
-        return set()
+        return frozenset()
     found: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.stmt):
@@ -47,7 +52,7 @@ def statements_of(cell_code: str) -> set[str]:
                 found.add(normalize_stmt(ast.unparse(node)))
             except (ValueError, TypeError, RecursionError):
                 continue
-    return found
+    return frozenset(found)
 
 
 class InputHashes(dict):

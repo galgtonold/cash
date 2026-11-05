@@ -832,7 +832,9 @@ class CashMagics(Magics):
 
         if isinstance(result, RunInstead):
             with self._history_records(), self._statement_processor.running_as_written():
-                return self._original_run_cell(result.source, *args, **kwargs)
+                outcome = self._original_run_cell(result.source, *args, **kwargs)
+            self._cell_executor.note_ran_as_written(raw_cell, result, outcome)
+            return outcome
         if isinstance(result, PipelineSyntaxError):
             with (
                 self._tracking_imports_of(raw_cell),
@@ -915,7 +917,9 @@ class CashMagics(Magics):
             if result.source != raw_cell:
                 kwargs = self._substitute_cell_kwargs(result.source, kwargs)
             with self._history_records(), self._statement_processor.running_as_written():
-                return await self._original_run_cell_async(result.source, *args, **kwargs)
+                outcome = await self._original_run_cell_async(result.source, *args, **kwargs)
+            self._cell_executor.note_ran_as_written(raw_cell, result, outcome)
+            return outcome
         if isinstance(result, PipelineSyntaxError):
             # The cell's own AST failed to parse — let IPython handle it (it
             # will render the SyntaxError) exactly once on its live loop.

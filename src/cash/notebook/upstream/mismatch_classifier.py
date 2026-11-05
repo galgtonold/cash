@@ -871,12 +871,18 @@ class MismatchClassifier:
         cells, idx = check.notebook_cells, check.current_cell_idx
         if not cells or not 0 <= idx < len(cells) - 1:
             return
-        below = "\n".join(cells[idx + 1 :])
+        below = cells[idx + 1 :]
         codes = self.tracking_state.executed_cell_codes
         user_ns = self.shell.user_ns
-        changed = {
-            name for name, code in codes.items() if code and name in user_ns and strip_markers(code).strip() in below
-        }
+        # Matched as a statement, not as text: the code is recorded unparsed
+        # (``BIG[0] = 'x'``) and a cell below may write ``BIG[0] = "x"``.
+        changed = set()
+        for name, code in codes.items():
+            if not code or name not in user_ns:
+                continue
+            statement = strip_markers(code).strip()
+            if any(cell_holds_statement(cell, statement) for cell in below):
+                changed.add(name)
         if not changed:
             return
         warned = self._warned_changed_below
