@@ -52,3 +52,15 @@ def test_unchanged_rerun_still_clean(nb_runner):
     _setup(nb_runner)
     nb_runner.run_cell(3)
     assert "y=20" in nb_runner.get_output(3)
+
+
+def test_the_failure_leaves_no_name_of_cashs_in_the_namespace(nb_runner):
+    """The cell raises cash's ``UpstreamStateError`` without binding the
+    name: it was left in the user's namespace, where a plain kernel has
+    nothing."""
+    _setup(nb_runner)
+    nb_runner.set_cell_source(1, "x = undefined_name_xyz * 2")
+    with pytest.raises(CellExecutionError):
+        nb_runner.run_cell(3)
+
+    assert nb_runner.peek("'UpstreamStateError' in globals()") == "False"
