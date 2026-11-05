@@ -968,11 +968,18 @@ def _bug_report_url(metrics: list[_Metric], context: dict | None) -> str:
         if not notebook_source:
             return ""
         parts = []
+        length = 0
         for i, cell in enumerate(notebook_source, 1):
             snippet = cell.strip()
             if len(snippet) > max_chars:
                 snippet = snippet[: max_chars - 3] + "..."
             parts.append(f"# --- Cell {i} ---\n{snippet}")
+            length += len(parts[-1])
+            if length > _BUG_URL_MAX:
+                # Already too long for the link: the rest of the notebook
+                # would not change that, and every badge of a long notebook
+                # read every cell, twice a render.
+                break
         return (
             "<details><summary>Notebook source</summary>\n\n```python\n"
             + "\n\n".join(parts)
