@@ -26,7 +26,7 @@ from ..magic_effects import is_magic_statement, magic_effects, simulation_cell
 from ..shared_objects import history_names
 from ..tracking_state import TrackingState
 
-__all__ = ["NotebookVetter"]
+__all__ = ["NotebookVetter", "first_forward_read"]
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +101,60 @@ class _NotebookText:
 @functools.lru_cache(maxsize=NOTEBOOK_VERSIONS)
 def _notebook_text(cells: tuple[str, ...]) -> _NotebookText:
     return _NotebookText(cells)
+
+
+@functools.lru_cache(maxsize=NOTEBOOK_CELLS)
+def _bound_anywhere(cell_code: str) -> frozenset[str]:
+    """Every name *cell_code* binds in any scope: a comprehension's
+    ``i``, a function's parameters. Read where it binds them, such a name
+    is no read of the cell's namespace, and is never taken for one."""
+    tree = parse_cell_source(cell_code)
+    if tree is None:
+        return frozenset()
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            names.add(node.id)
+        elif isinstance(node, ast.arg):
+            names.add(node.arg)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.alias):
+            names.add((node.asname or node.name).split(".")[0])
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            names.add(node.name)
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
+            names.add(node.name)
+    return frozenset(names)
+
+
+@functools.lru_cache(maxsize=NOTEBOOK_VERSIONS)
+def first_forward_read(cells: tuple[str, ...], upto: int) -> tuple[int, str, int] | None:
+    """The first cell above *upto* that a run from the top cannot get
+    through: ``(cell, name, binder)`` for a cell reading *name*, when it
+    runs, that only a cell below it (*binder*) binds. None when every cell
+    above *upto* runs in order, or a cell does not parse.
+
+    The cell raises ``NameError`` there, so a run from the top never
+    reaches the cells below it (``NotebookVetter._refuse_forward_references``
+    is the same rule for the cell being run).
+    """
+    binders = _notebook_text(cells).binders
+    if binders is None:
+        return None
+    for idx in range(min(upto, len(cells))):
+        reads = NotebookVetter._module_level_reads(cells[idx])
+        if not reads:
+            continue
+        try:
+            own = _cell_writes(cells[idx]) | _bound_anywhere(cells[idx])
+        except (SyntaxError, ValueError):
+            return None
+        for name in sorted(reads - own):
+            bound = binders.get(name)
+            if bound and bound[0] > idx:
+                return idx, name, bound[0]
+    return None
 
 
 class ReadsBelow(Set):
