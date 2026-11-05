@@ -22,7 +22,7 @@ from ..cache_key import (
 from ..lineage_formula import bound_names, recorded_reads_lineage_component
 from ._types import TraceEntry, cell_holds_statement, normalize_stmt
 from .statement_lineage import unbound_builtin
-from .virtual_lineage import _trace_codes
+from .virtual_lineage import statement_trace_codes
 
 if TYPE_CHECKING:
     from ..tracking_state import TrackingState
@@ -152,7 +152,7 @@ class UnsavedEdits:
         if not outputs:
             return False
         state = self.tracking_state
-        own = set(_trace_codes(entry.stmt_code))
+        own = set(statement_trace_codes(entry.stmt_code))
         for out in outputs:
             made_by = state.executed_cell_codes.get(out)
             if made_by is None:
@@ -164,7 +164,7 @@ class UnsavedEdits:
                     return False
                 continue
             if not any(
-                made_by in _trace_codes(later.stmt_code)
+                made_by in statement_trace_codes(later.stmt_code)
                 and (out not in later.inputs or _read_as_above(built_on, later, {out} | (read & later.inputs)))
                 for later in simulation_trace[at + 1 :]
             ):

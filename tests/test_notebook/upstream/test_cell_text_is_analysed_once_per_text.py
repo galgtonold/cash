@@ -45,9 +45,9 @@ def test_a_later_definition_still_wins():
 
 
 def test_trace_codes_are_worked_out_once(monkeypatch):
-    virtual_lineage._trace_codes.cache_clear()
+    virtual_lineage.statement_trace_codes.cache_clear()
     calls = _count_unparse(monkeypatch)
     loop = "for i in range(3):\n    total = total + i\n    print(i)"
     for _ in range(4):
-        assert virtual_lineage._trace_codes(loop) == (loop, "total = total + i", "print(i)")
+        assert virtual_lineage.statement_trace_codes(loop) == (loop, "total = total + i", "print(i)")
     assert len(calls) == 2

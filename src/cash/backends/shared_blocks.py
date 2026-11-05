@@ -75,7 +75,7 @@ def compared_count() -> tuple[int, int]:
     return _Counts.compared, _Counts.compared_bytes
 
 
-def _layout(values: Any) -> tuple | None:
+def block_layout(values: Any) -> tuple | None:
     """The type, dtype, shape and memory order of a block's *values*; None
     for values not shared: only numpy arrays and the pandas arrays over one
     that hold nothing else (dates, durations, strings as Python objects)."""
@@ -119,14 +119,14 @@ class BlockReuse:
         #: ``positions of a block's columns -> content key``.
         self._keys = keys
         #: ``positions -> (the caller's block values, their layout)`` for the
-        #: blocks `_layout` knows: what `keep` records the stored copies as
+        #: blocks `block_layout` knows: what `keep` records the stored copies as
         #: copied from.
         self._sources = sources
 
     @classmethod
     def for_frame(cls, frame: Any) -> BlockReuse | None:
         """None when *frame* is not a DataFrame, or none of its blocks has
-        a layout a stored block can be taken for (`_layout`)."""
+        a layout a stored block can be taken for (`block_layout`)."""
         if getattr(frame, "ndim", 0) != 2:
             return None
         keys = content_keys(frame)
@@ -162,7 +162,7 @@ class BlockReuse:
         if refs is None or refs[0]() is not block.values:
             return None
         stored = refs[1]()
-        if stored is None or _layout(stored) != source[1]:
+        if stored is None or block_layout(stored) != source[1]:
             return None
         return stored if _same_bytes(block.values, stored) else None
 
@@ -173,7 +173,7 @@ class BlockReuse:
         try:
             for block in copied._mgr.blocks:
                 positions = tuple(block.mgr_locs.as_array)
-                layout = _layout(block.values)
+                layout = block_layout(block.values)
                 values = block.values
                 source = self._sources.get(positions)
                 if source is not None and source[1] == layout and source[0] is not values:
@@ -216,7 +216,7 @@ def bytes_to_copy(frame: Any) -> int:
 def content_keys(frame: Any) -> dict[tuple, tuple]:
     """``positions of a block's columns -> content key`` for each block of
     the DataFrame *frame* whose every column the frame memo vouches for now
-    (`known_column_pieces`): the block's layout (`_layout`) and the bytes
+    (`known_column_pieces`): the block's layout (`block_layout`) and the bytes
     each of its columns folded into a digest, in order. Two blocks with one
     key hold the same bytes in the same order. Empty when nothing is known.
     """
@@ -242,7 +242,7 @@ def _sources(frame: Any) -> dict[tuple, tuple[Any, tuple]]:
     sources = {}
     try:
         for block in frame._mgr.blocks:
-            layout = _layout(block.values)
+            layout = block_layout(block.values)
             if layout is not None and _raw(block.values).dtype.kind not in "OV":
                 sources[tuple(int(pos) for pos in block.mgr_locs.as_array)] = (block.values, layout)
     except Exception:  # pandas internals changed: copy it all
@@ -272,7 +272,7 @@ def _remember_copy(source: Any, stored: Any) -> None:
 
 
 def _raw(values: Any) -> Any:
-    """The numpy array a block's *values* keep their data in (`_layout`)."""
+    """The numpy array a block's *values* keep their data in (`block_layout`)."""
     return getattr(values, "_ndarray", values)
 
 
@@ -282,7 +282,7 @@ _COMPARE_CHUNK = 1 << 20
 
 
 def _same_bytes(values: Any, stored: Any) -> bool:
-    """Do the block values *values* and *stored*, of one `_layout`, hold the
+    """Do the block values *values* and *stored*, of one `block_layout`, hold the
     same bytes? Read in memory order, a chunk at a time."""
     import numpy as np
 
@@ -310,14 +310,14 @@ def _same_bytes(values: Any, stored: Any) -> bool:
 
 def _plan(frame: Any) -> list[tuple[tuple, tuple, list[tuple]]]:
     """``(positions, layout, column memory keys)`` for each block of *frame*
-    `_layout` knows. Holds no reference to an array once it returns."""
+    `block_layout` knows. Holds no reference to an array once it returns."""
     import pandas as pd
 
     plan = []
     try:
         dtypes = frame.dtypes
         for block in frame._mgr.blocks:
-            layout = _layout(block.values)
+            layout = block_layout(block.values)
             if layout is None:
                 continue
             positions = tuple(int(pos) for pos in block.mgr_locs.as_array)

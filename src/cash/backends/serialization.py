@@ -566,7 +566,7 @@ def _blocks_known(value: Any) -> dict[tuple[int, int], tuple[Any, tuple]]:
                 key = keys.get(tuple(int(pos) for pos in block.mgr_locs.as_array))
                 if key is not None:
                     # A content key is only for a contiguous block
-                    # (`shared_blocks._layout`): its memory is its bytes.
+                    # (`shared_blocks.block_layout`): its memory is its bytes.
                     array = getattr(block.values, "_ndarray", block.values)
                     known[(_address(array), array.nbytes)] = (array, key)
         except Exception:  # only a speedup: nothing known

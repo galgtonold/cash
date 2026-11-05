@@ -722,14 +722,14 @@ def checked_digest(frame: Any, keys: dict[tuple, tuple] | None = None) -> bytes 
     from cash import bulk_digest
 
     from . import block_digests
-    from .shared_blocks import _layout
+    from .shared_blocks import block_layout
 
     digest = hashlib.sha256(_CHECKED_TAG)
     for block in frame._mgr.blocks:
         if block not in _CHECKED_BLOCKS:
             continue
         key = keys.get(tuple(int(pos) for pos in block.mgr_locs.as_array)) if keys else None
-        if key is not None and _layout(block.values) != key[0]:
+        if key is not None and block_layout(block.values) != key[0]:
             key = None
         for _name, array in _ndarray_parts(block.values) or ():
             flat = _flat_bytes(array)

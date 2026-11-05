@@ -40,7 +40,7 @@ from .library_rules import self_call_resets_lineage
 from .loop_rules import LoopRules
 from .simulated_callables import SimulatedCallables
 from .unsaved_edits import UnsavedEdits
-from .virtual_lineage import VirtualLineage, _trace_codes, copy_edges
+from .virtual_lineage import VirtualLineage, copy_edges, statement_trace_codes
 
 __all__ = ["MismatchClassifier"]
 
@@ -1466,7 +1466,7 @@ def _rebound_below(name: str, made_by: str, trace: list) -> bool:
     for entry in reversed(trace):
         if name not in entry.outputs:
             continue
-        if made_by in _trace_codes(entry.stmt_code):
+        if made_by in statement_trace_codes(entry.stmt_code):
             return False
         if name not in entry.inputs:
             return True

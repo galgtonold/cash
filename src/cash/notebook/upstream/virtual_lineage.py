@@ -578,7 +578,7 @@ class VirtualLineage:
         """
         simulation_trace_codes: set[str] = set()
         for entry in simulation_trace:
-            simulation_trace_codes.update(_trace_codes(entry.stmt_code))
+            simulation_trace_codes.update(statement_trace_codes(entry.stmt_code))
         return simulation_trace_codes
 
     def _update_stale_file_deps(
@@ -971,7 +971,7 @@ class VirtualLineage:
 
 
 @functools.lru_cache(maxsize=8192)
-def _trace_codes(stmt_code: str) -> tuple[str, ...]:
+def statement_trace_codes(stmt_code: str) -> tuple[str, ...]:
     """The normalised codes one trace statement stands for: itself, and the
     body statements of a control structure. The text decides them, and every
     cell asks for every statement above it: parsing and unparsing them again

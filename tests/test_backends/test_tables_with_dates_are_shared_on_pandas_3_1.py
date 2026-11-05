@@ -83,7 +83,7 @@ def test_a_hit_of_a_table_with_dates_is_shared_and_can_be_changed():
 def test_a_date_column_has_a_layout_for_block_reuse():
     values = _dated()._mgr.blocks[1].values
     assert type(values) is pd.arrays.DatetimeArray
-    assert shared_blocks._layout(values) is not None
+    assert shared_blocks.block_layout(values) is not None
 
 
 def test_a_freeze_that_fails_part_way_leaves_the_table_as_it_was(monkeypatch):

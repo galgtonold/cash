@@ -120,7 +120,7 @@ def note_copy(copied: Any, keys: dict[tuple, tuple]) -> None:
     else writes."""
     if not keys:
         return
-    from .shared_blocks import _layout
+    from .shared_blocks import block_layout
 
     try:
         for block in copied._mgr.blocks:
@@ -128,7 +128,7 @@ def note_copy(copied: Any, keys: dict[tuple, tuple]) -> None:
             values = block.values
             # The copy keeps each block's layout (`copy_keeping_blocks`);
             # checked, not trusted.
-            if key is None or _layout(values) != key[0]:
+            if key is None or block_layout(values) != key[0]:
                 continue
             array = getattr(values, "_ndarray", values)
             if array.nbytes < MIN_BYTES:
