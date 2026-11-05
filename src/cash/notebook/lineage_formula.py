@@ -692,10 +692,22 @@ def def_time_names(
     or wrapped, where this ``def`` had found nothing. Every other global
     keeps folding as it stood at the ``def``, so the function's lineage
     moves when one changed. Both engines take the names from here."""
-    names = set(names)
+    return set(names) - forward_helpers(code, user_ns, virtual_modules, bound)
+
+
+def forward_helpers(
+    code: str,
+    user_ns: Mapping[str, Any],
+    virtual_modules: Iterable[str] = (),
+    bound: Iterable[str] = (),
+) -> frozenset[str]:
+    """The helpers defined below the ``def`` statement *code* that
+    `def_time_names` leaves out: what its body calls that was not bound
+    when it ran, or is bound since to a function where it had found
+    nothing. Empty for any other statement."""
     called = _called_helpers(code) & call_time_reads(code, user_ns, virtual_modules)
     if not called:
-        return names
+        return frozenset()
     bound = set(bound)
     digest = exact_source_digest(code)
     seen = _FORWARD_HELPERS.get(digest) or frozenset()
@@ -705,8 +717,7 @@ def def_time_names(
         _FORWARD_HELPERS[digest] = seen
         for name in absent:
             _FORWARD_NAMES[name] = True
-    forward = absent | {name for name in called & seen if _is_helper(user_ns.get(name))}
-    return names - forward
+    return absent | {name for name in called & seen if _is_helper(user_ns.get(name))}
 
 
 def _called_helpers(code: str) -> frozenset[str]:

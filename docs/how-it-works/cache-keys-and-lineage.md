@@ -104,7 +104,7 @@ type faster, or one that cannot be pickled, register a hasher; see [custom hashe
 
 ### The statement key
 
-<!-- claim: cash/notebook/cache_key.py:compute_cache_key @dadaf3eb -->
+<!-- claim: cash/notebook/cache_key.py:compute_cache_key @c33a4ecd -->
 Every statement key is built by one function. It joins these parts with
 colons, in this order, and hashes the result:
 
@@ -197,7 +197,7 @@ the chain. You declare no dependencies.
 Files, called functions, local modules, callee globals and the value are left
 out when there are none.
 
-<!-- claim: cash/notebook/lineage_formula.py:def_time_names @e9b6dbb8 -->
+<!-- claim: cash/notebook/lineage_formula.py:def_time_names @e1b4dbfd, cash/notebook/statement/processor.py:StatementProcessor._decide_cacheability @729ea48d -->
 A function whose body calls a helper defined in a cell below keeps one
 lineage, whether the helper was there when the `def` ran (the next Run All
 of the same kernel) or not (a first Run All, or after a restart): its
@@ -205,9 +205,12 @@ lineage leaves that helper out. The helper is looked up when the function
 is called, so it counts in the key of the statement that calls it, as a
 callee global, and what holds the function, such as
 `solvers = (greedy, held_karp)`, is served on the next Run All. A helper
-here is a name the body calls that was not bound when the `def` ran. Any
-other global the body reads stays in the function's lineage as it was when
-the `def` ran.
+here is a name the body calls that was not bound when the `def` ran. What
+the helper's own body reads is left out of the `def` the same way: its
+globals and attributes (`tree.get`) do not join the `def` statement's
+callee globals, and a helper that draws with pyplot does not make the `def`
+one whose function is keyed by its value. Any other global the body reads
+stays in the function's lineage as it was when the `def` ran.
 
 <!-- claim: cash/notebook/upstream/simulated_callables.py:SimulatedCallables.stale_callee_globals @08ed88a4 -->
 Since the function's lineage leaves such a helper out, an edit to it that
