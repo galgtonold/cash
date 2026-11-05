@@ -36,7 +36,7 @@ import json
 import logging
 import textwrap
 import types
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from cash._user_attrs import attribute_or, instance_of
@@ -289,7 +289,13 @@ class ControlStructureProcessor:
             # Valued as the simulation values it (`ControlSimulation` compares
             # with this), from the run's stats: the upstream check built the
             # same component moments ago for the cell that read the files.
-            outcome = (entry, left, frozenset(files), file_component_this_run(files))
+            outcome = (
+                entry,
+                left,
+                frozenset(files),
+                file_component_this_run(files),
+                stored_lineages(code, result.metrics, left),
+            )
             state.control_outcomes[outcome_key(code, occurrence_index)] = outcome
             # When it read them, for a write of the notebook's after it
             # (`rewritten_by_the_notebook_since`).
@@ -370,13 +376,14 @@ class ControlStructureProcessor:
                     sp.cash_instance.backend.delete(key)
                     written[key] = None
                 return
-            entry, left, files, file_component = outcome
+            entry, left, files, file_component, stored = outcome
             record = {
                 "entry": entry,
                 "callees": callees,
                 "left": left,
                 "files": sorted(files),
                 "file_component": file_component,
+                "stored": stored,
             }
             if written.get(key) == record:
                 return
@@ -787,6 +794,13 @@ class ControlStructureProcessor:
         # After execution, update lineage for mutated variables
         status = metrics.get("status")
         if update_lineage and status in (CacheStatus.COMPUTED, CacheStatus.RESTORED):
+            entry = _helpers.structure_entry([metrics])
+            if entry is not None:
+                # The lineages its entry stores, before the update below moves
+                # what it changed in place on: a restore of the entry by the
+                # simulation checks them (`stored_lineages`).
+                lineage = self.statement_processor.tracking_state.variable_lineage
+                metrics["stored_lineages"] = {name: lineage[name] for name in entry[1] if name in lineage}
             _helpers.update_lineage_after_execution(
                 self.shell,
                 self.statement_processor,
@@ -798,7 +812,7 @@ class ControlStructureProcessor:
                 link_shares=_helpers.current_loop_pass(self) is None,
                 cost=metrics.get("execution_time", 0.0),
                 prior_lineages=self._lineages_before(code, metrics.get("stored_in_place", ())),
-                entry=_helpers.structure_entry([metrics]),
+                entry=entry,
             )
         elif update_lineage:
             self.statement_processor.in_loop.close_watch(code, ran=False)
@@ -836,6 +850,24 @@ class ControlStructureProcessor:
             cached_iterations=1 if metrics.get("status") == CacheStatus.RESTORED else 0,
             computed_iterations=1 if metrics.get("status") == CacheStatus.COMPUTED else 0,
         )
+
+
+def stored_lineages(code: str, metrics: Iterable[Any], left: Mapping[str, str]) -> dict[str, str]:
+    """The lineage the cache entry of the structure *code*, run as one unit,
+    stores for each variable it then moved on to the lineage in *left*.
+
+    A loop that changes a list in place stores it with the lineage its
+    statement gave it, and the structure's lineage update
+    (``update_mutated_variable_lineages``) moves it on after: the simulation
+    takes *left* as the loop's outcome, and a restore of the entry
+    (``CacheRestorer.try_virtual_restore``) checks it for these instead."""
+    stored: dict[str, str] = {}
+    for m in metrics:
+        held = m.get("stored_lineages") if isinstance(m, dict) else None
+        if not held or m.get("code") != code:
+            continue
+        stored.update((name, lin) for name, lin in held.items() if name in left and left[name] != lin)
+    return stored
 
 
 def _drawn_from(value: Any) -> bool:

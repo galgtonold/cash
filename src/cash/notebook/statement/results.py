@@ -102,6 +102,10 @@ class ProcessResult(ProcessResultRequired, total=False):
     stderr: str
     decorator_calls: list[DecoratorCallMetric]
     evaluated_vars: list[str]
+    # A control structure run as one unit: the lineage its entry stores for
+    # each output, before the structure moves what it changed in place on
+    # (`control_structures.processor.stored_lineages`).
+    stored_lineages: dict[str, str]
     skipped_reason: str
     is_upstream: bool
     inputs: list[str]

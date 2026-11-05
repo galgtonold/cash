@@ -272,6 +272,7 @@ class ControlSimulation:
         # (see TrackingState.control_outcomes): the files it read, and the
         # lineages it produced.
         recorded = self._recorded_outcome(stmt_code, virtual_lineage, occurrence_index)
+        stored_lineages: dict[str, str] = {}
         if recorded is not None:
             # The cell's snapshot must know these files, or the next check
             # reuses it after one changed and never asks the record again: a
@@ -314,6 +315,13 @@ class ControlSimulation:
                 # The runtime ran this very structure with these very inputs
                 # and the files it read are where it left them: what it left
                 # behind is the answer, not a formula it never used.
+                #
+                # Its entry stores what it changed in place with the lineages
+                # its statement gave them, which the runtime then moved on
+                # (``update_mutated_variable_lineages``): a restore checks the
+                # entry for those, as the runtime recorded them, and leaves
+                # the outputs where the record says the run left them.
+                stored_lineages = dict(recorded[4]) if len(recorded) > 4 else {}
                 virtual_lineage.update(recorded[1])
                 all_outputs = all_outputs | set(recorded[1])
 
@@ -325,7 +333,17 @@ class ControlSimulation:
 
         if all_outputs:
             produced_lineages = {out: virtual_lineage[out] for out in all_outputs if out in virtual_lineage}
-            sim.trace.append(TraceEntry(stmt_code, all_outputs, inputs, input_hashes, produced_lineages, files_stale))
+            sim.trace.append(
+                TraceEntry(
+                    stmt_code,
+                    all_outputs,
+                    inputs,
+                    input_hashes,
+                    produced_lineages,
+                    files_stale,
+                    stored_lineages=_stored_for(produced_lineages, stored_lineages),
+                )
+            )
             if lookup_time > 0:
                 sim.stmt_lookup_times[stmt_code] = lookup_time
         elif self._may_write_files(node, stmt_code):
@@ -397,6 +415,14 @@ class ControlSimulation:
         if statement_writes_files(stmt_code):
             return True
         return any(not has_attribute(builtins, name) for name in called_names(node))
+
+
+def _stored_for(produced: Mapping[str, str], stored: Mapping[str, str]) -> dict[str, str] | None:
+    """The lineage the structure's entry stores for each output it
+    produced: *stored* where the runtime recorded one the structure moved
+    on from, else the one it leaves with. None when that is every one."""
+    moved = {name: lin for name, lin in stored.items() if name in produced and produced[name] != lin}
+    return {**produced, **moved} if moved else None
 
 
 def _stats_of(paths: set[str], known: Mapping[str, tuple[int, int, int]]) -> dict[str, tuple[int, int, int]]:

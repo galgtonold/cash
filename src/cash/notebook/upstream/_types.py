@@ -205,6 +205,16 @@ class TraceEntry:
     cell: int = -1
     """The notebook cell the statement belongs to; -1 when unknown."""
 
+    stored_lineages: dict[str, str] | None = None
+    """The lineage each output has in the statement's own cache entry, where
+    that is not the one it leaves with; None when every one is.
+
+    A control structure run as one unit stores what it changed in place with
+    the lineages its statement gave them, then moves them on
+    (``update_mutated_variable_lineages``): *produced_lineages* is where they
+    end, this is what the entry holds, as the runtime recorded it
+    (``TrackingState.control_outcomes``)."""
+
 
 class IncrementalStartResult(NamedTuple):
     """Where the forward simulation starts: the first cell it must redo."""

@@ -61,5 +61,5 @@ def test_the_outcome_reuses_the_component_the_check_built(cash_magics, mock_shel
     # The same component a build from scratch gives.
     outcomes = [o for o in cash_magics.tracking_state.control_outcomes.values() if len(o[2]) == N]
     assert outcomes
-    for _entry, _left, files, component in outcomes:
+    for _entry, _left, files, component, *_stored in outcomes:
         assert component == file_deps.compute_file_hash_component(set(files))

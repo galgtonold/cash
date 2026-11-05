@@ -35,9 +35,10 @@ __all__ = ["CacheProbe", "ControlOutcome"]
 
 logger = logging.getLogger(__name__)
 
-#: ``(entry lineages, lineages left, files read, their file component)`` of a
-#: control structure's recorded run (see ``TrackingState.control_outcomes``).
-ControlOutcome = tuple[dict[str, str], dict[str, str], frozenset[str], str]
+#: ``(entry lineages, lineages left, files read, their file component,
+#: lineages its cache entry holds for what it moved on)`` of a control
+#: structure's recorded run (see ``TrackingState.control_outcomes``).
+ControlOutcome = tuple[dict[str, str], dict[str, str], frozenset[str], str, dict[str, str]]
 
 
 class CacheProbe:
@@ -243,6 +244,7 @@ class CacheProbe:
                 dict(record["left"]),
                 frozenset(record["files"]),
                 str(record["file_component"]),
+                dict(record.get("stored") or {}),
             )
         except (KeyError, TypeError, ValueError, AttributeError):
             return None

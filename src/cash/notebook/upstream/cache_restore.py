@@ -20,7 +20,9 @@ from ..._clock import perf_counter as _perf_counter
 from ..._user_attrs import instance_of
 from ...analysis.annotations import get_statement_annotations
 from ...analysis.ast_util import parse_cached
+from ...analysis.cacheability import analyze_statement
 from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source, statement_code
+from ...analysis.handed_callables import forget_held_answers
 from ...backends._base import ttl_expired
 from ...tracking.env_reads import environment_unchanged
 from ...tracking.file_dep_snapshot import snapshot_is_fresh
@@ -45,6 +47,7 @@ from ..statement._metadata import StatementCacheMetadata
 from ..statement.derivation_edges import record_shared_object_edges
 from ..statement.directives import statement_directives, ttl_floor_from_called_functions
 from ..statement.in_place import restore_into
+from ..statement.output_refusals import live_shared_reason
 from ._types import key_inputs, key_lineages
 from .cache_probe import CacheProbe
 
@@ -128,10 +131,18 @@ class CacheRestorer:
         input_hashes: dict[str, str],
         virtual_modules: set[str] | None = None,
         expected_lineages: dict[str, str] | None = None,
+        final_lineages: dict[str, str] | None = None,
     ) -> tuple[set[str], float, float]:
         """Attempt to restore a statement using virtual input hashes.
 
         Directly queries backend and updates memory if successful.
+
+        *expected_lineages* are the lineages the entry must hold for its
+        outputs. *final_lineages*, when given, are where the outputs end
+        after the statement: a control structure run as one unit moves what
+        it changed in place on after its entry is stored or found
+        (``update_mutated_variable_lineages``), and a restored output is
+        moved there too, as a hit at the structure's own place moves it.
 
         Returns:
             Tuple of (set of variables successfully restored, restore_time_seconds, saved_time_seconds).
@@ -215,6 +226,11 @@ class CacheRestorer:
                     logger.debug("[UPSTREAM] Restore failed: a variable stored with the outputs changed")
                     return set(), _perf_counter() - start_time, 0.0
 
+                why = self._live_refusal(stmt_code, outputs, metadata, variables_to_restore)
+                if why is not None:
+                    logger.debug("[UPSTREAM] Restore failed: %s", why)
+                    return set(), _perf_counter() - start_time, 0.0
+
                 # 4. Success! Restore into shell.
                 # Cache stores variables under 'variables' key (see StatementStore._payload)
                 if self.guard is not None:
@@ -234,6 +250,8 @@ class CacheRestorer:
                         [name for name in metadata["anchor_links"] if name in self.shell.user_ns],
                     )
                 self._update_tracking_after_restore(restored_vars, metadata, input_hashes)
+                if final_lineages:
+                    self._move_to_final_lineages(restored_vars, metadata, final_lineages)
                 if restored_vars and cached_data.get("rng_state"):
                     self.restored_rng_states[stmt_code] = cached_data["rng_state"]
                 self.last_outputs = {
@@ -424,6 +442,54 @@ class CacheRestorer:
                 state.executed_input_lineages[var] = dict(input_hashes)
             if resolved_paths:
                 state.executed_file_deps.setdefault(var, set()).update(resolved_paths)
+
+    def _live_refusal(
+        self, stmt_code: str, outputs: set[str], metadata: dict, variables_to_restore: dict
+    ) -> str | None:
+        """Why the live objects forbid restoring *variables_to_restore*, as
+        a hit at the statement's own place refuses (`StatementHit.serve`,
+        `StatementProcessor._live_objects_shared`); None when they do not.
+
+        A copy bound where something points at the live object (a weak
+        reference, an ``id()`` key: ``bound_copies``) or where another
+        variable or container holds the object the statement changes in
+        place or stores with its outputs (``keep = actions`` before a loop
+        filling ``actions`` is restored) would not be that object: the
+        statement runs instead."""
+        user_ns = self.shell.user_ns
+        for name in metadata.get("bound_copies") or ():
+            if name in user_ns and not in_place.bound_as_a_copy(user_ns[name], user_ns):
+                return f"something points at {name} now"
+        holders = set(metadata.get("holders") or ())
+        names = {
+            name
+            for name in set(variables_to_restore) | holders
+            if name in user_ns and user_ns.get(name) is not FORWARD_PROBE_PLACEHOLDER
+        }
+        try:
+            mutated = set(analyze_statement(stmt_code, None, user_ns).all_mutated_vars) & (
+                outputs | set(variables_to_restore)
+            )
+        except (SyntaxError, ValueError, TypeError):
+            return "cash could not read what it changes in place"
+        keep = (holders | mutated) & names
+        if not keep:
+            return None
+        # What the analyses kept of the user's objects is cash's reference,
+        # not a holder of the user's.
+        forget_held_answers()
+        return live_shared_reason(names, keep, user_ns, shell=self.shell)
+
+    def _move_to_final_lineages(self, restored_vars: set[str], metadata: dict, final_lineages: dict[str, str]) -> None:
+        """Give each of *restored_vars* the lineage it leaves the statement
+        with (*final_lineages*), where that is not the one its entry holds."""
+        holders = metadata.get("holders") or {}
+        stored = metadata.get("output_lineages") or {}
+        for var in restored_vars:
+            final = final_lineages.get(var)
+            if var in holders or final is None or stored.get(var) == final:
+                continue
+            self.tracking_state.lineage.record(var, final, value=self.shell.user_ns.get(var))
 
     def eliminate_broken_vars_via_current_cell_probe(
         self,

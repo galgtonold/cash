@@ -1231,7 +1231,8 @@ class MismatchClassifier:
                     entry.inputs,
                     entry.input_hashes,
                     sim.virtual_modules,
-                    expected_lineages=entry.produced_lineages,
+                    expected_lineages=entry.stored_lineages or entry.produced_lineages,
+                    final_lineages=entry.produced_lineages if entry.stored_lineages else None,
                 )
             total_restore_time += restore_time
 

@@ -430,14 +430,15 @@ class TrackingState:
     # `outcome_key` (sha256 of ``ast.unparse`` of a top-level
     # if/for/while/with/try, and which copy in its cell it is) ->
     # ({input: lineage at entry}, {var: lineage it left behind}, files behind
-    # those, their file-hash component). The runtime derives a control
-    # structure's output lineages from values, which the simulation cannot
-    # reproduce from code; reached again with the same inputs and file state,
-    # the simulation takes what the runtime recorded.
+    # those, their file-hash component, and {var: lineage its entry holds}
+    # for what it moved on after its entry was stored or found). The runtime
+    # derives a control structure's output lineages from values, which the
+    # simulation cannot reproduce from code; reached again with the same
+    # inputs and file state, the simulation takes what the runtime recorded,
+    # and a restore of the entry checks it for the lineages it holds.
+    # A record of four items holds no entry lineages.
     # W: ControlStructureProcessor. R: VirtualLineage.
-    control_outcomes: dict[str, tuple[dict[str, str], dict[str, str], frozenset[str], str]] = field(
-        default_factory=dict
-    )
+    control_outcomes: dict[str, tuple] = field(default_factory=dict)
 
     # Module name -> variables whose stored input lineages need refreshing once
     # that module's import statement re-executes.
