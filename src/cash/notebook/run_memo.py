@@ -993,16 +993,27 @@ def _held_keys_of(watch: Any, recorded: Mapping[str, Any]) -> _Held | None:
 def _held_keys_parts(watch: Any, recorded: Mapping[str, Any]) -> tuple[list, list[str]]:
     """`FileWatch.cover_by_folder` of the paths of *recorded* whose stat
     the watch holds now with the recorded `stat_key` (a relative one by its
-    absolute spelling); the rest are loose."""
+    absolute spelling); the rest are loose.
+
+    Asked only once every path of *recorded* was found with its recorded key
+    this run (`stat_keys_this_run`): a stat the watch holds that is the very
+    stat the run keyed is as recorded without a key made of it again."""
     by_key: dict[str, str] = {}
     loose: list[str] = []
     current = watch.current
     isabs = os.path.isabs
     spelled = _fds.spelled_absolute
+    run_stats = stats_this_run(recorded)
     for p, key in recorded.items():
         twin = p if isabs(p) else spelled(p)
         st = current(twin) if twin is not None else None
-        if st is None or stat_key(st) != key:
+        if st is None:
+            loose.append(p)
+            continue
+        found = run_stats.get(p)
+        if found is not None and found[1] is st:
+            by_key[p] = twin
+        elif stat_key(st) != key:
             loose.append(p)
         else:
             by_key[p] = twin
