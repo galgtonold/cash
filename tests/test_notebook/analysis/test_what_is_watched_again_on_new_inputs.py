@@ -24,7 +24,7 @@ import heapq
 import io
 import pathlib
 import random
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import numpy as np
 import pytest
@@ -199,3 +199,56 @@ def test_a_loop_whose_data_changed_loses_its_trust_when_it_lists_the_data():
 def test_a_loop_on_the_same_data_keeps_its_trust():
     rules = _rules({"rows": "r0", "raw": "same"})
     assert rules.loops_reading_changed_data({"rows"}, _trace("same"), {"k"}, {"rows", "k", "raw"}) == set()
+
+
+# A helper read off a project module (``import btlib``; ``btlib.run_backtest``)
+# is a helper of the user's as much as one imported by name: what only it is
+# handed keeps its verdict too. Its source is read by the dotted name.
+MODULE_SOURCES = {
+    "lib.run_backtest": SOURCES["run_backtest"],
+    "lib.push": SOURCES["push"],
+    "lib.sub.score": SOURCES["score"],
+}
+
+
+def _module_namespace() -> dict:
+    ns = _namespace()
+    lib = ModuleType("lib")
+    lib.sub = ModuleType("lib.sub")
+    for dotted, source in MODULE_SOURCES.items():
+        holder = lib
+        *path, fname = dotted.split(".")[1:]
+        for part in path:
+            holder = getattr(holder, part)
+        scope: dict = {"heapq": heapq}
+        exec(source, scope)  # the helpers under test
+        setattr(holder, fname, scope[fname])
+    ns["lib"] = lib
+    ns["obj"] = SimpleNamespace(run_backtest=lib.run_backtest)
+    return ns
+
+
+def _module_exempt(stmt: str) -> set[str]:
+    return set(rewatch_exempt(ast.parse(stmt), _module_namespace(), MODULE_SOURCES.get))
+
+
+@pytest.mark.parametrize(
+    ("stmt", "exempt"),
+    [
+        ("bt = lib.run_backtest(data, 3)", {"data"}),
+        ("out = lib.sub.score(data, n)", {"data", "n"}),
+        ("for k in pending:\n    rows.append(lib.sub.score(data, k))", {"data"}),
+    ],
+)
+def test_what_only_a_module_helper_is_handed_keeps_its_verdict(stmt, exempt):
+    assert _module_exempt(stmt) == exempt
+
+
+def test_what_a_module_helper_changes_on_some_runs_only_is_watched_again():
+    assert "h" not in _module_exempt("for x in data:\n    n = lib.push(h, x)")
+    assert "h" in _module_exempt("n = lib.push(h, 3)")
+
+
+def test_a_helper_read_off_an_object_is_watched_again():
+    # A method's receiver is a parameter the call does not show.
+    assert _module_exempt("bt = obj.run_backtest(data, 3)") == set()

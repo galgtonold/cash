@@ -2314,7 +2314,8 @@ def rewatch_exempt(
 ) -> frozenset[str]:
     """The names *tree* only hands, each time as a plain argument, to a
     function of the user's whose source is read (``bt =
-    run_backtest(series, 3)``), or as data to a draw on a Figure/Axes
+    run_backtest(series, 3)``, or ``btlib.run_backtest(series, 3)`` off a
+    module the namespace binds), or as data to a draw on a Figure/Axes
     (``ax.bar(names, totals)``).
 
     A verdict learned from earlier runs is learned again on new inputs
@@ -2348,10 +2349,11 @@ def rewatch_exempt(
                         arg = arg.value
                     if isinstance(arg, ast.Name) and _plain_data(user_ns.get(arg.id, _UNBOUND)):
                         safe_nodes.add(id(arg))
+                continue
+        name = _helper_name(func, user_ns)
+        if resolve_source is None or name is None or not users_callee(func, user_ns):
             continue
-        if resolve_source is None or not isinstance(func, ast.Name) or not users_callee(func, user_ns):
-            continue
-        callee = _readable_function(func.id, resolve_source)
+        callee = _readable_function(name, resolve_source)
         if callee is None or not _result_kept(call, parents, user_ns):
             continue
         # What the helper changes on some runs only (in a loop over its
@@ -2361,9 +2363,9 @@ def rewatch_exempt(
         if some_runs is None:
             some_runs = _some_runs_only(tree)
         if id(call) in some_runs:
-            handed, _free = function_handoffs(callee, user_ns, resolve_source, frozenset({func.id}))
+            handed, _free = function_handoffs(callee, user_ns, resolve_source, frozenset({name}))
         else:
-            handed = conditional_param_handoffs(callee, user_ns, resolve_source, frozenset({func.id}))
+            handed = conditional_param_handoffs(callee, user_ns, resolve_source, frozenset({name}))
         watched = handed_to_params(call, callee, handed, {}) if handed else set()
         for arg in [*call.args, *(kw.value for kw in call.keywords if kw.arg is not None)]:
             if isinstance(arg, ast.Name) and arg.id not in watched:
@@ -2384,6 +2386,32 @@ def rewatch_exempt(
         if isinstance(node, ast.Name):
             (safe if id(node) in safe_nodes else other).add(node.id)
     return frozenset(safe - other)
+
+
+def _helper_name(func: ast.expr, user_ns: Mapping[str, Any]) -> str | None:
+    """The name *func* calls a helper by: ``run_backtest`` for a bare name,
+    ``btlib.run_backtest`` for a function read off a module the namespace
+    binds (``import btlib``), as ``live_function_source`` reads a dotted
+    name. None for anything else: a method of an object takes its receiver
+    as a parameter the call does not show."""
+    if isinstance(func, ast.Name):
+        return func.id
+    parts: list[str] = []
+    node: ast.expr = func
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name) or not isinstance(user_ns.get(node.id), types.ModuleType):
+        return None
+    holder: Any = user_ns[node.id]
+    for attr in reversed(parts[1:]):
+        try:
+            holder = inspect.getattr_static(holder, attr)
+        except AttributeError:
+            return None
+        if not isinstance(holder, types.ModuleType):
+            return None
+    return ".".join([node.id, *reversed(parts)])
 
 
 def _array_like(value: Any) -> bool:

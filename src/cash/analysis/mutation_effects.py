@@ -115,6 +115,19 @@ __all__ = [
 SourceResolver = Callable[[str], "str | None"]
 
 
+def _wrapped_function(fn: types.FunctionType) -> Any:
+    """The innermost function *fn* wraps through ``__wrapped__``, read from
+    each function's own ``__dict__`` so no attribute code runs; *fn* when it
+    wraps none."""
+    seen = {id(fn)}
+    while True:
+        inner = fn.__dict__.get("__wrapped__")
+        if type(inner) is not types.FunctionType or id(inner) in seen:
+            return fn
+        seen.add(id(inner))
+        fn = inner
+
+
 def live_function_source(name: str, namespace: Mapping[str, Any]) -> str | None:
     """Source of the function *name* as the kernel holds it, or None.
 
@@ -135,6 +148,11 @@ def live_function_source(name: str, namespace: Mapping[str, Any]) -> str | None:
                 fn = inspect.getattr_static(fn, attr)
             except AttributeError:
                 return None
+        if type(fn) is types.FunctionType:
+            # A decorated helper (``@cash.cache``, ``functools.wraps``) is read
+            # as the function it wraps, as ``inspect.getsource`` reads a bare
+            # name below.
+            fn = _wrapped_function(fn)
         if type(fn) is not types.FunctionType or not is_user_code_file(fn.__code__.co_filename):
             return None
         try:
