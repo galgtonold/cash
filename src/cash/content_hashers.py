@@ -406,6 +406,28 @@ def set_piece_source(source: Callable[[Any], Any]) -> None:
     _PIECE_SOURCE[:] = [source]
 
 
+#: Who reads a frame into the frame memo (`read_into_memo`): the memo
+#: registers itself (`cash.decorator.arg_hashing.cow_frame_digest`).
+_FRAME_READER: list[Callable[[Any], Any]] = []
+
+
+def set_frame_reader(reader: Callable[[Any], Any]) -> None:
+    """Make *reader* what `read_into_memo` asks."""
+    _FRAME_READER[:] = [reader]
+
+
+def read_into_memo(frame: Any) -> bool:
+    """Have the frame memo take the digest of the pandas *frame*, keeping
+    what each column folded into it (`known_column_pieces`); a column it
+    vouches for already is not read. True when it did."""
+    if not _FRAME_READER:
+        return False
+    try:
+        return _FRAME_READER[0](frame) is not None
+    except Exception:  # noqa: BLE001 - only a speedup: nothing is known
+        return False
+
+
 def known_column_pieces(frame: Any) -> Any:
     """What the columns of the pandas frame *frame* fold into a digest, as
     far as the frame memo can vouch for them now (`ColumnPieces`): an object

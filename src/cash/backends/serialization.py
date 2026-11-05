@@ -14,6 +14,7 @@ from collections.abc import Callable
 from typing import Any
 
 from .. import _cash_views, kept_state
+from . import block_digests
 from .datetime_columns import reduce_datetime_objects
 from .no_file_writes import NoFileWrites, import_what_it_imported, no_file_writes
 
@@ -523,11 +524,15 @@ def _reduce_arrow_array(value: Any) -> Any:
     """
     try:
         chunked = value._pa_array
-        chunks = [_compact(chunk) for chunk in chunked.chunks]
+        whole = chunked.chunks
+        chunks = [_compact(chunk) for chunk in whole]
         arrow_type = chunked.type
     except Exception:  # not the layout this expects: pandas' own pickle
         logger.debug("pickling a %s the pandas way", type(value).__name__, exc_info=True)
         return value.__reduce_ex__(5)
+    # The buffers written as they are, held by *chunked*: a table stored
+    # again holding the same column is not hashed again (`block_digests`).
+    block_digests.note_arrow(chunked, [chunk for chunk, kept in zip(whole, chunks) if kept is chunk])
     state = dict(value.__dict__)
     del state["_pa_array"]
     return _arrow_array_from_chunks, (type(value), chunks, arrow_type, state)

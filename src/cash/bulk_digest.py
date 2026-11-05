@@ -49,6 +49,7 @@ __all__ = [
     "TAG",
     "bulk_digest",
     "fold_buffer",
+    "fold_digest",
     "hashing_threads",
     "leaf_hasher",
 ]
@@ -226,5 +227,12 @@ def fold_buffer(h: Any, data: Any) -> None:
         h.update(b"r" + n.to_bytes(8, "little"))
         h.update(view)
     else:
-        h.update(b"t" + n.to_bytes(8, "little"))
-        h.update(bulk_digest(view))
+        fold_digest(h, n, bulk_digest(view))
+
+
+def fold_digest(h: Any, nbytes: int, digest: bytes) -> None:
+    """Fold into *h* what `fold_buffer` folds for a buffer of more than
+    `DIRECT_MAX_BYTES` bytes, *nbytes* of them, whose tree digest is
+    *digest*: the same bytes, without reading the buffer."""
+    h.update(b"t" + nbytes.to_bytes(8, "little"))
+    h.update(digest)

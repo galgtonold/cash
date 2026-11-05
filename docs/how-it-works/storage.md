@@ -334,7 +334,7 @@ write and read. Parquet files are smaller for columns with few distinct values
 matters more than speed, the [`compress`](../getting-started/configuration.md#all-settings)
 setting gets most of that back.
 
-<!-- claim: cash/backends/serialization.py:_reduce_arrow_array @388e99d3, cash/backends/serialization.py:_compact @79a515ab -->
+<!-- claim: cash/backends/serialization.py:_reduce_arrow_array @2c76f35c, cash/backends/serialization.py:_compact @79a515ab -->
 A pandas column backed by Arrow (pandas' `str` columns, `ArrowDtype`) is
 stored as its Arrow chunks, written as they are: pandas' own pickle first
 joins a column's chunks into one copy. A short slice of a long column is

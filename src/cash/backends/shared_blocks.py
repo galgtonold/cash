@@ -37,7 +37,7 @@ from ..content_hashers import column_memory_key, known_column_pieces, pandas_val
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["BlockReuse", "bytes_to_copy", "compared_count", "is_kept", "reused_count"]
+__all__ = ["BlockReuse", "bytes_to_copy", "compared_count", "content_keys", "is_kept", "reused_count"]
 
 #: ``content key -> weak reference`` to block values a stored table holds.
 _KEPT: dict[tuple, Any] = {}
@@ -129,16 +129,7 @@ class BlockReuse:
         a layout a stored block can be taken for (`_layout`)."""
         if getattr(frame, "ndim", 0) != 2:
             return None
-        keys = {}
-        pieces = known_column_pieces(frame)
-        if pieces is not None:
-            plan = _plan(frame)
-            # Asked only now: the memo counts who references a frame's arrays to
-            # vouch for it, and `_plan` holds none of them any more.
-            for positions, layout, memory in plan:
-                found = [pieces.get(key) for key in memory]
-                if all(piece is not None for piece in found):
-                    keys[positions] = (layout, tuple(found))
+        keys = content_keys(frame)
         # Taken after the memo was asked: they hold the frame's arrays.
         sources = _sources(frame)
         return cls(keys, sources) if keys or sources else None
@@ -220,6 +211,29 @@ def bytes_to_copy(frame: Any) -> int:
             continue
         total += int(getattr(values, "nbytes", 0))
     return total
+
+
+def content_keys(frame: Any) -> dict[tuple, tuple]:
+    """``positions of a block's columns -> content key`` for each block of
+    the DataFrame *frame* whose every column the frame memo vouches for now
+    (`known_column_pieces`): the block's layout (`_layout`) and the bytes
+    each of its columns folded into a digest, in order. Two blocks with one
+    key hold the same bytes in the same order. Empty when nothing is known.
+    """
+    keys: dict[tuple, tuple] = {}
+    if getattr(frame, "ndim", 0) != 2:
+        return keys
+    pieces = known_column_pieces(frame)
+    if pieces is None:
+        return keys
+    plan = _plan(frame)
+    # Asked only now: the memo counts who references a frame's arrays to
+    # vouch for it, and `_plan` holds none of them any more.
+    for positions, layout, memory in plan:
+        found = [pieces.get(key) for key in memory]
+        if all(piece is not None for piece in found):
+            keys[positions] = (layout, tuple(found))
+    return keys
 
 
 def _sources(frame: Any) -> dict[tuple, tuple[Any, tuple]]:

@@ -30,7 +30,7 @@ from ..cost_model import GENERIC_FAMILY
 from ..sizing import memory_footprint, pickled_size_estimate
 from ..source_reading import read_code_file
 from ..value_types import IMMUTABLE_PRIMS
-from . import frame_sharing, heap_blocks, iterative_copy, set_order, shared_blocks
+from . import block_digests, frame_sharing, heap_blocks, iterative_copy, set_order, shared_blocks
 from ._base import MEASURED_ROUND_TRIP, CacheBackend, MetadataDict, gdsf_value
 from .entry_format import SplitPayload
 from .no_file_writes import WouldWriteAFile, no_file_writes, refused_now, would_write_a_file
@@ -2592,7 +2592,11 @@ def _write_copy(value: Any, memo: dict[int, Any], depth: int = 0) -> Any:
     if found is not None:
         return found
     if _is_pandas_frame(kind):
+        # What each block holds, asked before it is copied: the copy, which
+        # nothing else writes, then holds those bytes (`block_digests`).
+        keys = shared_blocks.content_keys(value) if _big_table(value) else {}
         copied = _full_frame_copy(value)
+        block_digests.note_copy(copied, keys)
     elif _of_atoms(value):
         copied = value if kind is tuple else kind(value)
     elif kind is dict:
@@ -2622,6 +2626,15 @@ def _frames_own(frame_cells: dict[int, Any], stored: Any, copied: builtins.set[i
         cells in (_SHARED, _BYTES) or key in copied or (cells is False and key in found and _copies_in_full(found[key]))
         for key, cells in frame_cells.items()
     )
+
+
+def _big_table(frame: Any) -> bool:
+    """Does the DataFrame *frame* hold a block the chunk store keeps apart
+    (`block_digests.MIN_BYTES`)?"""
+    try:
+        return frame.ndim == 2 and any(block.values.nbytes >= block_digests.MIN_BYTES for block in frame._mgr.blocks)
+    except Exception:  # noqa: BLE001 - not a table as known here
+        return False
 
 
 def _full_frame_copy(frame: Any) -> Any:
