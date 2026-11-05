@@ -198,6 +198,25 @@ def test_a_young_file_a_statement_reads_is_hashed_once_for_it(cash_magics, tmp_p
     assert again.calls == 1, "a young file's digest outlived its statement"
 
 
+def test_a_plain_statement_walks_for_no_calls(cash_magics):
+    """``y = base + 1`` calls nothing, stores on no attribute or item and
+    imports nothing (`plain_statement`): the analyses that look only for
+    those answered it by walking it, each on its own, some of them for
+    every module it reaches."""
+    from cash.analysis import mutations
+    from cash.notebook import callee_reach
+
+    run_cash_cell(cash_magics, "base = 1")
+    with (
+        method_calls(mutations._TopLevelCallCollector, "statement") as collected,
+        method_calls(callee_reach, "_state_writes") as state_writes,
+    ):
+        run_cash_cell(cash_magics, "y = base + 1")
+    # Several of each before: one per question asked of the statement.
+    assert collected.calls == 0, collected.calls
+    assert state_writes.calls == 0, state_writes.calls
+
+
 def test_a_cell_adding_columns_to_a_table_copies_each_column_once(cash_magics):
     """``df["hour"] = ...`` statement after statement: each stores the table
     again, and the RAM tier copied all of it each time (440 MB a statement

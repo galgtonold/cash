@@ -32,7 +32,7 @@ from cash._user_attrs import attribute_or, has_attribute, instance_of, is_routin
 
 from .._memo import NOTEBOOK_STATEMENTS
 from ..analysis.analysis_budget import AnalysisBudgetExceeded
-from ..analysis.ast_util import parse_cached
+from ..analysis.ast_util import parse_cached, plain_statement
 from ..analysis.bytecode import NAME_LOADS, argvals
 from ..analysis.callee_effects import source_global_mutations
 from ..analysis.handed_callables import handed_callable_values
@@ -248,7 +248,9 @@ def module_state_writes(code: str, namespace: Mapping[str, Any] | None) -> froze
     if not code or not namespace:
         return frozenset()
     tree = parse_cached(code)
-    if tree is None:
+    # A plain statement (`plain_statement`) stores on no attribute or item
+    # and calls nothing: it binds names, which sets nothing on a module.
+    if tree is None or plain_statement(tree):
         return frozenset()
     found: set[str] = set()
     _state_writes(tree.body, namespace, found, set(), aliases=_module_aliases(tree.body, namespace))
@@ -289,7 +291,7 @@ def process_state_writes(code: str, namespace: Mapping[str, Any] | None) -> froz
     if not code:
         return frozenset()
     tree = parse_cached(code)
-    if tree is None:
+    if tree is None or plain_statement(tree):
         return frozenset()
     process: set[str] = set()
     _state_writes(tree.body, namespace or {}, None, set(), process)
