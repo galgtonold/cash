@@ -2007,7 +2007,10 @@ and the variable no longer holds that change. The message names the variable,
 the cell below and its statement. When the cell reads the variable through a
 function that holds it (`def draw(k, rows=BIG)`, a closure cell, a `partial`),
 it names the function too, and says "may hold" when the function holds more
-than cash looks through. It is shown once per cell, variable and statement.
+than cash looks through. It is also shown for a variable the cell does not
+read that cash rebuilt to make one it does (`played`, rebuilt to rebuild
+`hist = run(played)` after an edit to `run`). It is shown once per cell,
+variable and statement.
 
 **Why it matters.** Plain Jupyter would run the cell on the changed value.
 Here the result is the one a run from the top gives, and the change the cell

@@ -178,6 +178,7 @@ def warn_changed_below(
     warned: set[tuple[int, str, str]],
     through: str | None = None,
     maybe: bool = False,
+    along: bool = False,
 ) -> bool:
     """Warn NOTEBOOK-CHANGED-BELOW when *name*, an input of cell *cell_idx*
     that is about to be rebuilt as the cells above leave it, was last changed
@@ -185,8 +186,10 @@ def warn_changed_below(
     input the cell reads, when *name* is a variable whose object that input
     holds (``def draw(k, rows=BIG)`` holds ``BIG``, which ``BIG.append(...)``
     changes); *maybe*: the walk over *through* was cut short, so it may
-    hold *name*. Once per cell, name and statement (*warned*). Returns
-    whether it warned."""
+    hold *name*. *along*: *name* is no input of the cell but was rebuilt
+    on the way to one (``played``, to rebuild ``hist`` the cell reads).
+    Once per cell, name and statement (*warned*). Returns whether it
+    warned."""
     if not last_code or not 0 <= cell_idx < len(cells):
         return False
     code = strip_markers(last_code).strip()
@@ -205,16 +208,25 @@ def warn_changed_below(
     first = written.strip().splitlines()[0]
     if len(first) > 60:
         first = first[:57] + "..."
-    what = (
-        f"cell {cell_idx + 1} reads {reads}, which cell {below + 1} below changed in place "
-        f"(`{first}`). Re-run on its own, cell {cell_idx + 1} gets '{name}' rebuilt as the cells "
-        f"above leave it, so it computes without that change, and '{name}' no longer holds it "
-        f"until cell {below + 1} runs again."
-    )
-    fix = (
-        f"run cell {below + 1} again to apply the change; for cell {cell_idx + 1} to see it, move "
-        f"the change into a cell above cell {cell_idx + 1}."
-    )
+    if along:
+        what = (
+            f"to bring cell {cell_idx + 1} up to date cash rebuilt '{name}' as the cells above "
+            f"leave it, which cell {below + 1} below had changed in place (`{first}`). Cell "
+            f"{cell_idx + 1} gets what a run from the top gives it, but '{name}' no longer holds "
+            f"that change until cell {below + 1} runs again."
+        )
+        fix = f"run cell {below + 1} again to apply the change to '{name}'."
+    else:
+        what = (
+            f"cell {cell_idx + 1} reads {reads}, which cell {below + 1} below changed in place "
+            f"(`{first}`). Re-run on its own, cell {cell_idx + 1} gets '{name}' rebuilt as the cells "
+            f"above leave it, so it computes without that change, and '{name}' no longer holds it "
+            f"until cell {below + 1} runs again."
+        )
+        fix = (
+            f"run cell {below + 1} again to apply the change; for cell {cell_idx + 1} to see it, move "
+            f"the change into a cell above cell {cell_idx + 1}."
+        )
     log_diagnostic(logger, "NOTEBOOK-CHANGED-BELOW", what, fix)
     warn_diagnostic(CashWarning, "NOTEBOOK-CHANGED-BELOW", what, fix, location=("<cash>", cell_idx + 1))
     return True

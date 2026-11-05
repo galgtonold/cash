@@ -29,6 +29,7 @@ from ..shared_objects import hold_repair_snapshot, release_repair_snapshot
 from ..staleness import StalenessTracker, normalise_source
 from ..statement.carrier_advances import reachable_generators
 from ..tracking_state import TrackingState
+from .changed_below import warn_changed_below
 from .notebook_vetting import NotebookVetter
 from .replay import StatementReplay, UpstreamRepairGap
 from .rng_rewind import RngRewind
@@ -696,6 +697,30 @@ class UpstreamChecker:
             else:
                 lineage.discard(name)
 
+    def _warn_rebuilt_changed_below(
+        self,
+        rebuilt: set[str],
+        bindings_before: dict[str, Any],
+        codes_before: dict[str, str],
+        notebook_cells: list[str],
+        current_cell_idx: int,
+    ) -> None:
+        """Say NOTEBOOK-CHANGED-BELOW for a name the repair rebuilt on the
+        way to the cell's inputs that a cell below had changed in place.
+
+        The classifier says so for an input of the cell. A name rebuilt to
+        make one goes the same way unsaid: an edited helper rebuilt ``hist``
+        from ``played``, and ``played`` lost the column a cell below had
+        added to it. What the cell gets is what a run from the top gives
+        it; the warning tells the user ``played`` no longer holds the change.
+        """
+        warned = self.simulator.classifier._warned_changed_below
+        for name in sorted(rebuilt):
+            before = bindings_before.get(name, _UNBOUND)
+            if before is _UNBOUND or self.shell.user_ns.get(name, _UNBOUND) is before:
+                continue
+            warn_changed_below(name, codes_before.get(name), notebook_cells, current_cell_idx, warned, along=True)
+
     def _rebuilt_names(self, statements: list[str], restored_info: list[ProcessResult]) -> set[str]:
         """What the planned re-runs bind, and what the simulation restored."""
         names: set[str] = set()
@@ -772,6 +797,9 @@ class UpstreamChecker:
             # the repair restores is not refused for the objects they keep.
             hold_repair_snapshot(bindings_before)
             lineages_before = dict(self.tracking_state.variable_lineage)
+            # The statement that last changed each name, before a restore
+            # records the one it restored (`_warn_rebuilt_changed_below`).
+            codes_before = dict(self.tracking_state.executed_cell_codes)
             # The cell's own source goes along: the classifier re-simulates it to
             # tell its own earlier run apart from an upstream edit.
             self.simulator.restorer.restored_rng_states.clear()
@@ -802,7 +830,8 @@ class UpstreamChecker:
                 trace=self.simulator.last_trace,
                 restored_states=self.simulator.restorer.restored_rng_states,
             )
-            self._refuse_to_undo(unsaved, self._rebuilt_names(statements_to_reexecute, restored_info))
+            rebuilt = self._rebuilt_names(statements_to_reexecute, restored_info)
+            self._refuse_to_undo(unsaved, rebuilt)
 
             executed_metrics = []
             if statements_to_reexecute:
@@ -824,6 +853,7 @@ class UpstreamChecker:
                     raise
             self.rng.label_rerun_metrics(executed_metrics, rng_rerun)
             total_execution_time = self.replay.sum_execution_times(executed_metrics)
+            self._warn_rebuilt_changed_below(rebuilt, bindings_before, codes_before, notebook_cells, current_cell_idx)
 
             # Put the random streams the cell draws from where a run from the
             # top has them before it. After the re-runs above, so it is the
