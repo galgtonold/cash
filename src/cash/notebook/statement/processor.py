@@ -2150,7 +2150,10 @@ class StatementProcessor:
                 self._freshness.last_miss_reason = self._hits.last_refusal
             return None
         self._last_runs.note(
-            run.code, run.cache_key, self.tracking_state.statement_entry_lineages.get(run.code), parts=run.key_parts
+            run.pass_slot or run.code,
+            run.cache_key,
+            self.tracking_state.statement_entry_lineages.get(run.code),
+            parts=run.key_parts,
         )
         if metadata is not None and metadata.scalar_identity:
             # Stored where an attribute was set on a pandas scalar: this
@@ -2935,7 +2938,9 @@ class StatementProcessor:
 
     def _last_run_reason(self, run: StatementRun) -> str | None:
         """Why *run* missed, against its last run in this session
-        (`LastRuns.reason`): one metadata read, of its own key, at most."""
+        (`LastRuns.reason`): one metadata read, of its own key, at most.
+        In a loop's pass, its last run in that same pass (`pass_slot`): the
+        pass before binds the loop's variables to other values."""
         backend = self.cash_instance.backend
 
         def has_entry(key: str) -> bool | None:
@@ -2946,7 +2951,7 @@ class StatementProcessor:
                 return None
 
         return self._last_runs.reason(
-            run.code,
+            run.pass_slot or run.code,
             run.cache_key,
             self.tracking_state.statement_entry_lineages.get(run.code),
             has_entry,
@@ -2970,7 +2975,7 @@ class StatementProcessor:
         elif not storage:
             unkept = "it was not stored, and cash recorded no reason"
         self._last_runs.note(
-            run.code,
+            run.pass_slot or run.code,
             run.cache_key,
             self.tracking_state.statement_entry_lineages.get(run.code),
             unkept,
