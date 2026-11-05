@@ -8,7 +8,9 @@ relative spelling the read was also recorded under. A trivial cell wrote
 * An entry refers to the records of the entry its input came from, by its key
   and the token naming them, rather than copying them
   (``cash.notebook.file_records``); a reference that no longer names the
-  records stored there is never fresh.
+  records stored there is never fresh. A file rewritten with the same
+  bytes is in the same state: the records made of it again name it alike,
+  so a reference made before the rewrite still holds after a restart.
 * A cheap statement whose inputs were built from files, and which reads none
   itself, is not stored: run again, it costs what it did. One whose input is
   an open file or another stream is not judged so: run again, it would find
@@ -25,7 +27,7 @@ import uuid
 
 import pytest
 
-from cash.notebook.file_records import entry_file_records
+from cash.notebook.file_records import entry_file_records, records_token
 from cash.tracking.file_dep_snapshot import ALSO_SPELLED, snapshot_file_deps, snapshot_is_fresh
 from tests._cell_driver import run_cash_cell
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
@@ -92,6 +94,21 @@ def test_a_reference_to_other_records_is_never_fresh(tmp_path):
         records = entry_file_records({"file_refs": refs}, Backend())
         fresh, stale = snapshot_is_fresh(records)
         assert not fresh and stale.reason == "unresolved", (refs, records)
+
+
+def test_records_of_a_file_rewritten_with_the_same_bytes_keep_their_token(tmp_path):
+    data = tmp_path / "data.txt"
+    data.write_text("x,y", encoding="utf-8")
+    before = snapshot_file_deps({str(data)})
+    st = os.stat(data)
+    data.write_text("x,y", encoding="utf-8")
+    os.utime(data, ns=(st.st_atime_ns, st.st_mtime_ns + 2_000_000_000))
+    same = snapshot_file_deps({str(data)})
+    assert same[str(data)]["mtime_ns"] != before[str(data)]["mtime_ns"]  # the positive control
+    assert records_token(same) == records_token(before)
+    # Other bytes are another state.
+    data.write_text("x,z", encoding="utf-8")
+    assert records_token(snapshot_file_deps({str(data)})) != records_token(before)
 
 
 def test_a_cheap_statement_below_a_read_is_not_stored(cash_magics, cash_instance, docs):

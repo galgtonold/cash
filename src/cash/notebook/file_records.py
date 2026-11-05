@@ -75,23 +75,33 @@ _OWN: LruMemo[tuple[str, str], Records] = LruMemo(FILE_RECORDS)
 _MERGED: LruMemo[tuple, Mapping[str, Any]] = LruMemo(FILE_RECORDS)
 
 
+#: What a record with a content digest (``hash``) says of the file's stat
+#: and of when it was hashed: a shortcut of its check, which takes the
+#: content as the authority, so not part of what the token names.
+_STAT_FIELDS = frozenset({"hashed_at", "mtime", "mtime_ns", "ctime_ns", "dev", "ino"})
+
+
 def records_token(stored: Mapping[str, Any]) -> str:
     """The token naming *stored*, records about to be stored as they are
     stored (`file_dep_snapshot.fold_relative_twins`): a digest of what they
     say of each file, but for when it was last hashed (``hashed_at``),
-    which a later check moves on in place.
+    which a later check moves on in place, and, for a file recorded with
+    its content digest, its stat (`_STAT_FIELDS`).
 
     Records of the same files in the same state are named alike, whenever
     they were made: a value kept only in RAM is computed again after a
     restart and stored with records of the files as they are, and the
     entries referring to the ones it stored before hold while those files
-    are as they were."""
+    are as they were. A file rewritten with the same bytes is as it was:
+    its check of the content finds it fresh, so the records made of it
+    after the rewrite name the same state."""
     parts: list[str] = []
     for path in sorted(stored):
         recorded = stored[path]
         parts.append(path)
         if type(recorded) is dict:
-            parts.append(repr([(k, v) for k, v in recorded.items() if k != "hashed_at"]))
+            drop = _STAT_FIELDS if recorded.get("hash") is not None else ("hashed_at",)
+            parts.append(repr([(k, v) for k, v in recorded.items() if k not in drop]))
         else:
             parts.append(repr(recorded))
     return hashlib.sha256("\0".join(parts).encode("utf-8", "surrogateescape")).hexdigest()[:32]
