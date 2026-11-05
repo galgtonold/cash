@@ -1,9 +1,10 @@
 """A cell below a folder read refers to the read's records of its files.
 
 Its entry keeps a reference to the entry of the read, not a copy of a
-record per file (``cash.notebook.file_records``). After a restart the cell
-is served while the files are as read, and runs again once one of them
-changed.
+record per file (``cash.notebook.file_records``), and the files are read by
+relative path, whose second spelling is folded into its absolute twin's
+record. After a restart the cell is served while the files are as read, and
+runs again once one of them changed.
 """
 
 import pytest

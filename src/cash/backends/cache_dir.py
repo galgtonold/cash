@@ -108,9 +108,10 @@ __all__ = [
 #: reads such an entry as one that only read the memo, and would serve it
 #: with the memo left as it was; they are cleared.
 #: 11: a statement's entry refers to the file records of the entries its
-#: inputs came from rather than holding a copy (`file_records`). An older
-#: build reads such an entry as one that depends on none of those files,
-#: and would serve it after they changed; they are cleared.
+#: inputs came from rather than holding a copy (`file_records`), and keeps
+#: a relative read's second spelling in its absolute twin's record. An
+#: older build reads such an entry as one that depends on none of those
+#: files, and would serve it after they changed; they are cleared.
 CACHE_FORMAT_VERSION = 11
 
 #: The per-directory format stamp. No entry suffix, so entry globs skip it.

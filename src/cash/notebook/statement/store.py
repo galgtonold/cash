@@ -43,7 +43,7 @@ from cash.notebook.statement.miss_guard import GUARD_SKIP_REASON
 from cash.notebook.statement.run import ECHO_FIELD, MEMO_ANSWERS_NAME, MEMO_CHANGES_FIELD
 from cash.sizing import estimate_object_size, pickled_size_estimate
 from cash.tracking import file_dep_snapshot
-from cash.tracking.file_dep_snapshot import snapshot_dependencies
+from cash.tracking.file_dep_snapshot import fold_relative_twins, snapshot_dependencies
 from cash.tracking.randomness import capture_object_rng_states
 from cash.value_hash import known_size
 from cash.value_types import IMMUTABLE_LEAF_TYPES
@@ -737,14 +737,16 @@ class StatementStore:
             return None
 
         own_files = (
-            _snapshot_with_inherited(
-                file_dependencies,
-                execution.accessed_remote,
-                inherited.copied if inherited is not None else None,
-                execution.file_tracker.known_reads() if execution.file_tracker is not None else None,
-                execution.probes,
-                attribute_or(execution.file_tracker, "take_checked_stats", dict)(),
-                referred=inherited.referred if inherited is not None else (),
+            fold_relative_twins(
+                _snapshot_with_inherited(
+                    file_dependencies,
+                    execution.accessed_remote,
+                    inherited.copied if inherited is not None else None,
+                    execution.file_tracker.known_reads() if execution.file_tracker is not None else None,
+                    execution.probes,
+                    attribute_or(execution.file_tracker, "take_checked_stats", dict)(),
+                    referred=inherited.referred if inherited is not None else (),
+                )
             )
             or None
         )

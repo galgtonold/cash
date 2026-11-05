@@ -16,6 +16,10 @@ records of that token; one stored again with records of the files in
 another state, or dropped, leaves it unresolved, and the entry referring
 to it is stale (``unresolved``): run again, it records its files afresh.
 
+Each relative read's second spelling is folded into its absolute twin's
+record as it is stored (`file_dep_snapshot.fold_relative_twins`) and
+unfolded as it is read, so every reader sees the records as they were made.
+
 Every reader of an entry's records goes through `entry_file_records`.
 """
 
@@ -27,6 +31,7 @@ from dataclasses import replace
 from typing import Any, NamedTuple
 
 from cash._memo import FILE_RECORDS, LruMemo
+from cash.tracking.file_dep_snapshot import unfold_relative_twins
 
 __all__ = [
     "REFS_FIELD",
@@ -71,7 +76,8 @@ _MERGED: LruMemo[tuple, Mapping[str, Any]] = LruMemo(FILE_RECORDS)
 
 
 def records_token(stored: Mapping[str, Any]) -> str:
-    """The token naming *stored*, records about to be stored: a digest of what they
+    """The token naming *stored*, records about to be stored as they are
+    stored (`file_dep_snapshot.fold_relative_twins`): a digest of what they
     say of each file, but for when it was last hashed (``hashed_at``),
     which a later check moves on in place.
 
@@ -110,7 +116,7 @@ def own_records(meta: Any, key: str | None = None) -> Records | None:
         found = _OWN.get((key, token))
         if found is not None:
             return found
-    records = stored
+    records = unfold_relative_twins(stored)
     found = Records(key, token if isinstance(token, str) else "", records, frozenset(records))
     if isinstance(token, str):
         _OWN[(key, token)] = found

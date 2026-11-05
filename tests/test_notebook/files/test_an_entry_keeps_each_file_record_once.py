@@ -1,13 +1,17 @@
 """A statement's entry keeps each record of a file it depends on once.
 
 Below a read of 15,000 files every statement's entry held a record of each,
-copied from the entry its input came from. A trivial cell wrote 5 MB, and a
-restart read it back to decide to run the cell again.
+twice: copied from the entry its input came from, and once more under the
+relative spelling the read was also recorded under. A trivial cell wrote
+5 MB, and a restart read it back to decide to run the cell again.
 
 * An entry refers to the records of the entry its input came from, by its key
   and the token naming them, rather than copying them
   (``cash.notebook.file_records``); a reference that no longer names the
   records stored there is never fresh.
+* A relative read's second spelling is folded into its absolute twin's
+  record when stored, and read back as its own record, so a check under
+  another working folder still looks for it where its name leads now.
 """
 
 from __future__ import annotations
@@ -18,7 +22,7 @@ import uuid
 import pytest
 
 from cash.notebook.file_records import entry_file_records
-from cash.tracking.file_dep_snapshot import snapshot_file_deps, snapshot_is_fresh
+from cash.tracking.file_dep_snapshot import ALSO_SPELLED, snapshot_file_deps, snapshot_is_fresh
 from tests._cell_driver import run_cash_cell
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
@@ -80,3 +84,37 @@ def test_a_reference_to_other_records_is_never_fresh(tmp_path):
         records = entry_file_records({"file_refs": refs}, Backend())
         fresh, stale = snapshot_is_fresh(records)
         assert not fresh and stale.reason == "unresolved", (refs, records)
+
+
+def test_a_relative_read_is_recorded_once(cash_magics, cash_instance, docs):
+    backend = cash_instance.backend
+    run_cash_cell(cash_magics, READ)
+    stored = _metadata(cash_magics, backend, "X")["file_dependencies"]
+    assert not [path for path in stored if not os.path.isabs(path)], "a relative spelling has a record of its own"
+    for name in os.listdir(docs):
+        absolute = str(docs / name).replace("\\", "/")
+        assert stored[absolute][ALSO_SPELLED] == [f"docs/{name}"]
+    # Read back, each spelling has its record.
+    records = entry_file_records(_metadata(cash_magics, backend, "X"), backend)
+    for name in os.listdir(docs):
+        assert records[f"docs/{name}"]["hash"] == records[str(docs / name).replace("\\", "/")]["hash"]
+
+
+def test_a_relative_read_under_another_working_folder_is_read_again(cash_magics, cash_instance, tmp_path, monkeypatch):
+    backend = cash_instance.backend
+    for place, text in (("a", "from a"), ("b", "from b")):
+        (tmp_path / place / "docs").mkdir(parents=True)
+        (tmp_path / place / "docs" / "d.txt").write_text(text, encoding="utf-8")
+    cell = "t = open('docs/d.txt').read()"
+    monkeypatch.chdir(tmp_path / "a")
+    run_cash_cell(cash_magics, cell)
+    stored = _metadata(cash_magics, backend, "t")["file_dependencies"]
+    assert "docs/d.txt" not in stored, "the relative spelling was not folded into its twin's record"
+    run_cash_cell(cash_magics, "t = None")
+    run_cash_cell(cash_magics, cell)
+    assert cash_magics.cash_status("dict")["last_cell"]["statements"][0]["status"].name == "RESTORED"
+    assert cash_magics.shell.user_ns["t"] == "from a"
+
+    monkeypatch.chdir(tmp_path / "b")
+    run_cash_cell(cash_magics, cell)
+    assert cash_magics.shell.user_ns["t"] == "from b"
