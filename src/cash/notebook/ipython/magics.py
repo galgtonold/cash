@@ -1111,6 +1111,15 @@ class CashMagics(Magics):
             e.with_traceback(None)  # cash's own frames, not the user's
             yield
             return
+        # IPython formats the traceback once more for its history: the one
+        # the user was shown (`show_clean_error`), not cash's own frames, one
+        # syntax-highlighted lexer each. Taken once: the same exception
+        # raised again in a later cell is shown anew.
+        shown_tb = attribute_or(e, "_cash_shown_tb", None)
+        if shown_tb is not None:
+            with contextlib.suppress(AttributeError, TypeError):
+                del e._cash_shown_tb
+            e.with_traceback(shown_tb)
         orig_showtb = attribute_or(self.shell, "showtraceback", None)
         try:
             self.shell.showtraceback = lambda *a, **kw: None

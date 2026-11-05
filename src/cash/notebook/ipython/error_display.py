@@ -8,6 +8,7 @@ same traceback experience they would get from native Jupyter execution.
 from __future__ import annotations
 
 import ast
+import contextlib
 import linecache
 import logging
 import sys
@@ -112,6 +113,9 @@ def show_clean_error(
         # synth_tb has two frames: this function's exec() → cell code.
         # We want only the cell code frame (and anything below it).
         cell_tb = synth_tb.tb_next or synth_tb
+        # The cell ends with the traceback shown (`CashMagics._raising_quietly`).
+        with contextlib.suppress(AttributeError, TypeError):
+            exc._cash_shown_tb = cell_tb  # type: ignore[attr-defined] - read by CashMagics._raising_quietly
 
         # Use IPython's showtraceback if available (real notebook),
         # otherwise fall back to Python's traceback module (tests).
