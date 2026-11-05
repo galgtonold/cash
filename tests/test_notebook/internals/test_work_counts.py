@@ -178,6 +178,26 @@ def test_a_cell_starts_no_thread_to_time_its_progress_badges(cash_magics, monkey
     assert starts.calls == 0, starts.calls
 
 
+def test_a_young_file_a_statement_reads_is_hashed_once_for_it(cash_magics, tmp_path):
+    """A file written seconds ago is too young for the digest memo: hashed
+    when the statement read it, and again for its key. Within the one
+    statement its stat (size, both times, identity) holds the digest; the
+    next statement reads it again (``_HASH_MEMO_MIN_AGE_SECONDS``)."""
+    pytest.importorskip("pandas")
+    from cash.tracking import file_dep_snapshot
+
+    path = tmp_path / "young.csv"
+    path.write_text("a,b\n" + "1,2\n" * 1000, encoding="utf-8")
+    run_cash_cell(cash_magics, "import pandas as pd")
+    with method_calls(file_dep_snapshot, "_read_digest") as reading:
+        run_cash_cell(cash_magics, f"df = pd.read_csv({str(path)!r})")
+    # Two before: at the read, and for the statement's key.
+    assert reading.calls == 1, reading.calls
+    with method_calls(file_dep_snapshot, "_read_digest") as again:
+        run_cash_cell(cash_magics, f"df2 = pd.read_csv({str(path)!r})")
+    assert again.calls == 1, "a young file's digest outlived its statement"
+
+
 def test_a_cell_adding_columns_to_a_table_copies_each_column_once(cash_magics):
     """``df["hour"] = ...`` statement after statement: each stores the table
     again, and the RAM tier copied all of it each time (440 MB a statement

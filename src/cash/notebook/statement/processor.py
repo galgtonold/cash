@@ -163,7 +163,7 @@ from ...analysis.namespace_effects import (
 from ...analytics import AnalyticsManager
 from ...tracking.env_reads import environment_digests
 from ...tracking.env_reads import recording as recording_env_reads
-from ...tracking.file_dep_snapshot import file_state_epoch, probe_answers
+from ...tracking.file_dep_snapshot import file_state_epoch, probe_answers, young_digests_kept
 from ...tracking.file_tracker import FileAccessTracker
 from ...tracking.function_tracker import FunctionTracker
 from ...tracking.randomness import (
@@ -1236,54 +1236,56 @@ class StatementProcessor:
             'saved_time', 'restored_vars', 'code', plus optional keys depending
             on cache status.
         """
-        forget_heap_unreadable()
-        run = StatementRun(
-            code,
-            ttl=ttl,
-            silent=silent,
-            annotation=annotation,
-            display_code=display_code,
-            exec_source=exec_source,
-            occurrence_index=occurrence_index,
-            stream_output=stream_output,
-            keep_displays=keep_displays,
-            force_outputs=force_outputs,
-            is_last=is_last,
-            loop_iterable=loop_iterable,
-            header_files=header_files,
-            header_remote=header_remote,
-        )
-        # The analyses before the statement runs share their walks through
-        # what it reads (`answers_shared`), up to the moment it runs.
-        shadow = _shadow.SHADOW
-        with answers_shared():
-            done = self._prepare(run)
-            if done is not None:
+        # A young file read is hashed once for the statement (`young_digests_kept`).
+        with young_digests_kept():
+            forget_heap_unreadable()
+            run = StatementRun(
+                code,
+                ttl=ttl,
+                silent=silent,
+                annotation=annotation,
+                display_code=display_code,
+                exec_source=exec_source,
+                occurrence_index=occurrence_index,
+                stream_output=stream_output,
+                keep_displays=keep_displays,
+                force_outputs=force_outputs,
+                is_last=is_last,
+                loop_iterable=loop_iterable,
+                header_files=header_files,
+                header_remote=header_remote,
+            )
+            # The analyses before the statement runs share their walks through
+            # what it reads (`answers_shared`), up to the moment it runs.
+            shadow = _shadow.SHADOW
+            with answers_shared():
+                done = self._prepare(run)
+                if done is not None:
+                    if shadow is not None:
+                        shadow.statement_served(run, done)
+                    self._advance_rng(run)
+                    self._adopt_seeds_it_set(run)
+                    self._remember_rng_positions(run)
+                    self._move_what_reducers_wrote(run)
+                    return done
+                with self._executing(run) as runner:
+                    self._offer_digests(run, runner)
+                    unit = self._begin_recording(shadow, run)
+                    try:
+                        runner.run()
+                    finally:
+                        self._end_recording(shadow, run, unit)
+                        self._mutations.digests.withdraw_offer()
+            try:
+                result = self._finish(run, runner.execution)
                 if shadow is not None:
-                    shadow.statement_served(run, done)
+                    shadow.statement_finished(run, unit, result)
+                return result
+            finally:
                 self._advance_rng(run)
-                self._adopt_seeds_it_set(run)
+                self._adopt_seeds_it_set(run, runner.execution.rng_reseeded)
                 self._remember_rng_positions(run)
                 self._move_what_reducers_wrote(run)
-                return done
-            with self._executing(run) as runner:
-                self._offer_digests(run, runner)
-                unit = self._begin_recording(shadow, run)
-                try:
-                    runner.run()
-                finally:
-                    self._end_recording(shadow, run, unit)
-                    self._mutations.digests.withdraw_offer()
-        try:
-            result = self._finish(run, runner.execution)
-            if shadow is not None:
-                shadow.statement_finished(run, unit, result)
-            return result
-        finally:
-            self._advance_rng(run)
-            self._adopt_seeds_it_set(run, runner.execution.rng_reseeded)
-            self._remember_rng_positions(run)
-            self._move_what_reducers_wrote(run)
 
     @staticmethod
     def _begin_recording(shadow: Any, run: StatementRun) -> Any:
@@ -1336,44 +1338,46 @@ class StatementProcessor:
         before any coroutine is built, so an identical second run skips the
         await entirely.
         """
-        run = StatementRun(
-            code,
-            ttl=ttl,
-            silent=silent,
-            annotation=annotation,
-            display_code=display_code,
-            exec_source=exec_source,
-            occurrence_index=occurrence_index,
-            stream_output=stream_output,
-            keep_displays=keep_displays,
-            force_outputs=force_outputs,
-            is_last=is_last,
-        )
-        shadow = _shadow.SHADOW
-        with answers_shared():
-            done = self._prepare(run)
-            if done is not None:
+        # A young file read is hashed once for the statement (`young_digests_kept`).
+        with young_digests_kept():
+            run = StatementRun(
+                code,
+                ttl=ttl,
+                silent=silent,
+                annotation=annotation,
+                display_code=display_code,
+                exec_source=exec_source,
+                occurrence_index=occurrence_index,
+                stream_output=stream_output,
+                keep_displays=keep_displays,
+                force_outputs=force_outputs,
+                is_last=is_last,
+            )
+            shadow = _shadow.SHADOW
+            with answers_shared():
+                done = self._prepare(run)
+                if done is not None:
+                    if shadow is not None:
+                        shadow.statement_served(run, done)
+                    self._advance_rng(run)
+                    self._adopt_seeds_it_set(run)
+                    self._move_what_reducers_wrote(run)
+                    return done
+                with self._executing(run) as runner:
+                    unit = self._begin_recording(shadow, run)
+                    try:
+                        await runner.run_async()
+                    finally:
+                        self._end_recording(shadow, run, unit)
+            try:
+                result = self._finish(run, runner.execution)
                 if shadow is not None:
-                    shadow.statement_served(run, done)
+                    shadow.statement_finished(run, unit, result)
+                return result
+            finally:
                 self._advance_rng(run)
-                self._adopt_seeds_it_set(run)
+                self._adopt_seeds_it_set(run, runner.execution.rng_reseeded)
                 self._move_what_reducers_wrote(run)
-                return done
-            with self._executing(run) as runner:
-                unit = self._begin_recording(shadow, run)
-                try:
-                    await runner.run_async()
-                finally:
-                    self._end_recording(shadow, run, unit)
-        try:
-            result = self._finish(run, runner.execution)
-            if shadow is not None:
-                shadow.statement_finished(run, unit, result)
-            return result
-        finally:
-            self._advance_rng(run)
-            self._adopt_seeds_it_set(run, runner.execution.rng_reseeded)
-            self._move_what_reducers_wrote(run)
 
     def _prepare(self, run: StatementRun) -> ProcessResult | None:
         """Analyse, key and look up *run*'s statement, before it may execute.
