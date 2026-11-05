@@ -776,7 +776,7 @@ as an argument (`load_cfg("config.yaml")` inside the cached function).
 
 ### An edit that keeps the size and timestamps
 
-<!-- claim: cash/tracking/file_dep_snapshot.py:_unchanged_since_hashed @59019b2b, cash/tracking/file_dep_snapshot.py:_HASH_MEMO_MIN_AGE_SECONDS == 10.0, cash/notebook/upstream/virtual_lineage.py:VirtualLineage._check_cell_file_deps @31e1e449 -->
+<!-- claim: cash/tracking/file_dep_snapshot.py:_unchanged_since_hashed @59019b2b, cash/tracking/file_dep_snapshot.py:_HASH_MEMO_MIN_AGE_SECONDS == 10.0, cash/notebook/upstream/virtual_lineage.py:VirtualLineage._check_cell_file_deps @907ec094 -->
 cash checks a file's size and timestamps first and reads its content only when
 one of them moved. On Linux and macOS every write moves the inode change time,
 so this never misses. On **Windows**, two kinds of edit move nothing: a write
@@ -812,7 +812,10 @@ kernel restarts:
 - a write through a memory map (`np.memmap(path, mode="r+")`) made by
   another process, after it opened the file;
 - on **Windows**, a write by a program that still has the file open: Windows
-  may report it only when the program closes the file or flushes it.
+  may report it only when the program closes the file or flushes it;
+- on **Linux**, a write through a second name (a hard link) made for the file
+  in another folder after cash checked it: the link and the write are
+  reported to that other folder only.
 
 **Fix:** set `CASH_FILE_WATCH=0` before starting the kernel. Every file is
 then checked before every cell, which is slower for many files.
