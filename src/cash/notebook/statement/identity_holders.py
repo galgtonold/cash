@@ -421,7 +421,17 @@ def _pandas_column(column: Any, dtype: Any) -> Any:
     kind = attribute_or(dtype, "kind")
     if kind == "O":
         spelled = _arrow_text_spelling_numbers(column)
-        return spelled if spelled is not None else column.to_numpy(dtype=object)
+        if spelled is not None:
+            return spelled
+        values = attribute_or(column, "_values", None)
+        if attribute_or(column, "ndim", 0) == 1 and hasattr(values, "to_numpy") and not hasattr(values, "flags"):
+            # An extension array (strings held as Python objects): read
+            # from it, not through ``column.to_numpy()``, which goes by
+            # ``.array`` -- a handle the frame memo records, so the frame
+            # was hashed afresh after every statement (and an index's
+            # cache kept the array as one more reference).
+            return values.to_numpy(dtype=object)
+        return column.to_numpy(dtype=object)
     if kind in ("i", "u") and attribute_or(dtype, "itemsize") == 8:
         numpy = sys.modules.get("numpy")
         if numpy is not None and isinstance(dtype, numpy.dtype):
