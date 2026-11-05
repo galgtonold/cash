@@ -168,6 +168,13 @@ class ForLoopHandler:
         #: The iterable's lineage each loop last ran over, by the loop and
         #: its enclosing iteration (`_name_a_moved_iterable`).
         self._iterable_lineages: dict[tuple[str, str], str | None] = {}
+        #: The ``(target, digest)`` pairs each loop's passes bound when it
+        #: last ran, by the loop and its enclosing iteration
+        #: (`_name_a_new_pass`).
+        self._pass_values: dict[tuple[str, str], frozenset[tuple[str, str]]] = {}
+        #: Each pass of the loops running now: its targets' digests, by the
+        #: pass's iteration digest.
+        self._pass_digests: dict[str, dict[str, str]] = {}
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -616,6 +623,7 @@ class ForLoopHandler:
 
         total_iterations = 0
         cached_iterations = 0
+        loop_metrics_start = len(all_metrics)
         loop_pass = _helpers.LoopPass()
         passes = attribute_or(self.dispatcher, "loop_passes", None)
         if isinstance(passes, list):
@@ -689,6 +697,7 @@ class ForLoopHandler:
         if probe_n is not None:
             self._split_policy.record_verdict(node, probe_elapsed, probe_n)
         self._name_a_moved_iterable(node, loop_code, parent_context, iterable_lineage, all_metrics)
+        self._name_a_new_pass(loop_code, parent_context, all_metrics[loop_metrics_start:])
 
         # After all iterations, update lineage for mutated variables. The
         # rest run as one unit reports no branch it ran, so a variable only an
@@ -796,6 +805,7 @@ class ForLoopHandler:
             iteration_context["__iterable_lineage__"] = iterable_lineage
 
         context_hash = compute_context_hash(iteration_context)
+        self._pass_digests[context_hash] = loop_var_digests
         loop_vars = {k: v for k, v in iteration_context.items() if not k.startswith("__")}
         # Pushed once for the WHOLE iteration's body, not per statement: an
         # intercepted sub-call needs the CURRENT iteration's loop-var values
@@ -929,6 +939,44 @@ class ForLoopHandler:
                 and not m.get("uncacheable_reasons")
             ):
                 m["miss_reason"] = reason
+
+    def _name_a_new_pass(self, loop_code: str, parent_context: dict[str, Any] | None, metrics: list) -> None:
+        """Give each iteration that ran with no reason of its own, in a pass
+        whose loop variable holds a value none of the loop's passes bound
+        when it last ran, that reason: its pass is a statement the cache has
+        not seen. ``for m in re.finditer(...)``: each ``m`` is a new object
+        each run, and each pass ran again with no reason given."""
+        key = (loop_code, compute_context_hash(parent_context) if parent_context else "")
+        passes = {
+            digest: self._pass_digests.pop(digest)
+            for m in metrics
+            if isinstance(m, dict)
+            and (digest := iteration_digest(m.get("code") or "")) is not None
+            and digest in self._pass_digests
+        }
+        last = self._pass_values.pop(key, None)
+        if len(self._pass_values) >= _ITERABLE_LINEAGES_KEPT:
+            self._pass_values.pop(next(iter(self._pass_values)))
+        self._pass_values[key] = frozenset(pair for digests in passes.values() for pair in digests.items())
+        if len(self._pass_digests) > _ITERABLE_LINEAGES_KEPT:
+            self._pass_digests.clear()
+        if last is None:
+            return
+        for m in metrics:
+            if (
+                not isinstance(m, dict)
+                or m.get("status") != CacheStatus.COMPUTED
+                or any(m.get(field) for field in ("miss_reason", "uncacheable_reasons", "skipped_reason"))
+            ):
+                continue
+            digests = passes.get(iteration_digest(m.get("code") or "") or "")
+            new = sorted(name for name, digest in (digests or {}).items() if (name, digest) not in last)
+            if new:
+                held = "holds" if len(new) == 1 else "hold"
+                m["miss_reason"] = (
+                    f"a new pass: loop variable {', '.join(new)} {held} a value no pass of the loop "
+                    "bound when it last ran"
+                )
 
     def _execute_loop_body_nested_control(
         self,

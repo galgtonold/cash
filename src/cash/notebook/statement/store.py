@@ -733,6 +733,7 @@ class StatementStore:
             # ``data`` alone: its cost is the display, which a hit repeats.
             # Stored, the value was copied and pickled again, 0.6 s for a
             # list of 87,000 sessions, then refused as not worth its bytes.
+            run.unkept_why = "it only shows a variable, which is never stored"
             return True
         # On a contended machine a trivial statement can measure tens of ms
         # and clear the floor, so nothing may assume this branch is taken
@@ -748,6 +749,13 @@ class StatementStore:
             "[SIZE_AWARE] Compute took only %.1fms, below %.0fms floor — not writing cache entry",
             execution_time * 1000,
             policy.store_floor_s * 1000,
+        )
+        what = (
+            "it took" if seconds >= (execution.cost or 0.0) else "its own work, the calls cached apart left out, took"
+        )
+        run.unkept_why = (
+            f"{what} {execution_time * 1000:.1f} ms, under the {policy.store_floor_s * 1000:.0f} ms "
+            "a statement must take to be stored"
         )
         return True
 

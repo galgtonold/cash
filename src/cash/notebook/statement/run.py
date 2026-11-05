@@ -133,6 +133,12 @@ class StatementRun:
     #: was served there (None: not in this kernel), for the miss reason.
     pass_slot: str | None = None
     pass_lineages_before: dict[str, str] | None = None
+    #: The functions and modules its key named, and its occurrence in the
+    #: cell (`LastRuns`, for the miss reason).
+    key_parts: Any = None
+    #: Why this run leaves no entry a later run under its key could be
+    #: served from, when nothing in its metrics says so (`LastRuns`).
+    unkept_why: str | None = None
     #: `reducer_writes.runs_now` when the statement began: the reducers of
     #: the user's cash's pickles run from then on are this statement's.
     reducer_mark: int = 0

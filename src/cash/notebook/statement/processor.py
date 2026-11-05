@@ -103,6 +103,7 @@ from cash.notebook.statement.input_change import (
     stored_input_change_reason,
     version_slot,
 )
+from cash.notebook.statement.last_runs import KeyParts, LastRuns
 from cash.notebook.statement.lineage import StatementLineageBuilder, clear_rebound_edges
 from cash.notebook.statement.miss_guard import GUARD_SKIP_REASON, MissGuard
 from cash.notebook.statement.mutation_routing import MutationRouting
@@ -326,6 +327,10 @@ _LOG_ANNOTATION = "[ANNOTATION]"
 
 #: Why a statement that runs a magic or a shell command is not cached.
 _IPYTHON_REASON = "Runs an IPython magic or shell command, which cash cannot see into, so it runs every time"
+#: The miss reason of a statement marked ``# @cash:no-cache``.
+NO_CACHE_REASON = "marked # @cash:no-cache, so it runs every time"
+#: The miss reason of an import, which is never stored.
+IMPORT_REASON = "an import is never stored: it runs whenever what it binds is not already in place"
 
 #: Why a statement that read a file replaced while it ran is not cached.
 INPUT_CHANGED_REASON = (
@@ -817,6 +822,10 @@ class StatementProcessor:
             _guard_dir = None
         self._miss_guard = MissGuard(_guard_dir)
         self._unstored = UnstoredNotes(_guard_dir)
+        # Each statement's last run in this session, for a miss nothing
+        # else explains (`LastRuns`).
+        self._last_runs = LastRuns()
+        self._key_parts: KeyParts | None = None
         self._randomness.use_draw_store(ObservedDrawStore(_guard_dir) if _guard_dir else None)
         self._evicted = EvictedRecomputes()
 
@@ -1808,6 +1817,9 @@ class StatementProcessor:
             "display_code": run.display_code,
             "uncacheable_reasons": [],
         }
+        if run.skip_cache:
+            # Only ``# @cash:no-cache`` refuses it this early.
+            run.metrics["miss_reason"] = NO_CACHE_REASON
         self._randomness.stamp_random_effect(run.metrics, code, run.unseeded_calls)
         logger.debug("%s Processing statement: %s...", _LOG_DEBUG, code[:50])
 
@@ -1826,6 +1838,7 @@ class StatementProcessor:
         effects, run.source_hash, run.cache_key, analysis_time, hash_time = self._analyze_and_hash(
             run.code, occurrence_index=run.occurrence_index, tree=run.tree
         )
+        run.key_parts = self._key_parts
         outputs = set(effects.outputs)
         callee_globals = set(effects.callee_globals)
         # Caller-forced outputs (accumulator-loop fast path): capture
@@ -2154,6 +2167,12 @@ class StatementProcessor:
             if self._hits.last_refusal:
                 self._freshness.last_miss_reason = self._hits.last_refusal
             return None
+        self._last_runs.note(
+            run.pass_slot or run.code,
+            run.cache_key,
+            self.tracking_state.statement_entry_lineages.get(run.code),
+            parts=run.key_parts,
+        )
         if metadata is not None and metadata.scalar_identity:
             # Stored where an attribute was set on a pandas scalar: this
             # session's statements keep them by identity too.
@@ -2899,6 +2918,9 @@ class StatementProcessor:
                 )
             if reason is None:
                 reason = self._unstored.reason(run.cache_key, version_slot(run.source_hash, run.outputs))
+            if reason is None:
+                # Against its last run in this session.
+                reason = self._last_run_reason(run)
             if reason is not None:
                 metrics["miss_reason"] = reason
 
@@ -2931,6 +2953,53 @@ class StatementProcessor:
             )
             self.record_magic(run.code, run.tree.body[0], run.magic_reads)
         return metrics
+
+    def _last_run_reason(self, run: StatementRun) -> str | None:
+        """Why *run* missed, against its last run in this session
+        (`LastRuns.reason`): one metadata read, of its own key, at most.
+        In a loop's pass, its last run in that same pass (`pass_slot`): the
+        pass before binds the loop's variables to other values."""
+        backend = self.cash_instance.backend
+
+        def has_entry(key: str) -> bool | None:
+            try:
+                return backend.peek_metadata(key) is not None
+            except Exception:  # a miss reason is a diagnostic
+                logger.debug("Could not look for the entry of %s", key, exc_info=True)
+                return None
+
+        return self._last_runs.reason(
+            run.pass_slot or run.code,
+            run.cache_key,
+            self.tracking_state.statement_entry_lineages.get(run.code),
+            has_entry,
+            parts=run.key_parts,
+        )
+
+    def _note_last_run(self, run: StatementRun, storage: Iterable[str]) -> None:
+        """Note what *run*, which ran, left to serve a later run from
+        (`LastRuns`)."""
+        storage = tuple(storage)
+        unkept = None
+        if run.skip_cache:
+            reasons = run.metrics.get("uncacheable_reasons") or ()
+            unkept = str(reasons[0]) if reasons else run.unkept_why or run.metrics.get("miss_reason")
+            unkept = unkept or "it was not stored, and cash recorded no reason"
+        elif run.metrics.get("skipped_reason"):
+            unkept = str(run.metrics["skipped_reason"])
+        elif run.unkept_why:
+            # Too quick to store: a metadata-only entry may be there.
+            unkept = run.unkept_why
+        elif not storage:
+            unkept = "it was not stored, and cash recorded no reason"
+        self._last_runs.note(
+            run.pass_slot or run.code,
+            run.cache_key,
+            self.tracking_state.statement_entry_lineages.get(run.code),
+            unkept,
+            memory_only=storage == ("RAM",),
+            parts=run.key_parts,
+        )
 
     def _forget_ipython_bindings(self, run: StatementRun) -> None:
         """Forget how every name a magic or shell command bound was computed
@@ -3346,6 +3415,7 @@ class StatementProcessor:
                     # entry would be served without that write
                     # (`_move_what_reducers_wrote`).
                     run.skip_cache = True
+                    run.unkept_why = "pickling its value ran code of the user's that wrote to a variable"
                 if run.metrics.get("stored_in_place"):
                     self._keep_stored_in_place(run)
                 if not run.skip_cache:
@@ -3384,6 +3454,7 @@ class StatementProcessor:
         self._tell_past_budget(run, execution.cost or execution.wall_time or 0.0)
         storage = (saved_metadata.storage if saved_metadata else None) or ()
         self._note_unstored(run, storage, execution.cost or execution.wall_time or 0.0)
+        self._note_last_run(run, storage)
         self._rebuild_cost.note(
             run.cache_key, run.inputs, run.outputs, execution.store_cost, on_disk=any(s != "RAM" for s in storage)
         )
@@ -4876,6 +4947,9 @@ class StatementProcessor:
             return
         if self._randomness.draw_newly_seen and not run.skip_cache:
             run.skip_cache = True
+            run.unkept_why = (
+                "it drew from a random stream its key named only once it had run, so it was stored under neither key"
+            )
             logger.debug(
                 "%s Not storing %s: hidden RNG draw discovered after its key was built; next run keys it correctly",
                 _LOG_ANNOTATION,
@@ -4969,6 +5043,7 @@ class StatementProcessor:
                     code.strip(),
                 )
                 run.skip_cache = True
+                run.metrics["miss_reason"] = "an import of a module reloaded since it last ran: it runs again"
                 return None
 
             if not all_present:
@@ -4979,6 +5054,7 @@ class StatementProcessor:
                 # bound THEN: `from helper import summary` restored after an
                 # edit to helper.py put the pre-edit function back.
                 run.skip_cache = True
+                run.metrics["miss_reason"] = IMPORT_REASON
                 return None
             if all_present:
                 logger.debug("%s SKIPPING redundant import: %s", _LOG_OPTIMIZATION, code.strip())
@@ -5108,9 +5184,11 @@ class StatementProcessor:
         key_inputs = inputs | key_hidden_reads(code, self.tracking_state)
 
         try:
-            cache_key, source_hash, _, _, _ = self._key(code, key_inputs, outputs, occurrence_index)
+            cache_key, source_hash, _, functions, modules = self._key(code, key_inputs, outputs, occurrence_index)
         except Exception as exc:
             raise CacheKeyComputationError(f"Failed to compute cache key for: {code[:80]!r}") from exc
+        # For the miss reason only (`LastRuns`).
+        self._key_parts = KeyParts(frozenset(functions), frozenset(modules), occurrence_index)
 
         self._randomness.record_seeds(code, cache_key)
         self._record_module_state_writes(code)
