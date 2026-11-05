@@ -1508,7 +1508,8 @@ def put_back(records: list[dict] | None, changes: Any, ns: Mapping[str, Any]) ->
                 same = len(pairs) == len(keys)
             else:
                 pairs = [(_live_key(key), answer) for key, answer in change["pairs"]]
-                same = record.get("kd") == KEY_DIGESTS and [_change_key_digest(key) for key, _ in pairs] == list(record.get("keys") or ())
+                digests = [_change_key_digest(key) for key, _ in pairs]
+                same = record.get("kd") == KEY_DIGESTS and digests == list(record.get("keys") or ())
         except Exception:  # noqa: BLE001 - an entry this cannot read
             return f"the answers it put into the helper memo {label} cannot be read back"
         if not _is_user_memo(memo) or not _unbounded(memo) or _answers_dict(memo) is None:
