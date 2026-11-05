@@ -331,13 +331,19 @@ class UpstreamResolution:
             # synthesised raise carries only the message, never a chain back
             # into cash's internals.
             cls = type(caught)
+            # ``__import__`` with a fromlist hands back the module without
+            # binding a name: ``from cash.exceptions import ...`` here left
+            # cash's ``UpstreamStateError`` in the user's namespace.
             # repr(), not a triple-quoted literal. Python quotes names in its
             # own messages -- "No such file or directory: 'side.txt'" -- and a
             # message ending in a quote closed the literal early, so the user's
             # cell died with `SyntaxError: unterminated string literal` from
             # code cash wrote, with the real failure nowhere in sight. repr()
             # also handles the newlines this message routinely carries.
-            error_code = f"from {cls.__module__} import {cls.__name__}; raise {cls.__name__}({str(caught)!r}) from None"
+            error_code = (
+                f"raise __import__({cls.__module__!r}, fromlist=[{cls.__name__!r}])"
+                f".{cls.__name__}({str(caught)!r}) from None"
+            )
             self._badges.close(badge_display_id)
             return RunInstead(error_code, caught)
         # An internal failure, and the cell is about to run UNCACHED. This used

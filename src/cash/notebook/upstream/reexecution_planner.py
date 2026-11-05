@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import builtins
+import importlib.util
 import logging
 import sys
 import textwrap
@@ -19,6 +20,7 @@ from ...analysis.mutations import consumed_input_names
 from .._trace import trace_event
 from ..cache_key import statement_source_hash
 from ..call_key import TooMuchToLookThrough, holds_a_closure_with_state
+from ..consumables import is_consumable_unrestorable, is_write_stream
 from ..stateful_carriers import carrier_kind_from_producer, stateful_carrier_kind
 from ..statement.mutation_routing import functions_in
 from ._types import CellCheck, ClassificationResult, ReexecutionPlan, SimulationResult, latest_producer
@@ -241,6 +243,10 @@ class ReexecutionPlanner:
                 stmts_to_run_indices,
                 simulation_trace,
             )
+            stmts_to_run_indices = self._reopen_drawn_inputs(
+                stmts_to_run_indices,
+                simulation_trace,
+            )
             if len(stmts_to_run_indices) == before:
                 break
 
@@ -266,8 +272,12 @@ class ReexecutionPlanner:
             stmts_to_run_indices, simulation_trace, sim.vars_mutated_by_loops
         )
         stmts_to_run_indices = self._dedup_sorted_indices(stmts_to_run_indices)
-        gap = self._unclosed_read(stmts_to_run_indices, simulation_trace) or self._overwritten_read(
-            stmts_to_run_indices, simulation_trace, check, virtual_lineage, restored_statements_info
+        gap = (
+            self._unclosed_read(stmts_to_run_indices, simulation_trace)
+            or self._overwritten_read(
+                stmts_to_run_indices, simulation_trace, check, virtual_lineage, restored_statements_info
+            )
+            or self._failing_import_left_out(stmts_to_run_indices, simulation_trace)
         )
         if gap is not None:
             raise gap
@@ -349,6 +359,49 @@ class ReexecutionPlanner:
             imports = import_only(entry.stmt_code)
             for name in entry.outputs or ():
                 holds[name] = None if imports else (entry.produced_lineages or {}).get(name)
+        return None
+
+    def _failing_import_left_out(
+        self, stmts_to_run_indices: list[int], simulation_trace: list
+    ) -> UpstreamRepairGap | None:
+        """The gap, when the plan re-runs statements below an import it
+        leaves out that never bound its names here and would fail.
+
+        A run from the top stops at that import, so nothing below it runs;
+        the plan, re-running only the statements the cell needs, ran past
+        it: ``from typing import Dict`` re-run without the failing ``from
+        parse import parse`` above it, and a cell that a plain kernel fails
+        with ``NameError`` ran. Refused only on evidence: the module (or the
+        name taken from a module already loaded) cannot be found. An import
+        whose names the kernel holds ran here, and is not asked about.
+        """
+        if not stmts_to_run_indices:
+            return None
+        last = max(stmts_to_run_indices)
+        scheduled = set(stmts_to_run_indices)
+        user_ns = self._user_ns()
+        for j in range(last):
+            if j in scheduled:
+                continue
+            entry = simulation_trace[j]
+            if not import_only(entry.stmt_code):
+                continue
+            outputs = set(entry.outputs or ())
+            if not outputs or all(name in user_ns for name in outputs):
+                continue
+            failure = _import_failure(entry.stmt_code)
+            if failure is None:
+                continue
+            first = simulation_trace[min(k for k in scheduled if k > j)]
+            logger.debug("[UPSTREAM] Plan runs past [%s], an import that would fail (%s); not re-running", j, failure)
+            return UpstreamRepairGap(
+                f"Cash would re-run statements below {entry.stmt_code.splitlines()[0][:60]!r}, which would fail",
+                stmt_code=first.stmt_code,
+                error_text=f"a run from the top stops above it, at an import that fails ({failure})",
+                producer=entry.stmt_code,
+                cell_no=entry.cell + 1 if entry.cell >= 0 else None,
+                planned=True,
+            )
         return None
 
     @staticmethod
@@ -448,6 +501,83 @@ class ReexecutionPlanner:
             cell_no=cell_no,
             planned=True,
         )
+
+    def _reopen_drawn_inputs(self, stmts_to_run_indices: list[int], simulation_trace: list) -> list[int]:
+        """Schedule the statement that made each open file, generator or
+        iterator a scheduled statement draws from, and every statement
+        between them that draws from it too.
+
+        Such a value moves as it is read and cannot be put back. The kernel's
+        one has already been read by the statement's earlier run, so the
+        statement run again alone reads what is left: ``lines =
+        f.readlines()`` re-run without ``f = open(path)`` read no lines, and
+        every cell below ran on an empty list. A run from the top opens the
+        file again first, so the plan does too.
+
+        A value no statement above makes afresh cannot be had as a run from
+        the top has it: the plan is refused (:class:`UpstreamRepairGap`) and
+        the cell runs as written. A stream open for writing is left alone:
+        making it again would empty its file.
+        """
+        if not stmts_to_run_indices:
+            return stmts_to_run_indices
+        user_ns = self._user_ns()
+        scheduled = set(stmts_to_run_indices)
+        for i in sorted(stmts_to_run_indices):
+            entry = simulation_trace[i]
+            inputs = set(entry.inputs or ())
+            if not inputs:
+                continue
+            drawn = {name for name in inputs if _drawn_in_place(user_ns.get(name, None))}
+            if not drawn:
+                continue
+            try:
+                drawn &= consumed_input_names(parse_cached(textwrap.dedent(entry.stmt_code)))
+            except (SyntaxError, ValueError, TypeError):
+                continue
+            for name in sorted(drawn):
+                if any(name in (simulation_trace[j].outputs or ()) for j in scheduled if j < i):
+                    continue
+                producer = next(
+                    (
+                        j
+                        for j in range(i - 1, -1, -1)
+                        if name in (simulation_trace[j].outputs or ())
+                        and name not in (simulation_trace[j].inputs or ())
+                    ),
+                    None,
+                )
+                if producer is None:
+                    raise UpstreamRepairGap(
+                        f"Cash would re-run {entry.stmt_code.splitlines()[0][:60]!r} on a {name!r} already read",
+                        stmt_code=entry.stmt_code,
+                        error_text=(
+                            f"it reads {name!r}, which moves as it is read and which no statement above makes again"
+                        ),
+                        producer=name,
+                        cell_no=None,
+                        planned=True,
+                    )
+                added = [producer]
+                for j in range(producer + 1, i):
+                    if j in scheduled or name not in (simulation_trace[j].inputs or ()):
+                        continue
+                    try:
+                        between = consumed_input_names(parse_cached(textwrap.dedent(simulation_trace[j].stmt_code)))
+                    except (SyntaxError, ValueError, TypeError):
+                        between = frozenset({name})
+                    if name in between:
+                        added.append(j)
+                new = [j for j in added if j not in scheduled]
+                if new:
+                    logger.debug(
+                        "[UPSTREAM] [%s] draws from %r, already read: re-running %s with it", i, name, sorted(new)
+                    )
+                    trace_event("reopen_drawn_input", stmt=entry.stmt_code[:80], name=name, added=sorted(new))
+                    scheduled.update(new)
+        if len(scheduled) == len(stmts_to_run_indices):
+            return stmts_to_run_indices
+        return sorted(scheduled)
 
     def _schedule_consumable_producer_touches(
         self,
@@ -1249,6 +1379,66 @@ def _rebuilds_of_what_it_changes(simulation_trace: list, index: int, consumables
             return None
         rebuilds.update(writers)
     return rebuilds
+
+
+def _import_failure(stmt_code: str) -> str | None:
+    """What an import-only *stmt_code* would raise if run now, as far as can
+    be told without importing anything; None when it may well succeed.
+
+    A top-level module with no spec cannot be imported. A name taken from a
+    module already loaded that is neither an attribute nor a submodule of it
+    cannot be either. Anything else (a module not loaded yet, a relative
+    import) is not decided: importing it to find out would run its code.
+    """
+    try:
+        body = ast.parse(stmt_code).body
+    except SyntaxError:
+        return None
+    for node in body:
+        if isinstance(node, ast.Import):
+            modules = [alias.name for alias in node.names]
+            names: list[tuple[str, str]] = []
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            modules = [node.module]
+            names = [(node.module, alias.name) for alias in node.names if alias.name != "*"]
+        else:
+            continue
+        for module in modules:
+            top = module.partition(".")[0]
+            if top in sys.modules:
+                continue
+            try:
+                found = importlib.util.find_spec(top) is not None
+            except (ImportError, ValueError, AttributeError):
+                found = True
+            if not found:
+                return f"ModuleNotFoundError: No module named {top!r}"
+        for module, name in names:
+            loaded = sys.modules.get(module)
+            if loaded is None or has_attribute(loaded, name):
+                continue
+            if f"{module}.{name}" in sys.modules:
+                continue
+            if has_attribute(loaded, "__path__"):
+                try:
+                    if importlib.util.find_spec(f"{module}.{name}") is not None:
+                        continue
+                except (ImportError, ValueError, AttributeError):
+                    continue
+            return f"ImportError: cannot import name {name!r} from {module!r}"
+    return None
+
+
+def _drawn_in_place(value: Any) -> bool:
+    """Whether *value* moves as it is read and cannot be put back (an open
+    file read from, a generator, an iterator): a statement reading it again
+    reads only what is left."""
+    if value is None:
+        return False
+    try:
+        return is_consumable_unrestorable(value) and not is_write_stream(value)
+    except Exception:  # noqa: BLE001 - a user object's lookups may raise
+        return False
 
 
 def _holds_it(names: Iterable[str], user_ns: Mapping[str, Any], fn: Any) -> bool:
