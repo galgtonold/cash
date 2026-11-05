@@ -104,4 +104,5 @@ class TestMissReasonAttribution:
         run_cash_cell(cash_magics, "a = 1")
         run_cash_cell(cash_magics, "# @cash:no-cache\nb = a + 1")
         m = _last_metric(mock_shell, cash_magics, "# @cash:no-cache\nb = a + 1")
-        assert m.get("miss_reason") is None, m.get("miss_reason")
+        # It runs because of its mark, and says so; no input is blamed.
+        assert m.get("miss_reason") == "marked # @cash:no-cache, so it runs every time", m.get("miss_reason")

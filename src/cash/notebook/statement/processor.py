@@ -326,6 +326,10 @@ _LOG_ANNOTATION = "[ANNOTATION]"
 
 #: Why a statement that runs a magic or a shell command is not cached.
 _IPYTHON_REASON = "Runs an IPython magic or shell command, which cash cannot see into, so it runs every time"
+#: The miss reason of a statement marked ``# @cash:no-cache``.
+NO_CACHE_REASON = "marked # @cash:no-cache, so it runs every time"
+#: The miss reason of an import, which is never stored.
+IMPORT_REASON = "an import is never stored: it runs whenever what it binds is not already in place"
 
 #: Why a statement that read a file replaced while it ran is not cached.
 INPUT_CHANGED_REASON = (
@@ -1790,6 +1794,9 @@ class StatementProcessor:
             "display_code": run.display_code,
             "uncacheable_reasons": [],
         }
+        if run.skip_cache:
+            # Only ``# @cash:no-cache`` refuses it this early.
+            run.metrics["miss_reason"] = NO_CACHE_REASON
         self._randomness.stamp_random_effect(run.metrics, code, run.unseeded_calls)
         logger.debug("%s Processing statement: %s...", _LOG_DEBUG, code[:50])
 
@@ -4946,6 +4953,7 @@ class StatementProcessor:
                     code.strip(),
                 )
                 run.skip_cache = True
+                run.metrics["miss_reason"] = "an import of a module reloaded since it last ran: it runs again"
                 return None
 
             if not all_present:
@@ -4956,6 +4964,7 @@ class StatementProcessor:
                 # bound THEN: `from helper import summary` restored after an
                 # edit to helper.py put the pre-edit function back.
                 run.skip_cache = True
+                run.metrics["miss_reason"] = IMPORT_REASON
                 return None
             if all_present:
                 logger.debug("%s SKIPPING redundant import: %s", _LOG_OPTIMIZATION, code.strip())
