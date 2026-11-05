@@ -88,7 +88,7 @@ def test_a_text_column_comes_back_exactly_and_is_written_as_utf8(tmp_path, make)
     back, on_disk = _write_and_read(tmp_path, {"frame": frame, "column": column})
     pd.testing.assert_frame_equal(back["frame"], frame)
     for got in (back["frame"]["name"].array, back["column"]):
-        assert type(got) is pd.arrays.StringArray
+        assert type(got) is type(column)
         assert repr(got.dtype) == repr(column.dtype)
         assert _same_items(got, column)
     strings = [item for item in _items(column) if type(item) is str][:3]

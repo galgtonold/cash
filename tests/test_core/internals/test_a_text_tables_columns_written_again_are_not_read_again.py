@@ -12,6 +12,11 @@ column's UTF-8 buffers, kept for its content (`text_columns`), are bytes
 nothing can change, whose digest is read once. What the disk holds is
 checked by reading it back, and so is a column written past pandas
 between two writes.
+
+The frame memo runs under copy-on-write only: pandas 2 without it lets any
+handle write a block, so nothing vouches for the base's bytes and each
+write reads them again (what is read is pinned under copy-on-write only).
+What is stored anew and what the disk holds are pinned on either.
 """
 
 from __future__ import annotations
@@ -61,6 +66,7 @@ def _write(backend: FileBackend, key: str, value) -> None:
 
 def test_each_write_reads_its_new_column_once_and_the_disk_holds_what_was_written(tmp_path):
     base = _base()
+    memo = arg_hashing.is_cow_pandas(base)
     arg_hashing.cow_frame_digest(base)  # the loop's input, hashed before the loop (its key)
     backend = FileBackend(str(tmp_path / "c"), flush_interval=0)
     written = {}
@@ -74,7 +80,8 @@ def test_each_write_reads_its_new_column_once_and_the_disk_holds_what_was_writte
         if k:
             # p_home once, nothing of the base's columns, text or not; and
             # only p_home is stored anew.
-            assert read.bytes < 1.5 * new_column, (k, read.bytes, new_column)
+            if memo:
+                assert read.bytes < 1.5 * new_column, (k, read.bytes, new_column)
             assert _chunk_bytes(tmp_path / "c") - before < 1.1 * new_column
     again = FileBackend(str(tmp_path / "c"), flush_interval=0)
     for key, expected in written.items():
