@@ -2592,7 +2592,7 @@ A cached value that randomness makes non-reproducible. Every code here starts `R
 | [RANDOM-HELD-GENERATOR](#random-held-generator) | notebook | a cell re-run on its own draws from a generator held by an object, from where it stands |
 | [RANDOM-REPLAYED](#random-replayed) | notebook | a restored value is an earlier random draw |
 | [RANDOM-SEED-NONE](#random-seed-none) | notebook | `seed(None)` cannot refresh cached values |
-| [RANDOM-STREAM-NOT-RESTORED](#random-stream-not-restored) | notebook | a draw starts from where the stream stands, not where a run from the top has it |
+| [RANDOM-STREAM-UNRESTORED](#random-stream-unrestored) | notebook | a draw starts from where the stream stands, not where a run from the top has it |
 | [RANDOM-UNSEEDED](#random-unseeded) | both | a draw from an unseeded source is not reproducible |
 
 ### RANDOM-HELD-GENERATOR {#random-held-generator}
@@ -2658,7 +2658,7 @@ reproducible, seed with a fixed number instead.
 
 **When it is safe to ignore.** When nothing cached depends on that stream.
 
-### RANDOM-STREAM-NOT-RESTORED {#random-stream-not-restored}
+### RANDOM-STREAM-UNRESTORED {#random-stream-unrestored}
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashRandomnessWarning</span>
 

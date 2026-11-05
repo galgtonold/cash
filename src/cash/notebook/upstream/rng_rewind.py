@@ -18,7 +18,7 @@ else. In order of preference, the stream is
 4. set by running that statement again, only when it is a bare seed
    (``np.random.seed(0)``), which changes nothing but the stream;
 5. none of these: the draw runs from where the stream stands, and cash says
-   so (``RANDOM-STREAM-NOT-RESTORED``).
+   so (``RANDOM-STREAM-UNRESTORED``).
 
 A stream nothing above the draw seeds is unseeded there, whatever a cell below
 seeded on an earlier pass: it has no position a run from the top fixes, so only
@@ -639,7 +639,7 @@ class RngRewind:
             first = first[:57] + "..."
         warn_diagnostic(
             CashRandomnessWarning,
-            "RANDOM-STREAM-NOT-RESTORED",
+            "RANDOM-STREAM-UNRESTORED",
             f"cash cannot put the `{module}` stream back where a run from the top has it here: "
             f"`{first}` above moved it last, and running it again would change more than the stream. "
             "The draw continues from where the stream stands now.",

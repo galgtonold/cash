@@ -4941,7 +4941,7 @@ class StatementProcessor:
         statement.
         """
         if self._randomness.draws_unplaced() and not run.skip_cache:
-            # RANDOM-STREAM-NOT-RESTORED said so: drawn from where the stream
+            # RANDOM-STREAM-UNRESTORED said so: drawn from where the stream
             # stood, not where a run from the top has it.
             run.skip_cache = True
             return

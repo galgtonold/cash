@@ -187,7 +187,7 @@ class TrackingState:
     rng_states_by_lineage: OrderedDict[tuple[str, str], Any] = field(default_factory=OrderedDict)
 
     # The global streams the upstream check could not put where a run from
-    # the top has them (``RANDOM-STREAM-NOT-RESTORED``): a draw from one is
+    # the top has them (``RANDOM-STREAM-UNRESTORED``): a draw from one is
     # not stored and its position not kept, until a seed or a hit places it.
     # W: RngRewind, StatementRandomness. R: StatementRandomness.
     rng_unplaced: set[str] = field(default_factory=set)

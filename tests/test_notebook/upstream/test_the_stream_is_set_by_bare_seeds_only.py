@@ -75,7 +75,7 @@ def test_a_draw_that_does_more_is_never_run_again():
     out, added, codes = _plan(_checker({"np": object(), "df": object(), "k": 3}), SHUFFLE, ["z = np.random.rand(k)"])
     assert out == ["z = np.random.rand(k)"]
     assert not added
-    assert "RANDOM-STREAM-NOT-RESTORED" in codes
+    assert "RANDOM-STREAM-UNRESTORED" in codes
 
 
 def test_a_recorded_position_is_put_back_instead():
@@ -91,7 +91,7 @@ def test_a_recorded_position_is_put_back_instead():
     ]
     out, _, codes = _plan(checker, SHUFFLE, ["z = np.random.rand(k)"], trace)
     assert out == ["z = np.random.rand(k)"]
-    assert "RANDOM-STREAM-NOT-RESTORED" not in codes
+    assert "RANDOM-STREAM-UNRESTORED" not in codes
     assert checker.rng._before == {0: state}
 
 
@@ -101,7 +101,7 @@ def test_a_restored_draw_puts_the_stream_where_its_run_left_it():
     restored = {"df = df.reindex(np.random.permutation(df.index))": state}
     out, _, codes = _plan(checker, SHUFFLE, ["z = np.random.rand(k)"], restored=restored)
     assert out == ["z = np.random.rand(k)"]
-    assert "RANDOM-STREAM-NOT-RESTORED" not in codes
+    assert "RANDOM-STREAM-UNRESTORED" not in codes
     assert checker.rng._before == {0: state}
 
 
@@ -120,7 +120,7 @@ def test_a_draw_nothing_seeds_above_is_left_alone():
     trace = [TraceEntry("b = np.random.rand(2)", {"b"}, {"np"}, InputHashes({}, None, {NP: None}), {}, False, cell=2)]
     out, _, codes = _plan(_checker({"np": object()}), cells, ["b = np.random.rand(2)"], trace)
     assert out == ["b = np.random.rand(2)"]
-    assert "RANDOM-STREAM-NOT-RESTORED" not in codes
+    assert "RANDOM-STREAM-UNRESTORED" not in codes
 
 
 def test_no_draw_in_the_plan_changes_nothing():
@@ -139,7 +139,7 @@ def test_a_draw_that_only_binds_its_names_runs_again_from_its_own_place():
 
     out, _, codes = _plan(_checker({"np": numpy, "n": 3}), CHAIN, ["b = np.random.rand(2)"])
     assert out == ["np.random.seed(0)", "a = np.random.rand(n)", "b = np.random.rand(2)"]
-    assert "RANDOM-STREAM-NOT-RESTORED" not in codes
+    assert "RANDOM-STREAM-UNRESTORED" not in codes
 
 
 def test_a_draw_whose_names_change_below_is_not_run_again():
@@ -148,7 +148,7 @@ def test_a_draw_whose_names_change_below_is_not_run_again():
     cells = [*CHAIN[:3], "a = a * 2", "b = np.random.rand(2)"]
     out, _, codes = _plan(_checker({"np": numpy, "n": 3}), cells, ["b = np.random.rand(2)"])
     assert out == ["b = np.random.rand(2)"]
-    assert "RANDOM-STREAM-NOT-RESTORED" in codes
+    assert "RANDOM-STREAM-UNRESTORED" in codes
     cells = [*CHAIN[:3], "n = 4", "b = np.random.rand(2)"]
     out, _, codes = _plan(_checker({"np": numpy, "n": 4}), cells, ["b = np.random.rand(2)"])
     assert out == ["b = np.random.rand(2)"]
