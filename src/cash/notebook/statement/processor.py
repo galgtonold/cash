@@ -3334,7 +3334,7 @@ class StatementProcessor:
         del returned
         # Before the outputs are recorded as this statement's: an input it
         # also binds (``n += len(f.read())``) inherits its files as the entry
-        # it came from recorded them (`StatementStore._producer_file_snapshots`).
+        # it came from recorded them (`StatementStore._producer_records`).
         sources = self.tracking_state.variable_sources
         run.entry_sources = {name: sources[name] for name in run.inputs & run.outputs if name in sources}
         # Before it records its own: an edge it makes moves no input on.

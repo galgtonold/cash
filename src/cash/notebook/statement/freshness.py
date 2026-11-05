@@ -39,6 +39,7 @@ from ...tracking.env_reads import environment_unchanged
 from ...tracking.file_dep_snapshot import FreshnessMemo, snapshot_is_fresh
 from ...value_types import IMMUTABLE_LEAF_TYPES
 from ..call_refs import resolve_call_refs
+from ..file_records import entry_file_records, with_file_records
 from ..helper_memos import carries_changes
 from ..helper_memos import unfilled as memos_unfilled
 from ..restored_var import present_holders
@@ -209,6 +210,8 @@ class CacheFreshnessChecker:
         t3 = _perf_counter()
         raw_metadata, cached_data = self._backend.get(cache_key)
         metadata = StatementCacheMetadata.from_dict(raw_metadata) if raw_metadata is not None else None
+        # Every file record the entry holds, those it refers to included.
+        metadata = with_file_records(metadata, self._backend)
         cache_check_time = _perf_counter() - t3
 
         if cached_data and metadata:
@@ -391,7 +394,7 @@ class CacheFreshnessChecker:
         raw_source_meta = self._backend.peek_metadata(source_cache_key)
         if not raw_source_meta:
             return None
-        return StatementCacheMetadata.from_dict(raw_source_meta).file_dependencies or {}
+        return entry_file_records(raw_source_meta, self._backend)
 
     def _inherited_deps_changed(self, input_var: str, deps: dict) -> bool:
         """True, with the miss reason set, when one of *deps* (inherited through

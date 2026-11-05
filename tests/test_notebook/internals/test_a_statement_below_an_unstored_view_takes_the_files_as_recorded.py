@@ -5,7 +5,7 @@ producing entry recorded them. ``X_train = X[:5]`` stores no entry, so every
 statement below it (``X_train.shape``) took a stat and a digest of each file
 ``X`` was read from again, 15,000 of them per trivial cell on a photo set.
 They are now taken from the entry of the statement ``X_train`` was made
-from (``StatementStore._file_snapshots_through_inputs``).
+from (``StatementStore._records_through_inputs``).
 """
 
 from __future__ import annotations
@@ -77,6 +77,7 @@ def test_an_input_rebound_since_is_not_followed(cash_magics, statement_processor
     )
     run_cash_cell(cash_magics, "X_train = X[:5]")
     store = statement_processor._store
-    assert set(paths) <= store._file_snapshots_through_inputs("X_train").keys()  # the positive control
+    taken = store._records_through_inputs("X_train")
+    assert set(paths) <= {path for records in taken for path in records.paths}  # the positive control
     run_cash_cell(cash_magics, "X = np.zeros(3)")
-    assert store._file_snapshots_through_inputs("X_train") == {}
+    assert store._records_through_inputs("X_train") == []

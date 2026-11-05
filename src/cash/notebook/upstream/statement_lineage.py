@@ -978,7 +978,7 @@ class StatementLineage:
 
             if metadata:
                 carriers = metadata.get("carriers_advanced")
-                hist_files = metadata.get("file_dependencies", {})
+                hist_files = self.probe.entry_files(metadata)
                 output_lineages = metadata.get("output_lineages", {})
                 files_valid = not hist_files or self.probe.files_fresh(hist_files, memo_key=cache_key)
                 if not files_valid and rewritten_by_the_notebook_since(

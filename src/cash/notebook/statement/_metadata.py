@@ -43,8 +43,16 @@ class StatementCacheMetadata:
     store_time: float | None = None
     source_hash: str | None = None
     code: str | None = None
-    # path -> {"mtime": float, "size": int}
+    # path -> {"mtime": float, "size": int}: the records this entry made
+    # itself, each relative spelling folded into its absolute twin's. Read
+    # every record of an entry through ``file_records.entry_file_records``.
     file_dependencies: dict[str, dict[str, float]] | None = None
+    #: ``[[key, token], ...]``: the entries whose records this one takes
+    #: over whole, by reference (``file_records.REFS_FIELD``).
+    file_refs: list[list[str]] | None = None
+    #: The token naming the records in ``file_dependencies``
+    #: (``file_records.TOKEN_FIELD``).
+    files_token: str | None = None
     force_persist: bool | None = None
     output_lineages: dict[str, str] | None = None
     #: ``{output: the content digest its value had}`` for an output the
