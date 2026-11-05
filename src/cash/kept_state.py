@@ -255,7 +255,11 @@ def _dumps_walked_first(
     (`_SAFE_DEPTH`). Deeper, it is pickled flat; for a key, as deep as
     pickle follows elsewhere, and past that it raises RecursionError as the
     pickler raises on other Pythons."""
-    reducers, leaf = _KeepDict(protocol, extra, keyed), _held_leaf(_flat_leaf(persistent_id), aliases)
+    # The reducers both the walk and the pickler take: one without the memo
+    # writes no state setter, as `_dumps` picks for its own (`_reduce_with_dict`).
+    unshared = fast and persistent_id is None and not aliases
+    reducers = _KeepDict(protocol, extra, keyed, unshared=unshared)
+    leaf = _held_leaf(_flat_leaf(persistent_id), aliases)
     walk = _Walk(getattr(sink, "walked", None), reducer_override)
     # A container too may be taken whole: one the copy has made already
     # (*persistent_id*), or one the rest of a key holds (*aliases*).

@@ -7,6 +7,10 @@ back-reference but the object reduced again, without end: the C pickler
 crashed the process -- a ``datetime`` in a frame's list whose ``tzinfo`` is a
 class of the user's. Those bytes are only ever hashed, so the attributes are
 written as data instead.
+
+Both ways a value reaches the pickler: directly, and walked on the heap first
+(`kept_state.FLAT_FIRST`, Python 3.10 on Windows), whose reducers went
+without the memo-less rule and recursed there.
 """
 
 from __future__ import annotations
@@ -15,9 +19,14 @@ import datetime
 
 import pytest
 
-from cash import _plain_data
+from cash import _plain_data, kept_state
 
 pytestmark = [pytest.mark.core]
+
+
+@pytest.fixture(autouse=True, params=[False, True], ids=["pickled", "walked first"])
+def _flat_first(request, monkeypatch):
+    monkeypatch.setattr(kept_state, "FLAT_FIRST", request.param)
 
 
 class Zone(datetime.tzinfo):
