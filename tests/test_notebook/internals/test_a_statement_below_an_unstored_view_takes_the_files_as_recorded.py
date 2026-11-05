@@ -14,6 +14,7 @@ import collections
 
 import pytest
 
+from cash._paths import normalize_path
 from cash.tracking import file_dep_snapshot
 from tests._cell_driver import run_cash_cell
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
@@ -28,7 +29,9 @@ def paths(tmp_path, monkeypatch):
     folder.mkdir()
     for i in range(FILES):
         (folder / f"f{i:02d}.txt").write_text("x" * (i + 1), encoding="utf-8")
-    return sorted(str(p) for p in folder.iterdir())
+    # Spelled as a file dependency is recorded (forward slashes on Windows),
+    # so the paths compare equal to what the statements record.
+    return sorted(normalize_path(str(p)) for p in folder.iterdir())
 
 
 def _entries_holding(state, path: str) -> list[dict]:
