@@ -36,6 +36,7 @@ from ..restored_var import hashed_by_lineage
 from ..shared_objects import holds_part_of
 from ..statement.derivation_edges import shared_object_partners
 from ..tracking_state import TrackingState
+from ._types import cell_holds_statement
 from .class_state import ClassState
 from .unsaved_edits import UnsavedEdits
 
@@ -300,7 +301,10 @@ class StaleValueGuard:
                         and 0 <= current_cell_idx < len(notebook_cells)
                         else ""
                     )
-                    produced_by_current_cell = (not norm_prod) or (norm_prod in cur_src)
+                    # As a statement, not as text: cash records it unparsed
+                    # (``df = df[df['a'] > 0]``), the cell may write it
+                    # another way (``df = df[df["a"] > 0]``).
+                    produced_by_current_cell = (not norm_prod) or cell_holds_statement(cur_src, norm_prod)
                 if (
                     prod_code is not None
                     and not produced_by_current_cell
@@ -510,9 +514,11 @@ class StaleValueGuard:
         if not prod_code or notebook_cells is None or cell_idx is None or not 0 <= cell_idx < len(notebook_cells):
             return False
         norm_prod = strip_markers(prod_code).strip()
-        if not norm_prod or norm_prod in notebook_cells[cell_idx]:
+        # Matched as a statement: the recorded code is unparsed, and a cell
+        # writing ``df["b"] = ...`` holds ``df['b'] = ...``.
+        if not norm_prod or cell_holds_statement(notebook_cells[cell_idx], norm_prod):
             return False
-        return any(norm_prod in cell for cell in notebook_cells[:cell_idx])
+        return any(cell_holds_statement(cell, norm_prod) for cell in notebook_cells[:cell_idx])
 
     def _mark_nolineage_self_write_broken(
         self,
@@ -668,7 +674,9 @@ class StaleValueGuard:
             if partner not in user_ns:
                 continue
             prod = strip_markers(codes.get(partner) or "").strip()
-            if not prod or any(prod in cell for cell in above):
+            # As a statement: ``cfg = {"f": feats}`` above is recorded
+            # ``cfg = {'f': feats}``, and is no partner below.
+            if not prod or any(cell_holds_statement(cell, prod) for cell in above):
                 continue
             if user_ns[partner] is live_value or holds_part_of(user_ns[partner], [live_value]):
                 below.append(partner)
