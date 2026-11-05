@@ -114,3 +114,12 @@ def test_an_output_a_statement_below_goes_on_changing_stays_tainted():
     state.executed_cell_codes["parsed"] = "parsed.append(extra)"
     trace = _with_a_later_writer_of_parsed("parsed.append(extra)", {"parsed", "extra"})
     assert _tainted(state, trace) == {"parsed", "df"}
+
+
+def test_after_an_unsaved_edit_what_was_built_before_it_is_tainted():
+    # The kernel's ``lines`` is one no statement above makes: an edit run
+    # and not saved. The cells below must see what it changed, so values
+    # built on the saved version are stale even when built on that version.
+    state = _memory()
+    state.lineage.record("lines", "split-as-edited")
+    assert _tainted(state) >= {"lines2", "parsed", "df"}

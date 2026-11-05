@@ -84,9 +84,10 @@ class UnsavedEdits:
         # pipeline and the grid search built on it, which then ran again.
         vars_tainted: set[str] = set()
         propagation_sources = set(directly_mismatched_vars)
+        behind = self._behind(directly_mismatched_vars, simulation_trace)
         for at, entry in enumerate(simulation_trace):
             if entry.inputs & propagation_sources and not self._built_on_this_version(
-                at, simulation_trace, entry.inputs & propagation_sources, directly_mismatched_vars
+                at, simulation_trace, entry.inputs & propagation_sources, behind, directly_mismatched_vars
             ):
                 vars_tainted.update(entry.outputs - directly_mismatched_vars)
                 propagation_sources.update(entry.outputs)
@@ -104,8 +105,20 @@ class UnsavedEdits:
             )
         return vars_tainted
 
+    def _behind(self, directly_mismatched: set[str], simulation_trace: list) -> set[str]:
+        """The names among *directly_mismatched* whose kernel version is one
+        a statement above makes: a later statement making another has not
+        run, which is no edit. A version no statement above makes is one
+        (an unsaved edit), and what was built before it is stale."""
+        recorded = self.tracking_state.variable_lineage
+        return {
+            name
+            for name in directly_mismatched
+            if any((entry.produced_lineages or {}).get(name) == recorded.get(name) for entry in simulation_trace)
+        }
+
     def _built_on_this_version(
-        self, at: int, simulation_trace: list, read: set[str], directly_mismatched: set[str]
+        self, at: int, simulation_trace: list, read: set[str], behind: set[str], directly_mismatched: set[str]
     ) -> bool:
         """Whether what memory holds of the outputs of statement *at* was
         built on the version of each name in *read* that a run from the top
@@ -122,12 +135,14 @@ class UnsavedEdits:
         each cell that read one, on every run, although a run from the top
         builds them from the same lines.
 
-        Only a name mismatched directly is judged so: one tainted through it
-        has a lineage that does not show it. An output memory last took from
+        Only a name mismatched directly, and only when the kernel holds a
+        version a statement above makes (*behind*), is judged so: after an
+        unsaved edit the kernel's version is the one the cells below must
+        see, and one tainted through it has a lineage that does not show it. An output memory last took from
         a statement further down that binds it anew without reading it is
         that statement's to answer for.
         """
-        if not read <= directly_mismatched:
+        if not read <= behind:
             return False
         entry = simulation_trace[at]
         outputs = entry.outputs - directly_mismatched
