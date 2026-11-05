@@ -394,6 +394,9 @@ def _classes_with_state(
     value is left unread. Each by its name,
     with the names of the classes of *values* it came from
     (`_link_inputs_kept_by`). *unread* is True when items were left unread."""
+    if not values:
+        # Nothing to read around: the namespace is not looked through.
+        return {}, False
     named = {id(value): name for name, value in user_ns.items() if instance_of(value, type)}
     if not named:
         return {}, False
@@ -3856,13 +3859,15 @@ class StatementProcessor:
         # A module it set state on through a function it calls, named
         # nowhere in its text (``sbox.hold(d)`` calling ``reg.register(d)``):
         # what it keeps there moves with the module.
-        state_modules = {
-            name
-            for name, value in list(user_ns.items())
+        state_modules = (
+            {
+                name
+                for name, value in list(user_ns.items())
+                if instance_of(value, types.ModuleType) and attribute_or(value, "__name__", None) in run.state_modules
+            }
             if run.state_modules
-            and instance_of(value, types.ModuleType)
-            and attribute_or(value, "__name__", None) in run.state_modules
-        }
+            else set()
+        )
         changed |= state_modules
         value_types = VALUE_TYPES + library_value_types()
         # A class it defines keeps what its body was handed

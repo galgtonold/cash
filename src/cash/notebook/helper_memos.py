@@ -239,7 +239,11 @@ def _holders(ns: Mapping[str, Any]) -> tuple[int, ...]:
     wrappers, classes): binding or rebinding one changes this, and nothing
     else bound in the namespace can bring a memo in."""
     kinds = _HOLDER_TYPES
-    return tuple(id(v) for v in list(ns.values()) if type(v) in kinds or instance_of(v, type))
+    # ``issubclass`` of the real type is what `instance_of` answers for
+    # ``type`` (no object passes for a class by its ``__class__``), without
+    # its per-value lookups: this runs over the whole namespace twice a
+    # statement.
+    return tuple(id(v) for v in list(ns.values()) if (kind := type(v)) in kinds or issubclass(kind, type))
 
 
 #: Bumped before each statement (`new_statement`).
