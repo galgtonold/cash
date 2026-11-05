@@ -32,6 +32,7 @@ from ..cache_key import compute_cache_key
 from ..cache_status import CacheStatus
 from ..call_refs import resolve_call_refs
 from ..control_structures import is_control_structure
+from ..file_records import entry_file_records
 from ..helper_memos import carries_changes
 from ..helper_memos import unfilled as memos_unfilled
 from ..holder_patches import HolderPatch, apply_patch
@@ -191,7 +192,7 @@ class CacheRestorer:
                 return set(), _perf_counter() - start_time, 0.0
             if metadata and cached_data is not None:
                 # 3. Check file dependencies (Critical!)
-                file_deps = metadata.get("file_dependencies", {})
+                file_deps = self.probe.entry_files(metadata)
                 fresh, stale = snapshot_is_fresh(file_deps)
                 if not fresh:
                     logger.debug("[UPSTREAM] Restore failed: stale file dependency (%s)", stale)
@@ -412,7 +413,7 @@ class CacheRestorer:
 
         # Resolve file deps once.
         resolved_paths: set[str] = set()
-        file_deps_meta = metadata.get("file_dependencies", {})
+        file_deps_meta = entry_file_records(metadata, self.probe.backend() if self.probe is not None else None)
         if file_deps_meta:
             # Found with the run's stats (`run_memo.stats_this_run`): one
             # look per path per cell run, none while the folder watch vouches
@@ -579,7 +580,7 @@ class CacheRestorer:
             if (
                 not metadata
                 or metadata.get("metadata_only")
-                or not CacheProbe.files_fresh(metadata.get("file_dependencies", {}), memo_key=cache_key)
+                or not CacheProbe.files_fresh(self.probe.entry_files(metadata), memo_key=cache_key)
                 or self._lookup_refuses(metadata, self._statement_ttl(raw_cell, node, inputs))
             ):
                 needed_first |= unresolved

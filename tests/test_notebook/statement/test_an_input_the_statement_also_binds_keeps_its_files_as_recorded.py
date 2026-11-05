@@ -12,6 +12,7 @@ import os
 
 import cash.tracking.file_dep_snapshot as file_dep_snapshot
 from cash._paths import normalize_path
+from cash.notebook.file_records import entry_file_records
 
 
 def test_files_an_input_was_built_from_are_not_snapshotted_again(
@@ -46,7 +47,9 @@ def test_files_an_input_was_built_from_are_not_snapshotted_again(
     assert meta["status"].name == "COMPUTED"
     again = {path for paths in snapshotted for path in paths if mark in normalize_path(path)}
     assert again == set(), again
-    # Still recorded, as the first entry recorded them.
-    deps = cash_instance.backend.peek_metadata(p.tracking_state.variable_sources["n"])["file_dependencies"]
-    for path, recorded in first_entry["file_dependencies"].items():
+    # Still recorded, as the first entry recorded them (`entry_file_records`:
+    # by reference to that entry).
+    backend = cash_instance.backend
+    deps = entry_file_records(backend.peek_metadata(p.tracking_state.variable_sources["n"]), backend)
+    for path, recorded in entry_file_records(first_entry, backend).items():
         assert deps[path] == recorded

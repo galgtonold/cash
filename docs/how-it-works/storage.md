@@ -178,12 +178,13 @@ the entry was written with and the tier's current `default_ttl`.
     Each statement is judged on its own. A result that took less than 10 ms
     is not stored at all. One that took less than 0.1 s stays in memory. Above
     that, it goes to disk only when reading it back is predicted to be at
-    least 20% cheaper than recomputing it, and when it costs no more than
+    least 20% cheaper than recomputing it, when one re-run saves more than
+    writing it takes on this machine, and when it costs no more than
     128 MiB of disk per second of compute saved. `# @cash:persist` or
     `%cash_persist on` writes it anyway. The [cost model](../cost-model.md)
     explains the prediction and every setting.
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @1cf8c4c4 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @d0ef54da -->
 Each tier turns down a single value too large for its cap, so a 20 MB frame
 can be stored in memory and on disk while skipping a Redis tier limited to
 10 MB. When a value was meant for disk but every disk tier refused it, cash
@@ -423,7 +424,7 @@ stored a new result under the same entry meanwhile, the next read takes the
 new entry as it is on disk, and the counts are dropped rather than written over
 it.
 
-<!-- claim: cash/backends/cache_dir.py:CACHE_FORMAT_VERSION == 10, cash/backends/cache_dir.py:CacheDirStamp.check @7bdce11c -->
+<!-- claim: cash/backends/cache_dir.py:CACHE_FORMAT_VERSION == 11, cash/backends/cache_dir.py:CacheDirStamp.check @7bdce11c -->
 The cache folder records the storage format it was written in. When cash opens
 a folder written in a different format, by an older or newer cash, it logs a
 warning and deletes the old entries, so the first run afterwards recomputes.

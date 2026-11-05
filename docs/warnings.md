@@ -485,7 +485,7 @@ caches inside a statement faces the same rule unless a statement stores a
 reference to it (`b = load(p)`); the message then names the function, as in
 `load(...)`.
 
-<!-- claim: cash/notebook/statement/store.py:StatementStore._with_decorator_ref @9edb344d, cash/backends/persistence_policy.py:PersistencePolicy.decide @e3aa6741 -->
+<!-- claim: cash/notebook/statement/store.py:StatementStore._with_decorator_ref @9edb344d, cash/backends/persistence_policy.py:PersistencePolicy.decide @f269c827 -->
 The result of a `@cash.cache` function is not judged by this rule: the
 decorator writes every result to disk, and a statement that only binds it
 (`df = mylib.build_features(raw)`) refers to that entry instead of storing

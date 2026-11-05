@@ -64,6 +64,9 @@ __all__ = [
     "snapshot_is_fresh",
     "FreshnessMemo",
     "StaleDep",
+    "ALSO_SPELLED",
+    "fold_relative_twins",
+    "unfold_relative_twins",
 ]
 
 # Marks a snapshot entry as a REMOTE object rather than a local path. Remote
@@ -1599,16 +1602,108 @@ def snapshot_is_fresh(
     return True, None
 
 
-def _recorded_alike(absolute: Any, relative: Mapping[str, Any]) -> bool:
+def _recorded_alike(absolute: Any, relative: Mapping[str, Any], name: str | None = None) -> bool:
     """Do the two spellings' entries describe the file alike? The absolute
     one may also say where it lies beside the code (`_CODE_REL`), which
     only decides where this process looks for it: the twin's answer counts
-    only when it was found at its own path."""
+    only when it was found at its own path. One stored with its relative
+    spellings folded in (`ALSO_SPELLED`) vouches for relative *name* when
+    it lists it: the entry of that name was made from it
+    (`unfold_relative_twins`)."""
     if absolute == relative:
         return True
-    if not isinstance(absolute, Mapping) or _CODE_REL not in absolute:
+    if not isinstance(absolute, Mapping):
+        return False
+    spelled = absolute.get(ALSO_SPELLED)
+    if spelled is not None:
+        return name is not None and name in spelled
+    if _CODE_REL not in absolute:
         return False
     return {k: v for k, v in absolute.items() if k not in (_CODE_REL, _CODE_MOD)} == relative
+
+
+#: In an absolute path's entry of a stored snapshot: the relative spellings
+#: the same read was recorded under, each with this entry for its own
+#: (`fold_relative_twins`). Read back as entries of their own
+#: (`unfold_relative_twins`).
+ALSO_SPELLED = "also_spelled"
+
+_NOT_FOR_RELATIVE = (ALSO_SPELLED, _CODE_REL, _CODE_MOD)
+
+
+def fold_relative_twins(snap: Mapping[str, Any]) -> dict[str, Any]:
+    """*snap* with each relative spelling whose absolute twin it records
+    alike (`_recorded_alike`) folded into that twin's entry, as a name it
+    lists under `ALSO_SPELLED`: a relative read is recorded under both
+    spellings (``FileAccessTracker.track_path``), and stored so every
+    entry of a folder read by relative path was written twice.
+
+    The twin is the relative spelling made absolute from the working
+    directory now, as a check finds it (`spelled_absolute`); a spelling
+    with no such twin keeps its own entry. `unfold_relative_twins` gives
+    back each folded spelling's own entry, as recorded, so a check under
+    another working directory looks for it where its name leads now.
+    """
+    isabs = os.path.isabs
+    folded_into: dict[str, list[str]] = {}
+    kept: dict[str, Any] = {}
+    refolded = False
+    for path, recorded in snap.items():
+        if not isabs(path):
+            if isinstance(recorded, Mapping):
+                twin = spelled_absolute(path)
+                if twin is not None and twin != path and _same_entry(snap.get(twin), recorded):
+                    folded_into.setdefault(twin, []).append(path)
+                    continue
+        elif type(recorded) is dict and ALSO_SPELLED in recorded:
+            refolded = True  # taken from a stored form: its list is made again
+        kept[path] = recorded
+    if not folded_into and not refolded:
+        return kept
+    for path, recorded in kept.items():
+        names = folded_into.get(path)
+        if names is None and not (type(recorded) is dict and ALSO_SPELLED in recorded):
+            continue
+        entry = {k: v for k, v in recorded.items() if k != ALSO_SPELLED}
+        if names:
+            entry[ALSO_SPELLED] = names
+        kept[path] = entry
+    return kept
+
+
+def _same_entry(absolute: Any, relative: Mapping[str, Any]) -> bool:
+    """Does relative spelling's entry *relative* say what *absolute*, its
+    twin's, does but for what only an absolute path's entry says?"""
+    if absolute == relative:
+        return True
+    if not isinstance(absolute, Mapping):
+        return False
+    return {k: v for k, v in absolute.items() if k not in _NOT_FOR_RELATIVE} == relative
+
+
+def unfold_relative_twins(snap: Mapping[str, Any]) -> Mapping[str, Any]:
+    """*snap* as recorded, from its stored form (`fold_relative_twins`):
+    each spelling folded into an absolute path's entry an entry of its own
+    again, that entry less what only the absolute one says. *snap* itself
+    when nothing was folded into it. The absolute entries are *snap*'s
+    own objects (`_note_settled` notes in them)."""
+    found = False
+    for recorded in snap.values():
+        if type(recorded) is dict and ALSO_SPELLED in recorded:
+            found = True
+            break
+    if not found:
+        return snap
+    out: dict[str, Any] = {}
+    for path, recorded in snap.items():
+        out[path] = recorded
+        names = recorded.get(ALSO_SPELLED) if type(recorded) is dict else None
+        if names:
+            plain = {k: v for k, v in recorded.items() if k not in _NOT_FOR_RELATIVE}
+            for name in names:
+                if name not in snap:
+                    out[name] = dict(plain)
+    return out
 
 
 def _fresh_as_absolute_twin(
@@ -1636,7 +1731,7 @@ def _fresh_as_absolute_twin(
     if not isinstance(recorded, Mapping):
         return False
     twin = spelled_absolute(path)
-    if twin is None or twin == path or not _recorded_alike(snap.get(twin), recorded):
+    if twin is None or twin == path or not _recorded_alike(snap.get(twin), recorded, path):
         return False
     answer = answered.get(twin)
     if answer is None:

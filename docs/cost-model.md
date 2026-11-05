@@ -23,8 +23,9 @@ decision to cache it, and its results are always written to disk (see the
 | over 0.1 s, and worth reading back | keeps it in memory and on disk | yes |
 
 "Worth reading back" means the predicted time to read the value back beats the
-compute time by at least `min_cache_savings_pct` (20%). A large value that
-computes in 0.3 s but takes a second to read back stays in memory.
+compute time by at least `min_cache_savings_pct` (20%), and that one re-run
+saves more than writing the value takes (see [the write](#the-write)). A large
+value that computes in 0.3 s but takes a second to read back stays in memory.
 
 <!-- claim: cash/notebook/statement/call_routing.py:CallRouting.price @2197abce -->
 Compute time is your code's, not cash's. Time cash spends inside a statement
@@ -51,7 +52,7 @@ for all of them. Only a storage tier's size cap still applies.
 
 ### A statement around a cached call { #a-statement-around-a-cached-call }
 
-<!-- claim: cash/notebook/statement/store.py:StatementStore._store @040d800c, cash/notebook/call_unit.py:CallUnit._count_cached @48acf47c, cash/notebook/call_unit.py:CallUnit._cached @bf14dba3 -->
+<!-- claim: cash/notebook/statement/store.py:StatementStore._store @480bc467, cash/notebook/call_unit.py:CallUnit._count_cached @48acf47c, cash/notebook/call_unit.py:CallUnit._cached @bf14dba3 -->
 cash also caches the slow calls inside a statement on their own (see
 [`no-cache-calls`](annotations.md#call-level-caching-default-and-cashno-cache-calls)).
 The call's result is kept in the call's entry, so a statement around it is
@@ -94,6 +95,10 @@ Restoring 'big_frame' (412 MB DataFrame) would take ~0.71s vs 0.85s compute
 ```
 
 <!-- claim: cash/backends/value_policy.py:worth_its_bytes, cash/backends/value_policy.py:WORTH_CEILING_BYTES_PER_SECOND == 134217728, cash/backends/value_policy.py:WORTH_FLOOR_BYTES == 8388608 -->
+A value whose write would take longer than a re-run saves stays in memory with
+no warning: the next session computes it again, which is what writing it would
+have cost this one.
+
 A value that is large and quick to rebuild is refused on **rate** instead: cash
 spends at most 128 MiB of disk per second of compute saved, and does not write a
 value over 8 MiB that exceeds that rate. It warns once per cell with
@@ -156,6 +161,32 @@ faster to compute. Raise `min_cache_savings_pct` to 0.5–0.7, keep the in-memor
 tier in front, and mark values you would rather not fetch remotely
 `# @cash:no-cache`.
 
+## The write { #the-write }
+
+<!-- claim: cash/backends/persistence_policy.py:EXPECTED_RERUNS == 1, cash/backends/persistence_policy.py:PersistencePolicy.pays_for_its_write @fee6df3b, cash/backends/persistence_policy.py:write_seconds @ca0cb2e3, cash/backends/write_cost.py:WriteRates.record @7b4d4851 -->
+Writing a value to disk takes time on the run that makes it: pickling it,
+which holds up your next statement, and the disk write, which runs in the
+background but has to finish before the cell does once more than two seconds
+of writing are queued. cash writes a value only when **one re-run** that reads
+it back saves more than that: its compute time, less the time to read it back,
+must exceed the time to write it.
+
+The write time is measured on your machine. Each disk tier times the writes it
+makes and keeps a running rate for each kind of value (a table of numbers, an
+array, a table of text or other Python objects, which pickle many times slower
+per byte). Until it has timed one of a kind, it uses the rates measured for the
+cost model on a fast local disk. A statement whose result is a cached call's
+pays for writing that call's entry too, since the two are written together.
+
+What this means in a loop: each pass is judged on its own. A pass that computes
+for a long time and stores little is always written, on any disk; one that
+computes quickly and stores a lot is written only where the disk is fast enough
+to pay for it. A loop that grows one value pass by pass (`df = pd.concat([df,
+part])`, `total = total + x`) writes each in-between state whole, so those are
+written only when their own pass pays for the write. The state the loop leaves
+is judged at the end of the cell by what rebuilding the whole loop would cost.
+Leaving a value off disk never changes a result: it is computed again.
+
 ## How the decision is made
 
 <!-- claim: cash/cost_model.py:_TYPE_TO_FAMILY @674b9d86, cash/cost_model.py:resolve_family @c5b46bd6, cash/cost_model.py:_resolve_backend @d6308bba, cash/cost_model.py:_KNOWN_BACKENDS @3f31251c -->
@@ -185,9 +216,10 @@ flowchart TB
    both `min_cache_fixed_budget_seconds` and 80% of the compute time. In memory
    this almost never refuses.
 2. **Write it to disk?** Only when the compute time is over
-   0.1 s and reading the value back from disk beats computing it by
-   `min_cache_savings_pct`. A value that fails stays in memory, with no reason
-   shown.
+   0.1 s, reading the value back from disk beats computing it by
+   `min_cache_savings_pct`, and one re-run saves more than the write takes
+   ([the write](#the-write)). A value that fails stays in memory, with no
+   reason shown.
 3. **Worth its bytes?** At most 128 MiB of disk per second of
    compute saved, as above.
 

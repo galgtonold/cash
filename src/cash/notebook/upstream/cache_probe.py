@@ -12,7 +12,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from ...tracking.file_dep_snapshot import snapshot_is_fresh
@@ -27,6 +27,7 @@ from ..cache_key import (
     pyplot_draws_key,
     share_edges_key,
 )
+from ..file_records import entry_file_records
 from ..loop_split import is_split_half, loop_source_hash, store_for_backend
 from ..run_memo import file_state_this_run, known_fresh_entry, note_fresh_entry, note_fresh_snapshot, stat_keys_this_run
 from ..statement.derivation_edges import read_share_edges
@@ -82,6 +83,11 @@ class CacheProbe:
         if backend is None:
             return None
         return backend.get_metadata(cache_key)
+
+    def entry_files(self, metadata: Any) -> Mapping[str, Any]:
+        """Every file record of the entry *metadata* describes, those it
+        refers to included (`file_records.entry_file_records`)."""
+        return entry_file_records(metadata, self.backend()) if metadata else {}
 
     def record(self, key: str) -> dict | None:
         """The metadata record under *key*, or ``None`` when there is none or

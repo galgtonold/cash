@@ -23,6 +23,7 @@ __all__ = [
     "DYNAMIC_RESOLUTION_BYTES",
     "DYNAMIC_SOURCE_ENTRIES",
     "FILE_DIGESTS",
+    "FILE_RECORDS",
     "FRAMES",
     "FROZEN_RESULTS",
     "MODULE_ANALYSES",
@@ -221,6 +222,11 @@ USER_CALLEES = 500
 #: One set of file snapshots per producing cache entry: a folder read's set
 #: runs to thousands of files.
 PRODUCER_SNAPSHOTS = 64
+
+#: One entry's own file records, read back, per token that names them
+#: (`cash.notebook.file_records`), and one entry's records with those it
+#: refers to merged in: a folder read's records run to thousands of files.
+FILE_RECORDS = 64
 
 #: One source digest per function the notebook's cells reference.
 NOTEBOOK_FUNCTIONS = 500

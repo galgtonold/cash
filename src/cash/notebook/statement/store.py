@@ -31,6 +31,10 @@ from cash.diagnostics import log_diagnostic, warn_diagnostic
 from cash.exceptions import CashCacheStoreFailedWarning
 from cash.notebook.anchors import AnchorUnrebuilt, with_anchor_refs
 from cash.notebook.callee_reach import made_as_it_ran
+from cash.notebook.consumables import is_stream
+from cash.notebook.file_records import REFS_FIELD as FILE_REFS_FIELD
+from cash.notebook.file_records import Records, entry_file_records, own_records, records_token, referred_records
+from cash.notebook.read_handles import reaches_read_handle
 from cash.notebook.shared_objects import scalar_identity
 from cash.notebook.statement import reducer_writes
 from cash.notebook.statement._metadata import StatementCacheMetadata
@@ -41,7 +45,7 @@ from cash.notebook.statement.miss_guard import GUARD_SKIP_REASON
 from cash.notebook.statement.run import ECHO_FIELD, MEMO_ANSWERS_NAME, MEMO_CHANGES_FIELD
 from cash.sizing import estimate_object_size, pickled_size_estimate
 from cash.tracking import file_dep_snapshot
-from cash.tracking.file_dep_snapshot import snapshot_dependencies
+from cash.tracking.file_dep_snapshot import fold_relative_twins, snapshot_dependencies
 from cash.tracking.randomness import capture_object_rng_states
 from cash.value_hash import known_size
 from cash.value_types import IMMUTABLE_LEAF_TYPES
@@ -65,9 +69,11 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["StatementStore"]
 
-#: How many statements back `StatementStore._file_snapshots_through_inputs`
-#: looks for the stored records of an input's files.
-_INHERIT_HOPS = 4
+#: How many statements back `StatementStore._records_through_inputs`
+#: looks for the stored records of an input's files. A cheap statement
+#: that reads no file itself is not stored (`StatementStore._too_cheap_to_store`),
+#: so a chain of them can run a few deep.
+_INHERIT_HOPS = 8
 
 
 def _snapshot_with_inherited(
@@ -77,6 +83,7 @@ def _snapshot_with_inherited(
     known: dict[str, tuple[Any, ...]] | None = None,
     probes: dict[str, str] | None = None,
     checked: Mapping[str, Any] | None = None,
+    referred: Iterable[str] = (),
 ) -> dict[str, dict]:
     """Snapshot the files a statement read itself; take the ones it only
     inherited from its inputs' producers as they recorded them. *known* are
@@ -85,9 +92,12 @@ def _snapshot_with_inherited(
     *probes* are the paths it only checked for (``probe_answers``): the entry
     is fresh while each is still missing, or still there. *checked* are the
     stats the check that no input moved took just before
-    (``FileAccessTracker.checked_stats``)."""
+    (``FileAccessTracker.checked_stats``). *referred* are the paths whose
+    records the entry refers to (`_InheritedRecords.refs`): not recorded
+    here."""
     inherited_snapshots = inherited_snapshots or {}
     own = set(file_dependencies) - inherited_snapshots.keys()
+    own.difference_update(referred)
     absent = present = None
     if probes:
         absent = [path for path, asked in probes.items() if asked == "absent"]
@@ -96,6 +106,41 @@ def _snapshot_with_inherited(
     for path, recorded in inherited_snapshots.items():
         snapshot.setdefault(path, recorded)
     return snapshot
+
+
+class _InheritedRecords:
+    """The file records a statement takes over from its inputs' producers
+    (`StatementStore.save`): by reference to the producer's entry
+    (``refs``, the paths they name in ``referred``) where it takes all of
+    them, or else copied (``copied``), the path's first record kept."""
+
+    __slots__ = ("copied", "referred", "refs")
+
+    def __init__(self) -> None:
+        self.refs: dict[str, str] = {}  # token -> key, in the order taken
+        self.referred: set[str] = set()
+        self.copied: dict[str, dict] = {}
+
+    def take(self, records: Records, files: set[str], direct: set[str]) -> None:
+        """Take *records* for the paths of *files* (what an input was built
+        from) the statement did not read itself (*direct*)."""
+        if records.token in self.refs:
+            return
+        paths = records.paths
+        if records.token and paths <= files and paths.isdisjoint(direct):
+            # All of them, and none it read itself: the entry's own records.
+            self.refs[records.token] = records.key
+            self.referred |= paths
+            return
+        copied = self.copied
+        referred = self.referred
+        for path, recorded in records.records.items():
+            if path in files and path not in direct and path not in referred:
+                copied.setdefault(path, recorded)
+
+    def ref_list(self) -> list[list[str]] | None:
+        """The references, as stored (``StatementCacheMetadata.file_refs``)."""
+        return [[key, token] for token, key in self.refs.items()] or None
 
 
 def _frozen_tags(captured_vars: Mapping[str, Any], outputs: set[str]) -> dict[str, list[str]] | None:
@@ -336,7 +381,7 @@ class StatementStore:
 
         accessed_files = execution.accessed_files
         all_file_deps = set(accessed_files) if accessed_files else set()
-        inherited_snapshots: dict[str, dict] = {}
+        inherited = _InheritedRecords()
 
         # CRITICAL: Include inherited file dependencies from input variables
         # This ensures that when Cell 3 (`df`) is cached, it stores the CSV file's mtime
@@ -347,18 +392,21 @@ class StatementStore:
         # again here. Re-snapshotted per statement, every statement derived from
         # a frame read out of 5,222 files re-read all 5,222.
         # A later lookup still checks the real file against it.
+        #
+        # And where it takes over all of a producer's records, by reference
+        # to that producer's entry (`file_records`): copied, each statement
+        # below a read of 15,000 files wrote a 5 MB record of them.
         direct = all_file_deps.copy()
         for input_var in run.inputs:
-            inherited = self.tracking_state.executed_file_deps.get(input_var)
-            if not inherited:
+            files = self.tracking_state.executed_file_deps.get(input_var)
+            if not files:
                 continue
-            all_file_deps.update(inherited)
-            recorded = self._producer_file_snapshots(input_var, run.entry_sources.get(input_var))
-            if not recorded:
-                recorded = self._file_snapshots_through_inputs(input_var)
-            for path in inherited:
-                if path in recorded and path not in direct:
-                    inherited_snapshots.setdefault(path, recorded[path])
+            all_file_deps.update(files)
+            found = self._producer_records(input_var, run.entry_sources.get(input_var))
+            if not found:
+                found = self._records_through_inputs(input_var)
+            for records in found:
+                inherited.take(records, files, direct)
 
         return self._store(
             run,
@@ -366,7 +414,7 @@ class StatementStore:
             captured_vars,
             file_dependencies=all_file_deps,
             miss_guarded=miss_guarded,
-            inherited_snapshots=inherited_snapshots,
+            inherited=inherited,
             seed_epochs=seed_epochs,
         )
 
@@ -416,13 +464,14 @@ class StatementStore:
             warn_diagnostic(CashCacheStoreFailedWarning, "STORE-INPUT-CHANGED", what, fix)
         return True
 
-    def _producer_file_snapshots(self, var_name: str, key: str | None = None) -> dict[str, dict]:
-        """The file snapshots *var_name*'s producing statement stored, or {}:
-        the entry *key* when given (`StatementRun.entry_sources`)."""
+    def _producer_records(self, var_name: str, key: str | None = None) -> list[Records]:
+        """The file records *var_name*'s producing entry holds, its own and
+        those it refers to, or []: the entry *key* when given
+        (`StatementRun.entry_sources`)."""
         key = key or self.tracking_state.variable_sources.get(var_name)
         backend = attribute_or(self.cash_instance, "backend", None) if self.cash_instance else None
         if not key or backend is None:
-            return {}
+            return []
 
         memo = self._producer_snapshots
         if self._producer_snapshots_epoch != file_dep_snapshot.HASH_EPOCH:
@@ -435,12 +484,28 @@ class StatementStore:
             meta = backend.peek_metadata(key)
         except Exception:  # noqa: BLE001 - a snapshot it cannot read is taken afresh
             meta = None
-        snaps = (meta or {}).get("file_dependencies") or {} if isinstance(meta, dict) else {}
-        memo[key] = snaps
-        return snaps
+        found: list[Records] = []
+        if isinstance(meta, dict):
+            own = own_records(meta, key)
+            if own is not None:
+                found.append(own)
+            for ref in meta.get(FILE_REFS_FIELD) or ():
+                referred = (
+                    referred_records(backend, ref[0], ref[1])
+                    if isinstance(ref, (list, tuple)) and len(ref) == 2
+                    else None
+                )
+                if referred is None:
+                    # Records it cannot follow: none at all, as an entry
+                    # without records, and the files are taken afresh.
+                    found = []
+                    break
+                found.append(referred)
+        memo[key] = found
+        return found
 
-    def _file_snapshots_through_inputs(self, var_name: str) -> dict[str, dict]:
-        """The file snapshots recorded for what *var_name* was built from,
+    def _records_through_inputs(self, var_name: str) -> list[Records]:
+        """The file records stored for what *var_name* was built from,
         when its own producer stored none: those its inputs' producers
         stored, for each input still the value it was built from (its
         lineage unchanged since), followed back a few statements.
@@ -452,7 +517,7 @@ class StatementStore:
         an inherited file is recorded when the producer stored it."""
         state = self.tracking_state
         lineage = state.lineage
-        merged: dict[str, dict] = {}
+        found: list[Records] = []
         seen = {var_name}
         todo = [var_name]
         for _depth in range(_INHERIT_HOPS):
@@ -465,16 +530,15 @@ class StatementStore:
                     if input_var in seen or input_var not in lineage or lineage[input_var] != built_from:
                         continue
                     seen.add(input_var)
-                    recorded = self._producer_file_snapshots(input_var)
+                    recorded = self._producer_records(input_var)
                     if recorded:
-                        for path, entry in recorded.items():
-                            merged.setdefault(path, entry)
+                        found.extend(recorded)
                     else:
                         following.append(input_var)
             if not following:
                 break
             todo = following
-        return merged
+        return found
 
     def policy(self) -> PersistencePolicy:
         """The persistence policy under the current config, read per statement
@@ -632,7 +696,7 @@ class StatementStore:
         *,
         file_dependencies: set[str],
         miss_guarded: bool = False,
-        inherited_snapshots: dict[str, dict] | None = None,
+        inherited: _InheritedRecords | None = None,
         seed_epochs: Mapping[str, str],
     ) -> StatementCacheMetadata | None:
         """Store execution results and metadata in the cache. Returns
@@ -644,7 +708,7 @@ class StatementStore:
         # What this key recorded is about to change (``_producer_file_snapshots``).
         self._producer_snapshots.pop(run.cache_key, None)
 
-        if self._too_cheap_to_store(run, execution, file_dependencies, execution.cost):
+        if self._too_cheap_to_store(run, execution, execution.cost):
             if run.outputs and not self._calls.in_loop and replay_record(execution.captured) is not None:
                 # What it showed is kept for a cell run that skips it.
                 return self._store_metadata_only(run, execution, None, {})
@@ -655,7 +719,7 @@ class StatementStore:
             reason = f"its value holds variables' objects by reference, and it cannot be stored so ({exc})"
             _warn_not_stored(exc)
             return self._store_metadata_only(run, execution, reason, {})
-        if not referenced and self._too_cheap_to_store(run, execution, file_dependencies, execution.store_cost):
+        if not referenced and self._too_cheap_to_store(run, execution, execution.store_cost):
             # Its own work is not worth an entry: the calls inside it are what
             # was, and the cache holds them. The metadata still records its
             # output lineages, which a restart needs.
@@ -676,6 +740,20 @@ class StatementStore:
             run.metrics["skipped_reason"] = "pickling its value ran code of the user's that wrote to a variable"
             return None
 
+        own_files = (
+            fold_relative_twins(
+                _snapshot_with_inherited(
+                    file_dependencies,
+                    execution.accessed_remote,
+                    inherited.copied if inherited is not None else None,
+                    execution.file_tracker.known_reads() if execution.file_tracker is not None else None,
+                    execution.probes,
+                    attribute_or(execution.file_tracker, "take_checked_stats", dict)(),
+                    referred=inherited.referred if inherited is not None else (),
+                )
+            )
+            or None
+        )
         metadata = StatementCacheMetadata(
             timestamp=time.time(),
             inputs=list(run.inputs),
@@ -688,14 +766,9 @@ class StatementStore:
             source_hash=run.source_hash,
             code=run.code,
             key=run.cache_key,
-            file_dependencies=_snapshot_with_inherited(
-                file_dependencies,
-                execution.accessed_remote,
-                inherited_snapshots,
-                execution.file_tracker.known_reads() if execution.file_tracker is not None else None,
-                execution.probes,
-                attribute_or(execution.file_tracker, "take_checked_stats", dict)(),
-            ),
+            file_dependencies=own_files,
+            file_refs=inherited.ref_list() if inherited is not None else None,
+            files_token=records_token(own_files) if own_files else None,
             force_persist=run.force_persist,
             output_lineages=self._lineage_builder.build_output_lineages(self.tracking_state, run.outputs),
             output_digests=self._lineage_builder.build_output_digests(self.tracking_state, run.outputs) or None,
@@ -739,7 +812,9 @@ class StatementStore:
         logger.debug("[CACHE DEBUG] Stored in cache: %s", run.cache_key)
 
         stored = StatementCacheMetadata.from_dict(wire)
-        self.tracking_state.entry_file_states[run.cache_key] = (stored.file_dependencies,)
+        self.tracking_state.entry_file_states[run.cache_key] = (
+            entry_file_records(stored, attribute_or(self.cash_instance, "backend", None)) or None,
+        )
         return stored
 
     @staticmethod
@@ -750,9 +825,21 @@ class StatementStore:
         cached = execution.cached_call_reads
         return bool(set(file_dependencies) - cached or set(execution.accessed_remote) - cached)
 
-    def _too_cheap_to_store(
-        self, run: StatementRun, execution: StatementExecution, file_dependencies: set[str], seconds: float
-    ) -> bool:
+    def _reads_on_from_files(self, run: StatementRun) -> bool:
+        """Whether an input of *run* built from files is one reading moves
+        on: an open file (or what reaches one, `reaches_read_handle`) or
+        another stream (`is_stream`)."""
+        files = self.tracking_state.executed_file_deps
+        user_ns = self.shell.user_ns if self.shell is not None else {}
+        for name in run.inputs:
+            if not files.get(name) or name not in user_ns:
+                continue
+            value = user_ns[name]
+            if is_stream(value) or reaches_read_handle(value):
+                return True
+        return False
+
+    def _too_cheap_to_store(self, run: StatementRun, execution: StatementExecution, seconds: float) -> bool:
         """Whether *run*'s value, worth *seconds*, is not worth an entry.
 
         Asked of the statement's whole cost first: under the floor, it gets no
@@ -764,13 +851,20 @@ class StatementStore:
         nothing makes the next lookup a fast clean miss. Then of its own
         work, the calls the cache holds left out (``store_cost``).
 
-        The floor is waived for a statement with any file dependency, its
-        inputs' included, except one read inside a call the cache holds. A
-        cheap reader of a file HANDLE (``lines = [l for l in fh]``) must still
-        be stored: re-run on a second Run All, it reads the handle its
-        skipped producer left at EOF and gets [] (test_file_handle_iteration_second_run_all).
+        The floor is waived for a statement that reads a file itself, except
+        inside a call the cache holds, and for one with an input it reads
+        on from a file: a file HANDLE or another stream built from files
+        (`_reads_on_from_files`). A cheap reader of a handle
+        (``lines = [l for l in fh]``) must still be stored: re-run on a
+        second Run All, it reads the handle its skipped producer left at EOF
+        and gets [] (test_file_handle_iteration_second_run_all). Not for the
+        files its other inputs were built from: ``X.shape[0] + 1`` below a
+        read of 15,000 files was stored with a record of each, every cell,
+        to be run again just as cheaply.
         """
-        if run.force_persist or self._reads_files(execution, file_dependencies):
+        if run.force_persist or self._reads_files(execution, set(execution.accessed_files or ())):
+            return False
+        if self._reads_on_from_files(run):
             return False
         if _only_shows_a_name(run.tree):
             # ``data`` alone: its cost is the display, which a hit repeats.

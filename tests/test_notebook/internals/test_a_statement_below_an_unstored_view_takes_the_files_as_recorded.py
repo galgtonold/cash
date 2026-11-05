@@ -5,7 +5,7 @@ producing entry recorded them. ``X_train = X[:5]`` stores no entry, so every
 statement below it (``X_train.shape``) took a stat and a digest of each file
 ``X`` was read from again, 15,000 of them per trivial cell on a photo set.
 They are now taken from the entry of the statement ``X_train`` was made
-from (``StatementStore._file_snapshots_through_inputs``).
+from (``StatementStore._records_through_inputs``).
 """
 
 from __future__ import annotations
@@ -57,7 +57,8 @@ def test_a_statement_below_an_unstored_view_takes_no_stat_of_the_files(cash_magi
         return real(path, *args, **kwargs)
 
     monkeypatch.setattr(file_dep_snapshot, "own_stat", counting)
-    run_cash_cell(cash_magics, "X_train.shape[0] + 1")
+    # Stored: over the floor (a trivial one under it is not stored at all).
+    run_cash_cell(cash_magics, f"n = (time.sleep({ABOVE_PERSISTENCE_FLOOR_S}), X_train.shape[0] + 1)[1]")
     monkeypatch.setattr(file_dep_snapshot, "own_stat", real)
 
     assert stats["stat"] == 0, stats
@@ -77,6 +78,7 @@ def test_an_input_rebound_since_is_not_followed(cash_magics, statement_processor
     )
     run_cash_cell(cash_magics, "X_train = X[:5]")
     store = statement_processor._store
-    assert set(paths) <= store._file_snapshots_through_inputs("X_train").keys()  # the positive control
+    taken = store._records_through_inputs("X_train")
+    assert set(paths) <= {path for records in taken for path in records.paths}  # the positive control
     run_cash_cell(cash_magics, "X = np.zeros(3)")
-    assert store._file_snapshots_through_inputs("X_train") == {}
+    assert store._records_through_inputs("X_train") == []

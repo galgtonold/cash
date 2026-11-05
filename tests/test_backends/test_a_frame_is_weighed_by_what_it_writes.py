@@ -59,6 +59,7 @@ def test_a_frame_of_strings_is_weighed_by_its_pickle(tmp_path, monkeypatch):
 
     monkeypatch.setattr(persistence_policy.PersistencePolicy, "pays_to_restore", lambda *a, **k: True)
     monkeypatch.setattr(persistence_policy, "_write_outweighs_restore", lambda *a, **k: False)
+    monkeypatch.setattr(persistence_policy.PersistencePolicy, "pays_for_its_write", lambda *a, **k: True)
     frame = _strings_frame()
     written = len(pickle.dumps(frame, protocol=5))
 

@@ -107,7 +107,12 @@ __all__ = [
 #: stored with the pairs it put in, which a hit puts back. An older build
 #: reads such an entry as one that only read the memo, and would serve it
 #: with the memo left as it was; they are cleared.
-CACHE_FORMAT_VERSION = 10
+#: 11: a statement's entry refers to the file records of the entries its
+#: inputs came from rather than holding a copy (`file_records`), and keeps
+#: a relative read's second spelling in its absolute twin's record. An
+#: older build reads such an entry as one that depends on none of those
+#: files, and would serve it after they changed; they are cleared.
+CACHE_FORMAT_VERSION = 11
 
 #: The per-directory format stamp. No entry suffix, so entry globs skip it.
 VERSION_FILENAME = "CACHE_VERSION"
