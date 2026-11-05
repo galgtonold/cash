@@ -20,7 +20,9 @@ COUNT = "print('N', len(lines))"
 
 
 def test_a_run_all_counts_every_line(nb_runner):
-    (nb_runner.work_dir / "log.txt").write_text("".join(f"@User{i}: Action_1 -> Action_2\n" for i in range(50)), encoding="utf-8")
+    (nb_runner.work_dir / "log.txt").write_text(
+        "".join(f"@User{i}: Action_1 -> Action_2\n" for i in range(50)), encoding="utf-8"
+    )
     nb_runner.create_notebook([SETUP, OPEN, COPY, COUNT])
     nb_runner.start_kernel()
 
