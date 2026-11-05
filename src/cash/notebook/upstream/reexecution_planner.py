@@ -28,6 +28,7 @@ from .carrier_fills import fills_carrier
 from .figure_writes import FigureWriteGuard
 from .file_writers import FileWriterScheduler
 from .mismatch_classifier import import_only
+from .notebook_vetting import first_forward_read
 from .replay import UpstreamRepairGap
 
 if TYPE_CHECKING:
@@ -278,6 +279,7 @@ class ReexecutionPlanner:
                 stmts_to_run_indices, simulation_trace, check, virtual_lineage, restored_statements_info
             )
             or self._failing_import_left_out(stmts_to_run_indices, simulation_trace)
+            or self._past_a_forward_read(stmts_to_run_indices, simulation_trace, check)
         )
         if gap is not None:
             raise gap
@@ -403,6 +405,49 @@ class ReexecutionPlanner:
                 planned=True,
             )
         return None
+
+    @staticmethod
+    def _past_a_forward_read(
+        stmts_to_run_indices: list[int], simulation_trace: list, check: CellCheck
+    ) -> UpstreamRepairGap | None:
+        """The gap, when the plan re-runs a statement of a cell a run from
+        the top never gets through, or of one below it.
+
+        Such a cell reads a name only a cell below it binds, so a run from
+        the top raises ``NameError`` in it and runs nothing after. The
+        kernel got through it on a name a cell below had left in memory,
+        and no re-run can rebuild what that run made: the plan re-ran the
+        ``nps = {}`` above ``for v, g in sv.groupby(...)`` without the
+        loop it fills, which the simulation leaves out (its last run under
+        cash raised there), and a report below wrote the emptied dict to
+        its summary file. Refused only on evidence: a cell above this one
+        reads, when it runs, a name that only a cell below it binds.
+        """
+        cells, current = check.notebook_cells, check.current_cell_idx
+        if not stmts_to_run_indices or not cells or current is None:
+            return None
+        found = first_forward_read(tuple(cells), current)
+        if found is None:
+            return None
+        cell, name, binder = found
+        past = [i for i in stmts_to_run_indices if simulation_trace[i].cell >= cell]
+        if not past:
+            return None
+        first = simulation_trace[past[0]]
+        logger.debug("[UPSTREAM] Plan runs past cell %s, which reads %r before it is bound; not re-running", cell, name)
+        binding = cells[binder].strip()
+        producer = binding.splitlines()[0] if binding else name
+        return UpstreamRepairGap(
+            f"Cash would re-run {first.stmt_code.splitlines()[0][:60]!r}, which a run from the top never reaches",
+            stmt_code=first.stmt_code,
+            error_text=(
+                f"a run from the top stops at cell {cell + 1} with NameError: it reads {name!r}, "
+                f"which only cell {binder + 1} below it binds"
+            ),
+            producer=producer,
+            cell_no=binder + 1,
+            planned=True,
+        )
 
     @staticmethod
     def _overwritten_read(
