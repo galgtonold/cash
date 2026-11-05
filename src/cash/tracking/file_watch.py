@@ -1411,6 +1411,13 @@ def reset() -> None:
 
 
 def _close(watch: FileWatch) -> None:
+    # Every folder's watch ends: a verdict held by one of them (`FileWatch.still`,
+    # `FileWatch.changed_in`) lapses, as no change of it is reported any more.
+    with watch._lock:
+        for d in list(watch._dirs.values()):
+            d.alive = False
+            d.version += 1
+        watch._dirs.clear()
     backend = watch._backend
     try:
         for key in list(watch._by_key):
