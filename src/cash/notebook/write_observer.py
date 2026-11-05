@@ -26,7 +26,7 @@ import os
 import stat
 import sys
 import types
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from typing import Any
 
@@ -208,7 +208,10 @@ def _on_open(args: tuple) -> None:
         written = isinstance(flags, int) and bool(flags & _WRITE_FLAGS)
         # ``O_APPEND`` from the user's own code is an append like ``open(p, "a")``.
         appends = written and bool(flags & os.O_APPEND) and not flags & os.O_TRUNC and not _appended_by_user_code()
-    if written and not _names_a_folder(path):
+    # Only ``os.open`` can open a folder to write (``O_TMPFILE``): ``open()``
+    # of one fails, so its path is not stat-ed, a stat per file a statement
+    # unpacking an archive writes.
+    if written and (isinstance(mode, str) or not _names_a_folder(path)):
         _record(sinks, path, appends)
 
 
@@ -382,6 +385,19 @@ def kept_writes(
         # A folder is kept: one moved into place (``tmp.rename(dest)``) is
         # what the block published.
         and _lexists(p)
+    )
+
+
+def keeps_a_write(
+    written: Iterable[str], storage_root: object = None, appended=frozenset(), waived=frozenset()
+) -> bool:
+    """Does `kept_writes` find any path, asking the disk only until it does?"""
+    root = None
+    if isinstance(storage_root, (str, os.PathLike)):
+        root = os.path.normcase(os.path.abspath(os.fspath(storage_root))) + os.sep
+    return any(
+        p not in appended and p not in waived and not (root and os.path.normcase(p).startswith(root)) and _lexists(p)
+        for p in written
     )
 
 

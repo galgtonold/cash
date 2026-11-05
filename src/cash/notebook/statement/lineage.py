@@ -37,7 +37,7 @@ from ...analysis.mutations import assigned_method_call_receivers, standalone_met
 from ...analysis.namespace_effects import fits_its_receiver
 from ...tracking.file_dep_snapshot import realpath_of_read_this_run
 from ...tracking.module_symbols import static_attribute_reads
-from ...tracking.read_classification import regular_file_stat
+from ...tracking.read_classification import regular_file_stat, stat_key
 from ...value_hash import budgeted_hash, compute_hash, costly_after
 from ..cache_key import statement_source_hash
 from ..lineage_formula import (
@@ -129,8 +129,10 @@ def note_own_writes(tracking_state: "TrackingState", paths) -> None:
     (`TrackingState.own_file_writes`)."""
     tracking_state.file_event_seq += 1
     for path in paths:
-        where = realpath_of_read_this_run(path)[0]  # once per folder in a run, not per file
-        st = regular_file_stat(where)
+        # Once per folder in a run, not per file; the lstat that finds a
+        # regular file that is no link is its stat too.
+        where, found = realpath_of_read_this_run(path)
+        st = stat_key(found) if found is not None else regular_file_stat(where)
         if st is None:
             tracking_state.own_file_writes.pop(where, None)
         else:

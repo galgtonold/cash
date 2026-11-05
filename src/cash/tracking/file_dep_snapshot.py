@@ -164,17 +164,25 @@ def end_file_state_epoch() -> None:
 #: ``realpath`` answers for the current cell run, keyed on the path as given
 #: (and the working directory, for a relative one).
 _REALPATH_MEMO: dict[tuple[str, str], str] = {}
+
+#: How many answers `_REALPATH_MEMO` holds before it starts over.
+_REALPATH_KEPT = 65536
 _REALPATH_MEMO_EPOCH: int | None = None
 
 
 def _remember_realpath(key: tuple[str, str], resolved: str) -> None:
-    if len(_REALPATH_MEMO) < 65536:
-        _REALPATH_MEMO[key] = resolved
-        # A resolved path resolves to itself, and callers hand it back in
-        # both spellings: the tracker records ``normalize_path`` of it, and
-        # the lineage component resolves that record again.
-        _REALPATH_MEMO[("", resolved)] = resolved
-        _REALPATH_MEMO[("", normalize_path(resolved))] = resolved
+    if len(_REALPATH_MEMO) >= _REALPATH_KEPT:
+        # Full: start over, so a folder resolved from now on is remembered
+        # again. Kept full, a statement unpacking 50,000 files resolved the
+        # folder of each one past the first ~20,000 in full, a stat of every
+        # component of its path, three times a file.
+        _REALPATH_MEMO.clear()
+    _REALPATH_MEMO[key] = resolved
+    # A resolved path resolves to itself, and callers hand it back in
+    # both spellings: the tracker records ``normalize_path`` of it, and
+    # the lineage component resolves that record again.
+    _REALPATH_MEMO[("", resolved)] = resolved
+    _REALPATH_MEMO[("", normalize_path(resolved))] = resolved
 
 
 def realpath_of_read_this_run(
