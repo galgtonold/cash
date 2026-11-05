@@ -32,6 +32,73 @@ OUT_OF_BAND_MIN_BYTES = 64 * 1024
 _DATETIME_OBJECTS = kept_state.Ahead(reduce_datetime_objects)
 
 
+def _numpy_frombuffer() -> Callable[..., Any] | None:
+    """numpy's own rebuild of an array pickled out of band (what
+    ``ndarray.__reduce_ex__(5)`` names), or None when it names another."""
+    np = sys.modules.get("numpy")
+    try:
+        rebuild = np.zeros(1).__reduce_ex__(5)[0]
+    except Exception:  # noqa: BLE001 - an older numpy: arrays as before
+        return None
+    return rebuild if getattr(rebuild, "__name__", None) == "_frombuffer" else None
+
+
+_FROMBUFFER: list[Callable[..., Any] | None] = []
+
+
+def reduce_datetime64(array: Any) -> tuple | None:
+    """A ``datetime64`` or ``timedelta64`` array's reduce with its data out
+    of band, or None to pickle it as numpy does.
+
+    numpy pickles such an array into the stream: its dtype exports no
+    buffer, so protocol 5 cannot hand the data apart. A frame's date column
+    was then written whole into every entry holding it, never shared in the
+    chunk store as its other columns are: each result of ``h, _ =
+    run(played, k)`` in a loop wrote ``played``'s dates again (7 MB a
+    result for 900k rows). The same bytes go out of band as 8-byte integers
+    and come back through numpy's own rebuild with the array's dtype: the
+    array numpy would have loaded."""
+    np = sys.modules.get("numpy")
+    try:
+        if (
+            array.dtype.kind not in "mM"
+            or np is None
+            or type(array) is not np.ndarray
+            or array.dtype.metadata is not None
+            or array.nbytes < OUT_OF_BAND_MIN_BYTES
+        ):
+            return None
+        if array.flags.c_contiguous:
+            order = "C"
+        elif array.flags.f_contiguous:
+            order = "F"
+        else:
+            return None
+        if not _FROMBUFFER:
+            _FROMBUFFER.append(_numpy_frombuffer())
+        rebuild = _FROMBUFFER[0]
+        if rebuild is None:
+            return None
+        # A Fortran-ordered array's bytes are its transpose's in C order,
+        # which every buffer consumer takes (numpy hands those over too).
+        data = (array.T if order == "F" else array).view(np.int64)
+        return rebuild, (pickle.PickleBuffer(data), array.dtype, array.shape, order)
+    except Exception:  # noqa: BLE001 - anything unforeseen: pickled as numpy does
+        return None
+
+
+def _reduce_array_for_write(array: Any) -> tuple | None:
+    """`reduce_datetime_objects`, else `reduce_datetime64`: what the bytes
+    an entry is written as take for a numpy array."""
+    reduced = reduce_datetime_objects(array)
+    return reduced if reduced is not None else reduce_datetime64(array)
+
+
+#: `_DATETIME_OBJECTS`, and a ``datetime64`` array's data out of band, for
+#: the bytes `PickleSerializer` writes only.
+_ARRAYS_FOR_WRITE = kept_state.Ahead(_reduce_array_for_write)
+
+
 class Serializer(ABC):
     """Abstract base class for serializers."""
 
@@ -175,7 +242,8 @@ def stored_reducers(*, for_write: bool = False) -> dict | None:
     reduce.
 
     *for_write*: for the bytes `PickleSerializer` writes, also
-    `_reduce_chunked_array` for an Arrow column of chunks. Not for the
+    `_reduce_chunked_array` for an Arrow column of chunks and
+    `reduce_datetime64` for a ``datetime64`` array. Not for the
     pickles a digest is taken over (`stored_pickle`): how an entry is
     written changes no key."""
     reducers: dict = {}
@@ -191,7 +259,7 @@ def stored_reducers(*, for_write: bool = False) -> dict | None:
         reducers[string_array] = _reduce_string_array
     ndarray = getattr(sys.modules.get("numpy"), "ndarray", None)
     if isinstance(ndarray, type):
-        reducers[ndarray] = _DATETIME_OBJECTS
+        reducers[ndarray] = _ARRAYS_FOR_WRITE if for_write else _DATETIME_OBJECTS
     chunked = getattr(sys.modules.get("pyarrow"), "ChunkedArray", None)
     if for_write and isinstance(chunked, type):
         reducers[chunked] = _reduce_chunked_array

@@ -240,7 +240,7 @@ from ..shared_objects import (
     walk_budget,
 )
 from ..value_cutoff import LineageAliasStore, ValueLineageLog, use_value_lineage_log
-from ..write_observer import child_works, children_left_running, kept_writes, observe_writes
+from ..write_observer import child_works, children_left_running, keeps_a_write, kept_writes, observe_writes
 from . import hidden_generators, in_place
 from .lineage import note_own_writes
 from .observed_draws import ObservedDrawStore
@@ -4791,7 +4791,7 @@ class StatementProcessor:
             ):
                 self.tracking_state.executed_write_stmt_codes.add(code)
                 self.tracking_state.executed_write_input_lineages[code] = run.entry_lineages
-                if written and kept_writes(written, None, execution.appended_paths):
+                if written and keeps_a_write(written, None, execution.appended_paths):
                     self.tracking_state.observed_writer_codes.add(code)
                 else:
                     self.tracking_state.observed_writer_codes.discard(code)

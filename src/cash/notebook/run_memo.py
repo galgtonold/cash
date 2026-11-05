@@ -183,6 +183,14 @@ class _Held:
         self.loose = loose
         self.code = code
 
+    def renew(self, fresh: tuple[list, list[str]]) -> None:
+        """The paths `unsure` named were found as recorded just now: the
+        watch vouches for them again by *fresh* (`_held_keys_parts` of
+        them), in place of the folders that reported a change."""
+        parts, loose = fresh
+        self.parts = [part for part in self.parts if part[0].alive and part[0].version == part[1]] + parts
+        self.loose = loose
+
     def unsure(self) -> list[str] | None:
         """The snapshot's paths to check again: those in a folder that
         reported a change since, and the loose ones; None for all of them."""
@@ -910,6 +918,116 @@ def stat_keys_this_run(paths: Iterable[str]) -> Mapping[str, tuple[int, int, int
         for p, (_resolved, st) in stats_this_run(asked).items():
             keys[p] = stat_key(st) if st is not None else None
     return keys
+
+
+def stat_keys_as_recorded(recorded: Mapping[str, tuple[int, int, int] | None]) -> bool:
+    """Is every path of *recorded* (``{path: stat_key}``) found now with the
+    `stat_key` recorded for it (`stat_keys_this_run`)? False when one is
+    not, or was recorded as found nowhere (None).
+
+    Asked of each cached cell's files before every cell: below a cell that
+    read 25,000 files, every trivial cell went through each of them in
+    Python, a stat or a look-up in the folder watch each. A verdict found
+    while the watch held a stat of every file (`file_watch`) is kept
+    across runs, with the folders vouching for them (`_Held`): while none
+    of them reports a change it holds, and a later ask checks only the files
+    of a folder that did, and those no folder vouches for (a link, a file
+    with a second hard link, a folder that cannot be watched). The cost of
+    the check is then that of what changed, not of what was read."""
+    if None in recorded.values():
+        return False
+    run = file_state_this_run()
+    watch = run.get("watch") if run is not None else None
+    held = _held_keys_of(watch, recorded) if watch is not None else None
+    if held is not None:
+        unsure = held.unsure()
+        if unsure is not None:
+            if not unsure:
+                return True
+            part = {p: recorded[p] for p in unsure}
+            if part.items() <= stat_keys_this_run(part).items():
+                held.renew(_held_keys_parts(watch, part))
+                return True
+            return False
+    if not recorded.items() <= stat_keys_this_run(recorded).items():
+        return False
+    if watch is not None:
+        _note_held_keys(watch, recorded)
+    return True
+
+
+#: Stat-key dicts found as recorded while the folder watch held a stat of
+#: their files (`stat_keys_as_recorded`), across runs: each as a copy, with
+#: its `_Held`, the working directory and the watch, newest last. Found by
+#: comparing the copy whole, in C: a simulation builds each cell's dict
+#: anew, and a dict changed since, or another with other files, is never
+#: answered from another's verdict.
+_HELD_KEYS: list[tuple[dict, "_Held", str, Any]] = []
+
+#: How many paths the copies in `_HELD_KEYS` hold at most, all told.
+_HELD_KEYS_PATHS = 500_000
+
+
+def _held_keys_of(watch: Any, recorded: Mapping[str, Any]) -> _Held | None:
+    n = len(recorded)
+    found = None
+    for entry in reversed(_HELD_KEYS):
+        copy, _held, _cwd, by = entry
+        if len(copy) == n and by is watch and copy == recorded:
+            found = entry
+            break
+    if found is None:
+        return None
+    try:
+        here = os.getcwd()
+    except OSError:
+        return None
+    if found[2] != here:
+        return None
+    # The run's first drain is the one before any stat (`file_state_this_run`);
+    # this one takes what a statement of the run wrote since.
+    watch.drain()
+    return found[1]
+
+
+def _held_keys_parts(watch: Any, recorded: Mapping[str, Any]) -> tuple[list, list[str]]:
+    """`FileWatch.cover_by_folder` of the paths of *recorded* whose stat
+    the watch holds now with the recorded `stat_key` (a relative one by its
+    absolute spelling); the rest are loose."""
+    by_key: dict[str, str] = {}
+    loose: list[str] = []
+    current = watch.current
+    isabs = os.path.isabs
+    spelled = _fds.spelled_absolute
+    for p, key in recorded.items():
+        twin = p if isabs(p) else spelled(p)
+        st = current(twin) if twin is not None else None
+        if st is None or stat_key(st) != key:
+            loose.append(p)
+        else:
+            by_key[p] = twin
+    parts, unvouched = watch.cover_by_folder(by_key)
+    return parts, loose + unvouched
+
+
+def _note_held_keys(watch: Any, recorded: Mapping[str, Any]) -> None:
+    try:
+        cwd = os.getcwd()
+    except OSError:
+        return
+    parts, loose = _held_keys_parts(watch, recorded)
+    if 2 * len(loose) > len(recorded):
+        return
+    copy = dict(recorded)
+    kept = [entry for entry in _HELD_KEYS if not (len(entry[0]) == len(copy) and entry[0] == copy)]
+    kept.append((copy, _Held(parts, loose, None), cwd, watch))
+    total = 0
+    for at in range(len(kept) - 1, -1, -1):
+        total += len(kept[at][0])
+        if total > _HELD_KEYS_PATHS and at < len(kept) - 1:
+            kept = kept[at + 1 :]
+            break
+    _HELD_KEYS[:] = kept
 
 
 def file_component_this_run(

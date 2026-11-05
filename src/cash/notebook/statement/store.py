@@ -65,6 +65,10 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["StatementStore"]
 
+#: How many statements back `StatementStore._file_snapshots_through_inputs`
+#: looks for the stored records of an input's files.
+_INHERIT_HOPS = 4
+
 
 def _snapshot_with_inherited(
     file_dependencies: set[str],
@@ -350,6 +354,8 @@ class StatementStore:
                 continue
             all_file_deps.update(inherited)
             recorded = self._producer_file_snapshots(input_var, run.entry_sources.get(input_var))
+            if not recorded:
+                recorded = self._file_snapshots_through_inputs(input_var)
             for path in inherited:
                 if path in recorded and path not in direct:
                     inherited_snapshots.setdefault(path, recorded[path])
@@ -432,6 +438,43 @@ class StatementStore:
         snaps = (meta or {}).get("file_dependencies") or {} if isinstance(meta, dict) else {}
         memo[key] = snaps
         return snaps
+
+    def _file_snapshots_through_inputs(self, var_name: str) -> dict[str, dict]:
+        """The file snapshots recorded for what *var_name* was built from,
+        when its own producer stored none: those its inputs' producers
+        stored, for each input still the value it was built from (its
+        lineage unchanged since), followed back a few statements.
+
+        ``X_train = X[:10000]`` stores no entry, and every statement below
+        it (``X_train.shape``) took a stat and a digest of each of the
+        15,000 files ``X`` was read from, for the same records ``X``'s entry
+        holds. Those records describe the state the value was built from, as
+        an inherited file is recorded when the producer stored it."""
+        state = self.tracking_state
+        lineage = state.lineage
+        merged: dict[str, dict] = {}
+        seen = {var_name}
+        todo = [var_name]
+        for _depth in range(_INHERIT_HOPS):
+            following = []
+            for name in todo:
+                inputs = state.executed_input_lineages.get(name)
+                if not inputs:
+                    continue
+                for input_var, built_from in inputs.items():
+                    if input_var in seen or input_var not in lineage or lineage[input_var] != built_from:
+                        continue
+                    seen.add(input_var)
+                    recorded = self._producer_file_snapshots(input_var)
+                    if recorded:
+                        for path, entry in recorded.items():
+                            merged.setdefault(path, entry)
+                    else:
+                        following.append(input_var)
+            if not following:
+                break
+            todo = following
+        return merged
 
     def policy(self) -> PersistencePolicy:
         """The persistence policy under the current config, read per statement
