@@ -28,6 +28,9 @@ from tests._cell_driver import run_cash_cell
 
 #: Past the files a writer's provenance is recorded for (``_MAX_PROVENANCE_FILES``).
 FILES, FOLDERS = 1600, 4
+#: ``filter=`` came in 3.10.12 (CI's Windows and macOS 3.10 are 3.10.11);
+#: before it, ``extractall`` does what ``'fully_trusted'`` does.
+EXTRACT_ARGS = "filter='fully_trusted'" if hasattr(tarfile, "fully_trusted_filter") else ""
 
 
 @pytest.fixture
@@ -64,7 +67,7 @@ def test_each_file_unpacked_is_looked_at_a_few_times(cash_magics, archive, tmp_p
 
     monkeypatch.setattr(os, "stat", counting("stat", os.stat))
     monkeypatch.setattr(os, "lstat", counting("lstat", os.lstat))
-    run_cash_cell(cash_magics, "with tarfile.open('data.tar') as tar:\n    tar.extractall(filter='fully_trusted')")
+    run_cash_cell(cash_magics, f"with tarfile.open('data.tar') as tar:\n    tar.extractall({EXTRACT_ARGS})")
     monkeypatch.undo()
 
     assert len(list((tmp_path / "set").rglob("*.txt"))) == FILES
