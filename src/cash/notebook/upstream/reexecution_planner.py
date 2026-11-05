@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import builtins
+import importlib.util
 import logging
 import sys
 import textwrap
@@ -271,8 +272,12 @@ class ReexecutionPlanner:
             stmts_to_run_indices, simulation_trace, sim.vars_mutated_by_loops
         )
         stmts_to_run_indices = self._dedup_sorted_indices(stmts_to_run_indices)
-        gap = self._unclosed_read(stmts_to_run_indices, simulation_trace) or self._overwritten_read(
-            stmts_to_run_indices, simulation_trace, check, virtual_lineage, restored_statements_info
+        gap = (
+            self._unclosed_read(stmts_to_run_indices, simulation_trace)
+            or self._overwritten_read(
+                stmts_to_run_indices, simulation_trace, check, virtual_lineage, restored_statements_info
+            )
+            or self._failing_import_left_out(stmts_to_run_indices, simulation_trace)
         )
         if gap is not None:
             raise gap
@@ -354,6 +359,49 @@ class ReexecutionPlanner:
             imports = import_only(entry.stmt_code)
             for name in entry.outputs or ():
                 holds[name] = None if imports else (entry.produced_lineages or {}).get(name)
+        return None
+
+    def _failing_import_left_out(
+        self, stmts_to_run_indices: list[int], simulation_trace: list
+    ) -> UpstreamRepairGap | None:
+        """The gap, when the plan re-runs statements below an import it
+        leaves out that never bound its names here and would fail.
+
+        A run from the top stops at that import, so nothing below it runs;
+        the plan, re-running only the statements the cell needs, ran past
+        it: ``from typing import Dict`` re-run without the failing ``from
+        parse import parse`` above it, and a cell that a plain kernel fails
+        with ``NameError`` ran. Refused only on evidence: the module (or the
+        name taken from a module already loaded) cannot be found. An import
+        whose names the kernel holds ran here, and is not asked about.
+        """
+        if not stmts_to_run_indices:
+            return None
+        last = max(stmts_to_run_indices)
+        scheduled = set(stmts_to_run_indices)
+        user_ns = self._user_ns()
+        for j in range(last):
+            if j in scheduled:
+                continue
+            entry = simulation_trace[j]
+            if not import_only(entry.stmt_code):
+                continue
+            outputs = set(entry.outputs or ())
+            if not outputs or all(name in user_ns for name in outputs):
+                continue
+            failure = _import_failure(entry.stmt_code)
+            if failure is None:
+                continue
+            first = simulation_trace[min(k for k in scheduled if k > j)]
+            logger.debug("[UPSTREAM] Plan runs past [%s], an import that would fail (%s); not re-running", j, failure)
+            return UpstreamRepairGap(
+                f"Cash would re-run statements below {entry.stmt_code.splitlines()[0][:60]!r}, which would fail",
+                stmt_code=first.stmt_code,
+                error_text=f"a run from the top stops above it, at an import that fails ({failure})",
+                producer=entry.stmt_code,
+                cell_no=entry.cell + 1 if entry.cell >= 0 else None,
+                planned=True,
+            )
         return None
 
     @staticmethod
@@ -1331,6 +1379,54 @@ def _rebuilds_of_what_it_changes(simulation_trace: list, index: int, consumables
             return None
         rebuilds.update(writers)
     return rebuilds
+
+
+def _import_failure(stmt_code: str) -> str | None:
+    """What an import-only *stmt_code* would raise if run now, as far as can
+    be told without importing anything; None when it may well succeed.
+
+    A top-level module with no spec cannot be imported. A name taken from a
+    module already loaded that is neither an attribute nor a submodule of it
+    cannot be either. Anything else (a module not loaded yet, a relative
+    import) is not decided: importing it to find out would run its code.
+    """
+    try:
+        body = ast.parse(stmt_code).body
+    except SyntaxError:
+        return None
+    for node in body:
+        if isinstance(node, ast.Import):
+            modules = [alias.name for alias in node.names]
+            names: list[tuple[str, str]] = []
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            modules = [node.module]
+            names = [(node.module, alias.name) for alias in node.names if alias.name != "*"]
+        else:
+            continue
+        for module in modules:
+            top = module.partition(".")[0]
+            if top in sys.modules:
+                continue
+            try:
+                found = importlib.util.find_spec(top) is not None
+            except (ImportError, ValueError, AttributeError):
+                found = True
+            if not found:
+                return f"ModuleNotFoundError: No module named {top!r}"
+        for module, name in names:
+            loaded = sys.modules.get(module)
+            if loaded is None or has_attribute(loaded, name):
+                continue
+            if f"{module}.{name}" in sys.modules:
+                continue
+            if has_attribute(loaded, "__path__"):
+                try:
+                    if importlib.util.find_spec(f"{module}.{name}") is not None:
+                        continue
+                except (ImportError, ValueError, AttributeError):
+                    continue
+            return f"ImportError: cannot import name {name!r} from {module!r}"
+    return None
 
 
 def _drawn_in_place(value: Any) -> bool:
