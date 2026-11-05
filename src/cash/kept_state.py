@@ -570,7 +570,14 @@ def _dumps(
         # something, never through pickle's memo (`key_aliases`).
         pickler.fast = True
         pickler.persistent_id = key_aliases(aliases if type(aliases) is dict else None)
-    pickler.dispatch_table = _KeepDict(protocol, extra, keyed) if table is None else table
+    if table is None:
+        # Without the memo (and without a hook that marks an object met
+        # again), an object's state cannot be set by a state setter: pickle
+        # writes the object again for the setter to take, and with no memo
+        # to write it as a back-reference, reduces it again, without end.
+        unshared = pickler.fast and persistent_id is None and not aliases
+        table = _KeepDict(protocol, extra, keyed, unshared=unshared)
+    pickler.dispatch_table = table
     with own_work:
         pickler.dump(value)
     if after is not None:
@@ -1110,13 +1117,22 @@ class _KeepDict(dict):
     is the one ``pickle.dumps`` writes; `_reduce_with_dict` for a type whose
     reduce drops its instances' ``__dict__`` (`_drops_dict`)."""
 
-    def __init__(self, protocol: int, extra: dict | None, keyed: bool = False, watch: list | None = None) -> None:
+    def __init__(
+        self,
+        protocol: int,
+        extra: dict | None,
+        keyed: bool = False,
+        watch: list | None = None,
+        unshared: bool = False,
+    ) -> None:
         extra = dict(extra or ())
         #: The *extra* reducers tried before the type's own (`Ahead`).
         self._ahead = {t: extra.pop(t).reduce for t in [t for t, r in extra.items() if type(r) is Ahead]}
         super().__init__(extra)
         self._protocol = protocol
         self._keyed = keyed
+        #: A pickle without the memo, never loaded (`_reduce_with_dict`).
+        self._unshared = unshared
         #: Store bytes only (`dumps_also_keyed`): gets an item when an
         #: object is reduced otherwise than a key reduces it.
         self._watch = watch
@@ -1184,7 +1200,7 @@ class _KeepDict(dict):
             reducer = _reduce_container_subclass
         else:
             if _drops_dict(t):
-                reducer = _reducer_with_dict(self._protocol)
+                reducer = _reducer_with_dict(self._protocol, self._unshared)
             else:
                 reducer = operator.methodcaller("__reduce_ex__", self._protocol)
             if cached_properties(t) and (self._keyed or _leaves_views_out(t)):
@@ -1202,7 +1218,7 @@ class _KeepDict(dict):
         if _plain_container_subclass(t):
             return _reduce_container_subclass
         if _drops_dict(t):
-            reducer = _reducer_with_dict(self._protocol)
+            reducer = _reducer_with_dict(self._protocol, self._unshared)
         else:
             reducer = operator.methodcaller("__reduce_ex__", self._protocol)
         if cached_properties(t) and _leaves_views_out(t):
@@ -1814,11 +1830,12 @@ _PYTHON_METHODS = (types.FunctionType, classmethod, staticmethod)
 _DROPS_DICT: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 
-def _reducer_with_dict(protocol: int) -> Any:
+def _reducer_with_dict(protocol: int, unshared: bool = False) -> Any:
     """`_reduce_with_dict` for *protocol*, with the common case -- an
     instance with nothing in its ``__dict__`` -- first and in one call: a
     column of 1.9 million ``pandas.Timestamp`` went through it one at a
-    time, 1.8 s on top of pickle's own 3.4 s."""
+    time, 1.8 s on top of pickle's own 3.4 s. *unshared*: for a pickle
+    without the memo (`_reduce_with_dict`)."""
 
     def reduce(obj: Any) -> Any:
         try:
@@ -1827,14 +1844,22 @@ def _reducer_with_dict(protocol: int) -> Any:
             empty = True
         if empty:
             return obj.__reduce_ex__(protocol)
-        return _reduce_with_dict(obj, protocol)
+        return _reduce_with_dict(obj, protocol, unshared)
 
     reduce.with_dict_protocol = protocol  # type: ignore[attr-defined]
     return reduce
 
 
-def _reduce_with_dict(obj: Any, protocol: int) -> Any:
-    """*obj*'s own reduce, with its ``__dict__`` restored after its state."""
+def _reduce_with_dict(obj: Any, protocol: int, unshared: bool = False) -> Any:
+    """*obj*'s own reduce, with its ``__dict__`` restored after its state.
+
+    *unshared*: for a pickle without the memo, which is only ever hashed
+    (`pickle_unshared`, `content_dumps`). There the state is written as it
+    is, with no state setter: a setter takes the object written again, and
+    with no memo to write it as a back-reference pickle reduces it again,
+    without end -- a crash, not a RecursionError, under CPython's C pickler
+    (a ``datetime`` in a frame's list, its ``tzinfo`` a class of the
+    user's)."""
     reduced = obj.__reduce_ex__(protocol)
     attrs = getattr(obj, "__dict__", None)
     if not attrs or isinstance(reduced, str):
@@ -1842,6 +1867,8 @@ def _reduce_with_dict(obj: Any, protocol: int) -> Any:
     rebuild, args, *rest = reduced
     rest += [None] * (4 - len(rest))
     state, listitems, dictitems, setter = rest[:4]
+    if unshared:
+        return rebuild, args, (state, setter, dict(attrs)), listitems, dictitems
     return rebuild, args, (state, setter, dict(attrs)), listitems, dictitems, restore_with_dict
 
 
