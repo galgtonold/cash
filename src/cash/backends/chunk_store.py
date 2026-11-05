@@ -80,6 +80,7 @@ from typing import Any
 
 from .._paths import replace_with_retry
 from ..bulk_digest import LEAF_BYTES, PARALLEL_MIN_BYTES, bulk_digest, hashing_threads
+from . import block_digests
 from .cache_dir import (
     CHUNK_DIRNAME,
     CHUNK_SUFFIX,
@@ -149,19 +150,38 @@ def digests(views: list[memoryview]) -> list[bytes]:
     on one thread by `bulk_digest`, so an entry of many such columns is
     spread over `hashing_threads` threads here: the writer hashes beside a
     busy caller, and each leaf waits for the interpreter lock it hands back,
-    so one thread hashing leaf after leaf mostly waits."""
+    so one thread hashing leaf after leaf mostly waits.
+
+    A view whose digest is known already (`block_digests`: a loop's table
+    stored again with the same columns) is not read."""
     out: list[Any] = [None] * len(views)
+    slots: list[Any] = [None] * len(views)
     small = []
     for i, view in enumerate(views):
+        out[i], slots[i] = block_digests.lookup(view)
+        if out[i] is not None:
+            continue
         if view.nbytes >= PARALLEL_MIN_BYTES:
             out[i] = bulk_digest(view)  # on several threads already
         else:
             small.append(i)
+    try:
+        _digest_small(views, small, out)
+    finally:
+        for slot, digest in zip(slots, out):
+            if slot is not None and digest is not None:
+                block_digests.learn(slot, digest)
+    return out
+
+
+def _digest_small(views: list[memoryview], small: list[int], out: list[Any]) -> None:
+    """`bulk_digest` of each of *views* at the indices *small*, into *out*,
+    on several threads when there are several."""
     threads = min(hashing_threads(), len(small))
     if threads < 2:
         for i in small:
             out[i] = bulk_digest(views[i])
-        return out
+        return
     errors: list[BaseException] = []
 
     def run(indices: list[int]) -> None:
@@ -185,7 +205,6 @@ def digests(views: list[memoryview]) -> list[bytes]:
         worker.join()
     if errors:
         raise errors[0]
-    return out
 
 
 class _Replaced(Exception):

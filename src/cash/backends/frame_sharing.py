@@ -624,6 +624,7 @@ def _share_checked(frame: Any) -> tuple[Any, bytes] | None:
 
     if type(frame) is not pd.DataFrame or not freezable(frame, cells_known=True):
         return None
+    keys = _known_contents(frame)
     mgr = frame._mgr
     blocks = []
     checked = []
@@ -653,10 +654,33 @@ def _share_checked(frame: Any) -> tuple[Any, bytes] | None:
         return None  # pandas rebuilt the blocks: not the ones made here
     for block in checked:
         _CHECKED_BLOCKS.add(block)
-    digest = checked_digest(shared)
+    digest = checked_digest(shared, keys)
     if digest is None:
         return None
     return shared, digest
+
+
+def _known_contents(frame: Any) -> dict[tuple, tuple]:
+    """The content key of each block of *frame* the frame memo vouches for
+    (`shared_blocks.content_keys`), asked before `_share_checked`'s shallow
+    copies reference its arrays: a loop storing its table again with the
+    same columns does not read them again (`checked_digest`).
+
+    A table the memo knows some columns of but not all -- a loop's
+    ``h = matches.assign(p=...)``, ``matches`` hashed before -- is read into
+    the memo first (`read_into_memo`), its known columns not read: its new
+    columns are then read once, where the checked digest, the disk entry's
+    chunks and the next call taking ``h`` read them each."""
+    from ..content_hashers import read_into_memo
+    from .shared_blocks import content_keys
+
+    keys = content_keys(frame)
+    if not keys:
+        return keys
+    numpy_blocks = sum(1 for block in frame._mgr.blocks if _ndarray_parts(block.values))
+    if len(keys) < numpy_blocks and read_into_memo(frame):
+        keys = content_keys(frame)
+    return keys
 
 
 def _group(block: Any) -> list[Any]:
@@ -683,23 +707,42 @@ def _flat_bytes(array: Any) -> Any:
     return flat.view(np.uint8)  # a contiguous array reshapes to a view
 
 
-def checked_digest(frame: Any) -> bytes | None:
+def checked_digest(frame: Any, keys: dict[tuple, tuple] | None = None) -> bytes | None:
     """The digest of the data a table `share_checked` made keeps in the
     caller's arrays (its Arrow data and labels are its own); None when an
-    array is no longer in one piece."""
+    array is no longer in one piece.
+
+    *keys*: the content key of each block, by its columns' positions
+    (`shared_blocks.content_keys`), asked of the frame memo just now; a
+    block whose tree digest they give (`block_digests.known`) is not read,
+    and one read is remembered under its key. Without them, every block is
+    read: what checks the data before it is served."""
     import hashlib
 
     from cash import bulk_digest
+
+    from . import block_digests
+    from .shared_blocks import _layout
 
     digest = hashlib.sha256(_CHECKED_TAG)
     for block in frame._mgr.blocks:
         if block not in _CHECKED_BLOCKS:
             continue
+        key = keys.get(tuple(int(pos) for pos in block.mgr_locs.as_array)) if keys else None
+        if key is not None and _layout(block.values) != key[0]:
+            key = None
         for _name, array in _ndarray_parts(block.values) or ():
             flat = _flat_bytes(array)
             if flat is None:
                 return None
-            bulk_digest.fold_buffer(digest, flat)
+            if key is None or flat.nbytes <= bulk_digest.DIRECT_MAX_BYTES:
+                bulk_digest.fold_buffer(digest, flat)
+                continue
+            known = block_digests.known(key, flat.nbytes)
+            if known is None:
+                known = bulk_digest.bulk_digest(flat)
+                block_digests.remember(key, known)
+            bulk_digest.fold_digest(digest, flat.nbytes, known)
     return digest.digest()
 
 

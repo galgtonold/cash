@@ -45,6 +45,7 @@ from ..content_hashers import (
     immutable_labels,
     is_native_panic,
     polars_signature,
+    set_frame_reader,
     set_piece_source,
 )
 from ..exceptions import CashCacheIneffectiveWarning
@@ -1695,6 +1696,9 @@ def cow_frame_digest(value: Any) -> str | None:
     if digest is not None:
         return digest
     return FRAME_DIGESTS.hash_frame(value)
+
+
+set_frame_reader(cow_frame_digest)
 
 
 class ArgHasher:
