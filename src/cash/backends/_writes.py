@@ -40,6 +40,7 @@ from cash.tracking.tracker_context import untracked
 
 from ..config.resolve import get_config
 from ..config.schema import CashConfig
+from . import write_cost
 
 logger = logging.getLogger(__name__)
 
@@ -390,6 +391,10 @@ class PendingWrites:
         self._running: tuple[float, int] | None = None
         #: Has a sized write finished here, so the costs above are measured?
         self._measured = False
+        #: What an entry's write costs here, per kind of value, for the
+        #: persistence rule (`write_cost`): the writes made inside
+        #: `write_cost.sampling` are timed into it.
+        self.rates = write_cost.WriteRates()
         # Called by `wait_all` before it waits: a submitter that holds work
         # back for a while (a timer) submits it now, so a drain still covers it.
         self._drain_hooks: list[Callable[[], None]] = []
@@ -489,22 +494,33 @@ class PendingWrites:
         """
         if copied:
             self._make_room(nbytes)
-        future = self.submit(key, self._timed, nbytes, fn, *args)
+        sample = write_cost.current_sample()
+        priced = None if sample is None else (sample.kind, sample.nbytes, sample.take_main_seconds())
+        future = self.submit(key, self._timed, nbytes, priced, fn, *args)
         if not future.done():
             with self._lock:
                 self._sizes[future] = (nbytes, copied)
             future.add_done_callback(self._forget_size)
         return future
 
-    def _timed(self, nbytes: int, fn: Callable[..., Any], *args: Any) -> Any:
-        """Run one sized write, and learn from how long it took."""
+    def _timed(self, nbytes: int, priced: tuple[str, int, float] | None, fn: Callable[..., Any], *args: Any) -> Any:
+        """Run one sized write, and learn from how long it took.
+
+        *priced*: ``(kind, bytes, seconds on the cell's thread)`` of the
+        entry it writes (`write_cost.sampling`), whose rate it teaches."""
         start = time.perf_counter()
         self._running = (start, nbytes)
+        failed = True
         try:
-            return fn(*args)
+            result = fn(*args)
+            failed = False
+            return result
         finally:
             took = time.perf_counter() - start
             self._running = None
+            if priced is not None and not failed:
+                kind, priced_bytes, main_seconds = priced
+                self.rates.record(kind, priced_bytes, took + main_seconds)
             with self._lock:
                 if nbytes >= _TIMED_PER_BYTE_FROM:
                     self._seconds_per_byte = took / nbytes

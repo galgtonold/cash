@@ -25,7 +25,7 @@ from cash.exceptions import CacheBackendError
 from ..config.schema import CashConfig
 from ..tracking.read_classification import register_cache_dir
 from ..tracking.tracker_context import untracked
-from . import compression
+from . import compression, write_cost
 from ._base import CacheBackend, MetadataDict, entry_expired
 from ._writes import PendingWrites
 from .cache_dir import (
@@ -982,7 +982,9 @@ class FileBackend(CacheBackend):
         else:
             # IMPORTANT: serialize on the calling thread so a post-set()
             # mutation of `value` can't corrupt the cached bytes.
+            started = time.perf_counter()
             serialized_value = self._serialize(value, serializer, copy=True)
+            write_cost.on_this_thread(time.perf_counter() - started)
             nbytes = self._payload_bytes(serialized_value)
             job = self._do_set_sync
             work = serialized_value

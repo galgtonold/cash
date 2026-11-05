@@ -9,12 +9,13 @@ from collections.abc import Callable
 from typing import Any, NamedTuple
 
 from ..sizing import memory_footprint, pickled_size_estimate
-from . import memory_backend, set_order
+from . import memory_backend, set_order, write_cost
 from ._base import MEASURED_ROUND_TRIP, CacheBackend, MetadataDict, entry_expired, store_seconds
+from ._writes import PendingWrites
 from .clear_watch import ClearWatcher
 from .entry_format import SplitPayload
 from .no_file_writes import would_write_a_file
-from .persistence_policy import SERIALIZED_ESTIMATE, PersistencePolicy
+from .persistence_policy import SERIALIZED_ESTIMATE, PersistencePolicy, disk_bytes, write_seconds
 from .sampled_cost import sampled_cost
 from .serialization import PickleSerializer, Serializer
 from .store_notices import DECORATED_CALLS_FIELD, StoreNotices
@@ -455,11 +456,29 @@ class TieredBackend(CacheBackend):
         write_copy = getattr(self.backends[0], "write_copy", None)
         if write_copy is None:
             return _NO_COPY
+        started = time.perf_counter()
         try:
             return write_copy(key, value, metadata, _NO_COPY)
         except Exception:
             logger.debug("no copy of %r to write", key, exc_info=True)
             return _NO_COPY
+        finally:
+            # Made on the cell's thread for the write alone: part of its cost.
+            write_cost.on_this_thread(time.perf_counter() - started)
+
+    def _write_rates(self) -> list[write_cost.WriteRates]:
+        """What each tier past RAM measured its writes to cost (`write_cost`)."""
+        rates = []
+        for backend in self.backends[1:]:
+            writes = getattr(backend, "_writes", None)
+            if isinstance(writes, PendingWrites):
+                rates.append(writes.rates)
+        return rates
+
+    def _priced(self, metadata: MetadataDict, size: int) -> tuple[str, int]:
+        """The kind and bytes an entry's writes are timed as (`write_cost.sampling`),
+        the same the decision priced it by (`write_seconds`)."""
+        return write_cost.write_kind(metadata), disk_bytes(metadata, size)
 
     @staticmethod
     def _read_seconds(backend: CacheBackend, key: str) -> float:
@@ -543,7 +562,9 @@ class TieredBackend(CacheBackend):
                     # value is pickled once, not once here and again by the
                     # writer; out-of-band buffers stay views of a private
                     # value's memory, as the writer would take them.
+                    started = time.perf_counter()
                     probed = self._split_payload(value, serializer, copy=not private)
+                    write_cost.on_this_thread(time.perf_counter() - started)
                     probe_copied = probed is not None and not private  # bytes made for this write
                 true_size = _payload_bytes(probed) if probed is not None else self._serialized_size(value, serializer)
                 if true_size is not None and true_size <= cap:
@@ -606,8 +627,12 @@ class TieredBackend(CacheBackend):
         stored_metadata = entry[0]
         if self._persisted(stored_metadata.get("storage")):
             return False  # on disk already
+        rebuild_size = stored_metadata.get("size") or stored_metadata.get("cost_model_size_bytes", 0)
         decision = self.policy.decide_rebuild(
-            stored_metadata, rebuild_seconds, backend_kind=self._promotion_backend_kind()
+            stored_metadata,
+            rebuild_seconds,
+            backend_kind=self._promotion_backend_kind(),
+            write_s=write_seconds(stored_metadata, rebuild_size, self._write_rates()),
         )
         if decision.skipped == "bytes":
             self.notices.not_worth_bytes(
@@ -695,22 +720,23 @@ class TieredBackend(CacheBackend):
             # bytes does so before it returns): the shared parts are as
             # stored now, and nothing the caller does next reaches the bytes.
             private = False
-        elif not private and serialized is None:
-            # A full copy of it, when one costs about its memory (`_write_copy`).
-            made = self._write_copy(key, value, metadata)
-            copied = made is not _NO_COPY
-            if made is not _NO_COPY:
-                value, private = made, True
-        writes = self._write_persistent_tiers(
-            key,
-            value,
-            metadata,
-            None,
-            stored_metadata.get("size") or size,
-            private=private,
-            copied=copied,
-            serialized=serialized,
-        )
+        with write_cost.sampling(*self._priced(metadata, stored_metadata.get("size") or size)):
+            if not shared and not private and serialized is None:
+                # A full copy of it, when one costs about its memory (`_write_copy`).
+                made = self._write_copy(key, value, metadata)
+                copied = made is not _NO_COPY
+                if made is not _NO_COPY:
+                    value, private = made, True
+            writes = self._write_persistent_tiers(
+                key,
+                value,
+                metadata,
+                None,
+                stored_metadata.get("size") or size,
+                private=private,
+                copied=copied,
+                serialized=serialized,
+            )
         if not writes.stored:
             if writes.size_refused:
                 self.notices.too_big(key, writes.refused_size, writes.refusing_caps)
@@ -796,7 +822,14 @@ class TieredBackend(CacheBackend):
             deferred = bool(metadata.pop("defer_persist", False))
             if original_metadata is not None:
                 original_metadata.pop("defer_persist", None)
-            sampled = None if deferred or _chosen_by_caller(metadata) else sampled_cost(value)
+            chosen = _chosen_by_caller(metadata)
+            sampled = None if deferred or chosen else sampled_cost(value)
+            size = metadata.get("size", 0) or 0
+            cap_size = size or metadata.get("cost_model_size_bytes", 0)
+            if sampled is not None:
+                # Many Python objects: written at their own rate, now and by
+                # a later `persist_from_memory` (the same dict as the RAM tier's).
+                metadata[write_cost.WRITE_KIND] = write_cost.OBJECTS_KIND
             decision = self.policy.decide(
                 key,
                 metadata,
@@ -804,9 +837,8 @@ class TieredBackend(CacheBackend):
                 deferred=deferred,
                 override=self.promotion_policy,
                 sampled=sampled,
+                write_s=0.0 if deferred or chosen else write_seconds(metadata, cap_size, self._write_rates(), sampled),
             )
-            size = metadata.get("size", 0) or 0
-            cap_size = size or metadata.get("cost_model_size_bytes", 0)
             if decision.skipped == "bytes":
                 exec_time = store_seconds(metadata)
                 if decision.report:
@@ -823,45 +855,46 @@ class TieredBackend(CacheBackend):
                 # call's result against what it refers to.
                 self._persist_call_refs(metadata.get("call_refs"), settled=True)
             try:
-                if decision.persist and disk_alone:
-                    metadata[DISK_ALONE] = True
-                    self._drop_from_first_tier(key)
-                    writes = self._write_persistent_tiers(key, value, metadata, serializer, cap_size)
-                    if not self._persisted(writes.stored):
-                        metadata.pop(DISK_ALONE, None)
-                        disk_alone = False
-                        write_first_tier()
-                elif decision.persist:
-                    # The RAM tier's own copy, when it has one nothing changes: a
-                    # tier that takes it serializes it in the background, and the
-                    # caller pays one copy (or none, for a table) instead of two.
-                    private = self._private_copy(key, metadata)
-                    serialized = self._stored_payload(key, metadata)
-                    copied = False
-                    if private is _NO_COPY and serialized is None:
-                        # None kept, or none of its own (refused, dropped,
-                        # copied by pandas, kept uncopied): one made now, on this thread,
-                        # at the cost of its arrays, so the pickling,
-                        # checksum and write still run in the background,
-                        # and nothing done to *value* after this call
-                        # reaches them.
-                        private = self._write_copy(key, value, metadata)
-                        copied = private is not _NO_COPY
-                    writes = self._write_persistent_tiers(
-                        key,
-                        value if private is _NO_COPY else private,
-                        metadata,
-                        serializer,
-                        cap_size,
-                        private=private is not _NO_COPY,
-                        copied=copied,
-                        serialized=serialized,
-                    )
-                else:
-                    writes = _TierWrites([], False, cap_size, [], [])
-                    if disk_alone:
-                        disk_alone = False
-                        write_first_tier()
+                with write_cost.sampling(*self._priced(metadata, cap_size)):
+                    if decision.persist and disk_alone:
+                        metadata[DISK_ALONE] = True
+                        self._drop_from_first_tier(key)
+                        writes = self._write_persistent_tiers(key, value, metadata, serializer, cap_size)
+                        if not self._persisted(writes.stored):
+                            metadata.pop(DISK_ALONE, None)
+                            disk_alone = False
+                            write_first_tier()
+                    elif decision.persist:
+                        # The RAM tier's own copy, when it has one nothing changes: a
+                        # tier that takes it serializes it in the background, and the
+                        # caller pays one copy (or none, for a table) instead of two.
+                        private = self._private_copy(key, metadata)
+                        serialized = self._stored_payload(key, metadata)
+                        copied = False
+                        if private is _NO_COPY and serialized is None:
+                            # None kept, or none of its own (refused, dropped,
+                            # copied by pandas, kept uncopied): one made now, on this thread,
+                            # at the cost of its arrays, so the pickling,
+                            # checksum and write still run in the background,
+                            # and nothing done to *value* after this call
+                            # reaches them.
+                            private = self._write_copy(key, value, metadata)
+                            copied = private is not _NO_COPY
+                        writes = self._write_persistent_tiers(
+                            key,
+                            value if private is _NO_COPY else private,
+                            metadata,
+                            serializer,
+                            cap_size,
+                            private=private is not _NO_COPY,
+                            copied=copied,
+                            serialized=serialized,
+                        )
+                    else:
+                        writes = _TierWrites([], False, cap_size, [], [])
+                        if disk_alone:
+                            disk_alone = False
+                            write_first_tier()
             finally:
                 self._release_handoff()
             stored_destinations.extend(writes.stored)

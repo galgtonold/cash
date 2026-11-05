@@ -9,6 +9,8 @@ Past RAM (`decide`, `decide_rebuild`):
 * otherwise it is kept when restoring it beats recomputing it by
   ``min_savings_pct`` of the compute, as the fitted cost model predicts, and it
   took at least ``compute_floor_s`` to compute;
+* and when what one re-run saves (the compute less the restore) pays for the
+  time writing it takes on this machine (`write_cost`, `pays_for_its_write`);
 * and only while it is worth the disk it takes (`value_policy`).
 
 A notebook statement's value, in any tier (`too_cheap_to_store`,
@@ -29,18 +31,21 @@ from typing import Any, NamedTuple
 from cash import cost_model
 from cash.config.schema import CashConfig
 
+from . import write_cost
 from ._base import store_seconds
 from .sampled_cost import SampledCost
 from .value_policy import worth_its_bytes
 
 __all__ = [
     "COMPUTE_FLOOR_S",
+    "EXPECTED_RERUNS",
     "MIN_SAVINGS_PCT",
     "RESTORE_BUDGET_S",
     "STORE_FLOOR_S",
     "Decision",
     "PersistencePolicy",
     "restore_kind",
+    "write_seconds",
 ]
 
 #: Nothing that computes faster than this is persisted past RAM. Not because
@@ -66,6 +71,13 @@ STORE_FLOOR_S = CashConfig.min_execution_time_to_cache_seconds
 #: trivial statement.
 RESTORE_BUDGET_S = CashConfig.min_cache_fixed_budget_seconds
 
+#: The re-runs an entry's write must pay for itself within: one. An entry is
+#: written past RAM only when the first re-run that reads it back saves more
+#: than writing it cost the run that made it. Counting on more re-runs would
+#: keep entries whose write is a sure cost on the first run against savings
+#: that may never come (an edit above changes the key first).
+EXPECTED_RERUNS = 1
+
 
 def restore_kind(backend: Any) -> str:
     """The `cost_model` kind a notebook value is restored from: ``"ram"`` when
@@ -79,8 +91,8 @@ class Decision(NamedTuple):
     """Whether one entry goes past RAM, and why not when it does not."""
 
     persist: bool
-    #: Why it stayed in RAM: ``"compute"``, ``"bytes"``, ``"replaced_in_cell"``
-    #: or ``"process_local"``;
+    #: Why it stayed in RAM: ``"compute"``, ``"write"``, ``"bytes"``,
+    #: ``"replaced_in_cell"`` or ``"process_local"``;
     #: None when it is persisted, or when nothing was decided.
     skipped: str | None = None
     #: The bytes the entry was judged by, its referenced results included.
@@ -135,6 +147,25 @@ class PersistencePolicy:
         *restore_s* be kept as metadata only, in every tier?"""
         return compute_s > 0 and restore_s > self.restore_budget(compute_s)
 
+    def restore_seconds(
+        self,
+        size_bytes: int,
+        *,
+        type_name: str = "",
+        backend_kind: str = "disk",
+        measured_s: float | None = None,
+    ) -> float:
+        """What reading *size_bytes* back is predicted to take: by `cost_model`
+        for the value's type (the slowest family when *type_name* is unknown)
+        on *backend_kind*, or *measured_s* when that is longer: what
+        unpickling the RAM tier's copy of it took here, which a disk hit takes
+        again (a statsmodels results object rebuilds its design matrix when it
+        is unpickled)."""
+        restore = cost_model.estimated_restore_time(type_name, size_bytes, backend_kind)
+        if measured_s:
+            restore = max(restore, float(measured_s))
+        return restore
+
     def pays_to_restore(
         self,
         compute_s: float,
@@ -146,19 +177,28 @@ class PersistencePolicy:
     ) -> bool:
         """Does restoring *size_bytes* beat recomputing for *compute_s*?
 
-        ``compute_s - restore > min_savings_pct * compute_s``, with the restore
-        time predicted by `cost_model` for the value's type (the slowest family
-        when *type_name* is unknown) on *backend_kind*, or *measured_s* when
-        that is longer: what unpickling the RAM tier's copy of it took here,
-        which a disk hit takes again (a statsmodels results object rebuilds
-        its design matrix when it is unpickled).
+        ``compute_s - restore > min_savings_pct * compute_s``, with the
+        restore time of `restore_seconds`.
         """
         if compute_s < self.compute_floor_s:
             return False
-        restore = cost_model.estimated_restore_time(type_name, size_bytes, backend_kind)
-        if measured_s:
-            restore = max(restore, float(measured_s))
+        restore = self.restore_seconds(
+            size_bytes, type_name=type_name, backend_kind=backend_kind, measured_s=measured_s
+        )
         return compute_s - restore > self.min_savings_pct * compute_s
+
+    @staticmethod
+    def pays_for_its_write(compute_s: float, restore_s: float, write_s: float) -> bool:
+        """Does keeping an entry save more on its re-runs than writing it costs?
+
+        ``EXPECTED_RERUNS * (compute_s - restore_s) > write_s``: each re-run
+        that reads the entry back instead of computing it saves the compute
+        less the restore; the write is paid once, on the run that makes it.
+        A write of no measurable cost (*write_s* 0) is always paid for.
+        """
+        if write_s <= 0:
+            return True
+        return EXPECTED_RERUNS * (compute_s - restore_s) > write_s
 
     def decide(
         self,
@@ -169,6 +209,7 @@ class PersistencePolicy:
         deferred: bool = False,
         override: Callable[[float, int], bool] | None = None,
         sampled: SampledCost | None = None,
+        write_s: float = 0.0,
     ) -> Decision:
         """Should the entry *metadata* describes be written past RAM now?
 
@@ -178,7 +219,9 @@ class PersistencePolicy:
         is what pickling and loading the value's big object-heavy parts was
         measured to cost on a sample (`sampled_cost`): such a value is kept
         in RAM only when its write would hold up the notebook longer than
-        one restore saves.
+        one restore saves. *write_s* is what writing the entry is expected
+        to take on this machine (`write_seconds`): an entry whose re-run
+        would not save that much stays in RAM (`pays_for_its_write`).
         """
         size = metadata.get("size", 0) or 0
         cap_size = size or metadata.get("cost_model_size_bytes", 0)
@@ -194,21 +237,35 @@ class PersistencePolicy:
             return Decision(True, weight=cap_size)
         compute_s = store_seconds(metadata)
         if metadata.get("cost_model_family") is not None:
+            restore_size = metadata.get("cost_model_size_bytes", size)
+            type_name = metadata.get("cost_model_type_name", "")
             pays = self.pays_to_restore(
                 compute_s,
-                metadata.get("cost_model_size_bytes", size),
-                type_name=metadata.get("cost_model_type_name", ""),
+                restore_size,
+                type_name=type_name,
                 backend_kind=backend_kind,
                 measured_s=_measured_copy_seconds(metadata),
             )
         elif override is not None:
+            # The caller's own rule decides, write cost and all.
+            restore_size, type_name, write_s = size, "", 0.0
             pays = override(compute_s, size)
         else:
+            restore_size, type_name = size, ""
             pays = self.pays_to_restore(
                 compute_s, size, backend_kind=backend_kind, measured_s=_measured_copy_seconds(metadata)
             )
         if not pays or (sampled is not None and _write_outweighs_restore(compute_s, sampled, self.min_savings_pct)):
             return Decision(False, "compute", cap_size)
+        if write_s > 0:
+            restore_s = self.restore_seconds(
+                restore_size,
+                type_name=type_name,
+                backend_kind=backend_kind,
+                measured_s=max(_measured_copy_seconds(metadata) or 0.0, sampled.load if sampled else 0.0),
+            )
+            if not self.pays_for_its_write(compute_s, restore_s, write_s):
+                return Decision(False, "write", cap_size)
 
         # An entry is weighed with the entries it refers to (``call_ref_bytes``):
         # its own may be a few KB while what it restores is hundreds of MB. A
@@ -229,21 +286,31 @@ class PersistencePolicy:
             return Decision(False, "bytes", weight, report=True)
         return Decision(True, weight=weight)
 
-    def decide_rebuild(self, metadata: dict[str, Any], rebuild_s: float, *, backend_kind: str) -> Decision:
+    def decide_rebuild(
+        self, metadata: dict[str, Any], rebuild_s: float, *, backend_kind: str, write_s: float = 0.0
+    ) -> Decision:
         """Should a RAM-only notebook value be persisted, now that rebuilding
         it is known to cost *rebuild_s* (its whole upstream chain, not just
-        its own statement)? Only a value with a cost-model family is judged."""
+        its own statement)? Only a value with a cost-model family is judged.
+        *write_s* is what writing it is expected to take (`write_seconds`),
+        which the rebuild it saves must pay for (`pays_for_its_write`)."""
         if metadata.get("metadata_only") or metadata.get("cost_model_family") is None:
             return Decision(False)
         size = metadata.get("cost_model_size_bytes", metadata.get("size", 0))
+        type_name = metadata.get("cost_model_type_name", "")
+        measured = _measured_copy_seconds(metadata)
         if not self.pays_to_restore(
             rebuild_s,
             size,
-            type_name=metadata.get("cost_model_type_name", ""),
+            type_name=type_name,
             backend_kind=backend_kind,
-            measured_s=_measured_copy_seconds(metadata),
+            measured_s=measured,
         ):
             return Decision(False)
+        if not metadata.get("force_persist") and write_s > 0:
+            restore_s = self.restore_seconds(size, type_name=type_name, backend_kind=backend_kind, measured_s=measured)
+            if not self.pays_for_its_write(rebuild_s, restore_s, write_s):
+                return Decision(False, "write")
         weight = disk_bytes(metadata, metadata.get("size") or size) + int(metadata.get("call_ref_bytes") or 0)
         if not metadata.get("force_persist") and not worth_its_bytes(weight, rebuild_s):
             return Decision(False, "bytes", weight, report=True)
@@ -295,3 +362,43 @@ def _write_outweighs_restore(compute_s: float, sampled: SampledCost, min_savings
     """
     saved = compute_s - sampled.load
     return saved <= max(sampled.dump, min_savings_pct * compute_s)
+
+
+def write_seconds(
+    metadata: dict[str, Any],
+    size: int,
+    rates: list[write_cost.WriteRates],
+    sampled: SampledCost | None = None,
+) -> float:
+    """What writing the entry *metadata* describes, of RAM size *size*, to
+    the tiers whose write queues measured *rates* is expected to take.
+
+    Priced by the bytes it writes (`disk_bytes`) at the rate this machine's
+    recent writes of its kind ran at (`write_cost.WriteRates`), or, before
+    one was measured, by the fitted cost model's serialize prediction for its
+    type. Never less than what pickling a sample of it measured
+    (*sampled*). Each tier writes it once, so their costs add.
+
+    The call entries it refers to (``call_ref_bytes``) are written with it
+    (`TieredBackend._persist_call_refs`), so they are its cost too: a
+    statement ``h = run(data, k)`` is a few bytes pointing at the call's
+    frame. Their kind is not known here, so they are priced at the slowest
+    rate this tier has measured, or the cost model's slowest family.
+    """
+    if not rates:
+        return 0.0
+    nbytes = disk_bytes(metadata, size)
+    referred = int(metadata.get("call_ref_bytes") or 0)
+    if nbytes <= 0 and referred <= 0:
+        return 0.0
+    kind = write_cost.write_kind(metadata, objects=sampled is not None)
+    assumed = cost_model.estimated_serialize_time(metadata.get("cost_model_type_name") or "", nbytes, "disk")
+    dump = sampled.dump if sampled is not None else 0.0
+    total = 0.0
+    for rate in rates:
+        if nbytes > 0:
+            total += max(rate.seconds(kind, nbytes, max(assumed, dump)), dump)
+        if referred > 0:
+            generic = cost_model.estimated_serialize_time("", referred, "disk")
+            total += max(generic, referred * (rate.slowest_per_byte() or 0.0))
+    return total
