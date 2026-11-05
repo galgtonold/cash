@@ -1056,6 +1056,7 @@ class StatementRandomness:
         *,
         code: str | None = None,
         read: Mapping[str, str | None] | None = None,
+        inputs: Mapping[str, str] | None = None,
     ) -> None:
         """Keep where each global stream the last statement moved (or
         *modules*) stands now, under the lineage its RNG variable has now.
@@ -1071,6 +1072,8 @@ class StatementRandomness:
         drew from at that lineage (``position_after``): the simulation can
         name a stream's lineage after a statement otherwise than the run
         did (a draw first seen inside a call), but agrees on what it read.
+        The lineages its other *inputs* had are kept with it: how far a
+        statement moves a stream can follow them (``rng.rand(h)``).
         """
         moved = self._positions_moved if modules is None else set(modules)
         self._positions_moved = set()
@@ -1092,12 +1095,15 @@ class StatementRandomness:
             keys = [(rng_virtual_var(module), held)]
             came_from = (read or {}).get(rng_virtual_var(module))
             if code is not None and came_from is not None:
-                keys.append(position_after(code, rng_virtual_var(module), came_from))
+                after = position_after(code, rng_virtual_var(module), came_from)
+                keys.append(after)
+                self.tracking_state.rng_position_inputs[after] = dict(inputs or {})
             for key in keys:
                 store[key] = part
                 store.move_to_end(key)
         while len(store) > RNG_POSITIONS_KEPT:
-            store.popitem(last=False)
+            dropped, _ = store.popitem(last=False)
+            self.tracking_state.rng_position_inputs.pop(dropped, None)
 
     def flag_observed_hidden_draw(
         self,

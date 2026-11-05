@@ -191,6 +191,10 @@ class RngRewind:
         self._before: dict[int, dict] = {}
         #: The stream states to put in place before the cell runs.
         self._cell_state: dict = {}
+        #: Plan index -> the lineage each stream put back there has in a run.
+        self._before_lineages: dict[int, dict[str, str]] = {}
+        #: The lineage each stream put back before the cell has in a run.
+        self._cell_lineages: dict[str, str] = {}
         #: The streams the cell draws whose position this check settled; the
         #: others (unseeded, or nothing above moves them) take the frozen rule.
         self._cell_settled: set[str] = set()
@@ -261,12 +265,25 @@ class RngRewind:
         positions = self._positions(statements, stmts)
         in_plan = {p for p in positions if p is not None}
         reads = self._trace_reads(trace)
+        simulated_inputs = self._trace_inputs(trace)
         codes_seen: dict[str, int] = {}
         for s in stmts:
             codes_seen[s.code] = codes_seen.get(s.code, 0) + 1
 
         inserts: dict[int, None] = {}  # positions of statements put in, to run at their places
         restores: dict[tuple, dict] = {}  # ("plan", i) / ("pos", p) / ("cell",) -> states before it
+        # The same keys -> the lineage each stream put back holds there in a
+        # run. The kernel's lineage of a stream names where it stood before
+        # the rewind moved it: the statement drawing next keys on it and
+        # records the position it leaves under it, so a later rewind took a
+        # position that statement left with other inputs on an earlier run.
+        named: dict[tuple, dict[str, str]] = {}
+
+        def put_back(key: tuple, module: str, state: dict, lineage: str | None) -> None:
+            restores.setdefault(key, {}).update(state)
+            if lineage:
+                named.setdefault(key, {})[rng_virtual_var(module)] = lineage
+            self.tracking_state.rng_unplaced.discard(module)
 
         def lineage_read(pos: int, module: str) -> tuple[bool, str | None]:
             """Whether the statement at *pos* reads a seeded *module*, as
@@ -279,6 +296,21 @@ class RngRewind:
             if lineage == UNSEEDED:
                 return False, None  # drawn unseeded there: nothing fixes its position
             return lineage is not None, lineage
+
+        def inputs_at(pos: int) -> dict[str, str]:
+            """The lineages the simulation gives the statement at *pos*'s
+            inputs; empty when it was not simulated."""
+            target = stmts[pos]
+            return simulated_inputs.get((target.cell, target.code, target.occurrence), {})
+
+        def left_under_these_inputs(after: tuple, pos: int) -> bool:
+            """Whether the position kept under *after* was left by the
+            statement at *pos* reading its inputs at the lineages a run
+            has there: an input both name at another lineage (an edit
+            above not run yet) can change how far it moves the stream."""
+            kept = self.tracking_state.rng_position_inputs.get(after, {})
+            wanted = inputs_at(pos)
+            return all(kept[name] == lineage for name, lineage in wanted.items() if name in kept)
 
         def settle(module: str, target_pos: int, target_lineage: str | None, key: tuple) -> bool:
             """Put *module* where a run has it before the statement at
@@ -305,18 +337,17 @@ class RngRewind:
             # draw seen for the first time can name another place.
             seeded, came_from = lineage_read(above, module)
             if seeded and came_from is not None:
-                recorded = self.tracking_state.rng_states_by_lineage.get(position_after(source.code, var, came_from))
-                if recorded is not None:
-                    restores.setdefault(key, {}).update(recorded)
-                    self.tracking_state.rng_unplaced.discard(module)
+                after = position_after(source.code, var, came_from)
+                recorded = self.tracking_state.rng_states_by_lineage.get(after)
+                if recorded is not None and left_under_these_inputs(after, above):
+                    put_back(key, module, recorded, target_lineage)
                     return True
             if target_lineage is not None:
                 # A recorded state is the stream itself; the live lineage is
                 # only a name for it and can match while the stream does not.
                 recorded = self.tracking_state.rng_states_by_lineage.get((var, target_lineage))
                 if recorded is not None:
-                    restores.setdefault(key, {}).update(recorded)
-                    self.tracking_state.rng_unplaced.discard(module)
+                    put_back(key, module, recorded, target_lineage)
                     return True
                 if (
                     not moved_by_plan
@@ -328,20 +359,20 @@ class RngRewind:
                 own = self.tracking_state.rng_pre_states.get(exact_source_digest(cell_code))
                 if own is not None and dict(own[1]).get(module) == target_lineage:
                     # Where this cell started last time, under the same lineage.
-                    restores.setdefault(key, {}).update(_with_companions(own[0], {module}))
-                    self.tracking_state.rng_unplaced.discard(module)
+                    put_back(key, module, _with_companions(own[0], {module}), target_lineage)
                     return True
             entry = restored_states.get(source.code)
             if entry is not None and module in entry and codes_seen.get(source.code) == 1:
-                restores.setdefault(key, {}).update(_with_companions(entry, {module}))
-                self.tracking_state.rng_unplaced.discard(module)
+                put_back(key, module, _with_companions(entry, {module}), target_lineage)
                 return True
-            if module in source.bare_seed and self._inputs_ready(above, stmts, in_plan, inserts, target_pos):
+            if module in source.bare_seed and self._inputs_ready(
+                above, stmts, in_plan, inserts, target_pos, inputs_at(above)
+            ):
                 inserts[above] = None
                 self.tracking_state.rng_unplaced.discard(module)
                 return True
             if self._draws_and_binds_only(above, stmts, target_pos) and self._inputs_ready(
-                above, stmts, in_plan, inserts, target_pos
+                above, stmts, in_plan, inserts, target_pos, inputs_at(above)
             ):
                 # It binds names nothing between rebinds or changes, from
                 # inputs nothing between rebinds: run again, it gives them the
@@ -372,8 +403,10 @@ class RngRewind:
         for key, state in restores.items():
             if key[0] == "cell":
                 self._cell_state.update(state)
+                self._cell_lineages.update(named.get(key, {}))
             else:
                 self._before.setdefault(index_of[key], {}).update(state)
+                self._before_lineages.setdefault(index_of[key], {}).update(named.get(key, {}))
         added = {stmts[p].code for p in inserts}
         if added:
             logger.debug("[UPSTREAM] Setting the random stream with %d statement(s) above", len(added))
@@ -488,11 +521,20 @@ class RngRewind:
         binder = _binder(name, at, stmts)
         return binder is not None and _imports_only(stmts[binder].code)
 
-    def _inputs_ready(self, at: int, stmts: list[_Stmt], in_plan: set[int], inserts: dict[int, None], end: int) -> bool:
+    def _inputs_ready(
+        self,
+        at: int,
+        stmts: list[_Stmt],
+        in_plan: set[int],
+        inserts: dict[int, None],
+        end: int,
+        simulated: dict[str, str] | None = None,
+    ) -> bool:
         """Whether every name the statement at *at* reads holds, when it runs
         again, what it held there in a run: bound in the kernel and changed
-        by nothing between it and *end*, or bound by a statement the plan
-        runs before it, or by an import above it, which is then run first."""
+        by nothing between it and *end*, at the lineage the simulation gives
+        it there (*simulated*) when it gives one, or bound by a statement the
+        plan runs before it, or by an import above it, which is then run first."""
         try:
             inputs, _ = CodeAnalyzer.analyze_code_block(stmts[at].code)
         except (SyntaxError, ValueError, TypeError):
@@ -510,6 +552,9 @@ class RngRewind:
                     self._changes(stmts[q].code, {name}) for q in range(at + 1, end)
                 ):
                     return False
+                held = self.tracking_state.variable_lineage.get(name)
+                if simulated and name in simulated and held is not None and held != simulated[name]:
+                    return False  # an edit above, not run yet, gives it another value there
                 continue
             if binder is None:
                 return False
@@ -532,6 +577,12 @@ class RngRewind:
         state = self._before.get(index)
         if state:
             restore_rng_state(state, self.tracking_state.rng_live_states)
+            self._name_positions(self._before_lineages.get(index, {}))
+
+    def _name_positions(self, lineages: dict[str, str]) -> None:
+        """Give each stream just put back the lineage it has there in a run."""
+        for var, lineage in lineages.items():
+            self.tracking_state.lineage.reset_to(var, lineage)
 
     # ------------------------------------------------------------------
     # Reading the notebook
@@ -609,6 +660,22 @@ class RngRewind:
             out[(cell, code, k)] = dict(hidden)
         return out
 
+    @staticmethod
+    def _trace_inputs(trace: list | None) -> dict[tuple[int, str, int], dict[str, str]]:
+        """(cell, statement, occurrence) -> the lineages of its inputs in
+        the simulation."""
+        out: dict[tuple[int, str, int], dict[str, str]] = {}
+        seen: dict[tuple[int, str], int] = {}
+        for entry in trace or ():
+            cell = attribute_or(entry, "cell", -1)
+            code = attribute_or(entry, "stmt_code", None)
+            if code is None:
+                continue
+            k = seen.get((cell, code), 0)
+            seen[(cell, code)] = k + 1
+            out[(cell, code, k)] = dict(attribute_or(entry, "input_hashes") or {})
+        return out
+
     def _draws(self, code: str) -> set[str]:
         """The streams the statement *code* draws from, as written or as seen."""
         seen = self.tracking_state.observed_rng_statement_draws.get(exact_source_digest(code), ())
@@ -684,11 +751,23 @@ class RngRewind:
 
         Static analysis sees ``np.random.rand()`` in the cell; the observed set
         adds modules a call like ``model.fit()`` changed at runtime, so
-        an indirect draw is treated like a direct one on re-run.
+        an indirect draw is treated like a direct one on re-run. So does a
+        statement seen drawing in another cell text: an edit elsewhere in
+        the cell (``hidden = 8`` above ``model = Model(hidden)``) leaves the
+        cell's own record behind, not the draw.
         """
         modules = set(get_drawing_rng_modules(cell_code))
         digest = exact_source_digest(cell_code)
         modules |= self.tracking_state.observed_rng_cells.get(digest, set())
+        ledger = self.tracking_state.observed_rng_statement_draws
+        tree = parse_cell_source(cell_code) if ledger else None
+        if tree is not None:
+            clean = clean_cell_source(cell_code)
+            for node in tree.body:
+                try:
+                    modules |= set(ledger.get(exact_source_digest(statement_code(node, clean)), ()))
+                except (ValueError, TypeError, RecursionError):
+                    continue
         modules.discard("torch.cuda")
         return modules
 
@@ -750,6 +829,7 @@ class RngRewind:
             if self._planned:
                 if self._cell_state:
                     restore_rng_state(self._cell_state, self.tracking_state.rng_live_states)
+                    self._name_positions(self._cell_lineages)
                 drawing -= self._cell_settled
                 if not drawing:
                     return
