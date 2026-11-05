@@ -11,7 +11,7 @@ CI runner, even a 0.2 s body), and a test that then looked for the call's
 entry found none. The shell's publisher records instead
 (`tests.conftest.RecordingDisplayPub`), as a real kernel's is no mock.
 
-The badge's timer is released by the body starting rather than by the
+The badge's publish is released by the body starting rather than by the
 interval, so the publish lands inside the body however long cash's own
 work before it takes on a loaded machine.
 """
@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import os
 import sys
-import threading
 import time
 
 import pytest
@@ -62,22 +61,23 @@ def lib(cash_magics, cash_instance, mock_shell, tmp_path, monkeypatch):
 
 @pytest.fixture
 def badge_fires_in_the_body(lib, monkeypatch):
-    """The badge's timer fires once ``make``'s body has started, not after
-    its interval; every other timer is left as it is."""
-    real_timer = threading.Timer
+    """The badge's progress publish fires once ``make``'s body has started,
+    not after its interval."""
+    from cash.notebook.ipython import badges
 
-    class BodyTimer(real_timer):
-        def run(self):
-            if getattr(self.function, "__module__", None) != "cash.notebook.ipython.badges":
-                return super().run()
+    clock = badges._PROGRESS_CLOCK
+    real_call_later = clock.call_later
+
+    def call_later(owner, delay, fn):
+        def once_the_body_runs():
             deadline = time.monotonic() + 10
-            while not lib.SPANS and not self.finished.is_set() and time.monotonic() < deadline:
+            while not lib.SPANS and time.monotonic() < deadline:
                 time.sleep(0.001)
-            if not self.finished.is_set():
-                self.function(*self.args, **self.kwargs)
-            self.finished.set()
+            fn()
 
-    monkeypatch.setattr(threading, "Timer", BodyTimer)
+        real_call_later(owner, 0.0, once_the_body_runs)
+
+    monkeypatch.setattr(clock, "call_later", call_later)
 
 
 def test_the_call_is_stored_although_the_badge_was_published_while_it_ran(

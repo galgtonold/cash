@@ -20,6 +20,7 @@ import functools
 import inspect
 import sys
 import types
+import weakref
 from collections.abc import Mapping
 from typing import Any, Literal
 
@@ -34,6 +35,7 @@ __all__ = [
     "copy_tree",
     "handed_names",
     "parse_cached",
+    "plain_statement",
     "resolve_callee",
     "resolve_dotted_name",
 ]
@@ -45,6 +47,76 @@ _C_METHOD_DESCRIPTORS = (
     types.ClassMethodDescriptorType,
     types.BuiltinFunctionType,
 )
+
+
+#: The nodes a plain statement is made of (`plain_statement`): names,
+#: constants, the operators and the literal containers.
+_PLAIN_NODES = frozenset(
+    {
+        ast.Module,
+        ast.Expr,
+        ast.Assign,
+        ast.Pass,
+        ast.Name,
+        ast.Load,
+        ast.Store,
+        ast.Constant,
+        ast.BinOp,
+        ast.UnaryOp,
+        ast.BoolOp,
+        ast.Compare,
+        ast.IfExp,
+        ast.List,
+        ast.Tuple,
+        ast.Set,
+        ast.Dict,
+    }
+    | {kind for base in (ast.operator, ast.unaryop, ast.boolop, ast.cmpop) for kind in base.__subclasses__()}
+)
+#: `plain_statement`'s answers, by the tree, held weakly: a tree parsed
+#: for one statement is let go with it.
+_PLAIN: weakref.WeakKeyDictionary[ast.AST, bool] = weakref.WeakKeyDictionary()
+
+
+def plain_statement(tree: ast.AST | None) -> bool:
+    """Is *tree* a plain statement: names bound to names, constants and
+    what operators and literal containers make of them (``x = 1``, ``y = a
+    + b``, ``z = [a, b]``, ``a``), and nothing else -- no call, attribute,
+    subscript, comprehension, lambda, f-string, ``**`` in a dict, starred
+    or unpacking target, augmented assignment, import, ``del``,
+    ``global``, definition or control statement?
+
+    An analysis that looks only for those may answer such a statement
+    with nothing found without walking it. What an operator runs (a
+    user's ``__add__``) is not of that kind: whatever asks about it must
+    still be asked.
+
+    Answered once per tree: cash's rewrites of a tree work on a copy
+    (`copy_tree`), and only ever replace a call, an attribute or a
+    subscript, of which a plain statement has none."""
+    if tree is None:
+        return False
+    try:
+        return _PLAIN[tree]
+    except KeyError:
+        pass
+    answer = isinstance(tree, ast.Module) and _is_plain(tree)
+    _PLAIN[tree] = answer
+    return answer
+
+
+def _is_plain(tree: ast.Module) -> bool:
+    for node in ast.walk(tree):
+        kind = type(node)
+        if kind not in _PLAIN_NODES:
+            return False
+        if kind is ast.Assign and not all(type(target) is ast.Name for target in node.targets):
+            return False
+        if kind is ast.Dict and None in node.keys:
+            return False
+        if kind in (ast.List, ast.Tuple) and type(node.ctx) is not ast.Load:
+            return False
+    return True
 
 
 @functools.lru_cache(maxsize=1024)
@@ -208,7 +280,7 @@ def called_dotted_names(tree: ast.AST | None) -> frozenset[str]:
     """The dotted spellings called in *tree*: ``helpers.save(...)`` gives
     ``"helpers.save"``, ``pkg.io.save(...)`` gives ``"pkg.io.save"``. Only a
     chain of attributes on a bare name; ``make().save()`` has none."""
-    if tree is None:
+    if tree is None or plain_statement(tree):
         return frozenset()
     out: set[str] = set()
     for node in ast.walk(tree):
@@ -260,7 +332,7 @@ def nodes_in(tree: ast.AST | None, scope: CallScope = "all") -> list[ast.AST]:
 
 def _call_names(tree: ast.AST | None, scope: CallScope, pick) -> frozenset[str]:
     """The names *pick* takes from each ``Call`` in *tree*, within *scope*."""
-    if tree is None:
+    if tree is None or plain_statement(tree):
         return frozenset()
     if scope == "all":
         return frozenset(name for n in ast.walk(tree) if isinstance(n, ast.Call) for name in pick(n))

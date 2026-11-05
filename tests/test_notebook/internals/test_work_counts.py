@@ -137,7 +137,9 @@ def test_a_rerun_restores_built_records_without_a_step_per_item(cash_magics, cas
 
 def test_a_fast_cell_draws_its_badge_twice(cash_magics, monkeypatch):
     """RUNNING, then the final badge: a progress render between them, for a
-    statement that finished at once, was ~2 ms of a trivial cell."""
+    statement that finished at once, was ~2 ms of a trivial cell. And only
+    the final one is built for the cell: the RUNNING badge it opens with has
+    no rows, and is built once (``_opening_html``)."""
     from cash.notebook.ipython.badges import BadgePresenter
 
     # Fast however busy the machine: a cell past the interval earns its
@@ -145,11 +147,74 @@ def test_a_fast_cell_draws_its_badge_twice(cash_magics, monkeypatch):
     monkeypatch.setattr(BadgePresenter, "MIN_RENDER_INTERVAL", 60.0)
     cash_magics._cell_executor._badges.mode = "html"
     run_cash_cell(cash_magics, "base = 1")
-    with method_calls(BadgePresenter, "render") as renders:
+    with (
+        method_calls(BadgePresenter, "_publish_html") as published,
+        method_calls(BadgePresenter, "_build_html") as built,
+    ):
         run_cash_cell(cash_magics, "a = base + 1\nb = a + 1\nc = b + 1")
 
     # Three before: RUNNING, the first statement's progress, DONE.
-    assert renders.calls == 2, renders.calls
+    assert published.calls == 2, published.calls
+    # Two before: RUNNING, built again for each cell, and DONE.
+    assert built.calls == 1, built.calls
+
+
+def test_a_cell_starts_no_thread_to_time_its_progress_badges(cash_magics, monkeypatch):
+    """Each statement armed its progress badge on a ``threading.Timer`` of
+    its own: a thread started, through cash's own ``Thread.start`` patch,
+    for a badge only a statement slower than the interval publishes, ~0.5 ms
+    of a trivial statement. One clock thread, started once, arms them all."""
+    import threading
+
+    from cash.notebook.ipython.badges import BadgePresenter
+
+    monkeypatch.setattr(BadgePresenter, "MIN_RENDER_INTERVAL", 60.0)
+    cash_magics._cell_executor._badges.mode = "html"
+    run_cash_cell(cash_magics, "base = 1")
+    with method_calls(threading.Thread, "start") as starts:
+        run_cash_cell(cash_magics, "a = base + 1\nb = a + 1\nc = b + 1")
+
+    # Three before: one Timer a statement.
+    assert starts.calls == 0, starts.calls
+
+
+def test_a_young_file_a_statement_reads_is_hashed_once_for_it(cash_magics, tmp_path):
+    """A file written seconds ago is too young for the digest memo: hashed
+    when the statement read it, and again for its key. Within the one
+    statement its stat (size, both times, identity) holds the digest; the
+    next statement reads it again (``_HASH_MEMO_MIN_AGE_SECONDS``)."""
+    pytest.importorskip("pandas")
+    from cash.tracking import file_dep_snapshot
+
+    path = tmp_path / "young.csv"
+    path.write_text("a,b\n" + "1,2\n" * 1000, encoding="utf-8")
+    run_cash_cell(cash_magics, "import pandas as pd")
+    with method_calls(file_dep_snapshot, "_read_digest") as reading:
+        run_cash_cell(cash_magics, f"df = pd.read_csv({str(path)!r})")
+    # Two before: at the read, and for the statement's key.
+    assert reading.calls == 1, reading.calls
+    with method_calls(file_dep_snapshot, "_read_digest") as again:
+        run_cash_cell(cash_magics, f"df2 = pd.read_csv({str(path)!r})")
+    assert again.calls == 1, "a young file's digest outlived its statement"
+
+
+def test_a_plain_statement_walks_for_no_calls(cash_magics):
+    """``y = base + 1`` calls nothing, stores on no attribute or item and
+    imports nothing (`plain_statement`): the analyses that look only for
+    those answered it by walking it, each on its own, some of them for
+    every module it reaches."""
+    from cash.analysis import mutations
+    from cash.notebook import callee_reach
+
+    run_cash_cell(cash_magics, "base = 1")
+    with (
+        method_calls(mutations._TopLevelCallCollector, "statement") as collected,
+        method_calls(callee_reach, "_state_writes") as state_writes,
+    ):
+        run_cash_cell(cash_magics, "y = base + 1")
+    # Several of each before: one per question asked of the statement.
+    assert collected.calls == 0, collected.calls
+    assert state_writes.calls == 0, state_writes.calls
 
 
 def test_a_cell_adding_columns_to_a_table_copies_each_column_once(cash_magics):

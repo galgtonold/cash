@@ -14,7 +14,7 @@ from collections.abc import Callable, Iterable
 
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from .analysis_budget import check_analysis_budget
-from .ast_util import CallScope, called_names, handed_names
+from .ast_util import CallScope, called_names, handed_names, plain_statement
 from .mutations import MUTATING_METHODS, MutationVisitor, iter_store_targets
 
 __all__ = [
@@ -275,7 +275,7 @@ def statement_calls(tree: ast.AST | None, *, control_bodies: bool = True) -> lis
     ``class`` or a ``lambda``. Without *control_bodies*, not the ones in the
     body of a loop or a branch either."""
     out: list[ast.Call] = []
-    if tree is None:
+    if tree is None or plain_statement(tree):
         return out
 
     def visit(node: ast.AST) -> None:
@@ -562,7 +562,7 @@ def call_arg_targets(tree: ast.Module | None) -> frozenset[CallArgTargets]:
     runtime runs those one statement at a time, each read on its own, and
     the control structure owns what its body changes.
     """
-    if tree is None:
+    if tree is None or plain_statement(tree):
         return frozenset()
     iterated = iterated_sources(tree)
     out: set[CallArgTargets] = set()

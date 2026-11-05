@@ -35,6 +35,7 @@ from cash.analysis.namespace_effects import code_waived_lines
 from cash.install_paths import is_user_code_file
 from cash.purity import is_pure
 from cash.tracking import io_watch
+from cash.tracking.file_dep_snapshot import forget_young_digests
 from cash.tracking.read_classification import is_runtime_cache_path, own_lstat, own_stat
 
 __all__ = [
@@ -87,6 +88,9 @@ def _record(sinks: tuple[WrittenPaths, ...], path: object, appends: bool = False
         # that skips the write only leaves to be compiled again. Not the
         # statement's output, wherever ``PYTHONPYCACHEPREFIX`` puts it.
         return
+    # A young file's digest kept for the statement may be of what it held
+    # before this write.
+    forget_young_digests()
     waived = _write_waived()
     for sink in sinks:
         sink.add(resolved)
@@ -266,6 +270,8 @@ def _on_unseen_writer(event: str) -> io_watch.Consumer:
 
     def note(_args: tuple) -> None:
         sinks = _active.get()
+        if sinks:
+            forget_young_digests()
         for sink in sinks:
             if sink.unseen is None:
                 sink.unseen = event

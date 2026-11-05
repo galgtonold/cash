@@ -11,6 +11,7 @@ import ast
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
+from .ast_util import plain_statement
 from .file_effects import SideEffectVisitor
 
 __all__ = [
@@ -1540,8 +1541,10 @@ class TopLevelCalls:
 
 
 def top_level_calls(tree: ast.Module | None) -> TopLevelCalls:
-    """The calls *tree*'s top-level statements make (see :class:`TopLevelCalls`)."""
-    if tree is None:
+    """The calls *tree*'s top-level statements make (see :class:`TopLevelCalls`).
+    A plain statement makes none, and changes nothing in place by its text
+    (`plain_statement`)."""
+    if tree is None or plain_statement(tree):
         return TopLevelCalls()
     collector = _TopLevelCallCollector()
     for node in tree.body:

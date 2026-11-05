@@ -26,13 +26,14 @@ recorded, and that had settled before it was hashed, is not read again
 
 from __future__ import annotations
 
+import contextlib
 import io
 import logging
 import os
 import stat as _stat
 import sys
 import time
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import Any, NamedTuple
 
 from cash._memo import FILE_DIGESTS, LruMemo
@@ -134,6 +135,38 @@ _EPOCH_COUNT = 0
 #: A cell run started inside another (a cell that calls
 #: `get_ipython().run_cell(...)`) is the same run.
 _EPOCH_DEPTH = 0
+
+
+#: Digests of files too young for ``_HASH_MEMO``, by its key, kept while a
+#: statement is processed (`young_digests_kept`): a file the statement
+#: read was hashed when it was read and again for its key, ~2x the bytes.
+#: Within the statement its stat is the whole key -- size, both times and
+#: the file's identity -- as ``_HASH_MEMO``'s is for a settled file; across
+#: statements a young file is read again, as ever. A write cash sees in the
+#: statement forgets them all (`forget_young_digests`).
+_YOUNG_DIGESTS: dict[tuple[str, int, int, int, int, int], str] = {}
+#: How many `young_digests_kept` blocks are open.
+_YOUNG_DEPTH = 0
+
+
+@contextlib.contextmanager
+def young_digests_kept() -> Iterator[None]:
+    """Keep young files' digests for the block, one statement's processing;
+    forgotten as it starts and as it ends (a nested one included)."""
+    global _YOUNG_DEPTH
+    _YOUNG_DIGESTS.clear()
+    _YOUNG_DEPTH += 1
+    try:
+        yield
+    finally:
+        _YOUNG_DEPTH -= 1
+        _YOUNG_DIGESTS.clear()
+
+
+def forget_young_digests() -> None:
+    """A file may have been written: no young file's digest is reused."""
+    if _YOUNG_DIGESTS:
+        _YOUNG_DIGESTS.clear()
 
 
 def begin_file_state_epoch() -> None:
@@ -318,7 +351,7 @@ def file_content_hash(
 
     *st* is the caller's stat of *path*, when it has just taken one.
     """
-    memo_key = None
+    memo_key = young_key = None
     hashed_at = time.time()
     try:
         if st is None:
@@ -334,6 +367,17 @@ def file_content_hash(
             remembered = _remembered_digest(memo_key)
             if remembered is not None:
                 return remembered
+        elif (
+            _YOUNG_DEPTH
+            and _HASH_MEMO_TTL_SECONDS is None
+            and st.st_ino
+            and _stat.S_ISREG(st.st_mode)
+            and not is_written_in_place(st, path)
+        ):
+            young_key = _stat_memo_key(path, st, size)
+            kept = _YOUNG_DIGESTS.get(young_key)
+            if kept is not None:
+                return kept
     except OSError:
         logger.debug("[FILE_DEP] Could not stat file for freshness: %s", path)
         return None
@@ -342,6 +386,8 @@ def file_content_hash(
     except OSError:
         logger.debug("[FILE_DEP] Could not hash file for freshness: %s", path)
         return None
+    if young_key is not None:
+        _YOUNG_DIGESTS[young_key] = digest
     if memo_key is not None:
         _HASH_MEMO[memo_key] = (time.monotonic(), digest, HASH_EPOCH)
         table = current_table() if _reuse_seconds(memo_key) is None else None
