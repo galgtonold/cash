@@ -20,8 +20,9 @@ from ..cache_key import (
     statement_source_hash,
 )
 from ..lineage_formula import bound_names, recorded_reads_lineage_component
-from ._types import cell_holds_statement, normalize_stmt
+from ._types import TraceEntry, cell_holds_statement, normalize_stmt
 from .statement_lineage import unbound_builtin
+from .virtual_lineage import _trace_codes
 
 if TYPE_CHECKING:
     from ..tracking_state import TrackingState
@@ -83,8 +84,11 @@ class UnsavedEdits:
         # pipeline and the grid search built on it, which then ran again.
         vars_tainted: set[str] = set()
         propagation_sources = set(directly_mismatched_vars)
-        for entry in simulation_trace:
-            if entry.inputs & propagation_sources:
+        behind = self._behind(directly_mismatched_vars, simulation_trace)
+        for at, entry in enumerate(simulation_trace):
+            if entry.inputs & propagation_sources and not self._built_on_this_version(
+                at, simulation_trace, entry.inputs & propagation_sources, behind, directly_mismatched_vars
+            ):
                 vars_tainted.update(entry.outputs - directly_mismatched_vars)
                 propagation_sources.update(entry.outputs)
             else:
@@ -100,6 +104,72 @@ class UnsavedEdits:
                 vars_tainted,
             )
         return vars_tainted
+
+    def _behind(self, directly_mismatched: set[str], simulation_trace: list) -> set[str]:
+        """The names among *directly_mismatched* whose kernel version is one
+        a statement above makes: a later statement making another has not
+        run, which is no edit. A version no statement above makes is one
+        (an unsaved edit), and what was built before it is stale."""
+        recorded = self.tracking_state.variable_lineage
+        return {
+            name
+            for name in directly_mismatched
+            if any((entry.produced_lineages or {}).get(name) == recorded.get(name) for entry in simulation_trace)
+        }
+
+    def _built_on_this_version(
+        self, at: int, simulation_trace: list, read: set[str], behind: set[str], directly_mismatched: set[str]
+    ) -> bool:
+        """Whether what memory holds of the outputs of statement *at* was
+        built on the version of each name in *read* that a run from the top
+        gives it.
+
+        A name is directly mismatched by its LAST version: the kernel holds
+        another one than the last statement above makes. A statement before
+        that one reads an earlier version, and memory can hold what it built
+        from exactly that version. ``lines = f.readlines()``, ``lines =
+        split(lines)`` and the frame built from ``lines``, then the read again
+        in a cell below that has not run since a restart: the kernel's
+        ``lines`` is the split one and the simulation's the read one, so
+        every value the frame fed was taken as stale and built again before
+        each cell that read one, on every run, although a run from the top
+        builds them from the same lines.
+
+        Only a name mismatched directly, and only when the kernel holds a
+        version a statement above makes (*behind*), is judged so: after an
+        unsaved edit the kernel's version is the one the cells below must
+        see, and one tainted through it has a lineage that does not show it.
+
+        An output memory last took from a statement further down is that
+        statement's to answer for: one that binds it anew, or one that read
+        it, and those names, at the versions the cells above give it there
+        (``parsed = sorted(parsed)`` below ``parsed = parse(lines)``).
+        """
+        if not read <= behind:
+            return False
+        entry = simulation_trace[at]
+        outputs = entry.outputs - directly_mismatched
+        if not outputs:
+            return False
+        state = self.tracking_state
+        own = set(_trace_codes(entry.stmt_code))
+        for out in outputs:
+            made_by = state.executed_cell_codes.get(out)
+            if made_by is None:
+                return False
+            made_by = strip_markers(made_by).strip()
+            built_on = state.executed_input_lineages.get(out) or {}
+            if made_by in own:
+                if not _read_as_above(built_on, entry, read):
+                    return False
+                continue
+            if not any(
+                made_by in _trace_codes(later.stmt_code)
+                and (out not in later.inputs or _read_as_above(built_on, later, {out} | (read & later.inputs)))
+                for later in simulation_trace[at + 1 :]
+            ):
+                return False
+        return True
 
     def _find_directly_mismatched_vars(
         self,
@@ -321,3 +391,13 @@ class UnsavedEdits:
             except (SyntaxError, ValueError):
                 logger.debug("Failed to parse notebook cell for unsaved extension check")
         return all_notebook_stmts
+
+
+def _read_as_above(built_on: dict[str, str], entry: TraceEntry, names: set[str]) -> bool:
+    """Whether a value built on the input versions *built_on* read each of
+    *names* at the version the simulation gives *entry*."""
+    for name in names:
+        version = entry.input_hashes.get(name)
+        if version is None or built_on.get(name) != version:
+            return False
+    return True
