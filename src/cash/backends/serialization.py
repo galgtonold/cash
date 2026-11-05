@@ -9,12 +9,13 @@ from __future__ import annotations
 import logging
 import pickle
 import sys
+import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import Any
 
 from .. import _cash_views, kept_state
-from . import block_digests
+from . import block_digests, text_columns
 from .datetime_columns import reduce_datetime_objects
 from .no_file_writes import NoFileWrites, import_what_it_imported, no_file_writes
 
@@ -89,10 +90,46 @@ def reduce_datetime64(array: Any) -> tuple | None:
 
 
 def _reduce_array_for_write(array: Any) -> tuple | None:
-    """`reduce_datetime_objects`, else `reduce_datetime64`: what the bytes
-    an entry is written as take for a numpy array."""
+    """`reduce_datetime_objects`, else `reduce_datetime64`, else
+    `reduce_text_objects`: what the bytes an entry is written as take for a
+    numpy array."""
     reduced = reduce_datetime_objects(array)
-    return reduced if reduced is not None else reduce_datetime64(array)
+    if reduced is None:
+        reduced = reduce_datetime64(array)
+    return reduced if reduced is not None else reduce_text_objects(array)
+
+
+def reduce_text_objects(array: Any) -> tuple | None:
+    """A numpy object array of strings and missing values (``None``,
+    ``nan``, ``pd.NA``) with its strings in one buffer out of band
+    (`text_columns`), rebuilt by `_text_objects`; None to pickle it as
+    numpy does: another item, a small array, a string UTF-8 cannot hold.
+
+    Pickled as numpy does, each string is an object of its own in the
+    stream: a column of a million strings took longer to write than to
+    read from its CSV."""
+    np = sys.modules.get("numpy")
+    try:
+        if (
+            np is None
+            or type(array) is not np.ndarray
+            or array.dtype != object
+            or array.size < STRINGS_APART_MIN_ITEMS
+            or array.ndim > 2
+        ):
+            return None
+        encoded = text_columns.encode(array, missing_only=True)
+    except Exception:  # anything unforeseen: pickled as numpy does
+        logger.debug("pickling an object array the numpy way", exc_info=True)
+        return None
+    if encoded is None:
+        return None
+    return _text_objects, encoded.parts()
+
+
+def _text_objects(*parts: Any) -> Any:
+    """The object array `reduce_text_objects` stored."""
+    return text_columns.decode(*parts)
 
 
 #: `_DATETIME_OBJECTS`, and a ``datetime64`` array's data out of band, for
@@ -152,16 +189,28 @@ class PickleSerializer(Serializer):
             raw = buffer.raw()
             if raw.nbytes < OUT_OF_BAND_MIN_BYTES:
                 return True  # in band
-            if copy:
-                buffers.append(raw.tobytes())
+            if _over_bytes(raw):
+                buffers.append(raw)  # nothing can write it: no copy
+            elif copy:
+                # A block the frame memo vouches for is copied into an
+                # array whose digest its content key gives (`_known_copy`).
+                known = _known_copy(raw)
+                buffers.append(known if known is not None else raw.tobytes())
             else:
                 _cash_views.note(raw)
                 buffers.append(raw)
             return False
 
-        stream = kept_state.dumps(
-            data, protocol=5, buffer_callback=take, on_retry=buffers.clear, extra=stored_reducers(for_write=True)
-        )
+        # The caller's value, pickled now on its thread: the blocks whose
+        # bytes the frame memo vouches for are known by their content key.
+        previous = _KNOWN.arrays
+        _KNOWN.arrays = _blocks_known(data) if copy else None
+        try:
+            stream = kept_state.dumps(
+                data, protocol=5, buffer_callback=take, on_retry=buffers.clear, extra=stored_reducers(for_write=True)
+            )
+        finally:
+            _KNOWN.arrays = previous
         return stream, buffers
 
     def deserialize_split(self, stream: Any, buffers: list) -> Any:
@@ -243,8 +292,10 @@ def stored_reducers(*, for_write: bool = False) -> dict | None:
     reduce.
 
     *for_write*: for the bytes `PickleSerializer` writes, also
-    `_reduce_chunked_array` for an Arrow column of chunks and
-    `reduce_datetime64` for a ``datetime64`` array. Not for the
+    `_reduce_chunked_array` for an Arrow column of chunks,
+    `reduce_datetime64` for a ``datetime64`` array, and a column of Python
+    strings as UTF-8 (`_reduce_text_for_write`, `reduce_text_objects`)
+    in place of `_reduce_string_array`. Not for the
     pickles a digest is taken over (`stored_pickle`): how an entry is
     written changes no key."""
     reducers: dict = {}
@@ -257,7 +308,7 @@ def stored_reducers(*, for_write: bool = False) -> dict | None:
     pd = sys.modules.get("pandas")
     string_array = getattr(getattr(pd, "arrays", None), "StringArray", None)
     if isinstance(string_array, type):
-        reducers[string_array] = _reduce_string_array
+        reducers[string_array] = _reduce_text_for_write if for_write else _reduce_string_array
     ndarray = getattr(sys.modules.get("numpy"), "ndarray", None)
     if isinstance(ndarray, type):
         reducers[ndarray] = _ARRAYS_FOR_WRITE if for_write else _DATETIME_OBJECTS
@@ -415,6 +466,153 @@ def _string_array_from_items(func: Callable[..., Any], args: tuple, dtype: Any, 
     array = func(*args)
     array.__setstate__((dtype, pickle.loads(items), *rest))
     return array
+
+
+def _reduce_text_for_write(value: Any) -> Any:
+    """A pandas column of Python strings as `_reduce_string_array` keeps it,
+    but with its strings joined into one UTF-8 buffer (`text_columns`),
+    not pickled one by one, rebuilt by `_string_array_from_text`. Missing
+    values keep their kind, and the array its dtype (storage and missing
+    value), restored by pandas' own ``__setstate__``.
+
+    A column whose strings UTF-8 cannot hold goes as
+    `_reduce_string_array` does."""
+    reduced = value.__reduce_ex__(5)
+    try:
+        func, args, state = reduced[0], reduced[1], reduced[2]
+        if (
+            len(reduced) != 3
+            or type(state) is not tuple
+            or len(state) < 2
+            or state[1] is not value._ndarray
+            or len(state[1]) < STRINGS_APART_MIN_ITEMS
+            or getattr(state[0], "storage", None) != "python"
+        ):
+            return _reduce_string_array(value)
+        objects = value._ndarray
+        encoded = text_columns.encode_column(value, objects, _content_key(objects))
+    except Exception:  # not the layout this expects
+        logger.debug("pickling a %s as strings", type(value).__name__, exc_info=True)
+        return _reduce_string_array(value)
+    if encoded is None:
+        return _reduce_string_array(value)
+    return _string_array_from_text, (func, args, state[0], encoded.parts(), state[2:])
+
+
+def _string_array_from_text(func: Callable[..., Any], args: tuple, dtype: Any, parts: tuple, rest: tuple = ()) -> Any:
+    """The column `_reduce_text_for_write` stored: built as pandas' own
+    pickle builds it, with its strings read back from *parts*."""
+    array = func(*args)
+    array.__setstate__((dtype, text_columns.decode(*parts), *rest))
+    return array
+
+
+class _Known(threading.local):
+    """``(address, bytes) -> (array, content key)`` for the block arrays of
+    the tables in a value being pickled on its caller's thread
+    (`_blocks_known`), or None. By memory, not by array: numpy pickles a
+    view of a block's array (a date column's integers), whose ``base`` is
+    the memory's owner, not the block's array."""
+
+    arrays: dict[tuple[int, int], tuple[Any, tuple]] | None = None
+
+
+_KNOWN = _Known()
+
+
+def _content_key(array: Any) -> tuple | None:
+    """The content key naming the bytes of the block array *array* now:
+    cash's own copy (`block_digests.content_key_of`), or a block of a
+    table being written from its caller's thread (`_KNOWN`)."""
+    known = _KNOWN.arrays
+    if known and array.flags.c_contiguous:
+        found = known.get((_address(array), array.nbytes))
+        if found is not None:
+            return found[1]
+    return block_digests.content_key_of(array)
+
+
+def _blocks_known(value: Any) -> dict[tuple[int, int], tuple[Any, tuple]]:
+    """`_Known.arrays` of *value*: the blocks of the big pandas tables in it
+    (or in the dicts, lists and tuples around them) whose bytes the frame
+    memo vouches for now (`shared_blocks.content_keys`)."""
+    pd = sys.modules.get("pandas")
+    frame_type = getattr(pd, "DataFrame", None)
+    if not isinstance(frame_type, type):
+        return {}
+    frames: list[Any] = []
+    pending: list[tuple[Any, int]] = [(value, 0)]
+    while pending and len(frames) < 64:
+        item, depth = pending.pop()
+        kind = type(item)
+        if kind is frame_type:
+            frames.append(item)
+        elif depth < 3 and kind in (dict, list, tuple) and len(item) <= 1024:
+            items = item.values() if kind is dict else item
+            pending.extend((each, depth + 1) for each in items)
+    known: dict[tuple[int, int], tuple[Any, tuple]] = {}
+    if not frames:
+        return known
+    from .shared_blocks import content_keys
+
+    for frame in frames:
+        try:
+            if not any(block.values.nbytes >= block_digests.MIN_BYTES for block in frame._mgr.blocks):
+                continue
+            keys = content_keys(frame)
+            if not keys:
+                continue
+            for block in frame._mgr.blocks:
+                key = keys.get(tuple(int(pos) for pos in block.mgr_locs.as_array))
+                if key is not None:
+                    # A content key is only for a contiguous block
+                    # (`shared_blocks._layout`): its memory is its bytes.
+                    array = getattr(block.values, "_ndarray", block.values)
+                    known[(_address(array), array.nbytes)] = (array, key)
+        except Exception:  # only a speedup: nothing known
+            logger.debug("cash: a table's blocks unknown", exc_info=True)
+    return known
+
+
+def _known_copy(raw: memoryview) -> Any:
+    """A copy of *raw* when it is all the memory of a block array in
+    `_KNOWN`, made cash's own and recorded as holding the bytes the block's
+    content key names (`block_digests.note_own`); None for any other
+    buffer. The block's table holds its array while it is pickled, so no
+    other memory is at that address."""
+    known = _KNOWN.arrays
+    if not known or raw.nbytes < block_digests.MIN_BYTES:
+        return None
+    found = known.get((_address(raw), raw.nbytes))
+    if found is None:
+        return None
+    np = sys.modules["numpy"]
+    copied = np.frombuffer(raw.tobytes(), dtype=np.uint8)
+    block_digests.note_own(copied, found[1])
+    return memoryview(copied)
+
+
+def _address(buffer: Any) -> int:
+    """Where *buffer*'s memory (a numpy array, or a contiguous buffer)
+    starts."""
+    np = sys.modules["numpy"]
+    if isinstance(buffer, np.ndarray):
+        return buffer.__array_interface__["data"][0]
+    return np.frombuffer(buffer, dtype=np.uint8).__array_interface__["data"][0]
+
+
+def _over_bytes(raw: memoryview) -> bool:
+    """Is *raw* memory of a ``bytes`` object (a text column's buffers,
+    `text_columns`), which nothing can write, so needs no copy?"""
+    np = sys.modules.get("numpy")
+    obj = raw.obj
+    for _depth in range(8):
+        if np is None or not isinstance(obj, np.ndarray):
+            return type(obj) is bytes
+        if obj.flags.writeable:
+            return False
+        obj = obj.base
+    return False
 
 
 class _KeptItems:

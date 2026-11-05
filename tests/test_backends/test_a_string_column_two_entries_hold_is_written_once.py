@@ -6,7 +6,7 @@ without pyarrow) was pickled into every entry's stream instead. A loop whose
 results share the column with their input (``h = df.assign(...)``) wrote
 and pickled it again every iteration. Its strings now pickle into one
 buffer of their own, which goes to the chunk store like a column of
-numbers; a column the RAM tier keeps is pickled once while it is kept.
+numbers; a column the RAM tier keeps is written out once while it is kept.
 """
 
 from __future__ import annotations
@@ -65,17 +65,17 @@ def test_a_derived_tables_string_column_adds_no_chunk(tmp_path):
 
 
 @pytest.mark.skipif(not frame_sharing.enabled(), reason="needs pandas copy-on-write")
-def test_a_column_the_ram_tier_keeps_is_pickled_once(tmp_path):
-    from cash.backends import serialization
+def test_a_column_the_ram_tier_keeps_is_encoded_once(tmp_path):
+    from cash.backends import text_columns
 
     df = _frame()
     cow_frame_digest(df)  # hashed, as a call's argument is: its columns are known
     tiers = TieredBackend([InMemoryBackend(), FileBackend(str(tmp_path / "cache"), flush_interval=0)])
-    before = serialization._KEPT_ITEMS.pickled
+    before = text_columns._KEPT.encoded
     for k in range(4):
         tiers.set(f"r{k}", df.assign(p=float(k)), {"execution_time": 5.0, "force_persist": True})
     tiers.backends[1]._writes.wait_all()
-    assert serialization._KEPT_ITEMS.pickled - before == 1
+    assert text_columns._KEPT.encoded - before == 1
     for k in range(4):
         got = FileBackend(str(tmp_path / "cache"), flush_interval=0).get(f"r{k}")[1]
         pd.testing.assert_frame_equal(got, df.assign(p=float(k)))

@@ -24,6 +24,12 @@ What is known, and how:
   by its address and size while an array holding it lives (`note_arrow`):
   nothing writes such memory (a hit shares it on the same grounds), and
   while it is held no other buffer can be at that address.
+* A numpy array over a ``bytes`` object (`note_immutable`: a text column's
+  buffers, `text_columns`), by the array, while it lives: nothing can
+  write a ``bytes`` object.
+* A copy of a block made for a disk write from a caller's table whose
+  blocks the frame memo vouches for (`note_own`), by that block's content
+  key, as for `note_copy`.
 
 Anything else is read, as before.
 """
@@ -35,7 +41,18 @@ import weakref
 from collections import OrderedDict
 from typing import Any
 
-__all__ = ["known", "learn", "lookup", "note_arrow", "note_copy", "remember", "single_column_digest"]
+__all__ = [
+    "content_key_of",
+    "known",
+    "learn",
+    "lookup",
+    "note_arrow",
+    "note_copy",
+    "note_immutable",
+    "note_own",
+    "remember",
+    "single_column_digest",
+]
 
 #: ``content key -> tree digest`` of the block bytes it names, least
 #: recently used first.
@@ -48,6 +65,9 @@ _COPIES: dict[int, tuple[Any, tuple]] = {}
 #: ``(address, size) -> [weak reference to an array holding that buffer,
 #: tree digest or None]`` of Arrow buffers in memory Arrow allocated.
 _ARROW: dict[tuple[int, int], list[Any]] = {}
+#: ``id(array) -> [weak reference to it, tree digest or None]`` of numpy
+#: arrays over a ``bytes`` object (`note_immutable`).
+_IMMUTABLE: dict[int, list[Any]] = {}
 _LOCK = threading.RLock()
 #: Buffers smaller than this are hashed as they come: what the chunk store
 #: keeps apart (`chunk_store.CHUNK_MIN_BYTES`).
@@ -121,6 +141,60 @@ def note_copy(copied: Any, keys: dict[tuple, tuple]) -> None:
         return
 
 
+def note_own(array: Any, key: tuple) -> None:
+    """Record *array*, cash's own copy of a block whose content *key* named
+    its bytes when it was copied, which nothing else writes, as holding the
+    bytes *key* names."""
+    try:
+        if array.nbytes < MIN_BYTES:
+            return
+        at = id(array)
+        ref = weakref.ref(array, lambda ref, at=at: _drop(_COPIES, at, ref))
+    except Exception:  # noqa: BLE001 - only a speedup: read as before
+        return
+    with _LOCK:
+        _COPIES[at] = (ref, key)
+
+
+def content_key_of(array: Any) -> tuple | None:
+    """The content key *array* was recorded with (`note_copy`, `note_own`),
+    while it lives; else None."""
+    with _LOCK:
+        found = _COPIES.get(id(array))
+    if found is None or found[0]() is not array:
+        return None
+    return found[1]
+
+
+def note_immutable(array: Any) -> None:
+    """Record *array*, a numpy array over a ``bytes`` object, so its digest
+    is read once while it lives (`lookup`)."""
+    try:
+        if array.nbytes < MIN_BYTES or not _over_bytes(array):
+            return
+        at = id(array)
+        ref = weakref.ref(array, lambda ref, at=at: _drop(_IMMUTABLE, at, ref))
+    except Exception:  # noqa: BLE001 - only a speedup: read as before
+        return
+    with _LOCK:
+        _IMMUTABLE[at] = [ref, None]
+
+
+def _over_bytes(array: Any) -> bool:
+    """Is the numpy *array*'s memory a ``bytes`` object's, which nothing
+    can write?"""
+    import numpy as np
+
+    base = array
+    for _depth in range(8):
+        if not isinstance(base, np.ndarray):
+            return type(base) is bytes
+        if base.flags.writeable:
+            return False
+        base = base.base
+    return False
+
+
 def _drop(table: dict, at: Any, ref: Any) -> None:
     """Forget *table*'s entry at *at* when it is *ref*'s. A weak reference's
     callback: it may run inside a lock this thread holds, so it takes none
@@ -171,6 +245,10 @@ def lookup(view: memoryview) -> tuple[bytes | None, Any]:
         source = view.obj
         if type(source).__name__ == "Buffer" and type(source).__module__ == "pyarrow.lib":
             return _arrow_lookup(source, view.nbytes)
+        with _LOCK:
+            found = _IMMUTABLE.get(id(source))
+        if found is not None and found[0]() is source and source.nbytes == view.nbytes:
+            return found[1], ("immutable", id(source), found)
         return _copy_lookup(source, view.nbytes)
     except Exception:  # noqa: BLE001 - only a speedup: read as before
         return None, None
@@ -212,9 +290,10 @@ def learn(slot: Any, digest: bytes) -> None:
     if slot[0] == "content":
         remember(slot[1], digest)
         return
-    _kind, at, found = slot
+    kind, at, found = slot
+    table = _ARROW if kind == "arrow" else _IMMUTABLE
     with _LOCK:
         # The same entry, its array alive since `lookup`: the memory read is
         # the memory it holds.
-        if _ARROW.get(at) is found and found[0]() is not None:
+        if table.get(at) is found and found[0]() is not None:
             found[1] = digest
