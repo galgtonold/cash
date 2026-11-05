@@ -2586,6 +2586,7 @@ A cached value that randomness makes non-reproducible. Every code here starts `R
 | [RANDOM-HELD-GENERATOR](#random-held-generator) | notebook | a cell re-run on its own draws from a generator held by an object, from where it stands |
 | [RANDOM-REPLAYED](#random-replayed) | notebook | a restored value is an earlier random draw |
 | [RANDOM-SEED-NONE](#random-seed-none) | notebook | `seed(None)` cannot refresh cached values |
+| [RANDOM-STREAM-NOT-RESTORED](#random-stream-not-restored) | notebook | a draw starts from where the stream stands, not where a run from the top has it |
 | [RANDOM-UNSEEDED](#random-unseeded) | both | a draw from an unseeded source is not reproducible |
 
 ### RANDOM-HELD-GENERATOR {#random-held-generator}
@@ -2650,6 +2651,29 @@ side by side with nothing to tell them apart.
 reproducible, seed with a fixed number instead.
 
 **When it is safe to ignore.** When nothing cached depends on that stream.
+
+### RANDOM-STREAM-NOT-RESTORED {#random-stream-not-restored}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashRandomnessWarning</span>
+
+<!-- claim: cash/notebook/upstream/rng_rewind.py:RngRewind._warn_not_restored @9d160ded -->
+**What happened.** A cell, or a statement above it that cash runs again to
+bring it up to date, draws from a seeded global stream (`np.random`,
+`random`, `torch`). Cash puts such a stream where a run from the top has it
+before the draw: by a position it recorded, by the position a restored
+result left, or by running a bare `seed(...)` call again. Here it had none
+of these: the statement above that moved the stream last also does other
+work, and cash does not run it again for the stream alone. The draw starts
+from where the stream stands now.
+
+**Why it matters.** The numbers drawn can differ from the ones a run from the
+top gives, and so can everything computed from them.
+
+**What to do.** Run the notebook from the top. To make the cell independent
+of the draws above it, seed the stream in the cell, before it draws.
+
+**When it is safe to ignore.** When the values drawn do not matter, only that
+they are random.
 
 ### RANDOM-UNSEEDED {#random-unseeded}
 

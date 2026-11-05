@@ -8,7 +8,7 @@ import functools
 import hashlib
 import logging
 import types
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from typing import TYPE_CHECKING
 
 from cash._user_attrs import attribute_or
@@ -60,6 +60,9 @@ from ..callee_reach import helper_seeded_modules, reached_user_code
 from ..lineage_formula import note_seeded_unseen
 from .held_generators import HeldGenerators
 from .observed_draws import ObservedDrawStore
+
+#: How many stream positions ``TrackingState.rng_states_by_lineage`` keeps.
+RNG_POSITIONS_KEPT = 256
 
 _LIBRARY_DRAW_FIX = (
     "pass random_state=<int> (polars: seed=<int>) to make it reproducible, put "
@@ -115,6 +118,13 @@ logger = logging.getLogger(__name__)
 _LOG_PROCESSOR = "[PROCESSOR]"
 
 __all__ = ["StatementRandomness"]
+
+
+def position_after(code: str, var: str, read: str) -> tuple[str, str, str]:
+    """The key of ``TrackingState.rng_states_by_lineage`` for where the
+    statement *code* leaves the stream of *var* when it drew from it at
+    lineage *read*."""
+    return (exact_source_digest(code), var, read)
 
 
 class StatementRandomness:
@@ -191,6 +201,9 @@ class StatementRandomness:
         self._seeded_by_a_hit: set[str] = set()
         #: Where the generators a statement reaches through an attribute stood.
         self._held = HeldGenerators()
+        #: The global streams the LAST statement, or its hit, moved: whose
+        #: positions `remember_positions` keeps under their lineages.
+        self._positions_moved: set[str] = set()
 
     def before_compute(self, code: str) -> None:
         """RANDOM-HELD-GENERATOR for a statement about to be computed in a
@@ -342,6 +355,7 @@ class StatementRandomness:
         """
         self.observed_draw = set()
         self.moved_streams = {}
+        self._positions_moved = set()
         self.reseeded_streams = frozenset()
         self.seeded_first = frozenset()
         self.draw_newly_seen = False
@@ -871,6 +885,7 @@ class StatementRandomness:
             if reseeded:
                 self.note_ledgered_seeds(code)
             self.moved_streams = self._moved_streams(code, post, changed | reseeded)
+            self._positions_moved = set(self.moved_streams)
         except (TypeError, AttributeError):  # pragma: no cover - defensive
             self.observed_draw = set()
             self.moved_streams = {}
@@ -987,8 +1002,12 @@ class StatementRandomness:
         """What this cell's statements changed, and the positions either side.
 
         Harvested by the cell executor in place of its own before/after diff, so
-        a single observer feeds both the badge and the replay ledger.
+        a single observer feeds both the badge and the replay ledger. The
+        positions the cell leaves are kept too (`remember_positions`): a
+        loop or branch moves a stream in statements of its body, which keep
+        none.
         """
+        self.remember_positions(self._cell_changed)
         return set(self._cell_changed), self._cell_pre, self._cell_post
 
     def before_hit(self) -> tuple[dict, dict[str, str]]:
@@ -1015,8 +1034,70 @@ class StatementRandomness:
                 self._cell_pre, self._cell_pre_lineage = before
             self._cell_changed |= changed
             self._cell_post = post
+            self._positions_moved = changed
+            self.tracking_state.rng_unplaced -= changed
         except (TypeError, AttributeError):  # pragma: no cover - defensive
             return
+
+    def draws_unplaced(self) -> bool:
+        """Whether the statement that just ran drew from a stream the
+        upstream check could not put where a run from the top has it: what
+        it computed may differ from that run's, so it is not stored. A seed
+        before its draw, or a hit's replay, places the stream again."""
+        unplaced = self.tracking_state.rng_unplaced
+        if not unplaced:
+            return False
+        unplaced -= set(self.seeded_first) | (set(self.reseeded_streams) - set(self.observed_draw))
+        return bool(set(self.observed_draw) & unplaced)
+
+    def remember_positions(
+        self,
+        modules: Iterable[str] | None = None,
+        *,
+        code: str | None = None,
+        read: Mapping[str, str | None] | None = None,
+    ) -> None:
+        """Keep where each global stream the last statement moved (or
+        *modules*) stands now, under the lineage its RNG variable has now.
+
+        Called once the statement ran or was served and its draws moved the
+        variables on. A lineage fixes a seeded stream's position, so a draw
+        the upstream check runs again below the same seeds and draws is put
+        back here (``RngRewind``) instead of re-running the draws above it.
+        An unseeded stream has no lineage and is not kept.
+
+        With the statement's *code* and the lineages its key *read*, the
+        position is also kept as where that statement leaves a stream it
+        drew from at that lineage (``position_after``): the simulation can
+        name a stream's lineage after a statement otherwise than the run
+        did (a draw first seen inside a call), but agrees on what it read.
+        """
+        moved = self._positions_moved if modules is None else set(modules)
+        self._positions_moved = set()
+        moved -= self.tracking_state.rng_unplaced
+        lineage = self.tracking_state.variable_lineage
+        wanted = {m: lineage.get(rng_virtual_var(m)) for m in moved if m != "torch.cuda"}
+        wanted = {m: h for m, h in wanted.items() if h is not None}
+        if not wanted:
+            return
+        try:
+            state = capture_rng_state()
+        except (TypeError, AttributeError):  # pragma: no cover - defensive
+            return
+        store = self.tracking_state.rng_states_by_lineage
+        for module, held in wanted.items():
+            if module not in state:
+                continue
+            part = {m: s for m, s in state.items() if m == module or (module == "torch" and m == "torch.cuda")}
+            keys = [(rng_virtual_var(module), held)]
+            came_from = (read or {}).get(rng_virtual_var(module))
+            if code is not None and came_from is not None:
+                keys.append(position_after(code, rng_virtual_var(module), came_from))
+            for key in keys:
+                store[key] = part
+                store.move_to_end(key)
+        while len(store) > RNG_POSITIONS_KEPT:
+            store.popitem(last=False)
 
     def flag_observed_hidden_draw(
         self,

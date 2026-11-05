@@ -55,6 +55,8 @@ def test_reexecuted_seed_explains_why(nb_runner):
     nb_runner.create_notebook([C_ON, data, "total = float(arr.sum())\nprint('T', total)"])
     nb_runner.start_kernel()
     nb_runner.run_all()
+    nb_runner.restart()  # no stream position kept: the seed itself runs again
+    nb_runner.run_cell(1)
     nb_runner.set_cell_source(2, data.replace("MULT = 100.0", "MULT = 200.0"))
     nb_runner.run_cell(3)  # downstream-only re-run forces the seed to re-run
     html = _badge_html(nb_runner, 3)

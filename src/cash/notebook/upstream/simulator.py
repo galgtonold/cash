@@ -97,6 +97,7 @@ class NotebookSimulator:
         self._warned_failed_run: set[tuple[str, int, int | None]] = set()
         #: The previous simulation's per-cell snapshots, where the next one starts.
         self.cache = SimulationCache()
+        self.last_trace: list = []
 
         #: Metadata and file-freshness reads from the backend.
         self.probe = CacheProbe(cash_instance)
@@ -332,6 +333,9 @@ class NotebookSimulator:
             self._track_modules_bound_before_cash_on()
 
         sim = self.virtual_lineage.simulate(current_cell_idx, notebook_cells, required_inputs, cell_code)
+        #: The statements above the cell as this check simulated them, for
+        #: the lineage of the random stream each one reads (``RngRewind``).
+        self.last_trace = sim.trace
 
         # Hand the simulation's view of every name to the runtime about to
         # execute this cell. A control structure records the lineages of what

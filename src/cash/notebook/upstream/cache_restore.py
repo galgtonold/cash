@@ -115,6 +115,10 @@ class CacheRestorer:
         #: What the entry the last successful `try_virtual_restore` restored
         #: showed when it ran: ``{"stdout", "stderr", "rich_outputs"}``.
         self.last_outputs: dict[str, Any] = {}
+        #: Statement -> where the global random streams its run moved stood
+        #: after it, for each entry `try_virtual_restore` restored since the
+        #: check began (``RngRewind`` puts a stream back there).
+        self.restored_rng_states: dict[str, dict] = {}
 
     def try_virtual_restore(
         self,
@@ -230,6 +234,8 @@ class CacheRestorer:
                         [name for name in metadata["anchor_links"] if name in self.shell.user_ns],
                     )
                 self._update_tracking_after_restore(restored_vars, metadata, input_hashes)
+                if restored_vars and cached_data.get("rng_state"):
+                    self.restored_rng_states[stmt_code] = cached_data["rng_state"]
                 self.last_outputs = {
                     "stdout": cached_data.get("stdout", "") or "",
                     "stderr": cached_data.get("stderr", "") or "",

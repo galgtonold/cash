@@ -369,6 +369,9 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         "RANDOM-REPLAYED",  # what you are seeing is a replay of an earlier
         # draw, not a fresh one
         "RANDOM-SEED-NONE",  # seed(None) cannot refresh cached values below
+        "RANDOM-STREAM-NOT-RESTORED",  # a draw re-run above a cell, or the cell,
+        # starts from where the stream stands: putting it where a run from the
+        # top has it would mean running again a statement that does more
         "RANDOM-UNSEEDED",  # an unseeded draw is being cached and frozen
         # -- REMOTE: tracking a remote object's freshness -----------------------
         "REMOTE-FRESHNESS-COST",  # freshness checks cost more than they protect

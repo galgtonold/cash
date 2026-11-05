@@ -774,6 +774,7 @@ class UpstreamChecker:
             lineages_before = dict(self.tracking_state.variable_lineage)
             # The cell's own source goes along: the classifier re-simulates it to
             # tell its own earlier run apart from an upstream edit.
+            self.simulator.restorer.restored_rng_states.clear()
             try:
                 statements_to_reexecute, restored_info, total_restore_time = self.simulator.simulate_upstream(
                     current_cell_idx,
@@ -794,7 +795,12 @@ class UpstreamChecker:
                 len(restored_info),
             )
             statements_to_reexecute, rng_rerun = self.rng.with_rng_chain(
-                cell_code, notebook_cells, current_cell_idx, statements_to_reexecute
+                cell_code,
+                notebook_cells,
+                current_cell_idx,
+                statements_to_reexecute,
+                trace=self.simulator.last_trace,
+                restored_states=self.simulator.restorer.restored_rng_states,
             )
             self._refuse_to_undo(unsaved, self._rebuilt_names(statements_to_reexecute, restored_info))
 
@@ -811,6 +817,7 @@ class UpstreamChecker:
                         annotations=self.replay.statement_directives(notebook_cells),
                         exec_sources=self.replay.statement_exec_sources(notebook_cells),
                         notebook_cells=notebook_cells,
+                        before_statement=self.rng.before_statement,
                     )
                 except UpstreamRepairGap:
                     self._put_back(bindings_before, lineages_before)
@@ -818,12 +825,9 @@ class UpstreamChecker:
             self.rng.label_rerun_metrics(executed_metrics, rng_rerun)
             total_execution_time = self.replay.sum_execution_times(executed_metrics)
 
-            # Restore the position-correct RNG state
-            # right before the current draw runs, so a re-executed draw continues
-            # from the stream position (and under the seed) it holds top-to-bottom
-            # rather than wherever the live state was last left. Runs after any
-            # upstream re-execution above, so it is the last thing to touch the
-            # RNG before the cell.
+            # Put the random streams the cell draws from where a run from the
+            # top has them before it. After the re-runs above, so it is the
+            # last thing to touch them before the cell.
             self.rng.restore_position_rng_state(cell_code, notebook_cells, current_cell_idx)
 
             self.simulator.resync_after_replay(records_before)

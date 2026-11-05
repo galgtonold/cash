@@ -206,13 +206,16 @@ class StatementReplay:
         annotations: dict[str, Any] | None = None,
         notebook_cells: list[str] | None = None,
         exec_sources: dict[str, str] | None = None,
+        before_statement: Callable[[int], None] | None = None,
     ) -> list[ProcessResult]:
         """Re-execute a list of statements and return their metrics.
 
         *annotations* maps a statement's code to the ``# @cash:`` directives
         written on it in its cell (see :meth:`statement_directives`), and
         *exec_sources* a waived ``def``/``class`` to the text it runs as
-        (see :meth:`statement_exec_sources`).
+        (see :meth:`statement_exec_sources`). *before_statement* is called
+        with each statement's index just before it runs (the random streams
+        put where a run has them there, ``RngRewind.before_statement``).
         """
         executed_metrics = []
         total_upstream_steps = len(statements)
@@ -225,6 +228,8 @@ class StatementReplay:
                 if len(stmt_code) > 40:
                     stmt_short += "..."
                 logger.debug("Cash: Auto-executing upstream statement: %s", stmt_short)
+            if before_statement is not None:
+                before_statement(stmt_idx)
 
             try:
                 # Check if this is a control structure (for/if/try/with/while).

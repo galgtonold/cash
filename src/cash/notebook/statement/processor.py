@@ -779,6 +779,9 @@ class StatementProcessor:
         # TrackingState); the processor never aliases its fields.
         self.tracking_state: TrackingState = tracking_state or TrackingState()
         self._randomness = StatementRandomness(shell, self.tracking_state)
+        #: (statement, the RNG lineages its key read) of the last statement whose
+        #: draws moved the streams on (`_advance_rng`), for the positions kept.
+        self._rng_read: tuple[str, Mapping[str, str | None]] | None = None
         # What a cell's last line showed, for the next edit that computes it again.
         self._memo = ExpressionMemo()
         self._rebuild_cost = RebuildCostLedger(shell, self.tracking_state, cash_instance)
@@ -1019,6 +1022,17 @@ class StatementProcessor:
             key = "unkeyable:" + secrets.token_hex(16)
         for var in sorted(drawn):
             self.tracking_state.lineage.record(var, advanced_rng_lineage(key, var))
+        self._randomness.remember_positions(var[len(rng_virtual_var("")) :] for var in drawn)
+
+    def _remember_rng_positions(self, run: StatementRun) -> None:
+        """Keep where the streams *run*'s statement moved stand, under the
+        lineages it left them at (`StatementRandomness.remember_positions`).
+        Not for a loop or branch body, whose stream lineage moves only with
+        the structure (:meth:`advance_rng_of_a_structure`)."""
+        if is_control_body(run.code) or run.magic_reads is not None:
+            return
+        read = self._rng_read[1] if self._rng_read is not None and self._rng_read[0] == run.code else None
+        self._randomness.remember_positions(code=run.code, read=read)
 
     def _advance_rng(self, run: StatementRun) -> None:
         """Move on the RNG variables *run*'s statement drew from, once it ran
@@ -1031,6 +1045,7 @@ class StatementProcessor:
         the draw, as the simulation's do. Not for a loop or branch body: the
         structure moves it as a whole (:meth:`advance_rng_of_a_structure`).
         """
+        self._rng_read = None
         if not run.cache_key or is_control_body(run.code) or run.magic_reads is not None:
             return  # a magic statement's draw moves it in record_magic
         state = self.tracking_state
@@ -1039,6 +1054,7 @@ class StatementProcessor:
         except (SyntaxError, ValueError, AttributeError, RecursionError):
             return
         note_rng_read(state, run.code, read)
+        self._rng_read = (run.code, read)
         drawn = {var for var, lineage in read.items() if lineage is not None}
         key = run.rng_advance_key or run.cache_key
         for var in sorted(drawn):
@@ -1233,6 +1249,7 @@ class StatementProcessor:
                     shadow.statement_served(run, done)
                 self._advance_rng(run)
                 self._adopt_seeds_it_set(run)
+                self._remember_rng_positions(run)
                 self._move_what_reducers_wrote(run)
                 return done
             with self._executing(run) as runner:
@@ -1251,6 +1268,7 @@ class StatementProcessor:
         finally:
             self._advance_rng(run)
             self._adopt_seeds_it_set(run, runner.execution.rng_reseeded)
+            self._remember_rng_positions(run)
             self._move_what_reducers_wrote(run)
 
     @staticmethod
@@ -4851,6 +4869,11 @@ class StatementProcessor:
         misses, and stores under it. Self-healing, one extra recompute per
         statement.
         """
+        if self._randomness.draws_unplaced() and not run.skip_cache:
+            # RANDOM-STREAM-NOT-RESTORED said so: drawn from where the stream
+            # stood, not where a run from the top has it.
+            run.skip_cache = True
+            return
         if self._randomness.draw_newly_seen and not run.skip_cache:
             run.skip_cache = True
             logger.debug(

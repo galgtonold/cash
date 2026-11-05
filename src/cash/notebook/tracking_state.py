@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from collections.abc import Mapping, Set
 from dataclasses import MISSING, dataclass, field, fields
 from typing import TYPE_CHECKING, Any
@@ -176,6 +177,20 @@ class TrackingState:
     # a new value each run instead of the rewound one; the entry is used up.
     # W: RngRewind, StatementRestorer. R/W: StatementRandomness.
     rng_live_states: dict[str, Any] = field(default_factory=dict)
+
+    # (RNG variable, its lineage) -> where that global stream stood under
+    # that lineage, taken after a statement that moved it ran or was served.
+    # A lineage fixes a seeded stream's position wherever it occurs, so a
+    # draw re-run below the same seeds and draws starts from here. Bounded
+    # (``RNG_POSITIONS_KEPT``), oldest first out.
+    # W: StatementRandomness. R: RngRewind.
+    rng_states_by_lineage: OrderedDict[tuple[str, str], Any] = field(default_factory=OrderedDict)
+
+    # The global streams the upstream check could not put where a run from
+    # the top has them (``RANDOM-STREAM-NOT-RESTORED``): a draw from one is
+    # not stored and its position not kept, until a seed or a hit places it.
+    # W: RngRewind, StatementRandomness. R: StatementRandomness.
+    rng_unplaced: set[str] = field(default_factory=set)
 
     # sha256(cell source) -> RNG modules the cell changed at runtime, including
     # draws inside called functions that static analysis cannot see.
