@@ -203,8 +203,15 @@ class UnsavedEdits:
                 # that adds a column to a frame from above
                 # (``docs['topic'] = ...``) found the frame ahead by its own
                 # earlier write and rebuilt everything derived from it.
+                # Matched as a statement, not as text: the recorded code is
+                # unparsed (``played['gd'] = ...``) and the cell may write it
+                # another way (``played["gd"] = ...``). Taken for an edit
+                # above, a column a cell below added in place made a re-run
+                # of a cell reading a value built from the frame re-run that
+                # value's statement on the changed frame.
                 is_downstream = any(
-                    normalized_prod in notebook_cells[di] for di in range(current_cell_idx, len(notebook_cells))
+                    cell_holds_statement(notebook_cells[di], normalized_prod)
+                    for di in range(current_cell_idx, len(notebook_cells))
                 )
                 if not is_downstream:
                     directly_mismatched.add(vname)
