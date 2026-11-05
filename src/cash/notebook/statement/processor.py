@@ -190,6 +190,7 @@ from ..callee_reach import (
 )
 from ..holder_patches import holder_patches
 from ..lineage_formula import (
+    forward_helpers,
     held_lineage,
     keep_held_lineage,
     key_hidden_reads,
@@ -1990,6 +1991,18 @@ class StatementProcessor:
         """Skip-cache *run* when the static cacheability decision refuses it."""
         if run.skip_cache:
             return
+        # A ``def`` is judged without the helpers defined below it that its
+        # body calls (`forward_helpers`), as on a first Run All or after a
+        # restart, where they are not bound yet: found on the next Run All,
+        # one that draws with pyplot turned the verdict to "varies", which
+        # put the function's value into its lineage, so the function and
+        # all that holds or calls it took another lineage than the first
+        # Run All's and missed. Its body runs when it is called, and the
+        # call is judged then.
+        user_ns = self.shell.user_ns
+        later = forward_helpers(run.code, user_ns)
+        if later:
+            user_ns = {name: value for name, value in user_ns.items() if name not in later}
         cacheable, reasons, varies, unless_it_draws = cacheability_verdict(
             code=run.code,
             tree=run.tree,
@@ -1997,7 +2010,7 @@ class StatementProcessor:
             outputs=run.outputs,
             annotation=run.annotation,
             analysis=run.analysis,
-            user_ns=self.shell.user_ns,
+            user_ns=user_ns,
             variable_lineage=self.tracking_state.variable_lineage,
             is_stateful_call=self._check_callable_stateful,
             scan_forbidden=CodeAnalyzer.scan_for_forbidden_functions,

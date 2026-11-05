@@ -37,6 +37,7 @@ from .held_modules import held_data_part, held_module_parts
 from .installed_code import installed_code_parts
 from .lineage_formula import (
     bound_names,
+    def_time_names,
     forward_helper,
     function_identity,
     is_cash_instrumentation,
@@ -1313,7 +1314,18 @@ def compute_cache_key(
     by_string: set[str] = {THE_STATEMENT} if statement_looks_up_by_string(code, ctx.user_ns) else set()
     module_classes: dict[int, type] = {}
     traced: set[str] = set()
-    callee_deps = _callee_deps(sorted_inputs, ctx, unfollowed, by_string, module_classes, traced)
+    # A ``def`` walks none of the helpers defined below it that its body
+    # calls (`def_time_names`): bound on the next Run All and not on the
+    # first, what their code names (``tree.get``) gave the function another
+    # lineage there. A key reading the function walks them at the call.
+    callee_deps = _callee_deps(
+        sorted(def_time_names(code, inputs, ctx.user_ns, ctx.virtual_modules or (), ctx.virtual_lineage or ())),
+        ctx,
+        unfollowed,
+        by_string,
+        module_classes,
+        traced,
+    )
     followed = ctx.traced and lookups_followed(code, by_string, traced, ctx.user_ns)
     # The code of the user's modules whose classes' objects the inputs hold
     # (``orders = pickle.load(f)`` of ``mylib.Order`` objects): no lineage
