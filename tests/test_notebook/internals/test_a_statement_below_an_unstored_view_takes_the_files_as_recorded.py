@@ -57,7 +57,8 @@ def test_a_statement_below_an_unstored_view_takes_no_stat_of_the_files(cash_magi
         return real(path, *args, **kwargs)
 
     monkeypatch.setattr(file_dep_snapshot, "own_stat", counting)
-    run_cash_cell(cash_magics, "X_train.shape[0] + 1")
+    # Stored: over the floor (a trivial one under it is not stored at all).
+    run_cash_cell(cash_magics, f"n = (time.sleep({ABOVE_PERSISTENCE_FLOOR_S}), X_train.shape[0] + 1)[1]")
     monkeypatch.setattr(file_dep_snapshot, "own_stat", real)
 
     assert stats["stat"] == 0, stats

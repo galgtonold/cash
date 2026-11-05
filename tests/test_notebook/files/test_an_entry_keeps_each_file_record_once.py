@@ -9,6 +9,10 @@ relative spelling the read was also recorded under. A trivial cell wrote
   and the token naming them, rather than copying them
   (``cash.notebook.file_records``); a reference that no longer names the
   records stored there is never fresh.
+* A cheap statement whose inputs were built from files, and which reads none
+  itself, is not stored: run again, it costs what it did. One whose input is
+  an open file or another stream is not judged so: run again, it would find
+  the stream where its last run left it.
 * A relative read's second spelling is folded into its absolute twin's
   record when stored, and read back as its own record, so a check under
   another working folder still looks for it where its name leads now.
@@ -48,6 +52,10 @@ def _metadata(cash_magics, backend, name: str) -> dict:
     return meta
 
 
+def _stored_keys(backend) -> int:
+    return backend.entry_count()
+
+
 def _doc_paths(folder) -> set[str]:
     return {str(folder / name).replace("\\", "/") for name in os.listdir(folder)}
 
@@ -84,6 +92,24 @@ def test_a_reference_to_other_records_is_never_fresh(tmp_path):
         records = entry_file_records({"file_refs": refs}, Backend())
         fresh, stale = snapshot_is_fresh(records)
         assert not fresh and stale.reason == "unresolved", (refs, records)
+
+
+def test_a_cheap_statement_below_a_read_is_not_stored(cash_magics, cash_instance, docs):
+    backend = cash_instance.backend
+    run_cash_cell(cash_magics, READ)
+    stored = _stored_keys(backend)
+    run_cash_cell(cash_magics, "m = X[:3]")
+    assert cash_magics.shell.user_ns["m"] == ["text 0", "text 1", "text 2"]
+    assert set(_doc_paths(docs)) <= cash_magics.tracking_state.executed_file_deps["m"]
+    assert _stored_keys(backend) == stored, "it was stored with the records of the files X was read from"
+
+
+def test_a_cheap_reader_of_a_file_handle_reads_it_again_on_a_second_run(cash_magics, docs):
+    cells = ["fh = open('docs/d00.txt')", "lines = [line for line in fh]"]
+    for _ in range(2):
+        for cell in cells:
+            run_cash_cell(cash_magics, cell)
+        assert cash_magics.shell.user_ns["lines"] == ["text 0"]
 
 
 def test_a_relative_read_is_recorded_once(cash_magics, cash_instance, docs):

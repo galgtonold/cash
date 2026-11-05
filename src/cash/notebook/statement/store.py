@@ -31,8 +31,10 @@ from cash.diagnostics import log_diagnostic, warn_diagnostic
 from cash.exceptions import CashCacheStoreFailedWarning
 from cash.notebook.anchors import AnchorUnrebuilt, with_anchor_refs
 from cash.notebook.callee_reach import made_as_it_ran
+from cash.notebook.consumables import is_stream
 from cash.notebook.file_records import REFS_FIELD as FILE_REFS_FIELD
 from cash.notebook.file_records import Records, entry_file_records, own_records, records_token, referred_records
+from cash.notebook.read_handles import reaches_read_handle
 from cash.notebook.shared_objects import scalar_identity
 from cash.notebook.statement import reducer_writes
 from cash.notebook.statement._metadata import StatementCacheMetadata
@@ -68,8 +70,10 @@ logger = logging.getLogger(__name__)
 __all__ = ["StatementStore"]
 
 #: How many statements back `StatementStore._records_through_inputs`
-#: looks for the stored records of an input's files.
-_INHERIT_HOPS = 4
+#: looks for the stored records of an input's files. A cheap statement
+#: that reads no file itself is not stored (`StatementStore._too_cheap_to_store`),
+#: so a chain of them can run a few deep.
+_INHERIT_HOPS = 8
 
 
 def _snapshot_with_inherited(
@@ -704,7 +708,7 @@ class StatementStore:
         # What this key recorded is about to change (``_producer_file_snapshots``).
         self._producer_snapshots.pop(run.cache_key, None)
 
-        if self._too_cheap_to_store(run, execution, file_dependencies, execution.cost):
+        if self._too_cheap_to_store(run, execution, execution.cost):
             if run.outputs and not self._calls.in_loop and replay_record(execution.captured) is not None:
                 # What it showed is kept for a cell run that skips it.
                 return self._store_metadata_only(run, execution, None, {})
@@ -715,7 +719,7 @@ class StatementStore:
             reason = f"its value holds variables' objects by reference, and it cannot be stored so ({exc})"
             _warn_not_stored(exc)
             return self._store_metadata_only(run, execution, reason, {})
-        if not referenced and self._too_cheap_to_store(run, execution, file_dependencies, execution.store_cost):
+        if not referenced and self._too_cheap_to_store(run, execution, execution.store_cost):
             # Its own work is not worth an entry: the calls inside it are what
             # was, and the cache holds them. The metadata still records its
             # output lineages, which a restart needs.
@@ -821,9 +825,21 @@ class StatementStore:
         cached = execution.cached_call_reads
         return bool(set(file_dependencies) - cached or set(execution.accessed_remote) - cached)
 
-    def _too_cheap_to_store(
-        self, run: StatementRun, execution: StatementExecution, file_dependencies: set[str], seconds: float
-    ) -> bool:
+    def _reads_on_from_files(self, run: StatementRun) -> bool:
+        """Whether an input of *run* built from files is one reading moves
+        on: an open file (or what reaches one, `reaches_read_handle`) or
+        another stream (`is_stream`)."""
+        files = self.tracking_state.executed_file_deps
+        user_ns = self.shell.user_ns if self.shell is not None else {}
+        for name in run.inputs:
+            if not files.get(name) or name not in user_ns:
+                continue
+            value = user_ns[name]
+            if is_stream(value) or reaches_read_handle(value):
+                return True
+        return False
+
+    def _too_cheap_to_store(self, run: StatementRun, execution: StatementExecution, seconds: float) -> bool:
         """Whether *run*'s value, worth *seconds*, is not worth an entry.
 
         Asked of the statement's whole cost first: under the floor, it gets no
@@ -835,13 +851,20 @@ class StatementStore:
         nothing makes the next lookup a fast clean miss. Then of its own
         work, the calls the cache holds left out (``store_cost``).
 
-        The floor is waived for a statement with any file dependency, its
-        inputs' included, except one read inside a call the cache holds. A
-        cheap reader of a file HANDLE (``lines = [l for l in fh]``) must still
-        be stored: re-run on a second Run All, it reads the handle its
-        skipped producer left at EOF and gets [] (test_file_handle_iteration_second_run_all).
+        The floor is waived for a statement that reads a file itself, except
+        inside a call the cache holds, and for one with an input it reads
+        on from a file: a file HANDLE or another stream built from files
+        (`_reads_on_from_files`). A cheap reader of a handle
+        (``lines = [l for l in fh]``) must still be stored: re-run on a
+        second Run All, it reads the handle its skipped producer left at EOF
+        and gets [] (test_file_handle_iteration_second_run_all). Not for the
+        files its other inputs were built from: ``X.shape[0] + 1`` below a
+        read of 15,000 files was stored with a record of each, every cell,
+        to be run again just as cheaply.
         """
-        if run.force_persist or self._reads_files(execution, file_dependencies):
+        if run.force_persist or self._reads_files(execution, set(execution.accessed_files or ())):
+            return False
+        if self._reads_on_from_files(run):
             return False
         if _only_shows_a_name(run.tree):
             # ``data`` alone: its cost is the display, which a hit repeats.
