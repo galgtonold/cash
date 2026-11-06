@@ -57,6 +57,19 @@ from ._types import (
     SimulationCacheEntry,
     SimulationResult,
     TraceEntry,
+    statements_of,
+)
+from .cell_memo import (
+    VERIFY_LOG_ENV,
+    CellMemo,
+    RecordingLineage,
+    apply_written,
+    differences,
+    missing,
+    namespace_token,
+    put_state,
+    state_of,
+    verify_requested,
 )
 from .control_simulation import ControlSimulation
 from .simulated_callables import SimulatedCallables
@@ -170,6 +183,8 @@ class VirtualLineage:
         self.cache = cache
         #: ``TrackingState.module_generation`` the last pass 1 saw.
         self._simulated_module_generation = 0
+        #: Cells a memo stood in for, since the session started.
+        self.memo_hits = 0
 
     def record_replayed_file_deps(self, rerecorded: set[str]) -> None:
         """Add the files behind the *rerecorded* variables to the snapshots of
@@ -318,21 +333,11 @@ class VirtualLineage:
         """
         first_changed_cell = 0
         cache_had_hash_mismatch = False
-
-        def in_notebook(code: str) -> bool:
-            self.statements.set_notebook_functions(notebook_cells)
-            return self.statements.in_notebook(code)
-
-        module_data = self._reaches_watched_module_data(current_cell_idx, notebook_cells, required_inputs, cell_code)
-        if outside_changes(self.tracking_state.reads, in_notebook, module_data=module_data):
+        if self._outside_changed(current_cell_idx, notebook_cells, required_inputs, cell_code):
             # The environment or a module's data, read by a statement, was
             # changed outside the notebook's cells: no cell's code says so, so
             # simulate them all again, as for a changed file.
             return first_changed_cell, cache_had_hash_mismatch
-        if module_data is not True:
-            # What this cell did not hash, the statements simulated below do
-            # not either.
-            take_known_as_read(self.tracking_state.reads)
         for idx in range(min(current_cell_idx, len(self.cache.entries))):
             cell_code = notebook_cells[idx].replace("\r\n", "\n")
             cell_hash = exact_source_digest(cell_code)
@@ -346,48 +351,81 @@ class VirtualLineage:
                     cell_hash[:12],
                 )
                 break
-            if cached.magic_generation not in (None, self.tracking_state.magic_generation):
-                # A magic has run since: what the cell's magics left changed.
-                break
-            if cached.stopped_at != self._stop_index(cell_code):
-                # The cell has run (or failed) since: what of it ran changed,
-                # not its code.
-                break
-            if cached.cell_environment != self._cell_environment(cell_code):
-                # An environment variable the cell reads has another value:
-                # its outputs' lineages fold it, so re-simulate from here --
-                # like a changed file, not like edited code.
-                break
-            cached_file_deps = cached.cell_file_deps
-            if cached_file_deps and self._check_cell_file_deps(cached_file_deps, idx, cached.file_event_seq):
-                # A file-dep change (or a mere mtime touch of identical content)
-                # must re-simulate FROM this cell so the reader re-populates
-                # ``vars_with_stale_files`` (its dedicated invalidation channel,
-                # mismatch_classifier ``_handle_mismatch_prereqs``). But it must
-                # NOT set ``cache_had_hash_mismatch``: that flag becomes the global
-                # ``upstream_has_modifications``, which disables loop-derived TRUST
-                # for EVERY loop var in the notebook — so an unrelated loop chain
-                # (whose runtime folds a value-hash and whose sim folds input-
-                # lineages, structurally divergent) would be spuriously marked
-                # broken and re-executed. Break to re-simulate; leave the flag
-                # alone so file staleness stays decoupled from code modification.
-                #
-                break
-            if self._share_records_changed(cached):
-                # A statement of the cell linked other edges when it ran
-                # since (`TrackingState.share_edge_records`): what it changed
-                # through them is asked again.
-                break
-            if cached.vars_with_stale_files:
-                # Which names a changed file left stale is a fact of the time
-                # the cell was simulated, not of its code: a repair has
-                # likely re-read the file since. Kept, it marked a value
-                # computed from the new file broken on every later check
-                # (``forecast`` re-ran in each cell below a corrected
-                # file), so re-simulate from here and ask the entries again.
+            if not self._snapshot_holds(cached, idx, cell_code):
                 break
             first_changed_cell = idx + 1
         return first_changed_cell, cache_had_hash_mismatch
+
+    def _outside_changed(
+        self,
+        current_cell_idx: int,
+        notebook_cells: list[str],
+        required_inputs: set[str] | None,
+        cell_code: str | None,
+    ) -> bool:
+        """Whether the environment or a module's data a statement read was
+        changed outside the notebook's cells (`outside_changes`). Every cell
+        memo is dropped then: none of them can tell."""
+
+        def in_notebook(code: str) -> bool:
+            self.statements.set_notebook_functions(notebook_cells)
+            return self.statements.in_notebook(code)
+
+        module_data = self._reaches_watched_module_data(current_cell_idx, notebook_cells, required_inputs, cell_code)
+        if outside_changes(self.tracking_state.reads, in_notebook, module_data=module_data):
+            self.cache.memo.clear()
+            return True
+        if module_data is not True:
+            # What this cell did not hash, the statements simulated below do
+            # not either.
+            take_known_as_read(self.tracking_state.reads)
+        return False
+
+    def _snapshot_holds(self, cached: SimulationCacheEntry, idx: int, cell_code: str) -> bool:
+        """Whether the snapshot *cached* of cell *idx*, whose text is
+        *cell_code* still, may be reused: what else it was simulated under
+        is as it was."""
+        if cached.magic_generation not in (None, self.tracking_state.magic_generation):
+            # A magic has run since: what the cell's magics left changed.
+            return False
+        if cached.stopped_at != self._stop_index(cell_code):
+            # The cell has run (or failed) since: what of it ran changed,
+            # not its code.
+            return False
+        if cached.cell_environment != self._cell_environment(cell_code):
+            # An environment variable the cell reads has another value:
+            # its outputs' lineages fold it, so re-simulate from here --
+            # like a changed file, not like edited code.
+            return False
+        cached_file_deps = cached.cell_file_deps
+        if cached_file_deps and self._check_cell_file_deps(cached_file_deps, idx, cached.file_event_seq):
+            # A file-dep change (or a mere mtime touch of identical content)
+            # must re-simulate FROM this cell so the reader re-populates
+            # ``vars_with_stale_files`` (its dedicated invalidation channel,
+            # mismatch_classifier ``_handle_mismatch_prereqs``). But it must
+            # NOT set ``cache_had_hash_mismatch``: that flag becomes the global
+            # ``upstream_has_modifications``, which disables loop-derived TRUST
+            # for EVERY loop var in the notebook — so an unrelated loop chain
+            # (whose runtime folds a value-hash and whose sim folds input-
+            # lineages, structurally divergent) would be spuriously marked
+            # broken and re-executed. Break to re-simulate; leave the flag
+            # alone so file staleness stays decoupled from code modification.
+            #
+            return False
+        if self._share_records_changed(cached):
+            # A statement of the cell linked other edges when it ran
+            # since (`TrackingState.share_edge_records`): what it changed
+            # through them is asked again.
+            return False
+        if cached.vars_with_stale_files:
+            # Which names a changed file left stale is a fact of the time
+            # the cell was simulated, not of its code: a repair has
+            # likely re-read the file since. Kept, it marked a value
+            # computed from the new file broken on every later check
+            # (``forecast`` re-ran in each cell below a corrected
+            # file), so re-simulate from here and ask the entries again.
+            return False
+        return True
 
     def _share_records_changed(self, cached: SimulationCacheEntry) -> bool:
         """Whether the record of the edges a statement of *cached*'s cell
@@ -480,6 +518,10 @@ class VirtualLineage:
             first_changed_cell, cache_had_hash_mismatch = self._scan_main_cache_for_changes(
                 current_cell_idx, notebook_cells, required_inputs, cell_code
             )
+        elif self.cache.memo:
+            # No snapshot to scan, but memos to reuse: the look for changes
+            # made outside the notebook drops them when there was one.
+            self._outside_changed(current_cell_idx, notebook_cells, required_inputs, cell_code)
 
         # A reloaded helper module changes what cells compute without changing
         # their text or their files, which is all that scan compares, so it
@@ -496,6 +538,8 @@ class VirtualLineage:
             self._simulated_module_generation = generation
             reloaded = set(state.reloaded_names)
             state.reloaded_names = set()
+            # What a cell's functions do may have changed with the module.
+            self.cache.memo.clear()
             reader = _first_cell_reading(notebook_cells, current_cell_idx, reloaded)
             if reader is not None and reader < first_changed_cell:
                 first_changed_cell = reader
@@ -804,7 +848,7 @@ class VirtualLineage:
                 new_cache_entries.append(
                     SimulationCacheEntry(
                         cell_code_hash=cell_hash,
-                        virtual_lineage=dict(virtual_lineage),
+                        virtual_lineage=_plain(virtual_lineage),
                         virtual_modules=set(virtual_modules),
                         trace_segment=[],
                         vars_mutated_by_loops=set(),
@@ -881,7 +925,7 @@ class VirtualLineage:
         new_cache_entries.append(
             SimulationCacheEntry(
                 cell_code_hash=cell_hash,
-                virtual_lineage=dict(virtual_lineage),
+                virtual_lineage=_plain(virtual_lineage),
                 virtual_modules=set(virtual_modules),
                 trace_segment=cell_trace_segment,
                 vars_mutated_by_loops=set(sim.vars_mutated_by_loops),
@@ -897,6 +941,156 @@ class VirtualLineage:
                 vars_maybe_changed_by_loops=set(sim.vars_maybe_changed_by_loops),
                 file_event_seq=self.tracking_state.file_event_seq,
             )
+        )
+
+    # --- Cell memos (``cell_memo``) ---
+
+    def _memo_generations(self) -> tuple:
+        """What every memo must have been made under: the module and magic
+        generations, and the notebook's functions."""
+        state = self.tracking_state
+        return (state.module_generation, state.magic_generation, self.statements.notebook_functions_version)
+
+    def forget_cells_running(self, cell_code: str, cell_idx: int | None = None) -> None:
+        """Drop the memo of each cell sharing a statement with *cell_code*,
+        which is about to run, and of cell *cell_idx*: what the runtime
+        records of a statement when it runs is what simulating it reads."""
+        memo = self.cache.memo
+        if not memo:
+            return
+        if cell_idx is not None:
+            memo.pop(cell_idx, None)
+        running = statements_of(cell_code.replace("\r\n", "\n"))
+        if not running and cell_code.strip():
+            memo.clear()  # unreadable: it may run any of them
+            return
+        for idx in [idx for idx, cell in memo.items() if not cell.statements.isdisjoint(running)]:
+            del memo[idx]
+
+    def forget_memos(self) -> None:
+        """Drop every cell memo."""
+        self.cache.memo.clear()
+
+    def _reuse_memo(
+        self,
+        sim: SimulationResult,
+        recording: RecordingLineage,
+        i: int,
+        cell_code: str,
+        new_cache_entries: list[SimulationCacheEntry],
+        generations: tuple,
+    ) -> bool:
+        """Apply cell *i*'s memo to *sim* when it still holds; whether it did."""
+        memo = self.cache.memo.get(i)
+        if memo is None:
+            return False
+        cached = memo.entry
+        if (
+            memo.generations != generations
+            or cached.cell_code_hash != exact_source_digest(cell_code)
+            or not self._snapshot_holds(cached, i, cell_code)
+            or state_of(sim) != memo.before
+            or (memo.empty is not None and memo.empty != (not dict.__len__(recording)))
+        ):
+            return False
+        live = self.tracking_state.variable_lineage
+        user_ns = self.shell.user_ns
+        absent = missing()
+        for name, (virtual, held, token) in memo.reads.items():
+            if (
+                dict.get(recording, name, absent) != virtual
+                or live.get(name, absent) != held
+                or namespace_token(user_ns.get(name, absent)) != token
+            ):
+                return False
+        for name, (held, token) in memo.watched.items():
+            if live.get(name, absent) != held or namespace_token(user_ns.get(name, absent)) != token:
+                return False
+        reference = _copy_simulation(sim) if verify_requested() else None
+        if reference is not None:
+            # The cell simulated from the same state must agree with the memo.
+            reference_entries: list[SimulationCacheEntry] = []
+            self.simulate_one_cell(reference, i, cell_code, reference_entries)
+        apply_written(recording, memo.written)
+        put_state(sim, memo.after)
+        sim.stmt_lookup_times.update(memo.lookup_times)
+        sim.trace.extend(memo.trace)
+        new_cache_entries.append(
+            cached._replace(virtual_lineage=recording.plain(), cell_file_deps=dict(cached.cell_file_deps))
+        )
+        self.memo_hits += 1
+        if reference is not None:
+            _report_differences(differences(sim, reference, new_cache_entries[-1:], reference_entries), i)
+        return True
+
+    def _simulate_and_memo(
+        self,
+        sim: SimulationResult,
+        recording: RecordingLineage,
+        i: int,
+        cell_code: str,
+        new_cache_entries: list[SimulationCacheEntry],
+        generations: tuple,
+    ) -> None:
+        """Simulate cell *i* into *sim*, and keep what it read and did as its memo."""
+        memo = self.cache.memo
+        memo.pop(i, None)
+        if self._stop_index(cell_code) is not None or simulation_cell(cell_code) is not None:
+            # A failed run's leftovers and a magic's are read from the
+            # kernel, not from the state: simulated every time.
+            self.simulate_one_cell(sim, i, cell_code, new_cache_entries)
+            return
+        before = state_of(sim)
+        lookup_times = dict(sim.stmt_lookup_times)
+        trace_start = len(sim.trace)
+        entries_before = len(new_cache_entries)
+        recording.start()
+        try:
+            self.simulate_one_cell(sim, i, cell_code, new_cache_entries)
+        finally:
+            recording.stop()
+        if recording.whole or len(new_cache_entries) != entries_before + 1:
+            return
+        absent = missing()
+        live = self.tracking_state.variable_lineage
+        user_ns = self.shell.user_ns
+        trace = sim.trace[trace_start:]
+        reads = {
+            name: (virtual, live.get(name, absent), namespace_token(user_ns.get(name, absent)))
+            for name, virtual in recording.reads.items()
+        }
+        others = set(recording.written)
+        for entry in trace:
+            others |= entry.inputs | entry.outputs
+        for name in reads.keys() | others:
+            virtual = reads[name][0] if name in reads else dict.get(recording, name, absent)
+            if (
+                virtual is absent
+                and (name in reads or name not in recording.written)
+                and live.get(name, absent) is absent
+                and name in user_ns
+            ):
+                # No lineage anywhere: its lineage is a digest of what it
+                # holds now (``LineageStore.resolve``), which changes with
+                # nothing a memo compares (``Out``, a name bound untracked).
+                return
+        memo[i] = CellMemo(
+            entry=new_cache_entries[-1],
+            reads=reads,
+            empty=recording.empty,
+            watched={
+                name: (live.get(name, absent), namespace_token(user_ns.get(name, absent)))
+                for name in others - reads.keys()
+            },
+            before=before,
+            after=state_of(sim),
+            written={name: dict.get(recording, name, absent) for name in recording.written},
+            lookup_times={
+                stmt: seconds for stmt, seconds in sim.stmt_lookup_times.items() if lookup_times.get(stmt) != seconds
+            },
+            trace=trace,
+            generations=generations,
+            statements=statements_of(cell_code),
         )
 
     def _hold_what_a_failed_run_left(self, sim: SimulationResult, i: int, cell_hash: str) -> None:
@@ -925,14 +1119,25 @@ class VirtualLineage:
         notebook_cells: list[str],
         new_cache_entries: list[SimulationCacheEntry],
     ) -> None:
-        """Run pass-1 simulation for cells *first_changed_cell*..*current_cell_idx* and update caches."""
+        """Run pass-1 simulation for cells *first_changed_cell*..*current_cell_idx* and update caches.
+
+        A cell whose memo still holds is not simulated again (``cell_memo``).
+        """
         # Source of every top-level function across all cells, so
         # ``_mutation_receivers`` can decide which bare ``proc(d)`` calls mutate
         # their argument (headless: inspect.getsource has no linecache entry).
         self.statements.set_notebook_functions(notebook_cells)
-        for i in range(first_changed_cell, current_cell_idx):
-            cell_code = notebook_cells[i].replace("\r\n", "\n")
-            self.simulate_one_cell(sim, i, cell_code, new_cache_entries)
+        generations = self._memo_generations()
+        recording = RecordingLineage(sim.virtual_lineage)
+        sim.virtual_lineage = recording
+        try:
+            for i in range(first_changed_cell, current_cell_idx):
+                cell_code = notebook_cells[i].replace("\r\n", "\n")
+                if not self._reuse_memo(sim, recording, i, cell_code, new_cache_entries, generations):
+                    self._simulate_and_memo(sim, recording, i, cell_code, new_cache_entries, generations)
+        finally:
+            recording.stop()
+            sim.virtual_lineage = recording.plain()
 
         # Update simulation cache for future incremental simulation.
         # NOTE: We only store entries for cells 0..(current_cell_idx-1).
@@ -1053,3 +1258,48 @@ def _rebound_names(stmt_code: str) -> set[str]:
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             names.add(node.name)
     return names
+
+
+def _plain(virtual_lineage: dict[str, str]) -> dict[str, str]:
+    """A plain copy of *virtual_lineage*, not noted as a read of all of it."""
+    if isinstance(virtual_lineage, RecordingLineage):
+        return virtual_lineage.plain()
+    return dict(virtual_lineage)
+
+
+def _copy_simulation(sim: SimulationResult) -> SimulationResult:
+    """A copy of *sim* that changes apart from it, for a verify run."""
+    copied = SimulationResult(
+        virtual_lineage=_plain(sim.virtual_lineage),
+        virtual_modules=set(sim.virtual_modules),
+        trace=list(sim.trace),
+        vars_mutated_by_loops=set(sim.vars_mutated_by_loops),
+        vars_with_stale_files=set(sim.vars_with_stale_files),
+        vars_maybe_changed_by_loops=set(sim.vars_maybe_changed_by_loops),
+        loop_target_vars=set(sim.loop_target_vars),
+        stmt_lookup_times=dict(sim.stmt_lookup_times),
+        share_edges=copy_edges(sim.share_edges),
+        vars_left_by_failed_runs=dict(sim.vars_left_by_failed_runs),
+    )
+    return copied
+
+
+#: Each difference a verify run found, for the tests to fail on.
+VERIFY_FAILURES: list[str] = []
+
+
+def _report_differences(found: list[str], current_cell_idx: int) -> None:
+    """Fail loudly when a simulation reusing memos differed from one that did not."""
+    if not found:
+        return
+    message = f"cell {current_cell_idx}'s memo differs from simulating it: " + "; ".join(found)
+    VERIFY_FAILURES.append(message)
+    logger.error("[UPSTREAM] %s", message)
+    log = os.environ.get(VERIFY_LOG_ENV)
+    if log:
+        try:
+            with open(log, "a", encoding="utf-8") as handle:
+                handle.write(message + "\n")
+        except OSError:
+            pass
+    raise AssertionError(message)

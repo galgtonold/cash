@@ -634,6 +634,25 @@ def _main_module_put_back():
 
 
 @pytest.fixture(autouse=True)
+def _incremental_simulation_agrees():
+    """Under ``CASH_VERIFY_INCREMENTAL_SIM``, fail a test in which a check
+    that reused cell memos simulated otherwise than one that did not
+    (``cash.notebook.upstream.cell_memo``). The check also raises, but the
+    cell executor steps aside on any error, so the test might not see it.
+    A kernel's differences go to ``CASH_VERIFY_INCREMENTAL_SIM_LOG``."""
+    if os.environ.get("CASH_VERIFY_INCREMENTAL_SIM", "") in ("", "0"):
+        yield
+        return
+    from cash.notebook.upstream import virtual_lineage
+
+    del virtual_lineage.VERIFY_FAILURES[:]
+    yield
+    found = list(virtual_lineage.VERIFY_FAILURES)
+    del virtual_lineage.VERIFY_FAILURES[:]
+    assert not found, found
+
+
+@pytest.fixture(autouse=True)
 def _cash_logger_put_back():
     """Leave the ``cash`` logger, and cash's record of its own handlers, as
     the test found them.
