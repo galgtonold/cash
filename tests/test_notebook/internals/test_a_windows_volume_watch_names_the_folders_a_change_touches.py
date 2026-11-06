@@ -66,6 +66,24 @@ def test_a_watched_folder_itself_changed_touches_it_and_its_holder(index):
     assert sorted(index.touched("Data\\Photos\\Anna")) == ["data\\photos", "data\\photos\\anna"]
 
 
+def test_a_folder_modified_in_place_touches_its_holder_only(index):
+    """Its own times moved (a name in it came or went, or its parent's entry
+    for it was brought up to date): nothing below it changed."""
+    index.add("Data\\Photos", "data\\photos")
+    assert index.touched("Data\\Photos\\Anna", in_place=True) == ["data\\photos"]
+    assert index.touched("Data\\Photos", in_place=True) == []
+    assert index.touched("Data\\Photos\\Anna\\img001.jpg", in_place=True) == ["data\\photos\\anna"]
+
+
+def test_a_volume_reports_a_folder_modified_as_a_change_of_its_holder_only(volume):
+    v, kernel = volume
+    v.index.add("Data\\Photos", "data\\photos")
+    kernel.report(_notify("Data\\Photos\\Anna"))  # modified
+    assert v.poll()[0] == ["data\\photos"]
+    kernel.report(_notify("Data\\Photos\\Anna", action=4))  # renamed away
+    assert sorted(v.poll()[0]) == ["data\\photos", "data\\photos\\anna"]
+
+
 def test_a_name_that_may_be_a_short_alias_touches_everything_below_its_folder(index):
     # Anything below Data: the alias may name any folder there.
     assert sorted(index.touched("Data\\PHOTOS~1\\Anna\\img001.jpg")) == [

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import collections
 import os
+import struct
 import sys
 import time
 
@@ -20,6 +21,7 @@ import pytest
 from cash.notebook import run_memo
 from cash.tracking import file_dep_snapshot, file_watch
 from cash.tracking.file_dep_snapshot import LISTING_MIN_FILES
+from cash.tracking.file_watch import _FolderIndex, _Volume
 from cash.tracking.read_classification import stat_key
 
 pytestmark = pytest.mark.skipif(sys.platform == "darwin", reason="folders are not watched on macOS")
@@ -168,4 +170,105 @@ def test_a_change_in_one_folder_looks_again_only_at_its_files(recorded, looks, t
     looks.paths.clear()  # type: ignore[attr-defined]
     assert _ask(recorded)
     # Which paths were looked at, so a failure on a platform says where.
+    assert looks["stat"] <= FOLDERS and looks["lstat"] == 0 and looks["current"] == 0, (
+        looks,
+        looks.paths[:12],
+        file_watch.watcher().report(),
+    )
+
+
+class _Kernel:
+    """kernel32 as a volume's watch calls it, with no thread: `report` ends
+    the pending read with the names given."""
+
+    def __init__(self) -> None:
+        self.ended: bytes | None = None
+
+    def report(self, *records: tuple[int, str]) -> None:
+        out = b""
+        for at, (action, name) in enumerate(records):
+            encoded = name.encode("utf-16-le")
+            record = struct.pack("<II", action, len(encoded)) + encoded
+            record += b"\0" * (-(len(record) + 4) % 4)
+            out += struct.pack("<I", len(record) + 4 if at < len(records) - 1 else 0) + record
+        self.ended = out
+
+    def new_event(self):
+        return "event"
+
+    def new_read(self):
+        return object(), object()
+
+    def issue(self, handle, overlapped, buffer, event):
+        return True
+
+    def result(self, handle, overlapped):
+        if self.ended is None:
+            return False, 0, 996  # ERROR_IO_INCOMPLETE
+        n = len(self.ended)
+        return True, n, 0
+
+    def data(self, buffer, n):
+        data, self.ended = self.ended, None
+        return data[:n]
+
+    def cancel(self, handle, overlapped):
+        self.ended = b""
+
+    def close(self, handle):
+        pass
+
+
+class _AsOnWindows:
+    """The folder watch's backend as on Windows (`file_watch._VolumeChanges`):
+    one watch over the whole volume, whose reported names say which folders
+    changed; the test makes the reports."""
+
+    def __init__(self) -> None:
+        self.kernel = _Kernel()
+        self.volume = _Volume(self.kernel, os.sep, "root")
+        self.volume.pending = True
+
+    def add(self, path: str):
+        key = _FolderIndex.spelled(path)
+        self.volume.index.add(key, key)
+        return key
+
+    def remove(self, key) -> None:
+        self.volume.index.remove(key)
+
+    def poll(self):
+        keys, gone, _dead = self.volume.poll()
+        return [(key, True) for key in gone] + [(key, False) for key in keys]
+
+    def close(self) -> None:
+        self.volume.stop()
+
+    def report(self, *records: tuple[int, os.PathLike]) -> None:
+        self.kernel.report(*((action, _FolderIndex.spelled(os.fspath(p))) for action, p in records))
+
+
+def test_a_folder_reported_modified_after_its_listing_is_not_looked_at_again(recorded, looks, tmp_path, monkeypatch):
+    """Windows reports a folder modified when its parent's entry for it is
+    brought up to date, which may be only when the folder is next opened:
+    by the listing the check took of it after one of its files changed.
+    That report said nothing changed below the folder, but every file in
+    it was checked once more before the cell after."""
+    backend = _AsOnWindows()
+    monkeypatch.setattr(file_watch, "_backend", lambda: backend)
+    file_watch.reset()
+    monkeypatch.setattr(run_memo, "stats_from_listings", _listed)
+    assert _ask(recorded) and _ask(recorded)
+    set2 = tmp_path / "set2"
+    (set2 / "notes.ipynb").write_text("{}", encoding="utf-8")
+    backend.report((1, set2 / "notes.ipynb"), (3, set2 / "notes.ipynb"))
+    looks.start()
+
+    assert _ask(recorded)
+    assert 0 < looks["stat"] + looks["lstat"] + looks["current"], "the changed folder's files were not checked"
+
+    backend.report((3, set2))  # the listing above opened it
+    looks.clear()
+    looks.paths.clear()  # type: ignore[attr-defined]
+    assert _ask(recorded)
     assert looks["stat"] <= FOLDERS and looks["lstat"] == 0 and looks["current"] == 0, (looks, looks.paths[:12])
