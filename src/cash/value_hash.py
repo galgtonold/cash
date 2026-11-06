@@ -28,7 +28,7 @@ from . import value_watch
 from ._user_attrs import instance_of
 from .content_hashers import builtin_hash, builtin_hash_family, is_native_panic
 from .sizing import pandas_nbytes
-from .stored_pickle import HashBudgetExceeded, run_on, running_on, sized_object_digest
+from .stored_pickle import HashBudgetExceeded, run_on, running_on, sized_object_digest, unshared_digest
 
 logger = logging.getLogger(__name__)
 
@@ -401,6 +401,41 @@ def compute_hash(obj: Any) -> str:
         except TypeError:
             pass  # a list, dict or tuple: see `one_read`
     return digest
+
+
+def _holds_bulky(obj: Any) -> bool:
+    """Whether *obj* is a collection `compute_hash` reads item by item,
+    each item alone, for the frames or arrays in it (`_hash_collection`)."""
+    if type(obj) not in (list, tuple, dict):
+        return False
+    values = obj.values() if type(obj) is dict else obj
+    return any(map(_is_bulky_type, set(map(type, values))))
+
+
+def unshared_hash(obj: Any) -> str:
+    """*obj*'s content digest, blind to which of its equal strings, tuples
+    or dtypes are one object (`stored_pickle.unshared_digest`).
+
+    `compute_hash` pickles a value through pickle's memo, which writes an
+    object met again as a back-reference: four estimators made in one cell
+    share their parameter-name strings, while the same four restored from
+    two entries hold copies, and the list of them digested apart though
+    nothing in it differed. For a digest a lineage is made from, where only
+    the content may count. A frame, an array or a table (`builtin_hash`),
+    and a value this pickle cannot read, digest as `compute_hash` does.
+    """
+    if type(obj) in _ATOMS or builtin_hash_family(type(obj)) is not None or _holds_bulky(obj):
+        return compute_hash(obj)
+    try:
+        return unshared_digest(obj)
+    except HashBudgetExceeded:
+        raise
+    except Exception as exc:  # noqa: BLE001 - whatever stops this pickle, as `compute_hash` reads it
+        logger.debug("Unshared hash failed for %s: %r", type(obj).__name__, exc)
+    except BaseException as exc:
+        if not is_native_panic(exc):
+            raise
+    return compute_hash(obj)
 
 
 class _OneRead(threading.local):
