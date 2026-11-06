@@ -91,6 +91,16 @@ class TrackingState:
     # W: StatementProcessor, ControlStructureProcessor. R: FileWriterScheduler.
     executed_write_input_lineages: dict[str, dict[str, str]] = field(default_factory=dict)
 
+    # Code of a statement that wrote a file this session -> the files its
+    # inputs were read from when it last ran (their ``executed_file_deps``
+    # then). The simulation tells by them a writer that writes back what
+    # it read (a counter, never re-fired): ``executed_file_deps`` holds a
+    # later binding's once a cell below binds the name afresh, and ``df =
+    # pd.read_csv(P)`` below ``df.to_csv(P)`` is read from the very file
+    # the writer writes, where the frame it wrote from was not.
+    # W: StatementProcessor, ControlStructureProcessor. R: FileWriterScheduler.
+    executed_write_input_files: dict[str, frozenset[str]] = field(default_factory=dict)
+
     # The files statements of this session wrote, and the rereads of them
     # that made a statement run again (``NOTEBOOK-FILE-ROUNDTRIP``).
     # W/R: StatementProcessor.
@@ -586,6 +596,14 @@ class TrackingState:
         *generation* (an index into ``share_edge_changes``)."""
         last = self.share_edge_last_change
         return any(last.get(h, -1) >= generation for h in source_hashes)
+
+    def files_read_into(self, names: Iterable[str]) -> frozenset[str]:
+        """The files the values of *names* were read from, as recorded now."""
+        deps = self.executed_file_deps
+        found: set[str] = set()
+        for name in names:
+            found.update(deps.get(name, ()))
+        return frozenset(found)
 
     def reset_session_state(self) -> None:
         """Forget everything this session recorded, as a fresh kernel would.

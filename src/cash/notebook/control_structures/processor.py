@@ -346,9 +346,11 @@ class ControlStructureProcessor:
                 if statement_writes_files(code):
                     state.executed_write_stmt_codes.add(code)
                     state.executed_write_input_lineages[code] = {v: before[v] for v in reads if v in before}
+                    state.executed_write_input_files[code] = state.files_read_into(reads)
                 return
             state.executed_write_stmt_codes.add(code)
             state.executed_write_input_lineages[code] = {v: before[v] for v in reads if v in before}
+            state.executed_write_input_files[code] = state.files_read_into(reads)
             # A ``with`` block's statement recorded these writes just now.
             sp.persist_write_provenance(code, set(reads), None, written, again=True)
         except Exception:  # never let bookkeeping break the user's loop

@@ -1030,12 +1030,21 @@ class FileWriterScheduler:
         return forms
 
     def _rewrites_what_it_read(self, stmt_code: str, inputs, simulation_trace: list) -> bool:
-        """The writer writes a file one of its *inputs* was read from, as the
-        runtime recorded it (``executed_file_deps``)."""
-        read_from = self.tracking_state.executed_file_deps
-        sources: set[str] = set()
-        for name in inputs:
-            sources.update(read_from.get(name, ()))
+        """The writer writes a file one of its *inputs* was read from: as
+        they were when it last ran this session
+        (``executed_write_input_files``), else as the runtime holds them now
+        (``executed_file_deps``).
+
+        Now is a later binding's once a cell below binds a name afresh:
+        ``df = pd.read_csv(P)`` below ``df.to_csv(P)`` gave ``df`` the very
+        file the writer writes, and the writer was never re-fired again --
+        an edit of a review file the frame was read from never reached the
+        CSV, nor the ``df`` read back from it."""
+        recorded = self.tracking_state.executed_write_input_files.get(stmt_code)
+        if recorded is not None:
+            sources: set[str] | frozenset[str] = recorded
+        else:
+            sources = self.tracking_state.files_read_into(inputs)
         if not sources:
             return False
         written = self._writer_paths(stmt_code, simulation_trace)
