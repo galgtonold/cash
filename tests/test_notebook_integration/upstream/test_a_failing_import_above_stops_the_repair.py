@@ -2,11 +2,15 @@
 
 Found by replaying a real session (JuNE expert_8): an import cell whose
 ``from parse import parse`` fails, then ``from typing import Dict, List``.
-A cell below annotating with ``Dict`` fails with ``NameError`` in a plain
-kernel, and a run from the top stops at the import. After a restart, cash's
+A cell below reading ``Dict`` fails with ``NameError`` in a plain kernel,
+and a run from the top stops at the import. After a restart, cash's
 repair re-ran only the typing import for the cell, skipped the failing one,
 and the cell ran: the error was hidden. Now the cell runs as written, fails
 as a plain kernel fails it, and ``NOTEBOOK-REPAIR-GAP`` says why.
+
+The cell reads ``Dict`` in an expression, not only in an annotation: from
+Python 3.14 a module's annotations are evaluated only when asked for, so a
+plain kernel runs ``data: Dict[str, int] = {}`` without ``Dict`` defined.
 """
 
 import pytest
@@ -16,7 +20,7 @@ pytestmark = [pytest.mark.timeout(120), pytest.mark.upstream]
 
 SETUP = "import cash\n%load_ext cash\n%cash_on"
 IMPORTS = "import json\nfrom nonexistent_pkg_for_cash_tests import parse\nfrom typing import Dict, List"
-READER = "data: Dict[str, List[int]] = {}\nprint('RAN', len(data))"
+READER = "data = {}\nkind = Dict[str, List[int]]\nprint('RAN', len(data))"
 
 
 def test_a_cell_run_before_the_import_cell_fails_as_a_plain_kernel_fails_it(nb_runner):
