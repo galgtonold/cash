@@ -4841,6 +4841,9 @@ class StatementProcessor:
             ):
                 self.tracking_state.executed_write_stmt_codes.add(code)
                 self.tracking_state.executed_write_input_lineages[code] = run.entry_lineages
+                self.tracking_state.executed_write_input_files[code] = self.tracking_state.files_read_into(
+                    run.inputs or ()
+                )
                 if written and keeps_a_write(written, None, execution.appended_paths):
                     self.tracking_state.observed_writer_codes.add(code)
                 else:
