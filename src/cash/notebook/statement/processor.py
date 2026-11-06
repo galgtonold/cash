@@ -755,6 +755,12 @@ class StatementProcessor:
         self._share_refused: dict[str, list] = {}
         #: Statements already warned NOTEBOOK-SHARE-UNCHECKED about.
         self._share_unchecked_warned: set[str] = set()
+        #: Moved on as each statement starts: what ran since a share check.
+        self._statements_started = 0
+        #: ``(statements started then, {(name, id of its value)})`` the last
+        #: share check that found every holder looked at
+        #: (`record_structure_share_edges`).
+        self._share_checked: tuple[int, frozenset[tuple[str, int]]] | None = None
         #: The variables restored from entries stored while pandas scalars
         #: were values (`_warn_scalar_copies`).
         self._restored_scalar_values: set[str] = set()
@@ -1245,6 +1251,7 @@ class StatementProcessor:
             'saved_time', 'restored_vars', 'code', plus optional keys depending
             on cache status.
         """
+        self._statements_started += 1
         # A young file read is hashed once for the statement (`young_digests_kept`).
         with young_digests_kept():
             forget_heap_unreadable()
@@ -1347,6 +1354,7 @@ class StatementProcessor:
         before any coroutine is built, so an identical second run skips the
         await entirely.
         """
+        self._statements_started += 1
         # A young file read is hashed once for the statement (`young_digests_kept`).
         with young_digests_kept():
             run = StatementRun(
@@ -3835,6 +3843,18 @@ class StatementProcessor:
             record_shared_object_edges(self.tracking_state.derivation_edges, owners, names)
         if not complete:
             self._warn_share_unchecked(run, outputs, cost)
+        # What the same check asked again finds the same, while nothing runs:
+        # a structure ending right after it (`record_structure_share_edges`).
+        # Not after a check that took the holders a stored statement's check
+        # found (*holders*), nor after held objects were set aside (*held*).
+        if not (complete and holders is None and not held):
+            self._share_checked = None
+            return
+        covered = frozenset((name, id(captured_vars[name])) for name in outputs)
+        before = self._share_checked
+        if before is not None and before[0] == self._statements_started:
+            covered |= before[1]
+        self._share_checked = (self._statements_started, covered)
 
     def _kernel_object(self, value: Any) -> bool:
         """Whether *value* is the kernel's own machinery: the shell
@@ -4049,6 +4069,7 @@ class StatementProcessor:
         cost: float = 0.0,
         static: Mapping[str, set[str]] | None = None,
         held: tuple[Any, ...] = (),
+        nothing_ran: bool = False,
     ) -> None:
         """Link the variables *names* a control structure changed or bound to
         every other variable they share an object with, as a statement's own
@@ -4064,6 +4085,13 @@ class StatementProcessor:
         NOTEBOOK-SHARE-UNCHECKED says so. *held* is what cash holds of the
         structure (a loop's iterable). *static* links each loop target to
         the variables whose items it takes, without a check.
+
+        *nothing_ran*: no code of the structure's ran since its last
+        statement or structure ended (an ``if``'s branch, a structure run as
+        one statement). A name the check that ended it asked of the same
+        object, finding every holder, is not asked again: the same objects
+        held by the same things. An extraction in a ``with`` under an
+        ``if`` walked the 20,000 members of its ``TarFile`` three times.
         """
         user_ns = self.shell.user_ns
         value_types = VALUE_TYPES + library_value_types()
@@ -4072,6 +4100,13 @@ class StatementProcessor:
             if target in user_ns and not is_value(user_ns[target], value_types):
                 record_shared_object_edges(edges, [target], [root for root in roots if root in user_ns])
         captured = {name: user_ns[name] for name in names if name in user_ns}
+        checked = self._share_checked
+        if not nothing_ran:
+            # Its own code may have run since (a loop's last ``next``, a
+            # ``with``'s exit): no check before stands for what follows.
+            self._share_checked = checked = None
+        elif not held and checked is not None and checked[0] == self._statements_started:
+            captured = {name: value for name, value in captured.items() if (name, id(value)) not in checked[1]}
         if not captured:
             return
         run = StatementRun(code=code, source_hash=statement_source_hash(code))

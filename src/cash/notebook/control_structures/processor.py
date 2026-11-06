@@ -814,6 +814,8 @@ class ControlStructureProcessor:
                 cost=metrics.get("execution_time", 0.0),
                 prior_lineages=self._lineages_before(code, metrics.get("stored_in_place", ())),
                 entry=entry,
+                # Run as the one statement just checked: nothing ran since.
+                nothing_ran=True,
             )
         elif update_lineage:
             self.statement_processor.in_loop.close_watch(code, ran=False)
