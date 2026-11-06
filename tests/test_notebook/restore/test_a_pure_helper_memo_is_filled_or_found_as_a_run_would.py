@@ -203,3 +203,79 @@ def test_a_helper_with_an_effect_is_not_found_into_a_hit(cash_magics, monkeypatc
     seen = _run(cash_magics, cells, [1])
     assert seen == [["COMPUTED"]], (seen, reasons)
     assert "already holds an answer the statement computed" in str(reasons[cells[-1]]), reasons
+
+
+# --- cash calls a helper's body only when it calls nothing of the user's ------
+
+GUARDED = (
+    "import functools\n\nLOG = []\n\n"
+    "def side(n):\n    LOG.append(n)\n    return n\n\n"
+    "@functools.cache\ndef call_arg(g):\n    return [g()]\n\n"
+    "@functools.cache\ndef call_method(o):\n    return [o.method()]\n\n"
+    "@functools.cache\ndef call_item(xs):\n    return [xs[0](1)]\n\n"
+    "@functools.cache\ndef call_global(n):\n    return [side(n)]\n\n"
+    "@functools.cache\ndef call_map(n):\n    return list(map(abs, range(n)))\n\n"
+    "@functools.cache\ndef builtins_only(n):\n    return [i for i in reversed(range(n))] + [sum(i for i in range(n))]\n"
+)
+
+
+def _guarded() -> dict:
+    ns: dict = {}
+    exec(compile(GUARDED, "<cash-guarded>", "exec"), ns)
+    return ns
+
+
+def test_a_helper_calling_anything_but_pure_builtins_is_never_called_by_cash():
+    ns = _guarded()
+    for name in ("call_arg", "call_method", "call_item", "call_global", "call_map"):
+        assert not helper_memos._calls_only_pure(ns[name]), name
+    assert helper_memos._calls_only_pure(ns["builtins_only"])
+    assert helper_memos._calls_only_pure(_seg())
+
+
+def _seg():
+    ns: dict = {}
+    exec(SEG, ns)
+    return ns["seg"]
+
+
+def test_an_answer_of_a_helper_calling_a_global_function_is_not_computed_into_a_hit():
+    """``call_global`` calls ``side``, a function of the user's: the
+    statement read ``call_global(3)``, which the memo lacks after a
+    restart; cash does not call it, and refuses the entry."""
+    ns = _guarded()
+    ns["call_global"](3)
+    before = helper_memos.watched(ns)
+    exec("r = call_global(3)[0] + call_global(4)[0]", ns)
+    records = helper_memos.used(before, ns=ns, changes=[])
+    record = next(r for r in records if r["where"] == ["ns", "call_global"])
+    assert not record["pure"]
+    ns["call_global"].cache_clear()
+    logged = list(ns["LOG"])
+    assert helper_memos.unfilled(records, ns) is not None
+    assert ns["LOG"] == logged
+
+
+def test_a_key_of_a_helper_calling_an_argument_already_held_is_not_found_into_a_hit():
+    """``call_arg(g)`` calls ``g``: a lookup finding the key the run
+    computed does not call the body to compare, and refuses the entry."""
+    ns = _guarded()
+    ns["calls"] = []
+    ns["g"] = int  # a builtin, so the key is one cash can write as a call
+    before = helper_memos.watched(ns)
+    exec("r = call_arg(g)", ns)
+    records = helper_memos.used(before, ns=ns, changes=[])
+    assert not any(r.get("pure") for r in records or () if r["where"] == ["ns", "call_arg"])
+    reason = helper_memos.unfilled(records, ns)
+    assert reason is not None and "already holds" in reason
+
+
+def test_a_key_of_a_helper_calling_a_method_already_held_is_not_found_into_a_hit():
+    ns = _guarded()
+    ns["o"] = "text"
+    before = helper_memos.watched(ns)
+    exec("r = call_method(o) if False else call_item((str,))", ns)
+    records = helper_memos.used(before, ns=ns, changes=[])
+    assert not any(r.get("pure") for r in records or ())
+    reason = helper_memos.unfilled(records, ns)
+    assert reason is not None and "already holds" in reason

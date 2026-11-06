@@ -602,6 +602,63 @@ def _pure(memo: Any) -> bool:
     return True
 
 
+#: The pure builtins that call a function they are given (``map(g, xs)``,
+#: ``sorted(xs, key=g)``): a helper calling one is not called by cash.
+_CALLING_BUILTINS = frozenset(("map", "filter", "sorted", "min", "max"))
+_CALL_OPS = frozenset(("CALL", "CALL_KW", "CALL_FUNCTION_EX"))
+
+
+def _calls_only_pure(memo: Any) -> bool:
+    """Whether every call the function under *memo* makes is of a pure
+    builtin (`_PURE_BUILTINS`) or of the memo itself, by its global name:
+    asked before cash calls a helper's body on its own (`_refill_read`,
+    `_held_as_computed`), where a call of an argument (``g()``), of what an
+    argument holds (``xs[0]()``) or of a function a local names would run
+    code a run did not run there. `_pure` already refuses attributes
+    (``o.method()``) and globals that are not builtins.
+
+    Read from the bytecode (3.11 on): a call of a global loads it with the
+    marker ``NULL``, and every other callee pushes ``PUSH_NULL``; the calls
+    must be exactly those of such globals, plus the generator expressions
+    the body makes and calls in place. A builtin that calls what it is
+    given (`_CALLING_BUILTINS`) does not qualify."""
+    import dis
+
+    from cash.decorator.closure_fold import iter_code_scopes
+
+    if sys.version_info < (3, 11) or not _pure(memo):
+        return False
+    fn = attribute_or(memo, "__wrapped__", None)
+    code = attribute_or(fn, "__code__", None)
+    if code is None:
+        return False
+    try:
+        for scope in iter_code_scopes(code):
+            calls = callees = made = 0
+            previous = None
+            for instr in dis.get_instructions(scope):
+                op = instr.opname
+                if op == "PUSH_NULL" or op.startswith("CALL_FUNCTION") and op != "CALL_FUNCTION_EX":
+                    return False
+                if op == "LOAD_GLOBAL" and "NULL" in instr.argrepr:
+                    if instr.argval in _CALLING_BUILTINS:
+                        return False
+                    callees += 1
+                elif op == "MAKE_FUNCTION":
+                    made += 1
+                elif op in _CALL_OPS:
+                    calls += 1
+                    if op == "CALL" and previous == "GET_ITER" and instr.arg == 0 and made:
+                        made -= 1
+                        callees += 1  # a generator expression, called in place
+                previous = op
+            if calls != callees:
+                return False
+    except Exception:  # noqa: BLE001 - code this cannot read: not called
+        return False
+    return True
+
+
 _UNSET = object()
 
 
@@ -902,9 +959,13 @@ def used(
                 # the memo holds, as the share check refuses an output
                 # holding one the memo held when it ran. A call cash
                 # caches is not walked so, and keeps to fixed answers.
-                fixed = changes is not None or all(_fixed(answer) for _, answer in items)
-                pure = calls is not None and fixed and _pure(memo)
-                out.append({"where": where, "items": digests, "pure": pure, "calls": calls if pure else None})
+                fixed = all(_fixed(answer) for _, answer in items)
+                strict = not fixed and changes is not None and calls is not None and _calls_only_pure(memo)
+                pure = calls is not None and ((fixed and _pure(memo)) or strict)
+                record = {"where": where, "items": digests, "pure": pure, "calls": calls if pure else None}
+                if strict:
+                    record["strict"] = True  # refilled only while `_calls_only_pure`
+                out.append(record)
     if why is not None:
         if changes is not None:
             changes.clear()
@@ -972,7 +1033,7 @@ def _change_of(
     # of them gone (a kernel restart, where a cell below had put it there)
     # computes it as a run needing it would, and asks for its digest
     # (`_refill_read`).
-    pure = not emptied and _pure(memo)
+    pure = not emptied and _calls_only_pure(memo)
     calls = _calls_of(memo, before_items) if before_digests and pure else None
     return {
         "emptied": emptied,
@@ -1433,7 +1494,11 @@ def unfilled(records: list[dict] | None, ns: Mapping[str, Any], *, refill: bool 
             continue
         if recorded <= set(now):
             continue
-        if record.get("pure") and record.get("calls") is not None and _pure(memo):
+        if (
+            record.get("pure")
+            and record.get("calls") is not None
+            and (_calls_only_pure(memo) if record.get("strict") else _pure(memo))
+        ):
             if not refill:
                 return f"the helper memo {label} lacks answers the statement read"
             # Fill it now as the run did, while what the helper reads is
@@ -1456,7 +1521,7 @@ def _refill_read(record: dict, memo: Any, refill: bool) -> list[str] | None:
     place. One it held and did not need is computed too, which nothing but
     the memo's counters can tell, and a statement reading them is never
     served."""
-    if not refill or not record.get("pure") or not record.get("calls") or not _pure(memo):
+    if not refill or not record.get("pure") or not record.get("calls") or not _calls_only_pure(memo):
         return None
     _refill(memo, record["calls"])
     return _item_digests(memo)
@@ -1504,7 +1569,7 @@ def _held_as_computed(record: dict, memo: Any, keys: set[str]) -> bool:
     be the one the run left (`put_back`, which has it): the run left it as
     computed, and did not change it in place, which a run here would do to
     the held one."""
-    if not record.get("pure") or not _pure(memo):
+    if not record.get("pure") or not _calls_only_pure(memo):
         return False
     fn = attribute_or(memo, "__wrapped__", None)
     if fn is None:
