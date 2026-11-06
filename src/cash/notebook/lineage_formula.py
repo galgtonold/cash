@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import ast
 import builtins
+import functools
 import hashlib
 import logging
 import os
@@ -26,7 +27,7 @@ from typing import Any, Callable, Iterable
 
 from cash._user_attrs import attribute_or, has_attribute, instance_of
 
-from .._memo import CODE_OBJECTS, LruMemo
+from .._memo import CODE_OBJECTS, NOTEBOOK_STATEMENTS, LruMemo
 from ..analysis.ast_util import parse_cached, walk_tree
 from ..analysis.mutations import repeatable_setting_receiver
 from ..analysis.purity_analyzer import get_analyzer
@@ -857,9 +858,17 @@ def statement_environment_reads(
     return _written_environment_reads(code, user_ns) | callee_environment_reads(code, user_ns, reach)
 
 
+@functools.lru_cache(maxsize=NOTEBOOK_STATEMENTS)
+def _names_the_environment(code: str) -> bool:
+    """Whether *code*'s text holds an `ENVIRONMENT_TEXT_MARKERS` marker,
+    once per text: the upstream scan asks it of every cell above, on every
+    check."""
+    return any(marker in code for marker in ENVIRONMENT_TEXT_MARKERS)
+
+
 def _written_environment_reads(code: str, user_ns: Mapping[str, Any] | None) -> set[tuple[str, str]]:
     """The environment reads written in *code* itself."""
-    if not code or not any(marker in code for marker in ENVIRONMENT_TEXT_MARKERS):
+    if not code or not _names_the_environment(code):
         return set()
     tree = parse_cached(code)
     if tree is None:
