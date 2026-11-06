@@ -75,6 +75,7 @@ def looks(monkeypatch, tmp_path) -> collections.Counter:
         def call(path, *args, **kwargs):
             if os.fspath(path).startswith(root) or not os.path.isabs(os.fspath(path)):
                 seen[kind] += 1
+                seen.paths.append((kind, os.fspath(path)))  # type: ignore[attr-defined]
             return real(path, *args, **kwargs)
 
         return call
@@ -86,6 +87,7 @@ def looks(monkeypatch, tmp_path) -> collections.Counter:
         monkeypatch.setattr(watch, "current", counting("current", watch.current))
 
     seen.start = start  # type: ignore[attr-defined]
+    seen.paths = []  # type: ignore[attr-defined]
     return seen
 
 
@@ -163,5 +165,7 @@ def test_a_change_in_one_folder_looks_again_only_at_its_files(recorded, looks, t
     assert looks["stat"] + looks["lstat"] <= FOLDERS + 2 * FILES, looks
 
     looks.clear()
+    looks.paths.clear()  # type: ignore[attr-defined]
     assert _ask(recorded)
-    assert looks["stat"] <= FOLDERS and looks["lstat"] == 0 and looks["current"] == 0, looks
+    # Which paths were looked at, so a failure on a platform says where.
+    assert looks["stat"] <= FOLDERS and looks["lstat"] == 0 and looks["current"] == 0, (looks, looks.paths[:12])
