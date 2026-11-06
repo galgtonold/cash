@@ -12,7 +12,10 @@ kernel32) and the listing stats Windows takes of a crowded folder:
   the held copy, and looked for a None among them, twice a cell);
 * a folder Windows reports modified in place, as it does after the
   listing a check took of it, has none of its files looked at again (each
-  listing brought on the next report, and every cell checked all of them).
+  listing brought on the next report, and every cell checked all of them);
+* the file component of statements over the frame is not built again from
+  all 50,000 files when a file beside the CSV is written, or the notebook
+  saved there: only that folder's files are looked at.
 """
 
 from __future__ import annotations
@@ -179,3 +182,22 @@ def test_folders_reported_modified_after_their_listing_have_no_file_looked_at(pr
         _next_run()
 
     assert looks["stat"] + looks["lstat"] + looks["current"] <= 3 * FEW, looks
+
+
+def test_a_file_written_beside_the_csv_has_only_its_folder_looked_at_again(project, looks, _runs):
+    backend = _runs
+    paths = set(_reviews(project)) | {"movie_data.csv", str(project / "movie_data.csv")}
+    component = run_memo.file_component_this_run(paths)
+    _next_run()
+    assert run_memo.file_component_this_run(paths) == component
+    _next_run()
+    assert run_memo._COVERED_COMPONENTS, "no component was held: the count below would prove nothing"
+    looks.start()
+
+    (project / "notes.ipynb").write_text("{}", encoding="utf-8")  # the notebook saved beside the CSV
+    backend.report((1, project / "notes.ipynb"), (3, project / "notes.ipynb"))
+    assert run_memo.file_component_this_run(paths) == component
+    _next_run()
+    assert run_memo.file_component_this_run(paths) == component
+
+    assert looks["stat"] + looks["lstat"] + looks["current"] <= 2 * FEW, looks
