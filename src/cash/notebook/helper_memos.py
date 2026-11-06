@@ -603,6 +603,63 @@ def _pure(memo: Any) -> bool:
     return True
 
 
+#: The pure builtins that call a function they are given (``map(g, xs)``,
+#: ``sorted(xs, key=g)``): a helper calling one is not called by cash.
+_CALLING_BUILTINS = frozenset(("map", "filter", "sorted", "min", "max"))
+_CALL_OPS = frozenset(("CALL", "CALL_KW", "CALL_FUNCTION_EX"))
+
+
+def _calls_only_pure(memo: Any) -> bool:
+    """Whether every call the function under *memo* makes is of a pure
+    builtin (`_PURE_BUILTINS`) or of the memo itself, by its global name:
+    asked before cash calls a helper's body on its own (`_refill_read`,
+    `_held_as_computed`), where a call of an argument (``g()``), of what an
+    argument holds (``xs[0]()``) or of a function a local names would run
+    code a run did not run there. `_pure` already refuses attributes
+    (``o.method()``) and globals that are not builtins.
+
+    Read from the bytecode (3.11 on): a call of a global loads it with the
+    marker ``NULL``, and every other callee pushes ``PUSH_NULL``; the calls
+    must be exactly those of such globals, plus the generator expressions
+    the body makes and calls in place. A builtin that calls what it is
+    given (`_CALLING_BUILTINS`) does not qualify."""
+    import dis
+
+    from cash.decorator.closure_fold import iter_code_scopes
+
+    if sys.version_info < (3, 11) or not _pure(memo):
+        return False
+    fn = attribute_or(memo, "__wrapped__", None)
+    code = attribute_or(fn, "__code__", None)
+    if code is None:
+        return False
+    try:
+        for scope in iter_code_scopes(code):
+            calls = callees = made = 0
+            previous = None
+            for instr in dis.get_instructions(scope):
+                op = instr.opname
+                if op == "PUSH_NULL" or op.startswith("CALL_FUNCTION") and op != "CALL_FUNCTION_EX":
+                    return False
+                if op == "LOAD_GLOBAL" and "NULL" in instr.argrepr:
+                    if instr.argval in _CALLING_BUILTINS:
+                        return False
+                    callees += 1
+                elif op == "MAKE_FUNCTION":
+                    made += 1
+                elif op in _CALL_OPS:
+                    calls += 1
+                    if op == "CALL" and previous == "GET_ITER" and instr.arg == 0 and made:
+                        made -= 1
+                        callees += 1  # a generator expression, called in place
+                previous = op
+            if calls != callees:
+                return False
+    except Exception:  # noqa: BLE001 - code this cannot read: not called
+        return False
+    return True
+
+
 _UNSET = object()
 
 
@@ -698,7 +755,33 @@ def _held(memo: Any) -> tuple[frozenset[tuple[int, int]], list[tuple[Any, Any]],
     items = _items(memo)
     if items is None or len(items) > MAX_KEYED:
         return None
-    return frozenset((id(key), id(answer)) for key, answer in items), items, _answers_seen.get(memo)
+    return frozenset((id(key), id(answer)) for key, answer in items), items, _seen_now(memo, items)
+
+
+def _seen_now(memo: Any, items: list[tuple[Any, Any]]) -> dict[int, tuple[Any, str | bytes]] | None:
+    """*memo*'s answers as `_answers_seen` remembers them, with each one it
+    does not (put there by code cash did not watch: a statement that runs
+    every time, a call it does not cache) taken as it is now, before the run
+    that is about to start. What the run then reads of it is recorded by
+    its digest as it is now (`_change_of`), and a change the run makes to
+    it in place is seen against this one: unseen, the run could not be
+    stored ("It filled the helper memo ...")."""
+    seen = _answers_seen.get(memo)
+    missing = [
+        answer
+        for _, answer in items
+        if not _fixed(answer) and ((known := (seen or {}).get(id(answer))) is None or known[0] is not answer)
+    ]
+    if not missing:
+        return seen
+    taken = dict(seen or {})
+    for answer in missing:
+        try:
+            taken[id(answer)] = (answer, _answer_digest(answer))
+        except Exception:  # noqa: BLE001 - an answer with no digest: left unseen
+            continue
+    _answers_seen[memo] = taken
+    return taken
 
 
 def _label(where: list[str]) -> str:
@@ -829,8 +912,8 @@ def used(
                     {
                         "where": where,
                         "items": change["items"],
-                        "pure": False,
-                        "calls": None,
+                        "pure": bool(change.get("pure")),
+                        "calls": change.get("calls") or None,
                         "keys": change["keys"],
                         "emptied": change["emptied"] or None,
                         "cleared": change.get("cleared") or None,
@@ -872,8 +955,18 @@ def used(
                 why = f"It read the helper memo {label}, whose answers cash cannot digest"
             else:
                 calls = _calls_of(memo, items)
-                pure = calls is not None and all(_fixed(answer) for _, answer in items) and _pure(memo)
-                out.append({"where": where, "items": digests, "pure": pure, "calls": calls if pure else None})
+                # A statement's answers may be lists (a helper building
+                # index pairs): computed again, each is a new object only
+                # the memo holds, as the share check refuses an output
+                # holding one the memo held when it ran. A call cash
+                # caches is not walked so, and keeps to fixed answers.
+                fixed = all(_fixed(answer) for _, answer in items)
+                strict = not fixed and changes is not None and calls is not None and _calls_only_pure(memo)
+                pure = calls is not None and ((fixed and _pure(memo)) or strict)
+                record = {"where": where, "items": digests, "pure": pure, "calls": calls if pure else None}
+                if strict:
+                    record["strict"] = True  # refilled only while `_calls_only_pure`
+                out.append(record)
     if why is not None:
         if changes is not None:
             changes.clear()
@@ -936,12 +1029,21 @@ def _change_of(
         keys = [_change_key_digest(key) for key, _ in added]
     except Exception:  # noqa: BLE001 - a key or answer with no digest
         return None
+    # The calls that compute the answers it held before again, for a helper
+    # that provably computes from its arguments alone: a lookup finding one
+    # of them gone (a kernel restart, where a cell below had put it there)
+    # computes it as a run needing it would, and asks for its digest
+    # (`_refill_read`).
+    pure = not emptied and _calls_only_pure(memo)
+    calls = _calls_of(memo, before_items) if before_digests and pure else None
     return {
         "emptied": emptied,
         "items": before_digests,
         "keys": keys,
         "pairs": list(added),
         "unportable": not all(_portable_key(key) for key, _ in added),
+        "pure": pure,
+        "calls": calls,
     }
 
 
@@ -1385,13 +1487,19 @@ def unfilled(records: list[dict] | None, ns: Mapping[str, Any], *, refill: bool 
         if now is None:
             return f"the helper memo {label} does not hold the answers the statement read"
         if record.get("delta") is not None:
-            why = _change_refused(record, memo, label, recorded, set(now))
+            if not recorded <= set(now) and not record.get("emptied"):
+                now = _refill_read(record, memo, refill) or now
+            why = _change_refused(record, memo, label, recorded, set(now), refill=refill)
             if why is not None:
                 return why
             continue
         if recorded <= set(now):
             continue
-        if record.get("pure") and record.get("calls") is not None and _pure(memo):
+        if (
+            record.get("pure")
+            and record.get("calls") is not None
+            and (_calls_only_pure(memo) if record.get("strict") else _pure(memo))
+        ):
             if not refill:
                 return f"the helper memo {label} lacks answers the statement read"
             # Fill it now as the run did, while what the helper reads is
@@ -1404,7 +1512,25 @@ def unfilled(records: list[dict] | None, ns: Mapping[str, Any], *, refill: bool 
     return None
 
 
-def _change_refused(record: dict, memo: Any, label: str, recorded: set[str], now: set[str]) -> str | None:
+def _refill_read(record: dict, memo: Any, refill: bool) -> list[str] | None:
+    """For a change record of a helper that provably computes from its
+    arguments alone (``"pure"``, asked again now): call it for each answer
+    the run read that the memo lacks, and give the digests the memo holds
+    then; None when nothing was called. The run found those answers there;
+    a run here would compute each one it needs, the same value, and the
+    digest asked for then says the answer it found was not one changed in
+    place. One it held and did not need is computed too, which nothing but
+    the memo's counters can tell, and a statement reading them is never
+    served."""
+    if not refill or not record.get("pure") or not record.get("calls") or not _calls_only_pure(memo):
+        return None
+    _refill(memo, record["calls"])
+    return _item_digests(memo)
+
+
+def _change_refused(
+    record: dict, memo: Any, label: str, recorded: set[str], now: set[str], *, refill: bool = True
+) -> str | None:
     """Why the change a run made to *memo* (a record `used` wrote with
     *changes*) cannot be put back here, or None: the memo must be one a hit
     can fill, hold what it held when the run began (exactly, once the run
@@ -1428,8 +1554,42 @@ def _change_refused(record: dict, memo: Any, label: str, recorded: set[str], now
     if keys is None:
         return f"the helper memo {label} holds keys cash cannot digest"
     if not keys.isdisjoint(record.get("keys") or ()):
+        if refill and _held_as_computed(record, memo, keys & set(record.get("keys") or ())):
+            return None
         return f"the helper memo {label} already holds an answer the statement computed"
     return None
+
+
+def _held_as_computed(record: dict, memo: Any, keys: set[str]) -> bool:
+    """Whether a run here, finding in *memo* the keys it computed that the
+    memo holds now (*keys*, the digests of those it holds), could do what
+    the stored run did: the helper provably computes from its arguments
+    alone (``"pure"``, asked again now), so finding an answer instead of
+    computing it runs nothing else, and its body, called for each such key
+    now, gives the answer the memo holds. The hit then asks that answer to
+    be the one the run left (`put_back`, which has it): the run left it as
+    computed, and did not change it in place, which a run here would do to
+    the held one."""
+    if not record.get("pure") or not _calls_only_pure(memo):
+        return False
+    fn = attribute_or(memo, "__wrapped__", None)
+    if fn is None:
+        return False
+    wanted = keys & set(record.get("keys") or ())
+    held = [(key, answer) for key, answer in _items(memo) or () if _change_key_digest(key) in wanted]
+    calls = _calls_of(memo, held)
+    if calls is None or len(held) != len(wanted):
+        return False
+    import ast
+
+    for (_, answer), (_, text) in zip(held, calls, strict=True):
+        try:
+            args, kwargs = ast.literal_eval(text)
+            if compute_hash(fn(*args, **kwargs)) != compute_hash(answer):
+                return False
+        except Exception:  # noqa: BLE001 - it did not answer as the run's did
+            return False
+    return True
 
 
 #: ``memo -> (the keys it held, their digests)``: digested again when one
@@ -1497,12 +1657,19 @@ def _live_key(key: Any) -> Any:
     return key
 
 
-def put_back(records: list[dict] | None, changes: Any, ns: Mapping[str, Any]) -> Any:
+def put_back(records: list[dict] | None, changes: Any, ns: Mapping[str, Any], outputs: Any = None) -> Any:
     """Prepare to put the changes a served entry carries (`used` with
     *changes*) into the live memos: a function that does it, called once the
     outputs are restored, or a string saying why it cannot be done (the
     entry is then not served). Each key comes back as the run's: its digest
-    is the one recorded."""
+    is the one recorded.
+
+    A key the memo holds already (one the lookup let through,
+    `_held_as_computed`) keeps the answer it holds, as a run finding it
+    leaves it. *outputs*, the entry's outputs as stored with the changes:
+    when they hold such an answer of the run's that can change in place,
+    the run's outputs would hold the memo's own, and the entry is not
+    served."""
     plans: list[tuple[Any, bool, Any]] = []
     for record in records or ():
         index = record.get("delta")
@@ -1532,7 +1699,15 @@ def put_back(records: list[dict] | None, changes: Any, ns: Mapping[str, Any]) ->
             return f"the helper memo {label} is not one cash can put answers into"
         if not same:
             return f"the keys it put into the helper memo {label} come back as other keys"
-        plans.append((memo, bool(record.get("emptied")), pairs))
+        emptied = bool(record.get("emptied"))
+        if not emptied:
+            cache = _answers_dict(memo) or {}
+            kept = [(cache[key], answer) for key, answer in pairs if key in cache]
+            if kept:
+                why = _kept_refused(record, kept, outputs)
+                if why is not None:
+                    return why.format(label=label)
+        plans.append((memo, emptied, pairs))
     if not plans:
         return lambda: None
 
@@ -1543,7 +1718,11 @@ def put_back(records: list[dict] | None, changes: Any, ns: Mapping[str, Any]) ->
             cache = _answers_dict(memo)
             if cache is None:
                 continue
-            cache.update(pairs)
+            if emptied:
+                cache.update(pairs)
+            else:
+                for key, answer in pairs.items() if isinstance(pairs, dict) else pairs:
+                    cache.setdefault(key, answer)
             # Seen as the run left them: the next statement reading one
             # compares with these.
             items = _items(memo)
@@ -1553,6 +1732,63 @@ def put_back(records: list[dict] | None, changes: Any, ns: Mapping[str, Any]) ->
                 _answers_seen.pop(memo, None)
 
     return apply
+
+
+def _kept_refused(record: dict, kept: list[tuple[Any, Any]], outputs: Any) -> str | None:
+    """Why a hit cannot leave the memo's own answers, *kept* as ``(held, the
+    run's)`` for the keys the run computed that the memo holds (the lookup
+    let them through, `_held_as_computed`), or None: each must be the
+    answer the run left, and the outputs must not hold the run's when it
+    can change in place, as they would hold the memo's own after a run."""
+    if not record.get("pure"):
+        return "the helper memo {label} already holds an answer the statement computed"
+    try:
+        if any(compute_hash(held) != compute_hash(answer) for held, answer in kept):
+            return "the helper memo {label} holds another answer than the statement computed"
+    except Exception:  # noqa: BLE001 - an answer with no digest
+        return "the helper memo {label} holds an answer cash cannot digest"
+    mutable = [answer for _, answer in kept if not _fixed(answer)]
+    if mutable and _reaches(outputs, mutable):
+        return "the helper memo {label} already holds an answer the statement computed, which its outputs hold"
+    return None
+
+
+#: The most objects `_reaches` looks through before it takes the outputs as
+#: holding what it looks for.
+_REACH_LIMIT = 200_000
+
+
+def _reaches(outputs: Any, targets: list[Any]) -> bool:
+    """Whether *outputs* hold any of *targets*, or may (none given, or more
+    than `_REACH_LIMIT` objects to look through). A module, and a
+    function's globals, are not looked through: a target there is held by
+    the namespace, not by an output."""
+    if outputs is None:
+        return True
+    wanted = {id(target) for target in targets}
+    seen: set[int] = set()
+    todo = [outputs]
+    while todo:
+        obj = todo.pop()
+        if id(obj) in wanted:
+            return True
+        if id(obj) in seen or type(obj) in _SCALAR_TYPES:
+            continue
+        seen.add(id(obj))
+        if len(seen) > _REACH_LIMIT:
+            return True
+        kind = type(obj)
+        if kind is types.ModuleType:
+            continue  # what a module holds is no output's
+        try:
+            if kind is types.FunctionType:
+                # Not its globals: the namespace, which holds the memo.
+                todo.extend((obj.__closure__, obj.__defaults__, obj.__kwdefaults__, obj.__dict__))
+                continue
+            todo.extend(get_referents(obj))
+        except Exception:  # noqa: BLE001 - an object that cannot be looked through
+            return True
+    return False
 
 
 @contextlib.contextmanager

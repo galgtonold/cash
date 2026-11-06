@@ -262,7 +262,7 @@ state in the notebook, or pass it in and return it.
 
 ### A helper memoised with `functools.cache`
 
-<!-- claim: cash/notebook/helper_memos.py:unfilled @529d38f0, cash/notebook/helper_memos.py:used @21c4d2f1, cash/notebook/helper_memos.py:clears @bc3fe4e5, cash/notebook/helper_memos.py:MAX_KEYED == 4096, cash/notebook/helper_memos.py:watching_clears @a5f41663, cash/notebook/helper_memos.py:_cleared_change @db1300a1, cash/notebook/helper_memos.py:_plain_keys @b1c572b1 -->
+<!-- claim: cash/notebook/helper_memos.py:unfilled @2fec4958, cash/notebook/helper_memos.py:used @fb98566e, cash/notebook/helper_memos.py:clears @bc3fe4e5, cash/notebook/helper_memos.py:MAX_KEYED == 4096, cash/notebook/helper_memos.py:watching_clears @a5f41663, cash/notebook/helper_memos.py:_cleared_change @db1300a1, cash/notebook/helper_memos.py:_plain_keys @b1c572b1 -->
 A statement served from the cache does not run, so a `@functools.cache` or
 `@functools.lru_cache` helper it calls keeps what it held. A run leaves the
 answers in it, and a later call of the helper uses them without running its
@@ -284,6 +284,21 @@ body. So cash follows these rules:
   differs: `h.cache_info()` counts only those calls, not the hits the
   statement made, so a statement that names `cache_info` reruns every
   time.
+  A helper that returns a list or another value that can change in place
+  (`subsegment_indexes(n)` building index pairs) is held to the same
+  rules where a statement only read its answers, and to the rules below
+  where the statement filled it, with two more, which cash takes only
+  when every call the helper makes is of such a builtin or of itself (not
+  `g()` of an argument, `xs[0]()`, or `map` and `sorted`, which call what
+  they are given), as cash then calls the helper's body itself: an answer the run found
+  that the memo lacks at the lookup (after a restart, where a cell below
+  had put it there) is computed by calling the helper, and the entry is
+  served when that gives the answer the run found; and a key the run
+  computed that the memo already holds (the cells run again in the same
+  kernel) does not stop the hit when the memo holds the answer the run
+  left and the helper gives that answer again. The memo keeps its own
+  answer then, as a run finding it would, so the statement runs when an
+  output holds the answer.
 - Any other helper: a statement whose run made an unbounded memo
   (`functools.cache`, `lru_cache(maxsize=None)`) compute answers is stored
   with the key and answer pairs it put in, in one pickle with its outputs.
@@ -334,9 +349,12 @@ body. So cash follows these rules:
   around it is stored as above.
 - One that only read answers already there is served only while the memo
   holds every key and answer it read, compared by value. After a kernel
-  restart it runs until the memo is filled again, and the first statement
-  to read an answer that can change in place after that runs once more,
-  so cash has seen the answer as it was. As above, `cache_info()` then
+  restart it runs until the memo is filled again. An answer that can
+  change in place and that code cash does not watch put there (a cell
+  that runs every time, such as one drawing with pyplot) is taken as it
+  is just before the next statement calling the helper runs, so that
+  statement is stored, keyed on the answer as it read it, and one that
+  changes the answer in place runs every time. As above, `cache_info()` then
   counts fewer hits than a run would, on one of your classes too
   (`Model.lookup.cache_info()`).
 
