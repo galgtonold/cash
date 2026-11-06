@@ -28,8 +28,11 @@
  *       (sys.modules[module], module.__dict__[name]) as watched dict keys;
  *     - copyreg.dispatch_table[type] and copyreg's extension registry as
  *       watched keys;
- *     - tuples, frozensets and atoms (None, bool, int, float, str, bytes)
- *       are immutable: walked through, not recorded.
+ *     - tuples, frozensets and atoms (None, bool, int, float, str, bytes,
+ *       and a naive datetime, date, time or timedelta) are immutable:
+ *       walked through, not recorded. A datetime's class is named by the
+ *       pickle: how it is found by name, and copyreg.dispatch_table at it,
+ *       are recorded as a plain class's are.
  *   A value holding anything else (an array, a C object, a class with its
  *   own pickling, ...) is not armed.
  *
@@ -65,6 +68,7 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include <structmember.h>
+#include <datetime.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -110,7 +114,7 @@ typedef struct { uintptr_t addr; uint32_t root; uint32_t next; } WNode;
 typedef struct { WNode n; PyObject *key; /* borrowed: the root holds it in refs */ } KNode;
 
 /* what an atom a record holds reads as (`atom_print`) */
-enum { AK_FLOAT = 1, AK_INT = 2, AK_NEGINT = 3, AK_STR = 4, AK_BYTES = 5 };
+enum { AK_FLOAT = 1, AK_INT = 2, AK_NEGINT = 3, AK_STR = 4, AK_BYTES = 5, AK_DT = 6 };
 
 typedef struct {
     uintptr_t addr;
@@ -874,6 +878,7 @@ typedef struct {
     int saw_instances;
     int saw_globals;
     int plain_viewdict;    /* an instance dict walked with its views left out is also reached as a plain dict */
+    int dt_named;          /* bit i: the datetime class `dt_types[i]` was recorded (`dt_class`) */
 } Walk;
 
 static int root_push_node(Walk *W, uintptr_t addr, PyObject *key) {
@@ -1031,15 +1036,61 @@ static int func_value(Walk *W, PyFunctionObject *f) {
     return global_ref(W, (PyObject *)f, mn, qn);
 }
 
+/* datetime.datetime, .date, .time, .timedelta (`exec_module`), each with
+   the module and qualified name pickle finds it by; NULL without them */
+static PyTypeObject *dt_types[4];
+static PyObject *dt_mods[4], *dt_quals[4];
+
+/* which of `dt_types` t is, for a naive one (no tzinfo: a tzinfo is an
+   object of its own, perhaps the user's); -1 for anything else */
+static inline int dt_index(PyObject *o, PyTypeObject *t) {
+    if (t == dt_types[0]) return _PyDateTime_HAS_TZINFO(o) ? -1 : 0;
+    if (t == dt_types[1]) return 1;
+    if (t == dt_types[2]) return _PyDateTime_HAS_TZINFO(o) ? -1 : 2;
+    if (t == dt_types[3]) return 3;
+    return -1;
+}
+
 static inline int is_atom(PyObject *o, PyTypeObject *t) {
     return o == Py_None || t == &PyLong_Type || t == &PyUnicode_Type || t == &PyFloat_Type ||
-           t == &PyBytes_Type || t == &PyBool_Type;
+           t == &PyBytes_Type || t == &PyBool_Type || (dt_types[0] && dt_index(o, t) >= 0);
 }
 
 static size_t atom_size(PyObject *o, PyTypeObject *t) {
     if (t == &PyUnicode_Type) return 40 + (size_t)PyUnicode_GET_LENGTH(o) * PyUnicode_KIND(o);
     if (t == &PyBytes_Type) return 33 + (size_t)PyBytes_GET_SIZE(o);
+    if (dt_types[0] && dt_index(o, t) >= 0) return (size_t)t->tp_basicsize;
     return 24;
+}
+
+static int global_ref(Walk *W, PyObject *obj, PyObject *modname, PyObject *qualname);
+
+/* a naive datetime pickles as its class, named, and its bytes: what finding
+   the class by name reads, and copyreg's reducer table at it, recorded once
+   per walk. Its class is a static type, which nothing can change. 0 ok,
+   1 not provable (stop set), -1 error */
+static int dt_class(Walk *W, PyObject *o, PyTypeObject *t) {
+    int i = dt_index(o, t);
+    if (i < 0 || (W->dt_named & (1 << i))) return 0;
+    int g = global_ref(W, (PyObject *)t, dt_mods[i], dt_quals[i]);
+    if (g) return g;
+    if (dispatch_table) {
+        if (root_push_node(W, (uintptr_t)dispatch_table, (PyObject *)t) < 0) return -1;
+        if (PyDict_Watch(dict_wid, dispatch_table) < 0) return -1;
+        PyObject *reg = PyDict_GetItemWithError(dispatch_table, (PyObject *)t);
+        if (reg) { stop(W, A_INELIGIBLE, (PyObject *)t); return 1; }
+        if (PyErr_Occurred()) return -1;
+    }
+    W->dt_named |= 1 << i;
+    return 0;
+}
+
+/* an atom met in a walk: its size counted, a datetime's class recorded
+   (`dt_class`). 0 ok, 1 stop, -1 error */
+static inline int atom_seen(Walk *W, PyObject *o, PyTypeObject *t) {
+    W->content += atom_size(o, t);
+    if (!dt_types[0] || t == &PyFloat_Type || t == &PyLong_Type || t == &PyUnicode_Type) return 0;
+    return dt_class(W, o, t);
 }
 
 /* an int's print beyond what `atom_print` reads in place */
@@ -1087,7 +1138,30 @@ static inline int atom_print(PyObject *x, PyTypeObject *t, uint64_t *fp, uint64_
 #endif
         return int_print(x, fp);
     }
-    if (t != &PyUnicode_Type && t != &PyBytes_Type) return 0;
+    if (t != &PyUnicode_Type && t != &PyBytes_Type) {
+        int i = dt_types[0] ? dt_index(x, t) : -1;
+        if (i < 0) return 0;
+        /* exact: every byte it pickles from, and which class */
+        uint8_t b[16] = {0};
+        if (i == 0) {
+            memcpy(b, ((PyDateTime_DateTime *)x)->data, _PyDateTime_DATETIME_DATASIZE);
+            b[10] = PyDateTime_DATE_GET_FOLD(x);
+        } else if (i == 1) {
+            memcpy(b, ((PyDateTime_Date *)x)->data, _PyDateTime_DATE_DATASIZE);
+        } else if (i == 2) {
+            memcpy(b, ((PyDateTime_Time *)x)->data, _PyDateTime_TIME_DATASIZE);
+            b[6] = PyDateTime_TIME_GET_FOLD(x);
+        } else {
+            int v[3] = {PyDateTime_DELTA_GET_DAYS(x), PyDateTime_DELTA_GET_SECONDS(x),
+                        PyDateTime_DELTA_GET_MICROSECONDS(x)};
+            memcpy(b, v, sizeof v);
+        }
+        b[15] = (uint8_t)(i + 1);
+        memcpy(fp, b, 8);
+        memcpy(&ext[0], b + 8, 8);
+        ext[1] = 0;
+        return AK_DT;
+    }
     if (_Py_IsImmortal(x)) return 0;
     Py_hash_t h = t == &PyUnicode_Type ? ((PyASCIIObject *)x)->hash : -1;   /* cached */
     if (h == -1) h = PyObject_Hash(x);
@@ -1123,7 +1197,8 @@ static inline int atom_print(PyObject *x, PyTypeObject *t, uint64_t *fp, uint64_
 static int record_item(Walk *W, PyObject *x) {
     PyTypeObject *xt = Py_TYPE(x);
     if (!is_atom(x, xt)) return push(x);
-    W->content += atom_size(x, xt);
+    int seen = atom_seen(W, x, xt);
+    if (seen) return seen < 0 ? -1 : 1;
     uint64_t fp, ext[2];
     int k = atom_print(x, xt, &fp, ext);
     if (k == 0) return 0;
@@ -1245,6 +1320,7 @@ static uint32_t nkp = 0;
 /* an instance's dict when its key leaves the views in *views* out: watched,
    its other values walked, each view only recorded (`view_record`) */
 static int dict_with_views(Walk *W, PyObject *d, PyObject *views) {
+    int rc;
     int added = aset_add(&visited, (uintptr_t)d);
     if (added < 0) return -1;
     if (added == 0) { W->plain_viewdict = 1; return 0; }   /* walked already, all of it as content */
@@ -1256,7 +1332,7 @@ static int dict_with_views(Walk *W, PyObject *d, PyObject *views) {
     Py_ssize_t pos = 0; PyObject *k, *v;
     while (PyDict_Next(d, &pos, &k, &v)) {
         PyTypeObject *kt = Py_TYPE(k), *vt = Py_TYPE(v);
-        if (is_atom(k, kt)) W->content += atom_size(k, kt); else if (push(k) < 0) return -1;
+        if (is_atom(k, kt)) { if ((rc = atom_seen(W, k, kt)) != 0) return rc; } else if (push(k) < 0) return -1;
         int is_view = PyUnicode_CheckExact(k) ? PySet_Contains(views, k) : 0;
         if (is_view < 0) return -1;
         if (is_view) {
@@ -1266,7 +1342,7 @@ static int dict_with_views(Walk *W, PyObject *d, PyObject *views) {
             if (r) return r;
             continue;
         }
-        if (is_atom(v, vt)) W->content += atom_size(v, vt); else if (push(v) < 0) return -1;
+        if (is_atom(v, vt)) { if ((rc = atom_seen(W, v, vt)) != 0) return rc; } else if (push(v) < 0) return -1;
     }
     return 0;
 }
@@ -1275,6 +1351,7 @@ static int dict_with_views(Walk *W, PyObject *d, PyObject *views) {
 static int visit(Walk *W, PyObject *o) {
     Root *R = W->R;
     PyTypeObject *t = Py_TYPE(o);
+    int rc;
     if (t == &PyDict_Type) {
         W->content += 64 + (size_t)PyDict_GET_SIZE(o) * 24;
         if (root_push_node(W, (uintptr_t)o, NULL) < 0) return -1;
@@ -1282,8 +1359,8 @@ static int visit(Walk *W, PyObject *o) {
         Py_ssize_t pos = 0; PyObject *k, *v;
         while (PyDict_Next(o, &pos, &k, &v)) {
             PyTypeObject *kt = Py_TYPE(k), *vt = Py_TYPE(v);
-            if (is_atom(k, kt)) W->content += atom_size(k, kt); else if (push(k) < 0) return -1;
-            if (is_atom(v, vt)) W->content += atom_size(v, vt); else if (push(v) < 0) return -1;
+            if (is_atom(k, kt)) { if ((rc = atom_seen(W, k, kt)) != 0) return rc; } else if (push(k) < 0) return -1;
+            if (is_atom(v, vt)) { if ((rc = atom_seen(W, v, vt)) != 0) return rc; } else if (push(v) < 0) return -1;
         }
         return 0;
     }
@@ -1299,7 +1376,7 @@ static int visit(Walk *W, PyObject *o) {
         if (n) memcpy(&R->snap[R->nsnap], items, (size_t)n * sizeof(PyObject *));
         R->nsnap += (size_t)n;
         for (Py_ssize_t i = 0; i < n; i++)
-            if (record_item(W, ((PyListObject *)o)->ob_item[i]) < 0) return -1;
+            if ((rc = record_item(W, ((PyListObject *)o)->ob_item[i])) != 0) return rc;
         if (R->natoms != printed) R->snap[at] |= R_PRINTS;
         return 0;
     }
@@ -1315,7 +1392,7 @@ static int visit(Walk *W, PyObject *o) {
         R->snap[R->nsnap++] = (uintptr_t)o;
         for (Py_ssize_t i = 0; i < n; i++) R->snap[R->nsnap++] = (uintptr_t)PyTuple_GET_ITEM(o, i);
         for (Py_ssize_t i = 0; i < n; i++)
-            if (record_item(W, PyTuple_GET_ITEM(o, i)) < 0) return -1;
+            if ((rc = record_item(W, PyTuple_GET_ITEM(o, i))) != 0) return rc;
         if (R->natoms != printed) R->snap[at] |= R_PRINTS;
         return 0;
     }
@@ -1334,7 +1411,7 @@ static int visit(Walk *W, PyObject *o) {
             if (!x || x == set_dummy) continue;
             seen++;
             R->snap[R->nsnap++] = (uintptr_t)x;
-            if (record_item(W, x) < 0) return -1;
+            if ((rc = record_item(W, x)) != 0) return rc;
         }
         if (seen != n) { stop(W, A_INELIGIBLE, o); return 1; }
         if (R->natoms != printed) R->snap[at] |= R_PRINTS;
@@ -1393,7 +1470,7 @@ static int visit(Walk *W, PyObject *o) {
     for (Py_ssize_t i = 0; i < ns; i++) {
         PyObject *x = *(PyObject **)((char *)o + ti->offsets[i]);
         R->snap[R->nsnap++] = (uintptr_t)x;
-        if (x && record_item(W, x) < 0) { Py_XDECREF(d); return -1; }
+        if (x && (rc = record_item(W, x)) != 0) { Py_XDECREF(d); return rc; }
     }
     if (R->natoms != printed) R->snap[at] |= R_PRINTS;
     if (d && ti->views && views_of) {
@@ -1908,7 +1985,7 @@ static PyObject *arm_value(PyObject *o, PyObject *anchors, PyObject **kept) {
     R->last_used = ++tick;
     R->wref = wref;
 
-    Walk W = {R, (uint32_t)r, 0, A_ARMED, NULL, 0, 0, 0};
+    Walk W = {R, (uint32_t)r, 0, A_ARMED, NULL, 0, 0, 0, 0};
     int rc = 0;
     if (ans) {
         /* the namespace slot holding it: rebinding or deleting drops the root */
@@ -2929,6 +3006,28 @@ static int find_set_dummy(void) {
 
 PyObject *cwatch_set_dummy(void) { return set_dummy; }
 
+/* the datetime classes `dt_index` knows, and the names pickle finds them by;
+   without the datetime module they are not atoms */
+static int dt_init(void) {
+    PyDateTime_IMPORT;
+    if (!PyDateTimeAPI) { PyErr_Clear(); return 0; }
+    PyTypeObject *ts[4] = {PyDateTimeAPI->DateTimeType, PyDateTimeAPI->DateType, PyDateTimeAPI->TimeType,
+                           PyDateTimeAPI->DeltaType};
+    for (int i = 0; i < 4; i++) {
+        PyObject *m = PyObject_GetAttrString((PyObject *)ts[i], "__module__");
+        PyObject *q = m ? PyObject_GetAttrString((PyObject *)ts[i], "__qualname__") : NULL;
+        if (!m || !q || !PyUnicode_CheckExact(m) || !PyUnicode_CheckExact(q)) {
+            Py_XDECREF(m); Py_XDECREF(q);
+            for (int j = 0; j < i; j++) { Py_CLEAR(dt_mods[j]); Py_CLEAR(dt_quals[j]); }
+            PyErr_Clear();
+            return 0;
+        }
+        dt_mods[i] = m; dt_quals[i] = q;
+    }
+    for (int i = 0; i < 4; i++) dt_types[i] = (PyTypeObject *)Py_NewRef(ts[i]);
+    return 0;
+}
+
 #else  /* !CWATCH_USABLE */
 static PyMethodDef methods[] = {{NULL, NULL, 0, NULL}};
 #endif
@@ -2948,6 +3047,7 @@ static int exec_module(PyObject *m) {
         if (!s_module || !s_getstate || !s_reduce || !s_reduce_ex || !s_dot) return -1;
         if (find_set_dummy() < 0) return -1;
     }
+    if (!dt_types[0] && dt_init() < 0) return -1;
     struct { const char *n; int v; } consts[] = {
         {"FIRST", ST_FIRST}, {"ARM", ST_ARM}, {"SKIP", ST_SKIP}, {"BUSY", ST_BUSY}, {"OFF", ST_OFF},
         {"ARMED", A_ARMED}, {"ALREADY", A_ALREADY}, {"NEED_TYPE", A_NEED_TYPE},

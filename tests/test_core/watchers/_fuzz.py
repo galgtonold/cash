@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import copyreg
+import datetime
 import gc
 import random
 import signal
@@ -122,6 +123,9 @@ class Fuzz:
                 None,
                 True,
                 False,
+                datetime.datetime(2020, 1, 1, r.randint(0, 23), r.randint(0, 59), 0, r.randint(0, 999999)),
+                datetime.date(2020, r.randint(1, 12), 1),
+                datetime.timedelta(seconds=r.randint(0, 99)),
             ]
         )
 

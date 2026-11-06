@@ -18,7 +18,8 @@ again behind every reuse and raises `WatchMismatch` when the two differ.
 
 Which values are watched (`classify` and the C walker): exact dicts, lists,
 sets, tuples and frozensets, instances of plain classes, and the classes
-and functions they name, over atoms (None, bool, int, float, str, bytes).
+and functions they name, over atoms (None, bool, int, float, str, bytes,
+and a naive datetime, date, time or timedelta).
 A value holding anything else -- an array, a frame, a C object, an instance
 of a class that chooses its own pickled state or looks attributes up
 itself -- is hashed every time, as before. A value is watched only from
