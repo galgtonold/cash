@@ -582,6 +582,11 @@ class NotebookSimulator:
         repairs again.
         """
         rerecorded = self._rerecorded_since(records_before)
+        if rerecorded:
+            # The repair ran or restored statements, leaving records a memo
+            # did not see, and the snapshots below move with what it
+            # recorded; the memos would not.
+            self.virtual_lineage.forget_memos()
         self._sync_simulation_cache_lineages(rerecorded)
         # The snapshots of the cells replayed here may not know the files
         # behind what the replay restored (see record_replayed_file_deps).

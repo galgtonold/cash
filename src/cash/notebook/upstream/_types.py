@@ -23,6 +23,7 @@ from ...analysis.code_analyzer import parse_cell_source
 
 if TYPE_CHECKING:
     from ...analysis.mutation_effects import CellEffects
+    from .cell_memo import CellMemo
 
 
 def normalize_stmt(s: str) -> str:
@@ -173,6 +174,11 @@ class SimulationCache:
     last_index_by_cell_id: dict[str, int] = field(default_factory=dict)
     """Where each cell id last sat in the notebook."""
 
+    memo: dict[int, CellMemo] = field(default_factory=dict)
+    """The last simulation of each cell, by index, kept past *entries*: a
+    later simulation of the same text from a state that agrees on what it
+    read reuses it (``cell_memo``)."""
+
     def __len__(self) -> int:
         return len(self.entries)
 
@@ -183,6 +189,7 @@ class SimulationCache:
         """Forget the snapshots and hashes; cell positions stay."""
         self.entries.clear()
         self.cell_hashes.clear()
+        self.memo.clear()
 
 
 @dataclass(slots=True)

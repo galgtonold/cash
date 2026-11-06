@@ -33,6 +33,7 @@ from ._types import (
     SimulationResult,
     cell_holds_statement,
     normalize_stmt,
+    statements_of,
 )
 from .cache_restore import CacheRestorer
 from .changed_below import held_objects, warn_changed_below
@@ -871,26 +872,36 @@ class MismatchClassifier:
         cells, idx = check.notebook_cells, check.current_cell_idx
         if not cells or not 0 <= idx < len(cells) - 1:
             return
+        user_ns = self.shell.user_ns
+        # Only a function the cell reads can hold one; the look below,
+        # every recorded variable against every cell below, is skipped
+        # without one (it was a third of a trivial cell's run in a
+        # 300-cell notebook).
+        holders = [
+            name for name in sorted(inputs) if instance_of(user_ns.get(name), (types.FunctionType, functools.partial))
+        ]
+        if not holders:
+            return
         below = cells[idx + 1 :]
         codes = self.tracking_state.executed_cell_codes
-        user_ns = self.shell.user_ns
         # Matched as a statement, not as text: the code is recorded unparsed
         # (``BIG[0] = 'x'``) and a cell below may write ``BIG[0] = "x"``.
+        # Every cell below at once (``cell_holds_statement`` over each): source
+        # holds no NUL, so no match spans two cells of the joined text.
+        below_text = "\0".join(below)
+        below_statements = frozenset().union(*map(statements_of, below))
         changed = set()
         for name, code in codes.items():
             if not code or name not in user_ns:
                 continue
             statement = strip_markers(code).strip()
-            if any(cell_holds_statement(cell, statement) for cell in below):
+            if statement in below_text or statement in below_statements:
                 changed.add(name)
         if not changed:
             return
         warned = self._warned_changed_below
-        for name in sorted(inputs):
-            value = user_ns.get(name)
-            if not instance_of(value, (types.FunctionType, functools.partial)):
-                continue
-            ids, complete = held_objects(value)
+        for name in holders:
+            ids, complete = held_objects(user_ns.get(name))
             for other in sorted(changed - {name}):
                 if id(user_ns[other]) in ids:
                     warn_changed_below(other, codes.get(other), cells, idx, warned, through=name)

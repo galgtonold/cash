@@ -278,6 +278,11 @@ class StatementLineage:
             sources.update(cell_definitions(code, (ast.FunctionDef, ast.AsyncFunctionDef)))
         self._notebook_functions = sources
 
+    @property
+    def notebook_functions(self) -> Mapping[str, str]:
+        """``{name: source}`` of every top-level def in the notebook's cells."""
+        return self._notebook_functions
+
     def _function_source(self, name: str) -> str | None:
         """Source of function *name* for the headless mutation analysis.
 

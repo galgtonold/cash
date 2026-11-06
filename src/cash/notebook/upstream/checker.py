@@ -326,6 +326,9 @@ class UpstreamChecker:
             if cell_id:
                 logger.debug("[UPSTREAM_DEBUG]   cell_id: %s", cell_id)
 
+        # The cell's statements are about to run: a memo of a cell holding
+        # one simulated it on the records they leave behind.
+        self.simulator.virtual_lineage.forget_cells_running(cell_code)
         # A name the previous cell's forward probe held and no restore filled.
         self.simulator.restorer.drop_probe_placeholders()
         self.tracking_state.probe_held.clear()
@@ -586,6 +589,7 @@ class UpstreamChecker:
         self._note_how_it_ran(cell_code, cell_id, cells_with_ids, current_cell_idx)
         notebook_cells = self._as_run(notebook_cells, cells_with_ids)
         if current_cell_idx is not None:
+            self.simulator.virtual_lineage.forget_cells_running("", current_cell_idx)
             # Not right after the cell above it: run on its own, not in a pass down the notebook.
             self._reran = current_cell_idx > 0 and self.last_cell_index != current_cell_idx - 1
             self.last_cell_index = current_cell_idx
