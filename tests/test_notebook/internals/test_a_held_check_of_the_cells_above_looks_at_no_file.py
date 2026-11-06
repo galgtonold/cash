@@ -109,18 +109,7 @@ def _listed(paths) -> dict:
     """`file_dep_snapshot.stats_from_listings` as on Windows, where a
     crowded folder's files are stat-ed by listing it: a relative path's
     folder is listed by its relative spelling."""
-    by_dir: dict = {}
-    for p in paths:
-        folder, name = os.path.split(p)
-        by_dir.setdefault(folder, {})[name] = p
-    found = {}
-    for folder, wanted in by_dir.items():
-        if len(wanted) >= LISTING_MIN_FILES:
-            with os.scandir(folder or ".") as entries:
-                for entry in entries:
-                    if entry.name in wanted:
-                        found[wanted[entry.name]] = entry.stat()
-    return found
+    return file_dep_snapshot.listing_stats(paths)
 
 
 def test_a_later_check_looks_at_no_listed_file(recorded, looks, monkeypatch):

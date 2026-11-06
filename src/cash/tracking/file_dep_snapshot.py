@@ -971,6 +971,17 @@ def stats_from_listings(paths: Iterable[str]) -> dict[str, os.stat_result]:
     """
     if os.name != "nt":
         return {}
+    return listing_stats(paths)
+
+
+def listing_stats(paths: Iterable[str]) -> dict[str, os.stat_result]:
+    """`stats_from_listings` on any system: what it takes on Windows.
+
+    A symbolic link or junction is left out, to be stat-ed by itself
+    (`run_memo` notes it as followed): its entry's stat is that of what it
+    points to, which may lie in a folder the folder watch does not see. It
+    was kept as the link's for as long as the link's own folder reported no
+    change, and an edit of the file it pointed to was not seen."""
     by_dir: dict[str, dict[str, str]] = {}
     for path in paths:
         directory, name = os.path.split(path)
@@ -983,7 +994,7 @@ def stats_from_listings(paths: Iterable[str]) -> dict[str, os.stat_result]:
             with untracked(), os.scandir(directory or ".") as entries:
                 for entry in entries:
                     path = wanted.get(os.path.normcase(entry.name))
-                    if path is not None:
+                    if path is not None and not _links_elsewhere(entry):
                         try:
                             found[path] = entry.stat()
                         except OSError:
@@ -991,6 +1002,18 @@ def stats_from_listings(paths: Iterable[str]) -> dict[str, os.stat_result]:
         except OSError:
             continue
     return found
+
+
+def _links_elsewhere(entry: os.DirEntry) -> bool:
+    """Is the listing's *entry* a symbolic link or a junction? Read from the
+    listing, with no stat of its own."""
+    try:
+        if entry.is_symlink():
+            return True
+        is_junction = getattr(entry, "is_junction", None)  # 3.12 on
+        return bool(is_junction is not None and is_junction())
+    except OSError:
+        return True
 
 
 def _unchanged_since_hashed(st: os.stat_result, stored: dict[str, Any]) -> bool:

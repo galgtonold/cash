@@ -135,7 +135,17 @@ def test_the_files_of_a_statement_follow_each_change(paths, held_keys, tmp_path,
     assert _keys(paths) == after
 
 
-def test_the_files_of_a_statement_follow_a_file_replaced_by_a_link(paths, held_keys, tmp_path):
+@pytest.fixture(params=["stat-ed", "listed"])
+def stats(request, monkeypatch):
+    """How the files of a crowded folder are stat-ed: each by itself, or by
+    a listing of the folder as on Windows (`stats_from_listings`), whose
+    entry for a link would give the stat of what it points to."""
+    if request.param == "listed":
+        monkeypatch.setattr(run_memo, "stats_from_listings", file_dep_snapshot.listing_stats)
+    return request.param
+
+
+def test_the_files_of_a_statement_follow_a_file_replaced_by_a_link(stats, paths, held_keys, tmp_path):
     if not _can_link(tmp_path):
         pytest.skip("this system makes no symbolic links")
     target = tmp_path / "elsewhere.txt"
