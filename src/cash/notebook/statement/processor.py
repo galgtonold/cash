@@ -2831,6 +2831,7 @@ class StatementProcessor:
             attribute_or(backend, "local_dir", None),
             execution.appended_paths,
             execution.waived_paths,
+            lstats=execution.written_lstats,
         )
         if not written:
             return None
@@ -4867,7 +4868,7 @@ class StatementProcessor:
         # is in the helper) counts too: it was observed (``write_observer``).
         written = self._records.user_written_paths(execution.written_paths)
         if written:
-            note_own_writes(self.tracking_state, written)
+            note_own_writes(self.tracking_state, written, execution.written_lstats)
         try:
             if (
                 written

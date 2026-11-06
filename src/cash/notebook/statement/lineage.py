@@ -26,6 +26,7 @@ from __future__ import annotations
 import ast
 import logging
 import os
+import stat as _stat
 import types
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any
@@ -124,20 +125,38 @@ def _a_namespace(value: Any, user_ns: Mapping[str, Any]) -> bool:
     return value is user_ns or instance_of(value, types.ModuleType)
 
 
-def note_own_writes(tracking_state: "TrackingState", paths) -> None:
+def note_own_writes(tracking_state: "TrackingState", paths, lstats: Mapping[str, Any] | None = None) -> None:
     """Record that the notebook wrote *paths* just now, with each file's
     `stat_key` after the write and the cell that wrote them
-    (`TrackingState.own_file_writes`)."""
+    (`TrackingState.own_file_writes`).
+
+    *lstats* are ``lstat`` results taken of some of *paths* since the
+    statement ended (`write_observer.kept_writes`): one of a regular file
+    that is no link is its stat, taken in place of one here. A tar
+    extraction of 50,000 files stat-ed each twice as it ended."""
     tracking_state.file_event_seq += 1
     for path in paths:
         # Once per folder in a run, not per file; the lstat that finds a
         # regular file that is no link is its stat too.
-        where, found = realpath_of_read_this_run(path)
+        taken = lstats.get(path) if lstats else None
+        where, found = realpath_of_read_this_run(path, lstat=taken)
+        if found is None and taken is not None and _is_plain_file(taken):
+            found = taken
         st = stat_key(found) if found is not None else regular_file_stat(where)
         if st is None:
             tracking_state.own_file_writes.pop(where, None)
         else:
             tracking_state.own_file_writes[where] = (tracking_state.file_event_seq, st, tracking_state.running_cell)
+
+
+def _is_plain_file(st: Any) -> bool:
+    """Whether ``lstat`` result *st* is of a regular file that is no link
+    or reparse point: its ``stat`` then."""
+    return _stat.S_ISREG(st.st_mode) and not getattr(st, "st_file_attributes", 0) & _REPARSE_POINT
+
+
+#: ``FILE_ATTRIBUTE_REPARSE_POINT``: a symlink or junction on Windows.
+_REPARSE_POINT = 0x400
 
 
 def rewritten_by_the_notebook_after(tracking_state: "TrackingState", seq: int, path: str, cell: int) -> bool:
