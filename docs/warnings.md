@@ -2373,17 +2373,20 @@ purpose and no cell reads it any more.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/notebook/upstream/replay.py:StatementReplay._failure @b2ec7f5b, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._unclosed_read @9ffb9999, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._overwritten_read @9c2c1ae1, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._reopen_drawn_inputs @9261f967, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._failing_import_left_out @8ffec13c, cash/notebook/upstream/checker.py:UpstreamChecker._put_back @d0bf8f4e, cash/notebook/ipython/upstream_phase.py:UpstreamResolution._step_aside @fbf69e5b -->
+<!-- claim: cash/notebook/upstream/replay.py:StatementReplay._failure @e96a67b5, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._unclosed_read @9ffb9999, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._overwritten_read @9c2c1ae1, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._reopen_drawn_inputs @9261f967, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._failing_import_left_out @8ffec13c, cash/notebook/upstream/checker.py:UpstreamChecker._put_back @d0bf8f4e, cash/notebook/ipython/upstream_phase.py:UpstreamResolution._step_aside @fbf69e5b, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._writes_what_was_defined_again @11388d44, cash/notebook/upstream/replay.py:StatementReplay._defined_again_gap @e35826e2 -->
 **What happened.** To give the cell what a run from the top gives, cash re-ran
 statements above it, and one of them failed because cash did not re-run first
-a statement above it that sets what it reads. Or, found before anything ran,
+a statement above it that sets what it reads, or because it pickled a value
+holding a function or class that a cell below it defined again: pickle finds
+it by its name, which now holds the new one. Or, found before anything ran,
 one of them would have read a name as a statement further down leaves it,
 not as a run from the top has it there, or would have left the cell a name
 that a statement further down writes anew, or would have read an open file,
 a generator or an iterator that had already been read and that no statement
-above makes again, or would have run past an import above that cannot be
-found (a package that is not installed, a name the module does not have),
-where a run from the top stops, so cash re-ran nothing. The message names
+above makes again, or would have written to a file a value holding a function
+or class that a cell below it defined again, or would have run past an import
+above that cannot be found (a package that is not installed, a name the module
+does not have), where a run from the top stops, so cash re-ran nothing. The message names
 both statements. Cash put back every name the repair had rebound and ran the cell
 as written, on the values in memory, uncached.
 

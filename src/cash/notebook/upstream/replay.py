@@ -10,10 +10,12 @@ from __future__ import annotations
 import ast
 import functools
 import logging
+import pickle
 import re
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from cash import kept_state
 from cash.control_markers import strip_markers
 
 from ..._memo import NOTEBOOK_CELLS, NOTEBOOK_VERSIONS
@@ -360,8 +362,12 @@ class StatementReplay:
         Only the first is cash's own gap: the statement could not run on its
         inputs as the notebook has them, so the cell runs as written instead
         of failing. Any other failure stops the cell, as a run from the top
-        stops at that statement.
+        stops at that statement. So is a pickle refusing a function or class
+        a cell below the statement defined again (`_defined_again_gap`).
         """
+        again = self._defined_again_gap(exc, error_text, stmt_code, notebook_cells)
+        if again is not None:
+            return again
         producer = self._gap_producer(exc, already_scheduled, stmt_code, notebook_cells)
         planning_gap = self._planning_gap_for(
             exc, already_scheduled, stmt_code=stmt_code, notebook_cells=notebook_cells
@@ -372,6 +378,51 @@ class StatementReplay:
                 message, stmt_code=stmt_code, error_text=error_text, producer=producer[0], cell_no=producer[1]
             )
         return UpstreamStateError(message)
+
+    def _defined_again_gap(
+        self, exc: object, error_text: str, stmt_code: str, notebook_cells: list[str] | None
+    ) -> UpstreamRepairGap | None:
+        """The gap, when *exc* is pickle refusing a function or class whose
+        name now holds another object ("it's not the same object as
+        __main__.column_ratio"): the statement pickled a value in memory made
+        before a cell below it defined that name again. A run from the top
+        runs it above that cell, where the name still holds what the value
+        holds, so the failure is not one the notebook has. Named after the
+        last statement of the notebook binding that name; None when that
+        statement is above this one, or the cells are not known: a run from
+        the top fails there too.
+        """
+        if not isinstance(exc, pickle.PicklingError) or not kept_state.stopped_at_defined_again(exc):
+            return None
+        found = re.search(r"not the same object as ([\w.]+)", str(exc))
+        if found is None:
+            return None
+        module, _, qualname = found.group(1).partition(".")
+        name = (qualname.split(".")[0] if module == "__main__" else module) or found.group(1)
+        producer: tuple[str, int] | None = None
+        below = False
+        for cell_idx, cell in enumerate(notebook_cells or ()):
+            tree = parse_cell_source(cell)
+            if tree is None:
+                continue
+            clean = clean_cell_source(cell)
+            for node in tree.body:
+                code = statement_code(node, clean)
+                if code == stmt_code:
+                    below, producer = True, None
+                elif below and self._writes(node, "name", name, set()):
+                    producer = (code, cell_idx + 1)
+        if producer is None:
+            return None
+        message = self._format_upstream_failure(stmt_code, error_text)
+        return UpstreamRepairGap(
+            message,
+            stmt_code=stmt_code,
+            error_text=error_text,
+            producer=producer[0],
+            cell_no=producer[1],
+            after=True,
+        )
 
     def _gap_producer(
         self,

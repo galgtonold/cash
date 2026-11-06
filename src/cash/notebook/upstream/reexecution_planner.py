@@ -21,6 +21,7 @@ from .._trace import trace_event
 from ..cache_key import statement_source_hash
 from ..call_key import TooMuchToLookThrough, holds_a_closure_with_state
 from ..consumables import is_consumable_unrestorable, is_write_stream
+from ..held_functions import defined_again_held
 from ..stateful_carriers import carrier_kind_from_producer, stateful_carrier_kind
 from ..statement.mutation_routing import functions_in
 from ._types import CellCheck, ClassificationResult, ReexecutionPlan, SimulationResult, latest_producer
@@ -280,6 +281,7 @@ class ReexecutionPlanner:
             )
             or self._failing_import_left_out(stmts_to_run_indices, simulation_trace)
             or self._past_a_forward_read(stmts_to_run_indices, simulation_trace, check)
+            or self._writes_what_was_defined_again(stmts_to_run_indices, simulation_trace)
         )
         if gap is not None:
             raise gap
@@ -405,6 +407,70 @@ class ReexecutionPlanner:
                 planned=True,
             )
         return None
+
+    def _writes_what_was_defined_again(
+        self, stmts_to_run_indices: list[int], simulation_trace: list
+    ) -> UpstreamRepairGap | None:
+        """The gap, when the plan re-runs a file writer on a value in memory
+        that holds a function or class a cell below the writer defined again.
+
+        The writer pickles it (``joblib.dump(final_model, ...)``), and pickle
+        finds the function by its name, which holds the one defined again
+        now: "it's not the same object as __main__.column_ratio", where a run
+        from the top writes above that cell and the name still holds the
+        function the value holds. Re-run, the writer fails, and leaves a
+        half-written file behind. Refused only on evidence: a value the
+        writer reads from the kernel, not one the plan makes again first,
+        holds such an object (`held_functions.defined_again_held`).
+        """
+        user_ns = self._user_ns()
+        if not user_ns:
+            return None
+        lineages = self.tracking_state.variable_lineage
+        remade: set[str] = set()
+        for i in stmts_to_run_indices:
+            entry = simulation_trace[i]
+            if not _is_definition(entry.stmt_code) and statement_writes_files(entry.stmt_code):
+                for name in sorted(entry.inputs or ()):
+                    if name in remade or name not in user_ns:
+                        continue
+                    held = defined_again_held(user_ns[name], user_ns, lineages.get(name))
+                    gap = self._defined_again_gap(simulation_trace, i, name, held) if held else None
+                    if gap is not None:
+                        return gap
+            remade.update(entry.outputs or ())
+        return None
+
+    @staticmethod
+    def _defined_again_gap(simulation_trace: list, i: int, name: str, held: str) -> UpstreamRepairGap | None:
+        """The :class:`UpstreamRepairGap` for writer *i* pickling *name*,
+        which holds *held* (``module.qualname``) as defined before a statement
+        below the writer defined it again, naming that statement; None when
+        no statement below binds it: a run from the top meets the same
+        object there."""
+        entry = simulation_trace[i]
+        module, _, qualname = held.partition(".")
+        bound = qualname.split(".")[0] if module == "__main__" else module
+        again = next(
+            (
+                simulation_trace[j]
+                for j in range(len(simulation_trace) - 1, i, -1)
+                if bound in (simulation_trace[j].outputs or ())
+            ),
+            None,
+        )
+        if again is None:
+            return None
+        logger.debug("[UPSTREAM] Plan re-runs [%s], which would pickle %r holding %s defined again", i, name, held)
+        return UpstreamRepairGap(
+            f"Cash would re-run {entry.stmt_code.splitlines()[0][:60]!r}, which would pickle {name!r}",
+            stmt_code=entry.stmt_code,
+            error_text=f"it would pickle {name!r}, which holds {qualname} as defined before a cell below defined it again",
+            producer=again.stmt_code,
+            cell_no=again.cell + 1 if again.cell >= 0 else None,
+            planned=True,
+            after=True,
+        )
 
     @staticmethod
     def _past_a_forward_read(

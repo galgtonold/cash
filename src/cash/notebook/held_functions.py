@@ -51,6 +51,7 @@ __all__ = [
     "EXISTENCE_CHECK_AT",
     "WALK_LIMIT",
     "Held",
+    "defined_again_held",
     "held_notebook_code",
     "held_notebook_code_at",
     "module_class_objects_exist",
@@ -241,6 +242,47 @@ def held_notebook_code_at(lineage: str, namespace: Mapping[str, Any]) -> Held | 
         return _NOTHING
     found = _unheld(kept)
     return None if found is None else _held_of(found, namespace)
+
+
+def defined_again_held(value: Any, namespace: Mapping[str, Any], lineage: str | None = None) -> str | None:
+    """The name of a function or class *value* holds that its module now
+    names another object of (`kept_state.named_now`): its cell ran again
+    after *value* was made. None when it holds none, as far as the walk of
+    `held_notebook_code` sees (a walk it remembered for *lineage* is reused).
+
+    Pickle finds such an object by that name and refuses it ("it's not the
+    same object as __main__.column_ratio"), so a statement pickling *value*
+    fails here where a run from the top, which pickles it above the cell
+    defining it again, does not. A function a decorator wraps under its own
+    name is not one: the name holds the wrapper, which holds it.
+    """
+    if value is None or type(value) in _leaves() or instance_of(value, types.ModuleType):
+        return None
+    from ..kept_state import named_now
+
+    found = _unheld(_MEMO.get((id(value), lineage))) if lineage else None
+    if found is None or found is _NONE_EXISTED:
+        try:
+            found = _walk(value, namespace, check_at=EXISTENCE_CHECK_AT)
+        except _NoNotebookFunctions:
+            return None
+    functions, classes, _complete = found
+    for obj in (*functions, *classes):
+        current = named_now(obj)
+        if current is not None and not _wraps(current, obj):
+            return f"{obj.__module__}.{obj.__qualname__}"
+    return None
+
+
+def _wraps(wrapper: Any, obj: Any) -> bool:
+    """Whether *obj* is along *wrapper*'s ``__wrapped__`` chain."""
+    for _ in range(16):
+        wrapper = attribute_or(wrapper, "__wrapped__", None)
+        if wrapper is None:
+            return False
+        if wrapper is obj:
+            return True
+    return False
 
 
 def _held_of(found: tuple[tuple[Any, ...], tuple[Any, ...], bool], namespace: Mapping[str, Any]) -> Held:

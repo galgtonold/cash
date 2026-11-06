@@ -305,6 +305,13 @@ class UpstreamResolution:
                     "as a run from the top does, so it "
                     "re-ran nothing and this cell ran as written, on the values in memory, uncached."
                 )
+            elif caught.after:
+                what = (
+                    f"to bring this cell up to date cash re-ran `{first}`, "
+                    f"which failed ({caught.error_text[:120]}) because it ran after "
+                    f"`{producer}` ({where}), not before it as a run from the top does, so this cell ran "
+                    "as written, on the values in memory, uncached."
+                )
             else:
                 what = (
                     f"to bring this cell up to date cash re-ran `{first}`, "
