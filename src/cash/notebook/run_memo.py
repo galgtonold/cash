@@ -956,12 +956,21 @@ def stat_keys_as_recorded(recorded: Mapping[str, tuple[int, int, int] | None]) -
     of them reports a change it holds, and a later ask checks only the files
     of a folder that did, and those no folder vouches for (a link, a file
     with a second hard link, a folder that cannot be watched). The cost of
-    the check is then that of what changed, not of what was read."""
-    if None in recorded.values():
-        return False
+    the check is then that of what changed, not of what was read.
+
+    The very mapping asked again is found by its identity, before any of
+    its paths is looked at: below a loop over 50,000 review files each
+    trivial cell compared each cached cell's 100,000 recorded keys with the
+    held copy, and looked for a path recorded as found nowhere among them,
+    twice a cell. So a mapping asked again must not have been changed in
+    place since (the simulation's snapshots never are); a changed record is
+    another mapping, compared whole."""
     run = file_state_this_run()
     watch = run.get("watch") if run is not None else None
+    # Held only once found with every key as recorded, none of them None.
     held = _held_keys_of(watch, recorded) if watch is not None else None
+    if held is None and None in recorded.values():
+        return False
     if held is not None:
         unsure = held.unsure()
         if unsure is not None:
@@ -981,11 +990,11 @@ def stat_keys_as_recorded(recorded: Mapping[str, tuple[int, int, int] | None]) -
 
 #: Stat-key dicts found as recorded while the folder watch held a stat of
 #: their files (`stat_keys_as_recorded`), across runs: each as a copy, with
-#: its `_Held`, the working directory and the watch, newest last. Found by
-#: comparing the copy whole, in C: a simulation builds each cell's dict
-#: anew, and a dict changed since, or another with other files, is never
-#: answered from another's verdict.
-_HELD_KEYS: list[tuple[dict, "_Held", str, Any]] = []
+#: its `_Held`, the working directory, the watch and the mapping it was
+#: found for, newest last. Found by that mapping's identity, else by
+#: comparing the copy whole, in C: a dict built anew with the same keys is
+#: answered too, and another with other files, or other keys, never is.
+_HELD_KEYS: list[tuple[dict, "_Held", str, Any, Mapping[str, Any]]] = []
 
 #: How many paths the copies in `_HELD_KEYS` hold at most, all told.
 _HELD_KEYS_PATHS = 500_000
@@ -995,10 +1004,18 @@ def _held_keys_of(watch: Any, recorded: Mapping[str, Any]) -> _Held | None:
     n = len(recorded)
     found = None
     for entry in reversed(_HELD_KEYS):
-        copy, _held, _cwd, by = entry
-        if len(copy) == n and by is watch and copy == recorded:
+        copy, _held, _cwd, by, source = entry
+        if source is recorded and by is watch and len(copy) == n:
             found = entry
             break
+    if found is None:
+        for entry in reversed(_HELD_KEYS):
+            copy, _held, _cwd, by, _source = entry
+            if len(copy) == n and by is watch and copy == recorded:
+                # Asked again, the equal mapping is found by its identity.
+                found = (copy, _held, _cwd, by, recorded)
+                _HELD_KEYS[_HELD_KEYS.index(entry)] = found
+                break
     if found is None:
         return None
     try:
@@ -1054,7 +1071,7 @@ def _note_held_keys(watch: Any, recorded: Mapping[str, Any]) -> None:
         return
     copy = dict(recorded)
     kept = [entry for entry in _HELD_KEYS if not (len(entry[0]) == len(copy) and entry[0] == copy)]
-    kept.append((copy, _Held(parts, loose, None), cwd, watch))
+    kept.append((copy, _Held(parts, loose, None), cwd, watch, recorded))
     total = 0
     for at in range(len(kept) - 1, -1, -1):
         total += len(kept[at][0])
@@ -1110,10 +1127,13 @@ def file_component_this_run(
         held = _COVERED_COMPONENTS.get(key) if watch is not None else None
         if held is not None and held[2] == place:
             watch.drain()
-            if watch.still(held[1]):
+            if held[1].holds(watch, run):
                 components[key] = held[0]
                 return held[0]
     taken = stats_this_run(paths)  # it starts the run's records read below
+    # What the watch vouches for now, before the component is built from
+    # the stats it holds.
+    parts = _component_parts(watch, paths) if watch is not None else None
     listed = run["listed"] if run is not None else None
     followed = run["stat_followed"] if run is not None else None
     stats: Mapping[str, os.stat_result] = {}
@@ -1131,15 +1151,128 @@ def file_component_this_run(
     component = compute_file_hash_component(paths, remote, probes, stats=stats, lstats=lstats)
     if key is not None:
         components[key] = component
-    if watch is not None:
-        cover = _cover_of(watch, paths)
-        if cover is not None:
+    if watch is not None and parts is not None:
+        hold = _ComponentHold.of(watch, parts, stats_this_run(paths), run)
+        if hold is not None:
             if len(_COVERED_COMPONENTS) >= _COVERED_KEPT and key not in _COVERED_COMPONENTS:
                 _COVERED_COMPONENTS.pop(next(iter(_COVERED_COMPONENTS)))
-            _COVERED_COMPONENTS[key] = (component, cover, place)
+            _COVERED_COMPONENTS[key] = (component, hold, place)
     return component
 
 
 #: Components built from stats the folder watch held, across runs:
-#: ``{key: (component, cover, (cwd, notebook path))}`` (`file_component_this_run`).
-_COVERED_COMPONENTS: dict[tuple, tuple[str, tuple, tuple]] = {}
+#: ``{key: (component, hold, (cwd, notebook path))}`` (`file_component_this_run`).
+_COVERED_COMPONENTS: dict[tuple, tuple[str, "_ComponentHold", tuple]] = {}
+
+
+def _component_parts(watch: Any, paths: Iterable[str]) -> list | None:
+    """`FileWatch.cover_by_folder` of *paths*, a relative one by its
+    absolute spelling; None when the watch does not vouch for each of them
+    (a link, a path through ``..``, a folder that cannot be watched)."""
+    by_key: dict[str, str] = {}
+    isabs = os.path.isabs
+    spelled = _fds.spelled_absolute
+    for p in paths:
+        twin = p if isabs(p) else spelled(p)
+        if twin is None:
+            return None
+        by_key[p] = twin
+    parts, loose = watch.cover_by_folder(by_key)
+    return None if loose else parts
+
+
+class _ComponentHold:
+    """What a file component (`file_component_this_run`) built while the
+    folder watch vouched for each of its files rests on: the watched
+    folders, each with its version and its paths (`FileWatch.cover_by_folder`),
+    and the stat each path was found with (None: not there).
+
+    While no folder reports a change the component holds as it is. A folder
+    that reports one has only its own paths stat-ed again: each found where
+    it was, no link, of the same kind and with the same `stat_key` as before
+    gives the same component, and the folder is held again from now. Kept
+    whole, the component of a frame read from 50,000 files was built again
+    (a real path and a stat of each file, opening each on Windows) whenever
+    anything was written beside one of them, or the notebook was saved in
+    the folder of the one CSV it was round-tripped through."""
+
+    __slots__ = ("parts", "rows")
+
+    def __init__(self, parts: list, rows: list[list[Any]]) -> None:
+        self.parts = parts
+        self.rows = rows
+
+    @classmethod
+    def of(cls, watch: Any, parts: list, found: RunStats, run: dict | None) -> "_ComponentHold | None":
+        """The hold of *parts*, whose paths the run found as *found*
+        (`stats_this_run`); None when a folder reported a change since
+        *parts* were taken, or a path was found elsewhere, through a link,
+        or with another stat than the watch holds."""
+        if run is None or _fw.FileWatch.changed_in(parts):
+            return None
+        rows = cls._rows(watch, parts, found, run)
+        return None if rows is None else cls(parts, rows)
+
+    @staticmethod
+    def _rows(watch: Any, parts: list, found: RunStats, run: dict) -> list[list[Any]] | None:
+        """The stat the watch holds of each path of *parts* (None: held as
+        not there), each the stat the run found it with too."""
+        followed = run.get("stat_followed", ())
+        current = watch.current
+        isabs = os.path.isabs
+        spelled = _fds.spelled_absolute
+        rows = []
+        for _d, _version, keys in parts:
+            row = []
+            for p in keys:
+                resolved, st = found[p]
+                held = current(p if isabs(p) else spelled(p))
+                if held is None:
+                    if st is not None:
+                        return None
+                elif st is None or resolved != p or p in followed or (st is not held and not _same_file(st, held)):
+                    return None
+                row.append(held)
+            rows.append(row)
+        return rows
+
+    def holds(self, watch: Any, run: dict | None) -> bool:
+        """Is the component still the one these files give? Looks only at
+        the paths of a folder that reported a change since."""
+        changed = {at for at, (d, version, _keys) in enumerate(self.parts) if not (d.alive and d.version == version)}
+        if not changed:
+            return True
+        if run is None or any(not self.parts[at][0].alive for at in changed):
+            return False  # moved, or no longer watched: its real paths may be others
+        asked = [p for at in sorted(changed) for p in self.parts[at][2]]
+        found = stats_this_run(asked)  # takes again what the watch no longer holds
+        fresh = _component_parts(watch, asked)
+        if fresh is None:
+            return False
+        rows = self._rows(watch, fresh, found, run)
+        if rows is None or _fw.FileWatch.changed_in(fresh):
+            return False
+        before = {p: st for at in changed for p, st in zip(self.parts[at][2], self.rows[at])}
+        for (_d, _version, keys), row in zip(fresh, rows):
+            for p, st in zip(keys, row):
+                was = before[p]
+                if (st is None) != (was is None) or (st is not was and st is not None and not _same_file(st, was)):
+                    return False
+        # A folder's own part (a listed folder is vouched for by its own
+        # watch and its holder's) asked again through the other is replaced.
+        renewed = {id(d) for d, _version, _keys in fresh}
+        asked_once = set(asked)
+        kept = [
+            at
+            for at, (d, _version, keys) in enumerate(self.parts)
+            if at not in changed and not (id(d) in renewed and asked_once.issuperset(keys))
+        ]
+        self.parts = [self.parts[at] for at in kept] + fresh
+        self.rows = [self.rows[at] for at in kept] + rows
+        return True
+
+
+def _same_file(a: os.stat_result, b: os.stat_result) -> bool:
+    """The same kind of entry with the same `stat_key`: what a file
+    component is built from (`compute_file_hash_component`)."""
+    return _stat.S_IFMT(a.st_mode) == _stat.S_IFMT(b.st_mode) and stat_key(a) == stat_key(b)

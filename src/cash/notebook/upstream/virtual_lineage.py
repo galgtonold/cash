@@ -209,19 +209,26 @@ class VirtualLineage:
         """
         if not rerecorded:
             return
-        for entry in self.cache.entries:
+        entries = self.cache.entries
+        for at, entry in enumerate(entries):
+            added: dict[str, tuple[int, int, int]] = {}
             for trace_entry in entry.trace_segment:
                 for var in set(trace_entry.outputs) & rerecorded:
                     for path in self.tracking_state.executed_file_deps.get(var, ()):
-                        if path in entry.cell_file_deps:
+                        if path in entry.cell_file_deps or path in added:
                             continue
                         resolved = resolve_file_dep_path(path)
                         if resolved is None:
                             continue
                         try:
-                            entry.cell_file_deps[path] = stat_key(os.stat(resolved))
+                            added[path] = stat_key(os.stat(resolved))
                         except OSError:
                             continue
+            if added:
+                # A new dict, never the snapshot's own changed in place: a
+                # held verdict on it is found by its identity
+                # (`run_memo.stat_keys_as_recorded`).
+                entries[at] = entry._replace(cell_file_deps={**entry.cell_file_deps, **added})
 
     def _check_cell_file_deps(
         self,
