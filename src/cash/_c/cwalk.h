@@ -13,6 +13,8 @@ int cfilehook_add_functions(PyObject *m);
 int cviews_add_functions(PyObject *m);
 /* Add the set layout recorder (csets.c). */
 int csets_add_functions(PyObject *m);
+/* Add the garbage collection callback (cgc.c). */
+int cgc_add_functions(PyObject *m);
 /* The marker a set leaves where it deleted a key (cwatch.c). */
 PyObject *cwatch_set_dummy(void);
 

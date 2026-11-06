@@ -30,6 +30,10 @@ that code sees what they do. A finalizer resetting a token made
 outside the collection gets the ValueError of a token from another context
 (`reset_in_any_context` takes that), instead of changing the interrupted
 context at a moment nothing chose.
+
+With the C extension (3.12 on) the callback is ``gc_own_context`` in C, which
+a collection can call at any depth; without it, a Python function that gives
+itself frames past the recursion limit for its own calls.
 """
 
 from __future__ import annotations
@@ -46,11 +50,26 @@ __all__ = ["INSTALLED"]
 _HEADROOM = 50
 
 
+def _native_callback() -> Any:
+    """The C extension's callback (``cgc.c``), or None without it."""
+    from ._native import cwatch
+
+    return getattr(cwatch, "gc_own_context", None)
+
+
 def _install() -> bool:
     if platform.python_implementation() != "CPython":
         return False
-    if any(getattr(callback, "_cash_own_context", False) for callback in gc.callbacks):
+    native = _native_callback()
+    if any(getattr(callback, "_cash_own_context", False) or callback is native for callback in gc.callbacks):
         return True  # a second import of this module: one context per collection
+    if native is not None:
+        # Called from C, it takes no Python frame: the Python callback below
+        # cannot even be called a frame short of the recursion limit, which on
+        # 3.14 a collection deep in a recursion reported as an exception
+        # ignored in a GC callback, and ran in the interrupted code's context.
+        gc.callbacks.append(native)
+        return True
     import ctypes
 
     # Prototypes of our own, so the shared ``ctypes.pythonapi`` functions keep

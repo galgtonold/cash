@@ -21,7 +21,10 @@ import subprocess
 import sys
 import textwrap
 
+import pytest
+
 import cash  # noqa: F401 - importing cash is what sets collections apart
+from cash._native import cwatch
 
 RUNNING = contextvars.ContextVar("running", default="none")
 
@@ -47,6 +50,29 @@ def test_a_finalizer_sees_and_leaves_nothing_of_the_running_code():
         assert RUNNING.get() == "the code", "the finalizer's change reached the interrupted code"
     finally:
         RUNNING.reset(token)
+
+
+@pytest.mark.skipif(not hasattr(cwatch, "gc_own_context"), reason="no C extension here")
+def test_with_the_c_extension_the_collection_s_callback_takes_no_python_frame():
+    """A Python callback is a frame, which a collection starting a frame
+    short of the recursion limit cannot call: on 3.14 that was reported as
+    an exception ignored in a GC callback, and the collection ran in the
+    interrupted code's context. The C one is called at any depth."""
+    native = cwatch.gc_own_context
+    assert gc.callbacks.count(native) == 1
+    assert not [cb for cb in gc.callbacks if getattr(cb, "_cash_own_context", False)]
+
+    def body():
+        RUNNING.set("the code")
+        native("start", {})
+        try:
+            assert RUNNING.get() == "none", "the collection's context is not a fresh one"
+            RUNNING.set("finalizer")
+        finally:
+            native("stop", {})
+        assert RUNNING.get() == "the code"
+
+    contextvars.copy_context().run(body)
 
 
 STRESS = textwrap.dedent(
