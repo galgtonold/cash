@@ -32,7 +32,7 @@ _compiled_methods.__enter__()
 
 from . import (
     _active,
-    _gc_context,  # noqa: F401 - collections run in a context of their own on 3.10/3.11
+    _gc_context,  # noqa: F401 - collections run in a context of their own
     _streams_at_import,
 )
 from .backends import FileBackend, InMemoryBackend, TieredBackend

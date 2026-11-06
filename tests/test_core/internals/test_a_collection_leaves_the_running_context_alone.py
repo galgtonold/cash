@@ -7,7 +7,10 @@ variable then lost its change, or the interrupted call read a mapping freed
 under it: cash's next reset of its own variable failed with ``LookupError``
 (a CI worker then failed every notebook test after it), or the process
 crashed. Each collection now runs in a fresh context of its own
-(`cash._gc_context`); 3.12 runs the collector only between bytecodes.
+(`cash._gc_context`); 3.12 runs the collector only between bytecodes, but
+there too a finalizer is no work of the code it interrupted, whose file
+tracker must not count it
+(`tests/test_notebook/calls/test_a_finalizer_run_during_a_call_is_not_the_calls_work.py`).
 """
 
 from __future__ import annotations
@@ -18,13 +21,7 @@ import subprocess
 import sys
 import textwrap
 
-import pytest
-
 import cash  # noqa: F401 - importing cash is what sets collections apart
-
-pytestmark = pytest.mark.skipif(
-    sys.version_info >= (3, 12), reason="3.12 runs the collector between bytecodes, never inside a ContextVar call"
-)
 
 RUNNING = contextvars.ContextVar("running", default="none")
 

@@ -1,6 +1,17 @@
-"""Garbage collections run in a context of their own on Python 3.10 and 3.11.
+"""Garbage collections run in a context of their own.
 
-There the collector can start inside any allocation, including the ones a
+The finalizers a collection runs are no work of the code it interrupted:
+they run wherever an allocation made the collector start. In that code's
+context they ran under its file tracker, so a ``__del__`` of something long
+gone that submitted to a thread pool, started a thread or wrote a file
+counted as the cached call's own: work still running as the call returned
+(`FileAccessTracker.work_outlived_block`) kept its result out of the cache
+-- on a loaded machine, where even a short task had not finished yet -- and
+a write refused the call for the session. Whether a collection fell inside
+a call depended on what ran before it, so the same cheap call was stored
+alone and ran again in a full test run.
+
+On Python 3.10 and 3.11 the collector can start inside any allocation, including the ones a
 ``ContextVar.set`` or ``reset`` makes while it builds the context's new
 mapping. A finalizer the collection runs (a ``__del__``, a generator closed
 as garbage) that sets or resets a context variable then replaces the mapping
@@ -14,7 +25,8 @@ runs the collector only between bytecodes, never inside such a call.
 
 Here each collection enters a fresh, empty context, and leaves it when it is
 done: what the finalizers set and reset lands there, and the context of the
-code they interrupted is left as it was. A finalizer resetting a token made
+code they interrupted is left as it was, and no tracker or observer of
+that code sees what they do. A finalizer resetting a token made
 outside the collection gets the ValueError of a token from another context
 (`reset_in_any_context` takes that), instead of changing the interrupted
 context at a moment nothing chose.
@@ -35,7 +47,7 @@ _HEADROOM = 50
 
 
 def _install() -> bool:
-    if sys.version_info >= (3, 12) or platform.python_implementation() != "CPython":
+    if platform.python_implementation() != "CPython":
         return False
     if any(getattr(callback, "_cash_own_context", False) for callback in gc.callbacks):
         return True  # a second import of this module: one context per collection
@@ -88,5 +100,5 @@ def _install() -> bool:
     return True
 
 
-#: True when collections run in a context of their own (CPython 3.10, 3.11).
+#: True when collections run in a context of their own (CPython).
 INSTALLED = _install()
