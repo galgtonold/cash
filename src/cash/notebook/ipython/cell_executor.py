@@ -643,9 +643,22 @@ class CellExecutor:
         # 5. AST parse (tolerate a top-level ``await``; a bare
         # ast.parse rejects module-level await and would silently skip the cell)
         ipython = None
+        tree = None
+        internal: Exception | None = None
         try:
             tree = CodeAnalyzer.parse_cell(raw_cell)
         except SyntaxError:
+            pass
+        except Exception as e:  # noqa: BLE001 - cash's own failure, not the cell's
+            # Stepped aside from after the ``except`` block, as the upstream
+            # check does (`UpstreamResolution._step_aside`): the cell runs
+            # uncached with NOTEBOOK-BAILOUT. Raised, it was the cell's error.
+            # The upstream check met such a failure first while it parsed the
+            # cell itself; it now shares this text's tree (`parse_cached`).
+            internal = e
+        if internal is not None:
+            return self._upstream._step_aside(internal, raw_cell, badge_display_id)
+        if tree is None:
             ipython = ipython_cell(raw_cell, self.shell.transform_cell)
             if ipython is None:
                 self._badges.close(badge_display_id)
