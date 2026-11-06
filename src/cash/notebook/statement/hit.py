@@ -129,7 +129,10 @@ class CacheHitServer:
             # What the run put into the helper memos it filled goes back into
             # them once the outputs are restored, as one graph with them.
             changes = cached_data.get(MEMO_CHANGES_FIELD) if isinstance(cached_data, dict) else None
-            put_back = helper_memos.put_back(metadata.helper_memos, changes, self._restorer.shell.user_ns)
+            outputs = (
+                (cached_data.get("variables"), cached_data.get(ECHO_FIELD)) if isinstance(cached_data, dict) else None
+            )
+            put_back = helper_memos.put_back(metadata.helper_memos, changes, self._restorer.shell.user_ns, outputs)
             if isinstance(put_back, str):
                 return self._refused(put_back)
         try:
