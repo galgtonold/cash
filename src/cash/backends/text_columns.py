@@ -46,6 +46,11 @@ __all__ = ["Encoded", "decode", "encode", "encode_column"]
 SEPARATOR = "\x00"
 #: Columns of fewer items are written each item in turn.
 _CODES_MIN_ITEMS = 1024
+#: A column of strings each its own object, longer than this many
+#: characters on average, is pickled as it is (`_long_strings`).
+_PLAIN_ABOVE_MEAN_CHARS = 128
+#: How many items `_long_strings` averages over at most (about).
+_LENGTH_SAMPLE = 1024
 
 
 class Encoded:
@@ -118,7 +123,8 @@ def encode(objects: Any, *, missing_only: bool = False) -> Encoded | None:
     """The numpy object array *objects* as an `Encoded`, or None to pickle
     it as it is: a string holds ``"\\0"`` or cannot be encoded as UTF-8,
     or (*missing_only*) an item is neither a ``str`` nor a missing value,
-    or more than half are not ``str``.
+    or more than half are not ``str``, or its strings, each its own
+    object, are long (`_long_strings`).
 
     When most items are the same objects as others (read from a file,
     each team's name is one object held 900k times), each object is
@@ -132,6 +138,8 @@ def encode(objects: Any, *, missing_only: bool = False) -> Encoded | None:
     flat = objects.reshape(-1, order=order) if objects.ndim != 1 else objects
     count = len(flat)
     codes, first = _shared(flat)
+    if codes is None and _long_strings(flat):
+        return None
     items = (flat if first is None else flat.take(first)).tolist()
     kinds = set(map(type, items))
     at = others = None
@@ -155,6 +163,27 @@ def encode(objects: Any, *, missing_only: bool = False) -> Encoded | None:
     data_array = np.frombuffer(data, dtype=np.uint8)
     block_digests.note_immutable(data_array)
     return Encoded(objects.shape, order, len(items), data_array, codes, at, others)
+
+
+def _long_strings(flat: Any) -> bool:
+    """Are the strings of the 1-d object array *flat* longer, on average
+    over a sample of `_LENGTH_SAMPLE` items, than `_PLAIN_ABOVE_MEAN_CHARS`?
+
+    Each its own object, long strings gain nothing from the buffer: pickle
+    writes and reads one as a length and its bytes, where `encode` adds a
+    list, a set of types, a join, a count of separators and an encode, and
+    `decode` a decode, a split and an array. 50,000 unique review texts
+    (66 MB) took 81 ms against plain pickle's 42 ms on Windows. On Linux,
+    over synthetic columns of unique strings, it wrote 2.6x and read 2.2x
+    slower at 1.3 KB a string, 1.3x and 1.5x slower at 190 characters, and
+    wrote as fast near 128, while 900k strings of ~17 characters still
+    wrote in 0.6x the time and read in the same."""
+    count = len(flat)
+    if not count:
+        return False
+    sample = flat[:: max(1, count // _LENGTH_SAMPLE)].tolist()
+    lengths = [len(item) for item in sample if type(item) is str]
+    return bool(lengths) and sum(lengths) > _PLAIN_ABOVE_MEAN_CHARS * len(lengths)
 
 
 def _apart(where: Any, codes: Any, count: int) -> int:
