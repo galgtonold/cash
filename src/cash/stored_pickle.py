@@ -59,6 +59,7 @@ __all__ = [
     "run_on",
     "running_on",
     "sized_object_digest",
+    "unshared_digest",
 ]
 
 
@@ -101,6 +102,8 @@ def run_on(deadline: float, done: int) -> float:
 #: The head of a digest: this format and the bulk-digest scheme, so an
 #: install hashing with another algorithm never matches.
 _HEAD = b"cash-value-pickle-2\x00" + TAG
+#: The head of an `unshared_digest`, which never equals an `object_digest`.
+_UNSHARED_HEAD = b"cash-value-unshared-1\x00" + TAG
 
 
 def _out_of_band_min() -> int:
@@ -326,7 +329,9 @@ def _keyed_digest(value: Any, deadline: float | None, reducer_override: Any = No
     return _keyed_digest_once(value, deadline, kept_state.defined_again())
 
 
-def _keyed_digest_once(value: Any, deadline: float | None, reducer_override: Any) -> tuple[str, int]:
+def _keyed_digest_once(
+    value: Any, deadline: float | None, reducer_override: Any, aliases: bool = False
+) -> tuple[str, int]:
     sink = _Sink(deadline, False, True)
     folded = hashlib.sha256()
     size = 0
@@ -351,8 +356,25 @@ def _keyed_digest_once(value: Any, deadline: float | None, reducer_override: Any
         extra=_stored_reducers(),
         sink=sink,
         reducer_override=reducer_override,
+        aliases=aliases,
     )
-    return _final(_HEAD, sink.sha.digest(), folded.digest()), size + sink.size
+    return _final(_UNSHARED_HEAD if aliases else _HEAD, sink.sha.digest(), folded.digest()), size + sink.size
+
+
+def unshared_digest(value: Any) -> str:
+    """The digest of *value*'s keyed pickle written without pickle's memo
+    for what cannot change (`kept_state.key_aliases`): which equal strings,
+    tuples or dtypes in it are one object -- how it was built or restored,
+    not what it holds -- leaves the digest as it is. A changeable object met
+    twice is still marked, so two names for one list digest apart from two
+    equal lists. Never the digest `object_digest` takes, nor the bytes a
+    store keeps."""
+    try:
+        return _keyed_digest_once(value, None, None, aliases=True)[0]
+    except pickle.PicklingError as exc:
+        if not kept_state.stopped_at_defined_again(exc):
+            raise
+    return _keyed_digest_once(value, None, kept_state.defined_again(), aliases=True)[0]
 
 
 def object_digest(value: Any, deadline: float | None = None) -> str:

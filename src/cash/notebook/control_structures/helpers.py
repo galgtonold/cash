@@ -36,7 +36,7 @@ from ...analysis.mutation_effects import (
     is_module_name,
     loop_target_roots,
 )
-from ...value_hash import is_identity_fallback_hash
+from ...value_hash import is_identity_fallback_hash, unshared_hash
 from ...value_types import BUILTIN_NAMES
 from ..cache_status import CacheStatus
 from ..callee_reach import module_state_names, module_state_writes, state_holders
@@ -749,7 +749,10 @@ def update_mutated_variable_lineages(
                 # it read and the lineage before name it.
                 value_hash = "artists"
             else:
-                value_hash = statement_processor.compute_hash(val)
+                # Blind to which equal strings in it are one object: the
+                # estimators a loop fits, made in one cell or restored from
+                # two entries, digest alike (`unshared_hash`).
+                value_hash = unshared_hash(val)
                 if entry is not None and var_name in entry[1] and is_identity_fallback_hash(val, value_hash):
                     value_hash = f"entry={entry[0]}"
 
