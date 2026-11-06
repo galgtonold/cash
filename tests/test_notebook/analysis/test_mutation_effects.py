@@ -259,3 +259,20 @@ def test_a_call_leaving_a_changed_mutable_default_changes_the_function():
     # Control: the default handed in, and a constant default.
     assert function_arg_mutations(ast.parse("collect(rows, acc=mine)"), sources.get) == {"mine"}
     assert function_arg_mutations(ast.parse("fixed(rows)"), sources.get) == {"rows"}
+
+
+def test_live_function_source_reads_a_decorated_module_helper(tmp_path):
+    """``btlib.run_backtest`` under ``@cash.cache``, whose wrapper is cash's
+    code, is read as the function it wraps, as a bare name is."""
+    import importlib.util
+
+    path = tmp_path / "wrapped_helpers.py"
+    path.write_text(
+        "import cash\n@cash.cache\ndef run(series, n):\n    return series[:n]\n",
+        encoding="utf-8",
+    )
+    spec = importlib.util.spec_from_file_location("wrapped_helpers", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    source = live_function_source("wrapped_helpers.run", {"wrapped_helpers": module})
+    assert source is not None and "def run(series, n)" in source
