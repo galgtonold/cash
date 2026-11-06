@@ -2417,8 +2417,9 @@ def _check_group(
                 # objects and weak references among the nodes still hold
                 # what they hold: ``H = weakref.ref(BIG)`` is cash's own weak
                 # reference to ``BIG`` too, and ``BIG`` went unlinked.
+                # Every name, as links: no first guess for a count to decide.
                 inner, inner_found = _inside_library_objects(
-                    group, nodes, owner, value_types, user_ns, bindings, cash_held, gave_up, leaves
+                    group, nodes, owner, value_types, user_ns, bindings, cash_held, gave_up, leaves, guess=False
                 )
                 if inner_found:
                     gave_up.add(inner, inner_found)
@@ -2559,9 +2560,12 @@ def _inside_library_objects(
     cash_held: list[Any],
     gave_up: GaveUp | None = None,
     leaves: Leaves | None = None,
+    guess: bool = True,
 ) -> tuple[set[str], set[str] | None]:
     """`_check_group`'s ``(shared, found)`` for what the library objects
     among *nodes* hold, which the walk does not read (`children_of` None).
+    With *guess*, the variables found going down are answer enough
+    (`_variables_holding`): the caller counts again with them joined.
 
     ``torch.optim.SGD(model.parameters())`` holds ``model``'s parameters
     inside its ``param_groups``; read as one closed object, nothing else held
@@ -2578,7 +2582,8 @@ def _inside_library_objects(
     held inside went unlinked before."""
     if user_ns is None:
         return set(), set()
-    inside, owners = _held_from_outside(nodes, owner, value_types, leaves)
+    interior: set[int] = set()
+    inside, owners = _held_from_outside(nodes, owner, value_types, leaves, interior)
     if inside is None:
         if gave_up is not None:
             gave_up.complete = False
@@ -2588,7 +2593,13 @@ def _inside_library_objects(
     ignore = {id(nodes), id(group), id(owner), id(bindings), id(cash_held), *nodes}
     ignore.update(id(binding) for binding in bindings if binding is not user_ns)
     ignore.update(id(obj) for obj in cash_held)
-    names = _variables_holding(inside, user_ns, set(group), ignore, value_types)
+    # The library objects' own parts are no way up to a variable: a part a
+    # variable reaches is held from outside, so it is in *inside* itself and
+    # climbed from. Climbed through, ``optim.SGD(model.parameters())`` went
+    # from each parameter up its own ``param_groups`` list, the group's dict
+    # and its ``__dict__`` back to the optimizer, a read of the heap a level.
+    ignore |= interior
+    names = _variables_holding(inside, user_ns, set(group), ignore, value_types, guess)
     if names is None:
         if gave_up is not None:
             gave_up.complete = False
@@ -2795,7 +2806,11 @@ _PLAIN_SCALARS = (str, int, float, bool, bytes, complex, type(None))
 
 
 def _held_from_outside(
-    nodes: dict[int, Any], owner: dict[int, str], value_types: tuple[type, ...], leaves: Leaves | None = None
+    nodes: dict[int, Any],
+    owner: dict[int, str],
+    value_types: tuple[type, ...],
+    leaves: Leaves | None = None,
+    interior: set[int] | None = None,
 ) -> tuple[dict[int, Any] | None, set[str]]:
     """``(inside, owners)``: the objects inside the library objects among
     *nodes* that something besides them holds, by id, and the names of the
@@ -2807,7 +2822,12 @@ def _held_from_outside(
     library's own validators and the like with every other such object.
     Nor is one of the process's standard streams (`_standard_streams`)
     looked for, nor an anchor of *leaves* (`share_group`), which is noted
-    met as the walk notes it."""
+    met as the walk notes it.
+
+    *interior*, when given, gets the ids of every object read inside a
+    library object that is not held back: the library objects' own parts,
+    which the climb up from *inside* need not go through
+    (`_inside_library_objects`)."""
     roots = {key: owner[key] for key, node in nodes.items() if _reads_inside(node, value_types)}
     if not roots:
         return {}, set()
@@ -2873,6 +2893,8 @@ def _held_from_outside(
     held = [
         key for key in within if root_of[key] not in held_back and sys.getrefcount(within[key]) - refs[key] > _OVERHEAD
     ]
+    if interior is not None:
+        interior.update(key for key, root in root_of.items() if root not in held_back)
     return {key: within[key] for key in held}, {roots[root_of[key]] for key in held}
 
 
@@ -2882,6 +2904,7 @@ def _variables_holding(
     skip: set[str],
     ignore: set[int],
     value_types: tuple[type, ...],
+    guess: bool = False,
 ) -> set[str] | None:
     """The variables of *user_ns* not in *skip* that hold an object of
     *inside*, found up `gc.get_referrers`; None when the climb did not end
@@ -2895,6 +2918,16 @@ def _variables_holding(
     for name, value in list(user_ns.items()):
         if name not in skip and not _SHELL_NAME.fullmatch(name) and not is_value(value, value_types):
             by_id.setdefault(id(value), []).append(name)
+    direct: set[str] = set()
+    for key in inside:
+        direct.update(by_id.get(key, ()))
+    guessed = _variables_reaching(inside, user_ns, by_id, ignore, value_types) if guess else None
+    if guessed:
+        # Found down from the variables, a level of the heap read for none:
+        # a first guess the caller's count decides (`share_group` joins them
+        # and counts again; a holder it missed is still over the count, and
+        # is climbed to then).
+        return direct | guessed
     stop = {id(user_ns), id(inside), id(by_id), *ignore}
     namespaces = [vars(module) for module in list(sys.modules.values()) if module is not None]
     namespaces = [namespace for namespace in namespaces if namespace is not user_ns]
@@ -2965,6 +2998,105 @@ def _variables_holding(
         frontier[:] = following
         del following
     return names if not frontier else None
+
+
+#: How far `_variables_reaching` looks: levels down, objects in all, and the
+#: widest container it reads item by item.
+_REACH_DEPTH = 6
+_REACH_NODES = 5_000
+_REACH_WIDEST = 2_000
+
+
+def _variables_reaching(
+    inside: dict[int, Any],
+    user_ns: Mapping[str, Any],
+    by_id: Mapping[int, list[str]],
+    ignore: set[int],
+    value_types: tuple[type, ...],
+) -> set[str]:
+    """The variables of *by_id* (by the id of their value) from which an
+    object of *inside* is reached going down, within `_REACH_DEPTH` levels
+    and `_REACH_NODES` objects: through builtin containers, the attributes
+    of the notebook's objects and what a library's object holds (as
+    `_held_from_outside` reads it), never through an object of *ignore*
+    (the group's own, cash's), a module, a class or a function.
+
+    The climb up `gc.get_referrers` (`_variables_holding`) reads the whole
+    heap once per level: from ``model``'s parameters up through
+    ``optimizer``'s ``param_groups`` it took four reads (0.3 s on a PyTorch
+    notebook), for every cell that touched ``model``. Each variable named
+    here does hold one of them; one missed is left to the climb. Empty when
+    none is found."""
+    wanted = set(inside)
+    wanted_types = {type(obj) for obj in inside.values()}
+    exact = EXACT_VALUE_TYPES
+    roots: dict[int, list[str]] = {}
+    for key, names in by_id.items():
+        if key in wanted or key in ignore:
+            continue
+        roots[key] = names
+    if not roots:
+        return set()
+    parents: dict[int, list[int]] = {key: [] for key in roots}
+    level = [user_ns[names[0]] for names in roots.values()]
+    level = [obj for obj in level if not instance_of(obj, _NOT_REACHED)]
+    hits: set[int] = set()
+    budget = _REACH_NODES
+    for _depth in range(_REACH_DEPTH):
+        below = []
+        for obj in level:
+            if issubclass(type(obj), _CONTAINERS):
+                if len(obj) > _REACH_WIDEST:
+                    if (type(obj) is list or type(obj) is tuple) and _holds_by_id(obj, wanted, wanted_types):
+                        hits.add(id(obj))
+                    continue
+                children = children_of(obj)
+            else:
+                attrs = attributes_of(obj)
+                if attrs is not None:
+                    children = list(attrs.values())
+                elif _read_down(obj, value_types):
+                    children = get_referents(obj)
+                else:
+                    continue
+            if not children:
+                continue
+            parent = id(obj)
+            for child in children:
+                ckey = id(child)
+                if ckey in wanted:
+                    hits.add(parent)
+                    continue
+                if type(child) in exact or ckey in ignore or instance_of(child, _NOT_REACHED):
+                    continue
+                seen_from = parents.get(ckey)
+                if seen_from is not None:
+                    seen_from.append(parent)
+                    continue
+                parents[ckey] = [parent]
+                below.append(child)
+        budget -= len(below)
+        if not below or budget < 0:
+            break
+        level = below
+    found: set[str] = set()
+    stack = list(hits)
+    reached: set[int] = set()
+    while stack:
+        key = stack.pop()
+        if key in reached:
+            continue
+        reached.add(key)
+        if key in roots:
+            found.update(roots[key])
+        stack.extend(parents.get(key, ()))
+    return found
+
+
+#: What `_variables_reaching` neither starts from nor reads down: what a
+#: module, a class or a function holds is the library's or a key's business,
+#: as the climb it stands in for stops at modules and library classes.
+_NOT_REACHED = (types.ModuleType, type, types.FunctionType, types.BuiltinFunctionType, types.FrameType)
 
 
 def _module_references(objs: list[Any], namespaces: list[dict]) -> list[int] | None:

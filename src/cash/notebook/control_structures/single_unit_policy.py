@@ -61,6 +61,11 @@ MIN_OVERHEAD_SEC = 1.0
 # len(part))` through the machinery, 1.1 s against 8 ms plain.
 CHEAP_PASSES = 5
 CHEAP_WORK_SHARE = 0.1
+# A loop of known length runs the rest of its cheap passes as one unit only
+# when the bookkeeping that saves is worth it (`rest_worth_one_unit`): a unit
+# fingerprints what it may change, which for two passes left of
+# ``big[k] = 5`` over a 4 MB array cost more than the passes.
+CHEAP_REST_MIN_SAVING_SEC = 0.05
 
 # Builtin callables that PRODUCE an iterable without side effects, so a
 # header built only from them may be left to the unit to evaluate
@@ -341,6 +346,17 @@ def passes_were_cheap(work_shares: Sequence[float]) -> bool:
     if len(work_shares) < CHEAP_PASSES:
         return False
     return statistics.median(work_shares) < CHEAP_WORK_SHARE
+
+
+def rest_worth_one_unit(overheads: Sequence[float], remaining: int) -> bool:
+    """Whether the rest of a loop of known length, *remaining* passes, goes
+    as one unit, its passes so far having cost *overheads* seconds each
+    beyond their statements' own work: once they measured cheap
+    (`passes_were_cheap`), and the bookkeeping the rest would take is at
+    least `CHEAP_REST_MIN_SAVING_SEC`."""
+    if remaining <= 0 or not overheads:
+        return False
+    return statistics.median(overheads) * remaining >= CHEAP_REST_MIN_SAVING_SEC
 
 
 def header_names_the_iterator(iter_node: ast.AST, iterable: Any, user_ns: dict[str, Any]) -> bool:
