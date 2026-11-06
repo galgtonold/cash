@@ -437,7 +437,7 @@ class VirtualLineage:
             return True  # the session was reset after the snapshot
         if cached.share_edge_generation == len(changes):
             return False
-        return not cached.statement_hashes.isdisjoint(changes[cached.share_edge_generation :])
+        return self.tracking_state.share_edges_changed_since(cached.share_edge_generation, cached.statement_hashes)
 
     def _check_lightweight_hash_cache(
         self,

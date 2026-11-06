@@ -378,13 +378,13 @@ class StatementRecords:
                 if key not in at and len(at) >= self._SHARE_RECORDS_AT_MAX:
                     at.pop(next(iter(at)))
                 at[key] = record
-                state.share_edge_changes.append(source_hash)
+                state.note_share_edge_change(source_hash)
         known = state.share_edge_records
         had = known.get(source_hash)
         if had == record:
             return
         known[source_hash] = record
-        state.share_edge_changes.append(source_hash)
+        state.note_share_edge_change(source_hash)
         if not record and not had and not self._earlier_share_edges(source_hash):
             return
         persisted = sorted([src, dst] for src, dst in record)
@@ -413,7 +413,7 @@ class StatementRecords:
         # was kept: the simulation takes it so too, not its text.
         known[source_hash] = found or frozenset()
         state = self.tracking_state
-        state.share_edge_changes.append(source_hash)
+        state.note_share_edge_change(source_hash)
         return found
 
     def _earlier_share_edges(self, source_hash: str) -> frozenset[tuple[str, str]] | None:

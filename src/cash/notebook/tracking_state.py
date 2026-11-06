@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from collections.abc import Mapping, Set
+from collections.abc import Iterable, Mapping, Set
 from dataclasses import MISSING, dataclass, field, fields
 from typing import TYPE_CHECKING, Any
 
@@ -535,6 +535,11 @@ class TrackingState:
     # snapshot taken before a record of one of its statements changed is
     # simulated again.
     share_edge_changes: list[str] = field(default_factory=list)
+    # The source hash -> the index of its last change in
+    # ``share_edge_changes``: a snapshot asks whether one of its statements
+    # changed after its generation without reading the changes since, a
+    # list growing with every statement run. W: `note_share_edge_change`.
+    share_edge_last_change: dict[str, int] = field(default_factory=dict)
     # Class name -> the source hashes of the statements whose run changed
     # the class in place or left a value on it (``sbox.hold(d)`` through
     # ``type(self).held``): a re-run of another cell that changes the class
@@ -569,6 +574,18 @@ class TrackingState:
     def __post_init__(self) -> None:
         if not isinstance(self.executed_input_lineages, InputLineages):
             self.executed_input_lineages = self.lineage.input_lineages(self.executed_input_lineages)
+
+    def note_share_edge_change(self, source_hash: str) -> None:
+        """Record that a run changed the share-edge record of the statement
+        with *source_hash* (``share_edge_changes``)."""
+        self.share_edge_last_change[source_hash] = len(self.share_edge_changes)
+        self.share_edge_changes.append(source_hash)
+
+    def share_edges_changed_since(self, generation: int, source_hashes: Iterable[str]) -> bool:
+        """Whether the record of one of *source_hashes* changed at or after
+        *generation* (an index into ``share_edge_changes``)."""
+        last = self.share_edge_last_change
+        return any(last.get(h, -1) >= generation for h in source_hashes)
 
     def reset_session_state(self) -> None:
         """Forget everything this session recorded, as a fresh kernel would.
