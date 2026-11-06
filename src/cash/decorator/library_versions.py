@@ -568,7 +568,21 @@ def library_tops(functions: Iterable[Callable], own_pkg: str | None) -> set[str]
 
 def library_versions(functions: Iterable[Callable], own_pkg: str | None) -> list[tuple[str, str]]:
     """``(distribution, version)`` for each installed library *functions*
-    reach, sorted; empty when they reach none."""
+    reach, sorted; empty when they reach none.
+
+    Cash's own look, never the caller's input (`untracked`): finding a
+    distribution lists every folder on ``sys.path`` (``importlib.metadata``,
+    `_folder_print`) and reads its metadata, and a cached call made from a
+    notebook statement had the statement record those folders -- the
+    project folder first among them -- as inputs keyed on their stat. A file
+    saved next to the code then re-ran the statement and every one after it
+    that took its value (p08). The version itself is in the key.
+    """
+    with untracked():
+        return _library_versions(functions, own_pkg)
+
+
+def _library_versions(functions: Iterable[Callable], own_pkg: str | None) -> list[tuple[str, str]]:
     found: set[tuple[str, str]] = set()
     saved: dict | None = None
     for top in library_tops(functions, own_pkg):
