@@ -954,10 +954,16 @@ class StatementProcessor:
         self._records.persist_read_provenance(code, accessed_files)
 
     def persist_write_provenance(
-        self, code: str, inputs: set[str], tree: ast.Module | None, written: frozenset[str] | set[str] = frozenset()
+        self,
+        code: str,
+        inputs: set[str],
+        tree: ast.Module | None,
+        written: frozenset[str] | set[str] = frozenset(),
+        again: bool = False,
     ) -> None:
-        """Record what file(s) the writer statement *code* produced."""
-        self._records.persist_write_provenance(code, inputs, tree, written)
+        """Record what file(s) the writer statement *code* produced; *again*:
+        the writes the statement that ran it recorded just now."""
+        self._records.persist_write_provenance(code, inputs, tree, written, again)
 
     def persist_metadata_only(self, key: str, metadata: dict[str, Any]) -> None:
         """Write *metadata* under *key* with no value, for a later kernel to

@@ -73,6 +73,9 @@ class StatementRecords:
         # This cell's statements so far, each with the lineages it read, for a
         # chart writer's provenance (``carrier_history``).
         self._cell_stmt_log: list[tuple[str, dict[str, str]]] = []
+        # The paths and file snapshot the last write provenance found, with
+        # the code and writes it was found for (`persist_write_provenance`).
+        self._last_provenance_files: tuple[str, frozenset[str], list[str] | None, dict | None] | None = None
         # What was last written this session, per record, so an unchanged
         # record is not written again.
         self._import_bindings_written: dict[str, dict[str, dict[str, Any]]] = {}
@@ -496,6 +499,7 @@ class StatementRecords:
         inputs: set[str],
         tree: ast.Module | None,
         written: frozenset[str] | set[str] = frozenset(),
+        again: bool = False,
     ) -> None:
         """Record what file(s) a just-executed writer statement produced.
 
@@ -513,28 +517,14 @@ class StatementRecords:
         temporary file renamed into place -- is dropped; a path the code names
         must exist. The input lineages cover the globals the statement's
         callees read too: an edited helper is a new payload.
+
+        *again*: the same writes just recorded for the same code by the
+        statement that ran it (a ``with`` block, recorded once more by its
+        structure): the paths and snapshot found then are taken.
         """
         try:
-            raw_paths = statement_written_paths(code, tree, self.shell.user_ns) or set()
-            named = {os.path.abspath(p) for p in raw_paths}
-            if len(named) > self._MAX_PROVENANCE_FILES:
-                return  # snapshotting would cost more than a re-fire saves
-            # Looked for only up to the limit: ``tar.extractall()`` wrote
-            # 100,000 files, each probed in turn to learn there were too many.
-            seen: set[str] = set()
-            room = self._MAX_PROVENANCE_FILES - len(named)
-            for p in written:
-                if p not in named and _exists(p):
-                    seen.add(p)
-                    if len(seen) > room:
-                        return
-            if not named and not seen:
-                return  # nothing resolvable, nothing observed -> stay conservative
-            paths = sorted(named | seen)
-            file_deps = snapshot_file_deps(set(paths))
-            # Every recorded path must be readable now, else there is nothing to
-            # vouch for (and a later freshness check would fail anyway).
-            if any(p not in file_deps for p in paths):
+            paths, file_deps = self._provenance_files(code, tree, frozenset(written), again)
+            if paths is None or file_deps is None:
                 return
             names = set(inputs) | called_function_globals(
                 inputs, self.shell.user_ns, variable_lineage=self.tracking_state.variable_lineage
@@ -561,6 +551,54 @@ class StatementRecords:
                 )
         except (OSError, TypeError, ValueError, AttributeError):
             logger.debug("%s write-provenance persistence failed", _LOG_PROCESSOR)
+
+    def _provenance_files(
+        self, code: str, tree: ast.Module | None, written: frozenset[str], again: bool = False
+    ) -> tuple[list[str] | None, dict | None]:
+        """The paths writer *code* produced and their snapshot, or Nones when
+        it records nothing (`persist_write_provenance`).
+
+        Kept for the code and writes it was found for, for one call *again*:
+        a ``with`` block is recorded by the statement that ran it and then by
+        its structure (``ControlStructureProcessor._record_writes``), the
+        same writes moments apart, and each probed every written file
+        (``tar.extractall()`` in a ``with``: a stat per file, twice). Taken
+        once, never by a later statement, whose files may have changed."""
+        last, self._last_provenance_files = self._last_provenance_files, None
+        if again and last is not None and last[0] == code and last[1] == written:
+            return last[2], last[3]
+        found: tuple[list[str] | None, dict | None] = (None, None)
+        try:
+            found = self._find_provenance_files(code, tree, written)
+        finally:
+            self._last_provenance_files = (code, written, *found)
+        return found
+
+    def _find_provenance_files(
+        self, code: str, tree: ast.Module | None, written: frozenset[str]
+    ) -> tuple[list[str] | None, dict | None]:
+        raw_paths = statement_written_paths(code, tree, self.shell.user_ns) or set()
+        named = {os.path.abspath(p) for p in raw_paths}
+        if len(named) > self._MAX_PROVENANCE_FILES:
+            return None, None  # snapshotting would cost more than a re-fire saves
+        # Looked for only up to the limit: ``tar.extractall()`` wrote
+        # 100,000 files, each probed in turn to learn there were too many.
+        seen: set[str] = set()
+        room = self._MAX_PROVENANCE_FILES - len(named)
+        for p in written:
+            if p not in named and _exists(p):
+                seen.add(p)
+                if len(seen) > room:
+                    return None, None
+        if not named and not seen:
+            return None, None  # nothing resolvable, nothing observed -> stay conservative
+        paths = sorted(named | seen)
+        file_deps = snapshot_file_deps(set(paths))
+        # Every recorded path must be readable now, else there is nothing to
+        # vouch for (and a later freshness check would fail anyway).
+        if any(p not in file_deps for p in paths):
+            return None, None
+        return paths, file_deps
 
     def _carrier_histories(self, code: str, inputs: set[str]) -> dict[str, str]:
         """``{figure name: history fingerprint}`` for the figures writer *code* reads.

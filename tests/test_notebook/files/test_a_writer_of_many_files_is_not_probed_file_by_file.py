@@ -121,3 +121,32 @@ def test_cashs_own_checks_of_written_paths_are_not_the_statements_probes(tmp_pat
     if dangling is not None:
         assert write_observer._lexists(str(dangling)), "a dangling link is there, as os.path.lexists says"
     assert not asked, "went through the wrapped os.stat"
+
+
+def test_a_with_block_recorded_again_by_its_structure_is_probed_once(tmp_path, probes):
+    """A ``with`` block is recorded by the statement that ran it and then by
+    its structure, the same writes moments apart: the second takes what the
+    first found, and records it all the same."""
+    backend = _Backend()
+    written = _written(tmp_path, 5)
+    rec = _records(backend)
+    rec.persist_write_provenance("with x: extract()", {"a"}, None, written)
+    first = dict(backend.stored)
+    rec.persist_write_provenance("with x: extract()", {"a", "b"}, None, written, again=True)
+    assert len(probes) == len(written)
+    assert backend.stored.keys() == first.keys()
+    (record,) = backend.stored.values()
+    assert record["paths"] == sorted(written)
+
+
+def test_what_was_found_is_taken_once_and_only_when_asked(tmp_path, probes):
+    """A later statement of the same text, whose files may have changed, and
+    a second ask again, look at the files anew."""
+    backend = _Backend()
+    written = _written(tmp_path, 5)
+    rec = _records(backend)
+    rec.persist_write_provenance("extract()", set(), None, written)
+    rec.persist_write_provenance("extract()", set(), None, written)  # not again: probed anew
+    rec.persist_write_provenance("extract()", set(), None, written, again=True)
+    rec.persist_write_provenance("extract()", set(), None, written, again=True)  # taken once only
+    assert len(probes) == 3 * len(written)
