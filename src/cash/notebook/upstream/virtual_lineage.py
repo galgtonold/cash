@@ -1018,8 +1018,17 @@ class VirtualLineage:
         put_state(sim, memo.before, memo.after)
         sim.stmt_lookup_times.update(memo.lookup_times)
         sim.trace.extend(memo.trace)
+        # The snapshot holds the state after the cell, all of it, as a
+        # simulation of the cell leaves it: the memo compared only the
+        # modules the cell names (`state_of`), so the modules kept with it
+        # may lack an import added above since (``import collections``),
+        # and a later check starting after this cell began without it.
         new_cache_entries.append(
-            cached._replace(virtual_lineage=recording.plain(), cell_file_deps=dict(cached.cell_file_deps))
+            cached._replace(
+                virtual_lineage=recording.plain(),
+                virtual_modules=set(sim.virtual_modules),
+                cell_file_deps=dict(cached.cell_file_deps),
+            )
         )
         self.memo_hits += 1
         if reference is not None:
