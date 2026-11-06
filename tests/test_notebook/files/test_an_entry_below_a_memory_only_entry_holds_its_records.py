@@ -18,6 +18,7 @@ import pytest
 from cash.backends.file_backend import FileBackend
 from cash.backends.memory_backend import InMemoryBackend
 from cash.backends.tiered_backend import TieredBackend
+from cash.backends.write_cost import PIN_ENV
 from cash.notebook import file_records
 from cash.notebook.file_records import UNRESOLVED_PREFIX, entry_file_records
 from cash.tracking.file_dep_snapshot import snapshot_is_fresh
@@ -25,7 +26,8 @@ from tests._cell_driver import run_cash_cell
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
 SETUP = "import time\nimport numpy as np"
-# 40 MB in a fraction of a second: not worth the disk, kept in memory only.
+# 40 MB in a fraction of a second: kept in memory only, as its write costs
+# more than a re-run saves (`clean_backend` writes at 1 MiB/s here).
 BIG = (
     f"raw = (time.sleep({ABOVE_PERSISTENCE_FLOOR_S}), "
     "np.tile(np.frombuffer(open('data.bin', 'rb').read(), dtype=np.uint8), 40_000))[1]"
@@ -44,7 +46,12 @@ def cache_dir(tmp_path):
 
 
 @pytest.fixture
-def clean_backend(cache_dir):
+def clean_backend(cache_dir, monkeypatch):
+    # Writes priced at 1 MiB/s: BIG is kept in memory only whatever its
+    # compute took. Weighed against the disk ceiling instead (128 MiB/s of
+    # compute), its 0.21 s left 0.09 s to spare, and on the macOS runners
+    # it was stored on disk now and then, the positive control failing.
+    monkeypatch.setenv(PIN_ENV, "1")
     # RAM in front of disk, as a notebook's cash is.
     backend = TieredBackend([InMemoryBackend(), FileBackend(cache_dir=cache_dir)])
     yield backend
