@@ -771,12 +771,23 @@ def used(
             continue
         fired = cleared is not None and id(memo) in cleared.fired
         first = cleared is not None and id(memo) in cleared.first
-        if (info.hits, info.misses, info.currsize) == (hits, misses, size) and not clears and not fired:
+        if (info.hits, info.misses, info.currsize) == (hits, misses, size) and not fired:
             now = _held(memo)
-            if held is None or (now is not None and now[0] == held[0]):
+            if not clears:
+                if held is None or (now is not None and now[0] == held[0]):
+                    continue
+                if changes is None:
+                    clears = True  # emptied and filled again to the same counts
+            elif changes is not None and held is not None and now is not None and now[0] == held[0]:
+                # Code that names ``cache_clear`` (``held_karp_tsp`` clearing
+                # ``shortest_segment``) leaves alone a memo whose counters
+                # and very key and answer objects are as they were, and
+                # which no clear it was seen making reached: a clear and a
+                # refill would hold new answers. The statement did not call
+                # it, so what it holds decides nothing: ``benchmark``
+                # answers holding timings, computed again above, must not
+                # stop the statement from being served.
                 continue
-            if changes is None:
-                clears = True  # emptied and filled again to the same counts
         label = _label(where)
         items = _items(memo)
         change = None
