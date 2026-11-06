@@ -83,3 +83,21 @@ def test_a_cell_reading_the_frame_after_a_review_is_edited_sees_the_edit(nb_runn
     out = nb_runner.get_output(8)
     assert f"EDITED {edited}" in out, out
     assert "EDITED" in (work / "movie_data.csv").read_text(encoding="utf-8"), "the CSV was not written again"
+
+
+@pytest.mark.timeout(150)
+@pytest.mark.fresh_kernel
+def test_after_a_restart_the_frame_read_back_sees_the_edit(nb_runner):
+    work = nb_runner.work_dir
+    _archive(work)
+    nb_runner.create_notebook(_cells(GUARDED))
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+
+    (work / "aclImdb" / "train" / "neg" / "17_7.txt").write_text("EDITED review", encoding="utf-8")
+    nb_runner.restart()
+    nb_runner._inject_notebook_path()
+    nb_runner.run_cells([1, 8])
+
+    out = nb_runner.get_output(8)
+    assert "EDITED 1" in out, out
