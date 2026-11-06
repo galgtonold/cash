@@ -141,7 +141,7 @@ from ...analysis.analysis_budget import (
     no_analysis_budget,
 )
 from ...analysis.annotations import CacheAnnotation
-from ...analysis.ast_util import called_names, handed_names, resolve_dotted_name
+from ...analysis.ast_util import called_names, handed_names, parse_cached, resolve_dotted_name, walk_tree
 from ...analysis.cacheability import analyze_statement, statement_writes_files
 from ...analysis.cacheability_decision import (
     cacheability_verdict,
@@ -379,7 +379,7 @@ _ATOMS = frozenset({int, float, complex, bool, str, bytes, type(None)})
 def _calls_a_method(tree: ast.AST | None) -> bool:
     """Whether *tree* calls anything: a method (``boxes[0].hold(d)``), or a
     function handed the object (``keep(sbox, d)`` doing ``type(o).held``)."""
-    return tree is not None and any(isinstance(node, ast.Call) for node in ast.walk(tree))
+    return tree is not None and any(isinstance(node, ast.Call) for node in walk_tree(tree))
 
 
 def _classes_with_state(
@@ -658,7 +658,7 @@ def _bound_names(tree: ast.AST | None) -> set[str] | None:
     if tree is None:
         return None
     found: set[str] = set()
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load):
             found.add(node.id)
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -1840,10 +1840,9 @@ class StatementProcessor:
 
         run.process_start = _perf_counter()
 
-        try:
-            run.tree = ast.parse(code.strip())
-        except SyntaxError:
-            run.tree = None
+        # Shared with every other reading of this text (`parse_cached`):
+        # the analyses of the statement walk its tree once (`walk_tree`).
+        run.tree = parse_cached(code.strip())
 
     def _analyze(self, run: StatementRun) -> tuple[StatementEffects, float, float]:
         """Key *run* and settle its inputs and outputs.
@@ -4260,7 +4259,7 @@ class StatementProcessor:
         edges = self.tracking_state.derivation_edges
         bound = bound_names(tree) or set()
         called: set[str] = set()
-        for node in ast.walk(tree):
+        for node in walk_tree(tree):
             if not isinstance(node, ast.Call):
                 continue
             func = node.func
@@ -5314,9 +5313,9 @@ def _loop_targets(tree: ast.AST | None) -> frozenset[str]:
         return frozenset()
     return frozenset(
         name.id
-        for node in ast.walk(tree)
+        for node in walk_tree(tree)
         if isinstance(node, (ast.For, ast.AsyncFor))
-        for name in ast.walk(node.target)
+        for name in walk_tree(node.target)
         if isinstance(name, ast.Name)
     )
 

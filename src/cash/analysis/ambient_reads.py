@@ -29,7 +29,7 @@ from ..effects import (
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..install_paths import is_user_code_file
 from ..source_reading import getsource
-from .ast_util import called_names, resolve_callee
+from .ast_util import called_names, resolve_callee, walk_tree
 from .file_effects import get_base_name
 from .helper_bindings import build_namespace, callee_chain
 from .purity_flow import LogOnlyFlow, is_log_helper, is_log_line
@@ -183,7 +183,7 @@ def log_only_ambient_reads(
     none of which could reach a result.
     """
     candidates = []
-    for node in ast.walk(func_def):
+    for node in walk_tree(func_def):
         if isinstance(node, ast.Call):
             if ambient_call(node, namespace) is not None:
                 candidates.append(node)

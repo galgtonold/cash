@@ -32,7 +32,7 @@ from cash._user_attrs import attribute_or, has_attribute, instance_of, is_routin
 
 from .._memo import NOTEBOOK_STATEMENTS
 from ..analysis.analysis_budget import AnalysisBudgetExceeded
-from ..analysis.ast_util import parse_cached, plain_statement
+from ..analysis.ast_util import parse_cached, plain_statement, walk_tree
 from ..analysis.bytecode import NAME_LOADS, argvals
 from ..analysis.callee_effects import source_global_mutations
 from ..analysis.handed_callables import handed_callable_values
@@ -212,7 +212,7 @@ def names_read(code: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
     if tree is None:
         return ()
     steps: list[tuple[str, tuple[str, ...]]] = []
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
             steps.append((node.id, ()))
         elif isinstance(node, ast.Attribute):
@@ -498,7 +498,7 @@ def _state_writes(
         if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign, ast.Delete)):
             targets = node.targets if isinstance(node, (ast.Assign, ast.Delete)) else [node.target]
             for target in targets:
-                for part in ast.walk(target):
+                for part in walk_tree(target):
                     if isinstance(part, ast.expr) and isinstance(attribute_or(part, "ctx", None), (ast.Store, ast.Del)):
                         rooted(part)
                         if (
@@ -536,7 +536,7 @@ def _taken_by_from_imports(statements: Iterable[ast.AST]) -> dict[str, types.Mod
     a value other than a submodule from, by the name it binds."""
     taken: dict[str, types.ModuleType] = {}
     for statement in statements:
-        for node in ast.walk(statement):
+        for node in walk_tree(statement):
             if isinstance(node, ast.ImportFrom) and node.module and not node.level:
                 module = sys.modules.get(node.module)
                 if module is None:
@@ -552,7 +552,7 @@ def _bound_to_setters(statements: Iterable[ast.AST]) -> set[str]:
     return {
         target.id
         for statement in statements
-        for node in ast.walk(statement)
+        for node in walk_tree(statement)
         if isinstance(node, ast.Assign) and isinstance(node.value, ast.Name) and node.value.id in ("setattr", "delattr")
         for target in node.targets
         if isinstance(target, ast.Name)
@@ -565,7 +565,7 @@ def _imported_modules(statements: Iterable[ast.AST]) -> dict[str, types.ModuleTy
     b``, ``from pkg import mod``."""
     bound: dict[str, types.ModuleType] = {}
     for statement in statements:
-        for node in ast.walk(statement):
+        for node in walk_tree(statement):
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     name = alias.name if alias.asname else alias.name.partition(".")[0]
@@ -613,7 +613,7 @@ def import_state_writes(code: str, namespace: Mapping[str, Any] | None) -> froze
     if tree is None:
         return frozenset()
     names: list[str] = []
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if isinstance(node, ast.Import):
             names.extend(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
@@ -761,7 +761,7 @@ def _taken_from_libraries(code: str, namespace: Mapping[str, Any]) -> list[tuple
     if tree is None:
         return []
     taken = []
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if isinstance(node, ast.ImportFrom) and not node.level and node.module in _SET_ON_LIBRARIES:
             module = sys.modules.get(node.module)
             taken.extend(
@@ -1186,11 +1186,11 @@ def _receiver_stores(code: types.CodeType) -> frozenset[str]:
                 return
             node = inner
 
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign, ast.Delete)):
             targets = node.targets if isinstance(node, (ast.Assign, ast.Delete)) else [node.target]
             for target in targets:
-                for part in ast.walk(target):
+                for part in walk_tree(target):
                     if isinstance(part, (ast.Attribute, ast.Subscript)) and isinstance(part.ctx, (ast.Store, ast.Del)):
                         target_root(part)
         elif (
@@ -1303,7 +1303,7 @@ def _seeds_and_calls(source: str) -> tuple[frozenset[str], tuple[str, ...]]:
     except (SyntaxError, ValueError, AttributeError, RecursionError):
         return frozenset(), ()
     calls = sorted(
-        {node.func.id for node in ast.walk(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+        {node.func.id for node in walk_tree(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
     )
     return seeded, tuple(calls)
 
@@ -1448,7 +1448,7 @@ def module_globals(code: str, namespace: Mapping[str, Any] | None) -> dict[str, 
     tree = parse_cached(code)
     if tree is None or "get_ipython()" in code:
         return {}
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             return {}
         if isinstance(node, ast.Call) and _call_name(node.func) == "reload":

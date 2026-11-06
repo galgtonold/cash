@@ -39,6 +39,7 @@ from cash._memo import CODE_OBJECTS, LruMemo
 from cash._paths import MAIN_MODULE_NAMES, is_pseudo_filename
 from cash._referents import get_referents
 from cash._user_attrs import attribute_or, builtin_items, has_attribute, instance_of
+from cash.analysis.ast_util import walk_tree
 from cash.analysis.bytecode import NAME_LOADS, argvals
 from cash.analysis.callee_effects import resolve_function_def, source_global_mutations
 from cash.analysis.mutations import MUTATING_METHODS
@@ -362,9 +363,9 @@ def _builtins_reading(fdef: ast.FunctionDef | ast.AsyncFunctionDef, param: str) 
     called: set[str] = set()
     uses = []
     for stmt in fdef.body:
-        for node in ast.walk(stmt):
+        for node in walk_tree(stmt):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
-                if any(isinstance(n, ast.Name) and n.id == param for n in ast.walk(node)):
+                if any(isinstance(n, ast.Name) and n.id == param for n in walk_tree(node)):
                     return None
             for child in ast.iter_child_nodes(node):
                 parents[id(child)] = node

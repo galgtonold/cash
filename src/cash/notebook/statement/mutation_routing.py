@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from ... import rewrite_in_place
 from ..._user_attrs import attribute_or
+from ...analysis.ast_util import walk_tree
 from ...analysis.mutation_effects import (
     control_structure_mutations,
     is_module_name,
@@ -795,7 +796,7 @@ def _assigned_into(node: ast.AST) -> set[str]:
     """The names *node* assigns into: the root of an attribute or item it
     assigns, augments or deletes (``p.n += 1``, ``d[k] = v``, ``del a.x``)."""
     names: set[str] = set()
-    for sub in ast.walk(node):
+    for sub in walk_tree(node):
         if isinstance(sub, ast.Attribute | ast.Subscript) and isinstance(sub.ctx, ast.Store | ast.Del):
             root = sub.value
             while isinstance(root, ast.Attribute | ast.Subscript):
@@ -809,7 +810,7 @@ def _rebound_names(node: ast.AST) -> set[str]:
     """The names *node* binds or deletes itself, its loop target among them,
     as against the names it only assigns into."""
     names: set[str] = set()
-    for sub in ast.walk(node):
+    for sub in walk_tree(node):
         if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store | ast.Del):
             names.add(sub.id)
         elif isinstance(sub, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):

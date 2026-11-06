@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 from cash._user_attrs import has_attribute
 from cash.control_markers import iteration_digest
 
-from ...analysis.ast_util import parse_cached
+from ...analysis.ast_util import parse_cached, walk_tree
 from ...analysis.cacheability import statement_writes_files
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.mutations import consumed_input_names
@@ -1500,5 +1500,5 @@ def _called_names(code: str) -> frozenset[str]:
     if tree is None:
         return frozenset()
     return frozenset(
-        node.func.id for node in ast.walk(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        node.func.id for node in walk_tree(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     )

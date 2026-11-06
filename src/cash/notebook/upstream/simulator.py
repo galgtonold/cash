@@ -25,7 +25,7 @@ from typing import Any
 from cash._user_attrs import attribute_or
 from cash.control_markers import strip_markers
 
-from ...analysis.ast_util import parse_cached, resolve_callee
+from ...analysis.ast_util import parse_cached, resolve_callee, walk_tree
 from ...analysis.mutation_effects import CellEffects
 from ...diagnostics import log_diagnostic, warn_diagnostic
 from ...exceptions import CashWarning
@@ -964,7 +964,7 @@ def _binds_without_reading(code: str, user_ns: dict) -> bool:
     except (SyntaxError, ValueError):
         return False
     stdlib = attribute_or(sys, "stdlib_module_names", frozenset())
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if not isinstance(node, ast.Call):
             continue
         callee = resolve_callee(node.func, user_ns, builtins_fallback=True)
@@ -1003,7 +1003,7 @@ def _named_in(code: str) -> frozenset[str]:
     if tree is None:
         return frozenset()
     names: set[str] = set()
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if isinstance(node, ast.Name):
             names.add(node.id)
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):

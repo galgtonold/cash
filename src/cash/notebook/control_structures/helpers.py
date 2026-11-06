@@ -29,6 +29,7 @@ from ...analysis.annotations import (
     get_statement_annotations,
     parse_annotations_in_range,
 )
+from ...analysis.ast_util import walk_tree
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.mutation_effects import (
     condition_mutations,
@@ -436,7 +437,7 @@ def _names_in(code: object) -> set[str] | None:
         tree = ast.parse(textwrap.dedent(strip_markers(code)))
     except (SyntaxError, ValueError, RecursionError):
         return None
-    return {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    return {node.id for node in walk_tree(tree) if isinstance(node, ast.Name)}
 
 
 def structure_mutations(shell, statement_processor, node: ast.AST) -> set[str]:
@@ -579,7 +580,7 @@ def inherit_body_file_deps(
     executed_file_deps = statement_processor.tracking_state.executed_file_deps
     if executed_file_deps is None:
         return
-    used = {sub.id for body_node in body_nodes for sub in ast.walk(body_node) if isinstance(sub, ast.Name)}
+    used = {sub.id for body_node in body_nodes for sub in walk_tree(body_node) if isinstance(sub, ast.Name)}
     files: set[str] = set(body_files or ())
     for name in used:
         files.update(executed_file_deps.get(name, ()))
@@ -612,7 +613,7 @@ def collect_body_input_lineages(
     """
     reads: set[str] = set()
     for body_node in body_nodes:
-        for sub in ast.walk(body_node):
+        for sub in walk_tree(body_node):
             if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load):
                 reads.add(sub.id)
     lineages: dict[str, str] = {}

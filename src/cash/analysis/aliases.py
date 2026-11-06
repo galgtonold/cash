@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 
+from .ast_util import walk_tree
 from .mutations import module_level_stmts
 
 __all__ = ["cell_alias_map", "aliased_sources", "bare_alias_targets", "reference_alias_targets"]
@@ -57,7 +58,7 @@ def cell_alias_map(tree: ast.Module) -> dict[str, str]:
         # Walrus binding in this statement's own expressions. (Nested control
         # bodies are visited as their own yielded statements, so restrict the
         # walk to NamedExprs that are not themselves inside a deferred scope.)
-        for sub in ast.walk(node):
+        for sub in walk_tree(node):
             if isinstance(sub, ast.NamedExpr):
                 _bind(sub.target, sub.value)
         if not isinstance(node, ast.Assign):

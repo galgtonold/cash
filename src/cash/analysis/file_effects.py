@@ -13,6 +13,7 @@ import ast
 from dataclasses import dataclass
 
 from ..effects import Action, EffectKind, classify_call, is_open_write_mode, writes_to_console
+from .ast_util import walk_tree
 
 __all__ = [
     "NOTEBOOK_POLICY",
@@ -222,7 +223,7 @@ def locally_opened_handles(tree: ast.AST) -> set[str]:
     def _is_open(node) -> bool:
         return isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "open"
 
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if isinstance(node, (ast.With, ast.AsyncWith)):
             for item in node.items:
                 if _is_open(item.context_expr) and isinstance(item.optional_vars, ast.Name):
@@ -331,7 +332,7 @@ def statement_write_repeatability(code: str, tree: "ast.Module | None" = None) -
             return REPEATABILITY_UNKNOWN
     local_handles = frozenset(locally_opened_handles(tree))
     verdicts: set[str] = set()
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if not isinstance(node, ast.Call):
             continue
         verdict = call_repeatability(node, local_handles)
@@ -380,7 +381,7 @@ def statement_only_deletes_files(code: str, tree: "ast.Module | None" = None) ->
         except (SyntaxError, ValueError, TypeError):
             return False
     deletes = False
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if not isinstance(node, ast.Call):
             continue
         func = node.func

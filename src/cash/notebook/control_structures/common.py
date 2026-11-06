@@ -11,6 +11,7 @@ import hashlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from ...analysis.ast_util import walk_tree
 from ...value_hash import compute_hash
 from ...value_types import IMMUTABLE_PRIMS
 
@@ -54,7 +55,7 @@ def _header_binds(node: ast.AST) -> bool:
     while isinstance(current, ast.If):
         headers.append(current.test)
         current = current.orelse[0] if len(current.orelse) == 1 else None
-    return any(isinstance(sub, ast.NamedExpr) for header in headers for sub in ast.walk(header))
+    return any(isinstance(sub, ast.NamedExpr) for header in headers for sub in walk_tree(header))
 
 
 def get_control_structure_type(node: ast.AST) -> str | None:
@@ -81,7 +82,7 @@ def contains_break_or_continue(nodes: list[ast.AST]) -> bool:
     containing them must be executed as a single unit.
     """
     for node in nodes:
-        for child in ast.walk(node):
+        for child in walk_tree(node):
             if isinstance(child, (ast.Break, ast.Continue)):
                 return True
     return False

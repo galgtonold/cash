@@ -51,6 +51,7 @@ from cash.tracking.randomness.detect import RandomnessCallInfo, mints_unseeded_g
 from cash.tracking.randomness.estimator_draws import estimator_draws
 
 from ..._memo import NOTEBOOK_STATEMENTS
+from ...analysis.ast_util import parse_cached, walk_tree
 from ...analysis.code_analyzer import clean_cell_source, parse_cell_source
 from ...decorator.rng import unseeded_library_calls_in
 from ...exceptions import SOURCE_RETRIEVAL_ERRORS
@@ -533,7 +534,9 @@ class StatementRandomness:
         namespace = attribute_or(self.shell, "user_ns", None)
         if not isinstance(namespace, dict):
             return []
-        tree = ast.parse(code)
+        tree = parse_cached(code)
+        if tree is None:
+            return []
         found: list[tuple[RandomnessCallInfo, str, str]] = []
         numpy_seeded = "numpy.random" not in unseeded_streams({"numpy.random"})
         for call, line, condition in unseeded_library_calls_in(tree, namespace, classes=False):
@@ -760,7 +763,7 @@ class StatementRandomness:
         """True if the statement calls ``.fit(...)`` / ``.partial_fit(...)``."""
         if tree is None:
             return False
-        for node in ast.walk(tree):
+        for node in walk_tree(tree):
             if (
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Attribute)
@@ -1223,7 +1226,7 @@ def _bare_seeds(code: str, helper_seeds: Callable[[str], frozenset[str]] | None 
         return set()
     call = tree.body[0].value
     arguments = [*call.args, *(kw.value for kw in call.keywords)]
-    if any(isinstance(node, ast.Call) for arg in arguments for node in ast.walk(arg)):
+    if any(isinstance(node, ast.Call) for arg in arguments for node in walk_tree(arg)):
         return set()
     try:
         seeded = set(get_seeding_rng_modules(code))

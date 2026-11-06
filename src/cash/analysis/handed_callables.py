@@ -61,7 +61,7 @@ from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..source_reading import own_source, wrapper_layers
 from ..tracking.function_tracker import is_local_module
 from .analysis_budget import check_analysis_budget
-from .ast_util import CallScope, calls_in, nodes_in, same_as_all
+from .ast_util import CallScope, calls_in, nodes_in, same_as_all, walk_tree
 from .callee_effects import (
     all_param_names,
     callee_global_mutations,
@@ -547,9 +547,9 @@ def iteration_bindings(tree: ast.AST | None) -> dict[str, tuple[ast.expr, ...]]:
     out: dict[str, list[ast.expr]] = {}
     if tree is None:
         return {}
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if isinstance(node, (ast.comprehension, ast.For, ast.AsyncFor)):
-            for target in ast.walk(node.target):
+            for target in walk_tree(node.target):
                 if isinstance(target, ast.Name):
                     out.setdefault(target.id, []).append(node.iter)
     return {name: tuple(iters) for name, iters in out.items()}
@@ -749,7 +749,7 @@ def _lambda_reach(node: ast.Lambda, namespace: Mapping[str, Any], out: _Resolved
             out.values.extend(inner.values)
             out.any_of.extend(inner.any_of)
             out.unknown.extend(inner.unknown)
-    for sub in ast.walk(node.body):
+    for sub in walk_tree(node.body):
         if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load) and sub.id not in params:
             value = namespace.get(sub.id, _MISSING)
             if value is not _MISSING and callable(value):
@@ -3186,8 +3186,8 @@ def _read_call_facts(node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda) 
     global_methods: set[tuple[str, str]] = set()
     named_calls: set[str] = set()
     super_methods: set[str] = set()
-    local = params | {n.id for n in ast.walk(node) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
-    for call in ast.walk(node):
+    local = params | {n.id for n in walk_tree(node) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+    for call in walk_tree(node):
         if not isinstance(call, ast.Call):
             continue
         if not isinstance(call.func, ast.Attribute):
@@ -3631,7 +3631,7 @@ def _changes_its_class(source: str) -> bool:
             and expr.args[0].id == first
         )
 
-    for sub in ast.walk(node):
+    for sub in walk_tree(node):
         if isinstance(sub, (ast.Assign, ast.Delete)):
             targets = sub.targets
         elif isinstance(sub, (ast.AugAssign, ast.AnnAssign)):
@@ -3660,7 +3660,7 @@ def _reaches_its_class(source: str) -> bool:
     if not params:
         return False
     first = params[0]
-    for sub in ast.walk(node):
+    for sub in walk_tree(node):
         if (
             isinstance(sub, ast.Call)
             and isinstance(sub.func, ast.Name)
@@ -3698,7 +3698,7 @@ def _changes_its_first_argument(
     if first in params_mutated_in_function(node):
         return True
     seen = seen | {id(fn)}
-    for call in ast.walk(node):
+    for call in walk_tree(node):
         if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Attribute):
             continue
         chain_root = call.func.value

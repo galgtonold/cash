@@ -16,6 +16,7 @@ from typing import Any
 
 from cash._user_attrs import attribute_or, instance_of
 
+from .ast_util import walk_tree
 from .mutations import A_HELD_WRITER, MUTATING_METHODS, THE_NAMESPACE, WRITER_ROOTS, WRITER_SPELLINGS, WRITES_INTO
 
 __all__ = ["namespace_writer_aliases", "writer_names_aliases"]
@@ -110,4 +111,4 @@ def _writes_into(held: tuple[Any], namespace: Mapping[str, Any]) -> str:
 
 def namespace_writer_aliases(tree: ast.AST, namespace: Mapping[str, Any]) -> dict[str, str | None]:
     """`writer_names_aliases` for the names *tree* reads."""
-    return writer_names_aliases({node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}, namespace)
+    return writer_names_aliases({node.id for node in walk_tree(tree) if isinstance(node, ast.Name)}, namespace)

@@ -107,6 +107,8 @@ if TYPE_CHECKING:
 
 import logging
 
+from ...analysis.ast_util import walk_tree
+
 logger = logging.getLogger(__name__)
 
 
@@ -128,7 +130,7 @@ def _cell_scope_nodes(node: ast.AST) -> Iterator[ast.AST]:
                 stack.extend(sub.args.defaults + [d for d in sub.args.kw_defaults if d is not None])
             else:
                 stack.append(sub.generators[0].iter)
-            stack.extend(w for w in ast.walk(sub) if isinstance(w, ast.NamedExpr))
+            stack.extend(w for w in walk_tree(sub) if isinstance(w, ast.NamedExpr))
         elif isinstance(sub, _DEFINITIONS):
             stack.extend(_definition_header(sub))
         else:
@@ -172,13 +174,13 @@ def _read_names(node: ast.AST) -> set[str]:
 
     in_cell_scope = loads(_cell_scope_nodes(node))
     local: set[str] = set()
-    for sub in ast.walk(node):
+    for sub in walk_tree(node):
         if isinstance(sub, ast.Lambda):
             local |= {a.arg for a in sub.args.posonlyargs + sub.args.args + sub.args.kwonlyargs}
         elif isinstance(sub, _NEW_SCOPES):
             for gen in sub.generators:
-                local |= {n.id for n in ast.walk(gen.target) if isinstance(n, ast.Name)}
-    return in_cell_scope | (loads(ast.walk(node)) - local)
+                local |= {n.id for n in walk_tree(gen.target) if isinstance(n, ast.Name)}
+    return in_cell_scope | (loads(walk_tree(node)) - local)
 
 
 def _changed_by_a_failed_step(
@@ -219,7 +221,7 @@ def _changed_by_its_callees(
     tree = ast.Module(body=[node], type_ignores=[])
     try:
         effects = statement_effects(ast.unparse(node), tree, namespace=namespace, resolve_source=resolve_source)
-        bound = {sub.id for sub in ast.walk(node) if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store)}
+        bound = {sub.id for sub in walk_tree(node) if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store)}
         changed = set(effects.callee_globals | effects.arg_mutations | (effects.outputs - bound))
         if effects.unanalysed:
             changed |= _handed_or_called_on(tree)
@@ -641,9 +643,22 @@ class CellExecutor:
         # 5. AST parse (tolerate a top-level ``await``; a bare
         # ast.parse rejects module-level await and would silently skip the cell)
         ipython = None
+        tree = None
+        internal: Exception | None = None
         try:
             tree = CodeAnalyzer.parse_cell(raw_cell)
         except SyntaxError:
+            pass
+        except Exception as e:  # noqa: BLE001 - cash's own failure, not the cell's
+            # Stepped aside from after the ``except`` block, as the upstream
+            # check does (`UpstreamResolution._step_aside`): the cell runs
+            # uncached with NOTEBOOK-BAILOUT. Raised, it was the cell's error.
+            # The upstream check met such a failure first while it parsed the
+            # cell itself; it now shares this text's tree (`parse_cached`).
+            internal = e
+        if internal is not None:
+            return self._upstream._step_aside(internal, raw_cell, badge_display_id)
+        if tree is None:
             ipython = ipython_cell(raw_cell, self.shell.transform_cell)
             if ipython is None:
                 self._badges.close(badge_display_id)

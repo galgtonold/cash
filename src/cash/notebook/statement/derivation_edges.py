@@ -48,7 +48,7 @@ from typing import Any, Callable
 from cash._user_attrs import attribute_or, instance_of
 
 from ... import _plain_data
-from ...analysis.ast_util import parse_cached
+from ...analysis.ast_util import parse_cached, walk_tree
 from ..borrowed_memory import borrowed_memory_names
 from ..shared_objects import (
     EXACT_CONTAINER_TYPES,
@@ -170,7 +170,7 @@ def bound_names(tree: ast.AST | None) -> set[str] | None:
     if tree is None:
         return None
     found: set[str] = set()
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load):
             found.add(node.id)
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -925,7 +925,7 @@ def _returned_params(source: str | None) -> tuple[frozenset[int], frozenset[str]
     positional = [a.arg for a in (*args.posonlyargs, *args.args)]
     names = set(positional) | {a.arg for a in args.kwonlyargs}
     returned: set[str] = set()
-    for sub in ast.walk(fn):
+    for sub in walk_tree(fn):
         if isinstance(sub, ast.Return) and sub.value is not None:
             returned |= _value_roots(sub.value, lambda _name: None, {}) & names
     if not returned:

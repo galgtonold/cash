@@ -45,6 +45,7 @@ from typing import Any
 
 from cash._referents import get_referents
 from cash._user_attrs import attribute_or, instance_of
+from cash.analysis.ast_util import walk_tree
 from cash.install_paths import is_user_code_file, is_user_module
 from cash.value_hash import compute_hash
 
@@ -1211,7 +1212,7 @@ def _memos_cleared_by(code: str | None, ns: Mapping[str, Any] | None, fn: Any = 
     functions: list[Any] = [fn] if fn is not None else []
     try:
         if code is not None and ns is not None:
-            for node in ast.walk(ast.parse(code)):
+            for node in walk_tree(ast.parse(code)):
                 if isinstance(node, ast.Attribute) and node.attr == "cache_clear":
                     attrs: list[str] = []
                     value = node.value
@@ -1705,7 +1706,7 @@ def _text_names_counters(code: str, names: tuple[str, ...] = _COUNTER_NAMES) -> 
         tree = ast.parse(code)
     except (SyntaxError, ValueError, RecursionError):
         return any(name in code for name in names)
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if isinstance(node, ast.Attribute):
             if node.attr in names:
                 return True

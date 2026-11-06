@@ -17,6 +17,7 @@ from typing import NamedTuple
 
 from cash._user_attrs import attribute_or
 
+from ...analysis.ast_util import walk_tree
 from ...analysis.cacheability import analyze_statement
 from ...value_types import BUILTIN_NAMES
 
@@ -37,11 +38,11 @@ class TargetChange(NamedTuple):
 
 
 def _bound_names(node: ast.AST) -> set[str]:
-    return {n.id for n in ast.walk(node) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+    return {n.id for n in walk_tree(node) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
 
 
 def _read_names(node: ast.AST) -> set[str]:
-    return {n.id for n in ast.walk(node) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+    return {n.id for n in walk_tree(node) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
 
 
 def _work_calls(stmt: ast.stmt) -> list[ast.Call]:
@@ -51,7 +52,7 @@ def _work_calls(stmt: ast.stmt) -> list[ast.Call]:
     every time)."""
     outer = stmt.value if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call) else None
     found = []
-    for node in ast.walk(stmt):
+    for node in walk_tree(stmt):
         if not isinstance(node, ast.Call):
             continue
         func = node.func

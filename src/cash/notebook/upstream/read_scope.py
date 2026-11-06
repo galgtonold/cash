@@ -13,7 +13,7 @@ import logging
 
 from cash._user_attrs import has_attribute
 
-from ...analysis.ast_util import parse_cached
+from ...analysis.ast_util import parse_cached, walk_tree
 from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source, statement_code
 from ...analysis.namespace_effects import (
     LISTING_TEXT_MARKERS,
@@ -53,8 +53,10 @@ def _bind_literal_paths(stmt: str, bound: dict, namespace) -> None:
     """
 
     try:
-        tree = ast.parse(CodeAnalyzer.strip_magics(stmt))
+        tree = parse_cached(CodeAnalyzer.strip_magics(stmt))
     except (SyntaxError, ValueError, TypeError):
+        return
+    if tree is None:
         return
     node = tree.body[0] if len(tree.body) == 1 else None
     if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
@@ -65,7 +67,7 @@ def _bind_literal_paths(stmt: str, bound: dict, namespace) -> None:
         if value is not None:
             bound[name] = value
             return
-    for n in ast.walk(tree):
+    for n in walk_tree(tree):
         if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
             bound[n.id] = None
 

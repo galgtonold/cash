@@ -11,7 +11,7 @@ import ast
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
-from .ast_util import plain_statement
+from .ast_util import plain_statement, walk_tree
 from .file_effects import SideEffectVisitor
 
 __all__ = [
@@ -494,7 +494,7 @@ def writer_aliases(tree: ast.AST) -> dict[str, str]:
     setattr as sa2``, ``import operator as op``. ``name -> spelling``, for
     `writer_of`."""
     found: dict[str, str] = {}
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
             if _is_namespace_call(node.value):
                 found[node.targets[0].id] = THE_NAMESPACE
@@ -560,7 +560,7 @@ def unrooted_write(tree: ast.AST, aliases: Mapping[str, str | None]) -> str | No
     writer (``f('x', -3)`` for ``f = functools.partial(setattr, points[7])``).
     None when every write it makes is rooted at a name. *aliases* as for
     `writer_of`: the namespace's and *tree*'s own."""
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if isinstance(node, ast.Call):
             root = node.func
             while isinstance(root, ast.Attribute):
@@ -578,7 +578,7 @@ def write_into_a_return(tree: ast.AST, of_the_users: Callable[[str], bool]) -> s
     (``pick(7).x = -3`` with ``def pick(i): return points[i]``), or None. A
     function *of_the_users* names may hand back an object a variable holds,
     and no name in the text says which."""
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         for written_into in _written_objects(node, {}):
             root = written_into
             while isinstance(root, (ast.Attribute, ast.Subscript)):
@@ -889,7 +889,7 @@ def _rhs_reads_target(rhs: ast.expr, target: ast.expr) -> bool:
         tgt = ast.unparse(target)
     except _UNPARSE_ERRORS:
         return False
-    for sub in ast.walk(rhs):
+    for sub in walk_tree(rhs):
         if isinstance(sub, (ast.Subscript, ast.Attribute)):
             try:
                 if ast.unparse(sub) == tgt:
@@ -964,7 +964,7 @@ def _rhs_reads_same_column(rhs: ast.expr, target: ast.expr, base: str) -> bool:
     written = _subscript_column_keys(target)
     if not written:  # unknown/positional target -> defer to the exact-match path
         return False
-    for sub in ast.walk(rhs):
+    for sub in walk_tree(rhs):
         if not isinstance(sub, ast.Subscript) or extract_base_name(sub) != base:
             continue
         read = _subscript_column_keys(sub)
@@ -1006,7 +1006,7 @@ def _target_key_grows_receiver(target: ast.expr, base: str) -> bool:
     5``, idempotent) is NOT flagged."""
     if not isinstance(target, ast.Subscript):
         return False
-    for sub in ast.walk(target.slice):
+    for sub in walk_tree(target.slice):
         if (
             isinstance(sub, ast.Call)
             and isinstance(sub.func, ast.Name)
@@ -1161,7 +1161,7 @@ def crossref_reassigned_vars(tree: ast.Module | None) -> frozenset[str]:
                 and len(tgt.elts) == len(node.value.elts)
             ):
                 continue
-            rhs_names = {n.id for n in ast.walk(node.value) if isinstance(n, ast.Name)}
+            rhs_names = {n.id for n in walk_tree(node.value) if isinstance(n, ast.Name)}
             for te, ve in zip(tgt.elts, node.value.elts):
                 if (
                     isinstance(te, ast.Name)
@@ -1178,12 +1178,12 @@ def crossref_reassigned_vars(tree: ast.Module | None) -> frozenset[str]:
     read_before: set[str] = set()
     for node in stmts:
         if isinstance(node, ast.Assign):
-            rhs_names = {n.id for n in ast.walk(node.value) if isinstance(n, ast.Name)}
+            rhs_names = {n.id for n in walk_tree(node.value) if isinstance(n, ast.Name)}
             for tgt in node.targets:
                 for t in iter_store_targets(tgt):
                     if isinstance(t, ast.Name) and t.id in read_before and t.id not in rhs_names:
                         flagged.add(t.id)
-        for n in ast.walk(node):
+        for n in walk_tree(node):
             if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load):
                 read_before.add(n.id)
 
@@ -1266,7 +1266,7 @@ def consumed_input_names(tree: ast.Module | None) -> frozenset[str]:
     if tree is None:
         return frozenset()
     parents: dict[ast.AST, ast.AST] = {}
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         for child in ast.iter_child_nodes(node):
             parents[child] = node
 
@@ -1299,7 +1299,7 @@ def consumed_input_names(tree: ast.Module | None) -> frozenset[str]:
         return True
 
     consumed: set[str] = set()
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
             if _occurrence_consumes(node):
                 consumed.add(node.id)
@@ -1426,7 +1426,7 @@ def repeatable_setting_receiver(tree: ast.Module | None) -> str | None:
     if not (setter or rc_update):
         return None
     for arg in [*call.args, *(kw.value for kw in call.keywords)]:
-        if any(isinstance(sub, ast.Name) and sub.id == base for sub in ast.walk(arg)):
+        if any(isinstance(sub, ast.Name) and sub.id == base for sub in walk_tree(arg)):
             return None
     return base
 
@@ -1560,7 +1560,7 @@ def _walk_with_locals(node: ast.AST, local: frozenset[str] = frozenset()):
         inner = set(local)
         for comp in node.generators:
             yield from _walk_with_locals(comp.iter, frozenset(inner))
-            inner |= {name.id for name in ast.walk(comp.target) if isinstance(name, ast.Name)}
+            inner |= {name.id for name in walk_tree(comp.target) if isinstance(name, ast.Name)}
             for test in comp.ifs:
                 yield from _walk_with_locals(test, frozenset(inner))
         parts = [node.key, node.value] if isinstance(node, ast.DictComp) else [node.elt]
@@ -1767,7 +1767,7 @@ def selfref_reassignment_targets(node: ast.AST) -> frozenset[str]:
         return frozenset({node.target.id})
     if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
         target_name = node.targets[0].id
-        for sub in ast.walk(node.value):
+        for sub in walk_tree(node.value):
             if isinstance(sub, ast.Name) and sub.id == target_name and isinstance(sub.ctx, ast.Load):
                 return frozenset({target_name})
     return frozenset()
@@ -1892,7 +1892,7 @@ def accumulator_loop_body_shape(
     loop_vars = _simple_loop_target_names(for_node.target)
     if not loop_vars:
         return None
-    for child in ast.walk(stmt):
+    for child in walk_tree(stmt):
         if isinstance(child, (ast.Break, ast.Continue)):
             return None
     for arg in (*call.args, *(kw.value for kw in call.keywords)):
@@ -1952,7 +1952,7 @@ def _fresh_seed_kind(name: str, prior_nodes: Sequence[ast.stmt]) -> str | None:
         kind = _seed_kinds(node).get(name)
         if kind is not None:
             return kind
-        if any(isinstance(sub, ast.Name) and sub.id == name for sub in ast.walk(node)):
+        if any(isinstance(sub, ast.Name) and sub.id == name for sub in walk_tree(node)):
             return None
     return None
 
@@ -2042,7 +2042,7 @@ def seeded_accumulator_loop(
     containers proven fresh.
     """
     targets: set[str] = set()
-    for sub in ast.walk(for_node):
+    for sub in walk_tree(for_node):
         if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Global, ast.Nonlocal)):
             return None
         if isinstance(sub, (ast.For, ast.AsyncFor)):
@@ -2055,7 +2055,7 @@ def seeded_accumulator_loop(
     visitor.visit(for_node)
     rebound = {
         sub.target.id
-        for sub in ast.walk(for_node)
+        for sub in walk_tree(for_node)
         if isinstance(sub, ast.AugAssign) and isinstance(sub.target, ast.Name)
     }
     mutated = {m.variable for m in visitor.mutations}
@@ -2070,8 +2070,8 @@ def seeded_accumulator_loop(
     if not kinds:
         return None
 
-    parents = {child: node for node in ast.walk(for_node) for child in ast.iter_child_nodes(node)}
-    for sub in ast.walk(for_node):
+    parents = {child: node for node in walk_tree(for_node) for child in ast.iter_child_nodes(node)}
+    for sub in walk_tree(for_node):
         if isinstance(sub, ast.Name) and sub.id in kinds and not _accumulator_use_ok(sub, parents, kinds[sub.id]):
             return None
     return frozenset(kinds) | targets

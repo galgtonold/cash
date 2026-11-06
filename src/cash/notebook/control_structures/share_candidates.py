@@ -35,6 +35,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from cash._user_attrs import attribute_or
+from cash.analysis.ast_util import walk_tree
 
 __all__ = ["share_candidates"]
 
@@ -204,7 +205,7 @@ def _plain_index(node: ast.AST) -> bool:
 
 
 def _target_names(node: ast.AST) -> set[str]:
-    return {sub.id for sub in ast.walk(node) if isinstance(sub, ast.Name)}
+    return {sub.id for sub in walk_tree(node) if isinstance(sub, ast.Name)}
 
 
 def share_candidates(
@@ -219,13 +220,13 @@ def share_candidates(
     # The calls of an iterable `_item_roots` took (``enumerate(rows)``,
     # ``d.items()``): they hand on items, and store nothing.
     taken: set[int] = set()
-    for sub in ast.walk(node):
+    for sub in walk_tree(node):
         if isinstance(sub, (ast.For, ast.AsyncFor)):
             by_target = _target_roots(sub.target, sub.iter, user_ns)
             if by_target is None:
                 names |= _target_names(sub.target)
             else:
-                taken.update(id(call) for call in ast.walk(sub.iter) if isinstance(call, ast.Call))
+                taken.update(id(call) for call in walk_tree(sub.iter) if isinstance(call, ast.Call))
                 for target, roots in by_target.items():
                     static.setdefault(target, set()).update(roots)
         elif isinstance(sub, (ast.Assign, ast.AnnAssign, ast.AugAssign)):

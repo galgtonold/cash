@@ -14,7 +14,7 @@ from collections.abc import Callable, Iterable
 
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from .analysis_budget import check_analysis_budget
-from .ast_util import CallScope, called_names, handed_names, plain_statement
+from .ast_util import CallScope, called_names, handed_names, plain_statement, walk_tree
 from .mutations import MUTATING_METHODS, MutationVisitor, iter_store_targets
 
 __all__ = [
@@ -307,11 +307,11 @@ def iterated_sources(tree: ast.AST | None) -> dict[str, frozenset[str]]:
         return {}
     sources: dict[str, set[str]] = {}
     loop_targets: set[str] = set()
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
             for part, values in loop_target_parts(node.target, node.iter):
                 roots = _iterable_roots(values) if values is not None else set()
-                for target in ast.walk(part):
+                for target in walk_tree(part):
                     if isinstance(target, ast.Name):
                         sources.setdefault(target.id, set()).update(roots)
                         if not isinstance(node, ast.comprehension):
@@ -360,8 +360,8 @@ def loop_target_parts(target: ast.expr, iterable: ast.expr) -> list[tuple[ast.ex
 def _iterable_roots(expr: ast.AST) -> set[str]:
     """The variables the values of *expr*, a loop's iterable, come out of:
     every name it reads, but the functions it calls (``enumerate``, ``zip``)."""
-    called = {id(n.func) for n in ast.walk(expr) if isinstance(n, ast.Call)}
-    return {n.id for n in ast.walk(expr) if isinstance(n, ast.Name) and id(n) not in called}
+    called = {id(n.func) for n in walk_tree(expr) if isinstance(n, ast.Call)}
+    return {n.id for n in walk_tree(expr) if isinstance(n, ast.Name) and id(n) not in called}
 
 
 def argument_roots(arg: ast.AST, iterated: dict[str, frozenset[str]]) -> frozenset[str]:
@@ -404,7 +404,7 @@ def read_by_helpers(arg: ast.AST, function_source: Callable[[str], str | None]) 
     knows the dotted name: one level only, and ``points`` was not watched."""
     found: set[str] = set()
     todo: list[str] = []
-    for sub in ast.walk(arg):
+    for sub in walk_tree(arg):
         if isinstance(sub, ast.Call):
             name = _dotted(sub.func)
             if name is not None:
@@ -423,7 +423,7 @@ def read_by_helpers(arg: ast.AST, function_source: Callable[[str], str | None]) 
             continue
         for node in _helper_nodes(source):
             local = scope_locals(node)
-            reads = {n.id for n in ast.walk(node) if isinstance(n, ast.Name) and n.id not in local}
+            reads = {n.id for n in walk_tree(node) if isinstance(n, ast.Name) and n.id not in local}
             found |= reads
             todo.extend(reads - seen)
     return found
@@ -458,7 +458,7 @@ def _helper_nodes(source: str) -> list[ast.AST]:
         parsed = _lambda_on_its_line(text)
     if parsed is None:
         return []
-    return [n for n in ast.walk(parsed) if isinstance(n, ast.Lambda)]
+    return [n for n in walk_tree(parsed) if isinstance(n, ast.Lambda)]
 
 
 def _lambda_on_its_line(text: str) -> ast.AST | None:
@@ -497,7 +497,7 @@ def _names_inside(node: ast.AST) -> set[str]:
     nor what goes into a new scalar (`_SCALAR_BUILTINS`, `_NEW_VALUES`). A
     name a walrus binds reads what its value reads, wherever the walrus
     sits (``[q] if (q := points[7]) is not None else []``)."""
-    walrus = {sub.target.id: sub.value for sub in ast.walk(node) if isinstance(sub, ast.NamedExpr)}
+    walrus = {sub.target.id: sub.value for sub in walk_tree(node) if isinstance(sub, ast.NamedExpr)}
     found: set[str] = set()
 
     def visit(sub: ast.AST, bound: frozenset[str]) -> None:
@@ -528,7 +528,7 @@ def _names_inside(node: ast.AST) -> set[str]:
             inner = bound
             for index, gen in enumerate(sub.generators):
                 visit(gen.iter, bound if index == 0 else inner)
-                inner = inner | {n.id for n in ast.walk(gen.target) if isinstance(n, ast.Name)}
+                inner = inner | {n.id for n in walk_tree(gen.target) if isinstance(n, ast.Name)}
                 for test in gen.ifs:
                     visit(test, inner)
             for part in (sub.key, sub.value) if isinstance(sub, ast.DictComp) else (sub.elt,):
@@ -856,14 +856,14 @@ def writes_a_module_it_imports(source: str) -> bool:
         return False
     imported = {
         (alias.asname or alias.name).split(".")[0]
-        for sub in ast.walk(node)
+        for sub in walk_tree(node)
         if isinstance(sub, (ast.Import, ast.ImportFrom))
         for alias in sub.names
         if isinstance(sub, ast.Import) or alias.asname or alias.name != "*"
     }
     if not imported:
         return False
-    for sub in ast.walk(node):
+    for sub in walk_tree(node):
         targets: list[ast.expr] = []
         if isinstance(sub, (ast.Assign, ast.Delete)):
             targets = list(sub.targets)
@@ -893,11 +893,11 @@ def source_global_rebinds(source: str) -> frozenset[str]:
     node = parse_function_source(source)
     if node is None:
         return frozenset()
-    declared = {name for sub in ast.walk(node) if isinstance(sub, ast.Global) for name in sub.names}
+    declared = {name for sub in walk_tree(node) if isinstance(sub, ast.Global) for name in sub.names}
     if not declared:
         return frozenset()
     stored = {
-        sub.id for sub in ast.walk(node) if isinstance(sub, ast.Name) and isinstance(sub.ctx, (ast.Store, ast.Del))
+        sub.id for sub in walk_tree(node) if isinstance(sub, ast.Name) and isinstance(sub.ctx, (ast.Store, ast.Del))
     }
     return frozenset(declared & stored)
 
@@ -1020,7 +1020,7 @@ def _function_mutates_own_object(func: ast.FunctionDef | ast.AsyncFunctionDef) -
     if any(_is_memoizer_decorator(d) for d in func.decorator_list):
         return True
     fname = func.name
-    for node in ast.walk(func):
+    for node in walk_tree(func):
         target = node.target if isinstance(node, ast.AugAssign) else None
         if isinstance(node, ast.Assign):
             for t in node.targets:
@@ -1132,7 +1132,7 @@ def reduce_free_mutations(tree: ast.Module | None, resolve_source) -> frozenset[
     if tree is None:
         return frozenset()
     out: set[str] = set()
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if not isinstance(node, ast.Call):
             continue
         fn = node.func
@@ -1170,7 +1170,7 @@ def _factory_returns_stateful_closure(factory: ast.FunctionDef | ast.AsyncFuncti
     returned function and is only reset by re-running the factory (B).
     """
     factory_scope = factory_body_scope(factory)
-    for node in ast.walk(factory):
+    for node in walk_tree(factory):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node is not factory:
             if free_vars_mutated_in_function(node) & factory_scope:
                 return True

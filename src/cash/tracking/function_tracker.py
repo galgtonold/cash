@@ -18,6 +18,7 @@ from collections.abc import Callable
 from typing import Any
 
 from .._memo import NOTEBOOK_FUNCTIONS, LruMemo
+from ..analysis.ast_util import parse_cached, walk_tree
 from ..code_digest import callable_identity, source_digest
 from ..install_paths import is_user_module
 from ..loaded_code import loaded_module_matches_disk
@@ -58,7 +59,7 @@ def _collect_imported_names(tree: ast.AST) -> set[str]:
     it was keyed one way on its first run and another way after.
     """
     names: set[str] = set()
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 names.add(alias.name.split(".")[0])
@@ -145,17 +146,13 @@ def _python_of_cell(code: str) -> ast.Module | None:
     """*code*'s Python, parsed: with its magic lines dropped when it has
     any (``%load_ext autoreload`` / ``%autoreload 2`` / ``import mylib``,
     the usual first cell), or None when even that does not parse."""
-    try:
-        return ast.parse(code)
-    except SyntaxError:
-        pass
+    tree = parse_cached(code)
+    if tree is not None:
+        return tree
     # Imported here: the analysis package imports this module.
     from ..analysis.code_analyzer import CodeAnalyzer
 
-    try:
-        return ast.parse(CodeAnalyzer.strip_magics(code))
-    except SyntaxError:
-        return None
+    return parse_cached(CodeAnalyzer.strip_magics(code))
 
 
 def _with_wrapped_chain(func: Any) -> set[int]:
@@ -1232,9 +1229,8 @@ class FunctionTracker:
         Returns:
             List of human-readable warning messages
         """
-        try:
-            tree = ast.parse(code)
-        except SyntaxError:
+        tree = parse_cached(code)
+        if tree is None:
             return []
 
         warnings: list[str] = []
@@ -1270,7 +1266,7 @@ class _OpaqueCallVisitor(ast.NodeVisitor):
         if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
             try:
                 inner_tree = ast.parse(node.args[0].value)
-                has_calls = any(isinstance(n, ast.Call) for n in ast.walk(inner_tree))
+                has_calls = any(isinstance(n, ast.Call) for n in walk_tree(inner_tree))
                 if has_calls:
                     self._warnings.append(f"{node.func.id}() with function calls — Cash cannot track source changes")
             except SyntaxError:

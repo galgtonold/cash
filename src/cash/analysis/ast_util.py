@@ -9,7 +9,7 @@ module; on anything else it is looked up statically, or not at all.
 is the one bounded parse memo for statement and cell text.
 :func:`bytecode_global_refs` is what stands in for the names a tree reads
 when a function has no source. :func:`copy_tree` is the one way cash copies
-a syntax tree.
+a syntax tree. :func:`walk_tree` is ``ast.walk`` walked once per tree.
 """
 
 from __future__ import annotations
@@ -18,10 +18,11 @@ import ast
 import builtins
 import functools
 import inspect
+import itertools
 import sys
 import types
 import weakref
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from typing import Any, Literal
 
 from cash._user_attrs import instance_of, own_dict
@@ -38,6 +39,7 @@ __all__ = [
     "plain_statement",
     "resolve_callee",
     "resolve_dotted_name",
+    "walk_tree",
 ]
 
 #: Descriptors implemented in C that bind a method and run nothing else.
@@ -105,8 +107,35 @@ def plain_statement(tree: ast.AST | None) -> bool:
     return answer
 
 
+#: `walk_tree`'s nodes below each node walked, by the node, held weakly.
+#: The node itself is left out of its entry, so the entry does not hold
+#: its own key and dies with the tree.
+_WALKS: weakref.WeakKeyDictionary[ast.AST, tuple[ast.AST, ...]] = weakref.WeakKeyDictionary()
+
+
+def walk_tree(node: ast.AST) -> Iterator[ast.AST]:
+    """``ast.walk(node)``: the same nodes in the same order, walked once per
+    node.
+
+    The analyses of a statement each walked its tree again: simulating
+    ``x = 1`` took some twenty walks of its four nodes. The trees they walk
+    are read, never changed (`parse_cached`; cash's rewrites work on a
+    `copy_tree` copy), so what the first walk found stands for the tree's
+    life. Only for a tree no one changes after walking it."""
+    try:
+        below = _WALKS[node]
+    except KeyError:
+        nodes = ast.walk(node)
+        next(nodes)  # *node* itself
+        below = tuple(nodes)
+        _WALKS[node] = below
+    except TypeError:  # not a node: ``ast.walk`` says what is wrong
+        return ast.walk(node)
+    return itertools.chain((node,), below)
+
+
 def _is_plain(tree: ast.Module) -> bool:
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         kind = type(node)
         if kind not in _PLAIN_NODES:
             return False
@@ -283,7 +312,7 @@ def called_dotted_names(tree: ast.AST | None) -> frozenset[str]:
     if tree is None or plain_statement(tree):
         return frozenset()
     out: set[str] = set()
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
             continue
         parts: list[str] = []
@@ -301,7 +330,7 @@ def same_as_all(tree: ast.AST | None, scope: CallScope) -> bool:
     ``"no_control_bodies"`` scope over a tree without a control statement."""
     if scope == "all":
         return True
-    return scope == "no_control_bodies" and not any(isinstance(n, _CONTROL_STATEMENTS) for n in ast.walk(tree))
+    return scope == "no_control_bodies" and not any(isinstance(n, _CONTROL_STATEMENTS) for n in walk_tree(tree))
 
 
 def nodes_in(tree: ast.AST | None, scope: CallScope = "all") -> list[ast.AST]:
@@ -309,7 +338,7 @@ def nodes_in(tree: ast.AST | None, scope: CallScope = "all") -> list[ast.AST]:
     if tree is None:
         return []
     if scope == "all":
-        return list(ast.walk(tree))
+        return list(walk_tree(tree))
     out: list[ast.AST] = []
 
     def visit(node: ast.AST, top: bool) -> None:
@@ -335,7 +364,7 @@ def _call_names(tree: ast.AST | None, scope: CallScope, pick) -> frozenset[str]:
     if tree is None or plain_statement(tree):
         return frozenset()
     if scope == "all":
-        return frozenset(name for n in ast.walk(tree) if isinstance(n, ast.Call) for name in pick(n))
+        return frozenset(name for n in walk_tree(tree) if isinstance(n, ast.Call) for name in pick(n))
     out: set[str] = set()
 
     def visit(node: ast.AST, top: bool) -> None:

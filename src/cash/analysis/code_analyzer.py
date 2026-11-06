@@ -17,10 +17,12 @@ import re
 import sys
 import textwrap
 import types
+import weakref
 from collections import ChainMap
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from .._memo import NOTEBOOK_STATEMENTS
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
 from .._user_attrs import instance_of
 from ..code_digest import unwrap_partials
@@ -28,7 +30,7 @@ from ..effects import Action, classify_call
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..source_reading import getsource
 from .ambient_reads import ambient_call, clock_helper_of
-from .ast_util import bytecode_global_refs, copy_tree, parse_cached
+from .ast_util import bytecode_global_refs, copy_tree, parse_cached, walk_tree
 from .callee_effects import callee_global_mutations
 from .file_effects import NOTEBOOK_POLICY, SCANNED_KINDS
 from .handed_callables import handed_callables
@@ -105,7 +107,7 @@ def _own_bindings(scope: ast.AST) -> set[str]:
 
 def _comprehension_targets(node: ast.AST) -> set[str]:
     """Names the comprehension *node* binds in its own scope (its targets)."""
-    return {n.id for gen in node.generators for n in ast.walk(gen.target) if isinstance(n, ast.Name)}
+    return {n.id for gen in node.generators for n in walk_tree(gen.target) if isinstance(n, ast.Name)}
 
 
 def _dotted_chain(node: ast.expr) -> list[str] | None:
@@ -1080,40 +1082,7 @@ class CodeAnalyzer:
         would be mangled into unparseable code, making the simulator raise a
         *fictional* SyntaxError that silently disables cache restore.
         """
-        # Fast path: a cell that already parses contains no magics to strip
-        # (a statement-leading ``%``/``!`` is never valid top-level Python), so
-        # return it untouched and avoid any line surgery on multi-line code.
-        # Await-tolerant so an async cell takes this path too.
-        try:
-            CodeAnalyzer.parse_cell(code)
-            return code
-        except SyntaxError:
-            pass
-        code = _cell_magic_body(code)
-        starts = CodeAnalyzer._logical_line_start_flags(code)
-        out: list[str] = []
-        in_magic = False  # dropping a magic's backslash-continued lines
-        for line, is_start in zip(code.split("\n"), starts):
-            if in_magic and not is_start:
-                continue
-            in_magic = is_start and _is_magic_line(line)
-            if in_magic:
-                indent = line[: len(line) - len(line.lstrip())]
-                if indent:
-                    # An indented magic is the leading (often sole) statement of
-                    # a block — ``if colab:``, ``for``, ``def`` … Deleting it
-                    # outright can leave an EMPTY suite (``if colab:`` with
-                    # nothing under it), a *fictional* SyntaxError that makes cash
-                    # treat a perfectly good cell as unparseable and stop
-                    # dependency-tracking it. Neutralise it in place with
-                    # ``pass`` so the block keeps a body (a magic contributes no
-                    # variable dependencies, so this loses nothing for analysis).
-                    out.append(indent + "pass")
-                # A top-level magic is dropped entirely: removing a module-level
-                # statement never empties a block.
-                continue
-            out.append(line)
-        return "\n".join(out)
+        return _stripped_of_magics(code)
 
     @staticmethod
     def parse_cell(code: str) -> ast.Module:
@@ -1178,15 +1147,15 @@ class CodeAnalyzer:
             A tuple of (input_vars, output_vars).
         """
         if tree is None:
-            clean_code = CodeAnalyzer.strip_magics(code)
-            tree = CodeAnalyzer.parse_cell(clean_code)  # tolerate top-level await
+            tree = _parsed_cell(code)  # tolerate top-level await
         if "run_line_magic" in code:
             # What a `%time` line's Python reads and binds, in a loop body too.
             tree = magic_python(tree)
 
-        visitor = _FlowVisitor(namespace_writer_aliases(tree, user_ns) if user_ns is not None else None)
-        visitor.visit(tree)
-        inputs, outputs = visitor.real_inputs, visitor.outputs
+        found_inputs, found_outputs = _flow(
+            tree, namespace_writer_aliases(tree, user_ns) if user_ns is not None else None
+        )
+        inputs, outputs = set(found_inputs), set(found_outputs)
         if resolve_source is not None:
             # Raises when a callee cannot be analysed; the caller decides what
             # a statement it cannot see through means (``statement_effects``
@@ -1208,9 +1177,9 @@ class CodeAnalyzer:
             # call really changes, `adata`, is observed at runtime instead. Module
             # SETTINGS (`plt.rcParams.update(...)`) are routed separately.
             bound = {
-                n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del))
+                n.id for n in walk_tree(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del))
             }
-            for node in ast.walk(tree):
+            for node in walk_tree(tree):
                 if isinstance(node, (ast.Import, ast.ImportFrom)):
                     bound.update((a.asname or a.name).split(".")[0] for a in node.names)
             outputs = {o for o in outputs if o in bound or not instance_of(user_ns.get(o), types.ModuleType)}
@@ -1273,7 +1242,7 @@ class CodeAnalyzer:
             else:
                 continue
             for tgt in targets:
-                for sub in ast.walk(tgt):
+                for sub in walk_tree(tgt):
                     if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store):
                         names.add(sub.id)
         return names
@@ -1319,7 +1288,7 @@ class CodeAnalyzer:
             return []
         visitor = _ForbiddenVisitor(user_ns)
         visitor.visit(tree)
-        for node in ast.walk(tree):
+        for node in walk_tree(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 for statement in node.body:
                     visitor.visit(statement)
@@ -1348,7 +1317,7 @@ def calls_ipython(tree: ast.AST) -> bool:
     What such a call reads and binds is IPython's business, not code cash
     can analyse.
     """
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
             continue
         shell = node.func.value
@@ -1399,7 +1368,7 @@ def magic_python(tree: ast.Module) -> ast.Module:
     acc.append(i * k)`` reads ``acc`` and ``k`` and changes ``acc``, as the
     plain loop does. *tree* itself is left as it is; without such a line it
     is what comes back."""
-    if not any(python_magic_argument(node) is not None for node in ast.walk(tree)):
+    if not any(python_magic_argument(node) is not None for node in walk_tree(tree)):
         return tree
     return _MagicPythonSplicer().visit(copy_tree(tree))
 
@@ -1442,7 +1411,7 @@ _COMPOUND_STATEMENTS = (
 def _magic_statements(stmt: ast.stmt) -> list[ast.stmt]:
     """The Python statements the line magics in the simple statement *stmt* run."""
     out: list[ast.stmt] = []
-    for node in ast.walk(stmt):
+    for node in walk_tree(stmt):
         arg = python_magic_argument(node)
         split = None if arg is None else split_magic_argument(arg)
         if split is not None and not calls_ipython(split[1]):
@@ -1467,6 +1436,90 @@ def _is_magic_line(line: str) -> bool:
         or _MAGIC_ASSIGN.match(line) is not None
         or _HELP.match(line) is not None
     )
+
+
+@functools.lru_cache(maxsize=1024)
+def _cell_tree(code: str) -> ast.Module | None:
+    """:meth:`CodeAnalyzer.parse_cell` of *code*, once per text; None when it
+    does not parse. Shared between callers: read the tree, never change it."""
+    tree = parse_cached(code)  # the same tree, shared with every other reader
+    if tree is not None:
+        return tree
+    try:
+        return CodeAnalyzer.parse_cell(code)  # a top-level ``await``
+    except SyntaxError:
+        return None
+
+
+def _parsed_cell(code: str) -> ast.Module:
+    """*code* with its magics stripped, parsed (:meth:`CodeAnalyzer.parse_cell`),
+    once per text; raises ``SyntaxError`` as that does. Shared between callers:
+    read the tree, never change it."""
+    stripped = CodeAnalyzer.strip_magics(code)
+    tree = _cell_tree(stripped)
+    return CodeAnalyzer.parse_cell(stripped) if tree is None else tree
+
+
+#: `_flow`'s answers, by the tree and then by the writer aliases, held
+#: weakly: a tree parsed for one statement is let go with it.
+_FLOWS: weakref.WeakKeyDictionary[ast.AST, dict[frozenset, tuple[frozenset[str], frozenset[str]]]] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _flow(tree: ast.AST, aliases: Mapping[str, str | None] | None) -> tuple[frozenset[str], frozenset[str]]:
+    """What `_FlowVisitor` finds *tree* reads and writes, given the writer
+    *aliases*: once per tree and aliases, which alone decide it. The
+    simulation and the runtime each asked again of the same statement."""
+    key = frozenset(aliases.items()) if aliases else frozenset()
+    try:
+        answers = _FLOWS[tree]
+    except KeyError:
+        answers = _FLOWS[tree] = {}
+    found = answers.get(key)
+    if found is None:
+        visitor = _FlowVisitor(aliases)
+        visitor.visit(tree)
+        found = answers[key] = (frozenset(visitor.real_inputs), frozenset(visitor.outputs))
+    return found
+
+
+@functools.lru_cache(maxsize=NOTEBOOK_STATEMENTS)
+def _stripped_of_magics(code: str) -> str:
+    """:meth:`CodeAnalyzer.strip_magics`, once per text: the text alone
+    decides it, and every analysis of a statement asked again (each asking
+    compiled the text to see whether it parses)."""
+    # Fast path: a cell that already parses contains no magics to strip
+    # (a statement-leading ``%``/``!`` is never valid top-level Python), so
+    # return it untouched and avoid any line surgery on multi-line code.
+    # Await-tolerant so an async cell takes this path too.
+    if _cell_tree(code) is not None:
+        return code
+    code = _cell_magic_body(code)
+    starts = CodeAnalyzer._logical_line_start_flags(code)
+    out: list[str] = []
+    in_magic = False  # dropping a magic's backslash-continued lines
+    for line, is_start in zip(code.split("\n"), starts):
+        if in_magic and not is_start:
+            continue
+        in_magic = is_start and _is_magic_line(line)
+        if in_magic:
+            indent = line[: len(line) - len(line.lstrip())]
+            if indent:
+                # An indented magic is the leading (often sole) statement of
+                # a block — ``if colab:``, ``for``, ``def`` … Deleting it
+                # outright can leave an EMPTY suite (``if colab:`` with
+                # nothing under it), a *fictional* SyntaxError that makes cash
+                # treat a perfectly good cell as unparseable and stop
+                # dependency-tracking it. Neutralise it in place with
+                # ``pass`` so the block keeps a body (a magic contributes no
+                # variable dependencies, so this loses nothing for analysis).
+                out.append(indent + "pass")
+            # A top-level magic is dropped entirely: removing a module-level
+            # statement never empties a block.
+            continue
+        out.append(line)
+    return "\n".join(out)
 
 
 def _cell_magic_body(code: str) -> str:

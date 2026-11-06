@@ -19,7 +19,7 @@ from typing import NamedTuple
 
 from cash.control_markers import strip_markers
 
-from ...analysis.ast_util import parse_cached
+from ...analysis.ast_util import parse_cached, walk_tree
 from ...diagnostics import warn_diagnostic
 from ...exceptions import CashWarning
 
@@ -794,9 +794,8 @@ def _scan(code: str) -> _ScanResult:
     carrier is session state, which the detector applies after the scan.
     Bounded, because a long notebook session is the real risk.
     """
-    try:
-        tree = ast.parse(code)
-    except SyntaxError:
+    tree = parse_cached(code)
+    if tree is None:
         return _EMPTY_SCAN
     visitor = RandomnessVisitor()
     visitor.visit(tree)
@@ -1571,7 +1570,7 @@ def mints_unseeded_generator(code: str) -> bool:
         tree = ast.parse(strip_markers(code))
     except SyntaxError:
         return False
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
@@ -1637,7 +1636,7 @@ def attribute_draws(code: str, self_name: str | None = None) -> tuple[AttributeD
     if tree is None:
         return ()
     found: list[AttributeDraw] = []
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
             continue
         chain = _attribute_chain(node.func.value)

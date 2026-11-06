@@ -21,6 +21,7 @@ from collections.abc import Callable
 from typing import Any
 
 from ..loaded_code import code_objects_of
+from .ast_util import walk_tree
 from .purity_report import PurityReport
 from .unloaded_modules import unloaded_import
 
@@ -42,7 +43,7 @@ def local_import_map(func_def: ast.AST, func: Any) -> dict[str, tuple[str, tuple
     if package is None:
         package = (getattr(func, "__module__", "") or "").rpartition(".")[0]
     found: dict[str, tuple[str, tuple[str, ...]]] = {}
-    for node in ast.walk(func_def):
+    for node in walk_tree(func_def):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.asname:
@@ -70,7 +71,7 @@ def dotted_imports(func_def: ast.AST) -> dict[str, tuple[str, ...]]:
     """``import pkg.sub`` in the body: it binds ``pkg`` (`local_import_map`)
     but loads ``pkg.sub`` too. Local name -> the dotted modules so loaded."""
     found: dict[str, tuple[str, ...]] = {}
-    for node in ast.walk(func_def):
+    for node in walk_tree(func_def):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 if not alias.asname and "." in alias.name:
@@ -221,7 +222,7 @@ def called_names_in_tree(tree: ast.AST) -> list[str]:
     the ordinary callee machinery, not here.
     """
     names: list[str] = []
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             names.append(node.func.id)
     return names

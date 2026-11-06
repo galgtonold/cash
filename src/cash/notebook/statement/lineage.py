@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any
 
 from cash._user_attrs import attribute_or, instance_of
 
+from ...analysis.ast_util import parse_cached, walk_tree
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.mutations import assigned_method_call_receivers, standalone_method_call_receivers
 from ...analysis.namespace_effects import fits_its_receiver
@@ -679,12 +680,11 @@ class StatementLineageBuilder:
         variable whichever symbol changed. This is the same rule the cache key
         applies (``static_attribute_reads``).
         """
-        try:
-            tree = ast.parse(code)
-        except SyntaxError:
+        tree = parse_cached(code)
+        if tree is None:
             tracking_state.module_attribute_deps.pop(var_name, None)
             return
-        names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+        names = {node.id for node in walk_tree(tree) if isinstance(node, ast.Name)}
         mod_deps: dict[str, set[str]] = {}
         for input_name in names:
             input_val = user_ns.get(input_name)

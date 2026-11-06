@@ -50,7 +50,7 @@ from collections.abc import Iterator, Mapping
 from typing import Any
 
 from cash._user_attrs import attribute_or, instance_of
-from cash.analysis.ast_util import bytecode_global_refs
+from cash.analysis.ast_util import bytecode_global_refs, walk_tree
 from cash.analysis.callee_effects import (
     free_vars_mutated_in_function,
     params_mutated_in_function,
@@ -441,11 +441,11 @@ def _fresh(arg: ast.expr, caller: ast.AST, depth: int = 0) -> str | None:
         # A local bound once, to something fresh.
         bound = [
             node.value
-            for node in ast.walk(caller)
+            for node in walk_tree(caller)
             if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.NamedExpr))
             and any(isinstance(t, ast.Name) and t.id == arg.id for t in _targets(node))
         ]
-        params = {a.arg for a in ast.walk(caller) if isinstance(a, ast.arg)}
+        params = {a.arg for a in walk_tree(caller) if isinstance(a, ast.arg)}
         if len(bound) == 1 and bound[0] is not None and arg.id not in params and not _loops_bind(caller, arg.id):
             return _fresh(bound[0], caller, depth + 1)
     return None
@@ -453,19 +453,19 @@ def _fresh(arg: ast.expr, caller: ast.AST, depth: int = 0) -> str | None:
 
 def _targets(node: ast.AST) -> list[ast.AST]:
     if isinstance(node, ast.Assign):
-        return [t for target in node.targets for t in ast.walk(target)]
+        return [t for target in node.targets for t in walk_tree(target)]
     return [node.target]
 
 
 def _loops_bind(caller: ast.AST, name: str) -> bool:
     """Is *name* bound in *caller* other than by assignment: a loop, ``with``,
     ``except``, comprehension or import, a ``global`` or ``nonlocal``?"""
-    for node in ast.walk(caller):
+    for node in walk_tree(caller):
         if isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
-            if any(isinstance(t, ast.Name) and t.id == name for t in ast.walk(node.target)):
+            if any(isinstance(t, ast.Name) and t.id == name for t in walk_tree(node.target)):
                 return True
         elif isinstance(node, ast.withitem) and node.optional_vars is not None:
-            if any(isinstance(t, ast.Name) and t.id == name for t in ast.walk(node.optional_vars)):
+            if any(isinstance(t, ast.Name) and t.id == name for t in walk_tree(node.optional_vars)):
                 return True
         elif isinstance(node, ast.ExceptHandler) and node.name == name:
             return True
@@ -490,10 +490,10 @@ def _sets_only_attributes(body: ast.AST, param: str) -> bool:
     (``self.d = d``, ``self.n += 1``) or to read them? Taking one out and
     changing it (``self.d.append``) may change what was handed in."""
     parents: dict[int, ast.AST] = {}
-    for node in ast.walk(body):
+    for node in walk_tree(body):
         for child in ast.iter_child_nodes(node):
             parents[id(child)] = node
-    for node in ast.walk(body):
+    for node in walk_tree(body):
         if not (isinstance(node, ast.Name) and node.id == param):
             continue
         parent = parents.get(id(node))
@@ -585,15 +585,15 @@ def _handed_to_libraries(function: Any, body: ast.AST) -> set[str]:
     that only reads. What such a call does to them is not read. A value
     nothing can change (``KEY = 'a'``, ``DT = np.float64``) is never one."""
     g = attribute_or(function, "__globals__", {})
-    local = {a.arg for a in ast.walk(body) if isinstance(a, ast.arg)} | {
-        n.id for n in ast.walk(body) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)
+    local = {a.arg for a in walk_tree(body) if isinstance(a, ast.arg)} | {
+        n.id for n in walk_tree(body) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)
     }
     found: set[str] = set()
     # What an import inside the body binds (``import copy``) is read as the
     # module, or the module's function, it names.
     imported = _imported_in(body)
     g = {**g, **imported} if imported else g
-    for node in ast.walk(body):
+    for node in walk_tree(body):
         if not isinstance(node, ast.Call):
             continue
         if isinstance(node.func, ast.Name):
@@ -627,7 +627,7 @@ def _imported_in(body: ast.AST) -> dict[str, Any]:
     """The names an ``import`` in *body* binds, to the loaded module or the
     module's attribute they name; one not loaded yet is left out."""
     bound: dict[str, Any] = {}
-    for node in ast.walk(body):
+    for node in walk_tree(body):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.asname:
@@ -670,7 +670,9 @@ def _only_reads(callee: Any, call: ast.Call, g: Mapping[str, Any]) -> bool:
 
 def _of_the_notebook(arg: ast.expr, g: Mapping[str, Any]) -> bool:
     """Is *arg* built from a global that something can change?"""
-    return any(isinstance(node, ast.Name) and node.id in g and not _never_changed(g[node.id]) for node in ast.walk(arg))
+    return any(
+        isinstance(node, ast.Name) and node.id in g and not _never_changed(g[node.id]) for node in walk_tree(arg)
+    )
 
 
 def _changes_its_first(fn: ast.expr, g: Mapping[str, Any]) -> bool:
@@ -723,7 +725,7 @@ def _changed_through_copies(function: Any, body: ast.FunctionDef | ast.AsyncFunc
     holds nothing of it (`_HOLDS_NOTHING_OF_IT`). Any change counts, the
     top-level one of a copy too."""
     g = attribute_or(function, "__globals__", {})
-    params = {a.arg for a in ast.walk(body.args) if isinstance(a, ast.arg)}
+    params = {a.arg for a in walk_tree(body.args) if isinstance(a, ast.arg)}
     aliases: dict[str, set[str]] = {}
     arguments = body.args
     positional = [*arguments.posonlyargs, *arguments.args]
@@ -771,7 +773,7 @@ def _reads_a_namespace(body: ast.AST, g: Mapping[str, Any]) -> bool:
         and isinstance(node.func, ast.Name)
         and node.func.id in ("globals", "vars", "locals")
         and node.func.id not in g
-        for node in ast.walk(body)
+        for node in walk_tree(body)
     )
 
 
@@ -780,7 +782,7 @@ def _bindings(body: ast.AST) -> Iterator[tuple[list[str], ast.expr, bool]]:
     names from a value: an assignment (each name of an unpacked target), a
     walrus, a loop's or a comprehension's target from the items of what it
     iterates (*items* true), a ``with``'s ``as`` from its context manager."""
-    for node in ast.walk(body):
+    for node in walk_tree(body):
         if isinstance(node, ast.Assign):
             yield [n for t in node.targets for n in _names(t)], node.value, False
         elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)) and node.value is not None:
@@ -792,7 +794,7 @@ def _bindings(body: ast.AST) -> Iterator[tuple[list[str], ast.expr, bool]]:
 
 
 def _names(target: ast.AST) -> list[str]:
-    return [n.id for n in ast.walk(target) if isinstance(n, ast.Name)]
+    return [n.id for n in walk_tree(target) if isinstance(n, ast.Name)]
 
 
 #: Calls whose result holds nothing of what they are handed.
@@ -912,7 +914,7 @@ def _globals_read(
 
     def every_global(node: ast.AST, local: Mapping[str, set[str]]) -> set[str]:
         found: set[str] = set()
-        for name in ast.walk(node):
+        for name in walk_tree(node):
             if isinstance(name, ast.Name) and isinstance(name.ctx, ast.Load):
                 found |= held(name, local)
         return found
@@ -1049,10 +1051,10 @@ def _changes_only_itself(body: ast.FunctionDef | ast.AsyncFunctionDef, param: st
     item set or deleted on it, a test of what it holds (``k in d``),
     returned? Nothing it holds is taken out, so nothing inside it changes."""
     parents: dict[int, ast.AST] = {}
-    for node in ast.walk(body):
+    for node in walk_tree(body):
         for child in ast.iter_child_nodes(node):
             parents[id(child)] = node
-    for node in ast.walk(body):
+    for node in walk_tree(body):
         if not (isinstance(node, ast.Name) and node.id == param and isinstance(node.ctx, ast.Load)):
             continue
         parent = parents.get(id(node))
@@ -1120,7 +1122,7 @@ def _body(function: Any) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
         return None
     found = [
         node
-        for node in ast.walk(tree)
+        for node in walk_tree(tree)
         if isinstance(node, ast.Lambda)
         and [a.arg for a in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs)] == wanted
     ]
@@ -1151,7 +1153,7 @@ def _users_callees(function: Any, body: ast.AST, t: type) -> list[tuple[Any, ast
     and on *t*, each with the call."""
     found = []
     g = attribute_or(function, "__globals__", {})
-    for node in ast.walk(body):
+    for node in walk_tree(body):
         if not isinstance(node, ast.Call):
             continue
         callee = None

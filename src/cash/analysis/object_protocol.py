@@ -11,6 +11,7 @@ import ast
 import textwrap
 from dataclasses import dataclass
 
+from .ast_util import walk_tree
 from .callee_effects import all_param_names, factory_body_scope, free_vars_mutated_in_function, resolve_function_def
 from .mutations import (
     DEFERRED_SCOPES,
@@ -177,7 +178,7 @@ def _instance_attr_names(classdef: ast.ClassDef, resolve_class_source=None) -> f
             recv = _first_param_name(meth)
             if recv is None:
                 continue
-            for node in ast.walk(meth):
+            for node in walk_tree(meth):
                 if not isinstance(node, ast.Assign):
                     continue
                 for tgt in node.targets:
@@ -522,7 +523,7 @@ def _decorator_free_var_mutations(
      closure case)."""
     scope = factory_body_scope(decorator_def)
     out: set[str] = set()
-    for node in ast.walk(decorator_def):
+    for node in walk_tree(decorator_def):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node is not decorator_def:
             out |= free_vars_mutated_in_function(node) - scope
     return frozenset(out)
@@ -727,7 +728,7 @@ class _ProtocolScan:
         """The ``(name, ClassDef)`` of a notebook class a factory function
         RETURNS (``def cm(): return Mgr()`` → ``Mgr``), or ``(None, None)``.
         Used for ``with cm() as x:`` where ``cm`` is a plain factory."""
-        for sub in ast.walk(fdef):
+        for sub in walk_tree(fdef):
             if isinstance(sub, ast.Return) and isinstance(sub.value, ast.Call) and isinstance(sub.value.func, ast.Name):
                 rcdef = self._classdef(sub.value.func.id)
                 if rcdef is not None:

@@ -33,7 +33,7 @@ from ..purity import is_pure
 from ..source_reading import own_source, wrapper_layers
 from ..tracking.randomness.state import rng_carrier_kind
 from .annotations import assume_safe_block_lines, audited_lines
-from .ast_util import called_names, resolve_callee
+from .ast_util import called_names, parse_cached, resolve_callee, walk_tree
 from .callee_effects import (
     all_param_names,
     argument_roots,
@@ -146,7 +146,7 @@ def statement_user_writer_call(
     """
     if not namespace or "(" not in code:
         return None
-    calls = _calls(code) if tree is None else tuple(n for n in ast.walk(tree) if isinstance(n, ast.Call))
+    calls = _calls(code) if tree is None else tuple(n for n in walk_tree(tree) if isinstance(n, ast.Call))
     bound = _bindings(code) if tree is None else iteration_bindings(tree)
     for node in calls:
         found = user_callee_writing_files(resolve_callee(node.func, namespace), appends=appends)
@@ -259,7 +259,7 @@ def _calls(code: str) -> tuple[ast.Call, ...]:
         tree = ast.parse(code)
     except SyntaxError:
         return ()
-    return tuple(n for n in ast.walk(tree) if isinstance(n, ast.Call))
+    return tuple(n for n in walk_tree(tree) if isinstance(n, ast.Call))
 
 
 #: How many user functions one question may follow before cash gives up on
@@ -305,7 +305,7 @@ def _read_body(func: types.FunctionType) -> "tuple[bool, bool, bool, tuple[ast.e
     except SyntaxError:
         return None
     handles = frozenset(locally_opened_handles(tree))
-    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+    calls = [node for node in walk_tree(tree) if isinstance(node, ast.Call)]
     # ``# @cash:assume-safe`` on a write, or ``with cash.assume_safe():``
     # around it, is the user's word that skipping it on a hit is fine; on the
     # ``def`` line it covers the whole body. In a helper it covers every
@@ -456,7 +456,7 @@ def statement_user_pyplot_call(
     or None."""
     if not namespace or "(" not in code or "matplotlib.pyplot" not in sys.modules:
         return None
-    calls = _calls(code) if tree is None else tuple(n for n in ast.walk(tree) if isinstance(n, ast.Call))
+    calls = _calls(code) if tree is None else tuple(n for n in walk_tree(tree) if isinstance(n, ast.Call))
     bound = _bindings(code) if tree is None else iteration_bindings(tree)
     for node in calls:
         # A method of the notebook's own class (``insp.nlines()``) as well.
@@ -516,7 +516,7 @@ def statement_calls_through_ctypes(
     ctypes = sys.modules.get("ctypes")
     if ctypes is None or not namespace or "(" not in code:
         return None
-    calls = _calls(code) if tree is None else tuple(n for n in ast.walk(tree) if isinstance(n, ast.Call))
+    calls = _calls(code) if tree is None else tuple(n for n in walk_tree(tree) if isinstance(n, ast.Call))
 
     def reaches(exprs: "Iterable[ast.expr]", names: "Mapping[str, Any]") -> bool:
         for expr in exprs:
@@ -588,7 +588,7 @@ def statement_starting_workers(
     statement's write observer, so a hit could skip it."""
     if "(" not in code:
         return None
-    calls = _calls(code) if tree is None else tuple(n for n in ast.walk(tree) if isinstance(n, ast.Call))
+    calls = _calls(code) if tree is None else tuple(n for n in walk_tree(tree) if isinstance(n, ast.Call))
     for node in calls:
         started = _worker_starter(node.func)
         if started:
@@ -895,14 +895,13 @@ def statement_written_paths(
     if not any(m in code for m in WRITE_TEXT_MARKERS):
         return None
     if tree is None:
-        try:
-            tree = ast.parse(textwrap.dedent(code))
-        except (SyntaxError, ValueError):
+        tree = parse_cached(textwrap.dedent(code))
+        if tree is None:
             return None
     paths: set[str] = set()
     saw_path_bearing = False
     listed = _listed_entry_folders(tree, namespace)
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if not isinstance(node, ast.Call):
             continue
         resolved, is_path_bearing = _removal_call_path(node, namespace, listed)
@@ -938,7 +937,7 @@ def statement_removed_paths(
             return None
     removed: set[str] = set()
     listed = _listed_entry_folders(tree, namespace)
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if not isinstance(node, ast.Call):
             continue
         resolved, is_removal = _removal_call_path(node, namespace, listed)
@@ -1130,7 +1129,7 @@ def _listed_entry_folders(tree: ast.AST, namespace: dict[str, Any] | None) -> tu
     found: dict[str, tuple[str, bool]] = {}
     loop_targets: set[int] = set()
     unknown: set[str] = set()
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if not isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)) or not isinstance(node.target, ast.Name):
             continue
         listing = _listing_of(node.iter, namespace)
@@ -1140,7 +1139,7 @@ def _listed_entry_folders(tree: ast.AST, namespace: dict[str, Any] | None) -> tu
             continue
         found[name] = listing
         loop_targets.add(id(node.target))
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load) and id(node) not in loop_targets:
             unknown.add(node.id)
         elif isinstance(node, ast.arg):
@@ -1229,13 +1228,12 @@ def statement_read_paths(
     if not any(m in code for m in READ_TEXT_MARKERS + LISTING_TEXT_MARKERS):
         return set()
     if tree is None:
-        try:
-            tree = ast.parse(textwrap.dedent(code))
-        except (SyntaxError, ValueError):
+        tree = parse_cached(textwrap.dedent(code))
+        if tree is None:
             return None
     loop_paths = _loop_variable_paths(tree, namespace)
     paths: set[str] = set()
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if not isinstance(node, ast.Call):
             continue
         resolved, is_path_bearing = _read_call_path(node, namespace)
@@ -1300,10 +1298,10 @@ def _loop_variable_paths(tree: ast.AST, namespace: dict[str, Any] | None) -> dic
     comprehensions whose iterable is a resolvable list of paths."""
     found: dict[str, list[str]] = {}
     unknown: set[str] = set()
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if isinstance(node, (ast.For, ast.comprehension)):
             if not isinstance(node.target, ast.Name):
-                unknown.update(n.id for n in ast.walk(node.target) if isinstance(n, ast.Name))
+                unknown.update(n.id for n in walk_tree(node.target) if isinstance(n, ast.Name))
                 continue
             values = resolve_path_list(node.iter, namespace)
             if values is None:
@@ -1314,7 +1312,7 @@ def _loop_variable_paths(tree: ast.AST, namespace: dict[str, Any] | None) -> dic
             # ``f = other`` inside the loop: f is no longer only the list's elements.
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             for t in targets:
-                unknown.update(n.id for n in ast.walk(t) if isinstance(n, ast.Name))
+                unknown.update(n.id for n in walk_tree(t) if isinstance(n, ast.Name))
     return {k: v for k, v in found.items() if k not in unknown}
 
 
@@ -1366,7 +1364,7 @@ def statement_saves_current_pyplot_figure(
         tree = ast.parse(textwrap.dedent(code))
     except (SyntaxError, ValueError):
         return False
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
@@ -1776,7 +1774,7 @@ def _function_shape(
     for name, roots in _local_aliases(fdef).items():
         iterated[name] = iterated.get(name, frozenset()) | roots
     calls = tuple(calls_with_lambdas(fdef))
-    reads = sorted({n.id for n in ast.walk(fdef) if isinstance(n, ast.Name) and n.id not in local})
+    reads = sorted({n.id for n in walk_tree(fdef) if isinstance(n, ast.Name) and n.id not in local})
     called = sorted({c.func.id for c in calls if isinstance(c.func, ast.Name) and c.func.id not in local})
     return frozenset(all_param_names(fdef)), local, iterated, calls, tuple(reads), tuple(called)
 
@@ -1935,7 +1933,7 @@ def _maps_a_reading_lambda(call: ast.Call, local: frozenset[str] | set[str], use
         return False
     return not any(
         isinstance(node, (ast.Call, ast.NamedExpr, ast.Yield, ast.YieldFrom, ast.Await))
-        for node in ast.walk(call.args[0])
+        for node in walk_tree(call.args[0])
     )
 
 
@@ -2047,7 +2045,7 @@ def _local_aliases(fdef: ast.FunctionDef | ast.AsyncFunctionDef) -> dict[str, fr
     variable: ``p = OPS['push']``, ``h = cfg.hook``, ``f = OPS.get('f')``
     lead to ``OPS`` and ``cfg``; ``q = p`` to what ``p`` leads to."""
     direct: dict[str, set[str]] = {}
-    for node in ast.walk(fdef):
+    for node in walk_tree(fdef):
         if isinstance(node, ast.Assign):
             targets, value = node.targets, node.value
         elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)) and node.value is not None:
@@ -2232,7 +2230,7 @@ def _some_runs_only(tree: ast.AST) -> frozenset[int]:
     out: set[int] = set()
 
     def mark(node: ast.AST) -> None:
-        out.update(id(n) for n in ast.walk(node))
+        out.update(id(n) for n in walk_tree(node))
 
     def block(stmts: list[ast.stmt], some: bool) -> None:
         for stmt in stmts:
@@ -2272,10 +2270,10 @@ def _some_runs_only(tree: ast.AST) -> frozenset[int]:
                 visit(value, True)
         elif isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)):
             first = node.generators[0]
-            runs_once = {id(n) for n in ast.walk(first.iter)}
+            runs_once = {id(n) for n in walk_tree(first.iter)}
             out.update(
                 id(child)
-                for child in ast.walk(node)
+                for child in walk_tree(node)
                 if child is not node and child is not first and id(child) not in runs_once
             )
             visit(first.iter, False)
@@ -2332,7 +2330,7 @@ def rewatch_exempt(
         return frozenset()
     from .cacheability_decision import receiver_is_identity_coupled  # it imports this module
 
-    parents = {id(child): node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    parents = {id(child): node for node in walk_tree(tree) for child in ast.iter_child_nodes(node)}
     safe_nodes: set[int] = set()
     some_runs: frozenset[int] | None = None
     for call in calls_with_lambdas(tree):
@@ -2375,7 +2373,7 @@ def rewatch_exempt(
         for arg in [*call.args, *(kw.value for kw in call.keywords if kw.arg is not None)]:
             if isinstance(arg, ast.Name) and arg.id not in watched:
                 safe_nodes.add(id(arg))
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if (
             isinstance(node, ast.Name)
             and isinstance(node.ctx, ast.Load)
@@ -2387,7 +2385,7 @@ def rewatch_exempt(
         return frozenset()
     safe: set[str] = set()
     other: set[str] = set()
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if isinstance(node, ast.Name):
             (safe if id(node) in safe_nodes else other).add(node.id)
     return frozenset(safe - other)

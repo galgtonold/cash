@@ -60,6 +60,7 @@ from cash._plain_data import held_items_facts
 from cash._referents import get_referents
 from cash._type_memo import MroMemo, TypeMemo, type_key
 from cash._user_attrs import attribute_or, builtin_items, has_attribute, instance_of, own_dict, own_lookup
+from cash.analysis.ast_util import walk_tree
 from cash.live_state import is_live_stream
 from cash.tracking.function_tracker import is_local_module
 from cash.value_types import LEAF_TYPES
@@ -368,7 +369,7 @@ def _writes_own_scalar_name(tree: Any) -> bool:
     yes; a false alarm (``self._cache = {}``) only turns the switch on
     sooner."""
     own = _ANY_OWN_SCALAR_NAME
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if isinstance(node, ast.Attribute):
             if node.attr in own and isinstance(node.ctx, (ast.Store, ast.Del)):
                 return True
@@ -415,7 +416,7 @@ def _raw_attribute_targets(tree: Any) -> Iterator[tuple[Any, bool]]:
         elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
             targets = [node.target]
         for target in targets:
-            for part in ast.walk(target):
+            for part in walk_tree(target):
                 if isinstance(part, ast.Subscript) and (found := owner(part.value)) is not None:
                     yield found, scoped
         if isinstance(node, ast.AugAssign) and (found := owner(node.target)) is not None:
