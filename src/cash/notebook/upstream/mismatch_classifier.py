@@ -878,9 +878,7 @@ class MismatchClassifier:
         # without one (it was a third of a trivial cell's run in a
         # 300-cell notebook).
         holders = [
-            name
-            for name in sorted(inputs)
-            if instance_of(user_ns.get(name), (types.FunctionType, functools.partial))
+            name for name in sorted(inputs) if instance_of(user_ns.get(name), (types.FunctionType, functools.partial))
         ]
         if not holders:
             return
