@@ -624,6 +624,8 @@ _DRIVE_RAMDISK = 6
 _NOTIFY_HEADER = struct.Struct("<III")
 #: FILE_ACTION_REMOVED and FILE_ACTION_RENAMED_OLD_NAME: the name is gone.
 _ACTIONS_GONE = frozenset((2, 4))
+#: FILE_ACTION_MODIFIED: what is at the name changed in place (`_FolderIndex.touched`).
+_ACTION_MODIFIED = 3
 _FILE_ATTRIBUTE_DIRECTORY = 0x10
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x400
 _INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF
@@ -744,13 +746,25 @@ class _FolderIndex:
             return self.under(name)
         return []
 
-    def touched(self, name: str, resolve: Any = None) -> list[Any]:
+    def touched(self, name: str, resolve: Any = None, in_place: bool = False) -> list[Any]:
         """The watched folders a change at *name* may have changed: the
         folder holding it, and, when it is a watched folder or holds one,
         every watched folder at or below it (a folder renamed, removed or
         replaced). A name with a component that may be a short alias, and
         that *resolve* cannot put in its long form, stands for anything
-        below the folder above that component."""
+        below the folder above that component.
+
+        A change *in_place* (``FILE_ACTION_MODIFIED``) is one of the folder
+        holding the name only: a folder modified in place changed its own
+        times, attributes or rights, not a file below it, and it is still
+        where it was. Windows reports a folder modified when its parent's
+        entry for it is brought up to date, which may be only when the
+        folder is next opened: one file written was reported again, by the
+        listing the next check took of its folder, as a change of that
+        folder and each one below it, and all their files were checked once
+        more before the cell after. A folder that now leads elsewhere (made
+        a junction or a mount point) is found by the stat of each watched
+        folder before each cell (`FileWatch.drain`)."""
         parts, cut = self._long_parts(name, resolve)
         if cut is not None:
             return self.under("\\".join(parts[:cut]))
@@ -759,6 +773,8 @@ class _FolderIndex:
         holder = self.keys.get("\\".join(parts[:-1]))
         if holder is not None:
             touched.append(holder)
+        if in_place:
+            return touched
         if name in self.keys or name in self.above:
             touched.extend(self.under(name))
         return touched
@@ -1040,7 +1056,7 @@ class _Volume:
             resolve = self._resolve
             for action, name in records:
                 if not self.everything:
-                    self.changed.update(touched(name, resolve))
+                    self.changed.update(touched(name, resolve, action == _ACTION_MODIFIED))
                 if action in _ACTIONS_GONE:
                     self._went(name)
         if error and error != _ERROR_NOTIFY_ENUM_DIR:
