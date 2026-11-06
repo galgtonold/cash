@@ -1234,10 +1234,17 @@ class MismatchClassifier:
 
         stmt_positions = {entry.stmt_code: i for i, entry in enumerate(trace)}
         total_restore_time = 0.0
+        #: Names a statement further down the trace than the one at hand
+        #: binds or changes: what they hold now is that statement's, so a
+        #: restore here leaves them unless the scan still needs them (as the
+        #: input of a statement below that runs again).
+        bound_below: set[str] = set()
 
         for i in range(len(trace) - 1, -1, -1):
             entry = trace[i]
             stmt_code, outputs = entry.stmt_code, entry.outputs
+            later = set(bound_below)
+            bound_below.update(outputs)
 
             if not any(out in scan.needed for out in outputs):
                 continue
@@ -1258,6 +1265,7 @@ class MismatchClassifier:
                     sim.virtual_modules,
                     expected_lineages=entry.stored_lineages or entry.produced_lineages,
                     final_lineages=entry.produced_lineages if entry.stored_lineages else None,
+                    keep=(outputs & later) - scan.needed,
                 )
             total_restore_time += restore_time
 

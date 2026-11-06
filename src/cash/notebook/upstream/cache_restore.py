@@ -133,6 +133,7 @@ class CacheRestorer:
         virtual_modules: set[str] | None = None,
         expected_lineages: dict[str, str] | None = None,
         final_lineages: dict[str, str] | None = None,
+        keep: set[str] | frozenset[str] = frozenset(),
     ) -> tuple[set[str], float, float]:
         """Attempt to restore a statement using virtual input hashes.
 
@@ -144,6 +145,11 @@ class CacheRestorer:
         it changed in place on after its entry is stored or found
         (``update_mutated_variable_lineages``), and a restored output is
         moved there too, as a hit at the structure's own place moves it.
+
+        *keep* names outputs the restore leaves as they are: a statement
+        further down bound them again, so what they hold now is not the
+        statement's (``a, b = split()`` restored for ``b`` leaves the ``a``
+        that ``a = list(a)`` made below it).
 
         Returns:
             Tuple of (set of variables successfully restored, restore_time_seconds, saved_time_seconds).
@@ -220,6 +226,10 @@ class CacheRestorer:
                     }
                     metadata = {**metadata, "holders": present or None}
                     holders = present
+                if keep:
+                    variables_to_restore = {
+                        k: v for k, v in variables_to_restore.items() if k not in keep or k in holders
+                    }
                 lineage = self.tracking_state.variable_lineage
                 if any(lineage.get(name) != before for name, before in holders.items()):
                     # As at a hit (``CacheFreshnessChecker``): the entry would
