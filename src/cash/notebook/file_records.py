@@ -16,6 +16,15 @@ records of that token; one stored again with records of the files in
 another state, or dropped, leaves it unresolved, and the entry referring
 to it is stale (``unresolved``): run again, it records its files afresh.
 
+A reference is taken only to an entry whose value a tier past RAM holds
+with those records (`outlives_the_process`). One kept in memory only
+leaves no more on disk than a metadata-only record, which the next run of
+its statement after a restart may replace with other records or none, and
+the disk cap may drop: ``faces = fetch_lfw_people(...)``, kept in memory
+only, took the records of ``X_train`` (14 s) and ``grid.fit`` (61 s) below
+it with it, and they ran again after a restart with no file changed. The
+records of such an entry are copied, as they were before references.
+
 Each relative read's second spelling is folded into its absolute twin's
 record as it is stored (`file_dep_snapshot.fold_relative_twins`) and
 unfolded as it is read, so every reader sees the records as they were made.
@@ -40,6 +49,7 @@ __all__ = [
     "UNRESOLVED_PREFIX",
     "Records",
     "entry_file_records",
+    "outlives_the_process",
     "records_token",
     "own_records",
     "referred_records",
@@ -156,6 +166,34 @@ def referred_records(backend: Any, key: str, token: str) -> Records | None:
     if not meta or _field(meta, TOKEN_FIELD) != token:
         return None
     return own_records(meta, key)
+
+
+def outlives_the_process(backend: Any, key: str, token: str) -> bool:
+    """Whether the entry under *key* holds records of *token* where a
+    restart finds them, so an entry stored now may refer to them
+    (`REFS_FIELD`): a tier of *backend* past RAM (``cost_kind``) holds its
+    value and those records. The metadata-only record a value kept in RAM
+    only leaves on disk does not count: any later run of its statement
+    may write another over it, or none, and the disk cap may drop it.
+
+    True when *backend* has no tier past RAM, or no tier in front of one
+    (nothing to lose to a restart there, or nothing kept apart from what
+    is on disk): a reference is as good as a copy. False when it cannot be
+    told: a copy is never wrong."""
+    tiers = attribute_or(backend, "backends", None)
+    if not tiers:
+        return True
+    try:
+        lasting = [tier for tier in tiers if attribute_or(tier, "cost_kind", "disk") != "ram"]
+        if not lasting:
+            return True
+        for tier in lasting:
+            meta = tier.peek_metadata(key)
+            if meta and not meta.get("metadata_only") and meta.get(TOKEN_FIELD) == token:
+                return True
+    except Exception:  # noqa: BLE001 - a tier it cannot ask: copied
+        return False
+    return False
 
 
 def _refs(meta: Any) -> list[tuple[str, str]]:
