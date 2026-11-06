@@ -114,7 +114,9 @@ typedef struct { uintptr_t addr; uint32_t root; uint32_t next; } WNode;
 typedef struct { WNode n; PyObject *key; /* borrowed: the root holds it in refs */ } KNode;
 
 /* what an atom a record holds reads as (`atom_print`) */
-enum { AK_FLOAT = 1, AK_INT = 2, AK_NEGINT = 3, AK_STR = 4, AK_BYTES = 5, AK_DT = 6 };
+enum { AK_FLOAT = 1, AK_INT = 2, AK_NEGINT = 3, AK_STR = 4, AK_BYTES = 5, AK_DELTA = 6, AK_DATETIME = 7 };
+/* a print with two words more in `ext` */
+#define AK_EXT(k) ((k) >= AK_STR && (k) <= AK_DELTA)
 
 typedef struct {
     uintptr_t addr;
@@ -347,6 +349,27 @@ static size_t root_bytes(Root *R) {
 }
 
 static size_t table_bytes_total = 0;   /* sum of roots' bytes */
+
+/* a walked root's records and prints, shrunk to what they hold: they grew
+   by doubling, and the slack counted against the budget (up to half of a
+   2-million-record value's table) */
+static void root_trim(Root *R) {
+    if (R->nsnap && R->nsnap < R->capsnap) {
+        uintptr_t *p = realloc(R->snap, R->nsnap * sizeof *p);
+        if (p) { R->snap = p; R->capsnap = R->nsnap; }
+    }
+    if (R->natoms && R->natoms < R->capatoms) {
+        uint8_t *pk = realloc(R->akind, R->natoms);
+        if (pk) R->akind = pk;
+        uint64_t *pf = realloc(R->afp, (size_t)R->natoms * sizeof *pf);
+        if (pf) R->afp = pf;
+        R->capatoms = R->natoms;   /* each array holds at least that many, shrunk or not */
+    }
+    if (R->next && R->next < R->capext) {
+        uint64_t *p = realloc(R->aext, (size_t)R->next * sizeof *p);
+        if (p) { R->aext = p; R->capext = R->next; }
+    }
+}
 
 static size_t index_bytes(void) {
     return ht_cap * 4 + rht_cap * 4 + (size_t)capwn * sizeof(WNode) + (size_t)capkn * sizeof(KNode) +
@@ -1141,26 +1164,36 @@ static inline int atom_print(PyObject *x, PyTypeObject *t, uint64_t *fp, uint64_
     if (t != &PyUnicode_Type && t != &PyBytes_Type) {
         int i = dt_types[0] ? dt_index(x, t) : -1;
         if (i < 0) return 0;
-        /* exact: every byte it pickles from, and which class */
-        uint8_t b[16] = {0};
-        if (i == 0) {
-            memcpy(b, ((PyDateTime_DateTime *)x)->data, _PyDateTime_DATETIME_DATASIZE);
-            b[10] = PyDateTime_DATE_GET_FOLD(x);
-        } else if (i == 1) {
-            memcpy(b, ((PyDateTime_Date *)x)->data, _PyDateTime_DATE_DATASIZE);
-        } else if (i == 2) {
-            memcpy(b, ((PyDateTime_Time *)x)->data, _PyDateTime_TIME_DATASIZE);
-            b[6] = PyDateTime_TIME_GET_FOLD(x);
-        } else {
+        /* exact: every field it pickles from, and which class. A datetime,
+           a date or a time packs into the word (a datetime's fields take
+           61 bits; the class the top two): two million of them in a
+           watched list cost 8 bytes each beside their pointers, not 24 */
+        if (i == 3) {
             int v[3] = {PyDateTime_DELTA_GET_DAYS(x), PyDateTime_DELTA_GET_SECONDS(x),
                         PyDateTime_DELTA_GET_MICROSECONDS(x)};
+            uint8_t b[16] = {0};
             memcpy(b, v, sizeof v);
+            memcpy(fp, b, 8);
+            memcpy(&ext[0], b + 8, 8);
+            ext[1] = 0;
+            return AK_DELTA;
         }
-        b[15] = (uint8_t)(i + 1);
-        memcpy(fp, b, 8);
-        memcpy(&ext[0], b + 8, 8);
-        ext[1] = 0;
-        return AK_DT;
+        uint64_t w = (uint64_t)(i + 1) << 62;
+        if (i <= 1) {
+            w |= (uint64_t)PyDateTime_GET_YEAR(x) << 47 | (uint64_t)PyDateTime_GET_MONTH(x) << 43 |
+                 (uint64_t)PyDateTime_GET_DAY(x) << 38;
+        }
+        if (i == 0) {
+            w |= (uint64_t)PyDateTime_DATE_GET_HOUR(x) << 33 | (uint64_t)PyDateTime_DATE_GET_MINUTE(x) << 27 |
+                 (uint64_t)PyDateTime_DATE_GET_SECOND(x) << 21 | (uint64_t)PyDateTime_DATE_GET_MICROSECOND(x) << 1 |
+                 (uint64_t)(PyDateTime_DATE_GET_FOLD(x) & 1);
+        } else if (i == 2) {
+            w |= (uint64_t)PyDateTime_TIME_GET_HOUR(x) << 33 | (uint64_t)PyDateTime_TIME_GET_MINUTE(x) << 27 |
+                 (uint64_t)PyDateTime_TIME_GET_SECOND(x) << 21 | (uint64_t)PyDateTime_TIME_GET_MICROSECOND(x) << 1 |
+                 (uint64_t)(PyDateTime_TIME_GET_FOLD(x) & 1);
+        }
+        *fp = w;
+        return AK_DATETIME;
     }
     if (_Py_IsImmortal(x)) return 0;
     Py_hash_t h = t == &PyUnicode_Type ? ((PyASCIIObject *)x)->hash : -1;   /* cached */
@@ -1215,7 +1248,7 @@ static int record_item(Walk *W, PyObject *x) {
     }
     R->akind[R->natoms] = (uint8_t)k;
     R->afp[R->natoms++] = fp;
-    if (k >= AK_STR) {
+    if (AK_EXT(k)) {
         if (R->next + 2 > R->capext) {
             uint32_t nc = R->capext ? R->capext * 2 : 16;
             uint64_t *p = realloc(R->aext, (size_t)nc * sizeof *p);
@@ -1240,7 +1273,7 @@ static inline int print_same(Root *R, Prints *c, PyObject *x) {
     if (k <= 0) return 1;   /* not printed: `verify` counts the prints read */
     uint32_t j = c->j++;
     if (j >= R->natoms || R->akind[j] != k || R->afp[j] != fp) return 0;
-    if (k >= AK_STR) {
+    if (AK_EXT(k)) {
         if (c->e + 2 > R->next || R->aext[c->e] != ext[0] || R->aext[c->e + 1] != ext[1]) return 0;
         c->e += 2;
     }
@@ -2041,6 +2074,7 @@ static PyObject *arm_value(PyObject *o, PyObject *anchors, PyObject **kept) {
         busy = 0;
         return arm_result(A_TOO_SMALL, NULL);
     }
+    root_trim(R);
     table_bytes_total -= R->bytes;
     R->bytes = root_bytes(R);
     table_bytes_total += R->bytes;

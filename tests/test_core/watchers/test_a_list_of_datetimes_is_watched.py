@@ -103,3 +103,16 @@ def test_a_reducer_registered_for_datetime_is_read(watching, counted):
         assert counted.calls == calls + 1, "a digest from before the reducer was served"
     finally:
         del copyreg.dispatch_table[datetime.datetime]
+
+
+def test_a_watched_datetime_costs_its_pointer_and_one_word(watching, counted):
+    """The parsed log at full size (2 million datetimes in records) needed a
+    344 MB table, past the budget of a 16 GB machine (2% of RAM), and was
+    hashed every time: a datetime is now printed in one word, and a walked
+    root's arrays are shrunk to what they hold."""
+    n = 20_000
+    value = [T0 + datetime.timedelta(seconds=i) for i in range(n)]
+    watching["value"] = value
+    _watched(value, counted)
+    # 8 bytes of pointer and 9 of print per item, and the root's own
+    assert value_watch._cw.stats()["table_bytes"] < 18 * n + 200_000
