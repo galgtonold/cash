@@ -334,9 +334,12 @@ body. So cash follows these rules:
   around it is stored as above.
 - One that only read answers already there is served only while the memo
   holds every key and answer it read, compared by value. After a kernel
-  restart it runs until the memo is filled again, and the first statement
-  to read an answer that can change in place after that runs once more,
-  so cash has seen the answer as it was. As above, `cache_info()` then
+  restart it runs until the memo is filled again. An answer that can
+  change in place and that code cash does not watch put there (a cell
+  that runs every time, such as one drawing with pyplot) is taken as it
+  is just before the next statement calling the helper runs, so that
+  statement is stored, keyed on the answer as it read it, and one that
+  changes the answer in place runs every time. As above, `cache_info()` then
   counts fewer hits than a run would, on one of your classes too
   (`Model.lookup.cache_info()`).
 

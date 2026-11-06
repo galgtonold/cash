@@ -697,7 +697,33 @@ def _held(memo: Any) -> tuple[frozenset[tuple[int, int]], list[tuple[Any, Any]],
     items = _items(memo)
     if items is None or len(items) > MAX_KEYED:
         return None
-    return frozenset((id(key), id(answer)) for key, answer in items), items, _answers_seen.get(memo)
+    return frozenset((id(key), id(answer)) for key, answer in items), items, _seen_now(memo, items)
+
+
+def _seen_now(memo: Any, items: list[tuple[Any, Any]]) -> dict[int, tuple[Any, str | bytes]] | None:
+    """*memo*'s answers as `_answers_seen` remembers them, with each one it
+    does not (put there by code cash did not watch: a statement that runs
+    every time, a call it does not cache) taken as it is now, before the run
+    that is about to start. What the run then reads of it is recorded by
+    its digest as it is now (`_change_of`), and a change the run makes to
+    it in place is seen against this one: unseen, the run could not be
+    stored ("It filled the helper memo ...")."""
+    seen = _answers_seen.get(memo)
+    missing = [
+        answer
+        for _, answer in items
+        if not _fixed(answer) and ((known := (seen or {}).get(id(answer))) is None or known[0] is not answer)
+    ]
+    if not missing:
+        return seen
+    taken = dict(seen or {})
+    for answer in missing:
+        try:
+            taken[id(answer)] = (answer, _answer_digest(answer))
+        except Exception:  # noqa: BLE001 - an answer with no digest: left unseen
+            continue
+    _answers_seen[memo] = taken
+    return taken
 
 
 def _label(where: list[str]) -> str:
