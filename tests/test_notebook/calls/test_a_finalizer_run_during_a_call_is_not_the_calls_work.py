@@ -66,5 +66,5 @@ def test_a_call_a_collection_ran_finalizers_in_is_still_stored(cash_magics, mock
         ns["pool"].shutdown(wait=True)
     assert mock_shell.user_ns["y"] == float(np.arange(100_000.0).sum())
     if mode == "file":
-        assert (tmp_path / "finalized").read_text() == "x", "the finalizer never ran"
+        assert (tmp_path / "finalized").read_text(encoding="utf-8") == "x", "the finalizer never ran"
     assert log.read_bytes() == b".", "the call ran again"
