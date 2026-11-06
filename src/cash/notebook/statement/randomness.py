@@ -59,6 +59,7 @@ from ...source_norm import exact_source_digest
 from ...source_reading import own_source
 from ..callee_reach import helper_seeded_modules, reached_user_code
 from ..lineage_formula import note_seeded_unseen
+from ..staleness import normalise_source
 from .held_generators import HeldGenerators
 from .observed_draws import ObservedDrawStore
 
@@ -1238,8 +1239,17 @@ def _bare_seeds(code: str, helper_seeds: Callable[[str], frozenset[str]] | None 
 
 
 def cell_key(cell: str) -> str:
-    """A cell's source as the notebook file and the kernel both have it."""
-    return exact_source_digest(clean_cell_source(cell).strip())
+    """A cell's source as the notebook file and the kernel both have it.
+
+    IPython empties every whitespace-only line before it runs a cell, while
+    the saved file keeps the indentation an editor leaves on a blank line
+    inside a block (mlbook ch08's ``if version...: ... else:
+    np.random.seed(0)``). Keyed on the text alone, such a cell never read as
+    run in full, so the seed in its untaken branch counted as one above,
+    and a draw below it kept the stream a seed further down left on an
+    earlier pass (`unseed_streams_not_seeded_above`): run after an edit, it
+    was stored under a key a restart never looks up (`normalise_source`)."""
+    return exact_source_digest(normalise_source(clean_cell_source(cell)))
 
 
 _CONDITIONAL = (

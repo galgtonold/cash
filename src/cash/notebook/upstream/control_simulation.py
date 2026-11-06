@@ -22,11 +22,12 @@ from ...analysis.ast_util import called_names
 from ...analysis.cacheability import statement_writes_files
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.mutation_effects import control_structure_mutations, is_module_name
+from ...tracking.randomness import hidden_lineage_writes
 from ...tracking.read_classification import stat_key
 from ..cache_key import statement_source_hash
 from ..callee_reach import module_state_names
 from ..control_structures import extract_target_names, get_control_structure_type
-from ..lineage_formula import output_lineage
+from ..lineage_formula import UNSEEDED, output_lineage
 from ..loop_split import split_nodes
 from ..run_memo import file_component_this_run
 from ..statement.derivation_edges import bump_derived_lineages
@@ -234,6 +235,7 @@ class ControlSimulation:
         virtual_lineage = sim.virtual_lineage
 
         inputs, input_hashes = self._input_hashes(stmt_code, virtual_lineage)
+        unseeded_before = _unseeded_streams_it_spells_seeds_of(stmt_code, virtual_lineage)
 
         # The edges a run with these inputs linked: one of the same text
         # elsewhere may have linked others.
@@ -323,6 +325,7 @@ class ControlSimulation:
                 # the outputs where the record says the run left them.
                 stored_lineages = dict(recorded[4]) if len(recorded) > 4 else {}
                 virtual_lineage.update(recorded[1])
+                _unseed_what_it_did_not_seed(unseeded_before, recorded[1], virtual_lineage)
                 all_outputs = all_outputs | set(recorded[1])
 
         if logger.isEnabledFor(logging.DEBUG):
@@ -415,6 +418,42 @@ class ControlSimulation:
         if statement_writes_files(stmt_code):
             return True
         return any(not has_attribute(builtins, name) for name in called_names(node))
+
+
+def _unseeded_streams_it_spells_seeds_of(stmt_code: str, virtual_lineage: Mapping[str, str]) -> dict[str, str | None]:
+    """The RNG variables *stmt_code* spells a seed of that are unseeded as
+    it is entered, each with what *virtual_lineage* holds for it then
+    (None: nothing)."""
+    try:
+        spelled = hidden_lineage_writes(stmt_code)
+    except (SyntaxError, ValueError, TypeError, RecursionError):  # pragma: no cover - defensive
+        return {}
+    return {var: virtual_lineage.get(var) for var in spelled if virtual_lineage.get(var) in (None, UNSEEDED)}
+
+
+def _unseed_what_it_did_not_seed(
+    unseeded_before: Mapping[str, str | None], left: Mapping[str, str], virtual_lineage: dict[str, str]
+) -> None:
+    """Leave unseeded a stream the structure spells a seed of in a branch
+    its run did not take: *left*, what the run left behind, has no lineage
+    for it.
+
+    The unit is keyed as written, so its seeds count whichever branch runs
+    (``if version...: df = df.sample(...) else: np.random.seed(0)`` in
+    mlbook ch08). The runtime runs the branch it takes: the stream stays
+    unseeded, and a draw below (``gs.fit(X, y)``) keys on that. Read as
+    seeded, the check took the draw for one it had to put the stream back
+    for, could not (``RANDOM-STREAM-UNRESTORED``) and ran it without storing
+    it: after an edit above it, every restart ran the fit again. A stream
+    unseeded before stays so whatever the structure drew from it.
+    """
+    for var, was in unseeded_before.items():
+        if var in left:
+            continue
+        if was is None:
+            virtual_lineage.pop(var, None)
+        else:
+            virtual_lineage[var] = was
 
 
 def _stored_for(produced: Mapping[str, str], stored: Mapping[str, str]) -> dict[str, str] | None:
