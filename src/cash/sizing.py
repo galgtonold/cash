@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import dataclasses
 import functools
+import io
 import itertools
 import logging
 import pickle
@@ -26,6 +27,7 @@ from typing import Any
 
 from . import _native, _plain_data
 from ._user_attrs import attribute_or, builtin_items, instance_of, own_dict
+from .live_state import is_live_stream
 from .value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, PLAIN_SEQS, library_scalar_types
 
 logger = logging.getLogger(__name__)
@@ -648,6 +650,8 @@ def _own_footprint(obj: Any, seen: set[int], stack: list) -> int:
         if size is not None:
             return size
         size = sys.getsizeof(obj)
+        if _held_as_a_name(obj):
+            return size
         held: list = []
         # By the builtin type's own methods: a subclass's ``values()`` or
         # ``__len__`` may print or count, where plain Python never asked.
@@ -677,6 +681,20 @@ def _own_footprint(obj: Any, seen: set[int], stack: list) -> int:
 
 
 _CONTAINER_KINDS = (dict, list, tuple, set, frozenset)
+
+
+def _held_as_a_name(obj: Any) -> bool:
+    """Whether *obj* is one of the process's output streams, which a stored
+    value holds as the name ``sys.stdout`` (`live_state`), not as a copy.
+
+    A progress bar holds ``sys.stdout``; in a kernel that is ipykernel's
+    stream, which reaches the kernel, its session and every message queue.
+    Walked as the bar's own, it was a million objects per store of a loop's
+    variables, for bytes the stored bar never holds.
+    """
+    kind = type(obj)
+    return (issubclass(kind, io.IOBase) or hasattr(kind, "_cash_wrapped_stream")) and is_live_stream(obj)
+
 
 #: What a copy of a value refers to rather than holds: pickled by name.
 _HELD_BY_NAME = (type, types.ModuleType, types.FunctionType, types.BuiltinFunctionType, types.MethodType)
