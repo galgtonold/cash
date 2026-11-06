@@ -16,6 +16,14 @@ cell's text, the ``else`` seed counted as one above: a run from the middle
 of the notebook keyed the fit on the seed below, ran it again, and stored it
 under a key a restart never looks up. A cell that ran seeds only what its
 statements seeded; when the branch is taken, the seed counts as before.
+
+The same holds after an edit above the draw: the fit runs again under the
+edit and a restart then serves what it stored. Two things kept it from
+being stored: the cell's text on disk kept the indent on a blank line in
+the ``if`` block that IPython empties, so the cell never counted as run
+and its ``else`` seed did; and the upstream check read the ``if`` as
+seeding the stream whichever branch ran, could not put the stream back
+for the draw (``RANDOM-STREAM-UNRESTORED``) and so did not store it.
 """
 
 from __future__ import annotations
@@ -81,3 +89,42 @@ def test_a_draw_under_a_seed_taken_draws_the_seeded_values(nb_runner, tmp_path):
     seeded = str(np.random.rand(3).tolist())
     for name, _, out in _passes(nb_runner, tmp_path, flag=False):
         assert seeded in out, (name, out)
+
+
+#: mlbook ch08's cell 6 keeps the indent of a blank line inside its block.
+IF_CELLS = {
+    "plain": "if flag:\n    w = 1\nelse:\n    np.random.seed(0)\n    w = 2",
+    "indented_blank_line": "if flag:\n    w = 1\n    \nelse:\n    np.random.seed(0)\n    w = 2",
+}
+
+
+@pytest.mark.parametrize("if_cell", sorted(IF_CELLS))
+def test_a_draw_run_again_after_an_edit_above_is_served_after_a_restart(nb_runner, tmp_path, if_cell):
+    log = tmp_path / "draws.log"
+    cells = _cells(str(log), True)
+    cells[2] = IF_CELLS[if_cell]
+    cells.insert(3, "k = 10")
+    cells[4] = "X = make(3) + k\nprint('X', X.tolist())"
+    nb_runner.create_notebook(cells)
+    nb_runner.start_kernel()
+
+    def draws() -> int:
+        return len(log.read_bytes()) if log.exists() else 0
+
+    def x() -> str:
+        return next((line for line in nb_runner.get_output(5).splitlines() if line.startswith("X [")), "")
+
+    nb_runner.run_all()
+    nb_runner.restart()
+    nb_runner.run_all()
+    assert draws() == 1, nb_runner.get_output(5)
+    nb_runner.set_cell_source(4, "k = 8")
+    nb_runner.run_cells([4, 5, 6])
+    edited = x()
+    assert draws() == 2 and edited, nb_runner.get_output(5)
+    assert "RANDOM-STREAM-UNRESTORED" not in nb_runner.get_output(5), nb_runner.get_output(5)
+    nb_runner.settle_writes()
+    nb_runner.restart()
+    nb_runner.run_all()
+    assert draws() == 2, nb_runner.get_output(5)
+    assert x() == edited, (edited, nb_runner.get_output(5))
