@@ -16,7 +16,7 @@ import pickle
 import sys
 import time
 import types
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from cash import cost_model, handed_digests, kept_state, stored_pickle
@@ -33,7 +33,14 @@ from cash.notebook.anchors import AnchorUnrebuilt, with_anchor_refs
 from cash.notebook.callee_reach import made_as_it_ran
 from cash.notebook.consumables import is_stream
 from cash.notebook.file_records import REFS_FIELD as FILE_REFS_FIELD
-from cash.notebook.file_records import Records, entry_file_records, own_records, records_token, referred_records
+from cash.notebook.file_records import (
+    Records,
+    entry_file_records,
+    outlives_the_process,
+    own_records,
+    records_token,
+    referred_records,
+)
 from cash.notebook.read_handles import reaches_read_handle
 from cash.notebook.shared_objects import scalar_identity
 from cash.notebook.statement import reducer_writes
@@ -112,14 +119,16 @@ class _InheritedRecords:
     """The file records a statement takes over from its inputs' producers
     (`StatementStore.save`): by reference to the producer's entry
     (``refs``, the paths they name in ``referred``) where it takes all of
-    them, or else copied (``copied``), the path's first record kept."""
+    them and that entry holds them where a restart finds them (*durable*), or
+    else copied (``copied``), the path's first record kept."""
 
-    __slots__ = ("copied", "referred", "refs")
+    __slots__ = ("_durable", "copied", "referred", "refs")
 
-    def __init__(self) -> None:
+    def __init__(self, durable: Callable[[str, str], bool] = lambda key, token: True) -> None:
         self.refs: dict[str, str] = {}  # token -> key, in the order taken
         self.referred: set[str] = set()
         self.copied: dict[str, dict] = {}
+        self._durable = durable
 
     def take(self, records: Records, files: set[str], direct: set[str]) -> None:
         """Take *records* for the paths of *files* (what an input was built
@@ -127,7 +136,7 @@ class _InheritedRecords:
         if records.token in self.refs:
             return
         paths = records.paths
-        if records.token and paths <= files and paths.isdisjoint(direct):
+        if records.token and paths <= files and paths.isdisjoint(direct) and self._durable(records.key, records.token):
             # All of them, and none it read itself: the entry's own records.
             self.refs[records.token] = records.key
             self.referred |= paths
@@ -381,7 +390,7 @@ class StatementStore:
 
         accessed_files = execution.accessed_files
         all_file_deps = set(accessed_files) if accessed_files else set()
-        inherited = _InheritedRecords()
+        inherited = _InheritedRecords(self._durable_entries())
 
         # CRITICAL: Include inherited file dependencies from input variables
         # This ensures that when Cell 3 (`df`) is cached, it stores the CSV file's mtime
@@ -463,6 +472,23 @@ class StatementStore:
             log_diagnostic(logger, "STORE-INPUT-CHANGED", what, fix)
             warn_diagnostic(CashCacheStoreFailedWarning, "STORE-INPUT-CHANGED", what, fix)
         return True
+
+    def _durable_entries(self) -> Callable[[str, str], bool]:
+        """``(key, token) -> whether the entry holds those records where a
+        restart finds them`` (`file_records.outlives_the_process`), each
+        asked once: only such an entry's records are referred to, those of
+        one kept in memory only are copied, which a restart would otherwise
+        lose."""
+        backend = attribute_or(self.cash_instance, "backend", None) if self.cash_instance else None
+        asked: dict[tuple[str, str], bool] = {}
+
+        def durable(key: str, token: str) -> bool:
+            found = asked.get((key, token))
+            if found is None:
+                found = asked[key, token] = backend is not None and outlives_the_process(backend, key, token)
+            return found
+
+        return durable
 
     def _producer_records(self, var_name: str, key: str | None = None) -> list[Records]:
         """The file records *var_name*'s producing entry holds, its own and
