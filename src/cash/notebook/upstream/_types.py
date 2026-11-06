@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from cash._user_attrs import attribute_or
 from cash.control_markers import strip_markers
 
+from ...analysis.ast_util import walk_tree
 from ...analysis.code_analyzer import parse_cell_source
 
 if TYPE_CHECKING:
@@ -47,7 +48,7 @@ def statements_of(cell_code: str) -> frozenset[str]:
     if tree is None:
         return frozenset()
     found: set[str] = set()
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if isinstance(node, ast.stmt):
             try:
                 found.add(normalize_stmt(ast.unparse(node)))

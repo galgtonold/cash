@@ -12,6 +12,7 @@ from typing import Any
 
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning
+from .ast_util import parse_cached, walk_tree
 
 __all__ = [
     "CacheAnnotation",
@@ -344,9 +345,8 @@ def extract_annotations_for_statements(full_source: str) -> dict[int, CacheAnnot
     Returns a dict mapping statement start line -> CacheAnnotation.
     This allows looking up annotations before unparsing AST nodes.
     """
-    try:
-        tree = ast.parse(full_source)
-    except SyntaxError:
+    tree = parse_cached(full_source)
+    if tree is None:
         return {}
 
     annotations = {}
@@ -482,7 +482,7 @@ def _names_bound_for(func: Any, tree: ast.AST) -> dict[str, Any]:
             namespace[name] = cell.cell_contents
         except ValueError:  # an empty cell
             continue
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 top = alias.name.partition(".")[0]
@@ -534,7 +534,7 @@ def assume_safe_block_lines(tree: ast.AST, func: Any = None) -> frozenset[int]:
     waives nothing. Without *func*, the spelling decides (`waiver_items`).
     """
     candidates: list[tuple[ast.With, list[tuple[int, list[str]]]]] = []
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if not isinstance(node, ast.With) or not node.body:
             continue
         calls = [

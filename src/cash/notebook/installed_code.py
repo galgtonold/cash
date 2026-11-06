@@ -25,6 +25,7 @@ from typing import Any
 
 from cash._memo import CODE_OBJECTS, NOTEBOOK_STATEMENTS, LruMemo
 from cash._user_attrs import attribute_or, has_attribute, instance_of
+from cash.analysis.ast_util import walk_tree
 from cash.code_digest import callable_identity
 from cash.decorator.closure_fold import iter_code_scopes
 from cash.decorator.code_args import installed_user_code, loaded_accessor_classes
@@ -51,7 +52,7 @@ def _statement_attributes(code: str) -> frozenset[str]:
         except (SyntaxError, ValueError):
             found = frozenset()
         else:
-            found = frozenset(node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute))
+            found = frozenset(node.attr for node in walk_tree(tree) if isinstance(node, ast.Attribute))
         _STATEMENT_ATTRIBUTES[code] = found
     return found
 

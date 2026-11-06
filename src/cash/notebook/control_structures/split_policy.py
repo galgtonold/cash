@@ -21,6 +21,7 @@ import logging
 import sys
 from typing import TYPE_CHECKING, Any
 
+from ...analysis.ast_util import walk_tree
 from ..loop_split import LoopSplitStore, is_split_half, loop_source_hash, store_for_backend
 from .single_unit_policy import has_file_io_calls
 
@@ -103,7 +104,7 @@ class LoopSplitPolicy:
             return None
         if has_file_io_calls(node.body):
             return None
-        for sub in ast.walk(ast.Module(body=list(node.body), type_ignores=[])):
+        for sub in walk_tree(ast.Module(body=list(node.body), type_ignores=[])):
             if isinstance(sub, (ast.Break, ast.Continue)):
                 return None
         return n

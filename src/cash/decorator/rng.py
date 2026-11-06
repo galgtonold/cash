@@ -15,6 +15,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from ..analysis.annotations import parse_annotation_line
+from ..analysis.ast_util import walk_tree
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..source_reading import getsource, getsourcelines
 from ..tracking.randomness import (
@@ -98,9 +99,9 @@ def seed_parameters(src: str) -> dict[str, tuple[str, str, bool, tuple]]:
         return {}
     a = fn.args
     params = {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs)}
-    assigned = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del))}
+    assigned = {n.id for n in walk_tree(fn) if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del))}
     found: dict[str, tuple[str, str, bool, tuple]] = {}
-    for node in ast.walk(fn):
+    for node in walk_tree(fn):
         if not isinstance(node, ast.Call):
             continue
         dotted = ast.unparse(node.func)
@@ -220,7 +221,7 @@ def unseeded_library_calls_in(
     # `.sample()` is a generator's draw, which the source scan judges.
     generators = {
         target.id
-        for node in ast.walk(fn)
+        for node in walk_tree(fn)
         if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)
         for target in node.targets
         if isinstance(target, ast.Name)
@@ -228,7 +229,7 @@ def unseeded_library_calls_in(
     }
     arguments = _parameter_receivers(fn)
     found: list[tuple[str, int, str | None]] = []
-    for node in ast.walk(fn):
+    for node in walk_tree(fn):
         if not isinstance(node, ast.Call) or any(kw.arg is None for kw in node.keywords):
             continue  # `**kwargs` may carry the seed
         if any(kw.arg in _SEED_KEYWORDS for kw in node.keywords):
@@ -277,13 +278,13 @@ def _parameter_receivers(tree: ast.AST) -> set[str]:
     """The parameters of the functions in *tree* that their bodies never
     rebind: a name among them stands for what the caller passed."""
     names: set[str] = set()
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
             continue
         args = node.args
         params = {a.arg for a in (*args.posonlyargs, *args.args, *args.kwonlyargs)}
         params |= {a.arg for a in (args.vararg, args.kwarg) if a is not None}
-        rebound = {n.id for n in ast.walk(node) if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del))}
+        rebound = {n.id for n in walk_tree(node) if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del))}
         names |= params - rebound
     return names
 

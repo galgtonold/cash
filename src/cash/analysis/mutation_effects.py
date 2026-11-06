@@ -37,7 +37,7 @@ from ..value_types import BUILTIN_NAMES
 from .aliases import aliased_sources
 from .analysis_budget import ANALYSIS_BUDGET_REASON, AnalysisBudgetExceeded, no_analysis_budget
 from .annotations import extract_annotations_for_statements
-from .ast_util import called_names
+from .ast_util import called_names, parse_cached, walk_tree
 from .cacheability import analyze_statement
 from .cacheability_decision import analysis_failed, receiver_is_identity_coupled
 from .callee_effects import (
@@ -330,9 +330,8 @@ class NotebookSources:
         source = self.functions.get(self.var_factories.get(var))
         if not source:
             return None
-        try:
-            parsed = ast.parse(source)
-        except (SyntaxError, ValueError):
+        parsed = parse_cached(source)
+        if parsed is None:
             return None
         if parsed.body and isinstance(parsed.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)):
             return parsed.body[0]
@@ -439,7 +438,7 @@ def _branches(node: ast.AST) -> list[ast.stmt]:
 def _loop_targets(node: ast.AST) -> set[str]:
     if not isinstance(node, ast.For):
         return set()
-    return {n.id for n in ast.walk(node.target) if isinstance(n, ast.Name)}
+    return {n.id for n in walk_tree(node.target) if isinstance(n, ast.Name)}
 
 
 @dataclass(frozen=True)
@@ -667,10 +666,10 @@ def _iterable_roots(node: ast.expr, names: _LoopNames | None = None) -> set[str]
         node = node.args[0]
     if _lists_files(node, names):
         return set()
-    functions = {id(sub.func) for sub in ast.walk(node) if isinstance(sub, ast.Call)}
-    roots = {sub.id for sub in ast.walk(node) if isinstance(sub, ast.Name) and id(sub) not in functions}
+    functions = {id(sub.func) for sub in walk_tree(node) if isinstance(sub, ast.Call)}
+    roots = {sub.id for sub in walk_tree(node) if isinstance(sub, ast.Name) and id(sub) not in functions}
     if names is not None:
-        for sub in ast.walk(node):
+        for sub in walk_tree(node):
             if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name):
                 source = names.user_source(sub.func.id)
                 if source and resolve_function_def(sub.func.id, lambda _name, s=source: s) is not None:
@@ -710,9 +709,9 @@ def _function_global_reads(source: str) -> frozenset[str]:
     if fdef is None:
         return frozenset()
     bound = set(all_param_names(fdef))
-    callees = {id(sub.func) for sub in ast.walk(fdef) if isinstance(sub, ast.Call)}
+    callees = {id(sub.func) for sub in walk_tree(fdef) if isinstance(sub, ast.Call)}
     reads: set[str] = set()
-    for sub in ast.walk(fdef):
+    for sub in walk_tree(fdef):
         if isinstance(sub, ast.Name):
             if not isinstance(sub.ctx, ast.Load):
                 bound.add(sub.id)
@@ -847,11 +846,11 @@ def _with_bound_names(node: ast.AST) -> set[str]:
     """The names the ``with`` statements in *node* bind with ``as``."""
     return {
         target.id
-        for stmt in ast.walk(node)
+        for stmt in walk_tree(node)
         if isinstance(stmt, (ast.With, ast.AsyncWith))
         for item in stmt.items
         if item.optional_vars is not None
-        for target in ast.walk(item.optional_vars)
+        for target in walk_tree(item.optional_vars)
         if isinstance(target, ast.Name)
     }
 
@@ -968,7 +967,7 @@ def _watch_statements(stmts: list[ast.stmt], names: _LoopNames, found: set[str],
             if isinstance(stmt, ast.For):
                 for part, values in loop_target_parts(stmt.target, stmt.iter):
                     roots = _iterable_roots(values, names) if values is not None else set()
-                    for target in (n.id for n in ast.walk(part) if isinstance(n, ast.Name)):
+                    for target in (n.id for n in walk_tree(part) if isinstance(n, ast.Name)):
                         targets.setdefault(target, set()).update(roots)
             if isinstance(stmt, (ast.If, ast.While)):
                 found |= _handed_to_unknown_code(_as_statement(stmt.test), names, bare=False)
@@ -1090,8 +1089,11 @@ def cell_effects(cell_code: str, sources: NotebookSources, namespace: Mapping[st
     view from a copy. A cell that does not parse (a magic) writes nothing
     this can see.
     """
+    tree = parse_cached(cell_code)
+    if tree is None:
+        return CellEffects()
     try:
-        facts = _CellFacts(cell_code, ast.parse(cell_code))
+        facts = _CellFacts(cell_code, tree)
         writes = _CellWrites.of(facts, sources, namespace)
         # Only what the cell hands over is read from its objects, under the
         # budget (`_CellWrites.of`). The rest is read from the cell and the
@@ -1310,7 +1312,7 @@ def _object_protocol_effects(
     # Any call / subscript / del / with can dispatch to a custom method; a
     # based ``class Sub(Base):`` runs the base's ``__init_subclass__``.
     triggered = any(
-        isinstance(n, (ast.Call, ast.Subscript, ast.Delete, ast.With, ast.AsyncWith)) for n in ast.walk(tree)
+        isinstance(n, (ast.Call, ast.Subscript, ast.Delete, ast.With, ast.AsyncWith)) for n in walk_tree(tree)
     ) or any(isinstance(n, ast.ClassDef) and n.bases for n in tree.body)
     if not triggered:
         return None
@@ -1353,10 +1355,10 @@ def _object_protocol_effects(
             if not seen_current and code == cell_code:
                 seen_current = True
                 continue
-            try:
-                other = resets_of(ast.parse(code))
-            except (SyntaxError, ValueError):
+            other_tree = parse_cached(code)
+            if other_tree is None:
                 continue
+            other = resets_of(other_tree)
             other_receivers |= other.receivers
             other_class_defs |= other.class_defs
             other_init_free |= other.init_subclass_free_vars

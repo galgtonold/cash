@@ -23,7 +23,7 @@ from cash._user_attrs import attribute_or
 from cash.control_markers import strip_markers
 
 from ..._paths import resolve_file_dep_path
-from ...analysis.ast_util import parse_cached
+from ...analysis.ast_util import parse_cached, walk_tree
 from ...analysis.cacheability import statement_writes_files
 from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source, statement_code
 from ...source_norm import exact_source_digest
@@ -1227,7 +1227,7 @@ def _first_cell_reading(notebook_cells: list[str], limit: int, names: set[str]) 
             tree = None
         if tree is None:
             return idx  # cannot tell: assume it reads them
-        for node in ast.walk(tree):
+        for node in walk_tree(tree):
             if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in names:
                 return idx
             if isinstance(node, ast.ImportFrom) and any((alias.asname or alias.name) in names for alias in node.names):
@@ -1261,7 +1261,7 @@ def _rebound_names(stmt_code: str) -> set[str]:
         if isinstance(node, (ast.Assign, ast.AnnAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             for target in targets:
-                for sub in ast.walk(target):
+                for sub in walk_tree(target):
                     if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store):
                         names.add(sub.id)
         elif isinstance(node, (ast.Import, ast.ImportFrom)):

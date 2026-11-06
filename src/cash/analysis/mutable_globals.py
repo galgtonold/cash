@@ -20,6 +20,7 @@ from .._memo import MODULE_ANALYSES, LruMemo
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..source_reading import settled_source_version, source_version_unchanged
 from ..value_types import BUILTIN_NAMES
+from .ast_util import walk_tree
 from .callee_effects import module_function_global_changes, scope_locals
 from .purity_report import ISSUE_MUTABLE_GLOBAL, PurityIssue
 
@@ -32,7 +33,7 @@ def _imported_module_names(tree: ast.AST) -> frozenset[str]:
     ``import os.path`` binds ``os``, so the top-level segment is what counts.
     """
     names: set[str] = set()
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 names.add(alias.asname or alias.name.split(".")[0])

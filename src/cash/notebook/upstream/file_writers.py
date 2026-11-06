@@ -22,7 +22,7 @@ from cash._user_attrs import attribute_or, has_attribute, instance_of
 
 from ..._memo import NOTEBOOK_STATEMENTS, STATEMENTS
 from ..._paths import resolve_file_dep_path
-from ...analysis.ast_util import called_names, parse_cached
+from ...analysis.ast_util import called_names, parse_cached, walk_tree
 from ...analysis.cacheability import statement_writes_files
 from ...analysis.file_effects import (
     REPEATABILITY_ACCUMULATING,
@@ -187,7 +187,7 @@ def _changed_in_place_only(body: list[ast.stmt], outputs) -> set[str]:
     ``globals()``)."""
     stored: set[str] = set()
     for stmt in body:
-        for sub in ast.walk(stmt):
+        for sub in walk_tree(stmt):
             if isinstance(sub, _BINDS_OTHERWISE):
                 return set()
             if isinstance(sub, ast.Name):

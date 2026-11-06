@@ -12,6 +12,8 @@ from __future__ import annotations
 import ast
 import textwrap
 
+from cash.analysis.ast_util import walk_tree
+
 __all__ = ["fills_carrier", "passes_carrier_to_a_call"]
 
 
@@ -55,10 +57,10 @@ def _control_body_touches(code: str, sibling_names: set[str]) -> bool:
         tree = ast.parse(textwrap.dedent(code))
     except (SyntaxError, ValueError, TypeError):
         return False
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if not isinstance(node, _CONTROL_NODES):
             continue
-        for sub in ast.walk(node):
+        for sub in walk_tree(node):
             if (
                 isinstance(sub, ast.Call)
                 and isinstance(sub.func, ast.Attribute)
@@ -100,7 +102,7 @@ def passes_carrier_to_a_call(code: str, sibling_names: set[str]) -> bool:
         tree = ast.parse(textwrap.dedent(code))
     except (SyntaxError, ValueError, TypeError):
         return False
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if not isinstance(node, ast.Call):
             continue
         if _root_name(node.func) in sibling_names:

@@ -51,6 +51,7 @@ from typing import Any
 
 from cash._user_attrs import attribute_or, has_attribute, instance_of
 
+from ..analysis.ast_util import walk_tree
 from ..analysis.mutation_effects import captured_call_receivers
 from ..analysis.mutations import NON_CONSUMING_FUNCS, consumed_input_names
 from .read_handles import reaches_read_handle
@@ -357,9 +358,9 @@ def _holds_drawn_stream(tree: ast.Module | None, name: str, value: Any, user_ns:
     so does a holder too big to read (`UNREAD`). None when it draws none."""
     if tree is None:
         return None
-    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
-    bound = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and not isinstance(n.ctx, ast.Load)}
-    for node in ast.walk(tree):
+    parents = {child: node for node in walk_tree(tree) for child in ast.iter_child_nodes(node)}
+    bound = {n.id for n in walk_tree(tree) if isinstance(n, ast.Name) and not isinstance(n.ctx, ast.Load)}
+    for node in walk_tree(tree):
         chain = _reach_chain(node, name)
         parent = parents.get(node)
         if not chain or (isinstance(parent, (ast.Attribute, ast.Subscript)) and parent.value is node):

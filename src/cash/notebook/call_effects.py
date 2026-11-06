@@ -28,6 +28,7 @@ from typing import Any
 
 from cash import handed_digests
 from cash._user_attrs import attribute_or
+from cash.analysis.ast_util import walk_tree
 from cash.analysis.bytecode import DEREF_WRITES, argvals
 from cash.analysis.read_only_callees import reads_its_arguments_only
 from cash.content_hashers import builtin_family_of, polars_signature
@@ -536,7 +537,7 @@ def _first_call_source(tree: ast.Module | None, namespace: Mapping[str, Any] | N
         return None
     try:
         source = ast.unparse(found)
-        if sum(1 for n in ast.walk(value) if isinstance(n, ast.Call) and ast.unparse(n) == source) != 1:
+        if sum(1 for n in walk_tree(value) if isinstance(n, ast.Call) and ast.unparse(n) == source) != 1:
             return None
     except (ValueError, TypeError, AttributeError, RecursionError):
         return None

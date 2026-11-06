@@ -16,6 +16,7 @@ import types
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from cash.analysis.ast_util import walk_tree
 from cash.analysis.cacheability_decision import receiver_is_identity_coupled
 from cash.analysis.mutation_effects import (
     classify_receivers,
@@ -529,7 +530,7 @@ def _in_place_receivers(tree: ast.Module | None) -> set[str]:
     found: set[str] = set()
     if tree is None:
         return found
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
             continue
         method = node.func.attr

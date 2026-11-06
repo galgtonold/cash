@@ -201,3 +201,14 @@ def method_calls(owner, name: str) -> Iterator[Count]:
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(owner, name, spy)
         yield count
+
+
+@contextlib.contextmanager
+def tree_walks() -> Iterator[Count]:
+    """``ast.walk`` calls inside the block: each one walks a syntax tree,
+    or a part of one, from the top. `cash.analysis.ast_util.walk_tree`
+    calls it once per tree, the first time the tree is asked for."""
+    import ast
+
+    with method_calls(ast, "walk") as count:
+        yield count

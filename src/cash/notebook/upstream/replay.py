@@ -18,7 +18,7 @@ from cash.control_markers import strip_markers
 
 from ..._memo import NOTEBOOK_CELLS, NOTEBOOK_VERSIONS
 from ...analysis.annotations import get_statement_annotations
-from ...analysis.ast_util import parse_cached
+from ...analysis.ast_util import parse_cached, walk_tree
 from ...analysis.code_analyzer import clean_cell_source, parse_cell_source, statement_code
 from ...exceptions import UpstreamStateError
 from ..control_structures import is_control_structure
@@ -86,7 +86,7 @@ def _cell_statement_codes(cell: str) -> tuple[tuple[tuple[str, ...], ...], int]:
     for node in tree.body:
         # A restored loop pass is keyed by its body statement.
         codes = [ast.unparse(node)]
-        codes += [ast.unparse(sub) for sub in ast.walk(node) if sub is not node and isinstance(sub, ast.stmt)]
+        codes += [ast.unparse(sub) for sub in walk_tree(node) if sub is not node and isinstance(sub, ast.stmt)]
         per_node.append(tuple(codes))
     return tuple(per_node), len(tree.body)
 
@@ -481,7 +481,7 @@ class StatementReplay:
             try:
                 reads = {
                     n.id
-                    for n in ast.walk(ast.parse(stmt_code))
+                    for n in walk_tree(ast.parse(stmt_code))
                     if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
                 }
             except SyntaxError:
@@ -513,7 +513,7 @@ class StatementReplay:
     def _writes(node: ast.AST, kind: str, name: str, reads: set[str]) -> bool:
         """Whether *node* writes the missing name, or the missing key or
         attribute on a variable the failing statement reads."""
-        for sub in ast.walk(node):
+        for sub in walk_tree(node):
             if kind == "name":
                 if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                     if sub.name == name:

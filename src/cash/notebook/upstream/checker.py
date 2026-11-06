@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from ..._memo import NOTEBOOK_CELLS, NOTEBOOK_VERSIONS
 from ...analysis.analysis_budget import AnalysisBudget, analysis_budget, analysis_budget_seconds
+from ...analysis.ast_util import parse_cached, walk_tree
 from ...analysis.code_analyzer import CodeAnalyzer, parse_cell_source
 from ...analysis.mutation_effects import CellEffects, NotebookSources, cell_effects
 from ...control_markers import strip_markers
@@ -63,7 +64,7 @@ def _statement_texts(cell_code: str) -> frozenset[str]:
     tree = parse_cell_source(cell_code)
     if tree is None:
         return frozenset()
-    return frozenset(ast.unparse(node).strip() for node in ast.walk(tree) if isinstance(node, ast.stmt))
+    return frozenset(ast.unparse(node).strip() for node in walk_tree(tree) if isinstance(node, ast.stmt))
 
 
 @functools.lru_cache(maxsize=NOTEBOOK_VERSIONS)
@@ -100,7 +101,7 @@ class UpstreamChecker:
         together (`expected_run_time`); the floor when none was measured."""
         total = 0.0
         try:
-            tree = ast.parse(cell_code)
+            tree = parse_cached(cell_code)
             for node in tree.body:
                 segment = ast.get_source_segment(cell_code, node)
                 took = self.expected_run_time(segment.strip()) if segment else None

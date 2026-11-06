@@ -17,7 +17,7 @@ from collections.abc import Iterator, Set
 from cash._user_attrs import attribute_or, instance_of
 
 from ..._memo import NOTEBOOK_CELLS, NOTEBOOK_VERSIONS
-from ...analysis.ast_util import called_names
+from ...analysis.ast_util import called_names, walk_tree
 from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source
 from ...diagnostics import log_diagnostic, warn_diagnostic
 from ...exceptions import CashUpstreamSyntaxWarning, ForwardReferenceError
@@ -112,7 +112,7 @@ def _bound_anywhere(cell_code: str) -> frozenset[str]:
     if tree is None:
         return frozenset()
     names: set[str] = set()
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
             names.add(node.id)
         elif isinstance(node, ast.arg):
@@ -191,7 +191,7 @@ def _bound_by(fn: "ast.AST") -> set[str]:
         for extra in (args.vararg, args.kwarg):
             if extra is not None:
                 bound.add(extra.arg)
-    for node in ast.walk(fn):
+    for node in walk_tree(fn):
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
             bound.add(node.id)
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):

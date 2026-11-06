@@ -31,6 +31,7 @@ import ast
 import hashlib
 from typing import Mapping, Sequence
 
+from ..analysis.ast_util import walk_tree
 from ..analysis.file_effects import READ_TEXT_MARKERS
 from .stateful_carriers import carrier_kind_from_producer
 
@@ -62,7 +63,7 @@ def _assigned_names(tree: ast.Module) -> set[str]:
             else []
         )
         for target in targets:
-            for sub in ast.walk(target):
+            for sub in walk_tree(target):
                 if isinstance(sub, ast.Name):
                     names.add(sub.id)
     return names
@@ -71,7 +72,7 @@ def _assigned_names(tree: ast.Module) -> set[str]:
 def _reads_any(tree: ast.Module, names: set[str]) -> bool:
     """Does this statement READ one of *names*?"""
     return any(
-        isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in names for node in ast.walk(tree)
+        isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in names for node in walk_tree(tree)
     )
 
 

@@ -27,6 +27,7 @@ import hashlib
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from ..analysis.ast_util import walk_tree
 from ..analysis.code_analyzer import CodeAnalyzer, calls_ipython
 from ..analysis.code_analyzer import python_magic_argument as _python_magic_arg
 from ..analysis.code_analyzer import split_magic_argument as _split_argument
@@ -64,7 +65,7 @@ def is_rerun_magic(node: ast.stmt) -> bool:
     run for the user (``NOTEBOOK-MAGIC-STALE``).
     """
     found = False
-    for call in ast.walk(node):
+    for call in walk_tree(node):
         if not (
             isinstance(call, ast.Call)
             and isinstance(call.func, ast.Attribute)
@@ -96,7 +97,7 @@ def _changed_receivers(tree: ast.Module) -> set[str]:
     """Names a method call in *tree* may change in place: the receiver of every
     method not known to leave it alone (``model.fit()``, not ``df.head()``)."""
     names: set[str] = set()
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
             if node.func.attr in KNOWN_PURE_METHODS:
                 continue
@@ -122,7 +123,7 @@ def magic_effects(node: ast.stmt, is_module: Callable[[str], bool]) -> tuple[set
     changed = set(outputs)
     read = set(inputs) - {"get_ipython"}
     trees: list[ast.AST] = [node]
-    for call in ast.walk(node):
+    for call in walk_tree(node):
         arg = _python_magic_arg(call)
         if arg is None:
             continue
@@ -147,9 +148,9 @@ def _only_bound(trees: list[ast.AST]) -> set[str]:
     stored: set[str] = set()
     loaded: set[str] = set()
     for tree in trees:
-        for node in ast.walk(tree):
+        for node in walk_tree(tree):
             if isinstance(node, ast.AugAssign):
-                loaded.update(n.id for n in ast.walk(node.target) if isinstance(n, ast.Name))
+                loaded.update(n.id for n in walk_tree(node.target) if isinstance(n, ast.Name))
             elif isinstance(node, ast.Name):
                 (loaded if isinstance(node.ctx, ast.Load) else stored).add(node.id)
     return stored - loaded
@@ -161,7 +162,7 @@ def magic_rng_advances(node: ast.stmt, code: str, lineage: Mapping[str, str]) ->
     variable's *lineage* before it: a draw moves the stream on, as a
     statement's does (``advanced_rng_lineage``). Both engines call this."""
     advances: dict[str, str] = {}
-    for call in ast.walk(node):
+    for call in walk_tree(node):
         arg = _python_magic_arg(call)
         inner = _python_argument(arg) if arg is not None else None
         if inner is None:
@@ -192,7 +193,7 @@ def magic_call_arguments(node: ast.stmt, user_ns: Mapping[str, Any]) -> tuple[fr
     """
     watched: set[str] = set()
     bare: set[str] = set()
-    for call in ast.walk(node):
+    for call in walk_tree(node):
         arg = _python_magic_arg(call)
         inner = None if arg is None else _python_argument(arg)
         if inner is None:

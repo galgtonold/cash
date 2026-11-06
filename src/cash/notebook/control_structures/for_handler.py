@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from cash._user_attrs import attribute_or
 from cash.control_markers import iteration_digest, mark_iteration
 
+from ...analysis.ast_util import walk_tree
 from ...analysis.mutations import accumulator_loop_body_shape, seeded_accumulator_loop
 from ...diagnostics import warn_diagnostic
 from ...exceptions import CashWarning
@@ -134,7 +135,7 @@ def _work(metrics: Sequence) -> float:
 def _rebound_names(node: ast.For) -> set[str]:
     """The names a statement of *node*'s body binds."""
     return {
-        n.id for stmt in node.body for n in ast.walk(stmt) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)
+        n.id for stmt in node.body for n in walk_tree(stmt) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)
     }
 
 
@@ -616,7 +617,7 @@ class ForLoopHandler:
         # so what those passes left must not reach the loop's lineages.
         lineage_now = self.statement_processor.tracking_state.variable_lineage
         before = (
-            {name: lineage_now.get(name) for name in {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}}
+            {name: lineage_now.get(name) for name in {n.id for n in walk_tree(node) if isinstance(n, ast.Name)}}
             if rest_after is not None
             else {}
         )
@@ -928,7 +929,7 @@ class ForLoopHandler:
         if last is None or iterable_lineage is None or last == iterable_lineage:
             return
         user_ns = attribute_or(self.shell, "user_ns", None) or {}
-        names = sorted({n.id for n in ast.walk(node.iter) if isinstance(n, ast.Name) and n.id in user_ns})
+        names = sorted({n.id for n in walk_tree(node.iter) if isinstance(n, ast.Name) and n.id in user_ns})
         reason = f"input changed: {', '.join(names)}" if names else "input changed: the loop's iterable"
         for m in all_metrics:
             if (

@@ -35,6 +35,7 @@ from typing import Any
 
 from ..._user_attrs import attribute_or
 from ...analysis.annotations import get_statement_annotations
+from ...analysis.ast_util import walk_tree
 from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source, statement_code
 from ...diagnostics import warn_diagnostic
 from ...source_norm import exact_source_digest
@@ -110,7 +111,7 @@ def _bare_seed_modules(code: str) -> frozenset[str]:
     if len(tree.body) != 1 or not isinstance(tree.body[0], ast.Expr):
         return frozenset()
     call = tree.body[0].value
-    if not isinstance(call, ast.Call) or sum(isinstance(n, ast.Call) for n in ast.walk(call)) != 1:
+    if not isinstance(call, ast.Call) or sum(isinstance(n, ast.Call) for n in walk_tree(call)) != 1:
         return frozenset()
 
     def plain(node: ast.AST) -> bool:
@@ -151,7 +152,7 @@ def _constant_binding(code: str) -> bool:
     for t in node.targets:
         if not all(isinstance(e, ast.Name) for e in (t.elts if isinstance(t, ast.Tuple) else [t])):
             return False
-    if any(isinstance(n, (ast.List, ast.Dict, ast.Set)) for n in ast.walk(node.value)):
+    if any(isinstance(n, (ast.List, ast.Dict, ast.Set)) for n in walk_tree(node.value)):
         return False  # a value a call could change in place
     try:
         ast.literal_eval(node.value)
@@ -465,11 +466,11 @@ class RngRewind:
             if not all(isinstance(e, ast.Name) for e in elts):
                 return False
             targets |= {e.id for e in elts}
-        read = {n.id for n in ast.walk(node.value) if isinstance(n, ast.Name)}
+        read = {n.id for n in walk_tree(node.value) if isinstance(n, ast.Name)}
         if targets & read:
             return False
         live = self.shell.user_ns
-        for call in (n for n in ast.walk(node.value) if isinstance(n, ast.Call)):
+        for call in (n for n in walk_tree(node.value) if isinstance(n, ast.Call)):
             root = call.func
             while isinstance(root, ast.Attribute):
                 root = root.value
@@ -499,7 +500,7 @@ class RngRewind:
             tree = ast.parse(code)
         except SyntaxError:
             return True
-        for n in ast.walk(tree):
+        for n in walk_tree(tree):
             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute):
                 base = n.func.value
                 while isinstance(base, (ast.Attribute, ast.Subscript)):

@@ -27,7 +27,7 @@ from typing import Any, Callable, Iterable
 from cash._user_attrs import attribute_or, has_attribute, instance_of
 
 from .._memo import CODE_OBJECTS, LruMemo
-from ..analysis.ast_util import parse_cached
+from ..analysis.ast_util import parse_cached, walk_tree
 from ..analysis.mutations import repeatable_setting_receiver
 from ..analysis.purity_analyzer import get_analyzer
 from ..code_digest import module_identity
@@ -98,7 +98,7 @@ def bound_names(code: str) -> set[str] | None:
     if tree is None:
         return None
     bound: set[str] = set()
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
             bound.add(node.id)
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
@@ -635,8 +635,8 @@ def body_only_reads(code: str) -> frozenset[str]:
     if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or node.decorator_list:
         return frozenset()
     evaluated = [*node.args.defaults, *(d for d in node.args.kw_defaults if d is not None)]
-    at_def = {n.id for d in evaluated for n in ast.walk(d) if isinstance(n, ast.Name)}
-    in_body = {n.id for stmt in node.body for n in ast.walk(stmt) if isinstance(n, ast.Name)}
+    at_def = {n.id for d in evaluated for n in walk_tree(d) if isinstance(n, ast.Name)}
+    in_body = {n.id for stmt in node.body for n in walk_tree(stmt) if isinstance(n, ast.Name)}
     return frozenset(in_body - at_def)
 
 
@@ -735,7 +735,7 @@ def _called_helpers(code: str) -> frozenset[str]:
     called = {
         sub.func.id
         for stmt in node.body
-        for sub in ast.walk(stmt)
+        for sub in walk_tree(stmt)
         if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name)
     }
     return frozenset(name for name in called if name not in vars(builtins))
@@ -865,7 +865,7 @@ def _written_environment_reads(code: str, user_ns: Mapping[str, Any] | None) -> 
     if tree is None:
         return set()
     found = set()
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         entry = environment_input(node, user_ns)
         if entry is not None:
             found.add(entry)

@@ -34,6 +34,7 @@ from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from ..._user_attrs import attribute_or, has_attribute, instance_of, own_dict
+from ...analysis.ast_util import walk_tree
 from ...analysis.callee_effects import free_vars_mutated_in_function, scope_locals
 from ...analysis.mutations import MUTATING_METHODS
 from ...exceptions import SOURCE_RETRIEVAL_ERRORS
@@ -797,7 +798,7 @@ def called_methods(tree: ast.AST | None) -> frozenset[str]:
         return frozenset()
     return frozenset(
         f"{node.func.value.id}.{node.func.attr}"
-        for node in ast.walk(tree)
+        for node in walk_tree(tree)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
     )
 
@@ -917,7 +918,7 @@ def _handed_writes(node: ast.AST) -> set[str]:
     looked up by ``getattr``."""
     out: set[str] = set()
     called: set[int] = set()
-    for sub in ast.walk(node):
+    for sub in walk_tree(node):
         if not isinstance(sub, ast.Call):
             continue
         called.add(id(sub.func))
@@ -939,7 +940,7 @@ def _handed_writes(node: ast.AST) -> set[str]:
             attr = sub.args[1]
             if not (isinstance(attr, ast.Constant) and isinstance(attr.value, str)) or attr.value in MUTATING_METHODS:
                 out.add(sub.args[0].id)
-    for sub in ast.walk(node):
+    for sub in walk_tree(node):
         if (
             isinstance(sub, ast.Attribute)
             and id(sub) not in called
@@ -960,7 +961,7 @@ def _method_writes(code: types.CodeType, globals_: Mapping[str, Any]) -> list[st
         return []
     own = scope_locals(node)
     out: list[str] = []
-    for sub in ast.walk(node):
+    for sub in walk_tree(node):
         if not (
             isinstance(sub, ast.Call)
             and isinstance(sub.func, ast.Attribute)
@@ -993,7 +994,7 @@ def _writes_its_object(code: types.CodeType) -> bool:
             target = target.value
         return isinstance(target, ast.Name) and target.id == me
 
-    for sub in ast.walk(node):
+    for sub in walk_tree(node):
         if isinstance(sub, (ast.Assign, ast.AugAssign, ast.AnnAssign, ast.Delete)):
             targets = sub.targets if isinstance(sub, (ast.Assign, ast.Delete)) else [sub.target]
             if any(isinstance(t, (ast.Attribute, ast.Subscript)) and rooted(t) for t in targets):
@@ -1036,11 +1037,11 @@ def _function_node(code: types.CodeType) -> ast.FunctionDef | ast.AsyncFunctionD
             return _lambda_in_its_text(code) if code.co_name == "<lambda>" else None
         first_line_moved = 1 - (len(text) - len(text.lstrip()))
     if code.co_name != "<lambda>":
-        for node in ast.walk(tree):
+        for node in walk_tree(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == code.co_name:
                 return node
         return None
-    lambdas = [node for node in ast.walk(tree) if isinstance(node, ast.Lambda)]
+    lambdas = [node for node in walk_tree(tree) if isinstance(node, ast.Lambda)]
     if len(lambdas) < 2:
         return lambdas[0] if lambdas else None
     if sys.version_info < (3, 11):
@@ -1082,7 +1083,7 @@ def _lambda_in_its_text(code: types.CodeType) -> ast.Lambda | None:
         tree = ast.parse("".join(linecache.getlines(code.co_filename)))
     except (SyntaxError, ValueError):
         return None
-    lambdas = [node for node in ast.walk(tree) if isinstance(node, ast.Lambda) and node.lineno == code.co_firstlineno]
+    lambdas = [node for node in walk_tree(tree) if isinstance(node, ast.Lambda) and node.lineno == code.co_firstlineno]
     if len(lambdas) < 2:
         return lambdas[0] if lambdas else None
     if sys.version_info < (3, 11):
@@ -1120,7 +1121,7 @@ def _comprehension_node(code: types.CodeType, kind: type) -> ast.Lambda | None:
         tree = ast.parse(text)
     except (SyntaxError, ValueError):
         return None
-    found = [node for node in ast.walk(tree) if isinstance(node, kind) and node.lineno == code.co_firstlineno]
+    found = [node for node in walk_tree(tree) if isinstance(node, kind) and node.lineno == code.co_firstlineno]
     if not found:
         return None
     # Several on the line: what any of them changes.
