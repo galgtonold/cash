@@ -44,7 +44,7 @@ from ..cache_key import called_function_globals, write_provenance_key
 from ..cache_status import CacheStatus
 from ..carrier_history import carrier_history_fingerprint
 from ..consumables import is_write_stream
-from ..run_memo import stats_this_run
+from ..run_memo import HeldPaths, stats_this_run
 from ._types import key_lineages, latest_producer
 
 if TYPE_CHECKING:
@@ -55,6 +55,9 @@ if TYPE_CHECKING:
     from .cache_probe import CacheProbe
 
 __all__ = ["FileWriterScheduler", "LazyReadPaths"]
+
+#: Fewer files read than this are resolved each time: holding them costs more.
+_HOLD_MIN_SOURCES = 256
 
 logger = logging.getLogger(__name__)
 
@@ -258,7 +261,13 @@ class FileWriterScheduler:
         self._read_index: tuple[set[str], int, tuple[set[str], list[str], list[str]]] | None = None
         #: ``(working directory, {read path: (where it is, its forms, its
         #: place)})`` -- see ``_read_path_index``.
-        self._read_forms: tuple[str, dict[str, tuple[str, tuple[str, ...], str]]] = ("", {})
+        self._read_forms: tuple[str, dict[str, tuple[str, tuple[str, ...], str, bool]]] = ("", {})
+        #: The index across runs, while the folder watch vouches for the
+        #: paths it was built from -- see ``_held_read_index``.
+        self._held_reads = HeldPaths(kept=2)
+        #: Whether writers' files are among what their inputs were read
+        #: from, across runs -- see ``_held_resolves_to``.
+        self._held_sources = HeldPaths(kept=4)
         #: ``(trace, its length, defs)`` -- see ``_trace_defs``. Holds the
         #: trace itself, so an identity match cannot be a reused id.
         self._trace_defs_memo: tuple[list, int, dict] | None = None
@@ -1041,7 +1050,50 @@ class FileWriterScheduler:
         written = self._writer_paths(stmt_code, simulation_trace)
         if not written:
             return False
-        return any_resolves_to(sources, {os.path.realpath(p) for p in written})
+        targets = frozenset(os.path.realpath(p) for p in written)
+        if len(sources) < _HOLD_MIN_SOURCES:
+            return any_resolves_to(sources, targets)
+        return self._held_resolves_to(sources, targets)
+
+    def _held_resolves_to(self, sources: set[str], targets: frozenset[str]) -> bool:
+        """`any_resolves_to` of *sources*, the files a writer's inputs were
+        read from, kept across runs while the folder watch vouches for them
+        (`run_memo.HeldPaths`): a later run resolves only the paths of a
+        folder that reported a change since. A link is never vouched for,
+        so it is looked at each time.
+
+        Below a loop over 50,000 review files, the check of ``df.to_csv``
+        before each cell went through all 100,000 paths the frame was read
+        from, splitting and case-folding each: 0.7 s a cell on Windows."""
+        found = self._held_sources.find(sources)
+        if found is not None:
+            entry, answers, unsure = found
+            known = answers.get(targets)
+            if known is not None and not unsure:
+                return known
+            if known is False:
+                located = stats_this_run(unsure)
+                if not any_resolves_to(unsure, targets):
+                    HeldPaths.renew(entry, {targets: False}, self._source_stats(unsure, located), unsure)
+                    return False
+                answers = {}
+            elif not unsure:
+                answer = any_resolves_to(sources, targets)
+                answers[targets] = answer
+                return answer
+        answer = any_resolves_to(sources, targets)
+        located = stats_this_run(sources)
+        self._held_sources.keep(sources, {targets: answer}, self._source_stats(sources, located))
+        return answer
+
+    @staticmethod
+    def _source_stats(paths, located) -> dict:
+        """``{path: stat or None}``: where it was recorded, else not there."""
+        stats = {}
+        for p in paths:
+            resolved, st = located[p]
+            stats[p] = st if resolved == p else None
+        return stats
 
     def _writer_paths(self, stmt_code: str, simulation_trace: list | None = None) -> set[str] | None:
         """The paths a writer writes: from its code, else from the record it
@@ -1118,6 +1170,91 @@ class FileWriterScheduler:
         cached = self._read_index
         if cached is not None and cached[0] is relevant_read_paths and cached[1] == len(relevant_read_paths):
             return cached[2]
+        index = self._held_read_index(relevant_read_paths)
+        if index is None:
+            index = self._build_read_index(relevant_read_paths)
+        self._read_index = (relevant_read_paths, len(relevant_read_paths), index)
+        return index
+
+    def _held_read_index(self, relevant_read_paths) -> tuple[set[str], list[str], list[str]] | None:
+        """The index built in an earlier run from the same paths, while the
+        folder watch vouches for them (`run_memo.HeldPaths`): the paths of a
+        folder that reported a change since are looked at again, and the
+        index holds when each is found where and as it was (a file still a
+        file, a folder still a folder). None otherwise: it is built anew.
+
+        Below a loop over 50,000 review files, each trivial cell built it
+        from all 100,000 paths read -- a stat or a watch look-up of each
+        and its spellings -- 2.7 s of a ``df.shape`` on Windows."""
+        found = self._held_reads.find(relevant_read_paths)
+        if found is None:
+            return None
+        entry, (rows, index), unsure = found
+        if not unsure:
+            return index
+        try:
+            located = stats_this_run(unsure)
+        except (OSError, ValueError, TypeError):
+            return None
+        for rp in unsure:
+            if self._read_row(rp, located, rows.get(rp)) != rows.get(rp):
+                return None
+        stats, loose = self._read_stats(unsure, located, rows)
+        HeldPaths.renew(entry, (rows, index), stats, unsure, loose)
+        return index
+
+    @staticmethod
+    def _read_stats(paths, located, rows) -> tuple[dict, list[str]]:
+        """``(found, loose)`` for `HeldPaths`: the stat each of
+        *paths* was found with where it was recorded; one found elsewhere
+        (the relocation fallbacks) is loose, asked again each run."""
+        stats: dict = {}
+        loose: list[str] = []
+        for rp in paths:
+            if rp not in located or rows[rp][0] != rp:
+                loose.append(rp)
+            else:
+                stats[rp] = located[rp][1]
+        return stats, loose
+
+    @staticmethod
+    def _read_row(rp: str, located, before: tuple | None) -> tuple:
+        """``(where it is, its comparable forms, its place, is a folder)`` of
+        read path *rp*, by *located* (`stats_this_run`); *before*, its row
+        in an earlier build in the same working directory, lends its
+        spellings when it is where it was."""
+        # One stat answers both "is it there" and "is it a folder" for a
+        # path that has not moved; only a missing one takes the relocation
+        # fallbacks and a second look.
+        if rp in located:
+            # Where it was recorded, or where the relocation fallbacks
+            # found it, with the stat of that place.
+            resolved, st = located[rp]
+            resolved = resolved or rp
+            is_dir = st is not None and stat.S_ISDIR(st.st_mode)
+        else:
+            try:
+                is_dir = stat.S_ISDIR(os.stat(rp).st_mode)
+                resolved = rp
+            except (OSError, ValueError, TypeError):
+                try:
+                    resolved = resolve_file_dep_path(rp) or rp
+                except (OSError, ValueError, TypeError):
+                    resolved = rp
+                is_dir = resolved != rp and os.path.isdir(resolved)
+        if before is not None and before[0] == resolved:
+            return before if before[3] == is_dir else (*before[:3], is_dir)
+        forms: list[str] = []
+        for candidate in {resolved, rp}:
+            try:
+                forms.append(os.path.normcase(os.path.abspath(candidate)))
+                forms.append(os.path.normcase(os.path.basename(candidate)))
+            except (OSError, ValueError, TypeError):
+                continue
+        return (resolved, tuple(forms), os.path.normcase(os.path.abspath(resolved)), is_dir)
+
+    def _build_read_index(self, relevant_read_paths) -> tuple[set[str], list[str], list[str]]:
+        """The index of every one of *relevant_read_paths* (`_read_path_index`)."""
         read_forms: set[str] = set()
         read_dirs: list[str] = []
         read_places: list[str] = []
@@ -1128,7 +1265,7 @@ class FileWriterScheduler:
             here = ""
         if not here or cwd != here:
             known = {}  # a relative path is somewhere else now
-        kept: dict[str, tuple[str, tuple[str, ...], str]] = {}
+        rows: dict[str, tuple] = {}
         # The stats the check of each entry's files took this cell run: one
         # look at each file per run, a listing for a crowded folder on Windows.
         try:
@@ -1136,46 +1273,19 @@ class FileWriterScheduler:
         except (OSError, ValueError, TypeError):
             located = {}
         for rp in relevant_read_paths:
-            # One stat answers both "is it there" and "is it a folder" for a
-            # path that has not moved; only a missing one takes the relocation
-            # fallbacks and a second look.
-            if rp in located:
-                # Where it was recorded, or where the relocation fallbacks
-                # found it, with the stat of that place.
-                resolved, st = located[rp]
-                resolved = resolved or rp
-                is_dir = st is not None and stat.S_ISDIR(st.st_mode)
-            else:
-                try:
-                    is_dir = stat.S_ISDIR(os.stat(rp).st_mode)
-                    resolved = rp
-                except (OSError, ValueError, TypeError):
-                    try:
-                        resolved = resolve_file_dep_path(rp) or rp
-                    except (OSError, ValueError, TypeError):
-                        resolved = rp
-                    is_dir = resolved != rp and os.path.isdir(resolved)
-            spelled = known.get(rp)
-            if spelled is None or spelled[0] != resolved:
-                forms: list[str] = []
-                for candidate in {resolved, rp}:
-                    try:
-                        forms.append(os.path.normcase(os.path.abspath(candidate)))
-                        forms.append(os.path.normcase(os.path.basename(candidate)))
-                    except (OSError, ValueError, TypeError):
-                        continue
-                spelled = (resolved, tuple(forms), os.path.normcase(os.path.abspath(resolved)))
-            kept[rp] = spelled
-            read_forms.update(spelled[1])
-            read_places.append(spelled[2])
-            if is_dir:
+            row = rows[rp] = self._read_row(rp, located, known.get(rp))
+            read_forms.update(row[1])
+            read_places.append(row[2])
+            if row[3]:
                 # A listed / globbed folder: whatever is written inside it is
                 # read by the next listing.
-                read_dirs.append(spelled[2] + os.sep)
+                read_dirs.append(row[2] + os.sep)
         # Only the paths of this set: what the cells above read, no more.
-        self._read_forms = (here, kept)
+        self._read_forms = (here, rows)
         index = (read_forms, read_dirs, read_places)
-        self._read_index = (relevant_read_paths, len(relevant_read_paths), index)
+        if here:
+            stats, loose = self._read_stats(relevant_read_paths, located, rows)
+            self._held_reads.keep(relevant_read_paths, (rows, index), stats, loose)
         return index
 
     def _writer_output_unread(

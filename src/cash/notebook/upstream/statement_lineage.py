@@ -87,7 +87,7 @@ from ..lineage_formula import (
 from ..loop_watch import branch_changes, loop_watch_hash, watch_candidates
 from ..pyplot_draws import pyplot_draw_names
 from ..restored_var import present_holders
-from ..run_memo import file_component_this_run, file_state_this_run, stats_this_run
+from ..run_memo import HeldPaths, file_component_this_run, file_state_this_run, stats_this_run
 from ..shared_objects import history_names
 from ..stateful_carriers import carrier_kind_from_producer
 from ..statement import is_control_body
@@ -112,6 +112,14 @@ if TYPE_CHECKING:
 __all__ = ["StatementLineage", "StatementOutcome", "unbound_builtin"]
 
 logger = logging.getLogger(__name__)
+
+#: The files of statements' outputs, each set with the files of it found
+#: where they were recorded and their `stat_key`, across cell runs while
+#: the folder watch vouches for them (`StatementLineage._file_hash_component`).
+_HELD_FILE_KEYS = HeldPaths(kept=8)
+
+#: Fewer files than this are looked at each time: holding them costs more.
+_HOLD_MIN_FILES = 256
 
 #: An entry's metadata not read yet (`_entry_metadata`).
 _UNREAD = object()
@@ -157,6 +165,55 @@ class _CacheLookup(NamedTuple):
     #: Those of ``bumped`` stored with the outputs the entry left as they
     #: were (`keep_held_lineage`).
     kept: frozenset[str] = frozenset()
+
+
+def _present_file_keys(paths: set[str]) -> tuple[frozenset[str], dict[str, tuple[int, int, int]]]:
+    """``(present, keys)``: those of *paths* found where they were recorded,
+    and the `stat_key` of each (`stats_this_run`).
+
+    Kept across runs while the folder watch vouches for the files
+    (`run_memo.HeldPaths`): a later run looks again only at the files of a
+    folder that reported a change since. Below a loop over 50,000 review
+    files, each statement over the frame went through all 100,000 paths it
+    was read from, a stat or a watch look-up and a key of each: 1.6 s of a
+    ``pd.read_csv`` cell on Windows."""
+    found = _HELD_FILE_KEYS.find(paths) if len(paths) >= _HOLD_MIN_FILES else None
+    if found is not None:
+        entry, (present, keys), unsure = found
+        if not unsure:
+            return present, keys
+        current = stats_this_run(unsure)
+        keys = dict(keys)
+        stats: dict[str, Any] = {}
+        for p in unsure:
+            resolved, st = current[p]
+            if st is not None and resolved == p:
+                keys[p] = stat_key(st)
+                stats[p] = st
+            else:
+                keys.pop(p, None)
+                stats[p] = None
+        if len(keys) != len(present) or not present.issuperset(keys):
+            present = frozenset(keys)
+        HeldPaths.renew(entry, (present, keys), stats, unsure)
+        return present, keys
+    current = stats_this_run(paths)
+    keys = {}
+    stats = {}
+    for p in paths:
+        resolved, st = current[p]
+        # Only a file that is where it was recorded, as before: the
+        # relocation fallbacks would put a different path's state in a key.
+        # One that is not is held while the watch has it as not there.
+        if st is not None and resolved == p:
+            keys[p] = stat_key(st)
+            stats[p] = st
+        else:
+            stats[p] = None
+    present = frozenset(keys)
+    if len(paths) >= _HOLD_MIN_FILES:
+        _HELD_FILE_KEYS.keep(paths, (present, keys), stats)
+    return present, keys
 
 
 class StatementLineage:
@@ -784,16 +841,8 @@ class StatementLineage:
         """
         if not file_deps_to_check:
             return ""
-
-        present: set[str] = set()
-        current = stats_this_run(file_deps_to_check)
-        for file_path in file_deps_to_check:
-            resolved, stat = current[file_path]
-            # Only a file that is where it was recorded, as before: the
-            # relocation fallbacks would put a different path's state in a key.
-            if stat is not None and resolved == file_path:
-                present.add(file_path)
-                stmt_file_deps[file_path] = stat_key(stat)
+        present, keys = _present_file_keys(file_deps_to_check)
+        stmt_file_deps.update(keys)
         return file_component_this_run(present) if present else ""
 
     # -- Imports ---------------------------------------------------------------

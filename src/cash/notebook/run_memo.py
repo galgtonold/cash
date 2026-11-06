@@ -28,7 +28,7 @@ import itertools
 import os
 import stat as _stat
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from typing import Any
 
 from .._paths import is_remote_url, normalize_path, resolve_file_dep_path
@@ -39,6 +39,7 @@ from ..tracking.file_dep_snapshot import LISTING_MIN_FILES, FreshnessMemo, stats
 from ..tracking.read_classification import own_lstat, own_stat, stat_key
 
 __all__ = [
+    "HeldPaths",
     "file_component_this_run",
     "fresh_snapshot_this_run",
     "file_state_this_run",
@@ -1276,3 +1277,107 @@ def _same_file(a: os.stat_result, b: os.stat_result) -> bool:
     """The same kind of entry with the same `stat_key`: what a file
     component is built from (`compute_file_hash_component`)."""
     return _stat.S_IFMT(a.st_mode) == _stat.S_IFMT(b.st_mode) and stat_key(a) == stat_key(b)
+
+
+class HeldPaths:
+    """What a caller worked out from this run's stats of a set of paths
+    (`stats_this_run`), kept across cell runs while the folder watch vouches
+    for each of them: their folders with their versions (`_Held`).
+
+    Below a loop over 50,000 review files every trivial cell worked the
+    same things out again from all of them -- which of them a writer's file
+    is (`file_writers`), each path's comparable spellings, the file
+    component of the statements over the frame -- a stat or a watch look-up
+    of each, and their spellings, in Python: 2-3.6 s a cell on Windows,
+    where plain Python takes 0.05 s. Kept, a later run asks only of the
+    paths of a folder that reported a change since, and of those no folder
+    vouches for (`find`).
+
+    Found by an equal set of paths, compared whole in C, in the same working
+    directory, under the same watch."""
+
+    __slots__ = ("_entries", "_kept")
+
+    def __init__(self, kept: int = 4) -> None:
+        #: ``[paths, working directory, watch, _Held, value]``, newest last.
+        self._entries: list[list[Any]] = []
+        self._kept = kept
+
+    def find(self, paths: Collection[str]) -> tuple[list[Any], Any, list[str]] | None:
+        """``(entry, value, unsure)`` kept for a set equal to *paths*:
+        *unsure* the paths to look at again (an empty list when the value
+        holds as it is), handed back to `renew` with *entry* once the value
+        is brought up to date. None when nothing is kept, or the watch no
+        longer vouches for it (a module the files lie beside moved)."""
+        run = file_state_this_run()
+        watch = run.get("watch") if run is not None else None
+        if watch is None or not self._entries:
+            return None
+        try:
+            here = os.getcwd()
+        except OSError:
+            return None
+        n = len(paths)
+        for entry in reversed(self._entries):
+            copy, cwd, by, held, value = entry
+            if by is watch and cwd == here and len(copy) == n and (copy is paths or copy == paths):
+                # The run's first drain is the one before any stat; this one
+                # takes what a statement of the run wrote since.
+                watch.drain()
+                unsure = held.unsure()
+                if unsure is None:
+                    self._entries.remove(entry)
+                    return None
+                return entry, value, unsure
+        return None
+
+    def keep(self, paths: Collection[str], value: Any, found: Mapping[str, Any], loose: Iterable[str] = ()) -> None:
+        """Keep *value*, worked out from *found* (``{path: stat or None}``,
+        this run's stat of each of *paths*), while the watch holds that very
+        stat of each (or holds it as not there); *loose* paths are asked
+        again by each `find` whatever the watch says. Nothing is kept when
+        most paths are loose."""
+        run = file_state_this_run()
+        watch = run.get("watch") if run is not None else None
+        if watch is None:
+            return
+        try:
+            here = os.getcwd()
+        except OSError:
+            return
+        parts, unvouched = _vouched(watch, paths, found, set(loose))
+        if 2 * len(unvouched) > len(paths):
+            return
+        copy = paths if isinstance(paths, frozenset) else frozenset(paths)
+        n = len(copy)
+        self._entries = [e for e in self._entries if not (len(e[0]) == n and e[0] == copy)][-(self._kept - 1) :]
+        self._entries.append([copy, here, watch, _Held(parts, unvouched, None), value])
+
+    @staticmethod
+    def renew(
+        entry: list[Any], value: Any, found: Mapping[str, Any], unsure: list[str], loose: Iterable[str] = ()
+    ) -> None:
+        """*entry* (`find`) holds again with *value*: its *unsure* paths were
+        looked at again this run and found as *found*; *loose* still are."""
+        _copy, _cwd, watch, held, _value = entry
+        held.renew(_vouched(watch, unsure, found, set(loose)))
+        entry[4] = value
+
+
+def _vouched(watch: Any, paths: Iterable[str], found: Mapping[str, Any], loose: set[str]) -> tuple[list, list[str]]:
+    """`FileWatch.cover_as_found` of each of *paths* with its stat in
+    *found* (None: not there), by the spelling the watch keeps it under
+    (`_watched_spelling`); those with no such spelling, and *loose*, are
+    loose."""
+    out: list[str] = []
+    asked: list[tuple[str, str, Any]] = []
+    isabs = os.path.isabs
+    get = found.get
+    for p in paths:
+        twin = p if isabs(p) else _watched_spelling(p)
+        if twin is None or p in loose:
+            out.append(p)
+        else:
+            asked.append((p, twin, get(p)))
+    parts, unvouched = watch.cover_as_found(asked, _same_file)
+    return parts, out + unvouched

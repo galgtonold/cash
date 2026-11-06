@@ -423,6 +423,46 @@ class FileWatch:
             part[2].append(key)
         return list(parts.values()), loose
 
+    def cover_as_found(
+        self, found: Iterable[tuple[str, str, os.stat_result | None]], same: Any
+    ) -> tuple[list[tuple[_Dir, int, list[str]]], list[str]]:
+        """`cover_by_folder` of *found* (``(key, path, stat)``), each path
+        vouched for only while the watch holds the stat it was found with
+        (that very stat, or one *same* takes for it), or holds it as not
+        there for a stat of None; the keys of the rest are loose. One pass,
+        for a caller that keeps what it worked out from 100,000 stats."""
+        parts: dict[int, tuple[_Dir, int, list[str]]] = {}
+        loose: list[str] = []
+        home = self._home
+        own_of = self._self
+        for key, p, was in found:
+            d = home.get(p)
+            if d is None:
+                loose.append(key)
+                continue
+            st = d.records.get(p)
+            if st is None:
+                if was is not None or p not in d.missing:
+                    loose.append(key)
+                    continue
+            elif was is None or (st is not was and not same(st, was)):
+                loose.append(key)
+                continue
+            elif st.st_mode & _S_IFMT == _S_IFDIR:
+                own = own_of.get(p)
+                if own is None or own.records.get(p) is not st:
+                    loose.append(key)
+                    continue
+                part = parts.get(id(own))
+                if part is None:
+                    part = parts[id(own)] = (own, own.version, [])
+                part[2].append(key)
+            part = parts.get(id(d))
+            if part is None:
+                part = parts[id(d)] = (d, d.version, [])
+            part[2].append(key)
+        return list(parts.values()), loose
+
     @staticmethod
     def changed_in(parts: list[tuple[_Dir, int, list[str]]]) -> list[str]:
         """The keys of `cover_by_folder`'s *parts* whose folder reported a
