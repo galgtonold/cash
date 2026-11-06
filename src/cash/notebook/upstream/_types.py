@@ -131,7 +131,9 @@ class SimulationCacheEntry(NamedTuple):
 
     cell_file_deps: dict[str, tuple[int, int, int]]
     """``{filepath: stat_key}`` (size, mtime_ns, ctime_ns) for files read
-    during this cell's simulation."""
+    during this cell's simulation. Never changed in place: a check of the
+    files finds its held verdict by the dict's identity
+    (``run_memo.stat_keys_as_recorded``), so a change is a new dict."""
 
     cell_environment: str = ""
     """What the environment reads written in the cell returned when it was

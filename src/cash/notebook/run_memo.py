@@ -956,12 +956,21 @@ def stat_keys_as_recorded(recorded: Mapping[str, tuple[int, int, int] | None]) -
     of them reports a change it holds, and a later ask checks only the files
     of a folder that did, and those no folder vouches for (a link, a file
     with a second hard link, a folder that cannot be watched). The cost of
-    the check is then that of what changed, not of what was read."""
-    if None in recorded.values():
-        return False
+    the check is then that of what changed, not of what was read.
+
+    The very mapping asked again is found by its identity, before any of
+    its paths is looked at: below a loop over 50,000 review files each
+    trivial cell compared each cached cell's 100,000 recorded keys with the
+    held copy, and looked for a path recorded as found nowhere among them,
+    twice a cell. So a mapping asked again must not have been changed in
+    place since (the simulation's snapshots never are); a changed record is
+    another mapping, compared whole."""
     run = file_state_this_run()
     watch = run.get("watch") if run is not None else None
+    # Held only once found with every key as recorded, none of them None.
     held = _held_keys_of(watch, recorded) if watch is not None else None
+    if held is None and None in recorded.values():
+        return False
     if held is not None:
         unsure = held.unsure()
         if unsure is not None:
@@ -981,11 +990,11 @@ def stat_keys_as_recorded(recorded: Mapping[str, tuple[int, int, int] | None]) -
 
 #: Stat-key dicts found as recorded while the folder watch held a stat of
 #: their files (`stat_keys_as_recorded`), across runs: each as a copy, with
-#: its `_Held`, the working directory and the watch, newest last. Found by
-#: comparing the copy whole, in C: a simulation builds each cell's dict
-#: anew, and a dict changed since, or another with other files, is never
-#: answered from another's verdict.
-_HELD_KEYS: list[tuple[dict, "_Held", str, Any]] = []
+#: its `_Held`, the working directory, the watch and the mapping it was
+#: found for, newest last. Found by that mapping's identity, else by
+#: comparing the copy whole, in C: a dict built anew with the same keys is
+#: answered too, and another with other files, or other keys, never is.
+_HELD_KEYS: list[tuple[dict, "_Held", str, Any, Mapping[str, Any]]] = []
 
 #: How many paths the copies in `_HELD_KEYS` hold at most, all told.
 _HELD_KEYS_PATHS = 500_000
@@ -995,10 +1004,18 @@ def _held_keys_of(watch: Any, recorded: Mapping[str, Any]) -> _Held | None:
     n = len(recorded)
     found = None
     for entry in reversed(_HELD_KEYS):
-        copy, _held, _cwd, by = entry
-        if len(copy) == n and by is watch and copy == recorded:
+        copy, _held, _cwd, by, source = entry
+        if source is recorded and by is watch and len(copy) == n:
             found = entry
             break
+    if found is None:
+        for entry in reversed(_HELD_KEYS):
+            copy, _held, _cwd, by, _source = entry
+            if len(copy) == n and by is watch and copy == recorded:
+                # Asked again, the equal mapping is found by its identity.
+                found = (copy, _held, _cwd, by, recorded)
+                _HELD_KEYS[_HELD_KEYS.index(entry)] = found
+                break
     if found is None:
         return None
     try:
@@ -1054,7 +1071,7 @@ def _note_held_keys(watch: Any, recorded: Mapping[str, Any]) -> None:
         return
     copy = dict(recorded)
     kept = [entry for entry in _HELD_KEYS if not (len(entry[0]) == len(copy) and entry[0] == copy)]
-    kept.append((copy, _Held(parts, loose, None), cwd, watch))
+    kept.append((copy, _Held(parts, loose, None), cwd, watch, recorded))
     total = 0
     for at in range(len(kept) - 1, -1, -1):
         total += len(kept[at][0])
