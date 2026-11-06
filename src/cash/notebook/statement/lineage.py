@@ -152,7 +152,7 @@ def note_own_writes(tracking_state: "TrackingState", paths, lstats: Mapping[str,
 def _is_plain_file(st: Any) -> bool:
     """Whether ``lstat`` result *st* is of a regular file that is no link
     or reparse point: its ``stat`` then."""
-    return _stat.S_ISREG(st.st_mode) and not getattr(st, "st_file_attributes", 0) & _REPARSE_POINT
+    return _stat.S_ISREG(st.st_mode) and not attribute_or(st, "st_file_attributes", 0) & _REPARSE_POINT
 
 
 #: ``FILE_ATTRIBUTE_REPARSE_POINT``: a symlink or junction on Windows.
