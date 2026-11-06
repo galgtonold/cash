@@ -38,6 +38,7 @@ from .callee_effects import (
     all_param_names,
     argument_roots,
     iterated_sources,
+    params_mutated_in_function,
     positional_param_names,
     read_by_helpers,
     resolve_function_def,
@@ -2366,6 +2367,10 @@ def rewatch_exempt(
             handed, _free = function_handoffs(callee, user_ns, resolve_source, frozenset({name}))
         else:
             handed = conditional_param_handoffs(callee, user_ns, resolve_source, frozenset({name}))
+        # And what its own body changes in place (``df.loc[0] = 0`` under an
+        # ``if``): the statement's text analysis reads a helper off a module
+        # by no name, so the watch is all that sees such a change.
+        handed = frozenset(handed) | params_mutated_in_function(callee, resolve_source)
         watched = handed_to_params(call, callee, handed, {}) if handed else set()
         for arg in [*call.args, *(kw.value for kw in call.keywords if kw.arg is not None)]:
             if isinstance(arg, ast.Name) and arg.id not in watched:

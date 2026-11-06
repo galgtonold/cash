@@ -208,6 +208,7 @@ MODULE_SOURCES = {
     "lib.run_backtest": SOURCES["run_backtest"],
     "lib.push": SOURCES["push"],
     "lib.sub.score": SOURCES["score"],
+    "lib.trim": "def trim(df, limit):\n    if max(df) > limit:\n        df[0] = 0\n    return len(df)\n",
 }
 
 
@@ -247,6 +248,12 @@ def test_what_only_a_module_helper_is_handed_keeps_its_verdict(stmt, exempt):
 def test_what_a_module_helper_changes_on_some_runs_only_is_watched_again():
     assert "h" not in _module_exempt("for x in data:\n    n = lib.push(h, x)")
     assert "h" in _module_exempt("n = lib.push(h, 3)")
+
+
+def test_what_a_module_helper_changes_itself_is_watched_again():
+    # The statement's text analysis reads no helper off a module, so the
+    # watch is all that sees ``df[0] = 0`` on the inputs that take the branch.
+    assert _module_exempt("out = lib.trim(data, n)") == {"n"}
 
 
 def test_a_helper_read_off_an_object_is_watched_again():
