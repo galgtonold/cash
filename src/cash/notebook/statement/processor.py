@@ -829,6 +829,9 @@ class StatementProcessor:
         # Each statement's last run in this session, for a miss nothing
         # else explains (`LastRuns`).
         self._last_runs = LastRuns()
+        #: What :meth:`running_as_written` read of each value after the last
+        #: cell it watched: ``name -> (id, lineage, fingerprint)``.
+        self._as_written_prints: dict[str, tuple[int, str, str]] = {}
         self._key_parts: KeyParts | None = None
         self._randomness.use_draw_store(ObservedDrawStore(_guard_dir) if _guard_dir else None)
         self._evicted = EvictedRecomputes()
@@ -3145,26 +3148,45 @@ class StatementProcessor:
         so is one whose value it changed in place, by its fingerprint before
         and after (``mutation_fingerprint``; one that cannot be taken counts
         as changed): a statement reading it then keys it by what it holds.
+
+        The fingerprint a value had after the last such cell is its
+        fingerprint before this one while it is the same object under the
+        same lineage: forty cells in a row that each read a 2-million-row
+        frame (``NOTEBOOK-FORWARD-READ``) fingerprinted every variable twice
+        per cell, 13-16 s a cell where plain Python took 0.03 s. A change
+        made between the two cells shows as a change made by this one, so
+        the value is forgotten: what costs a re-run, never a stale value.
         """
         ns = self.shell.user_ns
         before = self.bindings()
         lineage_before = dict(self.tracking_state.variable_lineage)
+        last = self._as_written_prints
         prints: dict[str, tuple[int, str | None]] = {}
-        for name in lineage_before:
+        for name, lineage in lineage_before.items():
             if name in ns and not _changed_by_rebinding_only(ns[name]):
-                prints[name] = (id(ns[name]), _fingerprint(ns[name]))
+                identity = id(ns[name])
+                kept = last.get(name)
+                if kept is not None and kept[0] == identity and kept[1] == lineage:
+                    prints[name] = (identity, kept[2])
+                else:
+                    prints[name] = (identity, _fingerprint(ns[name]))
+        last.clear()
         try:
             with tags_untrusted():
                 yield
         finally:
             self.forget_rebound(before, lineage_before)
+            lineage_after = self.tracking_state.variable_lineage
             for name, (identity, print_before) in prints.items():
                 if name not in ns or id(ns[name]) != identity:
                     continue  # rebound: forgotten above
                 value = ns[name]
-                if print_before is None or _fingerprint(value) != print_before:
+                print_after = None if print_before is None else _fingerprint(value)
+                if print_after is None or print_after != print_before:
                     self.forget_variable(name)
                     clear_tags(value)
+                elif lineage_after.get(name) == lineage_before[name]:
+                    last[name] = (identity, lineage_before[name], print_after)
 
     def bindings(self) -> dict[str, int]:
         """The identity of every binding in the namespace, for :meth:`forget_rebound`."""
