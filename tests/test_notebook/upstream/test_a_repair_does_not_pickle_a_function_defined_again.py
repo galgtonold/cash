@@ -21,8 +21,13 @@ import pytest
 from cash.notebook.upstream.replay import UpstreamRepairGap
 from tests._cell_driver import run_cash_cell
 
-DEFS = "import functools, pickle\ndef ratio(x, k):\n    return x * k"
-MODEL = "model = functools.partial(ratio, k=2)"
+DEFS = "import pickle\ndef ratio(x, k):\n    return x * k"
+# A tuple: a value nothing changes in place keeps the lineage it was made
+# with, so the repair re-runs the writer on it as it is in memory. One that
+# can change (a list, a dict, a partial) may be taken as changed by the dump
+# on some Pythons, and the repair then makes it again first, under the
+# ``ratio`` defined now, and the dump succeeds: right, but not this path.
+MODEL = "model = (ratio, 2)"
 AGAIN = "def ratio(x, k):\n    return x * k"
 
 
