@@ -13,6 +13,7 @@ from __future__ import annotations
 import collections
 import os
 import sys
+import time
 
 import pytest
 
@@ -134,9 +135,28 @@ def test_a_later_check_looks_at_no_listed_file(recorded, looks, monkeypatch):
     assert looks["current"] == 0, looks
 
 
+def _reports_settled(quiet: float = 1.0, timeout: float = 8.0) -> None:
+    """Wait until the watch takes no new report. Windows may report a write
+    again later (its last-write time, when the file's cache is flushed): a
+    report after the check below rightly has the folder's files checked
+    again. Taken reports change folders' versions only, so a held verdict
+    still sees the change."""
+    watch = file_watch.watcher()
+    deadline = time.monotonic() + timeout
+    last, quiet_since = None, time.monotonic()
+    while time.monotonic() < deadline:
+        watch.drain()
+        if watch.changes != last:
+            last, quiet_since = watch.changes, time.monotonic()
+        elif time.monotonic() - quiet_since >= quiet:
+            return
+        time.sleep(0.1)
+
+
 def test_a_change_in_one_folder_looks_again_only_at_its_files(recorded, looks, tmp_path):
     assert _ask(recorded) and _ask(recorded)
     (tmp_path / "set2" / "notes.ipynb").write_text("{}", encoding="utf-8")  # a save beside the files
+    _reports_settled()
     looks.start()
 
     assert _ask(recorded)
