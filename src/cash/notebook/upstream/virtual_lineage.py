@@ -16,6 +16,7 @@ import os
 import re
 import types
 from collections import ChainMap
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from cash._user_attrs import attribute_or
@@ -65,6 +66,7 @@ from .cell_memo import (
     RecordingLineage,
     apply_written,
     differences,
+    mentioned_names,
     missing,
     namespace_token,
     put_state,
@@ -947,9 +949,9 @@ class VirtualLineage:
 
     def _memo_generations(self) -> tuple:
         """What every memo must have been made under: the module and magic
-        generations, and the notebook's functions."""
+        generations."""
         state = self.tracking_state
-        return (state.module_generation, state.magic_generation, self.statements.notebook_functions_version)
+        return (state.module_generation, state.magic_generation)
 
     def forget_cells_running(self, cell_code: str, cell_idx: int | None = None) -> None:
         """Drop the memo of each cell sharing a statement with *cell_code*,
@@ -988,8 +990,9 @@ class VirtualLineage:
         if (
             memo.generations != generations
             or cached.cell_code_hash != exact_source_digest(cell_code)
+            or _functions_of(memo.names, self.statements.notebook_functions) != memo.functions
             or not self._snapshot_holds(cached, i, cell_code)
-            or state_of(sim) != memo.before
+            or state_of(sim, memo.names) != memo.before
             or (memo.empty is not None and memo.empty != (not dict.__len__(recording)))
         ):
             return False
@@ -1012,7 +1015,7 @@ class VirtualLineage:
             reference_entries: list[SimulationCacheEntry] = []
             self.simulate_one_cell(reference, i, cell_code, reference_entries)
         apply_written(recording, memo.written)
-        put_state(sim, memo.after)
+        put_state(sim, memo.before, memo.after)
         sim.stmt_lookup_times.update(memo.lookup_times)
         sim.trace.extend(memo.trace)
         new_cache_entries.append(
@@ -1035,12 +1038,13 @@ class VirtualLineage:
         """Simulate cell *i* into *sim*, and keep what it read and did as its memo."""
         memo = self.cache.memo
         memo.pop(i, None)
-        if self._stop_index(cell_code) is not None or simulation_cell(cell_code) is not None:
-            # A failed run's leftovers and a magic's are read from the
-            # kernel, not from the state: simulated every time.
+        if simulation_cell(cell_code) is not None:
+            # What a magic left is read from the kernel, not from the
+            # state: simulated every time.
             self.simulate_one_cell(sim, i, cell_code, new_cache_entries)
             return
-        before = state_of(sim)
+        names = mentioned_names(cell_code, self.statements.notebook_functions)
+        before = state_of(sim, names)
         lookup_times = dict(sim.stmt_lookup_times)
         trace_start = len(sim.trace)
         entries_before = len(new_cache_entries)
@@ -1062,6 +1066,11 @@ class VirtualLineage:
         others = set(recording.written)
         for entry in trace:
             others |= entry.inputs | entry.outputs
+        if self._stop_index(cell_code) is not None:
+            # Which names a failed run left is read from the kernel
+            # (``_hold_what_a_failed_run_left``): whether each is bound,
+            # and with what lineage.
+            others |= self.tracking_state.failed_cell_names.get(exact_source_digest(cell_code), frozenset())
         for name in reads.keys() | others:
             virtual = reads[name][0] if name in reads else dict.get(recording, name, absent)
             if (
@@ -1082,8 +1091,10 @@ class VirtualLineage:
                 name: (live.get(name, absent), namespace_token(user_ns.get(name, absent)))
                 for name in others - reads.keys()
             },
+            names=names,
+            functions=_functions_of(names, self.statements.notebook_functions),
             before=before,
-            after=state_of(sim),
+            after=state_of(sim, names),
             written={name: dict.get(recording, name, absent) for name in recording.written},
             lookup_times={
                 stmt: seconds for stmt, seconds in sim.stmt_lookup_times.items() if lookup_times.get(stmt) != seconds
@@ -1258,6 +1269,11 @@ def _rebound_names(stmt_code: str) -> set[str]:
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             names.add(node.name)
     return names
+
+
+def _functions_of(names: frozenset[str], functions: Mapping[str, str]) -> dict[str, str]:
+    """The source of each notebook function among *names*."""
+    return {name: functions[name] for name in names if name in functions}
 
 
 def _plain(virtual_lineage: dict[str, str]) -> dict[str, str]:

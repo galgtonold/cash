@@ -193,8 +193,6 @@ class StatementLineage:
         #: ``{name: source}`` of every top-level def in the notebook's cells
         #: (see ``set_notebook_functions``).
         self._notebook_functions: dict[str, str] = {}
-        #: Moves each time those sources change.
-        self.notebook_functions_version = 0
         #: The notebook's cells, joined (see ``set_notebook_functions``): a
         #: statement found in them is the notebook's (``in_notebook``).
         self._notebook_text = ""
@@ -278,11 +276,12 @@ class StatementLineage:
         sources: dict[str, str] = {}
         for code in notebook_cells:
             sources.update(cell_definitions(code, (ast.FunctionDef, ast.AsyncFunctionDef)))
-        if sources != self._notebook_functions:
-            # A cell's simulation resolves the functions it calls here: a
-            # memo of it made before holds no more (``cell_memo``).
-            self.notebook_functions_version += 1
         self._notebook_functions = sources
+
+    @property
+    def notebook_functions(self) -> Mapping[str, str]:
+        """``{name: source}`` of every top-level def in the notebook's cells."""
+        return self._notebook_functions
 
     def _function_source(self, name: str) -> str | None:
         """Source of function *name* for the headless mutation analysis.

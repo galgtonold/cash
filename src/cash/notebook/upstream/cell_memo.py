@@ -28,12 +28,12 @@ stands in for, from the same state, and fails when the two differ
 from __future__ import annotations
 
 import os
+import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
-
     from ._types import SimulationCacheEntry, SimulationResult, TraceEntry
 
 __all__ = [
@@ -267,8 +267,14 @@ class CellMemo:
     watched: dict[str, tuple[Any, Any]]
     """Each other name its statements read or wrote: ``(live lineage,
     namespace token)`` when it was simulated."""
+    names: frozenset[str]
+    """The names the cell can mention (``mentioned_names``), which scope
+    the module names and loop targets of *before* and *after*."""
+    functions: dict[str, str]
+    """The source of each notebook function among *names* (the simulation
+    resolves the functions a statement calls from the cell text)."""
     before: tuple
-    """The whole-state fields at the cell's start (``state_of``)."""
+    """The whole-state fields at the cell's start (``state_of``, scoped)."""
     after: tuple
     """The same fields after it."""
     written: dict[str, Any]
@@ -279,29 +285,40 @@ class CellMemo:
     trace: list[TraceEntry]
     """Its trace entries."""
     generations: tuple
-    """``(module generation, magic generation, notebook functions version)``."""
+    """``(module generation, magic generation)``."""
     statements: frozenset[str] = field(default_factory=frozenset)
     """Every statement of the cell, nested ones too (``statements_of``)."""
 
 
-def state_of(sim: SimulationResult) -> tuple:
-    """The fields of *sim* a cell's simulation is compared on as a whole."""
+def state_of(sim: SimulationResult, names: frozenset[str] | None = None) -> tuple:
+    """The fields of *sim* a cell's simulation is compared on as a whole.
+
+    With *names*, the module names and loop targets only as far as they are
+    among *names*: a cell asks those sets about the names it mentions, and
+    an import added above it changes nothing it can see."""
+
+    def scoped(values: set[str]) -> frozenset[str]:
+        return frozenset(values) if names is None else frozenset(values & names)
+
     return (
-        frozenset(sim.virtual_modules),
+        scoped(sim.virtual_modules),
         None if sim.share_edges is None else {src: frozenset(t) for src, t in sim.share_edges.items()},
         frozenset(sim.vars_with_stale_files),
         frozenset(sim.vars_mutated_by_loops),
         frozenset(sim.vars_maybe_changed_by_loops),
-        frozenset(sim.loop_target_vars),
+        scoped(sim.loop_target_vars),
         dict(sim.vars_left_by_failed_runs),
     )
 
 
-def put_state(sim: SimulationResult, state: tuple) -> None:
-    """Set the whole-state fields of *sim* to *state* (``state_of``)."""
-    modules, edges, stale, looped, maybe, targets, left = state
-    sim.virtual_modules.clear()
-    sim.virtual_modules.update(modules)
+def put_state(sim: SimulationResult, before: tuple, after: tuple) -> None:
+    """Make in *sim* what a cell changed from *before* to *after* (``state_of``,
+    the module names and loop targets scoped, the rest whole)."""
+    modules, edges, stale, looped, maybe, targets, left = after
+    sim.virtual_modules.difference_update(before[0] - modules)
+    sim.virtual_modules.update(modules - before[0])
+    sim.loop_target_vars.difference_update(before[5] - targets)
+    sim.loop_target_vars.update(targets - before[5])
     sim.share_edges = None if edges is None else {src: set(t) for src, t in edges.items()}
     sim.vars_with_stale_files.clear()
     sim.vars_with_stale_files.update(stale)
@@ -309,10 +326,32 @@ def put_state(sim: SimulationResult, state: tuple) -> None:
     sim.vars_mutated_by_loops.update(looped)
     sim.vars_maybe_changed_by_loops.clear()
     sim.vars_maybe_changed_by_loops.update(maybe)
-    sim.loop_target_vars.clear()
-    sim.loop_target_vars.update(targets)
     sim.vars_left_by_failed_runs.clear()
     sim.vars_left_by_failed_runs.update(left)
+
+
+_IDENTIFIER = re.compile(r"[A-Za-z_]\w*")
+
+
+def mentioned_names(cell_code: str, functions: Mapping[str, str]) -> frozenset[str]:
+    """Every identifier in *cell_code*, and in the source of each notebook
+    function (*functions*, name to source) one of them reaches, transitively.
+    A superset of the names the cell's simulation asks the module and loop
+    target sets about."""
+    names = set(_IDENTIFIER.findall(cell_code))
+    todo = [name for name in names if name in functions]
+    seen: set[str] = set()
+    while todo:
+        name = todo.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        for found in _IDENTIFIER.findall(functions[name]):
+            if found not in names:
+                names.add(found)
+                if found in functions:
+                    todo.append(found)
+    return frozenset(names)
 
 
 def apply_written(virtual_lineage: dict, written: Mapping[str, Any]) -> None:

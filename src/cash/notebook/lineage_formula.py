@@ -708,7 +708,10 @@ def forward_helpers(
     called = _called_helpers(code) & call_time_reads(code, user_ns, virtual_modules)
     if not called:
         return frozenset()
-    bound = set(bound)
+    # Asked by name: a whole copy of the simulation's lineage map was a
+    # read of every name in it (``cell_memo``).
+    if not isinstance(bound, (Mapping, set, frozenset)):
+        bound = set(bound)
     digest = exact_source_digest(code)
     seen = _FORWARD_HELPERS.get(digest) or frozenset()
     absent = frozenset(name for name in called if name not in user_ns and name not in bound)
