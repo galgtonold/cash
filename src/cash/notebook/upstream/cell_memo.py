@@ -33,6 +33,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from cash._user_attrs import attribute_or, has_attribute
+
 if TYPE_CHECKING:
     from ._types import SimulationCacheEntry, SimulationResult, TraceEntry
 
@@ -229,7 +231,7 @@ def namespace_token(value: Any) -> Any:
     if value is _MISSING:
         return _MISSING
     kind = type(value)
-    if callable(value) or kind.__name__ in _BY_IDENTITY or hasattr(kind, "__next__"):
+    if callable(value) or kind.__name__ in _BY_IDENTITY or has_attribute(kind, "__next__"):
         return (kind, id(value))
     return kind
 
@@ -369,8 +371,8 @@ def apply_written(virtual_lineage: dict, written: Mapping[str, Any]) -> None:
 def _trace_row(entry: TraceEntry) -> tuple:
     hashes = entry.input_hashes
     extra = (
-        dict(getattr(hashes, "callee_lineages", None) or {}),
-        dict(getattr(hashes, "hidden_lineages", None) or {}),
+        dict(attribute_or(hashes, "callee_lineages", None) or {}),
+        dict(attribute_or(hashes, "hidden_lineages", None) or {}),
     )
     return (
         entry.stmt_code,
@@ -381,7 +383,7 @@ def _trace_row(entry: TraceEntry) -> tuple:
         dict(entry.produced_lineages),
         bool(entry.files_stale),
         entry.cell,
-        dict(getattr(entry, "stored_lineages", None) or {}),
+        dict(entry.stored_lineages or {}),
     )
 
 
