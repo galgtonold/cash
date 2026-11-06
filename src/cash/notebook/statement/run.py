@@ -404,6 +404,10 @@ class StatementExecution:
     children_running: list[Any] = field(default_factory=list)
     #: Those of ``written_paths`` written only from a line the user waived.
     waived_paths: frozenset[str] = frozenset()
+    #: The ``lstat`` the check for a write left behind took of each of
+    #: ``written_paths`` it found (`write_observer.kept_writes`), for the
+    #: record of the notebook's own writes (`note_own_writes`).
+    written_lstats: dict[str, Any] = field(default_factory=dict)
     #: The `FileAccessTracker` of the run, for the store: which files moved
     #: since the statement read them, and their digests as it read them.
     file_tracker: Any = None

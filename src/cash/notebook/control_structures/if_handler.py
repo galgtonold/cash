@@ -125,6 +125,8 @@ class IfHandler:
                     node,
                     ast.unparse(node),
                     cost=sum(m.get("execution_time", 0.0) for m in all_metrics),
+                    # The branch's last statement ended it: nothing runs after.
+                    nothing_ran=True,
                 )
             else:
                 loop_pass.if_ran(self.shell, self.statement_processor, node, tests, branch_body)

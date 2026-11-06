@@ -285,6 +285,7 @@ def update_lineage_after_execution(
     prior_lineages: dict[str, str] | None = None,
     bound: frozenset[str] | set[str] = frozenset(),
     entry: tuple[str, frozenset[str]] | None = None,
+    nothing_ran: bool = False,
 ) -> None:
     """
     Update lineage for variables that may have been mutated inside the
@@ -324,6 +325,10 @@ def update_lineage_after_execution(
 
     *entry* is the key a loop run as one unit was stored or found under,
     with the outputs that entry holds (see `update_mutated_variable_lineages`).
+
+    *nothing_ran*: no code of the structure's ran after its last statement
+    or structure ended, so a share check that one made stands for this one
+    (``StatementProcessor.record_structure_share_edges``).
     """
     body_nodes = get_body_nodes(node)
     if not body_nodes:
@@ -352,7 +357,9 @@ def update_lineage_after_execution(
     mutated_vars |= drawn
     if link_shares:
         names, static = share_candidates(node, mutated_vars, user_ns)
-        statement_processor.record_structure_share_edges(code, names, cost, static=static, held=held)
+        statement_processor.record_structure_share_edges(
+            code, names, cost, static=static, held=held, nothing_ran=nothing_ran
+        )
 
     if mutated_vars:
         inherit_body_file_deps(shell, statement_processor, body_nodes, mutated_vars, body_files)
