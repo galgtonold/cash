@@ -555,3 +555,36 @@ def test_a_poll_the_thread_does_not_answer_counts_every_folder_changed(monkeypat
         assert sorted(v.poll(sync=True)[0]) == ["anna", "work"]
     finally:
         v.stop()
+
+
+class _Timed(_Apc):
+    """kernel32 waiting as long as it is told: a poke ends a wait early, a
+    wait that is not poked lasts its whole timeout."""
+
+    def wait_either(self, event, poke, ms):
+        self.waited_in.add(threading.current_thread())
+        if self._run_apcs():
+            return 0
+        poked = self.poked.wait(ms / 1000) if ms else self.poked.is_set()
+        self.poked.clear()
+        if self._run_apcs():
+            return 0
+        return 1 if poked else None
+
+
+def test_a_poll_is_answered_by_the_wait_after_the_one_its_poke_ended(monkeypatch):
+    # The poke ends the wait that began before the poll asked, which can
+    # answer only older polls; the next wait must not sit out its timeout.
+    monkeypatch.setattr(file_watch, "_THREAD_WAIT_MS", 5000)
+    kernel = _Timed()
+    v = _Volume(kernel, "C:\\", "root-handle")
+    v.index.add("Data\\Photos\\Anna", "anna")
+    assert v.start()
+    try:
+        time.sleep(0.02)  # the thread is in its wait
+        for _ in range(5):
+            kernel.report(_notify("Data\\Photos\\Anna\\a.jpg"))
+            assert v.poll(sync=True) == (["anna"], [], False)
+        assert v.counts.get("polls the thread did not answer", 0) == 0
+    finally:
+        v.stop()

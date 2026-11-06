@@ -957,11 +957,17 @@ class _Volume:
         try:
             while not self.stopping:
                 seen = self.asked  # before the wait: see `sync`
+                # A poll asked after the last wait began woke it, and that
+                # wait can answer only what was asked before it: the answer
+                # the poll waits for is this wait's, so it must not sit out
+                # the whole timeout. A wait of no time still enters the
+                # kernel after the ask, which is all `sync` needs.
+                ms = 0 if seen != self.answered and self.answered >= 0 else _THREAD_WAIT_MS
                 try:
                     if self.poke is not None:
-                        which = self.kernel.wait_either(self.event, self.poke, _THREAD_WAIT_MS)
+                        which = self.kernel.wait_either(self.event, self.poke, ms)
                     else:
-                        which = 0 if self.kernel.wait(self.event, _THREAD_WAIT_MS) else None
+                        which = 0 if self.kernel.wait(self.event, ms) else None
                 except Exception:  # noqa: BLE001 - the polls still take every report
                     return
                 if self.stopping:
