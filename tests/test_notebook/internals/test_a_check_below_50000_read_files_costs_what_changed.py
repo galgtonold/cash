@@ -32,7 +32,13 @@ from cash.tracking.read_classification import stat_key
 
 from .test_a_held_check_of_the_cells_above_looks_at_no_file import _AsOnWindows, _listed
 
-pytestmark = pytest.mark.skipif(sys.platform == "darwin", reason="folders are not watched on macOS")
+pytestmark = [
+    pytest.mark.skipif(sys.platform == "darwin", reason="folders are not watched on macOS"),
+    # The suite's 30 s for each test's own work, without the module's set-up:
+    # writing the 50,000 files took 18-24 s on the Windows runners, and the
+    # first test a worker ran of this module was killed inside its budget.
+    pytest.mark.timeout(30, func_only=True),
+]
 
 #: Folders of reviews, and reviews in each: 50,000 files.
 FOLDERS, FILES = 4, 12_500
