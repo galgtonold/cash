@@ -48,7 +48,7 @@ RUN = (
 
 
 def _calls(log) -> int:
-    return len(log.read_text()) if log.exists() else 0
+    return len(log.read_text(encoding="utf-8")) if log.exists() else 0
 
 
 def _images(cell) -> list[str]:

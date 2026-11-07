@@ -323,7 +323,7 @@ class PlotRuns:
             return None
         try:
             record = backend.get_metadata(plot_shapes_key(first, occurrence))
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - a store that cannot answer: the plot is drawn
             return None
         shapes = (record or {}).get("shapes") or []
         settings = None
@@ -362,7 +362,7 @@ class PlotRuns:
             return None
         try:
             metadata, payload = backend.get(key)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - an entry that cannot be read: the plot is drawn
             return None
         if not isinstance(payload, dict) or metadata is None:
             return None
@@ -434,7 +434,7 @@ class PlotRuns:
             return None
         try:
             cells = get_notebook_cells()
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - cells that cannot be read: nothing is served
             return None
         if not cells:
             return None
@@ -509,14 +509,14 @@ class PlotRuns:
         try:
             cash = self._processor.get_cash_instance()
             return cash.backend if cash is not None else None
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - no cache: nothing is kept
             return None
 
     def _note_shape(self, backend: Any, codes: list[str], occurrence: int) -> None:
         key = plot_shapes_key(codes[0], occurrence)
         try:
             record = backend.get_metadata(key) or {}
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - a store that cannot answer: no shapes known
             record = {}
         shapes = [s for s in (record.get("shapes") or []) if s != codes]
         shapes.insert(0, list(codes))
@@ -528,7 +528,7 @@ class PlotRuns:
             return None
         try:
             data, metadata = formatter.format(value)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - a value its formatter refuses: the run is not kept
             return None
         rich = rich_records([{"data": data, "metadata": metadata}])
         return (rich[0]["data"], rich[0]["metadata"]) if rich else None

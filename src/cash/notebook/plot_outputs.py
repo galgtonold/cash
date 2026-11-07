@@ -170,7 +170,7 @@ def _inline_settings() -> Any:
         return None
     try:
         return config.instance() if config.initialized() else None
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - a half-set-up backend: no inline config
         return None
 
 
