@@ -677,7 +677,9 @@ class UpstreamChecker:
                 "cell again."
             )
 
-    def _put_back(self, bindings: dict[str, Any], lineages: dict[str, str]) -> None:
+    def _put_back(
+        self, bindings: dict[str, Any], lineages: dict[str, str], codes: dict[str, str] | None = None
+    ) -> None:
         """Bind every name the repair restored or re-ran to what it held
         before, with the lineage it had then.
 
@@ -686,6 +688,9 @@ class UpstreamChecker:
         that mix reads values neither a plain run nor a run from the top
         gives. Put back, the cell runs on what plain Jupyter has. A change the
         repair made inside an object it did not rebind stays.
+
+        With *codes*, each name put back also gets back the statement that
+        made it (``executed_cell_codes``): the one the repair re-ran is not.
         """
         user_ns = self.shell.user_ns
         lineage = self.tracking_state.lineage
@@ -701,6 +706,12 @@ class UpstreamChecker:
                 lineage.reset_to(name, lineages[name])
             else:
                 lineage.discard(name)
+            if codes is not None:
+                made_by = self.tracking_state.executed_cell_codes
+                if name in codes:
+                    made_by[name] = codes[name]
+                else:
+                    made_by.pop(name, None)
 
     def _warn_rebuilt_changed_below(
         self,
@@ -805,6 +816,10 @@ class UpstreamChecker:
             # The statement that last changed each name, before a restore
             # records the one it restored (`_warn_rebuilt_changed_below`).
             codes_before = dict(self.tracking_state.executed_cell_codes)
+            # What the simulation last saw of the cells: an interrupted repair
+            # puts it back with the names, so the next check still sees the edit.
+            cache = self.simulator.cache
+            seen_before = (list(cache.entries), dict(cache.cell_hashes))
             # The cell's own source goes along: the classifier re-simulates it to
             # tell its own earlier run apart from an upstream edit.
             self.simulator.restorer.restored_rng_states.clear()
@@ -855,6 +870,20 @@ class UpstreamChecker:
                     )
                 except UpstreamRepairGap:
                     self._put_back(bindings_before, lineages_before)
+                    raise
+                except KeyboardInterrupt:
+                    # Stopped part way: ``lines = f.readlines()`` re-ran,
+                    # the loop splitting it did not, and the next check took
+                    # the unsplit lines for what the cell makes, the
+                    # half-filled ``lines2`` for the loop's (it trusts what a
+                    # loop fills once the statement binding it matches). The
+                    # names go back to what they held, and the simulation to
+                    # what it saw of the cells (or the next check, taking the
+                    # edit for one it already repaired, trusts the loop
+                    # again), as if the repair never started: the next cell
+                    # repairs them again.
+                    self._put_back(bindings_before, lineages_before, codes_before)
+                    cache.entries, cache.cell_hashes = seen_before
                     raise
             self.rng.label_rerun_metrics(executed_metrics, rng_rerun)
             total_execution_time = self.replay.sum_execution_times(executed_metrics)
