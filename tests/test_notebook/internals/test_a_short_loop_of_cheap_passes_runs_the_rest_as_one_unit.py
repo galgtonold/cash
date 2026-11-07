@@ -13,10 +13,13 @@ behaviour: a refactor may expect this to fail.
 
 from __future__ import annotations
 
+import warnings
+
 import pytest
 
 from cash.notebook.control_structures import single_unit_policy
 from cash.notebook.statement import StatementProcessor
+from cash.tracking.randomness import CashRandomnessWarning
 from tests._cell_driver import run_cash_cell
 from tests._work_counts import method_calls
 
@@ -61,6 +64,22 @@ def test_a_rerun_gives_the_same_values(cash_magics, measured_cheap):
         ns = cash_magics.shell.user_ns
         assert ns["seen"] == [i * 2 for i in range(12)]
         assert ns["total"] == 132
+
+
+def test_a_draw_is_warned_once_whether_its_pass_or_the_rest_reached_it(cash_magics, measured_cheap):
+    # The passes warn about the draws they ran; the rest, as one unit, warns
+    # only about the one no pass reached (``i > 30``), not those again.
+    cell = (
+        "import numpy as np\nacc = []\nfor i in range(50):\n"
+        "    acc.append(np.random.rand())\n    if i > 30:\n        z = np.random.randn()"
+    )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        run_cash_cell(cash_magics, cell)
+    drawn = [str(w.message) for w in caught if issubclass(w.category, CashRandomnessWarning)]
+    assert len(drawn) == 2
+    assert any("numpy.random.rand()" in m for m in drawn)
+    assert any("numpy.random.randn()" in m for m in drawn)
 
 
 def test_passes_that_do_real_work_keep_their_entries(cash_magics, monkeypatch):
