@@ -511,7 +511,9 @@ s.iloc[0] = 1e9     # cell 3: ...and it does not see this
 cash answers cell 2 as a top-to-bottom run would: it rebuilds `s` as cell 1
 leaves it, so cell 2 computes with `0.0`, and `s` holds `0.0` until cell 3 runs
 again. cash warns [NOTEBOOK-CHANGED-BELOW](warnings.md#notebook-changed-below)
-when this happens, naming the variable and the cell that changed it.
+when this happens, naming the variable and the cell that changed it. The
+same holds, and the same warning names it, when cell 3 binds `s` anew
+(`s = s * 2`): the re-run reads `s` as cell 1 leaves it.
 **Fix:** move the change above the cells that must see it, or run cell 3 again
 after the re-run.
 

@@ -1824,7 +1824,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-MEMO-UNREAD](#notebook-memo-unread) | notebook | a `functools.cache` memo the statement read holds more answers than cash checks, so it runs every time |
 | [NOTEBOOK-MEMO-SHARED](#notebook-memo-shared) | notebook | an answer the statement put into a `functools.cache` memo is held outside its outputs too, so it runs every time |
 | [NOTEBOOK-CELL-SYNTAX](#notebook-cell-syntax) | notebook | an earlier cell does not parse |
-| [NOTEBOOK-CHANGED-BELOW](#notebook-changed-below) | notebook | a cell re-run on its own reads a value rebuilt without the in-place change a cell below made |
+| [NOTEBOOK-CHANGED-BELOW](#notebook-changed-below) | notebook | a cell re-run on its own reads a value rebuilt without the in-place change, or the new binding, a cell below made |
 | [NOTEBOOK-CLASS-KEPT](#notebook-class-kept) | notebook | a class's own state a cell changes could not be put back for a re-run, and another cell changes it too |
 | [NOTEBOOK-FAILED-CELL](#notebook-failed-cell) | notebook | a cell raised part way, and a name it changed is not what a plain run leaves |
 | [NOTEBOOK-FILE-ROUNDTRIP](#notebook-file-roundtrip) | notebook | a file written in this session is read back, so the read reruns after every write |
@@ -2009,8 +2009,12 @@ function that holds it (`def draw(k, rows=BIG)`, a closure cell, a `partial`),
 it names the function too, and says "may hold" when the function holds more
 than cash looks through. It is also shown for a variable the cell does not
 read that cash rebuilt to make one it does (`played`, rebuilt to rebuild
-`hist = run(played)` after an edit to `run`). It is shown once per cell,
-variable and statement.
+`hist = run(played)` after an edit to `run`). When the cell below bound the
+variable anew instead (`lines = lines2`, `s = s * 2`), the message says it
+"binds anew": the re-run reads the value the cells above make, not the one
+that cell made. When the re-run then raises (a parse on the lines the cell
+below would have split), the warning is shown with the error. It is shown
+once per cell, variable and statement.
 
 **Why it matters.** Plain Jupyter would run the cell on the changed value.
 Here the result is the one a run from the top gives, and the change the cell
@@ -2018,7 +2022,8 @@ below made is gone until that cell runs again, so a cell further down that
 expects it reads the value without it.
 
 **What to do.** Run the cell below again to apply its change. For the cell
-you re-ran to see the change, move the change into a cell above it.
+you re-ran to see the change, move the change (or the binding) into a cell
+above it.
 
 **When it is safe to ignore.** When you want the value as a run from the top
 leaves it, and will run the cells below again.

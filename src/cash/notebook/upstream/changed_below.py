@@ -5,7 +5,9 @@ the upstream check rebuilds an input a cell below has moved on
 (``MismatchClassifier._reject_read_only_input``). When the cell below
 changed the value in place (``s.iloc[0] = 1e9``), that change is dropped
 with the rebuild: the re-run computes without it, and the variable no longer
-holds it until the cell below runs again. :func:`warn_changed_below` says so.
+holds it until the cell below runs again. When the cell below bound the name
+anew (``lines = lines2``), the re-run reads the value the cells above make,
+not that one. :func:`warn_changed_below` says both.
 """
 
 from __future__ import annotations
@@ -29,6 +31,16 @@ from ...sizing import slot_names, slot_value
 __all__ = ["held_objects", "warn_changed_below"]
 
 logger = logging.getLogger(__name__)
+
+
+def _rebinds(code: str, name: str) -> bool:
+    """Does the statement *code* bind *name* anew (``lines = lines2``)?"""
+    tree = parse_cached(code)
+    if tree is None:
+        return False
+    return any(
+        isinstance(node, ast.Name) and node.id == name and isinstance(node.ctx, ast.Store) for node in ast.walk(tree)
+    )
 
 
 def _changes_in_place(code: str, name: str) -> bool:
@@ -182,7 +194,8 @@ def warn_changed_below(
 ) -> bool:
     """Warn NOTEBOOK-CHANGED-BELOW when *name*, an input of cell *cell_idx*
     that is about to be rebuilt as the cells above leave it, was last changed
-    in place by *last_code*, a statement of a cell below. *through*: the
+    in place, or bound anew, by *last_code*, a statement of a cell below
+    (bound anew: not through another input). *through*: the
     input the cell reads, when *name* is a variable whose object that input
     holds (``def draw(k, rows=BIG)`` holds ``BIG``, which ``BIG.append(...)``
     changes); *maybe*: the walk over *through* was cut short, so it may
@@ -196,7 +209,14 @@ def warn_changed_below(
     if not code:
         return False
     found = _cell_below_holding(code, cells, cell_idx)
-    if found is None or not _changes_in_place(code, name):
+    if found is None:
+        return False
+    # Bound anew below (``lines = lines2``), not changed in place: the
+    # rebuild hands the cell the value the cells above make, where plain
+    # Jupyter hands it the one the cell below made. Said too, or a cell that
+    # then fails on it (``parse`` on unsplit lines) fails unexplained.
+    rebound = through is None and not _changes_in_place(code, name) and _rebinds(code, name)
+    if not rebound and not _changes_in_place(code, name):
         return False
     below, written = found
     holds = "may hold" if maybe else "holds"
@@ -208,7 +228,22 @@ def warn_changed_below(
     first = written.strip().splitlines()[0]
     if len(first) > 60:
         first = first[:57] + "..."
-    if along:
+    if rebound:
+        what = (
+            f"cell {cell_idx + 1} reads '{name}', which cell {below + 1} below binds anew (`{first}`). "
+            if not along
+            else f"to bring cell {cell_idx + 1} up to date cash rebuilt '{name}', which cell {below + 1} "
+            f"below binds anew (`{first}`). "
+        ) + (
+            f"Re-run on its own, cell {cell_idx + 1} gets '{name}' as the cells above leave it, as a run "
+            f"from the top does, not the value cell {below + 1} made, and '{name}' holds that version "
+            f"until cell {below + 1} runs again."
+        )
+        fix = (
+            f"run cell {below + 1} again to get its value back; for cell {cell_idx + 1} to read it, move "
+            f"that binding into a cell above cell {cell_idx + 1}."
+        )
+    elif along:
         what = (
             f"to bring cell {cell_idx + 1} up to date cash rebuilt '{name}' as the cells above "
             f"leave it, which cell {below + 1} below had changed in place (`{first}`). Cell "
