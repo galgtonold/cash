@@ -14,7 +14,7 @@ import ast
 import logging
 import types
 from collections import ChainMap
-from collections.abc import Callable, Container, Mapping
+from collections.abc import Callable, Container, Iterable, Mapping
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from cash._user_attrs import attribute_or, instance_of
@@ -707,6 +707,44 @@ class StatementLineage:
             )
         return input_lineages_all
 
+    def read_as_last_run(self, stmt_code: str, inputs: Iterable[str], virtual_lineage: dict[str, str]) -> None:
+        """Give each of *inputs* that nothing above binds the version
+        *stmt_code* read when it last ran (`_read_before_its_producer`)."""
+        for name in sorted(inputs):
+            read = self._read_before_its_producer(name, stmt_code, virtual_lineage)
+            if read is not None:
+                virtual_lineage[name] = read
+
+    def _read_before_its_producer(self, name: str, stmt_code: str, virtual_lineage: Mapping[str, str]) -> str | None:
+        """The version of *name* the statement *stmt_code* read when it last
+        ran, when no statement above it binds *name* and the kernel's
+        version is one a statement of the notebook made since: the cell
+        binds it again itself (``lines = lines2`` below ``for line in
+        lines``) or a cell below does (the cell that reads the file, saved
+        below the one that splits what it read).
+
+        Nothing above can give such a name, so the kernel's value stands in
+        for what a run from the top would hold there. The kernel's CURRENT
+        version is what the statement made of it, though, not what it read:
+        valued by it, ``lines2 = []`` and the split loop above were taken as
+        stale before every cell below, re-run, and the re-run moved ``lines``
+        on again, so the loop and everything built from ``lines`` ran again
+        before each reader, 15-225 s a cell. A version a statement outside
+        the notebook made (a deleted cell, an edit not saved) is no part of
+        the run from the top and is still read as the kernel holds it.
+        """
+        if name in virtual_lineage:
+            return None
+        state = self.tracking_state
+        current = state.variable_lineage.get(name)
+        read = (state.statement_entry_lineages.get(stmt_code) or {}).get(name)
+        if current is None or read is None or read == current:
+            return None
+        made_by = state.executed_cell_codes.get(name)
+        if made_by is None or not self.in_notebook(made_by):
+            return None
+        return read
+
     def output_lineages(
         self,
         source_hash: str,
@@ -1138,6 +1176,7 @@ class StatementLineage:
 
             tree = parse_cached(stmt_code)
             effects, inputs, outputs = self.reads_writes(stmt_code, tree, virtual_modules, virtual_lineage)
+            self.read_as_last_run(stmt_code, inputs, virtual_lineage)
             _apply_deletes(tree, virtual_lineage, virtual_modules)
 
             is_import = stmt_code.strip().startswith(("import ", "from "))
