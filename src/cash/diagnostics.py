@@ -318,7 +318,7 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         "NOTEBOOK-FAILED-CELL",  # a cell raised part way, and a name it
         # changed is kept as that run left it, or could not be put back
         "NOTEBOOK-CHANGED-BELOW",  # a cell re-run on its own reads a value rebuilt
-        # without the in-place change a cell below made to it
+        # without the in-place change, or the new binding, a cell below made
         "NOTEBOOK-CALLABLE-UNREAD",  # a callable the statement calls or hands over
         # cannot be read, so it runs uncached every time
         "NOTEBOOK-MEMO-UNREAD",  # a helper memo the statement read holds more
