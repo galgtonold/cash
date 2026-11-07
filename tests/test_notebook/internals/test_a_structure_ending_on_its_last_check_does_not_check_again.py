@@ -37,10 +37,10 @@ def tar_walks(cash_magics, monkeypatch):
     walks = []
     real = shared_objects._held_from_outside
 
-    def counting(nodes, owner, value_types, leaves=None):
+    def counting(nodes, owner, value_types, *args, **kwargs):
         if any(type(node) is tarfile.TarFile for node in nodes.values()):
             walks.append(1)
-        return real(nodes, owner, value_types, leaves)
+        return real(nodes, owner, value_types, *args, **kwargs)
 
     monkeypatch.setattr(shared_objects, "_held_from_outside", counting)
     cash_magics.shell.user_ns.update(blob=_blob(), io=io, tarfile=tarfile)

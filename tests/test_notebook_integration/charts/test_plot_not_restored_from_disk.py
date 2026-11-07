@@ -3,10 +3,10 @@
 The feature-tour chart cell (plot + trailing DataFrame) is run to warm the
 on-disk ``.cash``; then the kernel is RESTARTED (fresh session, ``.cash``
 persists) and the notebook re-run. The plotting statements (``ax=...plot``,
-``plt.tight_layout``, ``plt.show``) are display side-effects, so they always
-re-execute and the chart cell shows exactly ONE freshly drawn plot — never a
-figure replayed from cache. Guards the "TOP_N shows a stale Top-3 on a warm
-session" report.
+``plt.tight_layout``, ``plt.show``) are never stored on their own, so the chart
+cell shows exactly ONE plot -- drawn again, or the whole plot shown from the
+cache when nothing it reads changed -- never a stored figure next to a fresh
+one. Guards the "TOP_N shows a stale Top-3 on a warm session" report.
 """
 
 SETUP = "%matplotlib inline\nimport pandas as pd\nimport matplotlib.pyplot as plt"

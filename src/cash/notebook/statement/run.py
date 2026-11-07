@@ -337,6 +337,8 @@ class StatementRun:
     #: What of the process it changes (``callee_reach.process_state_writes``:
     #: the environment, the working directory).
     process_state: frozenset[str] = frozenset()
+    #: The notebook globals the functions it calls set (``callee_globals``).
+    callee_globals: frozenset[str] = frozenset()
     #: Its analysis budget (`analysis_budget`), from what it last took.
     analysis_budget: AnalysisBudget | None = None
     #: Seconds its analyses took so far, before and after it ran.

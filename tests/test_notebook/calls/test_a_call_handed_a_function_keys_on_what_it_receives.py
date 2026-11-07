@@ -24,6 +24,7 @@ import warnings
 
 import pytest
 
+from cash.notebook.control_structures import single_unit_policy
 from tests._cell_driver import run_cash_cell
 
 pd = pytest.importorskip("pandas")
@@ -162,6 +163,27 @@ def test_a_for_loop_over_the_call_reuses_it_after_a_fix_elsewhere(cash_magics, m
     _run(cash_magics, cells)
 
     assert runs() == 7
+
+
+def test_a_for_loop_whose_calls_were_served_is_not_cheap_on_a_slow_machine(
+    cash_magics, mock_shell, forecast, monkeypatch
+):
+    """Each pass's statement runs again (``cuts`` moved) but its call is
+    served: the pass costs what the call cost, not the 2 ms it took. Counted
+    at 2 ms, on a macOS runner the first five passes measured cheap and the
+    sixth ran in the rest of the loop as one unit, which ran its call again.
+    The machine's slowness is stood in for: a pass is cheap below 90% work,
+    and the rest's bookkeeping is always worth one unit."""
+    module, runs, _edit = forecast
+    loop = "bt = {}\nfor s in store_ids:\n    bt[s] = fu.backtest(daily[s], fu.fit_a, cuts, H)"
+    _run(cash_magics, [*_cells(module, 0, "store_ids")[:3], loop])
+    assert runs() == 6
+    monkeypatch.setattr(single_unit_policy, "CHEAP_WORK_SHARE", 0.9)
+    monkeypatch.setattr(single_unit_policy, "rest_worth_one_unit", lambda overheads, remaining: remaining > 0)
+
+    _run(cash_magics, [*_cells(module, 1, "store_ids")[:3], loop])
+
+    assert runs() == 7, "calls the cache held ran again in the rest of the loop"
 
 
 @pytest.mark.parametrize(

@@ -75,7 +75,7 @@ class TestForwardProbeUpstreamSkip:
     def test_no_nameerror_when_probe_resolves_var(self, nb_runner):
         """Regression: forward probe must inject placeholder + lineage so the
         statement's missing input does not stop its cache lookup
-        (``cacheability_decision._has_missing_lineage``), preventing NameError
+        (``cacheability_decision.has_missing_lineage``), preventing NameError
         when the broken var is used as input."""
         nb_runner.create_notebook(
             [

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import subprocess
 import sys
 import textwrap
@@ -360,7 +361,8 @@ def test_the_per_call_line_gives_the_body_s_own_time(tmp_path):
     contradiction. The floor is gone; the body's own time is still what the
     line reports, because that is the number a reader can act on."""
     lines = _calls(tmp_path, _MODE_JOB, "fast")
-    assert "(ran 0.00s" in lines[0], lines[0]
+    ran = re.search(r"\(ran (\d+\.\d+)s", lines[0])
+    assert ran and float(ran.group(1)) < 0.1, lines[0]  # a slow runner's first call can show 0.02s
     assert "persistence floor" not in lines[0], lines[0]
 
 

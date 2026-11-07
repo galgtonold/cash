@@ -119,14 +119,20 @@ def _stamp_body_index(m: dict, body_idx: int) -> None:
 
 def _work(metrics: Sequence) -> float:
     """What *metrics*' statements cost to compute: a restored one at the time
-    it saved (`ForLoopHandler._refresh_cost`)."""
+    it saved (`ForLoopHandler._refresh_cost`), one that ran with the calls
+    it served from the cache counted at what they cost (``compute_cost``).
+
+    Counted at its run time alone, `bt[s] = fu.backtest(...)` whose 0.25 s
+    call was served read as 2 ms of work: on a slow machine the passes then
+    measured cheap and the rest of the loop ran as one unit, which ran the
+    call again."""
     work = 0.0
     for m in metrics:
         if not isinstance(m, dict):
             continue
         status = m.get("status")
         if status == CacheStatus.COMPUTED:
-            work += m.get("execution_time", 0.0)
+            work += max(m.get("execution_time", 0.0), m.get("compute_cost", 0.0))
         elif status == CacheStatus.RESTORED:
             work += m.get("saved_time", 0.0)
     return work
@@ -602,14 +608,29 @@ class ForLoopHandler:
         # loop of 10,000 matches ran each pass through the machinery, 18 s
         # against 2 ms plain.
         named = single_unit_policy.header_names_the_iterator(node.iter, iterable, user_ns)
-        if (named or single_unit_policy.is_own_iterator(iterable)) and single_unit_policy.estimated_iterations(
-            node.iter, iterable, user_ns
-        ) is None:
+        sized = single_unit_policy.estimated_iterations(node.iter, iterable, user_ns)
+        if (named or single_unit_policy.is_own_iterator(iterable)) and sized is None:
             rest_after = single_unit_policy.iterations_for_one_unit(node)
+        # A loop of known length too short for the static rule
+        # (`worth_one_unit`) runs its first passes one by one; when they
+        # MEASURED cheap (`passes_were_cheap`), the rest runs as one unit
+        # drawing from the same iterator, as Python draws. E11's MNIST build,
+        # 10 passes of 5 statements, took 0.67 s against 0.06 s plain.
+        source = iterable
+        cheap_rest = (
+            rest_after is None
+            and sized is not None
+            and sized > single_unit_policy.CHEAP_PASSES
+            and not single_unit_policy.writes_files(node.body)
+        )
+        if cheap_rest:
+            source = iter(iterable)
         run_rest = False
         # The share of each pass's time its statements' own work took
         # (`single_unit_policy.passes_were_cheap`).
         work_shares: list[float] = []
+        # What each pass took beyond its statements' own work.
+        overheads: list[float] = []
         measured = 0
 
         # The lineages the loop's names had before it ran: when the rest runs
@@ -618,7 +639,7 @@ class ForLoopHandler:
         lineage_now = self.statement_processor.tracking_state.variable_lineage
         before = (
             {name: lineage_now.get(name) for name in {n.id for n in walk_tree(node) if isinstance(n, ast.Name)}}
-            if rest_after is not None
+            if rest_after is not None or cheap_rest
             else {}
         )
 
@@ -637,7 +658,7 @@ class ForLoopHandler:
         in_loop.open_watch(node, loop_code, self.statement_processor.resolve_live_function_source)
         overlay = in_loop.push_overlay(_helpers.target_roots(self.shell, self.statement_processor, node))
         try:
-            for idx, iteration_value in enumerate(iterable):
+            for idx, iteration_value in enumerate(source):
                 total_iterations += 1
                 iter_started = _time.perf_counter()
                 if self._process_one_iteration(
@@ -663,10 +684,19 @@ class ForLoopHandler:
                 # gathering quadratic.
                 for name in body_names:
                     body_files.update(file_deps.get(name, ()))
-                if rest_after is not None:
+                if rest_after is not None or cheap_rest:
                     wall = _time.perf_counter() - iter_started
-                    work_shares.append(_work(all_metrics[measured:]) / wall if wall > 0 else 1.0)
+                    work = _work(all_metrics[measured:])
+                    work_shares.append(work / wall if wall > 0 else 1.0)
+                    overheads.append(max(0.0, wall - work))
                     measured = len(all_metrics)
+                if (
+                    cheap_rest
+                    and single_unit_policy.passes_were_cheap(work_shares)
+                    and single_unit_policy.rest_worth_one_unit(overheads, sized - total_iterations)
+                ):
+                    run_rest = True
+                    break
                 if rest_after is not None and (
                     total_iterations >= rest_after or single_unit_policy.passes_were_cheap(work_shares)
                 ):
@@ -682,13 +712,20 @@ class ForLoopHandler:
         # The last item is the user's only through the loop's targets: held
         # here, it would read as another holder to the share check below.
         iteration_value = None
+        if not run_rest:
+            source = None  # spent; the iterable is held as itself below
 
         if run_rest:
             logger.debug("[CONTROL] %d passes over an iterator: the rest runs as one unit", total_iterations)
-            handed = {} if named else {"header_value": iterable, "header_files": frozenset(header_files)}
+            handed = (
+                {} if named and not cheap_rest else {"header_value": source, "header_files": frozenset(header_files)}
+            )
             rest = self.dispatcher.execute_as_single_unit(
                 node, ttl, silent, raw_cell, inherited_annotation, update_lineage=False, **handed
             )
+            del handed
+            # Nor the iterator the unit drew from: it holds the iterable.
+            source = None
             if rest_metrics is not None:
                 rest_metrics.extend(rest.metrics)
             if not rest.success:

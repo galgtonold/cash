@@ -111,7 +111,7 @@ they talk to the outside world.
 | writes to a database (`INSERT`, `commit`, `df.to_sql`) | runs every time |
 | starts a process (`subprocess.run`, `os.system`) | runs every time |
 | reads the clock (`datetime.now()`, `time.time()`, `uuid4()`), random bytes from the system (`os.urandom()`, `secrets.token_hex()`) or asks for `input()` | runs every time |
-| makes, picks or draws on the current pyplot figure (`plt.figure`, `plt.subplots`, `plt.subplot`, `plt.plot`, `plt.show`), directly or through a library or a function you wrote (`sns.barplot(...)`, `s.plot()`) | runs every time: a hit would leave the next drawing on another figure. Cash compares pyplot's open figures, the current one and what its axes hold before and after the statement |
+| makes, picks or draws on the current pyplot figure (`plt.figure`, `plt.subplots`, `plt.subplot`, `plt.plot`, `plt.show`), directly or through a library or a function you wrote (`sns.barplot(...)`, `s.plot()`) | not stored on its own: a hit would leave the next drawing on another figure. Cash compares pyplot's open figures, the current one and what its axes hold before and after the statement. With the inline backend, a whole plot whose inputs did not change is [shown from the cache](#plots-shown-from-the-cache) instead of drawn again |
 | calls a function you wrote that reads pyplot's current figure (`len(plt.gca().lines)`, `plt.gcf().axes`), however deep the call: a method of your class, pyplot handed in (`nlines(plt)`), kept as a default (`get=plt.gca`) or imported inside it included | runs every time, as `plt.gca()` in the statement does: no key holds the figure it reads. On Python 3.12+, where cash records what runs, only a run that reached pyplot counts: `run(tsp, cities, plot=False)`, whose plotting branch is not taken, is cached |
 | calls a function marked [`@stateful`](tutorials/feature-guides/controlling-cache-behavior.md#stateful-helpers) | runs every time |
 | changes an object made in an earlier cell through a method (`df.insert(...)`, `lst.append(...)`) or a function (`W, H = fit_nmf(X, k)` writing into `X`) | cached with the object's new state when it is an array, a frame or Series whose index, columns and dtypes stay as they were, or a list, dict or set of plain values: a hit writes that state back into the object, which keeps its identity ([details](how-it-works/safety.md#the-mutation-problem)). Otherwise (`df.insert(...)` adds a column) it runs every time; a slow call inside it is cached on the values it is handed (`df.insert(1, "c", slow(df))` reuses `slow(df)` while `df` holds the same data) |
@@ -153,6 +153,39 @@ Three directives change these rules for one statement:
 [Controlling caching](tutorials/feature-guides/controlling-cache-behavior.md)
 walks through them. [Knowing when not to cache](how-it-works/safety.md) explains
 the reasoning.
+
+### Plots shown from the cache
+
+<!-- claim: cash/notebook/ipython/plot_runs.py:PlotRuns.serve @0458b11a, cash/notebook/ipython/plot_runs.py:PlotRuns._store @5180bb40, cash/notebook/plot_outputs.py:statement_plot_facts @5e20ef0c, cash/notebook/plot_outputs.py:first_read_after @1d857b84 -->
+With the inline backend (the default in Jupyter), a plot begins with no
+figure open and ends when `plt.show()`, or the end of the cell, shows its
+figures and closes them. Cash keeps what such a plot showed: the image, what
+its statements printed, and the value the cell's last line echoed
+(`<Axes: ...>`). On a later run of the same statements with the same inputs,
+under the same matplotlib settings (`rcParams`, a style or seaborn theme, the
+inline backend's formats), cash shows that output and skips the drawing; the
+badge marks those rows cached. This holds for `run(N)` calling a function of
+yours that draws and calls `plt.show()`, for `plt.plot(x, y)` then
+`plt.show()`, for `df.plot(...)` and seaborn calls, and for
+`fig, ax = plt.subplots()` then drawing on `ax` in the same cell. It holds
+after a kernel restart when the plot was slow enough to be written to disk.
+
+A served plot binds nothing: `fig`, `ax` and whatever else it assigned are
+not there afterwards. So it is drawn again, as before, when:
+
+- code after it in the cell, or a cell below it, reads one of those names
+  before assigning it again (`fig.savefig(...)` in the next cell, or `Out`
+  and `_` when the cell echoed a value). A cell below that starts a figure
+  of its own (`plt.xlabel(...)`, `fig, ax = plt.subplots()`) draws on a new
+  figure whether the plot ran or not, so it changes nothing;
+- cash cannot tell which cell is running, or cannot read the notebook's cells;
+- it writes a file (`plt.savefig`, `fig.savefig`), reads one other than
+  matplotlib's fonts and style sheets, draws from a global random generator,
+  changes matplotlib's settings, sets a global through a function, or holds
+  a statement that is not stored for a reason other than drawing;
+- an environment variable it read holds another value, the backend is not
+  the inline one, or the inline backend keeps figures open
+  (`InlineBackend.close_figures = False`).
 
 ## Fitting models
 

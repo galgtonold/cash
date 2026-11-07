@@ -209,6 +209,7 @@ from ..magic_effects import (
     magic_rng_advances,
     simulation_cell,
 )
+from ..plot_outputs import PLOT_FACTS, is_pyplot_reason, statement_plot_facts
 from ..pyplot_draws import holds_artists, pyplot_draw_names
 from ..pyplot_state import CHANGED_PYPLOT_REASON, pyplot_state
 from ..recorded_reads import note_writes, snapshot
@@ -1599,6 +1600,14 @@ class StatementProcessor:
             run.analysis_spent += left.spent()
 
     @staticmethod
+    def _keeps_plot_displays(run: StatementRun) -> bool:
+        """Whether *run*, refused only because it draws through pyplot,
+        has its displays held for the cell all the same: what a plot run
+        showed is what keeps it (`plot_outputs`)."""
+        reasons = run.metrics.get("uncacheable_reasons") or ()
+        return run.keep_displays and bool(reasons) and all(is_pyplot_reason(r) for r in reasons)
+
+    @staticmethod
     def _refuse_if_it_drew(run: StatementRun, execution: StatementExecution) -> None:
         """Refuse *run*, cached on the condition that it does not touch
         pyplot (``unless_it_draws``), when pyplot's code ran in it, as the
@@ -1866,6 +1875,7 @@ class StatementProcessor:
         run.key_parts = self._key_parts
         outputs = set(effects.outputs)
         callee_globals = set(effects.callee_globals)
+        run.callee_globals = frozenset(callee_globals)
         # Caller-forced outputs (accumulator-loop fast path): capture
         # and restore these on top of the AST-discovered outputs, and mark them
         # as expected writes so an in-place accumulator mutation (``out.append``)
@@ -2540,7 +2550,9 @@ class StatementProcessor:
             with (
                 self.watching_reads(run.code),
                 make_capture_ctx(
-                    run.stream_output, run.skip_cache and run.stream_output, run.keep_displays
+                    run.stream_output,
+                    run.skip_cache and run.stream_output and not self._keeps_plot_displays(run),
+                    run.keep_displays,
                 ) as captured,
             ):
                 execution.captured = captured
@@ -2921,6 +2933,8 @@ class StatementProcessor:
         )
         metrics["status"] = CacheStatus.COMPUTED
         metrics["evaluated_vars"] = list(run.outputs) if run.outputs else []
+        # For the cell: whether a plot run holding it may be skipped (`plot_outputs`).
+        metrics[PLOT_FACTS] = statement_plot_facts(run, execution, drew_random=bool(self._randomness.observed_draw))
         # Input names, so provenance and badge tooltips can rebuild the
         # dependency graph. The no-name inputs the AST sometimes emits are dropped.
         metrics["inputs"] = [v for v in (run.inputs or []) if isinstance(v, str)]
