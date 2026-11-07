@@ -41,7 +41,7 @@ from .log_lines import LogLines, flush_all
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["content_version", "file_version", "note_same_content", "use_file_versions"]
+__all__ = ["content_version", "file_version", "note_same_content", "use_file_versions", "versions_seen"]
 
 #: ``(modification time ns, size, change time ns)``.
 Version = tuple[int, int, int]
@@ -59,6 +59,23 @@ _BY_CONTENT: LruMemo[tuple[str, str], Version] = LruMemo(FILE_DIGESTS)
 #: When this process began to watch: a file last written before it was not
 #: rewritten by this process, and is never hashed here (`content_version`).
 _STARTED_NS = time.time_ns()
+
+
+#: Bumped each time `_EARLIER` or `_BY_CONTENT` takes an entry (`versions_seen`).
+_CHANGES = 0
+
+
+def versions_seen() -> tuple[int, int]:
+    """A token that changes whenever an answer of `content_version` for a
+    stat it answered before may change: a version linked to an earlier one,
+    or a log taken in. A file component kept across runs from the same
+    stats holds only under the same token."""
+    return _CHANGES, _STARTED_NS
+
+
+def _changed() -> None:
+    global _CHANGES
+    _CHANGES += 1
 
 
 def _version(st: os.stat_result) -> Version:
@@ -94,6 +111,7 @@ def content_version(canonical_path: str, st: os.stat_result, digest: Callable[[]
     if content is None:
         return own
     root = _BY_CONTENT.get((canonical_path, content))
+    _changed()
     if root is None:
         _BY_CONTENT[(canonical_path, content)] = own
         if _LOG is not None:
@@ -123,6 +141,7 @@ def note_same_content(path: str, st: os.stat_result, recorded: Mapping[str, Any]
     if _EARLIER.get((canonical, own)) == root:
         return
     _EARLIER[(canonical, own)] = root
+    _changed()
     if _LOG is not None:
         _LOG.append(canonical, own, root)
 
@@ -139,6 +158,7 @@ class _VersionLog:
     def load(self) -> None:
         """Take the versions the log holds into this process's."""
         flush_all()  # this process's own lines, still waiting, are read too
+        _changed()
         try:
             with open(self.path, encoding="utf-8", errors="replace") as fh:
                 for raw in fh:

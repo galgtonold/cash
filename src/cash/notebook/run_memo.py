@@ -1209,6 +1209,16 @@ def file_component_this_run(
     parts = _component_parts(watch, paths) if watch is not None else None
     listed = run["listed"] if run is not None else None
     followed = run["stat_followed"] if run is not None else None
+    seen = None
+    if key is not None and not probes and len(paths) >= _SEEN_MIN_FILES:
+        # Built in an earlier run from stats the run found again unchanged:
+        # the same fields of the same files, so the same component.
+        seen = _seen_as(taken, listed, followed)
+        held_seen = _SEEN_COMPONENTS.get(key) if seen is not None else None
+        if held_seen is not None and held_seen[1] == seen:
+            _SEEN_COMPONENTS[key] = _SEEN_COMPONENTS.pop(key)  # the newest
+            components[key] = held_seen[0]
+            return held_seen[0]
     stats: Mapping[str, os.stat_result] = {}
     lstats = {}
     isabs = os.path.isabs
@@ -1224,6 +1234,13 @@ def file_component_this_run(
     component = compute_file_hash_component(paths, remote, probes, stats=stats, lstats=lstats)
     if key is not None:
         components[key] = component
+    if seen is not None:
+        # Under the versions known now: building it may have linked some
+        # (a file written in this process is versioned by its bytes), and
+        # the next build takes those.
+        from ..tracking.file_versions import versions_seen
+
+        _keep_seen(key, component, (*seen[:-1], versions_seen()))
     if watch is not None and parts is not None:
         hold = _ComponentHold.of(watch, parts, stats_this_run(paths), run)
         if hold is not None:
@@ -1231,6 +1248,69 @@ def file_component_this_run(
                 _COVERED_COMPONENTS.pop(next(iter(_COVERED_COMPONENTS)))
             _COVERED_COMPONENTS[key] = (component, hold, place)
     return component
+
+
+#: Components built in an earlier run, across runs, each with what it was
+#: built from (`_seen_as`): ``{key: (component, seen)}``, newest last.
+_SEEN_COMPONENTS: dict[tuple, tuple[str, tuple]] = {}
+
+#: How many components `_SEEN_COMPONENTS` keeps, and how many paths all told.
+_SEEN_KEPT = 16
+_SEEN_PATHS = 500_000
+
+#: Fewer files than this are built afresh: comparing costs about as much.
+_SEEN_MIN_FILES = 64
+
+
+def _seen_as(taken: RunStats, listed: Collection[str] | None, followed: Collection[str] | None) -> tuple | None:
+    """What `compute_file_hash_component` builds the component of *taken*'s
+    paths from, besides the paths: the run's stat of each (its kind,
+    identity, size and times; None when not there), the real path of each
+    folder, the working directory, the notebook's real path, and the file
+    versions known (`file_versions.versions_seen`). None when a path is
+    answered otherwise than by its own stat where it was recorded: found
+    elsewhere, through a link, by a listing, or spelled with a short name.
+
+    The files that the folder watch cannot vouch for (a second hard link
+    each, as a dataset cache leaves them) are stat-ed again each run, and
+    the component of the 13,000 photos below a read was then built again
+    from those stats in each check that asked for it: a real path, a
+    version and a line of text a file, 1 s a cell on Windows. Found
+    unchanged, it is the same component."""
+    from ..tracking.file_versions import versions_seen
+    from .statement.file_deps import get_notebook_path
+
+    by_path: dict[str, tuple | None] = {}
+    folders: set[str] = set()
+    dirname = os.path.dirname
+    for p, (resolved, st) in taken.items():
+        if st is None:
+            if resolved is not None:
+                return None
+            by_path[p] = None
+            continue
+        if resolved != p or "~" in p or (followed and p in followed) or (listed and p in listed):
+            return None
+        by_path[p] = (st.st_mode, st.st_ino, st.st_dev, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+        folders.add(dirname(p))
+    try:
+        cwd = os.getcwd()
+        notebook = get_notebook_path()
+        real = {folder: _fds.realpath_this_run(folder or ".") for folder in folders}
+        if notebook:
+            notebook = _fds.realpath_this_run(notebook)
+    except (OSError, ValueError):
+        return None
+    return by_path, real, cwd, notebook, versions_seen()
+
+
+def _keep_seen(key: tuple, component: str, seen: tuple) -> None:
+    """Keep *component*, built from *seen* (`_seen_as`), for later runs."""
+    _SEEN_COMPONENTS.pop(key, None)
+    _SEEN_COMPONENTS[key] = (component, seen)
+    total = sum(len(kept[1][0]) for kept in _SEEN_COMPONENTS.values())
+    while len(_SEEN_COMPONENTS) > 1 and (len(_SEEN_COMPONENTS) > _SEEN_KEPT or total > _SEEN_PATHS):
+        total -= len(_SEEN_COMPONENTS.pop(next(iter(_SEEN_COMPONENTS)))[1][0])
 
 
 #: Components built from stats the folder watch held, across runs:

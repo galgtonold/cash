@@ -17,19 +17,18 @@ from collections.abc import Callable, Mapping
 
 from cash._user_attrs import has_attribute
 
-from ..._paths import is_remote_url, normalize_path, resolve_file_dep_path
+from ..._paths import is_remote_url, normalize_path
 from ...analysis.ast_util import called_names
 from ...analysis.cacheability import statement_writes_files
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.mutation_effects import control_structure_mutations, is_module_name
 from ...tracking.randomness import hidden_lineage_writes
-from ...tracking.read_classification import stat_key
 from ..cache_key import statement_source_hash
 from ..callee_reach import module_state_names
 from ..control_structures import extract_target_names, get_control_structure_type
 from ..lineage_formula import UNSEEDED, output_lineage
 from ..loop_split import split_nodes
-from ..run_memo import file_component_this_run
+from ..run_memo import file_component_this_run, stat_keys_this_run
 from ..statement.derivation_edges import bump_derived_lineages
 from ..statement.lineage import rewritten_by_the_notebook_since
 from ..tracking_state import TrackingState, outcome_key
@@ -467,19 +466,18 @@ def _stored_for(produced: Mapping[str, str], stored: Mapping[str, str]) -> dict[
 
 def _stats_of(paths: set[str], known: Mapping[str, tuple[int, int, int]]) -> dict[str, tuple[int, int, int]]:
     """Each of *paths* not in *known*, with its stat key now; a path that
-    cannot be resolved or stat'ed is left out."""
-    out: dict[str, tuple[int, int, int]] = {}
-    for path in paths or ():
-        if path in known:
-            continue
-        resolved = resolve_file_dep_path(path)
-        if resolved is None:
-            continue
-        try:
-            out[path] = stat_key(os.stat(resolved))
-        except OSError:
-            continue
-    return out
+    cannot be resolved or stat'ed is left out.
+
+    The keys of this cell run's stats (`stat_keys_this_run`), found as
+    `resolve_file_dep_path` finds them: a loop over a frame read from
+    13,000 photos took an ``exists`` and a ``stat`` of each of its files'
+    two spellings in the first check after it ran, four more stats a file
+    the run had taken already."""
+    todo = [path for path in paths or () if path not in known]
+    if not todo:
+        return {}
+    keys = stat_keys_this_run(todo)
+    return {path: key for path in todo if (key := keys.get(path)) is not None}
 
 
 def _absolute_only(files: dict[str, tuple[int, int, int]]) -> dict[str, tuple[int, int, int]]:
