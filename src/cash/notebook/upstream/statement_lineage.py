@@ -309,7 +309,10 @@ class StatementLineage:
         """The edges a run of *stmt_code* that read *entry* linked
         (``TrackingState.share_edge_records_at``), or None."""
         key = (statement_source_hash(stmt_code), tuple(sorted(entry.items())))
-        return self.tracking_state.share_edge_records_at.get(key)
+        found = self.tracking_state.share_edge_records_at.get(key)
+        if found is None:
+            self.tracking_state.note_share_record_miss(key)
+        return found
 
     def relink(
         self,

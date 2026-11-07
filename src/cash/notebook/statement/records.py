@@ -374,11 +374,28 @@ class StatementRecords:
         if entry is not None:
             at = state.share_edge_records_at
             key = (source_hash, tuple(sorted(entry.items())))
-            if at.get(key) != record:
-                if key not in at and len(at) >= self._SHARE_RECORDS_AT_MAX:
-                    at.pop(next(iter(at)))
+            held = at.get(key)
+            if held != record:
+                if held is None and len(at) >= self._SHARE_RECORDS_AT_MAX:
+                    # A simulation of the statement it was kept for reads
+                    # the record by text from now on.
+                    evicted = next(iter(at))
+                    del at[evicted]
+                    state.note_share_edge_change(evicted[0])
                 at[key] = record
-                state.note_share_edge_change(source_hash)
+                # A simulation reads the record under its inputs, else the
+                # one by text. A new record from a cell's own run changes
+                # what a snapshot read only where a simulation looked for
+                # it and found none. Noted for each one, the snapshot of
+                # every cell holding the statement's text was simulated
+                # again on the next check: a second ``DataLoader`` built
+                # with the lines of the first re-simulated every cell
+                # between the two, before a one-line cell, on a straight
+                # run from the top. A re-run by the upstream repair (no
+                # running cell) is noted still: the snapshots of the cells
+                # it re-ran were simulated before it.
+                if held is not None or state.running_cell is None or state.share_record_was_missed(key):
+                    state.note_share_edge_change(source_hash)
         known = state.share_edge_records
         had = known.get(source_hash)
         if had == record:
