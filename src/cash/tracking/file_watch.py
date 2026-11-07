@@ -322,6 +322,10 @@ class FileWatch:
         """How many links the file at *path* in *d* has (None: no stat)."""
         if d.linked.get(path) == version:
             return 2
+        from .file_dep_snapshot import listed_links
+
+        if listed_links(path) == 1:
+            return 1
         try:
             nlink = own_stat(path).st_nlink
         except (OSError, ValueError):

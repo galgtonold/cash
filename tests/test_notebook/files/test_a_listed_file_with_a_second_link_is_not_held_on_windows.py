@@ -5,8 +5,11 @@ folder listings (`file_dep_snapshot.stats_from_listings`), and a listing's
 stat has no link count (``st_nlink`` 0). The folder watch kept such a stat
 as that of a file with one link, so an edit made through the second link,
 in a folder it does not watch (a dataset cache beside the project), went
-unseen, and a cell below the read was served the old result. The watch now
-asks one stat for the count, remembered until the folder reports a change.
+unseen, and a cell below the read was served the old result. Nor could the
+listing itself be trusted for such a file: NTFS keeps a size and times per
+folder entry, and a write through the other link leaves this entry's as
+they were. A listed file now takes one stat for its link count, once, and
+one with a second link is stat-ed by itself each time.
 
 Here a listing on Linux is made to look like a Windows one.
 """
@@ -45,20 +48,52 @@ def _runs(monkeypatch, tmp_path):
     file_watch.reset()
 
 
+class _ListedEntry:
+    """A folder entry as a Windows listing gives it: no link count, and the
+    size and times it had when the folder was first listed (NTFS keeps them
+    per entry, and a write through another link leaves them)."""
+
+    def __init__(self, entry: os.DirEntry, st: os.stat_result) -> None:
+        self.name, self.path, self._entry, self._st = entry.name, entry.path, entry, st
+
+    def is_symlink(self) -> bool:
+        return self._entry.is_symlink()
+
+    def stat(self) -> os.stat_result:
+        return self._st
+
+
+class _Listing:
+    def __init__(self, entries) -> None:
+        self._entries = entries
+
+    def __enter__(self):
+        return self._entries
+
+    def __exit__(self, *exc) -> None:
+        return None
+
+
 @pytest.fixture(autouse=True)
 def _listed_as_on_windows(monkeypatch):
-    """Listings on every system, each stat with no link count."""
+    """Listings on every system, each entry as a Windows listing gives it."""
+    first: dict[str, os.stat_result] = {}
+    real = os.scandir
 
-    def listed(paths):
-        found = file_dep_snapshot.listing_stats(paths)
-        return {p: _no_link_count(st) for p, st in found.items()}
+    def scandir(directory="."):
+        with real(directory) as it:
+            entries = []
+            for e in it:
+                if e.path not in first:
+                    st = e.stat()
+                    extra = {f: getattr(st, f) for f in dir(st) if f.startswith("st_") and f.endswith("_ns")}
+                    first[e.path] = os.stat_result((*st[:3], 0, *st[4:]), extra)
+                entries.append(_ListedEntry(e, first[e.path]))
+        return _Listing(entries)
 
-    monkeypatch.setattr(run_memo, "stats_from_listings", listed)
-
-
-def _no_link_count(st: os.stat_result) -> os.stat_result:
-    extra = {f: getattr(st, f) for f in dir(st) if f.startswith("st_") and f.endswith("_ns")}
-    return os.stat_result((*st[:3], 0, *st[4:]), extra)
+    monkeypatch.setattr(file_dep_snapshot.os, "scandir", scandir)
+    monkeypatch.setattr(run_memo, "stats_from_listings", file_dep_snapshot.listing_stats)
+    monkeypatch.setattr(file_dep_snapshot, "_LISTED_LINKS", {})
 
 
 def _next_run() -> None:
@@ -93,7 +128,6 @@ def _keys(paths: list[str]) -> dict:
 
 
 def test_an_edit_through_the_other_link_is_seen(tmp_path):
-    assert run_memo.stats_from_listings is not file_dep_snapshot.stats_from_listings
     linked = _photos(tmp_path, link=True)
     if file_watch.watcher() is None:
         pytest.skip("no folder watch")

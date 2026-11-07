@@ -996,12 +996,49 @@ def listing_stats(paths: Iterable[str]) -> dict[str, os.stat_result]:
                     path = wanted.get(os.path.normcase(entry.name))
                     if path is not None and not _links_elsewhere(entry):
                         try:
-                            found[path] = entry.stat()
+                            st = entry.stat()
+                            if not st.st_nlink and _links_of(entry.path) != 1:
+                                continue  # stat-ed by itself
+                            found[path] = st
                         except OSError:
                             pass
         except OSError:
             continue
     return found
+
+
+#: How many links each file a listing found has, by `_link_key`: a Windows
+#: listing gives no link count (``st_nlink`` 0), and its size and times of
+#: a file with a second link are those of the last write through this link
+#: alone (NTFS keeps them per folder entry). Such a file is stat-ed by
+#: itself each time; one with a single link takes one stat, once. A link
+#: made after that stat is the documented hard-link gap.
+_LISTED_LINKS: dict[str, int] = {}
+_LISTED_LINKS_MAX = 1_000_000
+
+
+def _link_key(path: str) -> str:
+    return os.path.normcase(os.path.abspath(path))
+
+
+def _links_of(path: str) -> int:
+    """The link count of the file a listing found at *path* (0: no stat)."""
+    key = _link_key(path)
+    n = _LISTED_LINKS.get(key)
+    if n is None:
+        try:
+            n = own_stat(path).st_nlink
+        except (OSError, ValueError):
+            return 0
+        if len(_LISTED_LINKS) >= _LISTED_LINKS_MAX:
+            _LISTED_LINKS.clear()
+        _LISTED_LINKS[key] = n
+    return n
+
+
+def listed_links(path: str) -> int | None:
+    """The link count a listing learnt for *path*, or None."""
+    return _LISTED_LINKS.get(_link_key(path))
 
 
 def _links_elsewhere(entry: os.DirEntry) -> bool:
