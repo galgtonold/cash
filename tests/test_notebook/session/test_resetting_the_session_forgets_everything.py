@@ -15,6 +15,7 @@ import dataclasses
 import numpy as np
 import pytest
 
+from cash._memo import LruMemo
 from cash.notebook.file_round_trips import FileRoundTrips
 from cash.notebook.lineage_store import LineageStore
 from cash.notebook.per_item_reruns import PerItemReruns
@@ -42,7 +43,7 @@ def _mark(state: TrackingState) -> dict[str, object]:
         elif isinstance(value, PerItemReruns):
             value.after_run("c", "h", values={"a": list(np.zeros((20, 2)))}, lineages={}, seconds=2.0)
             value._warned.add("h")
-        elif isinstance(value, dict):
+        elif isinstance(value, (dict, LruMemo)):
             value["x"] = {"y"}
         elif isinstance(value, set):
             value.add("x")
@@ -59,15 +60,22 @@ def _mark(state: TrackingState) -> dict[str, object]:
     return held
 
 
+def _seen(value: object) -> object:
+    """What a field holds, comparable: a memo by its entries."""
+    if isinstance(value, LruMemo):
+        return [(k, value.peek(k)) for k in value.keys()]
+    return value
+
+
 def test_every_field_goes_back_to_its_default():
     state = TrackingState()
     _mark(state)
     fresh = TrackingState()
-    assert any(getattr(state, f.name) != getattr(fresh, f.name) for f in dataclasses.fields(state))
+    assert any(_seen(getattr(state, f.name)) != _seen(getattr(fresh, f.name)) for f in dataclasses.fields(state))
 
     state.reset_session_state()
 
-    left = [f.name for f in dataclasses.fields(state) if getattr(state, f.name) != getattr(fresh, f.name)]
+    left = [f.name for f in dataclasses.fields(state) if _seen(getattr(state, f.name)) != _seen(getattr(fresh, f.name))]
     assert not left, f"reset_session_state left these fields set: {left}"
 
 

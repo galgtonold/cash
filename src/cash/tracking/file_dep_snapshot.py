@@ -635,6 +635,7 @@ def snapshot_file_deps(
         try:
             if st is None:
                 st = own_stat(f)
+                note_links(f, st)
         except (FileNotFoundError, NotADirectoryError):
             # Not there: a file the call deleted, or a read that failed (the
             # absence is recorded on its own channel).
@@ -990,6 +991,7 @@ def listing_stats(paths: Iterable[str]) -> dict[str, os.stat_result]:
     for directory, wanted in by_dir.items():
         if len(wanted) < LISTING_MIN_FILES:
             continue
+        base = None
         try:
             with untracked(), os.scandir(directory or ".") as entries:
                 for entry in entries:
@@ -997,8 +999,12 @@ def listing_stats(paths: Iterable[str]) -> dict[str, os.stat_result]:
                     if path is not None and not _links_elsewhere(entry):
                         try:
                             st = entry.stat()
-                            if not st.st_nlink and _links_of(entry.path) != 1:
-                                continue  # stat-ed by itself
+                            if not st.st_nlink:
+                                if base is None:
+                                    base = os.path.normcase(os.path.abspath(directory or "."))
+                                key = os.path.join(base, os.path.normcase(entry.name))
+                                if _links_of(entry.path, key) != 1:
+                                    continue  # stat-ed by itself
                             found[path] = st
                         except OSError:
                             pass
@@ -1011,28 +1017,44 @@ def listing_stats(paths: Iterable[str]) -> dict[str, os.stat_result]:
 #: listing gives no link count (``st_nlink`` 0), and its size and times of
 #: a file with a second link are those of the last write through this link
 #: alone (NTFS keeps them per folder entry). Such a file is stat-ed by
-#: itself each time; one with a single link takes one stat, once. A link
-#: made after that stat is the documented hard-link gap.
+#: itself each time; one with a single link takes one stat, once, unless a
+#: snapshot's stat of it already told (`note_links`). A link made after
+#: that stat is the documented hard-link gap.
 _LISTED_LINKS: dict[str, int] = {}
 _LISTED_LINKS_MAX = 1_000_000
+#: Only a Windows listing lacks the count; elsewhere nothing is noted.
+_NOTE_LINKS = os.name == "nt"
 
 
 def _link_key(path: str) -> str:
-    return os.path.normcase(os.path.abspath(path))
+    if not os.path.isabs(path):
+        path = os.path.abspath(path)
+    return os.path.normcase(path)
 
 
-def _links_of(path: str) -> int:
-    """The link count of the file a listing found at *path* (0: no stat)."""
-    key = _link_key(path)
+def _keep_links(key: str, n: int) -> None:
+    if len(_LISTED_LINKS) >= _LISTED_LINKS_MAX:
+        _LISTED_LINKS.clear()
+    _LISTED_LINKS[key] = n
+
+
+def note_links(path: str, st: os.stat_result) -> None:
+    """Keep the link count a stat of *path* by itself gave, for a listing of
+    its folder later on (Windows: a listing reports none)."""
+    if _NOTE_LINKS and st.st_nlink:
+        _keep_links(_link_key(path), st.st_nlink)
+
+
+def _links_of(path: str, key: str) -> int:
+    """The link count of the file a listing found at *path*, kept under
+    *key* (0: no stat)."""
     n = _LISTED_LINKS.get(key)
     if n is None:
         try:
             n = own_stat(path).st_nlink
         except (OSError, ValueError):
             return 0
-        if len(_LISTED_LINKS) >= _LISTED_LINKS_MAX:
-            _LISTED_LINKS.clear()
-        _LISTED_LINKS[key] = n
+        _keep_links(key, n)
     return n
 
 
