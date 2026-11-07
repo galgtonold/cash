@@ -3638,7 +3638,10 @@ class StatementProcessor:
                     values_passed=values_passed,
                     shared_owners=owners,
                 )
-                if reason is not None and holders is not None:
+                if reason is not None and holders is not None and values_passed:
+                    # Not when a value refused on its own: the retry checks
+                    # the same values, and is refused the same (a list of
+                    # 1.3 million Timedeltas was walked twice for it).
                     # Anchors only where holders alone refuse: an anchor binds
                     # the live object only while its digest is the one stored,
                     # which a holder restored with the outputs never needs

@@ -786,6 +786,14 @@ def _users_code(item: Any) -> bool:
     return module is not None and is_user_code_module(module)
 
 
+def _type_tells(kind: type) -> bool:
+    """Whether `library_parts` answers alike for every object of *kind*:
+    it asks ``isinstance``, which an object can answer apart from its type
+    through a ``__class__`` of its own (a proxy's); a NumPy array's answer
+    is its dtype's."""
+    return not _numpy_array(kind) and not any("__class__" in vars(base) for base in kind.__mro__[:-1])
+
+
 def _numpy_array(kind: type) -> bool:
     return kind.__name__ == "ndarray" and attribute_or(kind, "__module__") == "numpy"
 
@@ -834,6 +842,8 @@ class _Walk:
         self.unread: list[Any] = []
         #: The library's objects met and not looked inside (`library_parts`).
         self.closed: list[Any] = []
+        #: The kinds of `closed`'s objects, each told closed by its type.
+        self.closed_kinds: set[type] = set()
         self.cut = False
         self.quiet = quiet
         #: The ids looked for, by a *quiet* walk; `found` when one is the
@@ -857,8 +867,11 @@ class _Walk:
             into: list[Any] = []
             for item in level:
                 self._open(item, into)
-            if self.cut:
-                return
+                if self.cut:
+                    # Past the budget the answer is known: the rest of the
+                    # level was only counted (a list of 1.3 million
+                    # Timedeltas was, six times over the budget).
+                    return
             level = into
 
     def _open(self, item: Any, into: list[Any]) -> None:
@@ -885,6 +898,13 @@ class _Walk:
             return
         if self.targets is not None and weakref.getweakrefcount(item) and self._notebook_own(kind):
             self.targets.append(item)
+        if kind in self.closed_kinds:
+            # As the first of its kind was: a library's object not looked
+            # inside, told by its type alone (a list of 1.3 million
+            # Timedeltas each asked every question below).
+            if not self.quiet:
+                self.closed.append(item)
+            return
         if issubclass(kind, _REFERENCES):
             if not self.quiet or self.keep_refs:
                 self.refs.append(item)
@@ -955,6 +975,9 @@ class _Walk:
                 items = library_parts(item)
             except Exception:  # noqa: BLE001 - not readable: what it holds is unknown
                 items = None
+            else:
+                if items is None and _type_tells(kind):
+                    self.closed_kinds.add(kind)
             if items is None:
                 if not self.quiet:
                     self.closed.append(item)
