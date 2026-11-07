@@ -58,14 +58,15 @@ def _next_run() -> None:
 
 def _windows_listing(paths):
     """`stats_from_listings` as on Windows: entries of a crowded folder, with
-    no file identity."""
+    no file identity, the folder's watch told before it is listed."""
     by_dir = collections.defaultdict(list)
     for p in paths:
         by_dir[os.path.dirname(p)].append(p)
     found = {}
-    for ps in by_dir.values():
+    for directory, ps in by_dir.items():
         if len(ps) < file_dep_snapshot.LISTING_MIN_FILES:
             continue
+        file_dep_snapshot.listing_begins(directory)
         for p in ps:
             try:
                 st = os.lstat(p)

@@ -506,33 +506,69 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
                 if watch.is_listed(p):
                     from_listing.add(p)
         todo = rest
+    if todo and watch is not None and watch.listed_entries:
+        # A folder listed earlier and quiet since: its kept listing
+        # (`FileWatch.keep_listing`) holds the entries of the files asked
+        # now, where each cell asking for others of a crowded folder
+        # listed all of it again.
+        at = time.monotonic()
+        chunks.append((at, len(stats)))
+        take_listed = watch.take_listed
+        rest = []
+        for p in todo:
+            twin = _watched_spelling(p)
+            st = take_listed(twin) if twin is not None else None
+            if st is None:
+                rest.append(p)
+            elif p not in stats:
+                stats[p] = st
+                dates[p] = at
+                from_listing.add(p)
+        todo = rest
     if todo:
         at = time.monotonic()
-        # The watch keeps a listed stat of a relative path by its absolute
-        # spelling, as `_as_spelled_absolute` keeps a stat of one: kept by
-        # the relative spelling, which names no folder, it was never kept,
-        # and every check before a cell listed those files again.
-        watched_as = (
-            {p: _watched_spelling(p) for p in todo} if watch is not None and len(todo) >= LISTING_MIN_FILES else None
-        )
-        before = (
-            {p: watch.before_stat(twin) for p, twin in watched_as.items() if twin is not None}
-            if watched_as is not None
-            else None
-        )
-        listed = stats_from_listings(todo) if len(todo) >= LISTING_MIN_FILES else None
+        listed = None
+        # Each listed folder's watch, armed just before it is listed: one
+        # token for all its files. The watch keeps a listed stat of a
+        # relative path by its absolute spelling, as `_as_spelled_absolute`
+        # keeps a stat of one: kept by the relative spelling, which names no
+        # folder, it was never kept, and every check before a cell listed
+        # those files again.
+        tokens: dict[str, Any] = {}
+        if len(todo) >= LISTING_MIN_FILES:
+            if watch is not None:
+
+                def before_listing(directory: str) -> Any:
+                    folder = _watched_spelling(directory or ".")
+                    if folder is None:
+                        return None
+                    token = tokens.get(folder)
+                    if token is None:
+                        token = watch.before_listing(folder)
+                        if token is not None:
+                            tokens[folder] = token
+                    return token
+
+                with _fds.listings_told(before_listing, watch.keep_listing):
+                    listed = stats_from_listings(todo)
+            else:
+                listed = stats_from_listings(todo)
         if listed:
             # A listing's stats, dated by when the listing began, kept first:
             # the dates stay in the order the stats are kept.
             chunks.append((at, len(stats)))
+            dirname = os.path.dirname
             for p in todo:
                 st = listed.get(p)
                 if st is not None and p not in stats:
                     stats[p] = st
                     dates[p] = at
                     from_listing.add(p)
-                    if before is not None and p in before:
-                        watch.record(before[p], watched_as[p], st, listed=True)
+                    if tokens:
+                        twin = _watched_spelling(p)
+                        token = tokens.get(dirname(twin)) if twin is not None else None
+                        if token is not None:
+                            watch.record(token, twin, st, listed=True)
         stat = os.stat
         if attribute_or(stat, "_is_file_tracker_patch", False):
             stat = stat._original_func  # as `own_stat`, once for the lot

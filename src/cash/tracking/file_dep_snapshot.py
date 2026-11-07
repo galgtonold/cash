@@ -975,6 +975,42 @@ def stats_from_listings(paths: Iterable[str]) -> dict[str, os.stat_result]:
     return listing_stats(paths)
 
 
+#: Who is told of each listing `listing_stats` takes (`listings_told`):
+#: ``(before, after)``, innermost last.
+_LISTING_WATCHERS: list[tuple[Callable[[str], Any], Callable[[Any, dict[str, os.stat_result]], None]]] = []
+
+
+@contextlib.contextmanager
+def listings_told(before: Callable[[str], Any], after: Callable[[Any, dict[str, os.stat_result]], None]):
+    """Within the block, `listing_stats` calls ``before(directory)`` just
+    before it lists a directory, and ``after(told, entries)`` once it has,
+    with what ``before`` returned and every entry it found
+    (``{normcase(name): stat}``, links and junctions left out); with None
+    from ``before``, nothing more. The folder watch keeps a crowded
+    folder's listing whole this way (`file_watch.FileWatch.keep_listing`):
+    a cell asking for 100 more of its 13,000 files listed it again."""
+    _LISTING_WATCHERS.append((before, after))
+    try:
+        yield
+    finally:
+        _LISTING_WATCHERS.pop()
+
+
+def listing_begins(directory: str) -> Any:
+    """Tell whoever `listings_told` names that *directory* is about to be
+    listed; what they answer goes to `listing_ended` (None: nothing to
+    tell). Every listing of files whose stats are handed on calls it
+    first, before the directory is read."""
+    return _LISTING_WATCHERS[-1][0](directory) if _LISTING_WATCHERS else None
+
+
+def listing_ended(told: Any, entries: dict[str, os.stat_result]) -> None:
+    """Tell them every entry the listing `listing_begins` answered *told*
+    for found (``{normcase(name): stat}``, links and junctions left out)."""
+    if told is not None and _LISTING_WATCHERS:
+        _LISTING_WATCHERS[-1][1](told, entries)
+
+
 def listing_stats(paths: Iterable[str]) -> dict[str, os.stat_result]:
     """`stats_from_listings` on any system: what it takes on Windows.
 
@@ -992,24 +1028,33 @@ def listing_stats(paths: Iterable[str]) -> dict[str, os.stat_result]:
         if len(wanted) < LISTING_MIN_FILES:
             continue
         base = None
+        told = listing_begins(directory)
+        every: dict[str, os.stat_result] | None = {} if told is not None else None
         try:
             with untracked(), os.scandir(directory or ".") as entries:
                 for entry in entries:
-                    path = wanted.get(os.path.normcase(entry.name))
-                    if path is not None and not _links_elsewhere(entry):
-                        try:
-                            st = entry.stat()
-                            if not st.st_nlink:
-                                if base is None:
-                                    base = os.path.normcase(os.path.abspath(directory or "."))
-                                key = os.path.join(base, os.path.normcase(entry.name))
-                                if _links_of(entry.path, key) != 1:
-                                    continue  # stat-ed by itself
-                            found[path] = st
-                        except OSError:
-                            pass
+                    name = os.path.normcase(entry.name)
+                    path = wanted.get(name)
+                    if (path is None and every is None) or _links_elsewhere(entry):
+                        continue
+                    try:
+                        st = entry.stat()
+                    except OSError:
+                        continue
+                    if every is not None:
+                        every[name] = st
+                    if path is None:
+                        continue
+                    if not st.st_nlink:
+                        if base is None:
+                            base = os.path.normcase(os.path.abspath(directory or "."))
+                        if _links_of(entry.path, os.path.join(base, name)) != 1:
+                            continue  # stat-ed by itself
+                    found[path] = st
         except OSError:
-            continue
+            continue  # nothing kept of a listing cut short
+        if every is not None:
+            listing_ended(told, every)
     return found
 
 

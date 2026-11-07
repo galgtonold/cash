@@ -29,6 +29,11 @@ The rules that keep it safe:
 * A lost watch, a queue overflow, a folder whose path now names another
   folder (an ancestor renamed or re-linked: checked by a stat of each
   watched folder before each cell) drops every stat under it.
+* A folder's listing (Windows) is kept whole while the folder reports no
+  change (`FileWatch.keep_listing`), its watch armed before it was taken:
+  a later cell asking for other files of a crowded folder takes their
+  entries from it (`FileWatch.take_listed`), each kept as a stat by the
+  same rules, where it listed the folder again for each cell.
 * No stat is kept of a link, of a file with a second hard link (written
   through the other name, its folder reports nothing), or in a folder that
   cannot be watched: a network or FUSE file system, past the watch limit,
@@ -61,6 +66,10 @@ logger = logging.getLogger(__name__)
 #: At most this many folders are watched; past it, folders are stat-ed.
 DIR_LIMIT = 8192
 
+#: At most this many entries of folder listings are kept, all told
+#: (`FileWatch.keep_listing`); past it, a listing is not kept.
+LISTED_ENTRY_LIMIT = 500_000
+
 _S_IFMT = 0o170000
 _S_IFDIR = 0o040000
 _S_IFREG = 0o100000
@@ -68,10 +77,11 @@ _S_IFREG = 0o100000
 
 class _Dir:
     """One watched folder: the stats its watch vouches for (``records``),
-    the names it vouches are not there (``missing``), moved on by every
+    the names it vouches are not there (``missing``), its last listing
+    (``listing``: ``{normcase(name): stat}``, or None), moved on by every
     change it reports (``version``)."""
 
-    __slots__ = ("alive", "ident", "key", "linked", "listed", "missing", "path", "records", "version")
+    __slots__ = ("alive", "ident", "key", "linked", "listed", "listing", "missing", "path", "records", "version")
 
     def __init__(self, path: str, key: Any, ident: tuple[int, int]) -> None:
         self.path = path
@@ -82,6 +92,7 @@ class _Dir:
         self.missing: set[str] = set()
         #: Files found with a second link, by the version they were found at.
         self.linked: dict[str, int] = {}
+        self.listing: dict[str, os.stat_result] | None = None
         self.version = 0
         self.alive = True
 
@@ -128,6 +139,8 @@ class FileWatch:
         #: When the last drain began (``time.monotonic()``): a stat still
         #: current is as good as one taken then.
         self.confirmed_at = 0.0
+        #: How many listing entries the folders keep, all told.
+        self.listed_entries = 0
 
     # -- events ------------------------------------------------------------
 
@@ -176,6 +189,9 @@ class FileWatch:
             d.records = {}
             d.listed = set()
             d.missing = set()
+        if d.listing is not None:
+            self.listed_entries -= len(d.listing)
+            d.listing = None
         d.version += 1
         self.changes += 1
 
@@ -245,6 +261,15 @@ class FileWatch:
             return None
         folder = os.path.dirname(path)
         if not folder or folder == path:
+            return None
+        return self.before_listing(folder)
+
+    def before_listing(self, folder: str) -> tuple[_Dir, int] | None:
+        """Arm the watch on *folder*, if it can be watched, before it is
+        listed or a stat of a file in it is taken: the token `record` and
+        `keep_listing` keep what was found by. One for every file of a
+        folder listed at once, where each took one of its own."""
+        if not os.path.isabs(folder):
             return None
         d = self._dirs.get(folder)
         if d is None:
@@ -317,19 +342,60 @@ class FileWatch:
             d.missing.add(path)
             self._home[path] = d
 
+    def keep_listing(self, token: tuple[_Dir, int] | None, entries: dict[str, os.stat_result]) -> None:
+        """Keep *entries* (``{normcase(name): stat}``), a listing of the
+        folder taken after `before_listing` gave *token*, for as long as the
+        folder reports no change. Links and junctions are left out by the
+        caller: their entry's stat is that of a file elsewhere."""
+        if token is None:
+            return
+        d, version = token
+        with self._lock:
+            if not d.alive or d.version != version:
+                self._unkept("its folder changed while it was listed")
+                return
+            old = len(d.listing) if d.listing is not None else 0
+            if self.listed_entries - old + len(entries) > LISTED_ENTRY_LIMIT:
+                self._unkept("too many listed entries kept")
+                return
+            d.listing = entries
+            self.listed_entries += len(entries) - old
+
+    def take_listed(self, path: str) -> os.stat_result | None:
+        """The stat of *path* from its folder's listing kept since its folder
+        last reported a change (`keep_listing`), kept as *path*'s own stat
+        by `record`'s rules (a regular file with a single link, or a folder
+        whose own watch agrees); None when there is no such entry or it
+        is not kept. Ask after a `drain`, as for `current`."""
+        folder, name = os.path.split(path)
+        d = self._dirs.get(folder)
+        if d is None:
+            return None
+        version = d.version  # read first: a change after it clears the listing
+        listing = d.listing
+        if not listing:
+            return None
+        st = listing.get(os.path.normcase(name))
+        if st is None:
+            return None
+        self.record((d, version), path, st, listed=True)
+        return st if d.records.get(path) is st else None
+
     @staticmethod
     def _links(d: _Dir, version: int, path: str) -> int | None:
         """How many links the file at *path* in *d* has (None: no stat)."""
         if d.linked.get(path) == version:
             return 2
-        from .file_dep_snapshot import listed_links
+        from .file_dep_snapshot import listed_links, note_links
 
         if listed_links(path) == 1:
             return 1
         try:
-            nlink = own_stat(path).st_nlink
+            st = own_stat(path)
         except (OSError, ValueError):
             return None
+        note_links(path, st)  # for the folder's next listing too
+        nlink = st.st_nlink
         if nlink > 1:
             d.linked[path] = version
         return nlink
@@ -348,6 +414,7 @@ class FileWatch:
                 "watch limit reached": self._full,
                 "stats kept": sum(len(d.records) for d in self._dirs.values()),
                 "paths kept as not there": sum(len(d.missing) for d in self._dirs.values()),
+                "listing entries kept": self.listed_entries,
                 "folder changes taken": self.changes,
                 "stats not kept, by why": dict(self.unkept),
                 "reports": self._backend_report(),
