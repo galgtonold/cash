@@ -79,6 +79,7 @@ from ..background_threads import BackgroundThreads
 from ..cache_status import CacheStatus
 from ..compiled_source import statement_place
 from ..control_structures import contains_top_level_await, is_control_structure
+from ..plot_outputs import PLOT_FACTS
 from ..statement import ProcessResult
 from ..statement.capture import replay_outputs, show_unshown_output
 from ..statement.identity_holders import end_cell_reads
@@ -94,6 +95,7 @@ from .notifications import (
     opaque_call_rows,
     stale_notebook_rows,
 )
+from .plot_runs import PlotRuns, ServedStatement
 from .statement_source import statement_texts
 from .upstream_phase import UpstreamResolution
 
@@ -432,6 +434,12 @@ async def _drive_async(
         return done.value
 
 
+def _statement_code(source: str, node: ast.stmt) -> str | None:
+    """The keyed text of *node*, a statement of the cell *source*."""
+    texts = statement_texts(source, node)
+    return texts[0] if texts is not None else None
+
+
 def _builtin_trap(shell: Any):
     """The shell's builtin trap, which IPython enters around every cell it runs.
 
@@ -512,6 +520,7 @@ class CellExecutor:
             upstream_checker,
             control_structure_processor,
         )
+        self._plots = PlotRuns(shell, statement_processor, upstream_checker)
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -979,6 +988,17 @@ class CellExecutor:
         replay_outputs(rich=rich_outputs)
         return buffered_result_outputs
 
+    def _show_served(
+        self, item: ServedStatement, is_last: bool, all_metrics: list[ProcessResult], buffered: list
+    ) -> list:
+        """Show what a statement of a served plot run showed when it was
+        kept, part by part, as :meth:`_collect_ctrl_outputs` shows a run's."""
+        all_metrics.append(item.metrics)  # type: ignore[arg-type]
+        for n, (stdout, stderr, rich) in enumerate(item.parts):
+            replay_outputs(stdout, stderr)
+            buffered = self._flush_rich_outputs(list(rich), is_last and n == len(item.parts) - 1, buffered)
+        return buffered
+
     def _handle_regular_stmt_metrics(
         self,
         metrics: ProcessResult | None,
@@ -1147,111 +1167,145 @@ class CellExecutor:
         #: Each statement reached, with what to run it again.
         texts_by_index: dict[int, tuple[str, str | None, str | None, int]] = {}
 
-        for i, node in enumerate(tree.body):
-            if i in jump_runs:
-                plan = self._upstream_checker.plan_cell_run(
-                    tree.body[i : jump_runs[i]], raw_cell, dict(stmt_occurrence_counts)
-                )
-                planned = {i + k: m for k, m in (plan or {}).items()}
-            texts = statement_texts(cell.ipython.source if cell.ipython is not None else raw_cell, node)
-            if texts is None:
-                continue
-            stmt_code, stmt_display, stmt_exec_source = texts
-            if cell.ipython is not None:
-                stmt_display = cell.ipython.display_text(raw_cell, node) or stmt_display
-
-            occ = stmt_occurrence_counts.get(stmt_code, 0)
-            stmt_occurrence_counts[stmt_code] = occ + 1
-            texts_by_index[i] = (stmt_code, stmt_display, stmt_exec_source, occ)
-            if i in planned:
-                metric = planned.pop(i)
-                all_metrics.append(metric)
-                # What the statement showed when it ran, as a hit shows it.
-                replay_outputs(metric.pop("stdout", ""), metric.pop("stderr", ""))
-                buffered_result_outputs = self._flush_rich_outputs(
-                    metric.pop("rich_outputs", None) or [], i == len(tree.body) - 1, buffered_result_outputs
-                )
-                (skipped if metric.get("status") is CacheStatus.SKIPPED else restored).add(i)
-                continue
-            annotation = get_statement_annotations(raw_cell, node)
-            is_last = i == len(tree.body) - 1
-            unified_step = upstream_step_count + i + 1
-
-            t_badge_pre = _perf_counter()
-            self._badges.arm_progress(
-                all_metrics,
-                display_id=cell.badge_display_id,
-                step=unified_step,
-                total=total_steps_unified,
-                code=stmt_code,
-            )
-            badge_render_time += _perf_counter() - t_badge_pre
-
-            if is_control_structure(node):
-                steps = self._control_structure_steps(
-                    cell,
-                    i,
-                    stmt_code,
-                    occurrence_index=occ,
-                    is_last=is_last,
-                    buffered=buffered_result_outputs,
-                    awaitable=awaitable,
-                )
-            else:
-                steps = self._statement_steps(
-                    cell,
-                    stmt_code,
-                    annotation=annotation,
-                    display_code=stmt_display,
-                    exec_source=stmt_exec_source,
-                    occurrence_index=occ,
-                    is_last=is_last,
-                    written_later=written_later[i],
-                    buffered=buffered_result_outputs,
-                    first_line=node.lineno,
-                )
-            try:
-                buffered_result_outputs, render_time = yield from self._badged_steps(
-                    cell, node, steps, step=unified_step, total=total_steps_unified
-                )
-            except BaseException:
-                # What follows never ran; the upstream check must not credit it.
-                digest = exact_source_digest(raw_cell)
-                self.tracking_state.failed_cells[digest] = i
-                # What the statement changed before it raised was recorded
-                # against no lineage, so each name it may have changed no longer
-                # matches the run that made it: a re-run must rebuild it, and
-                # a cell below keeps it as the failed run left it.
-                left = _changed_by_a_failed_step(
-                    node, self.shell.user_ns, self._statement_processor.resolve_live_function_source
-                )
-                for name in left:
-                    self.tracking_state.lineage.discard(name)
-                self.tracking_state.failed_cell_names[digest] = frozenset(left)
-                # The plan skipped or restored statements by the version the
-                # whole cell ends with; a name a statement at or after this one
-                # writes holds a version a plain run never reached here.
-                owed, lost = _owed_by_skips(tree.body, skipped, i, restored, left)
-                if any(k not in texts_by_index for k in owed):
-                    owed, lost = [], lost | set().union(*(_stored_names(tree.body[k]) for k in owed))
-                if lost:
-                    self._drop_what_a_failed_run_left(lost, i)
-                for k in owed:
-                    code, display, exec_source, occurrence = texts_by_index[k]
-                    yield from self._statement_steps(
-                        cell,
-                        code,
-                        annotation=get_statement_annotations(raw_cell, tree.body[k]),
-                        display_code=display,
-                        exec_source=exec_source,
-                        occurrence_index=occurrence,
-                        is_last=False,
-                        written_later=frozenset(),
-                        buffered=[],
-                        first_line=tree.body[k].lineno,
+        #: Statements a kept plot run serves (`PlotRuns`).
+        served: dict[int, ServedStatement] = {}
+        source = cell.ipython.source if cell.ipython is not None else raw_cell
+        plots = self._plots
+        plots.begin_cell(cell)
+        try:
+            for i, node in enumerate(tree.body):
+                if i in jump_runs:
+                    plan = self._upstream_checker.plan_cell_run(
+                        tree.body[i : jump_runs[i]], raw_cell, dict(stmt_occurrence_counts)
                     )
-                raise
-            badge_render_time += render_time
+                    planned = {i + k: m for k, m in (plan or {}).items()}
+                texts = statement_texts(source, node)
+                if texts is None:
+                    plots.interrupt()
+                    continue
+                stmt_code, stmt_display, stmt_exec_source = texts
+                if cell.ipython is not None:
+                    stmt_display = cell.ipython.display_text(raw_cell, node) or stmt_display
+
+                occ = stmt_occurrence_counts.get(stmt_code, 0)
+                stmt_occurrence_counts[stmt_code] = occ + 1
+                texts_by_index[i] = (stmt_code, stmt_display, stmt_exec_source, occ)
+                if i in planned:
+                    plots.interrupt()
+                    metric = planned.pop(i)
+                    all_metrics.append(metric)
+                    # What the statement showed when it ran, as a hit shows it.
+                    replay_outputs(metric.pop("stdout", ""), metric.pop("stderr", ""))
+                    buffered_result_outputs = self._flush_rich_outputs(
+                        metric.pop("rich_outputs", None) or [], i == len(tree.body) - 1, buffered_result_outputs
+                    )
+                    (skipped if metric.get("status") is CacheStatus.SKIPPED else restored).add(i)
+                    continue
+                is_last = i == len(tree.body) - 1
+                if i not in served and not plots.recording:
+                    served = (
+                        plots.serve(
+                            i,
+                            occ,
+                            lambda k, i=i, code=stmt_code: code if k == i else _statement_code(source, tree.body[k]),
+                            tree.body,
+                            source,
+                            blocked=lambda k: k in planned or k in jump_runs,
+                        )
+                        or served
+                    )
+                if i in served:
+                    # What the plot run showed when it was kept, in place of running it.
+                    buffered_result_outputs = self._show_served(
+                        served.pop(i), is_last, all_metrics, buffered_result_outputs
+                    )
+                    continue
+                plots.before(i, occ)
+                rows_before = len(all_metrics)
+                annotation = get_statement_annotations(raw_cell, node)
+                unified_step = upstream_step_count + i + 1
+
+                t_badge_pre = _perf_counter()
+                self._badges.arm_progress(
+                    all_metrics,
+                    display_id=cell.badge_display_id,
+                    step=unified_step,
+                    total=total_steps_unified,
+                    code=stmt_code,
+                )
+                badge_render_time += _perf_counter() - t_badge_pre
+
+                if is_control_structure(node):
+                    steps = self._control_structure_steps(
+                        cell,
+                        i,
+                        stmt_code,
+                        occurrence_index=occ,
+                        is_last=is_last,
+                        buffered=buffered_result_outputs,
+                        awaitable=awaitable,
+                    )
+                else:
+                    steps = self._statement_steps(
+                        cell,
+                        stmt_code,
+                        annotation=annotation,
+                        display_code=stmt_display,
+                        exec_source=stmt_exec_source,
+                        occurrence_index=occ,
+                        is_last=is_last,
+                        written_later=written_later[i],
+                        buffered=buffered_result_outputs,
+                        first_line=node.lineno,
+                    )
+                try:
+                    buffered_result_outputs, render_time = yield from self._badged_steps(
+                        cell, node, steps, step=unified_step, total=total_steps_unified
+                    )
+                except BaseException:
+                    # What follows never ran; the upstream check must not credit it.
+                    digest = exact_source_digest(raw_cell)
+                    self.tracking_state.failed_cells[digest] = i
+                    # What the statement changed before it raised was recorded
+                    # against no lineage, so each name it may have changed no longer
+                    # matches the run that made it: a re-run must rebuild it, and
+                    # a cell below keeps it as the failed run left it.
+                    left = _changed_by_a_failed_step(
+                        node, self.shell.user_ns, self._statement_processor.resolve_live_function_source
+                    )
+                    for name in left:
+                        self.tracking_state.lineage.discard(name)
+                    self.tracking_state.failed_cell_names[digest] = frozenset(left)
+                    # The plan skipped or restored statements by the version the
+                    # whole cell ends with; a name a statement at or after this one
+                    # writes holds a version a plain run never reached here.
+                    owed, lost = _owed_by_skips(tree.body, skipped, i, restored, left)
+                    if any(k not in texts_by_index for k in owed):
+                        owed, lost = [], lost | set().union(*(_stored_names(tree.body[k]) for k in owed))
+                    if lost:
+                        self._drop_what_a_failed_run_left(lost, i)
+                    for k in owed:
+                        code, display, exec_source, occurrence = texts_by_index[k]
+                        yield from self._statement_steps(
+                            cell,
+                            code,
+                            annotation=get_statement_annotations(raw_cell, tree.body[k]),
+                            display_code=display,
+                            exec_source=exec_source,
+                            occurrence_index=occurrence,
+                            is_last=False,
+                            written_later=frozenset(),
+                            buffered=[],
+                            first_line=tree.body[k].lineno,
+                        )
+                    raise
+                badge_render_time += render_time
+                plots.after(i, stmt_code, stmt_display, all_metrics[rows_before:])
+
+            plots.end_cell(len(tree.body) - 1)
+        finally:
+            for row in all_metrics:
+                row.pop(PLOT_FACTS, None)
 
         return (all_metrics, buffered_result_outputs, badge_render_time)
 
