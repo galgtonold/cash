@@ -153,6 +153,9 @@ class UpstreamChecker:
         #: not hold and no cell id places, with the file's mtime then
         #: (``_unsaved_bindings``).
         self._unplaced_runs: list[tuple[frozenset[str], float | None]] = []
+        #: The cells (as ``normalise_source`` reads them) already warned
+        #: NOTEBOOK-CELL-UNPLACED for, so a cell says it once per text.
+        self._warned_unplaced: set[str] = set()
         #: Whether the last check found the cell among the notebook's and
         #: simulated the cells above it.
         self._simulated = False
@@ -206,6 +209,7 @@ class UpstreamChecker:
         self.vetter.forget_warnings()
         self._ran_unsaved.clear()
         self._unplaced_runs.clear()
+        self._warned_unplaced.clear()
         # A staleness verdict is proof about notebook A's file; carrying it
         # into notebook B (or a fresh %cash_on on the same one) would show a
         # warning about a file this session no longer even reads from, until
@@ -553,11 +557,44 @@ class UpstreamChecker:
             )
             return len(notebook_cells)
 
+        self._warn_unplaced(cell_code, cell_id, required_inputs)
+
         # DOWNSTREAM ADVANCEMENT FALLBACK (unsaved cell, no missing inputs)
         self._handle_downstream_advancement_fallback(cell_id, required_inputs, current_cell_outputs)
 
         invalidate_notebook_path_cache()
         return None
+
+    def _warn_unplaced(self, cell_code: str, cell_id: str | None, required_inputs: set[str]) -> None:
+        """Say NOTEBOOK-CELL-UNPLACED: the cell is not in the notebook cash
+        read, so the cells above it were not checked.
+
+        Only for a cell that reads a name of the notebook: one that reads
+        none has nothing above it to bring up to date. Once per cell text,
+        so a cell run again unchanged does not repeat it.
+        """
+        reads = sorted(n for n in required_inputs if n not in BUILTIN_NAMES and not n.startswith("_"))
+        if not reads:
+            return
+        text = normalise_source(cell_code)
+        if text in self._warned_unplaced:
+            return
+        self._warned_unplaced.add(text)
+        why = (
+            "the cell id the editor sent is not in it"
+            if cell_id
+            else "the editor sent no cell id and no saved cell has this text"
+        )
+        warn_diagnostic(
+            CashWarning,
+            "NOTEBOOK-CELL-UNPLACED",
+            f"cash could not find this cell in the saved notebook ({why}), so it did not check the "
+            f"cells above it: an edit above that has not run since does not reach "
+            f"{', '.join(reads[:3])}{', ...' if len(reads) > 3 else ''} here, as it would in a run "
+            "from the top.",
+            "save the notebook (Ctrl+S) and run the cell again.",
+            location=("<cash>", 0),
+        )
 
     def _load_notebook_and_find_cell(
         self,

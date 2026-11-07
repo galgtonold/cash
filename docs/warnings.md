@@ -1824,6 +1824,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-MEMO-UNREAD](#notebook-memo-unread) | notebook | a `functools.cache` memo the statement read holds more answers than cash checks, so it runs every time |
 | [NOTEBOOK-MEMO-SHARED](#notebook-memo-shared) | notebook | an answer the statement put into a `functools.cache` memo is held outside its outputs too, so it runs every time |
 | [NOTEBOOK-CELL-SYNTAX](#notebook-cell-syntax) | notebook | an earlier cell does not parse |
+| [NOTEBOOK-CELL-UNPLACED](#notebook-cell-unplaced) | notebook | the cell run is not in the saved notebook and no cell id places it, so the cells above it were not checked |
 | [NOTEBOOK-CHANGED-BELOW](#notebook-changed-below) | notebook | a cell re-run on its own reads a value rebuilt without the in-place change, or the new binding, a cell below made |
 | [NOTEBOOK-CLASS-KEPT](#notebook-class-kept) | notebook | a class's own state a cell changes could not be put back for a re-run, and another cell changes it too |
 | [NOTEBOOK-FAILED-CELL](#notebook-failed-cell) | notebook | a cell raised part way, and a name it changed is not what a plain run leaves |
@@ -1993,6 +1994,26 @@ longer invalidated when it changes.
 If it is not code, delete it or make it a markdown cell.
 
 **When it is safe to ignore.** When nothing below uses that cell.
+
+### NOTEBOOK-CELL-UNPLACED {#notebook-cell-unplaced}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._warn_unplaced @88641af4, cash/notebook/upstream/checker.py:UpstreamChecker._find_current_cell_index @d6e58b10 -->
+**What happened.** Before a cell runs, cash finds it among the notebook's
+cells, by the cell id the editor sends or, without one, by its text. It found
+neither: the cell is new or edited and not saved yet. A whitespace-only line,
+line endings and a trailing newline do not count as a difference. The message
+names the names the cell reads.
+
+**Why it matters.** cash did not check the cells above this one, so an edit
+above that has not run since does not reach it: the cell computes on the
+values in memory, not on what a run from the top gives it.
+
+**What to do.** Save the notebook (`Ctrl+S`) and run the cell again.
+
+**When it is safe to ignore.** When nothing above the cell changed since it
+last ran. It is shown once for each cell text.
 
 ### NOTEBOOK-CHANGED-BELOW {#notebook-changed-below}
 
