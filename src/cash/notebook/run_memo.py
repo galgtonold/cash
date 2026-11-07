@@ -106,6 +106,8 @@ def file_state_this_run() -> dict | None:
             stat={},
             since=time.monotonic(),
             watch=watch,
+            # This run's, until a write drops its stats (`_Held.unsure`).
+            token=object(),
         )
     return _FILE_STATE_THIS_RUN
 
@@ -157,7 +159,11 @@ def note_fresh_snapshot(snap: Mapping[str, Any], at: float | None = None) -> Non
 
 def _note_covered(watch: Any, snap: Mapping[str, Any]) -> None:
     covered = _COVERED_SNAPSHOTS
-    if any(known is snap and held.unsure() == [] for known, held, _cwd in covered):
+    # Found fresh again, with no folder of it reporting a change: the cover
+    # is the one kept. Its loose files (a second hard link each) were what
+    # the check just looked at; covering it again went through every path
+    # in Python, twice per statement over a read of 13,000 photos.
+    if any(known is snap and held.settled() for known, held, _cwd in covered):
         return
     held = _held_of(watch, snap)
     if held is None:
@@ -177,12 +183,15 @@ class _Held:
     vouches for (``loose``), and where the modules lie that files beside
     the code are checked in (`_CodePlaces`)."""
 
-    __slots__ = ("code", "loose", "parts")
+    __slots__ = ("code", "loose", "parts", "seen")
 
     def __init__(self, parts: list, loose: list[str], code: tuple | None) -> None:
         self.parts = parts
         self.loose = loose
         self.code = code
+        #: The run (``file_state_this_run()["token"]``) whose stats found
+        #: the loose paths as recorded, after the last `renew`.
+        self.seen: object | None = None
 
     def renew(self, fresh: tuple[list, list[str]]) -> None:
         """The paths `unsure` named were found as recorded just now: the
@@ -191,15 +200,25 @@ class _Held:
         parts, loose = fresh
         self.parts = [part for part in self.parts if part[0].alive and part[0].version == part[1]] + parts
         self.loose = loose
+        self.seen = None
 
-    def unsure(self) -> list[str] | None:
+    def settled(self) -> bool:
+        """Does the watch vouch for every folder as it did (`unsure` names
+        no path but the loose ones)?"""
+        if self.code is not None and _fds.code_places(self.code[0]) != self.code[1]:
+            return False
+        return not _fw.FileWatch.changed_in(self.parts)
+
+    def unsure(self, run: object | None = None) -> list[str] | None:
         """The snapshot's paths to check again: those in a folder that
-        reported a change since, and the loose ones; None for all of them."""
+        reported a change since, and the loose ones; None for all of them.
+        The loose ones only once in the run *run* (`seen`): its stats, which
+        found them as recorded, are the ones a check would take again."""
         if self.code is not None and _fds.code_places(self.code[0]) != self.code[1]:
             return None
         changed = _fw.FileWatch.changed_in(self.parts)
         if not changed:
-            return list(self.loose)
+            return [] if run is not None and self.seen is run else list(self.loose)
         return list(dict.fromkeys(changed + self.loose)) if self.loose else list(dict.fromkeys(changed))
 
 
@@ -973,19 +992,24 @@ def stat_keys_as_recorded(recorded: Mapping[str, tuple[int, int, int] | None]) -
     if held is None and None in recorded.values():
         return False
     if held is not None:
-        unsure = held.unsure()
+        # Each cached cell below a read carries an equal dict, held once:
+        # its loose files (a second hard link each) were looked over, and
+        # the watch asked of each, once per cached cell before every cell.
+        token = run.get("token") if run is not None else None
+        unsure = held.unsure(token)
         if unsure is not None:
             if not unsure:
                 return True
             part = {p: recorded[p] for p in unsure}
             if part.items() <= stat_keys_this_run(part).items():
                 held.renew(_held_keys_parts(watch, part))
+                held.seen = token
                 return True
             return False
     if not recorded.items() <= stat_keys_this_run(recorded).items():
         return False
     if watch is not None:
-        _note_held_keys(watch, recorded)
+        _note_held_keys(watch, recorded, run.get("token") if run is not None else None)
     return True
 
 
@@ -1062,17 +1086,65 @@ def _held_keys_parts(watch: Any, recorded: Mapping[str, Any]) -> tuple[list, lis
     return parts, loose + unvouched
 
 
-def _note_held_keys(watch: Any, recorded: Mapping[str, Any]) -> None:
+#: Stat-key dicts `_note_held_keys` found the watch could not vouch for,
+#: across runs: ``[copy, working directory, watch, runs to pass, runs
+#: passed after the last refusal, run last asked in]``, newest last.
+_REFUSED_KEYS: list[list[Any]] = []
+
+#: How many refused dicts `_REFUSED_KEYS` keeps.
+_REFUSED_KEYS_KEPT = 8
+
+
+def _refused_keys_entry(watch: Any, recorded: Mapping[str, Any], cwd: str) -> list[Any] | None:
+    n = len(recorded)
+    for entry in _REFUSED_KEYS:
+        copy = entry[0]
+        if entry[2] is watch and entry[1] == cwd and len(copy) == n and copy == recorded:
+            return entry
+    return None
+
+
+def _note_held_keys(watch: Any, recorded: Mapping[str, Any], token: object | None = None) -> None:
+    """Hold the verdict that *recorded* is as recorded across runs
+    (`_HELD_KEYS`), when the watch vouches for most of its files.
+
+    A dict the watch does not vouch for (files with a second hard link, as
+    a dataset cache leaves them) is not looked over again in the runs that
+    follow its refusal: one more after the first, then two, four, up to
+    `_REFUSED_OFFERS_PASSED`; nor again in the run that refused it, when
+    the snapshot of each cell below the read carries an equal dict.
+    Looking at every path only to refuse it cost a pass in Python over
+    each file, per cached cell, before every cell (1.2 s of a cell below
+    13,000 photos on Windows). Passing over it changes no answer: the
+    check that is not held is made in full each time."""
     try:
         cwd = os.getcwd()
     except OSError:
         return
+    epoch = _fds.HASH_EPOCH
+    refused = _refused_keys_entry(watch, recorded, cwd) if _REFUSED_KEYS else None
+    if refused is not None:
+        if refused[5] == epoch:
+            return
+        refused[5] = epoch
+        if refused[3] > 0:
+            refused[3] -= 1
+            return
     parts, loose = _held_keys_parts(watch, recorded)
     if 2 * len(loose) > len(recorded):
+        if refused is None:
+            _REFUSED_KEYS[:] = _REFUSED_KEYS[-(_REFUSED_KEYS_KEPT - 1) :] + [[dict(recorded), cwd, watch, 1, 1, epoch]]
+        else:
+            refused[4] = min(2 * refused[4], _REFUSED_OFFERS_PASSED)
+            refused[3] = refused[4]
         return
+    if refused is not None:
+        _REFUSED_KEYS.remove(refused)
     copy = dict(recorded)
     kept = [entry for entry in _HELD_KEYS if not (len(entry[0]) == len(copy) and entry[0] == copy)]
-    kept.append((copy, _Held(parts, loose, None), cwd, watch, recorded))
+    held = _Held(parts, loose, None)
+    held.seen = token  # every file was found as recorded with this run's stats
+    kept.append((copy, held, cwd, watch, recorded))
     total = 0
     for at in range(len(kept) - 1, -1, -1):
         total += len(kept[at][0])

@@ -197,6 +197,15 @@ def _present_file_keys(paths: set[str]) -> tuple[frozenset[str], dict[str, tuple
             present = frozenset(keys)
         HeldPaths.renew(entry, (present, keys), stats, unsure)
         return present, keys
+    # Asked again of an equal set by each statement below the read that runs
+    # in the simulation: worked out once per cell run, from the run's stats.
+    run = file_state_this_run()
+    answers = run.setdefault("present_file_keys", []) if run is not None and len(paths) >= _HOLD_MIN_FILES else None
+    if answers:
+        n = len(paths)
+        for asked, answer in answers:
+            if len(asked) == n and asked == paths:
+                return answer
     current = stats_this_run(paths)
     keys = {}
     # What `HeldPaths.keep` takes, only when it is offered the set.
@@ -217,6 +226,8 @@ def _present_file_keys(paths: set[str]) -> tuple[frozenset[str], dict[str, tuple
     present = frozenset(keys)
     if stats is not None:
         _HELD_FILE_KEYS.keep(paths, (present, keys), stats)
+    if answers is not None:
+        answers[:] = [*answers[-3:], (frozenset(paths), (present, keys))]
     return present, keys
 
 
@@ -1440,7 +1451,6 @@ class StatementLineage:
 
         stmt_file_deps = lookup.file_deps
         file_deps_to_check.update(lookup.files_to_check)
-        file_hash_component = self._file_hash_component(file_deps_to_check, stmt_file_deps)
         own_reads = self.tracking_state.statement_file_reads.get(cache_key)
         if own_reads is not None:
             # The runtime hashed the files THIS statement read -- not the
@@ -1450,6 +1460,14 @@ class StatementLineage:
             file_hash_component = file_component_this_run(
                 *own_reads, self.tracking_state.statement_probes.get(cache_key)
             )
+            # The inherited files' keys still go to the outcome; their
+            # component, which this one replaces, is not built: below a
+            # read of 13,000 photos each statement that ran built it anew
+            # before every cell, 2 s on Windows, for nothing.
+            if file_deps_to_check:
+                stmt_file_deps.update(_present_file_keys(file_deps_to_check)[1])
+        else:
+            file_hash_component = self._file_hash_component(file_deps_to_check, stmt_file_deps)
 
         source_hash = statement_source_hash(stmt_code)
         no_cache_values = self.tracking_state.no_cache_values.get(
