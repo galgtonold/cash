@@ -75,3 +75,22 @@ def test_a_cell_above_edited_is_still_simulated_again(cash_magics):
 
     assert cash_magics.shell.user_ns["first"] == 5
     assert cash_magics.shell.user_ns["second"] == 4
+
+
+def test_a_record_a_simulation_looked_for_still_counts(monkeypatch):
+    """A record under inputs a simulation asked for and found none under
+    changes what that snapshot read; past the bound, every one counts."""
+    import cash.notebook.tracking_state as tracking_state
+    from cash.notebook.tracking_state import TrackingState
+
+    state = TrackingState()
+    asked = ("h", (("", "k1"),))
+    state.note_share_record_miss(asked)
+    assert state.share_record_was_missed(asked)
+    assert not state.share_record_was_missed(asked), "a miss counts once"
+    assert not state.share_record_was_missed(("h", (("", "k2"),)))
+
+    monkeypatch.setattr(tracking_state, "SHARE_RECORD_MISSES_MAX", 2)
+    for n in range(3):
+        state.note_share_record_miss(("h", (("", f"m{n}"),)))
+    assert state.share_record_was_missed(("other", ()))

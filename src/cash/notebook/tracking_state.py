@@ -24,6 +24,10 @@ __all__ = ["ENTRY_HISTORY", "TrackingState", "outcome_key"]
 #: it starts over (``MutationClassifier.start_rewatch``).
 ENTRY_HISTORY = 16
 
+#: Most keys ``TrackingState.share_record_misses`` holds before every new
+#: share record counts as a change.
+SHARE_RECORD_MISSES_MAX = 4096
+
 
 def outcome_key(code: str, occurrence_index: int = 0) -> str:
     """Where `TrackingState.control_outcomes` files the structure *code*: by
@@ -540,6 +544,15 @@ class TrackingState:
     # statement's under its cache key (``{"": key}``), which holds them.
     # W: StatementRecords. R: ControlSimulation.
     share_edge_records_at: dict[tuple[str, tuple], frozenset[tuple[str, str]]] = field(default_factory=dict)
+    # The keys of ``share_edge_records_at`` a simulation looked up and found
+    # no record under: a snapshot simulated then took the record by text,
+    # and a run that keeps one under such a key changes what it reads. A
+    # run under a key no simulation asked for changes nothing a snapshot
+    # read. Past ``SHARE_RECORD_MISSES_MAX`` keys, every new record counts
+    # (``share_record_misses_overflowed``).
+    # W: StatementLineage.share_record_at. R: StatementRecords.note_share_edges.
+    share_record_misses: set[tuple[str, tuple]] = field(default_factory=set)
+    share_record_misses_overflowed: bool = False
     # The source hash of each change a run made to ``share_edge_records``,
     # in order: its length is the generation a simulation snapshot keeps. A
     # snapshot taken before a record of one of its statements changed is
@@ -590,6 +603,28 @@ class TrackingState:
         with *source_hash* (``share_edge_changes``)."""
         self.share_edge_last_change[source_hash] = len(self.share_edge_changes)
         self.share_edge_changes.append(source_hash)
+
+    def note_share_record_miss(self, key: tuple[str, tuple]) -> None:
+        """Record that a simulation found no record under *key*
+        (``share_record_misses``)."""
+        if self.share_record_misses_overflowed:
+            return
+        misses = self.share_record_misses
+        if len(misses) >= SHARE_RECORD_MISSES_MAX and key not in misses:
+            misses.clear()
+            self.share_record_misses_overflowed = True
+            return
+        misses.add(key)
+
+    def share_record_was_missed(self, key: tuple[str, tuple]) -> bool:
+        """Whether a simulation may have looked for a record under *key*
+        and found none (``share_record_misses``); forgets it."""
+        if self.share_record_misses_overflowed:
+            return True
+        if key in self.share_record_misses:
+            self.share_record_misses.discard(key)
+            return True
+        return False
 
     def share_edges_changed_since(self, generation: int, source_hashes: Iterable[str]) -> bool:
         """Whether the record of one of *source_hashes* changed at or after

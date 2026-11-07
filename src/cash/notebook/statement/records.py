@@ -384,15 +384,17 @@ class StatementRecords:
                     state.note_share_edge_change(evicted[0])
                 at[key] = record
                 # A simulation reads the record under its inputs, else the
-                # one by text. A record under inputs no run had read before
-                # answers what the record by text answered: it changes what
-                # a simulation reads only where it differs from that one,
-                # which is noted below as it replaces it. Noted here too,
-                # every snapshot holding the statement's text was simulated
+                # one by text. A new record from a cell's own run changes
+                # what a snapshot read only where a simulation looked for
+                # it and found none. Noted for each one, the snapshot of
+                # every cell holding the statement's text was simulated
                 # again on the next check: a second ``DataLoader`` built
                 # with the lines of the first re-simulated every cell
-                # between the two, before a one-line cell, on a straight run.
-                if held is not None:
+                # between the two, before a one-line cell, on a straight
+                # run from the top. A re-run by the upstream repair (no
+                # running cell) is noted still: the snapshots of the cells
+                # it re-ran were simulated before it.
+                if held is not None or state.running_cell is None or state.share_record_was_missed(key):
                     state.note_share_edge_change(source_hash)
         known = state.share_edge_records
         had = known.get(source_hash)
