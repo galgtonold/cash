@@ -12,6 +12,7 @@ import ast
 import functools
 import inspect
 import logging
+import sys
 import types
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -1290,7 +1291,10 @@ def warn_stale_randomness(
         )
 
 
-_COMPOUND = (ast.For, ast.AsyncFor, ast.While, ast.If, ast.With, ast.AsyncWith, ast.Try, ast.TryStar)
+# ``try ... except*`` is its own node from 3.11 on.
+_COMPOUND: tuple[type[ast.stmt], ...] = (ast.For, ast.AsyncFor, ast.While, ast.If, ast.With, ast.AsyncWith, ast.Try) + (
+    (ast.TryStar,) if sys.version_info >= (3, 11) else ()
+)
 
 
 def _warned_as_a_part(code: str, lineno: int, message: str, detector: RandomnessDetector) -> bool:
