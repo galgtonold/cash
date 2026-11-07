@@ -71,7 +71,7 @@ class _Dir:
     the names it vouches are not there (``missing``), moved on by every
     change it reports (``version``)."""
 
-    __slots__ = ("alive", "ident", "key", "listed", "missing", "path", "records", "version")
+    __slots__ = ("alive", "ident", "key", "linked", "listed", "missing", "path", "records", "version")
 
     def __init__(self, path: str, key: Any, ident: tuple[int, int]) -> None:
         self.path = path
@@ -80,6 +80,8 @@ class _Dir:
         self.records: dict[str, os.stat_result] = {}
         self.listed: set[str] = set()
         self.missing: set[str] = set()
+        #: Files found with a second link, by the version they were found at.
+        self.linked: dict[str, int] = {}
         self.version = 0
         self.alive = True
 
@@ -262,7 +264,14 @@ class FileWatch:
         d, version = token
         kind = st.st_mode & _S_IFMT
         if kind == _S_IFREG:
-            if st.st_nlink > 1:
+            nlink = st.st_nlink
+            if not nlink:
+                # A Windows listing gives no link count (0): one stat says,
+                # remembered while the folder reports no change. Kept as a
+                # single link, an edit through a link in a folder the watch
+                # does not see went unseen.
+                nlink = self._links(d, version, path)
+            if nlink is None or nlink > 1:
                 self._unkept("a second hard link")
                 return
         elif kind != _S_IFDIR:
@@ -307,6 +316,19 @@ class FileWatch:
             d.listed.discard(path)
             d.missing.add(path)
             self._home[path] = d
+
+    @staticmethod
+    def _links(d: _Dir, version: int, path: str) -> int | None:
+        """How many links the file at *path* in *d* has (None: no stat)."""
+        if d.linked.get(path) == version:
+            return 2
+        try:
+            nlink = own_stat(path).st_nlink
+        except (OSError, ValueError):
+            return None
+        if nlink > 1:
+            d.linked[path] = version
+        return nlink
 
     def _unkept(self, why: str) -> None:
         self.unkept[why] = self.unkept.get(why, 0) + 1
