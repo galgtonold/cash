@@ -35,31 +35,31 @@ MAKE = (
 )
 
 #: Cells run after ``MAKE``; whether the identity check refuses ``df``;
-#: how often the sessions column is read: after the change (before it, the
-#: reading ``MAKE``'s check kept answers), and where an ``id()`` was put,
-#: once more for the ids of its containers when the next statement's check,
-#: answered by the memo, looks for the object (`identity_holders._nodes_read`).
+#: how often the sessions column is read: once after the change (before it,
+#: the reading ``MAKE``'s check kept answers). Where an ``id()`` was put, the
+#: value refuses on its own, and the share check's retry with anchors, which
+#: would check the same value, is not asked.
 CHANGES = {
     "an id appended through the frame": (
         ["df['k1'] = 1\ndf['actions'][5].append(('c', hex(id(p))))\ndf['k2'] = 2"],
         True,
-        2,
+        1,
     ),
     "an id appended through the list it was built from": (
         ["df['k1'] = 1\nrecs[5][1].append(('c', str(id(p))))\ndf['k2'] = 2"],
         True,
-        2,
+        1,
     ),
-    "an id written over a record in place": (["df['k1'] = 1\nrecs[3][1][1] = ('c', id(p))\ndf['k2'] = 2"], True, 2),
+    "an id written over a record in place": (["df['k1'] = 1\nrecs[3][1][1] = ('c', id(p))\ndf['k2'] = 2"], True, 1),
     "a new alias in a later statement": (
         ["df['k1'] = 1\nalias = df['actions'][3]\nalias.append(('c', id(p)))\ndf['k2'] = 2"],
         True,
-        2,
+        1,
     ),
     "a new alias in a later cell": (
         ["df['k1'] = 1", "alias = df['actions'][3]\nalias.append(('c', id(p)))\ndf['k2'] = 2"],
         True,
-        2,
+        1,
     ),
     "a holder dropped": (["df['k1'] = 1\ndel recs\ndf['k2'] = 2\ndf['k3'] = 3"], False, 0),
     # The very records again, in the very list: nothing to read again.
