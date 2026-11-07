@@ -1290,6 +1290,44 @@ def warn_stale_randomness(
         )
 
 
+_COMPOUND = (ast.For, ast.AsyncFor, ast.While, ast.If, ast.With, ast.AsyncWith, ast.Try, ast.TryStar)
+
+
+def _warned_as_a_part(code: str, lineno: int, message: str, detector: RandomnessDetector) -> bool:
+    """Whether the draw at *lineno* of the structure *code* was already
+    warned about as a statement of its body.
+
+    A loop runs its first passes one statement at a time and may run the rest
+    as one unit; each body statement warned on its own pass (``ast.unparse``
+    of it, its lines counted from 1), and the unit would warn again about the
+    same draw at the line it holds in the loop. The draw is shown once.
+    """
+    tree = parse_cached(code)
+    if tree is None or len(tree.body) != 1 or not isinstance(tree.body[0], _COMPOUND):
+        return False
+    prefix = f"at line {lineno}."
+    if prefix not in message:
+        return False
+    node: ast.stmt = tree.body[0]
+    while True:
+        inner = None
+        for field in ("body", "orelse", "finalbody", "handlers"):
+            for child in getattr(node, field, ()):
+                parts = child.body if isinstance(child, ast.ExceptHandler) else [child]
+                for part in parts:
+                    if part.lineno <= lineno <= (part.end_lineno or part.lineno):
+                        inner = part
+        if inner is None:
+            return False
+        line = lineno - inner.lineno + 1
+        relative = message.replace(prefix, f"at line {line}.", 1)
+        if (ast.unparse(inner), relative) in detector._warned:
+            return True
+        if not isinstance(inner, _COMPOUND):
+            return False
+        node = inner
+
+
 def check_and_warn_randomness(
     code: str, detector: RandomnessDetector, suppress_warning: bool = False
 ) -> tuple[list[RandomnessCallInfo], bool]:
@@ -1313,6 +1351,8 @@ def check_and_warn_randomness(
     if not suppress_warning and warnings_list:
         for call, warning_msg in zip(unseeded_calls, warnings_list):
             if not detector.mark_warned(code, warning_msg):
+                continue
+            if _warned_as_a_part(code, call.lineno, warning_msg, detector):
                 continue
             # ``code=`` by name: see ``warn_stale_randomness``.
             warn_diagnostic(
