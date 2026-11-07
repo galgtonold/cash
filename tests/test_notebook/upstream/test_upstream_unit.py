@@ -243,6 +243,35 @@ class TestUpstreamFindCellIndex:
         assert "a comment is enough" in str(raised.value)
         assert "IPython to 8.3" in str(raised.value)
 
+    # IPython runs the cell with each whitespace-only line emptied and a
+    # trailing newline; the saved file keeps the editor's text.
+    SAVED = "def f():\n    a = 1\n    \n\t\n    return a\n\nf()"
+    RAN = "def f():\n    a = 1\n\n\n    return a\n\nf()\n"
+
+    def _checker(self):
+        mock_shell = MagicMock()
+        mock_shell.user_ns = {}
+        return UpstreamChecker(mock_shell)
+
+    def test_a_cell_ipython_ran_with_its_blank_lines_emptied_is_found(self):
+        cells = ["x = 1", self.SAVED, "z = 3"]
+        assert self._checker()._find_current_cell_index(self.RAN, cells) == 1
+        crlf = self.SAVED.replace("\n", "\r\n") + "\r\n"
+        assert self._checker()._find_current_cell_index(self.RAN, ["x = 1", crlf]) == 1
+
+    def test_a_cell_differing_on_a_line_with_code_is_not_found(self):
+        # trailing spaces after code are kept by IPython: a different text
+        cells = ["x = 1", self.SAVED.replace("a = 1", "a = 1  ")]
+        assert self._checker()._find_current_cell_index(self.RAN, cells) is None
+        assert self._checker()._find_current_cell_index(self.RAN.replace("a = 1", "a = 2"), [self.SAVED]) is None
+
+    def test_identical_cells_with_blank_lines_of_spaces_stay_ambiguous(self):
+        from cash.exceptions import AmbiguousCellError
+
+        cells = [self.SAVED, "x = 1", self.SAVED.replace("    \n", "  \n")]
+        with pytest.raises(AmbiguousCellError, match="code cells 1, 3"):
+            self._checker()._find_current_cell_index(self.RAN, cells)
+
 
 class TestForwardProbePopulatesState:
     """Verify eliminate_broken_vars_via_current_cell_probe injects

@@ -222,9 +222,15 @@ class UpstreamChecker:
         """Find the index of the current cell in the notebook.
 
         Uses a chain of matching strategies: ID match → exact content →
-        normalized newlines → stripped whitespace.  Returns the first
-        unambiguous match, or raises ``AmbiguousCellError`` when multiple
-        cells share the same content and no cell ID is available.
+        normalized newlines → stripped whitespace → the text IPython runs.
+        Returns the first unambiguous match, or raises ``AmbiguousCellError``
+        when multiple cells share the same content and no cell ID is available.
+
+        The last step compares the cells as ``normalise_source`` reads them:
+        IPython empties every whitespace-only line before it runs a cell,
+        while the saved file keeps the indentation an editor leaves on a
+        blank line in a block. Both texts run as the same code, so this
+        finds the cell without guessing between texts that differ.
         """
         # Strategy 1: Exact cell-ID match (available since IPython 8.3)
         if cell_id and cells_with_ids:
@@ -249,6 +255,7 @@ class UpstreamChecker:
             lambda cell: cell == cell_code,
             lambda cell: cell.replace("\r\n", "\n") == cell_code.replace("\r\n", "\n"),
             lambda cell: cell.strip() == cell_code.strip(),
+            lambda cell, ran=normalise_source(cell_code): normalise_source(cell) == ran,
         ]
         for matcher in content_matchers:
             matches = [i for i, cell in enumerate(notebook_cells) if matcher(cell)]
