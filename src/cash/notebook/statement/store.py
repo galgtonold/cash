@@ -560,12 +560,23 @@ class StatementStore:
         what it read (`_RecordsAsRun`), when it is not stored: what they
         inherit from its outputs is then taken once, at the first store
         below, not again at each. Called only when no file it read moved
-        while it ran, as far as its check (`inputs_moved`) looked."""
+        while it ran, as far as its check (`inputs_moved`) looked.
+
+        Also when it read no file itself but its inputs were built from
+        files: ``indices, patches = zip(*sliding_window(img))`` is not
+        stored, and ``indices = np.array(indices)`` below, which rebinds
+        the input it would follow back (`_records_through_inputs`), found
+        no records and took a stat of each of the 19,000 files again."""
         self.tracking_state.records_as_run.pop(run.cache_key, None)
-        if not (execution.accessed_files or execution.accessed_remote or execution.probes):
+        if not (execution.accessed_files or execution.accessed_remote or execution.probes or self._inherits(run)):
             return
         all_file_deps, inherited = self._inherit(run, execution)
         self._note_as_run(run, execution, all_file_deps, inherited)
+
+    def _inherits(self, run: StatementRun) -> bool:
+        """Was an input of *run* built from files?"""
+        file_deps = self.tracking_state.executed_file_deps
+        return any(file_deps.get(name) for name in run.inputs)
 
     def _inherit(self, run: StatementRun, execution: StatementExecution) -> tuple[set[str], _InheritedRecords]:
         """The files *run*'s value was built from, read or inherited, and

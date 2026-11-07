@@ -225,3 +225,27 @@ def test_a_statement_too_cheap_to_store_below_takes_no_stat_of_the_files(cash_ma
     )
     assert str(photos / "p0123.txt").replace("\\", "/") in records
     assert snapshot_is_fresh(records)[0]
+
+
+def test_a_store_rebinding_an_input_built_from_the_files_takes_their_records(cash_magics, photos, store_stats):
+    """``indices = np.array(indices)`` below ``indices, patches = zip(...)``,
+    which read no file itself and is not stored: it found no records of the
+    files ``indices`` was built from, its input rebound, and took a stat of
+    each again where the store above it in the cell took none."""
+    cells = [
+        *CELLS[:2],
+        "idx = [len(x) for x in X]  # @cash:no-cache",
+        f"a = ({WAIT}, [x[:3] for x in X])[1]",
+        f"idx = ({WAIT}, [i + 1 for i in idx])[1]",
+    ]
+    for cell in cells[:4]:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    store_stats()
+
+    run_cash_cell(cash_magics, cells[4], cells=cells)
+    assert store_stats() <= FILES // 4, "the store rebinding its input stat'ed the files again"
+    assert cash_magics.shell.user_ns["idx"] == [len(f"photo {i:04d}") + 1 for i in range(FILES)]
+    backend = cash_magics._cash_instance.backend
+    records = entry_file_records(backend.peek_metadata(cash_magics.tracking_state.variable_sources["idx"]), backend)
+    assert str(photos / "p0123.txt").replace("\\", "/") in records
+    assert snapshot_is_fresh(records)[0]
