@@ -374,11 +374,26 @@ class StatementRecords:
         if entry is not None:
             at = state.share_edge_records_at
             key = (source_hash, tuple(sorted(entry.items())))
-            if at.get(key) != record:
-                if key not in at and len(at) >= self._SHARE_RECORDS_AT_MAX:
-                    at.pop(next(iter(at)))
+            held = at.get(key)
+            if held != record:
+                if held is None and len(at) >= self._SHARE_RECORDS_AT_MAX:
+                    # A simulation of the statement it was kept for reads
+                    # the record by text from now on.
+                    evicted = next(iter(at))
+                    del at[evicted]
+                    state.note_share_edge_change(evicted[0])
                 at[key] = record
-                state.note_share_edge_change(source_hash)
+                # A simulation reads the record under its inputs, else the
+                # one by text. A record under inputs no run had read before
+                # answers what the record by text answered: it changes what
+                # a simulation reads only where it differs from that one,
+                # which is noted below as it replaces it. Noted here too,
+                # every snapshot holding the statement's text was simulated
+                # again on the next check: a second ``DataLoader`` built
+                # with the lines of the first re-simulated every cell
+                # between the two, before a one-line cell, on a straight run.
+                if held is not None:
+                    state.note_share_edge_change(source_hash)
         known = state.share_edge_records
         had = known.get(source_hash)
         if had == record:
