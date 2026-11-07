@@ -360,6 +360,7 @@ class ControlSimulation:
     def _input_hashes(self, stmt_code: str, virtual_lineage: dict[str, str]) -> tuple[set[str], dict[str, str]]:
         """What *stmt_code* reads, and the lineage each of those names has here."""
         inputs, _ = CodeAnalyzer.analyze_code_block(stmt_code)
+        self.statements.read_as_last_run(stmt_code, inputs, virtual_lineage)
         input_hashes = {}
         for inp in inputs:
             if inp in virtual_lineage:
