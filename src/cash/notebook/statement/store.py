@@ -115,6 +115,79 @@ def _snapshot_with_inherited(
     return snapshot
 
 
+class _RecordsAsRun:
+    """The file records a statement that ran makes of what it read, taken
+    once, when first asked for (`snapshot`): from the stats and digests it
+    took as it read its files and as it ended (*known*, *checked*), the
+    files it inherited as its inputs' producers recorded them.
+
+    What its entry stores, and, kept for the session by its cache key
+    (``TrackingState.records_as_run``), what a statement below takes over
+    when the entry holds none: refused, too cheap, or not written. Taken
+    again at each store below, each one stat'ed every file the value was
+    built from -- below a read of 13,000 photos, 42,000 stats per stored
+    statement -- and recorded the files as they were then, not as read.
+
+    Once an entry below holds a copy of exactly these records where a
+    restart finds it (`held_by`), the statements further below refer to
+    that entry's records instead of copying them again."""
+
+    __slots__ = ("_args", "_held", "_refs", "_snapshot", "key")
+
+    def __init__(
+        self,
+        key: str,
+        file_dependencies: set[str],
+        accessed_remote: set[str],
+        inherited: _InheritedRecords | None,
+        known: dict[str, tuple[Any, ...]] | None,
+        probes: dict[str, str] | None,
+        checked: Mapping[str, Any] | None,
+    ) -> None:
+        self.key = key
+        self._args = (
+            file_dependencies,
+            accessed_remote,
+            inherited.copied if inherited is not None else None,
+            known,
+            probes,
+            checked,
+            inherited.referred if inherited is not None else (),
+        )
+        self._refs = list(inherited.refs.items()) if inherited is not None else []
+        self._snapshot: dict[str, dict] | None = None
+        self._held: tuple[str, str] | None = None
+
+    def snapshot(self) -> dict[str, dict]:
+        """The records, as made (`_snapshot_with_inherited`), but for those
+        of the entries it refers to."""
+        if self._snapshot is None:
+            deps, remote, copied, known, probes, checked, referred = self._args
+            self._snapshot = _snapshot_with_inherited(deps, remote, copied, known, probes, checked, referred=referred)
+            self._args = None
+        return self._snapshot
+
+    def held_by(self, key: str, token: str) -> None:
+        """The entry *key* stores these records as its own, named *token*."""
+        self._held = (key, token)
+
+    def records(self, backend: Any) -> list[Records]:
+        """Every record, its own and those of the entries it refers to, or
+        [] when a reference no longer resolves. Its own carry no token, so a
+        statement below copies them, unless an entry holds them (`held_by`):
+        then they are that entry's, which a statement below refers to while
+        a restart finds them there (`_InheritedRecords.take`)."""
+        own = self.snapshot()
+        key, token = self._held or (self.key, "")
+        found = [Records(key, token, own, frozenset(own))] if own else []
+        for token, key in self._refs:
+            referred = referred_records(backend, key, token)
+            if referred is None:
+                return []
+            found.append(referred)
+        return found
+
+
 class _InheritedRecords:
     """The file records a statement takes over from its inputs' producers
     (`StatementStore.save`): by reference to the producer's entry
@@ -122,12 +195,14 @@ class _InheritedRecords:
     them and that entry holds them where a restart finds them (*durable*), or
     else copied (``copied``), the path's first record kept."""
 
-    __slots__ = ("_durable", "copied", "referred", "refs")
+    __slots__ = ("_durable", "copied", "referred", "refs", "unheld")
 
     def __init__(self, durable: Callable[[str, str], bool] = lambda key, token: True) -> None:
         self.refs: dict[str, str] = {}  # token -> key, in the order taken
         self.referred: set[str] = set()
         self.copied: dict[str, dict] = {}
+        #: Records no entry holds (`_RecordsAsRun`), copied whole.
+        self.unheld: list[Records] = []
         self._durable = durable
 
     def take(self, records: Records, files: set[str], direct: set[str]) -> None:
@@ -143,6 +218,8 @@ class _InheritedRecords:
             return
         copied = self.copied
         referred = self.referred
+        if not records.token and paths <= files and paths.isdisjoint(direct) and paths.isdisjoint(referred):
+            self.unheld.append(records)
         for path, recorded in records.records.items():
             if path in files and path not in direct and path not in referred:
                 copied.setdefault(path, recorded)
@@ -384,10 +461,40 @@ class StatementStore:
         """
         if attribute_or(execution.result, "skipped", False):
             return None
+        # What this key recorded as it ran before is not what it read now.
+        self.tracking_state.records_as_run.pop(run.cache_key, None)
         if self.inputs_moved(run, execution):
             run.metrics["skipped_reason"] = "a file it read changed while it ran"
             return None
 
+        all_file_deps, inherited = self._inherit(run, execution)
+        as_run = self._note_as_run(run, execution, all_file_deps, inherited)
+        return self._store(
+            run,
+            execution,
+            captured_vars,
+            file_dependencies=all_file_deps,
+            miss_guarded=miss_guarded,
+            inherited=inherited,
+            seed_epochs=seed_epochs,
+            as_run=as_run,
+        )
+
+    def note_ran(self, run: StatementRun, execution: StatementExecution) -> None:
+        """Keep, for the statements below, the file records *run* makes of
+        what it read (`_RecordsAsRun`), when it is not stored: what they
+        inherit from its outputs is then taken once, at the first store
+        below, not again at each. Called only when no file it read moved
+        while it ran, as far as its check (`inputs_moved`) looked."""
+        self.tracking_state.records_as_run.pop(run.cache_key, None)
+        if not (execution.accessed_files or execution.accessed_remote or execution.probes):
+            return
+        all_file_deps, inherited = self._inherit(run, execution)
+        self._note_as_run(run, execution, all_file_deps, inherited)
+
+    def _inherit(self, run: StatementRun, execution: StatementExecution) -> tuple[set[str], _InheritedRecords]:
+        """The files *run*'s value was built from, read or inherited, and
+        the records it takes over from its inputs' producers."""
         accessed_files = execution.accessed_files
         all_file_deps = set(accessed_files) if accessed_files else set()
         inherited = _InheritedRecords(self._durable_entries())
@@ -416,16 +523,31 @@ class StatementStore:
                 found = self._records_through_inputs(input_var)
             for records in found:
                 inherited.take(records, files, direct)
+        return all_file_deps, inherited
 
-        return self._store(
-            run,
-            execution,
-            captured_vars,
-            file_dependencies=all_file_deps,
-            miss_guarded=miss_guarded,
-            inherited=inherited,
-            seed_epochs=seed_epochs,
+    def _note_as_run(
+        self,
+        run: StatementRun,
+        execution: StatementExecution,
+        all_file_deps: set[str],
+        inherited: _InheritedRecords,
+    ) -> _RecordsAsRun:
+        """*run*'s records as it ran (`_RecordsAsRun`), kept for the
+        statements below when there is any."""
+        tracker = execution.file_tracker
+        as_run = _RecordsAsRun(
+            run.cache_key,
+            all_file_deps,
+            execution.accessed_remote,
+            inherited,
+            tracker.known_reads() if tracker is not None else None,
+            execution.probes,
+            # The stats `inputs_moved` just took: the files as the value was built from them.
+            attribute_or(tracker, "take_checked_stats", dict)(),
         )
+        if run.cache_key and (all_file_deps or execution.accessed_remote or execution.probes):
+            self.tracking_state.records_as_run[run.cache_key] = as_run
+        return as_run
 
     def inputs_moved(self, run: StatementRun, execution: StatementExecution, reuse_end_stats: bool = False) -> bool:
         """Did a file the statement read change after it read it, or a
@@ -511,6 +633,14 @@ class StatementStore:
         except Exception:  # noqa: BLE001 - a snapshot it cannot read is taken afresh
             meta = None
         found: list[Records] = []
+        if not isinstance(meta, dict) or not (meta.get("file_dependencies") or meta.get(FILE_REFS_FIELD)):
+            # No records stored under the key (refused, too cheap, not
+            # written): those its statement made as it ran this session.
+            as_run = self.tracking_state.records_as_run.get(key)
+            if as_run is not None:
+                found = as_run.records(backend)
+                memo[key] = found
+                return found
         if isinstance(meta, dict):
             own = own_records(meta, key)
             if own is not None:
@@ -724,6 +854,7 @@ class StatementStore:
         miss_guarded: bool = False,
         inherited: _InheritedRecords | None = None,
         seed_epochs: Mapping[str, str],
+        as_run: _RecordsAsRun,
     ) -> StatementCacheMetadata | None:
         """Store execution results and metadata in the cache. Returns
         metadata, or ``None`` when the statement was so cheap to compute
@@ -766,20 +897,7 @@ class StatementStore:
             run.metrics["skipped_reason"] = "pickling its value ran code of the user's that wrote to a variable"
             return None
 
-        own_files = (
-            fold_relative_twins(
-                _snapshot_with_inherited(
-                    file_dependencies,
-                    execution.accessed_remote,
-                    inherited.copied if inherited is not None else None,
-                    execution.file_tracker.known_reads() if execution.file_tracker is not None else None,
-                    execution.probes,
-                    attribute_or(execution.file_tracker, "take_checked_stats", dict)(),
-                    referred=inherited.referred if inherited is not None else (),
-                )
-            )
-            or None
-        )
+        own_files = fold_relative_twins(as_run.snapshot()) or None
         metadata = StatementCacheMetadata(
             timestamp=time.time(),
             inputs=list(run.inputs),
@@ -841,7 +959,27 @@ class StatementStore:
         self.tracking_state.entry_file_states[run.cache_key] = (
             entry_file_records(stored, attribute_or(self.cash_instance, "backend", None)) or None,
         )
+        if inherited is not None and stored.files_token:
+            self._note_held(inherited, as_run.snapshot(), run.cache_key, stored.files_token)
         return stored
+
+    def _note_held(self, inherited: _InheritedRecords, own: Mapping[str, Any], key: str, token: str) -> None:
+        """When the entry *key* just stored holds, as its own records
+        (*own*, named *token*), exactly those a statement not stored made
+        (`_RecordsAsRun`), the statements further below refer to them
+        there rather than copy them again: below a read of 13,000 photos
+        no entry holds, each stored statement wrote a 5 MB copy."""
+        if len(inherited.unheld) != 1:
+            return
+        records = inherited.unheld[0].records
+        if len(own) != len(records) or any(own.get(path) is not recorded for path, recorded in records.items()):
+            return
+        as_run = self.tracking_state.records_as_run.peek(inherited.unheld[0].key)
+        if as_run is None or as_run.snapshot() is not records:
+            return
+        as_run.held_by(key, token)
+        # Read again as that entry's (`_producer_records`).
+        self._producer_snapshots.pop(as_run.key, None)
 
     @staticmethod
     def _reads_files(execution: StatementExecution, file_dependencies: set[str]) -> bool:

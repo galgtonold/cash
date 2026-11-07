@@ -35,6 +35,7 @@ __all__ = [
     "PURITY_REPORTS",
     "READ_PATHS",
     "RECORDS",
+    "RECORDS_AS_RUN",
     "REMOTE_URLS",
     "RESULT_TYPES",
     "SOURCE_FILES",
@@ -222,6 +223,11 @@ USER_CALLEES = 500
 #: One set of file snapshots per producing cache entry: a folder read's set
 #: runs to thousands of files.
 PRODUCER_SNAPSHOTS = 64
+
+#: The file records each statement that ran this session made of what it
+#: read, by its cache key, for the statements below it to take over when
+#: its entry holds none: a folder read's records run to thousands of files.
+RECORDS_AS_RUN = 64
 
 #: One entry's own file records, read back, per token that names them
 #: (`cash.notebook.file_records`), and one entry's records with those it

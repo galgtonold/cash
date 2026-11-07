@@ -3503,6 +3503,9 @@ class StatementProcessor:
                         _LOG_ANNOTATION,
                         "; ".join(run.metrics.get("uncacheable_reasons") or ()) or "@cash:no-cache",
                     )
+                    if not inputs_moved:
+                        # What the statements below inherit from its outputs.
+                        self._store.note_ran(run, execution)
         moved = self._move_holders(run, saved_metadata)
         # After the save: the entry records each input's lineage as the
         # statement read it, before its draw moved it on.

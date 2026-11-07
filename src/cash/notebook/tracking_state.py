@@ -7,6 +7,7 @@ from collections.abc import Iterable, Mapping, Set
 from dataclasses import MISSING, dataclass, field, fields
 from typing import TYPE_CHECKING, Any
 
+from cash._memo import RECORDS_AS_RUN, LruMemo
 from cash._user_attrs import has_attribute
 from cash.notebook.file_round_trips import FileRoundTrips
 from cash.notebook.lineage_store import InputLineages, LineageStore
@@ -333,6 +334,14 @@ class TrackingState:
     # tuple each time, so a loop can tell its own record from an older one.
     # W: StatementStore, StatementRestorer. R: ControlStructureProcessor.
     entry_file_states: dict[str, tuple[Mapping[str, Any] | None]] = field(default_factory=dict)
+
+    # Cache key -> the file records that statement made of what it read on
+    # its last run this session (``store._RecordsAsRun``), taken when first
+    # asked for: what a statement below takes over when the key's entry
+    # holds none (not stored, refused, too cheap). Session state: a restart
+    # has only what the entries hold.
+    # W, R: StatementStore.
+    records_as_run: LruMemo[str, Any] = field(default_factory=lambda: LruMemo(RECORDS_AS_RUN))
 
     # Cache key -> {path: answer} of the existence checks that statement made
     # on its last run without reading the path (``probe_answers``): they join

@@ -25,6 +25,11 @@ only, took the records of ``X_train`` (14 s) and ``grid.fit`` (61 s) below
 it with it, and they ran again after a restart with no file changed. The
 records of such an entry are copied, as they were before references.
 
+A statement with no entry holding its records (not stored: uncacheable,
+refused, too cheap) keeps those it made as it ran for the session
+(``TrackingState.records_as_run``): the first entry stored below copies
+them, and the ones further below refer to that entry's records.
+
 Each relative read's second spelling is folded into its absolute twin's
 record as it is stored (`file_dep_snapshot.fold_relative_twins`) and
 unfolded as it is read, so every reader sees the records as they were made.
