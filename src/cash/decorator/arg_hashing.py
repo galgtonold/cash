@@ -36,7 +36,6 @@ from ..canonical_form import (
 )
 from ..content_hashers import (
     BUILTIN_CONTENT,
-    IMMUTABLE_ITEM_KINDS,
     ColumnPieces,
     builtin_family_of,
     builtin_hash,
@@ -438,7 +437,7 @@ def _axis_arrays(axis: Any) -> list:
 
 
 def frame_borrows_its_data(
-    obj: Any, held: Any = None, since: int = 0, lists: list | None = None, kept: dict | None = None
+    obj: Any, held: Any = None, since: int = 0, lists: list | None = None, kept: _KeptLists | None = None
 ) -> bool:
     """Whether *obj*'s data sits in memory something outside pandas may write.
 
@@ -513,7 +512,7 @@ def frame_borrows_its_data(
 
 
 def _frame_memory(
-    obj: Any, held: Any, lists: list | None = None, kept: dict | None = None
+    obj: Any, held: Any, lists: list | None = None, kept: _KeptLists | None = None
 ) -> tuple[list, dict[int, int]] | None:
     """``(arrays, {id(array): references pandas holds})`` for everything
     *obj* keeps its data in, or ``None`` when some of it cannot be vouched
@@ -536,6 +535,8 @@ def _frame_memory(
     holders: dict[int, Any] = {}
     todo: list = []
     caches: set[int] = set()
+    #: The object arrays whose items were vouched for (`_object_view`).
+    vouched: set[tuple] = set()
 
     def hold(holder: Any) -> None:
         if id(holder) not in holders:
@@ -595,10 +596,13 @@ def _frame_memory(
             values = holder.values
             if type(values) is np.ndarray and values.dtype == object and not immutable_items(values):
                 # Python objects change in place: `s[0].append(...)`
-                if lists is None or not (
-                    _lists_of_immutables(values, lists, kept) or _immutable_records(values, lists, kept)
-                ):
+                if lists is None:
                     return None
+                if _object_view(values) not in vouched:
+                    if not (_lists_of_immutables(values, lists, kept) or _immutable_records(values, lists, kept)):
+                        return None
+                    # The shallow copy's block views the same items: read once.
+                    vouched.add(_object_view(values))
             if not reference(values):
                 return None
             shared = holder.refs.referenced_blocks
@@ -652,24 +656,78 @@ def _frame_memory(
     return arrays, pandas_refs
 
 
-def _lists_of_immutables(values: Any, lists: list, kept: dict | None = None) -> bool:
-    """Whether every item of the object array *values* is a list of
-    immutable scalars (`immutable_items`) of exact types no attribute can be
-    set on, or a pandas date with none set (`_scalars_of_no_state`); each
-    one is appended to *lists*. One in *kept* is taken as one."""
-    from pandas.api.types import infer_dtype
+def _object_view(values: Any) -> tuple:
+    """Which items the object ndarray *values* shows: the array that owns
+    the memory, by id, and where in it *values* starts and how it steps.
+    A frame's block and its shallow copy's are two views of the same items;
+    the caller holds *values*, so the owner's id stays its own."""
+    import numpy as np
 
+    owner = values
+    while type(owner.base) is np.ndarray:
+        owner = owner.base
+    return id(owner), values.__array_interface__["data"][0], values.shape, values.strides
+
+
+def _lists_of_immutables(values: Any, lists: list, kept: _KeptLists | None = None) -> bool:
+    """Whether every item of the object array *values* is a list of
+    immutable scalars of exact types no attribute can be set on, or pandas
+    dates with none set (`_scalars_of_no_state`); each one is appended to
+    *lists*. One in *kept* is taken as one.
+
+    The items of all the lists are checked together, in one pass over them
+    at C speed: a column of 300,000 one-item lists asked pandas' C type
+    inference once per list, and a notebook statement that looked at such
+    a frame spent seconds on it (`_KeptLists`)."""
     items = values.ravel(order="K").tolist()
-    if not items or any(type(item) is not list for item in items):
+    if not items or set(map(type, items)) != {list}:
         return False
-    kept = kept or {}
-    if not all(
-        id(item) in kept or (infer_dtype(item, skipna=True) in IMMUTABLE_ITEM_KINDS and _scalars_of_no_state(item))
-        for item in items
-    ):
+    fresh = items
+    if kept:
+        known = kept.by_key.__contains__
+        unknown = next(itertools.filterfalse(known, map(id, items)), None)
+        fresh = [] if unknown is None else [item for item in items if not known(id(item))]
+    if fresh and not _scalars_of_no_state(list(itertools.chain.from_iterable(fresh))):
         return False
     lists.extend(items)
     return True
+
+
+class _KeptLists:
+    """What `FrameDigests.store` keeps of the lists and blocks of records a
+    frame's object blocks hold (`frame_borrows_its_data`), to tell at a
+    lookup that none of them changed (`_lists_unchanged`).
+
+    By key (``id`` of a list, `_Records.key` of a block): the list or the
+    block itself. For the lists, together and in one order: their lengths,
+    every item they held, flat, and the pandas dates and missing values
+    among those (`_stateful_of`). Kept flat so that a check is a few passes
+    at C speed, not a Python call per list: per-list copies made storing a
+    frame of 300,000 one-item lists cost seconds, and checking them as much
+    again."""
+
+    __slots__ = ("by_key", "flat", "lengths", "lists", "records", "stateful")
+
+    def __init__(self, noted: list) -> None:
+        records = [items for items in noted if type(items) is _Records] if _Records in set(map(type, noted)) else []
+        plain = [items for items in noted if type(items) is list] if records else noted
+        by_key: dict[int, Any] = dict(zip(map(id, plain), plain))
+        self.lists = list(by_key.values())
+        by_key.update((items.key, items) for items in records)
+        self.by_key = by_key
+        self.records = list({items.key: items for items in records}.values())
+        self.lengths = list(map(len, self.lists))
+        self.flat = tuple(itertools.chain.from_iterable(self.lists))
+        self.stateful = _stateful_of(self.flat) if self.flat else []
+
+    def __bool__(self) -> bool:
+        return bool(self.by_key)
+
+    def __contains__(self, key: object) -> bool:
+        return key in self.by_key
+
+    def get(self, key: int) -> Any:
+        return self.by_key.get(key)
 
 
 class _Records:
@@ -684,7 +742,7 @@ class _Records:
         self.array = weakref.ref(values)
 
 
-def _immutable_records(values: Any, lists: list, kept: dict | None = None) -> bool:
+def _immutable_records(values: Any, lists: list, kept: _KeptLists | None = None) -> bool:
     """Whether every item of the object array *values* is a tuple of
     immutable scalars of exact types no attribute can be set on, or such a
     scalar itself: nothing but a write to the array, which copy-on-write
@@ -706,8 +764,8 @@ def _immutable_records(values: Any, lists: list, kept: dict | None = None) -> bo
     if any(type(noted) is _Records and noted.key == key for noted in lists):
         return True  # the same array, met through the shallow copy
     known = kept.get(key) if kept else None
-    if known is not None and type(known[0]) is _Records and known[0].array() is values:
-        lists.append(known[0])
+    if type(known) is _Records and known.array() is values:
+        lists.append(known)
         return True
     items = values.ravel(order="K").tolist()
     plain, _stateful = _plain_scalar_types()
@@ -1565,12 +1623,7 @@ class FrameDigests:
             # hashed, which no copy-on-write guards (`_lists_unchanged`).
             # A block of records (`_immutable_records`) is kept as itself:
             # nothing in it can change but through a write to it.
-            kept = {
-                (id(items) if type(items) is list else items.key): (items, tuple(items), _stateful_of(items))
-                if type(items) is list
-                else (items, None, [])
-                for items in lists
-            }
+            kept = _KeptLists(lists)
             signature = frame_signature(obj)
             entries = self._entries
             key = id(obj)
@@ -1620,7 +1673,7 @@ def _memory_kept(frame: Any, entry: tuple) -> bool:
         return False
 
 
-def _lists_unchanged(lists: list, kept: dict[int, tuple[list, tuple, list]], gained: bool = False) -> bool:
+def _lists_unchanged(lists: list, kept: _KeptLists, gained: bool = False) -> bool:
     """Whether *lists*, the lists a frame's blocks of lists hold now, are
     the ones *kept* when its content was hashed, each still holding the
     same objects, which are immutable (`_lists_of_immutables`), the dates
@@ -1631,29 +1684,31 @@ def _lists_unchanged(lists: list, kept: dict[int, tuple[list, tuple, list]], gai
 
     With *gained*, *lists* may also hold lists and blocks the frame has
     gained since, which are not checked: every one *kept* must still be
-    among them."""
-    found = {id(items) if type(items) is list else items.key for items in lists}
-    if (not found >= kept.keys()) if gained else len(found) != len(kept):
+    among them.
+
+    Each check is a pass at C speed over all the lists together
+    (`_KeptLists`)."""
+    # By id: an object alive has an id no other live object has, and
+    # *kept* holds each of its lists, so a list found under a kept id is
+    # that very list.
+    plain = not kept.records and _Records not in set(map(type, lists))
+    found = set(map(id, lists)) if plain else {id(items) if type(items) is list else items.key for items in lists}
+    if (not found >= kept.by_key.keys()) if gained else found != kept.by_key.keys():
         return False
-    for items in lists:
-        if gained and (id(items) if type(items) is list else items.key) not in kept:
-            continue
-        if type(items) is _Records:
-            # A block of records, the very array (`_immutable_records`).
-            known = kept.get(items.key)
-            if known is None or type(known[0]) is not _Records or known[0].array() is not items.array():
+    if not plain:
+        # A block of records, the very array (`_immutable_records`).
+        now = {items.key: items for items in lists if type(items) is _Records}
+        for known in kept.records:
+            items = now.get(known.key)
+            if items is None or known.array() is not items.array():
                 return False
-            continue
-        known = kept.get(id(items))
-        if known is None or known[0] is not items:
-            return False
-        before = known[1]
-        if len(items) != len(before) or not all(map(operator.is_, items, before)):
-            return False
-        if any(map(_OWN_STATE, known[2])):
-            # An attribute set on a date it holds since (``t.tag = 2``).
-            return False
-    return True
+    # Each list as long as it was, holding the same objects.
+    if list(map(len, kept.lists)) != kept.lengths:
+        return False
+    if not all(map(operator.is_, itertools.chain.from_iterable(kept.lists), kept.flat)):
+        return False
+    # An attribute set on a date one holds since (``t.tag = 2``).
+    return not any(map(_OWN_STATE, kept.stateful))
 
 
 class _KnownPieces:
