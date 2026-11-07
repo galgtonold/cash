@@ -270,7 +270,7 @@ class TestForwardProbePopulatesState:
     def test_placeholder_injected_into_user_ns(self):
         """When the forward probe resolves a broken var, a placeholder
         must appear in user_ns, or the statement's missing input would stop
-        its cache lookup (``cacheability_decision._has_missing_lineage``)."""
+        its cache lookup (``cacheability_decision.has_missing_lineage``)."""
         checker, shell, backend, PLACEHOLDER = self._make_checker()
 
         # Simulate a cache hit: the probe reads metadata only
