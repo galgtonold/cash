@@ -67,10 +67,11 @@ def test_both_spellings_of_each_file_take_one_stat(faces, stats_taken, absolute_
     stats = run_memo.stats_this_run(paths)
 
     # The folder's own stats arm its watch (`file_watch`); each file takes
-    # one, or none where a listing of its folder stands in for its stats
-    # (Windows: `stats_from_listings`), under either spelling.
+    # one under either spelling. Where a listing of its folder stands in for
+    # its stats (Windows: `stats_from_listings`), that one stat is the one a
+    # listed file takes, once, for the link count a listing does not give.
     listed = run_memo.file_state_this_run()["listed"]
-    assert len([p for p in stats_taken if p.endswith(".npy")]) == len([p for p in spelled if p not in listed])
+    assert len([p for p in stats_taken if p.endswith(".npy")]) == len(spelled)
     for rel, absolute in zip(faces, spelled, strict=True):
         st = os.stat(absolute)
         if absolute in listed:  # a listed stat has no file identity (st_ino 0)
