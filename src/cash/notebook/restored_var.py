@@ -40,7 +40,7 @@ __all__ = [
 
 #: Stands in the namespace for a variable the upstream check's forward probe
 #: found a current-cell cache hit for: a statement whose input is not in the
-#: namespace is never looked up (``cacheability_decision._has_missing_lineage``),
+#: namespace is never looked up (``cacheability_decision.has_missing_lineage``),
 #: so without it the hit that restores the variable could not happen. The
 #: restore replaces it; it is no object of the notebook's, so nothing holding
 #: it stops that hit.

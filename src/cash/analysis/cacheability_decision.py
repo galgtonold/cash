@@ -115,7 +115,7 @@ def is_lineage_exempt(var_name: str, val: Any) -> bool:
     """Return True if *val* is a kind of input that never needs lineage tracking.
 
     Modules, ``get_ipython``, and bound / private callables (whose source
-    is captured by other means) are exempt.  Used by ``_has_missing_lineage``
+    is captured by other means) are exempt.  Used by ``has_missing_lineage``
     to decide whether absence of a lineage entry is a cacheability blocker.
     """
     if issubclass(type(val), types.ModuleType) or var_name == "get_ipython":
@@ -390,7 +390,7 @@ def cacheability_verdict(
         return CacheabilityVerdict(False, [analysis_failed("check the functions the statement calls", exc)])
 
     ast_reasons = analysis.skip_reasons(outputs, side_effects=not waived)
-    if ast_reasons or _has_missing_lineage(inputs, user_ns, variable_lineage):
+    if ast_reasons or has_missing_lineage(inputs, user_ns, variable_lineage):
         if drawn_reason is not None:
             return CacheabilityVerdict(False, [drawn_reason], varies=True)
         if ast_reasons:
@@ -437,7 +437,7 @@ def _helper_ambient_reasons(code: str, user_ns: Mapping[str, Any]) -> list[str]:
     return reasons
 
 
-def _has_missing_lineage(
+def has_missing_lineage(
     inputs: set[str],
     user_ns: Mapping[str, Any],
     variable_lineage: Mapping[str, str],
