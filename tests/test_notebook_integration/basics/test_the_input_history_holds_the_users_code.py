@@ -16,8 +16,11 @@ def test_in_and_underscore_i_hold_the_cells_source(nb_runner):
     nb_runner.run_all()
 
     assert nb_runner.peek("seen") == repr("k * 10")
-    assert nb_runner.peek("'pass' in In") == "False"
-    assert nb_runner.peek("[s for s in In if s in ('k = 2', 'k * 10')]") == repr(["k = 2", "k * 10"])
+    # A reused kernel's history also holds earlier tests' cells, some of
+    # them a plain ``pass``; only this notebook's entries are looked at.
+    own = "In[len(In) - 1 - In[::-1].index('k = 2'):]"
+    assert nb_runner.peek(f"'pass' in {own}") == "False"
+    assert nb_runner.peek(f"[s for s in {own} if s in ('k = 2', 'k * 10')]") == repr(["k = 2", "k * 10"])
 
 
 # %save writes the kernel's whole input history; a kernel reused from an
