@@ -201,3 +201,27 @@ def test_an_entry_below_goes_stale_when_an_inherited_file_changes(cash_magics, c
     _run_all(cash_magics)
     assert _values(cash_magics) == _plain()
     assert cash_magics.shell.user_ns["b"][123] == "PHO", "the edit was not seen"
+
+
+def test_a_statement_too_cheap_to_store_below_takes_no_stat_of_the_files(cash_magics, photos, store_stats):
+    """``positive_patches = faces.images`` below the unstored read stores
+    no entry: the records of the read's files are not taken for it, which
+    cost the cell that read 13,000 photos a stat of each."""
+    for cell in CELLS[:2]:
+        run_cash_cell(cash_magics, cell, cells=CELLS)
+    store_stats()
+
+    cells = [*CELLS[:2], "Y = X[:]", f"e = ({WAIT}, [len(y) for y in Y])[1]"]
+    run_cash_cell(cash_magics, cells[2], cells=cells)
+    assert store_stats() <= FILES // 4, "the store of a statement too cheap to keep stat'ed the files"
+    assert not cash_magics._cash_instance.backend.peek_metadata(cash_magics.tracking_state.variable_sources["Y"])
+
+    # The first entry stored below takes them, once.
+    run_cash_cell(cash_magics, cells[3], cells=cells)
+    assert store_stats() <= FILES * 1.5
+    key = cash_magics.tracking_state.variable_sources["e"]
+    records = entry_file_records(
+        cash_magics._cash_instance.backend.peek_metadata(key), cash_magics._cash_instance.backend
+    )
+    assert str(photos / "p0123.txt").replace("\\", "/") in records
+    assert snapshot_is_fresh(records)[0]

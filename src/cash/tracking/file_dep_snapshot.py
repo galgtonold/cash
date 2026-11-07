@@ -587,6 +587,7 @@ def snapshot_file_deps(
     known: dict[str, tuple[Any, str]] | None = None,
     stats: dict[str, tuple[int, int, int] | None] | None = None,
     checked: Mapping[str, os.stat_result] | None = None,
+    as_read: Mapping[str, tuple[int, int, int]] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Return ``{path: {'mtime', 'size', 'hash'}}`` for paths that exist.
 
@@ -610,6 +611,13 @@ def snapshot_file_deps(
     file's (*known*). The entry then describes the file as read, stat and
     digest alike. A file the snapshot must hash itself gets a stat of its
     own, taken right before the hash.
+
+    *as_read* maps a path to the `stat_key` its read took, when the
+    snapshot is taken a while after the read (the records of a statement not
+    stored, taken when a statement below stores them). A file that moved
+    since, whose content is not the one the read took (*known*) or cannot be
+    told, is recorded as never fresh, not as it is now, which would vouch
+    for a value built from what the read found.
     """
     snapshot: dict[str, dict[str, Any]] = {}
     # A relative read is recorded under both spellings
@@ -626,7 +634,8 @@ def snapshot_file_deps(
     for i, f in enumerate(todo):
         if relative and i >= first_relative:
             same = snapshot.get(spelled_absolute(f))
-            if same is not None and "size" in same:
+            if same is not None and ("size" in same or (as_read is not None and same.get(_UNRESOLVED_MARKER))):
+                # Its twin's moved since read too (*as_read*).
                 snapshot[f] = dict(same)
                 continue
         st = checked.get(f) if checked else None
@@ -660,8 +669,21 @@ def snapshot_file_deps(
             content_hash = read[1]
             hashed_at = read[2] if len(read) > 2 else None
         else:
+            digest_read = read[1] if read is not None and isinstance(read[1], str) else None
+            moved = as_read is not None and as_read.get(f, stat_key(st)) != stat_key(st)
+            if moved and digest_read is None:
+                # No digest of what the read found: nothing tells the content apart.
+                snapshot[f] = {_UNRESOLVED_MARKER: True}
+                if stats is not None:
+                    stats.pop(f, None)
+                continue
             hashed_at = time.time()  # before the read: an edit after it is not in the digest
             content_hash = file_content_hash(f, st.st_size, st)
+            if as_read is not None and digest_read is not None and content_hash != digest_read:
+                snapshot[f] = {_UNRESOLVED_MARKER: True}
+                if stats is not None:
+                    stats.pop(f, None)
+                continue
             if stats is not None:
                 # Hashed now, after the stat: an edit landing between the two
                 # is in the digest but not in this stat. The check stats it again.
@@ -853,14 +875,15 @@ def snapshot_dependencies(
     present: Mapping[str, str] | None = None,
     stats: dict[str, tuple[int, int, int] | None] | None = None,
     checked: Mapping[str, os.stat_result] | None = None,
+    as_read: Mapping[str, tuple[int, int, int]] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Snapshot everything a call read — local files and remote objects — as one dict.
 
     *unresolved* are paths the call read that cannot be stat'ed as recorded
     (``FileAccessTracker.get_unresolved_files``): each is recorded as never
     fresh. *present* are paths it probed and found without reading
-    (``FileAccessTracker.get_present_files``). *stats* and *checked* are
-    `snapshot_file_deps`'s.
+    (``FileAccessTracker.get_present_files``). *stats*, *checked* and
+    *as_read* are `snapshot_file_deps`'s.
 
     The single entry point both caching subsystems use, so neither has to
     remember to merge two helpers. Local and remote entries answer the same
@@ -877,6 +900,8 @@ def snapshot_dependencies(
             extra["stats"] = stats
         if checked:
             extra["checked"] = checked
+        if as_read is not None:
+            extra["as_read"] = as_read
         snapshot = snapshot_file_deps(set(paths), known, **extra)
     if urls:
         snapshot.update(snapshot_remote_deps(urls))
