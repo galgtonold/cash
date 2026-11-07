@@ -1279,6 +1279,11 @@ def _same_file(a: os.stat_result, b: os.stat_result) -> bool:
     return _stat.S_IFMT(a.st_mode) == _stat.S_IFMT(b.st_mode) and stat_key(a) == stat_key(b)
 
 
+#: The most offers of a refused set `HeldPaths.worth_keeping` passes over
+#: before `HeldPaths.keep` looks at it again.
+_REFUSED_OFFERS_PASSED = 64
+
+
 class HeldPaths:
     """What a caller worked out from this run's stats of a set of paths
     (`stats_this_run`), kept across cell runs while the folder watch vouches
@@ -1294,14 +1299,24 @@ class HeldPaths:
     vouches for (`find`).
 
     Found by an equal set of paths, compared whole in C, in the same working
-    directory, under the same watch."""
+    directory, under the same watch.
 
-    __slots__ = ("_entries", "_kept")
+    A set the watch does not vouch for most of is not kept, and is not
+    offered again each run (`worth_keeping`): the look at every path that
+    found it so (`_vouched`) cost as much as the answer it would have held,
+    each cell, for nothing -- 0.3 s of a trivial cell below 13,000 photos
+    on Linux, more on Windows."""
+
+    __slots__ = ("_entries", "_kept", "_refused")
 
     def __init__(self, kept: int = 4) -> None:
         #: ``[paths, working directory, watch, _Held, value]``, newest last.
         self._entries: list[list[Any]] = []
         self._kept = kept
+        #: ``[paths, working directory, watch, offers to pass, offers passed
+        #: after the last refusal]`` of each set `keep` could not keep,
+        #: newest last (`worth_keeping`).
+        self._refused: list[list[Any]] = []
 
     def find(self, paths: Collection[str]) -> tuple[list[Any], Any, list[str]] | None:
         """``(entry, value, unsure)`` kept for a set equal to *paths*:
@@ -1346,12 +1361,54 @@ class HeldPaths:
         except OSError:
             return
         parts, unvouched = _vouched(watch, paths, found, set(loose))
-        if 2 * len(unvouched) > len(paths):
-            return
         copy = paths if isinstance(paths, frozenset) else frozenset(paths)
         n = len(copy)
+        refused = self._refused_entry(copy, here, watch)
+        if 2 * len(unvouched) > len(paths):
+            # Passed over by the next offers, twice as many after each
+            # refusal: a set the watch comes to vouch for is still kept.
+            if refused is None:
+                self._refused = self._refused[-(self._kept - 1) :] + [[copy, here, watch, 1, 1]]
+            else:
+                refused[4] = min(2 * refused[4], _REFUSED_OFFERS_PASSED)
+                refused[3] = refused[4]
+            return
+        if refused is not None:
+            self._refused.remove(refused)
         self._entries = [e for e in self._entries if not (len(e[0]) == n and e[0] == copy)][-(self._kept - 1) :]
         self._entries.append([copy, here, watch, _Held(parts, unvouched, None), value])
+
+    def worth_keeping(self, paths: Collection[str]) -> bool:
+        """Whether to offer *paths* to `keep` this time, and so to work out
+        what it takes. No while the watch is off, and for the next offers
+        of a set equal to one `keep` refused (the watch vouched for less
+        than half of it): one more after each refusal, then two, four, up
+        to `_REFUSED_OFFERS_PASSED`. A set the caller does not keep is
+        worked out afresh each time, so passing over one changes no
+        answer."""
+        run = file_state_this_run()
+        watch = run.get("watch") if run is not None else None
+        if watch is None:
+            return False
+        if not self._refused:
+            return True
+        try:
+            here = os.getcwd()
+        except OSError:
+            return False
+        refused = self._refused_entry(paths, here, watch)
+        if refused is None or refused[3] <= 0:
+            return True
+        refused[3] -= 1
+        return False
+
+    def _refused_entry(self, paths: Collection[str], here: str, watch: Any) -> list[Any] | None:
+        n = len(paths)
+        for entry in self._refused:
+            copy, cwd, by = entry[0], entry[1], entry[2]
+            if by is watch and cwd == here and len(copy) == n and (copy is paths or copy == paths):
+                return entry
+        return None
 
     @staticmethod
     def renew(

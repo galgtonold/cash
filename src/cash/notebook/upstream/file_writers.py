@@ -1091,8 +1091,9 @@ class FileWriterScheduler:
                 answers[targets] = answer
                 return answer
         answer = any_resolves_to(sources, targets)
-        located = stats_this_run(sources)
-        self._held_sources.keep(sources, {targets: answer}, self._source_stats(sources, located))
+        if self._held_sources.worth_keeping(sources):
+            located = stats_this_run(sources)
+            self._held_sources.keep(sources, {targets: answer}, self._source_stats(sources, located))
         return answer
 
     @staticmethod
@@ -1292,7 +1293,7 @@ class FileWriterScheduler:
         # Only the paths of this set: what the cells above read, no more.
         self._read_forms = (here, rows)
         index = (read_forms, read_dirs, read_places)
-        if here:
+        if here and self._held_reads.worth_keeping(relevant_read_paths):
             stats, loose = self._read_stats(relevant_read_paths, located, rows)
             self._held_reads.keep(relevant_read_paths, (rows, index), stats, loose)
         return index

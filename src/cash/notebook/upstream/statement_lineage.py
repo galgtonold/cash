@@ -199,7 +199,10 @@ def _present_file_keys(paths: set[str]) -> tuple[frozenset[str], dict[str, tuple
         return present, keys
     current = stats_this_run(paths)
     keys = {}
-    stats = {}
+    # What `HeldPaths.keep` takes, only when it is offered the set.
+    stats: dict[str, Any] | None = (
+        {} if len(paths) >= _HOLD_MIN_FILES and _HELD_FILE_KEYS.worth_keeping(paths) else None
+    )
     for p in paths:
         resolved, st = current[p]
         # Only a file that is where it was recorded, as before: the
@@ -207,11 +210,12 @@ def _present_file_keys(paths: set[str]) -> tuple[frozenset[str], dict[str, tuple
         # One that is not is held while the watch has it as not there.
         if st is not None and resolved == p:
             keys[p] = stat_key(st)
-            stats[p] = st
-        else:
+            if stats is not None:
+                stats[p] = st
+        elif stats is not None:
             stats[p] = None
     present = frozenset(keys)
-    if len(paths) >= _HOLD_MIN_FILES:
+    if stats is not None:
         _HELD_FILE_KEYS.keep(paths, (present, keys), stats)
     return present, keys
 
