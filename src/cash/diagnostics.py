@@ -361,6 +361,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # running has not finished; statements run rather than be served
         "NOTEBOOK-SAVEFIG-SKIP",  # refused to re-run plt.savefig() during
         # reconstruction; it would overwrite your chart
+        "NOTEBOOK-SERVED-VIEW",  # a write into a table served from the cache
+        # did not reach an array taken from the table before it
         "NOTEBOOK-SHARE-UNCHECKED",  # cash could not find every variable
         # sharing an object with a statement's outputs in time
         "NOTEBOOK-SHARED-KEPT",  # a value another name below still shares
@@ -386,6 +388,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         "STORE-CHUNK-FAILED",  # a chunked write failed partway; the entry is
         # incomplete on retrieval
         "CACHE-RESULT-SHARED",  # the result shares state with the caller's own object
+        "CACHE-SERVED-VIEW",  # a write into a table a hit returned will not
+        # reach an array taken from the table before it
         "STORE-FAILED",  # the backend refused the write
         "STORE-INPUT-CHANGED",  # a file the call read changed before it
         # returned, so the result was not stored

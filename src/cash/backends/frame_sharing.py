@@ -14,9 +14,17 @@ So a table the tier shares is *frozen* first (`freeze`):
   not make a view of a read-only array writable again, so no handle pandas
   gives out can write it;
 * each block's copy-on-write reference group gets a reference that never
-  dies (`_PIN`). pandas then always sees the block as shared and copies it
+  dies (`_PinRef`). pandas then always sees the block as shared and copies it
   before writing, even once the stored table and every other hit are gone:
   a frozen block is never written in place, by pandas or anyone else.
+
+A hit therefore differs from a plain run in one way: a numpy array taken
+from it (``v = s.to_numpy()``, ``s.values``) keeps the old values when
+pandas then writes the column, where a plain run writes the column in place
+and the array sees the write. Such writes are watched
+(`_install_write_watch`), and `views_left_behind` names the memory such an
+array still reads, for the notebook to warn about. A handle that writes past
+pandas (``s.array[0] = ...``) raises on a hit; `read_only_note` says why.
 
 Only columns kept in plain numpy arrays (numbers, dates and times, object
 columns whose cells cannot change) and Arrow-backed ones are frozen. A
@@ -29,8 +37,9 @@ behave as on any other, they just copy first. A table frozen this way pickles
 as a writable one (`_install_pickling`): a disk entry, or a table the user
 pickles themselves, loads as an ordinary table.
 
-Only a table cash owns is frozen: its own copy made when storing, or a
-table it has just unpickled from disk. A table the caller holds is never
+Only a table cash owns is frozen: its own copy made when storing. A table
+read from disk goes to the caller unfrozen, as its own (`InMemoryBackend.promote`).
+A table the caller holds is never
 frozen -- cash does not change what an object of the caller's allows -- so
 the store copies it once, and every hit shares that copy. That copy holds
 nothing of the caller's (`own_parts`): its labels are copied, and so is
@@ -67,18 +76,23 @@ __all__ = [
     "arrow_owned",
     "copy_keeping_blocks",
     "enabled",
+    "forget_asked",
     "freeze",
     "frozen_already",
     "hand_out",
+    "has_pin",
     "is_frozen",
     "is_pin",
     "own_parts",
     "owned_arrow_data",
+    "read_only_note",
+    "reads_memory_of",
+    "views_left_behind",
 ]
 
 
 class _Pin:
-    """What the reference that never dies points to (`_PIN`)."""
+    """What the reference that never dies points to (`_PinRef`)."""
 
     __slots__ = ("__weakref__",)
 
@@ -87,15 +101,320 @@ class _Pin:
 
 
 _PIN_TARGET = _Pin()
-#: The reference a frozen block's copy-on-write group keeps: alive for good,
-#: so pandas always copies the block before writing it.
-_PIN = weakref.ref(_PIN_TARGET)
+
+
+class _PinRef(weakref.ref):
+    """The reference a frozen block's copy-on-write group keeps: alive for
+    good, so pandas always copies the block before writing it. One per
+    group, holding the arrays that own the group's frozen memory (*roots*)
+    and the blocks cash knows to be in the group (*blocks*, weakly), so
+    that a write can count who still reads that memory (`_note_shared`).
+    *writes* and *left*: how many writes pandas checked the group before,
+    and whether the last left a reader behind (`_watch_self_test`)."""
+
+    __slots__ = ("__weakref__", "blocks", "left", "roots", "writes")
+
+    def __new__(cls, roots: list[Any]) -> _PinRef:
+        return super().__new__(cls, _PIN_TARGET)
+
+    def __init__(self, roots: list[Any]) -> None:
+        super().__init__(_PIN_TARGET)
+        self.roots = [weakref.ref(root) for root in roots]
+        self.blocks: list[Any] = []
+        self.writes = 0
+        self.left = False
+
+    def know(self, block: Any) -> None:
+        """Remember *block*, one of the group's, to find the group by."""
+        self.blocks = [ref for ref in self.blocks if ref() is not None]
+        self.blocks.append(weakref.ref(block))
+
+
+#: ``id(root) -> {id(pin): weak reference to pin}`` for the groups whose
+#: frozen memory *root* owns; a column the RAM tier keeps for two entries is
+#: in two groups.
+_PINS_BY_ROOT: dict[int, Any] = {}
 
 
 def is_pin(obj: Any) -> bool:
-    """Is *obj* what `_PIN` points to? (not a block: walks of a reference
-    group skip it)."""
+    """Is *obj* what a `_PinRef` points to? (not a block: walks of a
+    reference group skip it)."""
     return obj is _PIN_TARGET
+
+
+def _pin_of(refs: Any) -> _PinRef | None:
+    """The `_PinRef` in the copy-on-write group *refs*; None in a group
+    cash has not frozen."""
+    for ref in refs.referenced_blocks:
+        if type(ref) is _PinRef:
+            return ref
+    return None
+
+
+def has_pin(block: Any) -> bool:
+    """Is *block* in a group cash froze (its data the RAM tier's)?"""
+    return _pin_of(block.refs) is not None
+
+
+# ------------------------------------------------- writes a view does not see
+#
+# A served table shares its memory with the RAM tier's copy, so pandas
+# copies a column before writing it, and a numpy array taken from the
+# column before (``v = s.to_numpy()``, ``s.values``, ``s.array``) keeps the
+# old values, where a plain run writes the column in place and the array
+# sees the write. That cannot be matched without copying every hit, so the
+# write is counted as pandas checks the column (`_install_write_watch`),
+# and warned about: at the end of the statement in a notebook cell cash
+# runs (`defer_reports`, `views_left_behind`), at the write itself
+# anywhere else (`_warn_at_write`).
+
+#: What writes left behind while reports are deferred, oldest first: for
+#: each, weak references to the roots still read.
+_LEFT: list[list[Any]] = []
+_LEFT_LOCK = threading.Lock()
+#: How many callers defer the reports (`defer_reports`).
+_DEFERRING: list[int] = [0]
+#: This thread's `_watch_self_test` writes: counted, never reported.
+_QUIET = threading.local()
+#: The places `_warn_at_write` warned about, ``(file, line)``.
+_WARNED_AT: set[tuple[str, int]] = set()
+_UNCHECKED_WARNED: list[bool] = []
+
+
+def _note_shared(refs: Any) -> None:
+    """pandas found the group *refs* shared before writing one of its
+    blocks: when cash froze it, count who still reads its memory besides
+    pandas' blocks (`_read_elsewhere`), and report it (`_left_behind`)."""
+    pin = _pin_of(refs)
+    if pin is None:
+        return
+    pin.writes += 1
+    if not _counts_exact():
+        _warn_unchecked()
+        return
+    try:
+        left = _read_elsewhere(pin)
+    except Exception:
+        logger.debug("cash: could not count the readers of a written table", exc_info=True)
+        return
+    pin.left = bool(left)
+    if left and not getattr(_QUIET, "on", False):
+        _left_behind(left)
+
+
+def _left_behind(left: list[Any]) -> None:
+    if _DEFERRING[0] > 0:
+        with _LEFT_LOCK:
+            _LEFT.append(left)
+    else:
+        _warn_at_write()
+
+
+#: ``id(root) -> references`` the views `for_storing` made hold to *root*:
+#: cash's own, credited when a write counts who reads that memory.
+_STORE_HELD: dict[int, int] = {}
+_STORE_LOCK = threading.Lock()
+#: How many `for_storing` calls are running, on whatever thread: their
+#: locals hold the blocks' values for a moment (`_held_by_pandas_and_cash`).
+_DETACHING = [0]
+
+
+def for_storing(value: Any) -> Any:
+    """*value* for a disk write to serialize off the caller's thread: each
+    frozen pandas table in it (as deep as the RAM tier looks for tables)
+    replaced by an equal one whose frozen columns are fresh views of the
+    same memory, outside its copy-on-write group.
+
+    The pickler and the payload's buffers then hold only those views, which
+    a write into a served table does not count as readers, while each view
+    itself is credited for as long as it lives (`_STORE_HELD`): the count
+    stays exact while the disk write runs. *value* itself when it holds no
+    frozen table, or when a table cannot be rebuilt so; the disk write's
+    references then count as readers (a write warns, never misses)."""
+    with _STORE_LOCK:
+        _DETACHING[0] += 1
+    try:
+        return _for_storing(value, {}, 0)
+    except Exception:
+        logger.debug("cash: a table stored to disk as it is", exc_info=True)
+        return value
+    finally:
+        with _STORE_LOCK:
+            _DETACHING[0] -= 1
+
+
+def _for_storing(value: Any, done: dict[int, Any], depth: int) -> Any:
+    if id(value) in done:
+        return done[id(value)]
+    kind = type(value)
+    if kind in (dict, list, tuple):
+        if depth >= 2:
+            return value
+        if kind is dict:
+            items = {key: _for_storing(item, done, depth + 1) for key, item in value.items()}
+            changed = any(items[key] is not value[key] for key in value)
+            result = items if changed else value
+        else:
+            parts = [_for_storing(item, done, depth + 1) for item in value]
+            changed = any(new is not old for new, old in zip(parts, value, strict=True))
+            result = kind(parts) if changed else value
+    elif getattr(value, "_mgr", None) is not None and kind.__module__.startswith("pandas"):
+        result = _detached(value)
+    else:
+        return value
+    done[id(value)] = result
+    return result
+
+
+def _detached(table: Any) -> Any:
+    """*table* rebuilt on fresh views of its frozen columns (`for_storing`);
+    *table* itself when none of its blocks is frozen."""
+    mgr = table._mgr
+    if not any(_pin_of(block.refs) is not None for block in mgr.blocks):
+        return table
+    blocks = []
+    for block in mgr.blocks:
+        values = block.values
+        if _pin_of(block.refs) is not None:
+            values = _fresh_view(values)
+        blocks.append(block.make_block_same_class(values))
+    if table.ndim == 2:
+        fresh = type(mgr)(tuple(blocks), list(mgr.axes), verify_integrity=False)
+    else:
+        fresh = type(mgr)(blocks[0], mgr.axes[0], verify_integrity=False)
+    return table._constructor_from_mgr(fresh, axes=fresh.axes).__finalize__(table)
+
+
+def _fresh_view(values: Any) -> Any:
+    """A new view of the frozen *values*, credited to its root while alive."""
+    import numpy as np
+
+    if type(values) is np.ndarray:
+        view = values.view()
+        fresh = view
+    else:
+        parts = _ndarray_parts(values)
+        if not parts:
+            return values  # Arrow: no numpy memory to count
+        view = values._ndarray.view()
+        fresh = values._from_backing_data(view)
+        if getattr(values, "_freq", None) is not None:
+            fresh._freq = values._freq
+    key = id(_root(view))
+    # Credited only once it exists: in between, it counts as a reader.
+    with _STORE_LOCK:
+        _STORE_HELD[key] = _STORE_HELD.get(key, 0) + 1
+    weakref.finalize(view, _store_view_gone, key).atexit = False
+    return fresh
+
+
+def _store_view_gone(key: int) -> None:
+    with _STORE_LOCK:
+        left = _STORE_HELD.pop(key, 1) - 1
+        if left > 0:
+            _STORE_HELD[key] = left
+
+
+def defer_reports(on: bool) -> None:
+    """While on, a write that leaves an array behind is kept for
+    `views_left_behind` rather than warned about where it happens: the
+    notebook warns at the end of the statement, naming the variables.
+    Calls nest; each ``True`` is matched by a ``False``."""
+    with _LEFT_LOCK:
+        _DEFERRING[0] = max(0, _DEFERRING[0] + (1 if on else -1))
+
+
+def forget_asked() -> None:
+    """Drop what `views_left_behind` would report."""
+    with _LEFT_LOCK:
+        _LEFT.clear()
+
+
+def views_left_behind() -> tuple[int, list[Any]]:
+    """The writes kept since the last call (`defer_reports`) that left a
+    numpy array reading a served table's old memory, and the arrays owning
+    that memory still alive (an array taken inside a function is gone by
+    the end of the statement; its write is still counted).
+
+    In a plain run the write reaches the array when no other table shares
+    the column; that is not told apart, so a write pandas would have
+    copied anyway is reported too."""
+    with _LEFT_LOCK:
+        taken = list(_LEFT)
+        _LEFT.clear()
+    roots: list[Any] = []
+    for refs in taken:
+        for ref in refs:
+            root = ref()
+            if root is not None and not any(root is seen for seen in roots):
+                roots.append(root)
+    return len(taken), roots
+
+
+def _counts_exact() -> bool:
+    """Are reference counts exact here? Not on a free-threaded CPython
+    with the GIL off, where another thread's references are counted
+    apart."""
+    gil = getattr(sys, "_is_gil_enabled", None)
+    return gil is None or bool(gil())
+
+
+def _warn_unchecked() -> None:
+    """Said once: writes into served tables cannot be checked here."""
+    if _UNCHECKED_WARNED or getattr(_QUIET, "on", False):
+        return
+    _UNCHECKED_WARNED.append(True)
+    from ..diagnostics import warn_diagnostic
+    from ..exceptions import CashWarning
+
+    what = (
+        "a pandas table served from the cache was written, and this free-threaded Python counts "
+        "references inexactly, so cash cannot tell whether a numpy array taken from the table before "
+        "the write still holds the old values (in a plain run it would see the write)."
+    )
+    fix = "take arrays from a served table after writing it, or copy the table first (df = df.copy())."
+    warn_diagnostic(CashWarning, "CACHE-SERVED-VIEW", what, fix, location=_write_site())
+
+
+def _write_site() -> tuple[str, int]:
+    """The line of the caller's own code that wrote the table: the first
+    frame outside pandas and cash."""
+    import os
+
+    import pandas as pd
+
+    skip = (os.path.dirname(pd.__file__) + os.sep, os.path.dirname(os.path.dirname(__file__)) + os.sep)
+    frame = sys._getframe(2)
+    while frame is not None and frame.f_code.co_filename.startswith(skip):
+        frame = frame.f_back
+    if frame is None:
+        return "<cash>", 0
+    return frame.f_code.co_filename, frame.f_lineno
+
+
+def _warn_at_write() -> None:
+    """CACHE-SERVED-VIEW, once per line of the caller's that writes: a
+    table ``@cash.cache`` served is about to be written while a numpy
+    array taken from it still reads its old memory (`_note_shared`)."""
+    from ..diagnostics import warn_diagnostic
+    from ..exceptions import CashWarning
+
+    site = _write_site()
+    if site in _WARNED_AT:
+        return
+    _WARNED_AT.add(site)
+    what = (
+        "this line writes into a pandas table a cached function returned from the cache, while a numpy "
+        "array taken from the table before (with .to_numpy(), .values or .array) is still held. The "
+        "served table shares its memory with the cache's copy, so pandas copies the column before "
+        "writing it, and the array keeps the old values. In a plain run the write reaches the array "
+        "whenever no other table shares the column."
+    )
+    fix = (
+        "take the array after the write, or copy the returned table (df = df.copy()) and take the "
+        "array from the copy, so that it sees later writes as in a plain run."
+    )
+    warn_diagnostic(CashWarning, "CACHE-SERVED-VIEW", what, fix, location=site)
 
 
 #: ``id(array) -> weak reference`` for each array whose memory `freeze` made
@@ -108,7 +427,12 @@ def _remember_frozen(array: Any) -> None:
     key = id(array)
     with _FROZEN_LOCK:
         if key not in _FROZEN:
-            _FROZEN[key] = weakref.ref(array, lambda _ref, key=key: _FROZEN.pop(key, None))
+            _FROZEN[key] = weakref.ref(array, lambda _ref, key=key: _forget_root(key))
+
+
+def _forget_root(key: int) -> None:
+    _FROZEN.pop(key, None)
+    _PINS_BY_ROOT.pop(key, None)
 
 
 def _root(array: Any) -> Any:
@@ -149,6 +473,8 @@ def enabled() -> bool:
     except Exception:
         logger.debug("cash: pandas tables are copied, not shared", exc_info=True)
         ok = False
+    if not ok:
+        _uninstall_write_watch()  # the self-test may have put it in
     _ENABLED.append(ok)
     return ok
 
@@ -186,7 +512,8 @@ def _self_test(pd: Any) -> bool:
         if pickle.loads(pickle.dumps(kept)).index.freq != original.index.freq:
             return False
     del stored
-    hit.iloc[0, 0] = 100.0
+    if not _watch_self_test(pd, hit, stored_series):
+        return False
     hit.iloc[1, 2] = pd.Timestamp("2021-01-01")
     hit.iloc[3, 1] = 9
     if other["f"].iloc[0] != 0.0 or other["i"].iloc[3] != 3:
@@ -202,6 +529,61 @@ def _self_test(pd: Any) -> bool:
     else:
         return False
     return bool(other["f"].iloc[1] == 1.0)
+
+
+def _watch_self_test(pd: Any, hit: Any, stored_series: Any) -> bool:
+    """Does the write watch see writes into a hit, through each place it
+    hooks, count a write with nothing else holding the data as clean, and
+    one with a numpy array taken before it as leaving it behind? When not,
+    tables are not shared (`enabled` takes the watch out again): copied,
+    they behave as in a plain run."""
+    import numpy as np
+
+    if not _counts_exact():
+        return True  # nothing is counted: a write says once it cannot be (`_warn_unchecked`)
+    _QUIET.on = True
+    try:
+        ok = _watch_checks(pd, np, hit, stored_series)
+    except Exception:
+        logger.debug("cash: the write watch failed its self-test", exc_info=True)
+        ok = False
+    finally:
+        _QUIET.on = False
+    return ok
+
+
+def _watch_checks(pd: Any, np: Any, hit: Any, stored_series: Any) -> bool:
+    def written(table: Any, write: Any) -> tuple[bool, bool]:
+        """Did writing *table* count as a write (`_note_shared`), and did
+        it leave a reader behind?"""
+        mgr = table._mgr
+        pin = _pin_of(mgr.blocks[mgr.blknos[0] if table.ndim == 2 else 0].refs)
+        if pin is None:
+            return False, False
+        before = pin.writes
+        write(table)
+        return pin.writes > before, pin.left
+
+    clean = (True, False)
+    # A frame's block, through the manager (`_has_no_reference_block`).
+    if written(hand_out(hit), lambda t: t.iloc.__setitem__((0, 0), 100.0)) != clean:
+        return False
+    # A Series (`SingleBlockManager._has_no_reference`).
+    if written(hand_out(stored_series), lambda t: t.iloc.__setitem__(0, 100.0)) != clean:
+        return False
+    # Block methods writing in place: `_maybe_copy` (mask, where) and
+    # `_get_refs_and_copy` (ffill, fillna, interpolate).
+    if written(hand_out(stored_series), lambda t: t.mask(t > 1, 0.0, inplace=True)) != clean:
+        return False
+    if written(hand_out(stored_series), lambda t: t.ffill(inplace=True)) != clean:
+        return False
+    # An array taken before the write still reads the old memory. Kept in
+    # a list, as a caller's would be: the locals of cash's own frames are
+    # counted as the write's (`_held_by_pandas_and_cash`).
+    frame = hand_out(hit)
+    kept = [frame["f"].to_numpy()]
+    seen = written(frame, lambda t: t.iloc.__setitem__((0, 0), 100.0))
+    return seen == (True, True) and kept[0][0] != 100.0
 
 
 # ---------------------------------------------------------------- freezing
@@ -328,9 +710,9 @@ def _undo(frame: Any, journal: _Journal) -> None:
     """Put back what a failed `_freeze` of *frame* changed (`_Journal`)."""
     for name, axis in reversed(journal.axes):
         setattr(frame, name, axis)
-    for referenced in journal.pins:
-        while any(ref is _PIN for ref in referenced):
-            referenced.remove(_PIN)
+    for referenced, pin in journal.pins:
+        while any(ref is pin for ref in referenced):
+            referenced.remove(pin)
     for block, values in reversed(journal.values):
         block.values = values
     # Bases were made read-only after the views over them: made writable
@@ -441,13 +823,12 @@ def _frozen_index(index: Any) -> Any:
 
 
 def frozen_already(frame: Any) -> bool:
-    """Is all of *frame*'s data frozen by cash already (a hit, a table cash
-    froze after unpickling it)? Then it can be kept as it is, by a shallow
+    """Is all of *frame*'s data frozen by cash already (a hit)? Then it can be kept as it is, by a shallow
     copy (`hand_out`): no holder can write that data, and storing it changes
     nothing any holder may do."""
     try:
         for blk in frame._mgr.blocks:
-            if not any(ref is _PIN for ref in blk.refs.referenced_blocks):
+            if _pin_of(blk.refs) is None:
                 return False
             parts = _ndarray_parts(blk.values)
             if parts is None or not all(not array.flags.writeable and is_frozen(array) for _name, array in parts):
@@ -471,7 +852,7 @@ def _is_range(index: Any) -> bool:
 def freeze(frame: Any, *, cells_known: bool = False) -> bool:
     """Make *frame*'s data immutable in place (see the module docstring), and
     every pandas object's that shares its blocks. *frame* must be cash's
-    own: a copy no caller holds, or a table just unpickled. False, with
+    own: a copy no caller holds. False, with
     nothing done, when *frame* is not `freezable`.
     """
     return enabled() and _freeze(frame, cells_known=cells_known)
@@ -483,6 +864,7 @@ def _freeze(frame: Any, *, cells_known: bool = False) -> bool:
         if not freezable(frame, cells_known=cells_known):
             return False
         _install_pickling()
+        _install_write_watch()
         _JOURNAL.current = journal
         _freeze_in_place(frame)
         return True
@@ -507,17 +889,23 @@ def _freeze_in_place(frame: Any) -> None:
     for blk in frame._mgr.blocks:
         refs = blk.refs
         sharing = [ref() for ref in refs.referenced_blocks]
-        for other in [blk, *sharing]:
-            if other is None or is_pin(other):
-                continue
+        group = [other for other in [blk, *sharing] if other is not None and not is_pin(other)]
+        for other in group:
             values = other.values
             frozen = _freeze_values(values)
             if frozen is not values:
                 journal.values.append((other, values))
                 other.values = frozen
-        if not any(ref is _PIN for ref in refs.referenced_blocks):
-            journal.pins.append(refs.referenced_blocks)
-            refs.referenced_blocks.append(_PIN)
+        pin = _pin_of(refs)
+        if pin is None:
+            pin = _PinRef([_root(array) for _name, array in _ndarray_parts(blk.values) or ()])
+            journal.pins.append((refs.referenced_blocks, pin))
+            refs.referenced_blocks.append(pin)
+            for root in pin.roots:
+                # By id: pins are weak references to one target, so all compare equal.
+                _PINS_BY_ROOT.setdefault(id(root()), {})[id(pin)] = weakref.ref(pin)
+        for other in group:
+            pin.know(other)
     for name in ("index",) if frame.ndim == 1 else ("index", "columns"):
         axis = getattr(frame, name)
         frozen = _frozen_index(axis)
@@ -643,7 +1031,7 @@ def _share_checked(frame: Any) -> tuple[Any, bytes] | None:
             nbytes += array.nbytes
         shallow = block.copy(deep=False)
         blocks.append(shallow)
-        if not any(ref is _PIN for ref in block.refs.referenced_blocks):
+        if _pin_of(block.refs) is None:
             checked.append(shallow)  # frozen data (a hit's) is no one's to write
     if nbytes < CHECKED_MIN_BYTES:
         return None
@@ -1419,6 +1807,10 @@ def hand_out(stored: Any) -> Any:
     which pandas copies before any write."""
     copied = stored.copy(deep=False)
     _private_axes(copied)
+    for block in copied._mgr.blocks:
+        pin = _pin_of(block.refs)
+        if pin is not None:
+            pin.know(block)
     return copied
 
 
@@ -1440,13 +1832,207 @@ def _private_axes(frame: Any) -> None:
             setattr(frame, name, fresh)
 
 
+# ------------------------------------------------- readers of a written table
+
+
+def reads_memory_of(value: Any, roots: list[Any]) -> bool:
+    """Is *value* a numpy array, or an array wrapping one (``s.array``),
+    over the memory one of *roots* owns (`views_left_behind`)?"""
+    import numpy as np
+
+    array = value if isinstance(value, np.ndarray) else getattr(value, "_ndarray", None)
+    if not isinstance(array, np.ndarray):
+        return False
+    root = _root(array)
+    return any(root is other for other in roots)
+
+
+def read_only_note(exc: BaseException) -> str | None:
+    """A note for *exc* when it is numpy's "read-only" error from a write
+    into a table served from the RAM tier (``s.array[0] = ...``); None for
+    any other error.
+
+    A plain run writes such a handle in place. A served table's memory is
+    the tier's, shared with every other hit, and read-only (`freeze`): the
+    write cannot be let through without changing them."""
+    import numpy as np
+
+    if not isinstance(exc, ValueError) or "read-only" not in str(exc):
+        return None
+    tb = exc.__traceback__
+    while tb is not None:
+        for value in list(tb.tb_frame.f_locals.values()):
+            array = value if isinstance(value, np.ndarray) else getattr(value, "_ndarray", None)
+            if isinstance(array, np.ndarray) and is_frozen(array):
+                return (
+                    "cash: this column belongs to a table served from the cache. Its memory is shared "
+                    "with the cache's copy and is read-only, so a write past pandas (such as "
+                    "s.array[0] = ...) cannot change it; a plain run writes it. Write through pandas "
+                    "(s.iloc[0] = ...), or copy the table first (df = df.copy())."
+                )
+        tb = tb.tb_next
+    return None
+
+
+def _read_elsewhere(pin: _PinRef) -> list[Any]:
+    """`views_left_behind` for one group: weak references to the roots read
+    elsewhere. The roots are held weakly here, so that the references
+    counted are the holders' alone."""
+    found = []
+    for ref in pin.roots:
+        root = ref()
+        if root is None:
+            continue
+        known = [ref() for ref in list(_PINS_BY_ROOT.get(id(root), {}).values())]
+        pins = [other for other in known if other is not None] or [pin]
+        del root
+        blocks: dict[int, Any] = {}
+        countable = True
+        for other in pins:
+            group = _known_group(other)
+            if group is None:
+                countable = False
+                break
+            for block in group:
+                blocks[id(block)] = block
+        if not countable or _unaccounted(list(blocks.values()), ref):
+            found.append(ref)
+    return found
+
+
+def _known_group(pin: _PinRef) -> list[Any] | None:
+    """The live blocks of *pin*'s group, through a block cash knows in it;
+    None when none of those is alive."""
+    for ref in pin.blocks:
+        block = ref()
+        if block is not None:
+            return _group(block)
+    return None if pin.blocks else []
+
+
+def _unaccounted(blocks: list[Any], root_ref: Any) -> bool:
+    """Is the root *root_ref* refers to, or an array or wrapper the
+    *blocks* keep over it, held by anything the blocks do not account for?"""
+    objects, holders = _block_holders(blocks)
+    del blocks
+    root = root_ref()
+    if root is None:
+        return False
+    objects[id(root)] = root
+    # The views a disk write serializes from are cash's own (`for_storing`).
+    holders[id(root)] = holders.get(id(root), 0) + _STORE_HELD.get(id(root), 0)
+    del root
+    held_here = _held_by_pandas_and_cash(objects)
+    for key in list(objects):
+        # Besides those counted: `objects`, the call's argument, and the
+        # locals of the pandas and cash code writing (`values = self.values`).
+        if sys.getrefcount(objects[key]) > holders[key] + held_here.get(key, 0) + 2:
+            return True
+    return False
+
+
+def _credit_locals(
+    frame: Any, objects: dict[int, Any], counted: dict[int, int], views: dict[int, list[Any]] | None
+) -> None:
+    """Credit the references *frame*'s locals hold to *objects*: one per
+    slot holding one of them. With *views*, also note each slot holding a
+    numpy view of one of them (`_credit_views`)."""
+    import numpy as np
+
+    for value in list(frame.f_locals.values()):
+        if objects.get(id(value)) is value:
+            counted[id(value)] = counted.get(id(value), 0) + 1
+        elif (
+            views is not None and isinstance(value, np.ndarray) and value.base is not None and id(value.base) in objects
+        ):
+            noted = views.setdefault(id(value), [value, 0])
+            noted[1] += 1
+
+
+def _credit_views(views: dict[int, list[Any]], counted: dict[int, int]) -> None:
+    """Credit the base of each view the stack's locals hold, once per view
+    (one view holds its base once, however many slots hold the view), and
+    only when those slots are all that hold the view: a view the caller
+    also holds, such as the array a write is given (``df.iloc[:, 0] = v``),
+    is the caller's reader, not the write's."""
+    for key in list(views):
+        view, slots = views.pop(key)
+        # Besides the slots: `view`, getrefcount's argument.
+        if sys.getrefcount(view) - 2 <= slots:
+            counted[id(view.base)] = counted.get(id(view.base), 0) + 1
+        del view
+
+
+def _held_by_pandas_and_cash(objects: dict[int, Any]) -> dict[int, int]:
+    """How many references to each of *objects* the locals of the pandas
+    and cash frames on this thread's stack hold, directly or through a
+    numpy view whose base is one of them: the write under way, not a
+    reader the caller keeps."""
+    import os
+
+    import pandas as pd
+
+    inside = (os.path.dirname(pd.__file__) + os.sep, os.path.dirname(os.path.dirname(__file__)) + os.sep)
+    counted: dict[int, int] = {}
+    views: dict[int, list[Any]] = {}
+    frame = sys._getframe(2)  # past `_unaccounted`, which holds `objects` alone
+    while frame is not None:
+        if frame.f_code.co_filename.startswith(inside):
+            _credit_locals(frame, objects, counted, views)
+        frame = frame.f_back
+    _credit_views(views, counted)
+    if _DETACHING[0]:
+        here = threading.get_ident()
+        for thread, frame in list(sys._current_frames().items()):
+            while frame is not None and thread != here:
+                if frame.f_code.co_filename == __file__:
+                    # Direct references only: a fresh view's base is
+                    # credited once registered (`_fresh_view`), and before
+                    # that it counts, so the count errs towards a warning.
+                    _credit_locals(frame, objects, counted, None)
+                frame = frame.f_back
+    return counted
+
+
+def _block_holders(blocks: list[Any]) -> tuple[dict[int, Any], dict[int, int]]:
+    """Each object *blocks* keep their data in (``id -> object``: the
+    values, a wrapper's array, the array owning the memory), and how many
+    references to it they account for. A values object several blocks
+    share (a shallow copy's) is counted once per block, the arrays below it
+    once."""
+    objects: dict[int, Any] = {}
+    holders: dict[int, int] = {}
+
+    def held(obj: Any) -> None:
+        objects[id(obj)] = obj
+        holders[id(obj)] = holders.get(id(obj), 0) + 1
+
+    values_seen: set[int] = set()
+    arrays_seen: set[int] = set()
+    for block in blocks:
+        values = block.values
+        held(values)
+        if id(values) in values_seen:
+            continue
+        values_seen.add(id(values))
+        for name, array in _ndarray_parts(values) or ():
+            if name:
+                held(array)
+            if id(array) in arrays_seen:
+                continue
+            arrays_seen.add(id(array))
+            if array.base is not None:
+                held(array.base)
+    return objects, holders
+
+
 # ---------------------------------------------------------------- pickling
 
 
 def _writable_alias(array: Any) -> Any:
     """A writable array over a frozen *array*'s memory, for pickle to read
     alone: pickle writes a read-only array as read-only, and a table loaded
-    from it could then not be written by pandas (it would hold no `_PIN`).
+    from it could then not be written by pandas (it would hold no `_PinRef`).
     Keeps *array* alive. Never handed to anything but a pickler."""
     import numpy as np
 
@@ -1518,3 +2104,67 @@ def _install_pickling() -> None:
         Block.__reduce__ = __reduce__
         SingleBlockManager.__getstate__ = __getstate__
         _PICKLING_INSTALLED.append(True)
+
+
+#: The pandas methods `_install_write_watch` replaced: ``(owner, name, original)``.
+_WATCH_INSTALLED: list[tuple[Any, str, Any]] = []
+_WATCH_DONE: list[bool] = []
+
+
+def _install_write_watch() -> None:
+    """Note each frozen group pandas finds shared before a write
+    (`_note_shared`): the places pandas' copy-on-write asks whether a block
+    it is about to write in place is shared. Once per process, before the
+    first table is frozen; `_watch_self_test` checks it."""
+    if _WATCH_DONE:
+        return
+    with _INSTALL_LOCK:
+        if _WATCH_DONE:
+            return
+        from pandas.core.internals.blocks import Block
+        from pandas.core.internals.managers import BaseBlockManager, SingleBlockManager
+
+        no_reference_block = BaseBlockManager._has_no_reference_block
+        single_no_reference = SingleBlockManager._has_no_reference
+        maybe_copy = Block._maybe_copy
+        refs_and_copy = Block._get_refs_and_copy
+
+        def _has_no_reference_block(self: Any, blkno: int) -> bool:
+            alone = no_reference_block(self, blkno)
+            if not alone:
+                _note_shared(self.blocks[blkno].refs)
+            return alone
+
+        def _has_no_reference(self: Any, i: int = 0) -> bool:
+            alone = single_no_reference(self, i)
+            if not alone:
+                _note_shared(self.blocks[0].refs)
+            return alone
+
+        def _maybe_copy(self: Any, inplace: bool, deep: bool = True) -> Any:
+            if inplace and deep:  # a shallow copy keeps the frozen memory: no write follows
+                _note_shared(self.refs)
+            return maybe_copy(self, inplace, deep)
+
+        def _get_refs_and_copy(self: Any, inplace: bool) -> Any:
+            if inplace:
+                _note_shared(self.refs)
+            return refs_and_copy(self, inplace)
+
+        for owner, name, original, wrapper in (
+            (BaseBlockManager, "_has_no_reference_block", no_reference_block, _has_no_reference_block),
+            (SingleBlockManager, "_has_no_reference", single_no_reference, _has_no_reference),
+            (Block, "_maybe_copy", maybe_copy, _maybe_copy),
+            (Block, "_get_refs_and_copy", refs_and_copy, _get_refs_and_copy),
+        ):
+            _WATCH_INSTALLED.append((owner, name, original))
+            setattr(owner, name, wrapper)
+        _WATCH_DONE.append(True)
+
+
+def _uninstall_write_watch() -> None:
+    """Put back the pandas methods `_install_write_watch` replaced."""
+    with _INSTALL_LOCK:
+        while _WATCH_INSTALLED:
+            owner, name, original = _WATCH_INSTALLED.pop()
+            setattr(owner, name, original)

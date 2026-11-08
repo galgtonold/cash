@@ -902,8 +902,8 @@ class InMemoryBackend(CacheBackend):
             # pandas copies before any write, is as independent as a deep one.
             return frame_sharing.hand_out(frame)
         if record_cells is not None and frame_sharing.enabled() and frame_sharing.frozen_already(frame):
-            # Stored: frozen by cash already (a hit, or a table just read
-            # from disk, `promote`), so no holder can write its data: kept
+            # Stored: frozen by cash already (a hit), so no holder can
+            # write its data: kept
             # by a shallow copy, nothing copied and nothing changed.
             stored = frame_sharing.hand_out(frame)
             record_cells[id(stored)] = _SHARED
@@ -1326,22 +1326,24 @@ class InMemoryBackend(CacheBackend):
         """Keep *value*, just read from a slower tier, when that costs no copy;
         False, with nothing kept, when it would.
 
-        The value is the caller's alone: nothing else has seen it. Its pandas
-        tables are frozen where they are (`frame_sharing`) and kept as they
-        are, so a restore of a 400 MB table costs no second copy; a polars
-        frame is kept as a clone, which shares its memory, polars' own. A value the
-        store would have to copy -- an array, records, an object -- is not
-        kept on its first read (`TieredBackend.get` keeps it on the second):
-        a restored value is mostly read once per process, and copying it
-        took longer than reading it from disk.
+        The value is the caller's alone: nothing else has seen it. A polars
+        frame is kept as a clone, which shares its memory, polars' own. A
+        value the store would have to copy -- an array, records, an object,
+        a pandas table -- is not kept on its first read (`TieredBackend.get`
+        keeps it on the second): a restored value is mostly read once per
+        process, and copying it took longer than reading it from disk.
+
+        A pandas table read from disk is not frozen in place and shared
+        either: it goes to the caller as a table of its own, as a plain run
+        builds it. Shared, its memory was the tier's, so pandas copied a
+        column before any write to it, and an array taken from the column
+        (``v = y.to_numpy()``) no longer saw a write a plain run lets it
+        see.
         """
         if not _cheap_to_keep(value):
             return False
-        for frame in _frames_in(value):
-            if _is_polars_frame(type(frame)):
-                _remember_own_polars(frame)  # read from disk: its store is a clone
-            elif not frame_sharing.freeze(frame):
-                return False
+        for frame in _frames_in(value):  # polars alone: `_cheap_to_keep`
+            _remember_own_polars(frame)  # read from disk: its store is a clone
         return self.set(key, value, metadata) is not False
 
     def peek_metadata(self, key: str) -> MetadataDict | None:
@@ -2485,14 +2487,13 @@ _CHEAP_ARRAY_BYTES = 1 << 20
 
 def _cheap_to_keep(value: Any, depth: int = 0) -> bool:
     """Can the RAM tier keep *value* without copying much of it: atoms,
-    small arrays, pandas tables it can freeze (`frame_sharing`) and polars
-    frames, in a few small dicts, lists and tuples (a notebook entry's
+    small arrays and polars frames, in a few small dicts, lists and tuples (a notebook entry's
     payload)?"""
     kind = type(value)
     if kind in _ATOMS:
         return True
     if _is_pandas_frame(kind):
-        return frame_sharing.enabled() and frame_sharing.freezable(value)
+        return False  # kept as the caller's own table (`InMemoryBackend.promote`)
     if _is_polars_frame(kind):
         # Its store is a clone (`_own_polars`), which shares the immutable
         # buffers: no copy. Not with an Object column, whose Python objects
@@ -2655,7 +2656,8 @@ def _tables_with_bytes_in(value: Any, depth: int = 0) -> list:
 
 
 def _frames_in(value: Any, depth: int = 0) -> list:
-    """The pandas tables and polars frames `_cheap_to_keep` found in *value*."""
+    """The pandas tables and polars frames found in *value*, as far as
+    `_cheap_to_keep` looks."""
     kind = type(value)
     if _is_pandas_frame(kind) or _is_polars_frame(kind):
         return [value]

@@ -72,12 +72,17 @@ def test_the_copy_the_disk_write_pickles_keeps_the_freq(name):
 @pytest.mark.skipif(not frame_sharing.enabled(), reason="needs pandas copy-on-write")
 @pytest.mark.parametrize("name", TABLES)
 def test_a_table_read_from_disk_keeps_the_freq_when_kept_in_ram(name):
-    """A disk read is frozen where it is (`promote`), and every hit of it after."""
+    """A disk read goes to the caller as it is (`promote` does not keep
+    it); the second read is stored as any table is, and every hit of it
+    after keeps the freq."""
     table = pickle.loads(pickle.dumps(TABLES[name]()))
     expected = _freqs(table)
     backend = InMemoryBackend()
-    backend.promote("k", table, {"execution_time": 1.0})
+    assert not backend.promote("k", table, {"execution_time": 1.0})
     assert _freqs(table) == expected
+    again = pickle.loads(pickle.dumps(TABLES[name]()))
+    backend.set("k", again, {"execution_time": 1.0})
+    assert _freqs(again) == expected
     assert _freqs(backend.get("k")[1]) == expected
 
 

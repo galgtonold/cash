@@ -25,7 +25,7 @@ from cash.exceptions import CacheBackendError
 from ..config.schema import CashConfig
 from ..tracking.read_classification import register_cache_dir
 from ..tracking.tracker_context import untracked
-from . import compression, write_cost
+from . import compression, frame_sharing, write_cost
 from ._base import CacheBackend, MetadataDict, entry_expired
 from ._writes import PendingWrites
 from .cache_dir import (
@@ -1082,6 +1082,10 @@ class FileBackend(CacheBackend):
         """`_do_set_sync` for a `set` ``private`` value: serialize it here, on
         the writer, without copying its buffers."""
         value, serializer = work
+        # A frozen table is serialized from views of its memory that a write
+        # into a served table sharing that memory credits as cash's own
+        # (`frame_sharing.for_storing`), not from its blocks.
+        value = frame_sharing.for_storing(value)
         try:
             serialized_value = self._serialize(value, serializer, copy=False)
         except Exception as exc:

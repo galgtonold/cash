@@ -1016,12 +1016,20 @@ default argument or base class does. **Fix:** move the binding above this cell.
 
 - **An empty cached value** (an empty list or frame) may be computed again
   instead of restored.
-- **A pandas table from the cache is read-only past pandas.** Under
+- **A pandas table served from memory is read-only past pandas.** Under
   copy-on-write the memory tier shares a table's data between hits, so
   `df["x"].array[0] = v`, or writing to a NumPy view made writable again,
   raises `ValueError: assignment destination is read-only`. `df.loc`,
-  `df.iloc` and `df["x"] = ...` work as usual. See
-  [the tiers](how-it-works/storage.md#the-tiers).
+  `df.iloc` and `df["x"] = ...` work as usual, but a NumPy array taken
+  from the table before such a write (`v = df["x"].to_numpy()`) keeps the
+  old values where plain Python shows it the write; cash warns with
+  [NOTEBOOK-SERVED-VIEW](warnings.md#notebook-served-view). The warning can
+  also come when the array would not have changed: it is of another column
+  of the same block, or of another hit of the same cached result, since an
+  array keeps no trace of which hit or column it was taken from.
+  A table read from disk, as after a restart, is your own and behaves as in
+  plain Python.
+  See [the tiers](how-it-works/storage.md#the-tiers).
 - **A file you save from a restored object may differ in its bytes.** A
   value restored from the cache equals the one the code computed, but its
   internals can be laid out differently: two attributes that shared one

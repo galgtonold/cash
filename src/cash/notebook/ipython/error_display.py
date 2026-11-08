@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 
 from cash._user_attrs import attribute_or, has_attribute
 
+from ...backends import frame_sharing
 from ..compiled_source import is_cash_filename
 from .cell_count import running_cell_count
 
@@ -59,6 +60,8 @@ def show_clean_error(
         # As IPython shows a cell's ``sys.exit()``: the exception line only.
         shell.showtraceback(exc_tuple=(exc_type, exc, None), exception_only=True)
         return
+
+    _explain_read_only(exc)
 
     # Determine the cell filename that IPython would use.
     exec_count = running_cell_count(shell)
@@ -132,6 +135,18 @@ def show_clean_error(
 
         # Fallback: format and print directly.
         tb_mod.print_exception(exc_type, exc, cell_tb)
+
+
+def _explain_read_only(exc: BaseException) -> None:
+    """Add cash's note to a write refused because the table written was
+    served from the cache (`frame_sharing.read_only_note`), where a plain
+    run writes it; read before the traceback is cut to the user's frames."""
+    try:
+        note = frame_sharing.read_only_note(exc)
+        if note is not None and note not in (getattr(exc, "__notes__", None) or ()):
+            exc.add_note(note)
+    except Exception:
+        logger.debug("could not explain a read-only error", exc_info=True)
 
 
 def show_module_load_error(module_name: str, exc: BaseException, shell: ShellProtocol) -> None:

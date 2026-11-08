@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @11234ae7 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @49ee50f0 -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -159,6 +159,7 @@ Caching happened, or refused to, and it is worth saying. Every code here starts 
 | [CACHE-PER-ITEM-RERUN](#cache-per-item-rerun) | notebook | a slow step ran again over a whole collection, though most of it is unchanged |
 | [CACHE-RETURNS-AWAITABLE](#cache-returns-awaitable) | decorator | a sync function returned a coroutine, which is not stored |
 | [CACHE-RESULT-SHARED](#cache-result-shared) | decorator | the result shares state with an object outside the call |
+| [CACHE-SERVED-VIEW](#cache-served-view) | decorator | a write into a pandas table a cached function returned from the cache will not reach a NumPy array taken from the table before it |
 | [CACHE-THRASH](#cache-thrash) | both | the cache is full and evicts what it just stored |
 | [CACHE-VALUE-TOO-BIG](#cache-value-too-big) | both | a value is bigger than the disk cap |
 | [CACHE-WRITE-ABANDONED](#cache-write-abandoned) | both | the process exited before its writes finished |
@@ -661,6 +662,43 @@ later runs.
 carries this finding, so neither `# @cash:assume-safe` nor
 `with cash.assume_safe():` applies. See [Silencing one
 code](#silencing-one-code).
+
+### CACHE-SERVED-VIEW {#cache-served-view}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/backends/frame_sharing.py:_warn_at_write @3bda0831, cash/backends/frame_sharing.py:_note_shared @b455aa07 -->
+**What happened.** A line of yours wrote into a pandas table that a cached
+function returned from the memory cache (`df.iloc[0, 0] = 100`), while a
+NumPy array taken from the table before the write (`v = df["t"].to_numpy()`,
+`.values`, `.array`) was still held. A served table shares its memory with
+the cache's copy, so pandas copies the column before writing it, and the
+array keeps the old values. In plain Python, with no other table sharing
+the column, pandas writes it in place and the array sees the write. The
+warning names the line that writes, once per line, and comes as the write
+is made, so an array taken and dropped inside a function counts too. A
+table the call computed, or one read from disk, is your own and never gets
+this warning. In a notebook cell cash runs, the same write warns
+[NOTEBOOK-SERVED-VIEW](#notebook-served-view) instead; after `%cash_off`
+it warns this code. On a free-threaded Python with the GIL off, reference
+counts are not exact, so cash cannot tell an array held from none: the
+first write into a served table warns once that it cannot check.
+
+**Why it matters.** Code that reads the array after the write (`v[0]`)
+gets the old value where plain Python gets the new one.
+
+**What to do.** Take the array after the write, or copy the returned table
+(`df = df.copy()`) and take the array from the copy.
+
+**When it is safe to ignore.** When the code does not read the array after
+the write, or the array would not have changed anyway. cash counts who
+reads the table's memory, not which column or which table, so it also
+warns when the array is of another column the write leaves alone, of
+another hit of the same cached call (`a = load(); b = load()`, an array of
+`b`, a write into `a`), or when another table shared the column anyway, as
+in a chained write (`df["t"].iloc[0] = 100`) that plain Python copies too.
+An array keeps no trace of which hit or column it was taken from, so these
+cannot be told apart from an array the write does miss.
 
 ### CACHE-THRASH {#cache-thrash}
 
@@ -1840,6 +1878,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-RELOAD-STATE](#notebook-reload-state) | notebook | a reload or restart dropped state cells set on a module, and cash cannot rebuild it |
 | [NOTEBOOK-REPAIR-GAP](#notebook-repair-gap) | notebook | a statement above the cell, re-run to bring it up to date, failed, would read a value from below, or would leave the cell an earlier value because cash left out a statement it needs, so the cell runs as written, uncached |
 | [NOTEBOOK-SAVEFIG-SKIP](#notebook-savefig-skip) | notebook | a `plt.savefig` was not re-run |
+| [NOTEBOOK-SERVED-VIEW](#notebook-served-view) | notebook | a write into a pandas table served from the cache did not reach a NumPy array taken from the table before it |
 | [NOTEBOOK-SHARE-UNCHECKED](#notebook-share-unchecked) | notebook | not every variable sharing an object with a statement's outputs was found in time |
 | [NOTEBOOK-SHARED-KEPT](#notebook-shared-kept) | notebook | a value a variable below shares is kept as it is for a cell re-run on its own |
 | [NOTEBOOK-THREAD-ALIVE](#notebook-thread-alive) | notebook | a thread the cell started still runs after the cell ended |
@@ -2451,6 +2490,38 @@ fig.savefig("chart.png")
 
 **When it is safe to ignore.** Almost always: the figure did not change, so the
 file on disk is the one you want.
+
+### NOTEBOOK-SERVED-VIEW {#notebook-served-view}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/notebook/statement/served_frame_writes.py:ServedFrameWrites._warn @980e2815, cash/backends/frame_sharing.py:views_left_behind @ece653dd -->
+**What happened.** A statement wrote into a pandas table served from the
+memory tier (`y.iloc[0] = 100`), while a NumPy array taken from the table
+before the write (`v = y.to_numpy()`, `y.values`) was still held. A served
+table shares its memory with the cache's copy, so pandas copied the column
+before writing it, and the array kept the old values. In plain Python,
+with no other table sharing the column, pandas writes it in place and the
+array sees the write. The write is counted as it is made, and the warning
+shown at the end of its statement, naming the variables that still hold
+such an array (an array taken inside a function and gone by then is
+counted too, unnamed). It is shown once per statement each time the cell
+runs. A table read from disk, as after a restart, is your own and never
+gets this warning.
+
+**Why it matters.** Code that reads the array after the write (`v[0]`)
+gets the old value where plain Python gets the new one.
+
+**What to do.** Take the array after the write, or copy the table where it
+is served (`df = df.copy()`) and take the array from the copy.
+
+**When it is safe to ignore.** When the code does not read the array after
+the write, or the array would not have changed anyway: when another table
+shared the column (`y = df["t"]` with `df` still held), plain Python copies
+it too. cash counts who reads the table's memory, not which column or which
+table, so it also warns for an array of another column the write leaves
+alone, or of another hit of the same cached result: an array keeps no trace
+of which hit or column it was taken from.
 
 ### NOTEBOOK-SHARE-UNCHECKED {#notebook-share-unchecked}
 
