@@ -91,7 +91,7 @@ Each argument is fingerprinted by the first rule that applies:
 7. The pickled value, in one canonical form: sets in sorted order, every
    container tagged with its type.
 
-<!-- claim: cash/kept_state.py:chooses_its_state @2d177a27, cash/kept_state.py:left_out_attrs @28c3abed -->
+<!-- claim: cash/kept_state.py:chooses_its_state @2d177a27, cash/kept_state.py:left_out_attrs @83bfa732 -->
 A class of yours whose own `__getstate__`, `__reduce__` or `__reduce_ex__`,
 or a reducer registered for it with `copyreg.pickle`, leaves instance
 attributes out of what it pickles (a precision, a device, a lock) is keyed
@@ -101,6 +101,18 @@ value (a portable default in place of the live setting). One that cannot be
 pickled, such as a lock, is keyed by its type; one that holds the object
 leaving it out is keyed by its content, as pickle stores the cycle. A
 library's class is keyed by what it pickles.
+
+<!-- claim: cash/kept_state.py:_own_attrs @f77e88c7, cash/kept_state.py:_reduce_by_reference_for_key @07729437, cash/kept_state.py:stands_by_reference @f8f477fc -->
+An object that pickles by reference, by its name or by a call that looks it up
+(a logger pickles as `getLogger(name)`), is keyed with the attributes it
+holds, as a pickle by value would hold them: `log.setLevel(10)` changes the
+key of a value holding `log`. One that cannot be pickled, such as a handler
+holding a lock, is keyed by its type, as above. A cache it fills as it is read
+(a private attribute named for one, such as a logger's `_cache`) is left out,
+and so is an object its class holds under the same name (every logger's one
+manager, which holds every logger in the process). Functions, classes, modules
+and bound methods are pickled by name with nothing of their own to add; their
+code and attributes are keyed where they are read.
 
 Inside a list, tuple, set or dict argument, a value a registered hasher, a
 `__cash_key__` or a built-in content hasher covers is hashed by it too;

@@ -1349,6 +1349,10 @@ class _KeepDict(dict):
             if cached_properties(t) and (self._keyed or _leaves_views_out(t)):
                 which = None if self._keyed else stored_views
                 reducer = functools.partial(_reduce_without_views, reducer=reducer, which=which)
+        if self._keyed and may_stand_by_reference(t):
+            # A logger reduces to ``getLogger(name)``: the key would hold
+            # its name and none of its level (`_reduce_by_reference_for_key`).
+            reducer = functools.partial(_reduce_by_reference_for_key, reducer=reducer)
         if self._keyed and t.__name__ in _GLOBAL_RNG_TYPE_NAMES:
             # One instance of the class may be a module's global RNG.
             reducer = functools.partial(_reduce_rng_for_key, reducer=reducer)
@@ -1621,11 +1625,33 @@ def _watched(reducer: Any, t: type, registered: Any, watch: list) -> Any:
             reduced = reducer(obj)
             if not plain:
                 watch.append(True)  # a key reduces it without the dict this adds
-            elif not isinstance(reduced, str) and left_out_attrs(obj, reduced[2] if len(reduced) > 2 else None):
+            elif left_out_attrs(obj, None if isinstance(reduced, str) or len(reduced) < 3 else reduced[2]):
                 watch.append(True)
             return reduced
 
         return state
+    if may_stand_by_reference(t):
+        reducer = _watched_by_reference(_watched_views(reducer, t, registered, watch), watch)
+    else:
+        reducer = _watched_views(reducer, t, registered, watch)
+    return reducer
+
+
+def _watched_by_reference(reducer: Any, watch: list) -> Callable[[Any], Any]:
+    """*reducer*, noting in *watch* an object it reduces by reference while
+    it holds attributes a key reduces it with (`_reduce_by_reference_for_key`)."""
+
+    def by_reference(obj: Any) -> Any:
+        reduced = reducer(obj)
+        if stands_by_reference(reduced) and _own_attrs(obj):
+            watch.append(True)
+        return reduced
+
+    return by_reference
+
+
+def _watched_views(reducer: Any, t: type, registered: Any, watch: list) -> Any:
+    """`_watched` for a class that is not the user's choosing its state."""
     if registered is None and cached_properties(t):
 
         def views(obj: Any) -> Any:
@@ -2215,13 +2241,130 @@ def _reduce_for_key(obj: Any, protocol: int, registered: Any = None) -> Any:
     beside it (`chooses_its_state`). Only hashed, never loaded."""
     reduced = obj.__reduce_ex__(protocol) if registered is None else registered(obj)
     if isinstance(reduced, str):
-        return reduced
+        # By its name, as a module-level singleton is: nothing of its state.
+        left_out = left_out_attrs(obj, None)
+        if not left_out:
+            return reduced
+        return _by_name_reduce(obj, reduced, ("__cash_left_out__", None, left_out))
     rebuild, args, *rest = reduced
     rest += [None] * (4 - len(rest))
     left_out = left_out_attrs(obj, rest[0])
     if not left_out:
         return reduced
     return rebuild, args, ("__cash_left_out__", rest[0], left_out), *rest[1:4]
+
+
+def may_stand_by_reference(t: type) -> bool:
+    """Can an instance of *t* pickle by reference -- by its name, or by a
+    call that looks it up (`stands_by_reference`) -- while it holds
+    attributes of its own? Its class has a reduce of its own and its
+    instances an ``__dict__`` or ``__slots__``. Remembered per type.
+
+    Most classes cannot: the ones that pickle their state, and the ones
+    whose instances hold no attributes (a numpy ufunc, a pandas Timestamp,
+    a bound method), are reduced as before, with no Python step per
+    instance. A function and a class are pickled by name before a reducer
+    is asked (their code and their attributes are read where they are
+    used); a module never pickles."""
+    try:
+        return _MAY_STAND_BY_REFERENCE[t]
+    except KeyError:
+        pass
+    except TypeError:  # a class whose metaclass makes it unhashable
+        return _decide_may_stand_by_reference(t)
+    found = _MAY_STAND_BY_REFERENCE[t] = _decide_may_stand_by_reference(t)
+    return found
+
+
+def _decide_may_stand_by_reference(t: type) -> bool:
+    if not t.__dictoffset__ and not any(klass.__dict__.get("__slots__") for klass in t.__mro__):
+        return False
+    for klass in t.__mro__:
+        own = klass.__dict__
+        if "__reduce_ex__" in own or "__reduce__" in own:
+            return klass is not object
+    return False
+
+
+_MAY_STAND_BY_REFERENCE: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+#: What a reduce rebuilds an object from its class and its state with: by
+#: value, never a lookup.
+_REBUILDS_BY_VALUE = (copyreg.__newobj__, copyreg.__newobj_ex__, copyreg._reconstructor)  # type: ignore[attr-defined]
+
+
+def stands_by_reference(reduced: Any) -> bool:
+    """Does *reduced*, an object's reduce value, stand for it by reference:
+    its name (a string), or a call that is not its class and is given no
+    state (``getLogger(name)``), so loading looks the object up?"""
+    if isinstance(reduced, str):
+        return True
+    if type(reduced) is not tuple or len(reduced) < 2:
+        return False
+    rebuild = reduced[0]
+    if len(reduced) > 2 and reduced[2] is not None:
+        return False
+    return not isinstance(rebuild, type) and not any(rebuild is by_value for by_value in _REBUILDS_BY_VALUE)
+
+
+def _reduce_by_reference_for_key(obj: Any, reducer: Any) -> Any:
+    """*reducer*'s reduce of *obj*, with the attributes *obj* holds as its
+    state when the reduce stands for it by reference (`stands_by_reference`).
+    Only hashed, never loaded.
+
+    A logger pickles as ``getLogger(name)``: its level, its handlers and its
+    parent are what the name finds then. Keyed by its name alone, a value
+    holding one digested the same after ``log.setLevel(10)``: the call was
+    taken to change nothing, and a reader of the logger was served the
+    level it read before. Its attributes are keyed as a pickle by value
+    would hold them, as `left_out_attrs` keys what a class of the user's
+    leaves out: one that cannot be pickled (a handler holding a lock and a
+    stream) by its type. A cache the object fills as it is read (a private
+    attribute named for one, as ``_cache``) is derived from the rest and
+    left out, or every read would count as a change."""
+    reduced = reducer(obj)
+    if not stands_by_reference(reduced):
+        return reduced
+    attrs = left_out_attrs(obj, None, own_only=True)
+    if not attrs:
+        return reduced
+    if isinstance(reduced, str):
+        return _by_name_reduce(obj, reduced, attrs)
+    return (reduced[0], reduced[1], attrs, *reduced[3:])
+
+
+def _own_attrs(obj: Any) -> dict:
+    """*obj*'s attributes (`_instance_attrs`) that are its own state: not a
+    cache it fills as it is read (a private attribute named for one,
+    ``_cache``), and not an object its class holds under the same name.
+
+    Every logger holds its class's one manager, which holds every logger in
+    the process: keyed with it, a value holding a logger changed whenever
+    any library made a logger, and keying it nested a pickle per logger
+    until the stack ran out. What a class holds is the class's state, read
+    where the class is."""
+    attrs = _instance_attrs(obj)
+    if not attrs:
+        return attrs
+    t = type(obj)
+    own = {}
+    for name, value in attrs.items():
+        if name.startswith("_") and name.rstrip("_").lower().endswith("cache"):
+            continue
+        if any(klass.__dict__.get(name, _NOT_HELD) is value for klass in t.__mro__):
+            continue
+        own[name] = value
+    return own
+
+
+_NOT_HELD = object()
+
+
+def _by_name_reduce(obj: Any, name: str, state: Any) -> tuple:
+    """A reduce value naming *obj* as pickle does for the *name* its reduce
+    gave, with *state* beside it: keyed, never loaded."""
+    module = pickle.whichmodule(obj, name)
+    return by_name, (module, name), state
 
 
 class _Keying:
@@ -2274,11 +2417,14 @@ def one_keying() -> Iterator[None]:
         _KEYING.now = None
 
 
-def left_out_attrs(obj: Any, state: Any) -> dict:
+def left_out_attrs(obj: Any, state: Any, *, own_only: bool = False) -> dict:
     """The attributes of *obj* -- in its ``__dict__`` or its ``__slots__``
     -- that *state*, what its reduce saves, does not hold: by name, or
     under their name with another value (a ``__getstate__`` that saves a
     portable default in place of the live setting).
+
+    *own_only*: only those `_own_attrs` gives, for an object pickled by
+    reference (`_reduce_by_reference_for_key`).
 
     One that cannot be pickled (a lock or a connection the class leaves out
     for that reason) is given as its type: its content is nothing pickle can
@@ -2289,7 +2435,7 @@ def left_out_attrs(obj: Any, state: Any) -> dict:
     keying = _keying()
     if keying is None:
         with one_keying():
-            return left_out_attrs(obj, state)
+            return left_out_attrs(obj, state, own_only=own_only)
     # Inline below: a chain of such objects nests a pickle per level, and
     # each frame here counts against the recursion limit.
     memo = keying.left_out
@@ -2303,7 +2449,7 @@ def left_out_attrs(obj: Any, state: Any) -> dict:
             return {}
         if known[1] is state:
             return known[2]  # type: ignore[return-value]
-    attrs = _instance_attrs(obj)
+    attrs = _own_attrs(obj) if own_only else _instance_attrs(obj)
     if not attrs:
         return {}
     memo[id(obj)] = (obj, _TELLING, None)
