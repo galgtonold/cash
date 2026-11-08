@@ -1557,6 +1557,15 @@ class FrameDigests:
         self._columns.clear()
         self._changed = None
 
+    def forget(self, obj: Any) -> None:
+        """Drop *obj*'s entry, and with it the shallow copy that holds its
+        blocks: while it is held, pandas copies a block before writing it,
+        which a write the caller makes without cash does not
+        (`rewrite_in_place.before_call`)."""
+        self._entries.pop(id(obj), None)
+        if self._changed is not None and self._changed[0] == id(obj):
+            self._changed = None
+
     def hash_frame(self, obj: Any) -> str | None:
         """`builtin_hash` of *obj*, a pandas frame under copy-on-write, kept
         for it (`store`).

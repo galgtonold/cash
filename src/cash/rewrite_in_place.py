@@ -26,6 +26,8 @@ it was and the computation runs on it.
 from __future__ import annotations
 
 import sys
+import weakref
+from collections.abc import Callable
 from typing import Any, NamedTuple
 
 from cash._user_attrs import attribute_or
@@ -35,10 +37,12 @@ __all__ = [
     "WRITTEN_BACK",
     "ArgumentsLeft",
     "FrameState",
+    "HeldByCash",
     "KeyedBefore",
     "Shape",
     "before_call",
-    "column_arrays",
+    "Columns",
+    "release_frame",
     "mismatch",
     "refusal",
     "rewritable_kind",
@@ -157,17 +161,43 @@ class Shape:
     def __init__(self, kind: type, parts: tuple) -> None:
         self.kind = kind
         self.parts = parts
-        #: A frame's `column_arrays`, when taken (`before_call`).
-        self.arrays: tuple | None = None
+        #: A frame's `Columns`, when taken (`before_call`).
+        self.arrays: Columns | None = None
 
 
-def before_call(obj: Any) -> Shape:
+def before_call(obj: Any, release: bool = True) -> Shape:
     """*obj*'s `Shape` before a call that may change it, with a frame's
-    `column_arrays`, which `snapshot` compares after it."""
+    `Columns`, which `snapshot` compares after it.
+
+    With *release*, a frame's entry in the frame-hash memo is dropped
+    first: the memo's shallow copy holds the frame's blocks, and while it
+    does, pandas copies a block before any write to it. The call then runs
+    on the frame as the caller holds it, and which columns it writes into
+    and which it gives a new array is what plain pandas does with that
+    frame. Without, a frame the memo holds is noted as such
+    (`Columns.cash_held`), and a call that gives one of its columns a new
+    array is not stored (`snapshot`): pandas may have copied it only
+    because of the memo."""
+    if release:
+        release_frame(obj)
     shape = shape_of(obj)
     if _pandas_kind(obj) == "frame":
-        shape.arrays = column_arrays(obj)
+        shape.arrays = Columns.of(obj)
     return shape
+
+
+def release_frame(obj: Any) -> None:
+    """Drop what cash holds of *obj*'s blocks (`FrameDigests.forget`)."""
+    if _pandas_kind(obj) != "frame":
+        return
+    hashing = sys.modules.get("cash.decorator.arg_hashing")
+    if hashing is not None:
+        hashing.FRAME_DIGESTS.forget(obj)
+
+
+def _held_by_cash(obj: Any) -> bool:
+    hashing = sys.modules.get("cash.decorator.arg_hashing")
+    return hashing is not None and id(obj) in hashing.FRAME_DIGESTS
 
 
 def shape_of(obj: Any) -> Shape:
@@ -183,37 +213,94 @@ def shape_of(obj: Any) -> Shape:
     return Shape(type(obj), (obj.index, obj.dtype, obj.name, dict(obj.attrs), flags))
 
 
-def column_arrays(frame: Any) -> tuple:
-    """Which array holds each column of *frame*: a NumPy column's memory
-    (address and strides), an extension column's array object. A column
-    whose entry differs after a call was given a new array; the others
-    were written into (`snapshot`)."""
-    np = sys.modules["numpy"]
-    mgr = attribute_or(frame, "_mgr", None)
+def _weak(obj: Any) -> Callable[[], Any]:
+    """A weak reference to *obj*, or, for an object that takes none, a
+    callable that returns it."""
     try:
-        # From the manager: a Series per column (``frame.iloc[:, i]``)
-        # would be one more pandas object sharing the frame's blocks, which
-        # the frame-hash memo then can no longer vouch for.
+        return weakref.ref(obj)
+    except TypeError:
+        return lambda: obj
+
+
+def _root(array: Any) -> Any:
+    """What owns an ndarray's memory: the end of its ``base`` chain."""
+    np = sys.modules["numpy"]
+    while isinstance(array, np.ndarray) and array.base is not None:
+        array = array.base
+    return array
+
+
+class Columns(NamedTuple):
+    """Which array holds each column of a frame (*tokens*: a NumPy column's
+    memory, address and strides, and its row in its block; an extension
+    column's array object and the address ranges of its memory), whether
+    another pandas object shares each column's block (*shared*, None where
+    pandas does not say), and, per column, weak references to the array
+    object and to what owns its memory (*held*): memory that is gone was
+    replaced, whatever array took its address since. Strong ones would
+    count as names for the arrays, which the frame-hash memo reads as the
+    frame's data being borrowed."""
+
+    tokens: tuple
+    shared: tuple
+    held: tuple
+    #: The frame-hash memo held the frame's blocks (`before_call`).
+    cash_held: bool = False
+
+    @classmethod
+    def of(cls, frame: Any) -> Columns:
+        np = sys.modules["numpy"]
+        mgr = frame._mgr
         blocks, blknos, blklocs = mgr.blocks, mgr.blknos, mgr.blklocs
-        tokens = []
+        tokens, shared, held = [], [], []
         for position in range(frame.shape[1]):
-            values = blocks[blknos[position]].values
+            block = blocks[blknos[position]]
+            values = block.values
             if isinstance(values, np.ndarray):
                 tokens.append((values.__array_interface__["data"][0], values.strides, int(blklocs[position])))
+                held.append((None, (_weak(_root(values)),)))
             else:
-                tokens.append(id(values))
-        return tuple(tokens)
-    except Exception:  # noqa: BLE001 - another manager: through the columns
-        pass
-    tokens = []
-    for position in range(frame.shape[1]):
-        values = frame.iloc[:, position].array
-        if type(values).__name__ == "NumpyExtensionArray":
-            held = np.asarray(values)
-            tokens.append((held.__array_interface__["data"][0], held.strides))
-        else:
-            tokens.append(id(values))
-    return tuple(tokens)
+                owners: list = []
+                tokens.append((id(values), _memory_of(values, owners)))
+                held.append((_weak(values), tuple(_weak(_root(owner)) for owner in owners)))
+            refs = attribute_or(block, "refs", None)
+            shared.append(bool(refs.has_reference()) if refs is not None else None)
+        return cls(tuple(tokens), tuple(shared), tuple(held), _held_by_cash(frame))
+
+
+def _memory_of(values: Any, owners: list) -> frozenset:
+    """The address ranges an extension array's own arrays and buffers
+    span: two array objects over the same memory (``fillna(inplace=True)``
+    on an ``Int64`` column wraps the very arrays it filled in a new one)
+    are one column written into."""
+    from cash.argument_sharing import memory_of
+
+    return frozenset(memory_of(values, owners))
+
+
+def _column_replaced(before: Any, held: tuple, now: Any, values: Any) -> bool | None:
+    """Whether a column whose array was *before* (a `Columns` token, with
+    its *held* references) was given a new one, now *now*, held in
+    *values*: False when it was written into, None when that cannot be
+    told (a new array over part of the old memory)."""
+    array, owners = held
+    if array is not None and array() is values:
+        return False  # the same array object, whatever it holds now
+    if any(owner() is None for owner in owners):
+        return True  # its memory is gone
+    if array is None:
+        return before != now  # a NumPy column: its memory and place in its block
+    if before[1] and before[1] == now[1]:
+        return False  # a new array over the very same memory
+    if any(lo < hi2 and lo2 < hi for lo, hi in before[1] for lo2, hi2 in now[1]):
+        return None
+    return True
+
+
+class HeldByCash(ValueError):
+    """A call gave a column of a frame the frame-hash memo held a new array:
+    pandas copies a block cash holds before writing it, so whether plain
+    pandas would have written into it cannot be told (`snapshot`)."""
 
 
 class FrameState(NamedTuple):
@@ -221,10 +308,16 @@ class FrameState(NamedTuple):
     columns the call gave a new array (``df["a"] = df["a"] + 1``); it wrote
     into the others (``df.loc[0, "a"] = 5``). A hit does the same, so a
     name for a column's array (``h = df["a"].array``) sees the write as it
-    does in a plain run, or keeps the old array as it does there."""
+    does in a plain run, or keeps the old array as it does there.
+
+    *shared* is whether another pandas object shared each column's block
+    before the call (`Columns`): pandas copies a shared block before it
+    writes it, so which columns a call gives a new array depends on it, and
+    a hit is served only on a frame whose columns are shared the same way."""
 
     frame: Any
     replaced: tuple[int, ...]
+    shared: tuple | None = None
 
 
 def _same(a: Any, b: Any) -> bool:
@@ -256,8 +349,19 @@ def shape_change(before: Shape, after: Any) -> str | None:
 
 def mismatch(live: Any, stored: Any) -> str | None:
     """Why *stored* cannot be written into *live*, or None when `rewrite`
-    can write it without failing halfway."""
+    can write it without failing halfway, and as the call wrote it."""
     if isinstance(stored, FrameState):
+        if _pandas_kind(live) == "frame":
+            release_frame(live)
+            try:
+                shared = Columns.of(live).shared
+            except Exception:  # noqa: BLE001 - its columns cannot be read: not written
+                return "its columns could not be read"
+            if stored.shared is None or shared != stored.shared:
+                return (
+                    "another pandas object shares its columns' memory differently than in the call it was "
+                    "stored from, so pandas would copy different columns before writing them"
+                )
         stored = stored.frame
     if type(live) is not type(stored):
         return f"it is bound to a {type(live).__name__}, not a {type(stored).__name__}"
@@ -282,36 +386,56 @@ def rewrite(live: Any, stored: Any) -> None:
     elif _numpy_array(live):
         sys.modules["numpy"].copyto(live, stored, casting="no")
     elif _pandas_kind(live) == "frame":
+        release_frame(live)
         replaced = range(stored.shape[1]) if not isinstance(stored, FrameState) else stored.replaced
         frame = stored.frame if isinstance(stored, FrameState) else stored
+        np = sys.modules["numpy"]
         for position in range(frame.shape[1]):
             # The stored column's own array, so its dtype comes with it and
             # nothing is aligned on labels: as a new array where the call
-            # gave the column one, else written into the column's array.
+            # gave the column one, else written into the very array that
+            # holds the column, as the call wrote into it.
             values = frame.iloc[:, position].array.copy()
             if position in replaced:
                 live.isetitem(position, values)
+                continue
+            mgr = live._mgr
+            held = mgr.blocks[mgr.blknos[position]].values
+            if isinstance(held, np.ndarray):
+                held[mgr.blklocs[position]] = np.asarray(values)
             else:
-                live.iloc[:, position] = values
+                held[:] = values
     else:
         live.iloc[:] = stored.to_numpy(copy=True)
 
 
-def snapshot(obj: Any, arrays: tuple | None = None) -> Any:
+def snapshot(obj: Any, arrays: Columns | None = None) -> Any:
     """A copy of *obj*'s state that nothing else holds, for an entry to
     keep. A frame's comes as a `FrameState`, whose replaced columns are
-    those whose array differs from *arrays*, its `column_arrays` before the
-    call (all of them when that was not taken)."""
+    those whose array differs from *arrays*, its `Columns` before the call
+    (all of them when that was not taken)."""
     if type(obj) in _CONTAINERS:
         return type(obj)(obj)
     if _pandas_kind(obj) == "frame":
-        now = column_arrays(obj)
-        replaced = tuple(
-            position
+        now = Columns.of(obj).tokens
+        before = arrays.tokens if arrays is not None else ()
+        mgr = obj._mgr
+        verdicts = [
+            True
+            if position >= len(before)
+            or (type(before[position][0]) is int) != (type(token[0]) is int)
+            or len(before[position]) != len(token)
+            else _column_replaced(
+                before[position], arrays.held[position], token, mgr.blocks[mgr.blknos[position]].values
+            )
             for position, token in enumerate(now)
-            if arrays is None or position >= len(arrays) or arrays[position] != token
-        )
-        return FrameState(obj.copy(), replaced)
+        ]
+        if None in verdicts:
+            raise ValueError("a column was given a new array over part of its old memory")
+        if arrays is not None and arrays.cash_held and any(verdicts):
+            raise HeldByCash("pandas may have copied a column only because cash's frame-hash memo held it")
+        replaced = tuple(position for position, verdict in enumerate(verdicts) if verdict)
+        return FrameState(obj.copy(), replaced, arrays.shared if arrays is not None else None)
     return obj.copy()
 
 

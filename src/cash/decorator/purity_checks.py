@@ -824,6 +824,10 @@ class PurityChecks:
         #: first call's warning until its body has run
         #: (`PurityChecks._hold_argument_mutations`).
         self._held_mutations: dict[str, tuple[list, bool]] = {}
+        #: The parameters reading a function's source found its body
+        #: changing in place (`_hold_argument_mutations`), kept after the
+        #: findings are said or dropped (`reads_as_changing`).
+        self._changed_in_source: dict[str, frozenset[str]] = {}
 
     def warn_shared_result(self, func, func_name: str, result, args, kwargs) -> str | None:
         """Say so when the result shares state with something the caller holds.
@@ -1590,7 +1594,17 @@ class PurityChecks:
         if not held:
             return issues
         self._held_mutations[func_name] = (held, per_report)
+        self._changed_in_source[func_name] = frozenset(
+            found.group(1)
+            for found in (_MUTATED_PARAMETER.search(getattr(issue, "description", "")) for issue in held)
+            if found is not None
+        )
         return [issue for issue in issues if not any(issue is h for h in held)]
+
+    def reads_as_changing(self, func_name: str, parameter: str) -> bool:
+        """Whether reading *func_name*'s source found its body changing
+        *parameter* in place."""
+        return parameter in self._changed_in_source.get(func_name, ())
 
     def holds_mutations(self, func_name: str) -> bool:
         """Whether findings on *func_name*'s arguments are held back

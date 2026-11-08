@@ -1467,9 +1467,14 @@ class CallRunner:
                 continue
             if keyed and content.covers(value):
                 try:
+                    # The memo's hold on a frame is let go only for a
+                    # function seen changing its arguments, or whose source
+                    # changes this one: one that changes nothing would pay
+                    # a second read of the frame for it.
+                    release = spec.changes_arguments or self._purity.reads_as_changing(spec.name, name)
                     before[name] = (
                         value,
-                        rewrite_in_place.before_call(value),
+                        rewrite_in_place.before_call(value, release=release),
                         rewrite_in_place.KeyedBefore(call.args_hash),
                     )
                 except Exception:  # noqa: BLE001 - no shape: not stored with the result
@@ -1478,8 +1483,8 @@ class CallRunner:
             if not spec.changes_arguments or rewrite_in_place.refusal(value) is not None:
                 continue
             try:
-                shape = rewrite_in_place.before_call(value)
                 fingerprint = mutation_fingerprint(value)
+                shape = rewrite_in_place.before_call(value)
             except Exception:  # noqa: BLE001 - not fingerprinted: not stored with the result
                 continue
             if fingerprint is not None:
@@ -1534,6 +1539,16 @@ class CallRunner:
                 return None
             try:
                 left[name] = (fingerprint, rewrite_in_place.snapshot(value, shape.arrays))
+            except rewrite_in_place.HeldByCash:
+                # Its first change seen, under the memo's hold: the next
+                # call lets go of the frame first and is stored.
+                observer.reword(
+                    "argument mutation",
+                    "so this call runs every time",
+                    "so this call ran; from the next call on, the state it leaves the argument in is stored "
+                    "with the result and a hit writes it back",
+                )
+                return None
             except Exception:  # noqa: BLE001 - not copied: not stored
                 return None
         try:

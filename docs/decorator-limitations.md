@@ -316,8 +316,8 @@ paths from the project root or pass absolute paths.
 - A result that can't be pickled is not stored
   ([`STORE-FAILED`](warnings.md#store-failed)), unless the function is
   `frozen=True`.
-<!-- claim: cash/decorator/runtime.py:CallRunner.arguments_left @f36bbc19, cash/decorator/runtime.py:CallRunner._arguments_to_write @0895402c, cash/rewrite_in_place.py:refusal @cece1b9e -->
-<!-- claim: cash/decorator/runtime.py:CallRunner.arguments_before @39fead21, cash/decorator/arg_hashing.py:ContentKeyed.covers @4d5faf1a -->
+<!-- claim: cash/decorator/runtime.py:CallRunner.arguments_left @5d0fd426, cash/decorator/runtime.py:CallRunner._arguments_to_write @0895402c, cash/rewrite_in_place.py:refusal @cece1b9e -->
+<!-- claim: cash/decorator/runtime.py:CallRunner.arguments_before @b57998e9, cash/decorator/arg_hashing.py:ContentKeyed.covers @4d5faf1a -->
 - A call that changed its argument in place is stored with the state it left
   the argument in when the argument is a NumPy array (not of objects), a
   pandas frame or Series whose index, columns and dtypes it kept (a Series of
@@ -328,6 +328,17 @@ paths from the project root or pass absolute paths.
   views of an array see the change. The cache key already holds such an
   argument by its content, so the first call is stored and the next call
   with the same values is a hit; nothing is hashed a second time for it.
+  A hit writes a frame's columns as the call did: into the column's own
+  array where the call wrote into it, as a new array where it gave the
+  column one, so a name for a column's array (`h = df["a"].array`) sees
+  what it sees after a plain run. Which of the two pandas does depends on
+  whether another pandas object shares the column, so a hit is served
+  only on a frame shared the way the stored one was. cash's own hold on a
+  frame it has hashed makes pandas copy a column before writing it: cash
+  lets go of the frame before the body of a function seen changing its
+  arguments, or whose own source changes this one. A first call that
+  changes a frame in a helper runs while cash still holds it, and is
+  stored from the next call on.
   (After a call that changed none of its arguments, cash stops looking at
   them before the body: a later call that starts changing one is not
   stored, the calls after it are.)

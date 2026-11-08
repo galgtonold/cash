@@ -34,7 +34,7 @@ from typing import Any
 
 from .value_types import IMMUTABLE_LEAF_TYPES
 
-__all__ = ["Unknown", "Targets", "reads_of", "read_values", "shared_in"]
+__all__ = ["Unknown", "Targets", "memory_of", "reads_of", "read_values", "shared_in"]
 
 #: Objects one answer walks at most: past it the answer is `Unknown`.
 WALK_LIMIT = 1_000_000
@@ -164,16 +164,20 @@ class _Walk:
         self.collect = collect
         self.seen: set[int] = set()
         self.found: list[tuple[int, int]] = []
+        #: With *collect*: what owns each memory found (an ndarray, a
+        #: pyarrow array, an object exporting a buffer), in order.
+        self.owners: list[Any] = []
 
     def memory_of(self, value: Any) -> list[tuple[int, int]]:
         self.run(value)
         return self.found
 
-    def _memory(self, span: tuple[int, int] | None) -> bool:
+    def _memory(self, span: tuple[int, int] | None, owner: Any = None) -> bool:
         if span is None:
             return False
         if self.collect:
             self.found.append(span)
+            self.owners.append(owner)
             return False
         return self.targets.overlaps(span)
 
@@ -205,7 +209,7 @@ class _Walk:
                     pending.extend(values)
                 continue
             if _ndarray(obj):
-                if self._memory(_bounds(obj)):
+                if self._memory(_bounds(obj), obj):
                     return True
                 if obj.dtype.hasobject:
                     pending.extend(obj.ravel(order="K").tolist())
@@ -219,10 +223,10 @@ class _Walk:
                 continue
             ranges = _arrow_ranges(obj)
             if ranges is not None:
-                if any(self._memory(span) for span in ranges):
+                if any([self._memory(span, obj) for span in ranges]):
                     return True
                 continue
-            if self._memory(_buffer_range(obj)):
+            if self._memory(_buffer_range(obj), obj):
                 return True
             if gc.is_tracked(obj):
                 pending.extend(
@@ -249,6 +253,18 @@ def _held_by_function(fn: Any) -> list:
         except ValueError:  # an empty cell
             pass
     return held
+
+
+def memory_of(value: Any, owners: list | None = None) -> list[tuple[int, int]]:
+    """The address ranges of the memory *value* holds: its arrays', its
+    buffers', however deep; what owns each is added to *owners*."""
+    targets = Targets.__new__(Targets)
+    targets.ids, targets.ranges, targets._keep = set(), [], []
+    walk = _Walk(targets, collect=True)
+    found = walk.memory_of(value)
+    if owners is not None:
+        owners.extend(walk.owners)
+    return found
 
 
 def shared_in(targets: Targets, value: Any) -> bool:
