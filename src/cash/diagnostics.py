@@ -321,7 +321,7 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # without the in-place change, or the new binding, a cell below made
         "NOTEBOOK-CALLABLE-UNREAD",  # a callable the statement calls or hands over
         # cannot be read, so it runs uncached every time
-        "NOTEBOOK-MEMO-UNREAD",  # a helper memo the statement read holds more
+        "NOTEBOOK-MEMO-UNREAD",  # a helper memo the statement filled or read holds more
         # answers than cash checks, so it runs every time
         "NOTEBOOK-MEMO-SHARED",  # an answer the statement put into a helper memo
         # is held outside its outputs too, so it runs every time

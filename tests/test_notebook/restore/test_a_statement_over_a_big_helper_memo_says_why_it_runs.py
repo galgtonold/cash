@@ -1,7 +1,9 @@
 """A statement reading a ``functools.cache`` memo that holds more answers
 than cash checks runs every time, as before, and now says why once
 (``NOTEBOOK-MEMO-UNREAD``): only the badge did, and the cell was just slow.
-A memo of a few hundred answers is checked and served."""
+The warning says whether the statement fills the memo or only reads it. A
+cell that only defines functions says nothing, as it calls no memo. A memo
+of a few hundred answers is checked and served."""
 
 from __future__ import annotations
 
@@ -29,12 +31,55 @@ def test_a_memo_over_the_limit_warns_once_and_runs_every_time(statement_processo
     read = f"tot = (sum(h(i) for i in range(60)), time.sleep({ABOVE_PERSISTENCE_FLOOR_S}))[0]"
     first, told = _run(sp, read)
     assert len(told) == 1
-    assert "the helper memo h, which holds 60 answers" in told[0]
+    assert "this statement reads the helper memo h, which holds 60 answers" in told[0]
     assert "up to 50 answers" in told[0]
     again, told_again = _run(sp, read)
     assert again.get("status") is not CacheStatus.RESTORED
     assert told_again == []  # once per statement
     assert sp.shell.user_ns["tot"] == sum(i * i for i in range(60))
+
+
+def test_a_statement_filling_the_memo_says_it_fills_it(statement_processor, monkeypatch):
+    monkeypatch.setattr(helper_memos, "MAX_KEYED", 50)
+    sp = statement_processor
+    sp.process_statement(DEFINE)
+    meta, told = _run(sp, "_fill = [h(i) for i in range(60)]")
+    assert len(told) == 1
+    assert "this statement fills the helper memo h, which holds 60 answers" in told[0]
+    assert "reads" not in told[0]
+    assert meta["uncacheable_reasons"] == [
+        "It filled the helper memo h, which holds more answers than cash checks (50) (statement re-executes)"
+    ]
+
+
+def test_a_cell_that_only_defines_functions_says_nothing_of_a_big_memo(statement_processor, monkeypatch):
+    # ``rebuild`` names ``cube.cache_clear``; defining it again once ``cube``
+    # holds more answers than cash checks said ``reads the helper memo
+    # cube ... runs every time``, though a def calls nothing.
+    monkeypatch.setattr(helper_memos, "MAX_KEYED", 50)
+    sp = statement_processor
+    define = (
+        "import functools\n@functools.cache\ndef cube(n):\n    return n ** 3\n"
+        "def rebuild(k):\n    cube.cache_clear()\n    return sum(cube(i) for i in range(k))"
+    )
+    rebuild = "def rebuild(k):\n    cube.cache_clear()\n    return sum(cube(i) for i in range(k))"
+    sp.process_statement(define)
+    sp.process_statement("_r = rebuild(60)")
+    assert sp.shell.user_ns["cube"].cache_info().currsize == 60
+    for code in (rebuild, "class Holder:\n    def again(self):\n        cube.cache_clear()"):
+        meta, told = _run(sp, code)
+        assert told == []
+        assert meta["uncacheable_reasons"] == []
+
+
+def test_a_def_whose_default_reads_the_memo_still_says_so(statement_processor, monkeypatch):
+    monkeypatch.setattr(helper_memos, "MAX_KEYED", 50)
+    sp = statement_processor
+    sp.process_statement(DEFINE)
+    sp.process_statement("_fill = [h(i) for i in range(60)]")
+    _, told = _run(sp, "def total(n=sum(h(i) for i in range(60))):\n    return n")
+    assert len(told) == 1
+    assert "this statement reads the helper memo h, which holds 60 answers" in told[0]
 
 
 def test_a_memo_of_three_hundred_answers_is_checked_and_served(statement_processor):
