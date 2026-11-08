@@ -115,6 +115,21 @@ def _statement_order(notebook_cells: tuple[str, ...]) -> tuple[dict[str, int], i
     return order, place
 
 
+def statement_cells(notebook_cells: list[str] | tuple[str, ...]) -> dict[str, int]:
+    """``{statement code: the index of the last cell it appears in}``, keyed
+    as `StatementReplay.in_notebook_order` reads a metric's code. The last:
+    for a text two cells hold (``voting_clf.fit(X_train, y_train)``) the
+    re-run is taken for the later one's, which puts back fewer names
+    (`UpstreamChecker._keep_live_bindings`)."""
+    cells: dict[str, int] = {}
+    for idx, cell in enumerate(notebook_cells):
+        per_node, _ = _cell_statement_codes(cell)
+        for codes in per_node:
+            for code in codes:
+                cells[code] = idx
+    return cells
+
+
 class StatementReplay:
     """Re-runs scheduled upstream statements, in order, loudly on failure."""
 

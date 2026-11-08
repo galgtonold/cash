@@ -101,6 +101,20 @@ def _sync_state(obj: Any) -> str | None:
     return None
 
 
+def reads_beyond_content(obj: Any) -> bool:
+    """Whether `mutation_fingerprint` reads *obj* other than through its
+    *content* callable: a sparse matrix not in canonical form (a copy is
+    hashed) or an AnnData-like object (each part is). A caller bounding the
+    read by its own *content* cannot bound those."""
+    t = type(obj)
+    if builtin_hash_family(t) == "scipy.sparse":
+        try:
+            return not getattr(obj, "has_canonical_format", True)
+        except Exception:  # noqa: BLE001 - a property that raises: read as not canonical
+            return True
+    return builtin_family_of(t) is None and _is_anndata_like(obj)
+
+
 def _is_anndata_like(obj: Any) -> bool:
     try:
         return all(hasattr(obj, a) for a in ("obs", "var", "uns", "X"))

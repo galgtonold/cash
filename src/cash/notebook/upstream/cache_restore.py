@@ -45,7 +45,7 @@ from ..restored_var import FORWARD_PROBE_PLACEHOLDER, HeldObject, apply_held_var
 from ..run_memo import stats_this_run
 from ..statement import in_place
 from ..statement._metadata import StatementCacheMetadata
-from ..statement.derivation_edges import record_shared_object_edges
+from ..statement.derivation_edges import note_bound_in_cell, record_shared_object_edges
 from ..statement.directives import statement_directives, ttl_floor_from_called_functions
 from ..statement.in_place import restore_into
 from ..statement.output_refusals import live_shared_reason
@@ -447,6 +447,7 @@ class CacheRestorer:
                     state.value_cutoff.remember(output_digests[var], lin)
             if stored_code:
                 state.executed_cell_codes[var] = stored_code
+            note_bound_in_cell(state, var, stored_code)
             if stored_hash:
                 state.executed_cell_hashes.setdefault(var, set()).add(stored_hash)
             if input_hashes:

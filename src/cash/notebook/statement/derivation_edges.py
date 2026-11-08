@@ -50,6 +50,7 @@ from cash._user_attrs import attribute_or, instance_of
 from ... import _plain_data
 from ...analysis.ast_util import parse_cached, walk_tree
 from ..borrowed_memory import borrowed_memory_names
+from ..lineage_formula import record_lineage_alias, resolve_lineage_alias
 from ..shared_objects import (
     EXACT_CONTAINER_TYPES,
     VALUE_TYPES,
@@ -640,6 +641,21 @@ def shared_object_partners(derivation_edges: dict[str, set[str]], var: str) -> s
     return partners
 
 
+def note_bound_in_cell(state: Any, name: str, code: str | None) -> None:
+    """Record the running cell as where *name* was bound
+    (``TrackingState.bound_in_cell``), when *code*, the statement that
+    produced it, binds it by its text: a change in place leaves the cell
+    that bound it. Without a text to read, or one that does not parse, it
+    counts as bound."""
+    bound = text_bound_names(code) if code else None
+    if bound is None or name in bound:
+        state.bound_in_cell[name] = state.running_cell
+        if code:
+            state.bound_by[name] = code
+        else:
+            state.bound_by.pop(name, None)
+
+
 def text_bound_names(code: str) -> frozenset[str] | None:
     """The names *code*'s own text binds -- assignment, ``for``, ``with`` and
     walrus targets, imports, ``def`` and ``class`` names, ``except ... as``
@@ -683,6 +699,7 @@ def bump_derived_lineages(
     kept: Iterable[str] = (),
     code: str | None = None,
     before: dict[str, frozenset[str]] | None = None,
+    resolve: bool = True,
 ) -> set[str]:
     """Replay derivation bumps after outputs' lineages were written.
 
@@ -722,8 +739,16 @@ def bump_derived_lineages(
         changed, but not bumped through, on every path alike, so the runtime
         and the simulation agree.
     kept:
-        Those of *skip* the statement left as they were
-        (`keep_held_lineage`): neither bumped nor bumped through.
+        Those the statement left as they were, by a content digest before and
+        after it (`keep_held_lineage`): neither bumped nor bumped through,
+        and the bump each would have taken recorded as an alias of the
+        lineage it keeps (`record_lineage_alias`), which a walk without
+        *kept* -- the simulation's -- resolves to the same.
+    resolve:
+        Whether a bump is resolved by those aliases: the simulation's is;
+        the runtime's is not, as it knows by its own digests what it kept,
+        and a target its digests did not see unchanged moves on whatever an
+        earlier run of the statement, keyed alike, saw.
         ``pre.fit_transform(X)`` fits clones of the pipeline ``pre`` holds;
         moved on by ``pre``'s lineage, the pipeline came out of a session
         that fitted twice with another lineage than a Run All after a
@@ -778,7 +803,7 @@ def bump_derived_lineages(
         if lineage_map.get(src) is None:
             continue
         for target in sorted(derivation_edges.get(src, ())):
-            if target in outputs or target in kept or target in bumped:
+            if target in outputs or target in bumped:
                 # An output: the statement gave it its lineage just now. One
                 # bumped: moved on by this change already.
                 continue
@@ -789,6 +814,17 @@ def bump_derived_lineages(
                 continue
             old = lineage_map.get(target, "")
             new_hash = hashlib.sha256(f"{old}:{change}".encode("utf-8")).hexdigest()
+            if target in kept:
+                # Left as it was, by its digest before and after: it keeps
+                # its lineage. Recorded as an alias, so the simulation, which
+                # takes no digest, and the next session keep it too: else a
+                # check that ran out of time and left the entry unstored
+                # moved it on where a stored one kept it.
+                if old:
+                    record_lineage_alias(new_hash, old)
+                continue
+            if resolve:
+                new_hash = resolve_lineage_alias(new_hash)
             if new_hash == old:
                 continue
             record(target, new_hash)

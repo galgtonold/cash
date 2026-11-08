@@ -26,6 +26,7 @@ from ..cache_key import statement_source_hash
 from ..cache_status import CacheStatus
 from ..lineage_store import statement_tag
 from ..statement.derivation_edges import shared_object_partners
+from ..string_lookups import cell_reads_names_unseen
 from ..tracking_state import TrackingState
 from ._types import (
     CellCheck,
@@ -933,6 +934,7 @@ class MismatchClassifier:
         user_ns = self.shell.user_ns
         produced = {out for entry in simulation_trace or () for out in entry.outputs or ()}
         in_cells: set[str] | None = None
+        made_below = self._made_below(check)
         for root in sorted(broken_vars):
             if root not in broken_vars:
                 continue
@@ -941,7 +943,7 @@ class MismatchClassifier:
             while todo:
                 name = todo.pop()
                 for partner in shared_object_partners(edges, name):
-                    if partner not in group and partner in user_ns:
+                    if partner not in group and partner in user_ns and partner not in made_below:
                         group.add(partner)
                         todo.append(partner)
             added = group - broken_vars
@@ -964,6 +966,41 @@ class MismatchClassifier:
                 "[UPSTREAM_DEBUG]   -> %s share an object with rebuilt '%s'. Marking broken.", sorted(added), root
             )
             broken_vars |= added
+
+    def _made_below(self, check: CellCheck | None) -> frozenset[str]:
+        """The names whose live binding a cell below *check*'s made
+        (``TrackingState.bound_in_cell``): not rebuilt with a partner the
+        cell needs. The producer above the cell is of an older binding of
+        the name -- ``voting_clf`` an earlier section fitted on two features,
+        where the ensemble a cell below built holds the estimators the
+        repair refits -- and binding it back hands every cell below, which
+        does not run again, a value a run from the top never gives it there.
+        Left as it is, the name is what a plain re-run of the cell leaves,
+        and the check of a cell below that reads it rebuilds it from its own
+        cells, above that one."""
+        if check is None or check.current_cell_idx is None:
+            return frozenset()
+        idx = check.current_cell_idx
+        cells = check.notebook_cells
+        text = check.cell_code if check.cell_code is not None else cells[idx] if 0 <= idx < len(cells) else ""
+        if cell_reads_names_unseen(
+            text, check.required_inputs or (), self.shell.user_ns, self.tracking_state.variable_lineage
+        ):
+            # It may read one of them by a string, or through a function
+            # that does: rebuilt, as a run from the top has it there.
+            return frozenset()
+        codes = self.tracking_state.bound_by
+        # The cell recorded must still hold the statement that bound it: a
+        # cell inserted, moved or deleted since shifts the positions, and a
+        # name then taken for one a cell below bound would not be rebuilt.
+        return frozenset(
+            name
+            for name, at in self.tracking_state.bound_in_cell.items()
+            if at is not None
+            and idx < at < len(cells)
+            and name in codes
+            and cell_holds_statement(cells[at], normalize_stmt(codes[name]))
+        )
 
     def _magic_bound(self, name: str, sim: SimulationResult) -> bool:
         """Whether a magic is the last to bind or change *name* above

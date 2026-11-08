@@ -186,6 +186,10 @@ def apply_restored_var(
             state.executed_cell_hashes.setdefault(name, set()).add(metadata.source_hash)
         if metadata.code:
             state.executed_cell_codes[name] = metadata.code
+        # Here, not at the top: the statement package imports this module.
+        from cash.notebook.statement.derivation_edges import note_bound_in_cell
+
+        note_bound_in_cell(state, name, metadata.code)
         # Exactly the entry's files, not those of whatever the name held before.
         if metadata.file_dependencies:
             state.executed_file_deps[name] = set(metadata.file_dependencies)

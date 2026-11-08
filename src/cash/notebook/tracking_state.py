@@ -59,6 +59,20 @@ class TrackingState:
     # R: UpstreamChecker (simulated vs executed code), ModuleInvalidator, %cash_status.
     executed_cell_codes: dict[str, str] = field(default_factory=dict)
 
+    # Variable -> the notebook position (0-based) of the cell whose own run
+    # last bound it, by its text (``running_cell`` then; `note_bound_in_cell`);
+    # None when the upstream repair of another cell did. A change in place
+    # (``BIG.append(...)``, ``voting_clf.fit(...)``) leaves it. Tells a name a
+    # cell below bound anew from one the cells above made, which the
+    # statement's text alone cannot when two cells hold the same text.
+    # W: StatementLineageBuilder, both restorers.
+    # R: MismatchClassifier (``_rebuild_what_shares_a_rebuilt_object``),
+    #    UpstreamChecker (``_keep_live_bindings``).
+    bound_in_cell: dict[str, int | None] = field(default_factory=dict)
+    # Variable -> the statement whose run recorded ``bound_in_cell``, to
+    # check the cell there still holds it (cells inserted, moved, deleted).
+    bound_by: dict[str, str] = field(default_factory=dict)
+
     # Variable -> sha256 of every statement that defined it this session (a set:
     # a re-run cell, a loop body and a restore can each define it).
     # W: StatementLineageBuilder, both restorers, the simulator's restore drain.
