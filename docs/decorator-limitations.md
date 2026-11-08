@@ -316,8 +316,8 @@ paths from the project root or pass absolute paths.
 - A result that can't be pickled is not stored
   ([`STORE-FAILED`](warnings.md#store-failed)), unless the function is
   `frozen=True`.
-<!-- claim: cash/decorator/runtime.py:CallRunner.arguments_left @cc53a991, cash/decorator/runtime.py:CallRunner._arguments_to_write @0d227488, cash/rewrite_in_place.py:refusal @cece1b9e -->
-<!-- claim: cash/decorator/runtime.py:CallRunner.arguments_before @c4f0d8ed, cash/decorator/arg_hashing.py:ContentKeyed.covers @4d5faf1a -->
+<!-- claim: cash/decorator/runtime.py:CallRunner.arguments_left @ff3b9a75, cash/decorator/runtime.py:CallRunner._arguments_to_write @0d227488, cash/rewrite_in_place.py:refusal @cece1b9e -->
+<!-- claim: cash/decorator/runtime.py:CallRunner.arguments_before @2623e9e1, cash/decorator/arg_hashing.py:ContentKeyed.covers @4d5faf1a -->
 - A call that changed its argument in place is stored with the state it left
   the argument in when the argument is a NumPy array (not of objects), a
   pandas frame or Series whose index, columns and dtypes it kept (a Series of
@@ -328,6 +328,9 @@ paths from the project root or pass absolute paths.
   views of an array see the change. The cache key already holds such an
   argument by its content, so the first call is stored and the next call
   with the same values is a hit; nothing is hashed a second time for it.
+  (After a call that changed none of its arguments, cash stops looking at
+  them before the body: a later call that starts changing one is not
+  stored, the calls after it are.)
   When the key holds the argument some other way (a
   [registered hasher](tutorials/feature-guides/custom-hashers.md) for its
   type), the first call seen changing it is not stored: from then on, each

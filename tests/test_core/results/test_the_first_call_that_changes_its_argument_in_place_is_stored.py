@@ -336,3 +336,23 @@ def test_a_call_not_stored_after_all_does_not_say_a_hit_writes_back(disk_cash):
         head_copy(np.arange(4.0))
     said = [str(w.message) for w in caught if "a hit writes it back" in str(w.message)]
     assert len(said) == 1 and "head_copy changed 'X'" in said[0], said
+
+
+def test_a_function_that_starts_changing_its_argument_later_is_stored_from_the_call_after(disk_cash):
+    """After a miss that changed nothing, nothing of the arguments is taken
+    before the body: the first change is not stored, the next one is."""
+    runs = []
+
+    @disk_cash.cache
+    def maybe_clip(a, clip):
+        runs.append(1)
+        if clip:
+            np.clip(a, 0, 1, out=a)
+        return float(a.sum())
+
+    maybe_clip(np.array([-1.0, 2.0]), False)
+    for _ in range(3):
+        a = np.array([-1.0, 2.0])
+        assert maybe_clip(a, True) == 1.0
+        assert a.tolist() == [0.0, 1.0]
+    assert len(runs) == 3

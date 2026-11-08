@@ -1440,12 +1440,19 @@ class CallRunner:
           has been seen changing an argument in place: until then a call
           that changes nothing pays nothing.
 
+        Neither is taken for a function whose misses so far changed nothing
+        (`CachedFunction.leaves_arguments_alone`): one that never changes
+        its arguments pays for this on its first miss alone, and one that
+        starts changing them later is stored from the miss after.
+
         A call keyed by ``key=``, or on copies of its arguments, is never
         stored with them."""
         if call.checked is not None:
             return {}
         arg_key = getattr(spec, "arg_key", None)
         if arg_key is not None and arg_key.key_fn is not None:
+            return {}
+        if not spec.changes_arguments and spec.leaves_arguments_alone:
             return {}
         content = call.content_keyed
         keyed = content is not None and call.args_hash is not None
@@ -1491,6 +1498,8 @@ class CallRunner:
         observer = run.observer
         mutated = observer.mutated_args if observer is not None else None
         if not mutated:
+            if observer is not None:
+                spec.leaves_arguments_alone = True
             return None
         learnt = not spec.changes_arguments
         spec.changes_arguments = True
