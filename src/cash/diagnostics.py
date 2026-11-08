@@ -32,6 +32,10 @@ from typing import Any
 
 from ._paths import CELL_NAME_PREFIX
 
+#: The name a cell's line is shown under (``<cash>:N``), as cash's notebook
+#: warnings name it.
+CELL_LOCATION = "<cash>"
+
 # /en/latest/, not /en/stable/: the stable build is only rebuilt at a release,
 # so a warning code documented since then would link to a missing anchor.
 _DOCS_BASE = "https://cash-lib.readthedocs.io/en/latest/warnings/"
@@ -184,8 +188,11 @@ def _warn_at(instance: Warning, level: int | None, fallback: tuple[str, int] | N
             # its name (``/<cash-1a2b>``) is a pseudo-filename the reader sees
             # nowhere else, so the line is named in ``<cash>``, as cash's
             # notebook warnings name a cell's lines.
-            shown = _filter_action(instance, "<cash>", lineno) != "ignore"
-            warnings.warn_explicit(instance, type(instance), "<cash>", lineno, registry=None)
+            # Filtered under its module's name (``__main__``), as any other
+            # line of the notebook's is: only the name shown changes.
+            shown = _filter_action(instance, module, lineno) != "ignore"
+            registry = frame.f_globals.setdefault("__warningregistry__", {})
+            warnings.warn_explicit(instance, type(instance), CELL_LOCATION, lineno, module=module, registry=registry)
             return shown
     shown = _filter_action(instance, module, lineno) != "ignore"
     warnings.warn(instance, stacklevel=level + 1)
@@ -597,11 +604,22 @@ def warn_diagnostic(
     instance = category(message)
     instance.code = code
     level = _user_frame_level()
+    if location is not None and location[0] == CELL_LOCATION and location[1] <= 0:
+        # No cell to name (``<cash>:0`` named none): the cell running now,
+        # else the nearest frame outside cash.
+        location = _running_cell()
+        if location is None:
+            _warn_at(instance, level, None)
+            return
     if location is None and not _blames_user_code(level):
         location = _running_cell()
     if location is not None:
         _hide_source_lines()
-        warnings.warn_explicit(instance, category, filename=location[0], lineno=location[1], registry=None)
+        filename, lineno = location
+        # A notebook's cell runs as ``__main__``: filtered as such, whatever
+        # name the line is shown under.
+        module = "__main__" if filename == CELL_LOCATION else None
+        warnings.warn_explicit(instance, category, filename, lineno, module=module, registry=None)
         return
     _warn_at(instance, level, None)
 
@@ -634,7 +652,8 @@ def _running_cell() -> tuple[str, int] | None:
         return None
     from .notebook.ipython.cell_count import running_cell_count  # the notebook package imports this one
 
-    return ("<cash>", running_cell_count(shell))
+    count = running_cell_count(shell)
+    return (CELL_LOCATION, count) if count > 0 else None
 
 
 def warn_diagnostic_message(
