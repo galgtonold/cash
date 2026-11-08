@@ -223,7 +223,7 @@ SCRIPT = textwrap.dedent("""
 
 
 def test_a_new_process_serves_the_first_call_and_writes_the_state_back(tmp_path):
-    (tmp_path / "job.py").write_text(SCRIPT)
+    (tmp_path / "job.py").write_text(SCRIPT, encoding="utf-8")
     first = run_python("job.py", cwd=tmp_path).stdout.split()
     second = run_python("job.py", cwd=tmp_path).stdout.split()
     assert first == ["1.5", "[0.0,", "0.5,", "1.0]", "0"]
