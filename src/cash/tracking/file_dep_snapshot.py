@@ -297,6 +297,12 @@ def realpath_of_read_this_run(
             resolved = os.path.join(resolve_folder(parent), name)
             if epoch is not None:
                 _remember_realpath(key, resolved)
+            if _NOTE_LINKS:
+                # For a listing of its folder later on, which gives no link
+                # count: the read's records are taken at a store below, if
+                # at all (`_PendingRecords`), and a listing before took a
+                # stat of each file and folder read to learn it.
+                note_links(absolute, st)
             return resolved, (st if _stat.S_ISREG(st.st_mode) else None)
     return (realpath_this_run(path) if epoch is not None else os.path.realpath(path)), None
 
