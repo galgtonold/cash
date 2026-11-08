@@ -291,6 +291,10 @@ class StatementRun:
     #: The ``holders`` the run left as they were, by their content digest:
     #: they keep their lineage (``lineage_formula.keep_held_lineage``).
     holders_unchanged: set[str] = field(default_factory=set)
+    #: The ones its digests saw change: they move on, whatever alias an
+    #: earlier run of the statement left (`held_lineage`). One with no
+    #: digest either way moves as the simulation moves it.
+    holders_changed: set[str] = field(default_factory=set)
     #: The in-place-edit digest (`mutation_fingerprint`) of each variable
     #: sharing an object with an output or receiver bound before the run
     #: (``shared_object_partners``), taken just before it ran: a holder
