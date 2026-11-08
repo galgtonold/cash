@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from cash import kept_state, value_hash
+from cash._user_attrs import attribute_or
 from cash.notebook.borrowed_memory import MemoryHome, data_arrays, memory_home, rebuild_view
 
 __all__ = [
@@ -136,7 +137,7 @@ def with_anchor_refs(value: Any, anchors: Mapping[str, Any], homes: Iterable[str
     by_id = {id(obj): name for name, obj in anchors.items()}
     homes = set(homes)
     data = {name: obj for name, obj in anchors.items() if name in homes and data_arrays(obj)}
-    ndarray = getattr(sys.modules.get("numpy"), "ndarray", None)
+    ndarray = attribute_or(sys.modules.get("numpy"), "ndarray")
     placed: dict[int, Any] = {}
 
     def name_of(obj: Any) -> Any:
