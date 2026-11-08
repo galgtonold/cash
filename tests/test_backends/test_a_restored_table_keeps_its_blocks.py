@@ -34,22 +34,15 @@ def _hit_after_store() -> pd.DataFrame:
 
 
 def _hit_after_disk() -> pd.DataFrame:
+    """A table read from disk: the RAM tier does not keep it on its first
+    read (`promote`), and the caller gets it as it is."""
     backend = InMemoryBackend()
-    assert backend.promote("k", pickle.loads(pickle.dumps(_read())), {"execution_time": 1.0})
-    return backend.get("k")[1]
+    table = pickle.loads(pickle.dumps(_read()))
+    assert not backend.promote("k", table, {"execution_time": 1.0})
+    return table
 
 
-@pytest.mark.parametrize(
-    "hit",
-    [
-        _hit_after_store,
-        pytest.param(
-            _hit_after_disk,
-            marks=pytest.mark.skipif(not frame_sharing.enabled(), reason="a table read from disk is kept frozen"),
-        ),
-    ],
-    ids=["stored", "read_from_disk"],
-)
+@pytest.mark.parametrize("hit", [_hit_after_store, _hit_after_disk], ids=["stored", "read_from_disk"])
 def test_to_numpy_of_a_hit_is_as_writable_as_of_the_callers_table(hit):
     plain = _read()
     if frame_sharing.enabled():

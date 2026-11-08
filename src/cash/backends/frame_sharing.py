@@ -29,8 +29,9 @@ behave as on any other, they just copy first. A table frozen this way pickles
 as a writable one (`_install_pickling`): a disk entry, or a table the user
 pickles themselves, loads as an ordinary table.
 
-Only a table cash owns is frozen: its own copy made when storing, or a
-table it has just unpickled from disk. A table the caller holds is never
+Only a table cash owns is frozen: its own copy made when storing. A table
+read from disk goes to the caller unfrozen, as its own (`InMemoryBackend.promote`).
+A table the caller holds is never
 frozen -- cash does not change what an object of the caller's allows -- so
 the store copies it once, and every hit shares that copy. That copy holds
 nothing of the caller's (`own_parts`): its labels are copied, and so is
@@ -441,8 +442,7 @@ def _frozen_index(index: Any) -> Any:
 
 
 def frozen_already(frame: Any) -> bool:
-    """Is all of *frame*'s data frozen by cash already (a hit, a table cash
-    froze after unpickling it)? Then it can be kept as it is, by a shallow
+    """Is all of *frame*'s data frozen by cash already (a hit)? Then it can be kept as it is, by a shallow
     copy (`hand_out`): no holder can write that data, and storing it changes
     nothing any holder may do."""
     try:
@@ -471,7 +471,7 @@ def _is_range(index: Any) -> bool:
 def freeze(frame: Any, *, cells_known: bool = False) -> bool:
     """Make *frame*'s data immutable in place (see the module docstring), and
     every pandas object's that shares its blocks. *frame* must be cash's
-    own: a copy no caller holds, or a table just unpickled. False, with
+    own: a copy no caller holds. False, with
     nothing done, when *frame* is not `freezable`.
     """
     return enabled() and _freeze(frame, cells_known=cells_known)
