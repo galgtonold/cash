@@ -361,6 +361,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # running has not finished; statements run rather than be served
         "NOTEBOOK-SAVEFIG-SKIP",  # refused to re-run plt.savefig() during
         # reconstruction; it would overwrite your chart
+        "NOTEBOOK-SERVED-VIEW",  # a write into a table served from the cache
+        # did not reach an array taken from the table before it
         "NOTEBOOK-SHARE-UNCHECKED",  # cash could not find every variable
         # sharing an object with a statement's outputs in time
         "NOTEBOOK-SHARED-KEPT",  # a value another name below still shares

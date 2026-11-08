@@ -125,6 +125,7 @@ from cash.notebook.statement.run import (
     error_result,
     over_the_handed_iterable,
 )
+from cash.notebook.statement.served_frame_writes import ServedFrameWrites
 from cash.notebook.statement.store import StatementStore
 from cash.notebook.statement.unstored import MEMORY_ONLY, UnstoredNotes
 from cash.notebook.tracking_state import ENTRY_HISTORY, TrackingState
@@ -764,6 +765,8 @@ class StatementProcessor:
         self._share_refused: dict[str, list] = {}
         #: Statements already warned NOTEBOOK-SHARE-UNCHECKED about.
         self._share_unchecked_warned: set[str] = set()
+        #: Writes into served tables an array taken before did not see.
+        self._served_writes = ServedFrameWrites()
         #: Moved on as each statement starts: what ran since a share check.
         self._statements_started = 0
         #: ``(statements started then, {(name, id of its value)})`` the last
@@ -1351,6 +1354,7 @@ class StatementProcessor:
                     finally:
                         self._end_recording(shadow, run, unit)
                         self._mutations.digests.withdraw_offer()
+                self.check_served_writes(run.code)
             try:
                 result = self._finish(run, runner.execution)
                 if shadow is not None:
@@ -1445,6 +1449,7 @@ class StatementProcessor:
                         await runner.run_async()
                     finally:
                         self._end_recording(shadow, run, unit)
+                self.check_served_writes(run.code)
             try:
                 result = self._finish(run, runner.execution)
                 if shadow is not None:
@@ -3364,6 +3369,7 @@ class StatementProcessor:
 
     def begin_cell_statement_log(self) -> None:
         """Start this cell's statement log, before its statements run."""
+        self._served_writes.cell_starts()
         self._records.begin_cell()
         self._rebuild_cost.begin_cell()
         self._calls.begin_cell()
@@ -4631,6 +4637,14 @@ class StatementProcessor:
             self._warn_holders_unfound(run, sorted(cls.__name__ for cls in replaced), cost)
         for name in names:
             self.forget_variable(name)
+
+    def check_served_writes(self, code: str | None = None) -> None:
+        """Warn NOTEBOOK-SERVED-VIEW when a write since the last check left
+        an array of a served table behind (`ServedFrameWrites`): after the
+        statement *code* ran, and with None at the end of a cell."""
+        from cash.notebook.ipython.cell_count import running_cell_count  # the ipython package imports this one
+
+        self._served_writes.check(self.shell.user_ns, code, ("<cash>", running_cell_count(self.shell)))
 
     def _warn_holders_unfound(self, run: StatementRun, classes: list[str], cost: float) -> None:
         """Warn (``NOTEBOOK-SHARE-UNCHECKED``) that the variables holding an

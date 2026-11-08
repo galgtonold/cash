@@ -715,6 +715,7 @@ class CellExecutor:
                 yield
         finally:
             self._warn_threads_left_running(cell)
+            self._statement_processor.check_served_writes()
         t_persist = _perf_counter()
         self._statement_processor.end_cell_persistence()
         end_cell_reads()

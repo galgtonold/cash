@@ -1020,9 +1020,12 @@ default argument or base class does. **Fix:** move the binding above this cell.
   copy-on-write the memory tier shares a table's data between hits, so
   `df["x"].array[0] = v`, or writing to a NumPy view made writable again,
   raises `ValueError: assignment destination is read-only`. `df.loc`,
-  `df.iloc` and `df["x"] = ...` work as usual. A table read from disk, as
-  after a restart, is your own and behaves as in plain Python. See
-  [the tiers](how-it-works/storage.md#the-tiers).
+  `df.iloc` and `df["x"] = ...` work as usual, but a NumPy array taken
+  from the table before such a write (`v = df["x"].to_numpy()`) keeps the
+  old values where plain Python shows it the write; cash warns with
+  [NOTEBOOK-SERVED-VIEW](warnings.md#notebook-served-view). A table read
+  from disk, as after a restart, is your own and behaves as in plain Python.
+  See [the tiers](how-it-works/storage.md#the-tiers).
 - **A file you save from a restored object may differ in its bytes.** A
   value restored from the cache equals the one the code computed, but its
   internals can be laid out differently: two attributes that shared one

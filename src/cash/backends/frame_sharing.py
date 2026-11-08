@@ -14,9 +14,17 @@ So a table the tier shares is *frozen* first (`freeze`):
   not make a view of a read-only array writable again, so no handle pandas
   gives out can write it;
 * each block's copy-on-write reference group gets a reference that never
-  dies (`_PIN`). pandas then always sees the block as shared and copies it
+  dies (`_PinRef`). pandas then always sees the block as shared and copies it
   before writing, even once the stored table and every other hit are gone:
   a frozen block is never written in place, by pandas or anyone else.
+
+A hit therefore differs from a plain run in one way: a numpy array taken
+from it (``v = s.to_numpy()``, ``s.values``) keeps the old values when
+pandas then writes the column, where a plain run writes the column in place
+and the array sees the write. Such writes are watched
+(`_install_write_watch`), and `views_left_behind` names the memory such an
+array still reads, for the notebook to warn about. A handle that writes past
+pandas (``s.array[0] = ...``) raises on a hit; `read_only_note` says why.
 
 Only columns kept in plain numpy arrays (numbers, dates and times, object
 columns whose cells cannot change) and Arrow-backed ones are frozen. A
@@ -68,18 +76,23 @@ __all__ = [
     "arrow_owned",
     "copy_keeping_blocks",
     "enabled",
+    "forget_asked",
     "freeze",
     "frozen_already",
     "hand_out",
+    "has_pin",
     "is_frozen",
     "is_pin",
     "own_parts",
     "owned_arrow_data",
+    "read_only_note",
+    "reads_memory_of",
+    "views_left_behind",
 ]
 
 
 class _Pin:
-    """What the reference that never dies points to (`_PIN`)."""
+    """What the reference that never dies points to (`_PinRef`)."""
 
     __slots__ = ("__weakref__",)
 
@@ -88,15 +101,68 @@ class _Pin:
 
 
 _PIN_TARGET = _Pin()
-#: The reference a frozen block's copy-on-write group keeps: alive for good,
-#: so pandas always copies the block before writing it.
-_PIN = weakref.ref(_PIN_TARGET)
+
+
+class _PinRef(weakref.ref):
+    """The reference a frozen block's copy-on-write group keeps: alive for
+    good, so pandas always copies the block before writing it. One per
+    group, holding the arrays that own the group's frozen memory (*roots*)
+    and the blocks cash knows to be in the group (*blocks*, weakly), so
+    `views_left_behind` can count who still reads that memory once pandas
+    has copied a block of the group to write it (`_install_write_watch`)."""
+
+    __slots__ = ("__weakref__", "blocks", "roots")
+
+    def __new__(cls, roots: list[Any]) -> _PinRef:
+        return super().__new__(cls, _PIN_TARGET)
+
+    def __init__(self, roots: list[Any]) -> None:
+        super().__init__(_PIN_TARGET)
+        self.roots = [weakref.ref(root) for root in roots]
+        self.blocks: list[Any] = []
+
+    def know(self, block: Any) -> None:
+        """Remember *block*, one of the group's, to find the group by."""
+        self.blocks = [ref for ref in self.blocks if ref() is not None]
+        self.blocks.append(weakref.ref(block))
+
+
+#: The frozen groups pandas found shared before writing one of their blocks
+#: since `forget_asked` (`_install_write_watch`): ``id(pin) -> weak
+#: reference to the pin``.
+_ASKED: dict[int, Any] = {}
+
+#: ``id(root) -> pins of the groups whose frozen memory *root* owns``; a
+#: column the RAM tier keeps for two entries is in two groups.
+_PINS_BY_ROOT: dict[int, Any] = {}
 
 
 def is_pin(obj: Any) -> bool:
-    """Is *obj* what `_PIN` points to? (not a block: walks of a reference
-    group skip it)."""
+    """Is *obj* what a `_PinRef` points to? (not a block: walks of a
+    reference group skip it)."""
     return obj is _PIN_TARGET
+
+
+def _pin_of(refs: Any) -> _PinRef | None:
+    """The `_PinRef` in the copy-on-write group *refs*; None in a group
+    cash has not frozen."""
+    for ref in refs.referenced_blocks:
+        if type(ref) is _PinRef:
+            return ref
+    return None
+
+
+def has_pin(block: Any) -> bool:
+    """Is *block* in a group cash froze (its data the RAM tier's)?"""
+    return _pin_of(block.refs) is not None
+
+
+def _note_shared(refs: Any) -> None:
+    """pandas found the group *refs* shared, before a write: note it when
+    cash froze it (`views_left_behind`)."""
+    pin = _pin_of(refs)
+    if pin is not None:
+        _ASKED[id(pin)] = weakref.ref(pin)
 
 
 #: ``id(array) -> weak reference`` for each array whose memory `freeze` made
@@ -109,7 +175,12 @@ def _remember_frozen(array: Any) -> None:
     key = id(array)
     with _FROZEN_LOCK:
         if key not in _FROZEN:
-            _FROZEN[key] = weakref.ref(array, lambda _ref, key=key: _FROZEN.pop(key, None))
+            _FROZEN[key] = weakref.ref(array, lambda _ref, key=key: _forget_root(key))
+
+
+def _forget_root(key: int) -> None:
+    _FROZEN.pop(key, None)
+    _PINS_BY_ROOT.pop(key, None)
 
 
 def _root(array: Any) -> Any:
@@ -187,7 +258,14 @@ def _self_test(pd: Any) -> bool:
         if pickle.loads(pickle.dumps(kept)).index.freq != original.index.freq:
             return False
     del stored
+    asked = dict(_ASKED)
+    _ASKED.clear()
     hit.iloc[0, 0] = 100.0
+    noted = bool(_ASKED)  # the write was seen (`views_left_behind`)
+    _ASKED.clear()
+    _ASKED.update(asked)
+    if not noted:
+        return False
     hit.iloc[1, 2] = pd.Timestamp("2021-01-01")
     hit.iloc[3, 1] = 9
     if other["f"].iloc[0] != 0.0 or other["i"].iloc[3] != 3:
@@ -329,9 +407,9 @@ def _undo(frame: Any, journal: _Journal) -> None:
     """Put back what a failed `_freeze` of *frame* changed (`_Journal`)."""
     for name, axis in reversed(journal.axes):
         setattr(frame, name, axis)
-    for referenced in journal.pins:
-        while any(ref is _PIN for ref in referenced):
-            referenced.remove(_PIN)
+    for referenced, pin in journal.pins:
+        while any(ref is pin for ref in referenced):
+            referenced.remove(pin)
     for block, values in reversed(journal.values):
         block.values = values
     # Bases were made read-only after the views over them: made writable
@@ -447,7 +525,7 @@ def frozen_already(frame: Any) -> bool:
     nothing any holder may do."""
     try:
         for blk in frame._mgr.blocks:
-            if not any(ref is _PIN for ref in blk.refs.referenced_blocks):
+            if _pin_of(blk.refs) is None:
                 return False
             parts = _ndarray_parts(blk.values)
             if parts is None or not all(not array.flags.writeable and is_frozen(array) for _name, array in parts):
@@ -483,6 +561,7 @@ def _freeze(frame: Any, *, cells_known: bool = False) -> bool:
         if not freezable(frame, cells_known=cells_known):
             return False
         _install_pickling()
+        _install_write_watch()
         _JOURNAL.current = journal
         _freeze_in_place(frame)
         return True
@@ -507,17 +586,22 @@ def _freeze_in_place(frame: Any) -> None:
     for blk in frame._mgr.blocks:
         refs = blk.refs
         sharing = [ref() for ref in refs.referenced_blocks]
-        for other in [blk, *sharing]:
-            if other is None or is_pin(other):
-                continue
+        group = [other for other in [blk, *sharing] if other is not None and not is_pin(other)]
+        for other in group:
             values = other.values
             frozen = _freeze_values(values)
             if frozen is not values:
                 journal.values.append((other, values))
                 other.values = frozen
-        if not any(ref is _PIN for ref in refs.referenced_blocks):
-            journal.pins.append(refs.referenced_blocks)
-            refs.referenced_blocks.append(_PIN)
+        pin = _pin_of(refs)
+        if pin is None:
+            pin = _PinRef([_root(array) for _name, array in _ndarray_parts(blk.values) or ()])
+            journal.pins.append((refs.referenced_blocks, pin))
+            refs.referenced_blocks.append(pin)
+            for root in pin.roots:
+                _PINS_BY_ROOT.setdefault(id(root()), weakref.WeakSet()).add(pin)
+        for other in group:
+            pin.know(other)
     for name in ("index",) if frame.ndim == 1 else ("index", "columns"):
         axis = getattr(frame, name)
         frozen = _frozen_index(axis)
@@ -643,7 +727,7 @@ def _share_checked(frame: Any) -> tuple[Any, bytes] | None:
             nbytes += array.nbytes
         shallow = block.copy(deep=False)
         blocks.append(shallow)
-        if not any(ref is _PIN for ref in block.refs.referenced_blocks):
+        if _pin_of(block.refs) is None:
             checked.append(shallow)  # frozen data (a hit's) is no one's to write
     if nbytes < CHECKED_MIN_BYTES:
         return None
@@ -1419,6 +1503,10 @@ def hand_out(stored: Any) -> Any:
     which pandas copies before any write."""
     copied = stored.copy(deep=False)
     _private_axes(copied)
+    for block in copied._mgr.blocks:
+        pin = _pin_of(block.refs)
+        if pin is not None:
+            pin.know(block)
     return copied
 
 
@@ -1440,13 +1528,181 @@ def _private_axes(frame: Any) -> None:
             setattr(frame, name, fresh)
 
 
+# ------------------------------------------------- writes a view does not see
+
+
+def forget_asked() -> None:
+    """Start over: the writes `views_left_behind` reports are those after
+    this call."""
+    _ASKED.clear()
+
+
+def views_left_behind() -> list[Any]:
+    """The arrays owning frozen memory that pandas copied a block of before
+    writing it since `forget_asked` (`_install_write_watch`), and that
+    something besides pandas' own blocks still reads: a numpy array taken
+    from a served table (``s.to_numpy()``, ``s.values``, ``s.array``)
+    before the write.
+
+    pandas copied the block before writing it, as its memory is the RAM
+    tier's (`_PinRef`), so that array kept the old values. In a plain run
+    the write reaches it when no other table shares the column; that is
+    not told apart here, so a write pandas would have copied anyway is
+    reported too.
+
+    Exact for what it counts: every reference to the memory, to the arrays
+    over it and to the wrappers holding them, against those the live blocks
+    of each group over it account for. A group none of whose blocks cash
+    knows to be alive cannot be counted, and is reported."""
+    if not _ASKED:
+        return []
+    pins = [ref() for ref in _ASKED.values()]
+    _ASKED.clear()
+    found: list[Any] = []
+    for pin in pins:
+        if pin is None:
+            continue
+        try:
+            for ref in _read_elsewhere(pin):
+                if not any(ref is seen for seen in found):
+                    found.append(ref)
+        except Exception:
+            logger.debug("cash: could not count the readers of a written table", exc_info=True)
+    roots = [ref() for ref in found]
+    return [root for root in roots if root is not None]
+
+
+def reads_memory_of(value: Any, roots: list[Any]) -> bool:
+    """Is *value* a numpy array, or an array wrapping one (``s.array``),
+    over the memory one of *roots* owns (`views_left_behind`)?"""
+    import numpy as np
+
+    array = value if isinstance(value, np.ndarray) else getattr(value, "_ndarray", None)
+    if not isinstance(array, np.ndarray):
+        return False
+    root = _root(array)
+    return any(root is other for other in roots)
+
+
+def read_only_note(exc: BaseException) -> str | None:
+    """A note for *exc* when it is numpy's "read-only" error from a write
+    into a table served from the RAM tier (``s.array[0] = ...``); None for
+    any other error.
+
+    A plain run writes such a handle in place. A served table's memory is
+    the tier's, shared with every other hit, and read-only (`freeze`): the
+    write cannot be let through without changing them."""
+    import numpy as np
+
+    if not isinstance(exc, ValueError) or "read-only" not in str(exc):
+        return None
+    tb = exc.__traceback__
+    while tb is not None:
+        for value in list(tb.tb_frame.f_locals.values()):
+            array = value if isinstance(value, np.ndarray) else getattr(value, "_ndarray", None)
+            if isinstance(array, np.ndarray) and is_frozen(array):
+                return (
+                    "cash: this column belongs to a table served from the cache. Its memory is shared "
+                    "with the cache's copy and is read-only, so a write past pandas (such as "
+                    "s.array[0] = ...) cannot change it; a plain run writes it. Write through pandas "
+                    "(s.iloc[0] = ...), or copy the table first (df = df.copy())."
+                )
+        tb = tb.tb_next
+    return None
+
+
+def _read_elsewhere(pin: _PinRef) -> list[Any]:
+    """`views_left_behind` for one group: weak references to the roots read
+    elsewhere. The roots are held weakly here, so that the references
+    counted are the holders' alone."""
+    found = []
+    for ref in pin.roots:
+        root = ref()
+        if root is None:
+            continue
+        pins = list(_PINS_BY_ROOT.get(id(root), ())) or [pin]
+        del root
+        blocks: dict[int, Any] = {}
+        countable = True
+        for other in pins:
+            group = _known_group(other)
+            if group is None:
+                countable = False
+                break
+            for block in group:
+                blocks[id(block)] = block
+        if not countable or _unaccounted(list(blocks.values()), ref):
+            found.append(ref)
+    return found
+
+
+def _known_group(pin: _PinRef) -> list[Any] | None:
+    """The live blocks of *pin*'s group, through a block cash knows in it;
+    None when none of those is alive."""
+    for ref in pin.blocks:
+        block = ref()
+        if block is not None:
+            return _group(block)
+    return None if pin.blocks else []
+
+
+def _unaccounted(blocks: list[Any], root_ref: Any) -> bool:
+    """Is the root *root_ref* refers to, or an array or wrapper the
+    *blocks* keep over it, held by anything the blocks do not account for?"""
+    objects, holders = _block_holders(blocks)
+    del blocks
+    root = root_ref()
+    if root is None:
+        return False
+    objects[id(root)] = root
+    holders.setdefault(id(root), 0)
+    del root
+    for key in list(objects):
+        # Besides those counted: `objects`, the call's argument.
+        if sys.getrefcount(objects[key]) > holders[key] + 2:
+            return True
+    return False
+
+
+def _block_holders(blocks: list[Any]) -> tuple[dict[int, Any], dict[int, int]]:
+    """Each object *blocks* keep their data in (``id -> object``: the
+    values, a wrapper's array, the array owning the memory), and how many
+    references to it they account for. A values object several blocks
+    share (a shallow copy's) is counted once per block, the arrays below it
+    once."""
+    objects: dict[int, Any] = {}
+    holders: dict[int, int] = {}
+
+    def held(obj: Any) -> None:
+        objects[id(obj)] = obj
+        holders[id(obj)] = holders.get(id(obj), 0) + 1
+
+    values_seen: set[int] = set()
+    arrays_seen: set[int] = set()
+    for block in blocks:
+        values = block.values
+        held(values)
+        if id(values) in values_seen:
+            continue
+        values_seen.add(id(values))
+        for name, array in _ndarray_parts(values) or ():
+            if name:
+                held(array)
+            if id(array) in arrays_seen:
+                continue
+            arrays_seen.add(id(array))
+            if array.base is not None:
+                held(array.base)
+    return objects, holders
+
+
 # ---------------------------------------------------------------- pickling
 
 
 def _writable_alias(array: Any) -> Any:
     """A writable array over a frozen *array*'s memory, for pickle to read
     alone: pickle writes a read-only array as read-only, and a table loaded
-    from it could then not be written by pandas (it would hold no `_PIN`).
+    from it could then not be written by pandas (it would hold no `_PinRef`).
     Keeps *array* alive. Never handed to anything but a pickler."""
     import numpy as np
 
@@ -1518,3 +1774,53 @@ def _install_pickling() -> None:
         Block.__reduce__ = __reduce__
         SingleBlockManager.__getstate__ = __getstate__
         _PICKLING_INSTALLED.append(True)
+
+
+_WATCH_INSTALLED: list[bool] = []
+
+
+def _install_write_watch() -> None:
+    """Note each frozen group pandas finds shared before a write
+    (`_note_shared`): the places pandas' copy-on-write asks whether a block
+    it is about to write in place is shared. Once per process, before the
+    first table is frozen; `_self_test` checks a write is noted."""
+    if _WATCH_INSTALLED:
+        return
+    with _INSTALL_LOCK:
+        if _WATCH_INSTALLED:
+            return
+        from pandas.core.internals.blocks import Block
+        from pandas.core.internals.managers import BaseBlockManager, SingleBlockManager
+
+        no_reference_block = BaseBlockManager._has_no_reference_block
+        single_no_reference = SingleBlockManager._has_no_reference
+        maybe_copy = Block._maybe_copy
+        refs_and_copy = Block._get_refs_and_copy
+
+        def _has_no_reference_block(self: Any, blkno: int) -> bool:
+            alone = no_reference_block(self, blkno)
+            if not alone:
+                _note_shared(self.blocks[blkno].refs)
+            return alone
+
+        def _has_no_reference(self: Any, i: int = 0) -> bool:
+            alone = single_no_reference(self, i)
+            if not alone:
+                _note_shared(self.blocks[0].refs)
+            return alone
+
+        def _maybe_copy(self: Any, inplace: bool, deep: bool = True) -> Any:
+            if inplace:
+                _note_shared(self.refs)
+            return maybe_copy(self, inplace, deep)
+
+        def _get_refs_and_copy(self: Any, inplace: bool) -> Any:
+            if inplace:
+                _note_shared(self.refs)
+            return refs_and_copy(self, inplace)
+
+        BaseBlockManager._has_no_reference_block = _has_no_reference_block
+        SingleBlockManager._has_no_reference = _has_no_reference
+        Block._maybe_copy = _maybe_copy
+        Block._get_refs_and_copy = _get_refs_and_copy
+        _WATCH_INSTALLED.append(True)

@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @11234ae7 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @b532e776 -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -1840,6 +1840,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-RELOAD-STATE](#notebook-reload-state) | notebook | a reload or restart dropped state cells set on a module, and cash cannot rebuild it |
 | [NOTEBOOK-REPAIR-GAP](#notebook-repair-gap) | notebook | a statement above the cell, re-run to bring it up to date, failed, would read a value from below, or would leave the cell an earlier value because cash left out a statement it needs, so the cell runs as written, uncached |
 | [NOTEBOOK-SAVEFIG-SKIP](#notebook-savefig-skip) | notebook | a `plt.savefig` was not re-run |
+| [NOTEBOOK-SERVED-VIEW](#notebook-served-view) | notebook | a write into a pandas table served from the cache did not reach a NumPy array taken from the table before it |
 | [NOTEBOOK-SHARE-UNCHECKED](#notebook-share-unchecked) | notebook | not every variable sharing an object with a statement's outputs was found in time |
 | [NOTEBOOK-SHARED-KEPT](#notebook-shared-kept) | notebook | a value a variable below shares is kept as it is for a cell re-run on its own |
 | [NOTEBOOK-THREAD-ALIVE](#notebook-thread-alive) | notebook | a thread the cell started still runs after the cell ended |
@@ -2451,6 +2452,32 @@ fig.savefig("chart.png")
 
 **When it is safe to ignore.** Almost always: the figure did not change, so the
 file on disk is the one you want.
+
+### NOTEBOOK-SERVED-VIEW {#notebook-served-view}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/notebook/statement/served_frame_writes.py:ServedFrameWrites._warn @888e30a2, cash/backends/frame_sharing.py:views_left_behind @d828ef56 -->
+**What happened.** A statement wrote into a pandas table served from the
+memory tier (`y.iloc[0] = 100`), while a NumPy array taken from the table
+before the write (`v = y.to_numpy()`, `y.values`) was still held. A served
+table shares its memory with the cache's copy, so pandas copied the column
+before writing it, and the array kept the old values. In plain Python,
+with no other table sharing the column, pandas writes it in place and the
+array sees the write. The message names the variables that hold such an
+array. It is shown once per statement. A table read from disk, as after a
+restart, is your own and never gets this warning.
+
+**Why it matters.** Code that reads the array after the write (`v[0]`)
+gets the old value where plain Python gets the new one.
+
+**What to do.** Take the array after the write, or copy the table where it
+is served (`df = df.copy()`) and take the array from the copy.
+
+**When it is safe to ignore.** When the code does not read the array after
+the write, or another table shared the column anyway (`y = df["t"]` with
+`df` still held): plain Python copies the column then too, and cash cannot
+always tell the two apart, so it warns.
 
 ### NOTEBOOK-SHARE-UNCHECKED {#notebook-share-unchecked}
 

@@ -94,7 +94,7 @@ def test_a_freeze_that_fails_part_way_leaves_the_table_as_it_was(monkeypatch):
     df = _dated()
     assert not frame_sharing._freeze(df)
     assert all(a.flags.writeable for a in frame_sharing.block_arrays(df))
-    assert not any(ref is frame_sharing._PIN for b in df._mgr.blocks for ref in b.refs.referenced_blocks)
+    assert not any(frame_sharing.has_pin(b) for b in df._mgr.blocks)
     df["x"].array[0] = -1.0  # a handle writes it, as on any table
     df.iloc[1, 0] = -2.0
     assert df["x"].iloc[0] == -1.0 and df["x"].iloc[1] == -2.0
