@@ -30,6 +30,8 @@ import sys
 import warnings
 from typing import Any
 
+from ._paths import CELL_NAME_PREFIX
+
 # /en/latest/, not /en/stable/: the stable build is only rebuilt at a release,
 # so a warning code documented since then would link to a missing anchor.
 _DOCS_BASE = "https://cash-lib.readthedocs.io/en/latest/warnings/"
@@ -176,6 +178,15 @@ def _warn_at(instance: Warning, level: int | None, fallback: tuple[str, int] | N
         module, lineno = frame.f_globals.get("__name__", "<string>"), frame.f_lineno
     except ValueError:  # deeper than the stack: warnings blames `sys`
         module, lineno = "sys", 0
+    else:
+        if frame.f_code.co_filename.startswith(CELL_NAME_PREFIX):
+            # A statement cash compiled in a cell, at its line in the cell:
+            # its name (``/<cash-1a2b>``) is a pseudo-filename the reader sees
+            # nowhere else, so the line is named in ``<cash>``, as cash's
+            # notebook warnings name a cell's lines.
+            shown = _filter_action(instance, "<cash>", lineno) != "ignore"
+            warnings.warn_explicit(instance, type(instance), "<cash>", lineno, registry=None)
+            return shown
     shown = _filter_action(instance, module, lineno) != "ignore"
     warnings.warn(instance, stacklevel=level + 1)
     return shown
