@@ -189,6 +189,22 @@ def column_arrays(frame: Any) -> tuple:
     whose entry differs after a call was given a new array; the others
     were written into (`snapshot`)."""
     np = sys.modules["numpy"]
+    mgr = attribute_or(frame, "_mgr", None)
+    try:
+        # From the manager: a Series per column (``frame.iloc[:, i]``)
+        # would be one more pandas object sharing the frame's blocks, which
+        # the frame-hash memo then can no longer vouch for.
+        blocks, blknos, blklocs = mgr.blocks, mgr.blknos, mgr.blklocs
+        tokens = []
+        for position in range(frame.shape[1]):
+            values = blocks[blknos[position]].values
+            if isinstance(values, np.ndarray):
+                tokens.append((values.__array_interface__["data"][0], values.strides, int(blklocs[position])))
+            else:
+                tokens.append(id(values))
+        return tuple(tokens)
+    except Exception:  # noqa: BLE001 - another manager: through the columns
+        pass
     tokens = []
     for position in range(frame.shape[1]):
         values = frame.iloc[:, position].array
