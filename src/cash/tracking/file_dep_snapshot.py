@@ -588,6 +588,7 @@ def snapshot_file_deps(
     stats: dict[str, tuple[int, int, int] | None] | None = None,
     checked: Mapping[str, os.stat_result] | None = None,
     as_read: Mapping[str, tuple[int, int, int]] | None = None,
+    taken: Mapping[str, os.stat_result] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Return ``{path: {'mtime', 'size', 'hash'}}`` for paths that exist.
 
@@ -618,6 +619,13 @@ def snapshot_file_deps(
     since, whose content is not the one the read took (*known*) or cannot be
     told, is recorded as never fresh, not as it is now, which would vouch
     for a value built from what the read found.
+
+    *taken* maps a path to a stat of the file itself its owner took a
+    moment before (the cell run's, ``run_memo.own_stats_this_run``): taken
+    in place of a stat of its own where no digest is taken now, which an
+    older stat would not describe: a folder, or a file whose digest from
+    the read is still its own (*known*). Older than a stat taken here, it
+    can only find the file moved since sooner.
     """
     snapshot: dict[str, dict[str, Any]] = {}
     # A relative read is recorded under both spellings
@@ -641,6 +649,12 @@ def snapshot_file_deps(
         st = checked.get(f) if checked else None
         if st is not None and not (known and f in known and known[f][0] == stat_key(st)):
             st = None
+        if st is None and taken is not None:
+            st = taken.get(f)
+            if st is not None and not (
+                _stat.S_ISDIR(st.st_mode) or (known and f in known and known[f][0] == stat_key(st))
+            ):
+                st = None
         try:
             if st is None:
                 st = own_stat(f)
@@ -876,14 +890,15 @@ def snapshot_dependencies(
     stats: dict[str, tuple[int, int, int] | None] | None = None,
     checked: Mapping[str, os.stat_result] | None = None,
     as_read: Mapping[str, tuple[int, int, int]] | None = None,
+    taken: Mapping[str, os.stat_result] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Snapshot everything a call read — local files and remote objects — as one dict.
 
     *unresolved* are paths the call read that cannot be stat'ed as recorded
     (``FileAccessTracker.get_unresolved_files``): each is recorded as never
     fresh. *present* are paths it probed and found without reading
-    (``FileAccessTracker.get_present_files``). *stats*, *checked* and
-    *as_read* are `snapshot_file_deps`'s.
+    (``FileAccessTracker.get_present_files``). *stats*, *checked*,
+    *as_read* and *taken* are `snapshot_file_deps`'s.
 
     The single entry point both caching subsystems use, so neither has to
     remember to merge two helpers. Local and remote entries answer the same
@@ -902,6 +917,8 @@ def snapshot_dependencies(
             extra["checked"] = checked
         if as_read is not None:
             extra["as_read"] = as_read
+        if taken:
+            extra["taken"] = taken
         snapshot = snapshot_file_deps(set(paths), known, **extra)
     if urls:
         snapshot.update(snapshot_remote_deps(urls))

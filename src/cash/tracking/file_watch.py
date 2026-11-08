@@ -141,6 +141,9 @@ class FileWatch:
         self.confirmed_at = 0.0
         #: How many listing entries the folders keep, all told.
         self.listed_entries = 0
+        #: Each watched folder's own stat, by its path, as the last drain
+        #: with *check_dirs* took it: a new dict each time.
+        self.folder_stats: dict[str, os.stat_result] = {}
 
     # -- events ------------------------------------------------------------
 
@@ -149,7 +152,7 @@ class FileWatch:
         touches. With *check_dirs*, also stat each watched folder by its path:
         one that is gone or now names another folder (an ancestor renamed,
         a link re-pointed) is dropped, and folders refused earlier are
-        tried again."""
+        tried again. The stats of the others are kept (``folder_stats``)."""
         with self._lock:
             at = time.monotonic()
             try:
@@ -175,13 +178,17 @@ class FileWatch:
                         self._invalidate(d)
             if check_dirs:
                 self._refused.clear()
+                folder_stats: dict[str, os.stat_result] = {}
                 for d in list(self._dirs.values()):
                     try:
-                        same = _ident(own_stat(d.path)) == d.ident
+                        st = own_stat(d.path)
                     except (OSError, ValueError):
-                        same = False
-                    if not same:
+                        st = None
+                    if st is not None and _ident(st) == d.ident:
+                        folder_stats[d.path] = st
+                    else:
                         self._kill(d)
+                self.folder_stats = folder_stats
             self.confirmed_at = at
 
     def _invalidate(self, d: _Dir) -> None:

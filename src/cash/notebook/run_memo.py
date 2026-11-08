@@ -47,6 +47,7 @@ __all__ = [
     "known_fresh_entry",
     "note_fresh_entry",
     "note_fresh_snapshot",
+    "own_stats_this_run",
     "stat_keys_this_run",
     "stats_taken_this_run",
     "stat_dates_this_run",
@@ -106,6 +107,8 @@ def file_state_this_run() -> dict | None:
             stat={},
             since=time.monotonic(),
             watch=watch,
+            # Each watched folder's own stat, as the drain above took it.
+            folder_stat=watch.folder_stats if watch is not None else {},
             # This run's, until a write drops its stats (`_Held.unsure`).
             token=object(),
         )
@@ -750,6 +753,75 @@ def _as_spelled_absolute(
 
 #: How many stats `stats_this_run` dates with one time.
 _STAT_CHUNK = 256
+
+
+def own_stats_this_run() -> Mapping[str, os.stat_result] | None:
+    """``{path: stat}`` of the stats this cell run already holds that the
+    path's file gave itself (`stats_this_run`), or None outside a run or
+    before any. Takes none.
+
+    Not a listing's (``run["listed"]``): on Windows a listed stat of a file
+    with a second hard link has no link count and can predate a write
+    through the other link, so such a file is stat-ed by itself. Nor one
+    with no file identity (``st_ino`` 0). A folder with no such stat has
+    the one the folder watch took of it as the run began
+    (`FileWatch.drain`). A statement that writes files
+    drops the run's stats (`forget_file_state_this_run`) before it is
+    stored, so none of these predates a write of the cell's own.
+
+    What the records of a statement stored in this cell run take in place
+    of a stat of their own (`snapshot_file_deps`): the first stored below a
+    read of 13,000 photos stat-ed each of them, and their 5,700 folders,
+    moments after the check before the cell had."""
+    epoch = _fds.HASH_EPOCH
+    run = _FILE_STATE_THIS_RUN
+    if epoch is None or run.get("epoch") != epoch:
+        return None
+    stats = run.get("stat") or {}
+    folders = run.get("folder_stat") or {}
+    if not (stats or folders):
+        return None
+    return _OwnStats(stats, run.get("listed") or set(), folders)
+
+
+class _OwnStats(Mapping):
+    """The run's stats (``run["stat"]``) but for the listed ones and those
+    with no file identity (`own_stats_this_run`), and for a folder the
+    run's stats do not hold so, its stat from the folder watch's first
+    drain of the run (``run["folder_stat"]``)."""
+
+    __slots__ = ("_folders", "_listed", "_stats")
+
+    def __init__(self, stats: dict[str, Any], listed: set[str], folders: Mapping[str, Any]) -> None:
+        self._stats = stats
+        self._listed = listed
+        self._folders = folders
+
+    def get(self, path: str, default: Any = None) -> Any:
+        st = None if path in self._listed else self._stats.get(path)
+        if st is None:
+            st = self._folders.get(path)
+            if st is not None and not _stat.S_ISDIR(st.st_mode):
+                st = None
+        if st is None or not st.st_ino:
+            return default
+        return st
+
+    def __getitem__(self, path: str) -> os.stat_result:
+        st = self.get(path)
+        if st is None:
+            raise KeyError(path)
+        return st
+
+    def __contains__(self, path: object) -> bool:
+        return isinstance(path, str) and self.get(path) is not None
+
+    def __iter__(self):
+        yield from (p for p in self._stats if p in self)
+        yield from (p for p in self._folders if p not in self._stats and p in self)
+
+    def __len__(self) -> int:
+        return sum(1 for _ in self)
 
 
 def stats_taken_this_run(paths: Iterable[str], not_before: float | None = None) -> Mapping[str, os.stat_result]:

@@ -62,6 +62,7 @@ from ..call_refs import DECORATOR_ENTRY, REF_BYTES_FIELD, REFS_FIELD, CallRef
 from ..closed_stream import ClosedStream, stored_form
 from ..lineage_formula import rng_reads_now
 from ..lineage_store import frozen_tag
+from ..run_memo import own_stats_this_run
 
 if TYPE_CHECKING:
     from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol
@@ -104,7 +105,10 @@ def _snapshot_with_inherited(
     records the entry refers to (`_InheritedRecords.refs`): not recorded
     here. *as_read*: the stats the reads took, for a snapshot taken a while
     after them; a file no longer as read is recorded as never fresh
-    (`snapshot_file_deps`)."""
+    (`snapshot_file_deps`). The stats this cell run holds already
+    (`own_stats_this_run`) are taken where they say what a stat taken now
+    would: the first statement stored below an unstored read of 13,000
+    photos stat-ed each again, and each of their 5,700 folders."""
     inherited_snapshots = inherited_snapshots or {}
     own = set(file_dependencies) - inherited_snapshots.keys()
     own.difference_update(referred)
@@ -113,7 +117,14 @@ def _snapshot_with_inherited(
         absent = [path for path, asked in probes.items() if asked == "absent"]
         present = {path: asked for path, asked in probes.items() if asked != "absent"}
     snapshot = snapshot_dependencies(
-        own, accessed_remote, absent, known=known, present=present, checked=checked, as_read=as_read
+        own,
+        accessed_remote,
+        absent,
+        known=known,
+        present=present,
+        checked=checked,
+        as_read=as_read,
+        taken=own_stats_this_run() if own else None,
     )
     for path, recorded in inherited_snapshots.items():
         snapshot.setdefault(path, recorded)
