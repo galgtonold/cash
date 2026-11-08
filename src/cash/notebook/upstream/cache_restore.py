@@ -27,7 +27,7 @@ from ...backends._base import ttl_expired
 from ...tracking.env_reads import environment_unchanged
 from ...tracking.file_dep_snapshot import snapshot_is_fresh
 from .. import shadow as _shadow
-from ..anchors import resolve_anchors
+from ..anchors import link_anchors, resolve_anchors
 from ..cache_key import compute_cache_key
 from ..cache_status import CacheStatus
 from ..call_refs import resolve_call_refs
@@ -45,7 +45,7 @@ from ..restored_var import FORWARD_PROBE_PLACEHOLDER, HeldObject, apply_held_var
 from ..run_memo import stats_this_run
 from ..statement import in_place
 from ..statement._metadata import StatementCacheMetadata
-from ..statement.derivation_edges import note_bound_in_cell, record_shared_object_edges
+from ..statement.derivation_edges import note_bound_in_cell
 from ..statement.directives import statement_directives, ttl_floor_from_called_functions
 from ..statement.in_place import restore_into
 from ..statement.output_refusals import live_shared_reason
@@ -255,10 +255,11 @@ class CacheRestorer:
                     self.tracking_state.held_with[cache_key] = dict(holders) if metadata.get("holders_moved") else {}
                 if restored_vars and metadata.get("anchor_links"):
                     # As the run linked them (`anchors`).
-                    record_shared_object_edges(
+                    link_anchors(
                         self.tracking_state.derivation_edges,
                         sorted(restored_vars),
                         [name for name in metadata["anchor_links"] if name in self.shell.user_ns],
+                        metadata.get("anchors"),
                     )
                 self._update_tracking_after_restore(restored_vars, metadata, input_hashes)
                 if final_lineages:

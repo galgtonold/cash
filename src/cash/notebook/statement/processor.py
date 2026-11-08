@@ -75,8 +75,10 @@ from cash.notebook.statement.control_body import is_control_body, is_one_structu
 from cash.notebook.statement.derivation_edges import (
     apply_share_record,
     bound_names,
+    link_memory_homes,
     logging_edges,
     own_share_edges,
+    read_only_view_homes,
     record_shared_object_edges,
     shared_object_partners,
     unlink,
@@ -180,7 +182,7 @@ from ...tracking.randomness import (
 )
 from ...tracking.trace_recorder import other_thread_alive
 from .. import helper_memos
-from ..anchors import anchor_digests
+from ..anchors import MEMORY_HOME, anchor_digests, memory_homes
 from ..borrowed_memory import borrowed_memory_names, lazy_frame_sources
 from ..callee_reach import (
     CWD,
@@ -3800,6 +3802,10 @@ class StatementProcessor:
         anchors: dict[str, Any] = {}
         anchor_links: set[str] = set()
         anchor_holds: dict[str, list[str]] = {}
+        # The variables whose data a numpy view in the outputs sits on, held
+        # as anchors for a restore to build the views on again.
+        homes: dict[int, str] = {}
+        memory: set[str] = set()
         # The outputs the holders found share an object with.
         owners: set[str] = set()
         outputs = run.outputs
@@ -3839,6 +3845,7 @@ class StatementProcessor:
                     restored_into=run.metrics.get("stored_in_place") or (),
                     values_passed=values_passed,
                     shared_owners=owners,
+                    homes=homes,
                 )
                 if reason is not None and holders is not None and values_passed:
                     # Not when a value refused on its own: the retry checks
@@ -3867,12 +3874,15 @@ class StatementProcessor:
                         anchor_links=anchor_links,
                         values_passed=values_passed,
                         shared_owners=retry_owners,
+                        homes=homes,
                     )
                     if retry is None and anchors:
                         reason, holders, gave_up, owners = None, retry_holders, retry_gave_up, retry_owners
                     else:
                         anchors.clear()
                         anchor_links.clear()
+                if reason is None and homes:
+                    reason = self._anchor_homes(run, homes, anchors, memory, holders or {})
                 if reason is None and echo:
                     reason = identity_coupled_reason("the value it echoes", echo[0])
                 if reason is None:
@@ -3900,7 +3910,8 @@ class StatementProcessor:
         finally:
             captured_vars.pop(MEMO_ANSWERS_NAME, None)
         if reason is None and anchors:
-            run.anchors = {name: self.tracking_state.current_session_hashes[name] for name in anchors}
+            session = self.tracking_state.current_session_hashes
+            run.anchors = {name: MEMORY_HOME if name in memory else session[name] for name in anchors}
             run.anchor_links = anchor_links | set(anchors)
             run.anchor_holds = anchor_holds
         if reason is None and found is not None:
@@ -4053,11 +4064,15 @@ class StatementProcessor:
             # append -- so the next cell took the frame built from ``rows``
             # for one built on an older ``data`` and rebuilt both.
             sharing = outputs if run.share_owners is None else [o for o in outputs if o in run.share_owners]
-            links = [(sharing, set(holders)), (outputs, set(run.anchor_links))]
+            homes = memory_homes(run.anchors)
+            links = [(sharing, set(holders)), (outputs, set(run.anchor_links) - homes)]
+            link_memory_homes(self.tracking_state.derivation_edges, homes & set(run.anchor_links), outputs)
         else:
+            homes = set()
             links, complete = self._holders_of(run, outputs, captured_vars, echo, cost, fallback_floor, held)
         bases, bases_complete = self._view_bases_of(outputs, captured_vars, cost, run.inputs)
-        links += bases
+        # The data the entry's read-only views sit on is linked one way, above.
+        links += [(owners, names - homes) for owners, names in bases]
         complete = complete and bases_complete
         for owners, names in links:
             record_shared_object_edges(self.tracking_state.derivation_edges, owners, names)
@@ -4468,7 +4483,9 @@ class StatementProcessor:
         shares memory with it across libraries (`borrowed_memory_names`:
         ``s = pl.Series(arr)``; for a polars LazyFrame, the *inputs* it may
         keep its data in, `lazy_frame_sources`), within the share check's
-        budget."""
+        budget. Those it holds only read-only views of are linked one way
+        here (`read_only_view_homes`), whether or not the statement is
+        stored."""
         if "numpy" not in sys.modules:
             return [], True
         user_ns = self.shell.user_ns
@@ -4494,8 +4511,14 @@ class StatementProcessor:
                     )
                     found |= lazy_frame_sources([captured_vars[name]], inputs, user_ns)
                     found.discard(name)
-                    if found:
-                        links.append(([name], found))
+                    # Data the output holds only read-only views of is
+                    # linked one way: a write to ``y`` reaches the fitted
+                    # model holding ``y.to_numpy()``, nothing reaches back.
+                    one_way = read_only_view_homes(captured_vars[name], user_ns, inputs) & found if found else set()
+                    if one_way:
+                        link_memory_homes(self.tracking_state.derivation_edges, one_way, [name])
+                    if found - one_way:
+                        links.append(([name], found - one_way))
                     done += 1
         except WalkBudgetExceeded:
             # Out of time: an output not looked at may sit on the memory of
@@ -4989,6 +5012,34 @@ class StatementProcessor:
                 compute_hash=self.compute_hash,
             )
         return set(holders)
+
+    def _anchor_homes(
+        self,
+        run: StatementRun,
+        homes: dict[int, str],
+        anchors: dict[str, Any],
+        memory: set[str],
+        holders: Mapping[str, Any],
+    ) -> str | None:
+        """Hold *homes*, the variables whose data a numpy view in *run*'s
+        outputs sits on, as anchors: the entry stores where each view sits
+        (`memory_home`), and a hit builds it on the live data again when the
+        bytes there are the ones stored (`MEMORY_HOME`). *memory* gets the
+        ones that are no anchor of their own. The refusal when the statement
+        bound or changed one, or it is stored with the outputs (*holders*):
+        a copy then, which the views would not sit on."""
+        user_ns = self.shell.user_ns
+        names = set(homes.values())
+        for name in sorted(names):
+            if name in run.outputs or name in holders or name not in run.inputs or name not in user_ns:
+                return (
+                    f"Live-alias object: an output holds a view of '{name}', which the statement "
+                    "changed; re-derived from live base, not cached."
+                )
+        for name in names - set(anchors):
+            anchors[name] = user_ns[name]
+            memory.add(name)
+        return None
 
     def _anchorable(self, run: StatementRun) -> Callable[[str], bool]:
         """Whether a variable holding an object of *run*'s outputs can be

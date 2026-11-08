@@ -33,14 +33,22 @@ def is_history_name(name: str) -> bool:
 
 
 def _alias_refusal(
-    name: str, value: Any, user_ns: dict[str, Any], cash_held: Iterable[Any] = (), inputs: Iterable[str] = ()
+    name: str,
+    value: Any,
+    user_ns: dict[str, Any],
+    cash_held: Iterable[Any] = (),
+    inputs: Iterable[str] = (),
+    homes: dict[int, str] | None = None,
 ) -> str | None:
     """A live-alias object (numpy view, pandas groupby/rolling ref-holder)
     is not cached: pickling and restoring it decouples it from its live
     base, so a later base mutation would be lost after restore. It is
     re-derived from the live base instead. ``.copy()`` produces no alias
-    and stays cacheable."""
-    if is_uncacheable_alias(value, user_ns, cash_held, inputs):
+    and stays cacheable. With *homes*, a view of a variable's data held
+    inside the value is no refusal: *homes* gets it, by id, with the
+    variable, whose data the restore builds it on again
+    (`is_uncacheable_alias`)."""
+    if is_uncacheable_alias(value, user_ns, cash_held, inputs, homes):
         return f"Live-alias object '{name}' (view/ref-holder); re-derived from live base, not cached."
     return None
 
@@ -77,6 +85,7 @@ def unrestorable_output_reason(
     restored_into: Iterable[str] = (),
     values_passed: list[bool] | None = None,
     shared_owners: set[str] | None = None,
+    homes: dict[int, str] | None = None,
 ) -> str | None:
     """Why one of *outputs* cannot be cached, the first refusal found; None
     when every captured value can. An output in *restored_into*, a loop's a
@@ -101,6 +110,12 @@ def unrestorable_output_reason(
     given, gets the names the check found an object of held by another
     variable (`shared_output_reason`).
 
+    *homes*, when given, gets each numpy view inside an output or a holder
+    that sits on a variable's data, by id, with that variable's name: the
+    entry must hold those variables as anchors for a restore to build the
+    views on them again (`memory_home`). Such a view is no refusal then,
+    and the shared-object check leaves it out as it does an anchor.
+
     ``identity_coupled_reason`` refuses an object identity-coupled to a
     library global: the RAM tier's deep copy of a matplotlib Figure
     re-registers the COPY as pyplot's current figure, so ``plt.savefig()``
@@ -110,7 +125,7 @@ def unrestorable_output_reason(
     inputs = set(inputs)
     reason = None
     if not values_passed:
-        reason = _value_refusal(outputs, captured_vars, user_ns, cash_held, inputs, set(restored_into))
+        reason = _value_refusal(outputs, captured_vars, user_ns, cash_held, inputs, set(restored_into), homes)
         if reason is None and values_passed is not None:
             values_passed.append(True)
     reason = reason or shared_output_reason(
@@ -125,9 +140,10 @@ def unrestorable_output_reason(
         anchors,
         anchor_links,
         shared_owners,
+        homes,
     )
     if reason is None and holders:
-        reason = _value_refusal(set(holders), holders, user_ns, cash_held)
+        reason = _value_refusal(set(holders), holders, user_ns, cash_held, homes=homes)
         if reason is not None:
             holders.clear()
     if reason is None and _attrs_parted(outputs, captured_vars, holders):
@@ -153,10 +169,11 @@ def _value_refusal(
     cash_held: Iterable[Any] = (),
     inputs: Iterable[str] = (),
     restored_into: set[str] | frozenset[str] = frozenset(),
+    homes: dict[int, str] | None = None,
 ) -> str | None:
     """The first refusal one output's value earns on its own."""
     refusals: tuple[Callable[[str, Any], str | None], ...] = (
-        lambda name, value: _alias_refusal(name, value, user_ns, cash_held, inputs),
+        lambda name, value: _alias_refusal(name, value, user_ns, cash_held, inputs, homes),
         identity_coupled_reason,
         _consumable_refusal,
         _context_variable_refusal,
@@ -204,6 +221,7 @@ def shared_output_reason(
     anchors: dict[str, Any] | None = None,
     anchor_links: set[str] | None = None,
     shared_owners: set[str] | None = None,
+    homes: dict[int, str] | None = None,
 ) -> str | None:
     """Nor an output whose object, or one inside it, something else holds too
     (`shared_names`): a restore would bind a copy, and that holder would keep
@@ -216,6 +234,7 @@ def shared_output_reason(
     (`share_group`): stored and restored with the outputs as one graph, they
     hold the restored objects again. A holder cash cannot restore -- a
     library's registry, a closure, IPython's own names -- still refuses.
+    The views *homes* names are left out (`share_group`'s *stops*).
     With *anchorable*, a variable the statement left as it was is first
     asked to be an anchor, which *anchors* gets: its object is not stored
     but bound again on a restore, so nothing else that holds it is looked
@@ -251,6 +270,7 @@ def shared_output_reason(
             else None,
             anchors=anchors,
             anchor_links=anchor_links,
+            stops=homes or (),
         )
         holders.update(found)
         del found

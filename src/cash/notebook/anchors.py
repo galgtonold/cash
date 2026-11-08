@@ -14,20 +14,46 @@ A hit binds an anchor only while the variable's content digest is the one
 the entry recorded: in the session that stored it, the very object; after a
 restart, the one the notebook built again, when it has the same content.
 Anything else is a miss, never a copy.
+
+A numpy view held inside the value whose memory is an anchor's data (a
+fitted ``KNeighborsRegressor`` keeps ``y.to_numpy()`` of the labels it was
+fitted on) is stored as where it sits there (`MemoryHome`), and a hit builds
+it on the live variable's data again, when its bytes there are the ones
+stored: a write to the labels in place reaches the restored model, as in
+plain Python. Such an anchor is recorded with `MEMORY_HOME` for a digest:
+the bytes are checked, not the variable's whole content.
 """
 
 from __future__ import annotations
 
 import io
 import pickle
+import sys
 import types
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from cash import kept_state, value_hash
+from cash.notebook.borrowed_memory import MemoryHome, data_arrays, memory_home, rebuild_view
 
-__all__ = ["AnchorRef", "AnchorUnrebuilt", "anchor_digests", "resolve_anchors", "with_anchor_refs"]
+__all__ = [
+    "MEMORY_HOME",
+    "AnchorRef",
+    "AnchorUnrebuilt",
+    "anchor_digests",
+    "link_anchors",
+    "memory_homes",
+    "resolve_anchors",
+    "with_anchor_refs",
+]
+
+#: The digest an entry records for an anchor held only for the memory of
+#: the views it builds on it again (`MemoryHome`): a frame's or an array's
+#: content has no digest of its own (its lineage stands for it), and the
+#: bytes each view sits on are checked instead. Any other cash reads it as
+#: a digest that changed: a miss.
+MEMORY_HOME = "memory-home"
 
 
 @dataclass(frozen=True)
@@ -54,7 +80,7 @@ _KEPT = "kept"
 
 
 class _RefPickler(pickle.Pickler):
-    def __init__(self, file: io.BytesIO, name_of: Callable[[Any], str | None], buffers: list) -> None:
+    def __init__(self, file: io.BytesIO, name_of: Callable[[Any], Any], buffers: list) -> None:
         super().__init__(file, pickle.HIGHEST_PROTOCOL, buffer_callback=buffers.append)
         self._name_of = name_of
         self.kept: dict[int, Any] = {}
@@ -70,9 +96,7 @@ class _RefPickler(pickle.Pickler):
         return name
 
 
-def _round_trip(
-    value: Any, name_of: Callable[[Any], str | None], load: Callable[[str], Any], *, naming: bool = False
-) -> Any:
+def _round_trip(value: Any, name_of: Callable[[Any], Any], load: Callable[[Any], Any], *, naming: bool = False) -> Any:
     """A copy of *value*, each object *name_of* names replaced by *load* of
     that name: one pickle round trip, so what the parts share stays shared.
     *naming*: a rebuild that fails raises `AnchorUnrebuilt` for the name
@@ -91,7 +115,7 @@ def _round_trip(
     def persistent_load(pid: Any) -> Any:
         if type(pid) is tuple and pid[0] == _KEPT:
             return kept[pid[1]]
-        loaded.append(pid)
+        loaded.append(pid.name if type(pid) is MemoryHome else pid)
         return load(pid)
 
     unpickler.persistent_load = persistent_load  # type: ignore[assignment]
@@ -103,11 +127,53 @@ def _round_trip(
         raise AnchorUnrebuilt(loaded[-1] if loaded else None) from exc
 
 
-def with_anchor_refs(value: Any, anchors: Mapping[str, Any]) -> Any:
+def with_anchor_refs(value: Any, anchors: Mapping[str, Any], homes: Iterable[str] = ()) -> Any:
     """A copy of *value* with an `AnchorRef` in each place it holds one of
-    the objects of *anchors* (``{name: object}``)."""
+    the objects of *anchors* (``{name: object}``), and the `MemoryHome` of
+    each numpy view it holds that sits in the data of an anchor *homes*
+    names: the statement's inputs, whose lineage its key holds. One view
+    held in two places is one `MemoryHome`, so it comes back as one."""
     by_id = {id(obj): name for name, obj in anchors.items()}
-    return _round_trip(value, lambda obj: by_id.get(id(obj)), AnchorRef, naming=True)
+    homes = set(homes)
+    data = {name: obj for name, obj in anchors.items() if name in homes and data_arrays(obj)}
+    ndarray = getattr(sys.modules.get("numpy"), "ndarray", None)
+    placed: dict[int, Any] = {}
+
+    def name_of(obj: Any) -> Any:
+        name = by_id.get(id(obj))
+        if name is None and data and type(obj) is ndarray and obj.base is not None:
+            if id(obj) not in placed:
+                placed[id(obj)] = memory_home(obj, data)
+            return placed[id(obj)]
+        return name
+
+    def load(pid: Any) -> Any:
+        return pid if type(pid) is MemoryHome else AnchorRef(pid)
+
+    return _round_trip(value, name_of, load, naming=True)
+
+
+def memory_homes(digests: Mapping[str, str] | None) -> set[str]:
+    """The anchors among *digests* held only for the views built on their
+    data (`MEMORY_HOME`)."""
+    return {name for name, digest in (digests or {}).items() if digest == MEMORY_HOME}
+
+
+def link_anchors(
+    derivation_edges: dict[str, set[str]],
+    outputs: Sequence[str],
+    links: Iterable[str],
+    digests: Mapping[str, str] | None,
+) -> None:
+    """Link *outputs* with the variables *links* names as the entry's
+    anchors link them: both ways, but from a `MEMORY_HOME` anchor to the
+    outputs only (`link_memory_homes`)."""
+    from cash.notebook.statement.derivation_edges import link_memory_homes, record_shared_object_edges
+
+    homes = memory_homes(digests)
+    links = list(links)
+    record_shared_object_edges(derivation_edges, outputs, [name for name in links if name not in homes])
+    link_memory_homes(derivation_edges, [name for name in links if name in homes], outputs)
 
 
 def anchor_digests(anchors: Mapping[str, Any], compute_hash: Callable[[Any], str] | None) -> dict[str, str] | None:
@@ -155,7 +221,7 @@ def resolve_anchors(
         if name not in user_ns:
             raise KeyError(f"anchor {name!r} is not bound")
         obj = user_ns[name]
-        if _digest(obj, hash_fn) != digest:
+        if digest != MEMORY_HOME and _digest(obj, hash_fn) != digest:
             raise KeyError(f"anchor {name!r} changed since the entry was stored")
         live[name] = obj
     for name, held in (holds or {}).items():
@@ -165,12 +231,23 @@ def resolve_anchors(
         if name in user_ns and anchors_held(user_ns[name], live) != set(held):
             raise KeyError(f"{name!r} no longer holds the objects of {sorted(held)}")
 
-    def name_of(obj: Any) -> str | None:
+    def name_of(obj: Any) -> Any:
+        if type(obj) is MemoryHome:
+            return obj
         return obj.name if type(obj) is AnchorRef else None
 
-    def load(name: str) -> Any:
-        if name not in live:
-            raise pickle.UnpicklingError(f"unknown anchor {name!r}")
-        return live[name]
+    built: dict[int, Any] = {}
+
+    def load(pid: Any) -> Any:
+        if type(pid) is MemoryHome:
+            if pid.name not in live:
+                raise pickle.UnpicklingError(f"unknown anchor {pid.name!r}")
+            # One view held in two places is one `MemoryHome` object: built once.
+            if id(pid) not in built:
+                built[id(pid)] = (pid, rebuild_view(pid, live[pid.name]))  # KeyError: laid out otherwise, or changed
+            return built[id(pid)][1]
+        if pid not in live:
+            raise pickle.UnpicklingError(f"unknown anchor {pid!r}")
+        return live[pid]
 
     return _round_trip(value, name_of, load)

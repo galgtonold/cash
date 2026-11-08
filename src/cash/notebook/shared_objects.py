@@ -2073,6 +2073,7 @@ def share_group(
     anchorable: Callable[[str], bool] | None = None,
     anchors: dict[str, Any] | None = None,
     anchor_links: set[str] | None = None,
+    stops: Iterable[int] = (),
 ) -> tuple[dict[str, Any], set[str]]:
     """``(holders, shared)`` for the outputs *names*, bound in *values*.
 
@@ -2107,6 +2108,10 @@ def share_group(
     the variables found holding an object of the outputs in the rounds that
     took anchors: they share objects with the outputs all the same, so a
     change through one of them moves the outputs on.
+
+    The objects *stops* names, by id, are left out as an anchor is: the
+    numpy views a restore builds on a variable's data again (`memory_home`),
+    which hold that data, not a copy of it.
     """
     group = {name: values[name] for name in names if values.get(name) is not None}
     bindings = [values, user_ns]
@@ -2122,7 +2127,7 @@ def share_group(
     held_memo = HeldWalk()
     links: list[tuple[set[str], set[str]]] = []
     partial = GaveUp() if gave_up is not None else None
-    leaves = Leaves()
+    leaves = Leaves(set(stops))
     #: The anchor tried for each object, by id; None when it can be none.
     tried: dict[int, str | None] = {}
     rounds = anchor_rounds = 0

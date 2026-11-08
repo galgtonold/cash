@@ -28,9 +28,11 @@ pandas objects whose blocks overlap are linked too (`_pandas_block_spans`).
 from __future__ import annotations
 
 import bisect
+import hashlib
 import logging
 import sys
 from collections.abc import Callable, Container, Iterable, Mapping
+from dataclasses import dataclass
 from itertools import chain
 from typing import Any
 
@@ -51,7 +53,18 @@ from .shared_objects import (
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["borrowed_memory_names", "borrows_from", "holds_a_borrower", "lazy_frame_sources", "memory_spans"]
+__all__ = [
+    "MemoryHome",
+    "borrowed_memory_names",
+    "borrowers_in",
+    "borrows_from",
+    "data_arrays",
+    "holds_a_borrower",
+    "lazy_frame_sources",
+    "memory_home",
+    "memory_spans",
+    "rebuild_view",
+]
 
 _NUMPY, _PANDAS, _POLARS, _ARROW = "numpy", "pandas", "polars", "arrow"
 
@@ -528,8 +541,123 @@ def borrows_from(value: Any, sources: Iterable[Any]) -> bool:
     return bool(borrowed_memory_names([value], {f"source{index}": source for index, source in enumerate(sources)}))
 
 
+def borrowers_in(values: Iterable[Any]) -> list[tuple[Any, str]]:
+    """The numpy views and the pandas, polars and Arrow objects among
+    *values*, or held in them, each with its library's name (``"numpy"``,
+    ``"pandas"``, ...)."""
+    return _borrowers_in(values)
+
+
 def holds_a_borrower(value: Any) -> bool:
     """Whether *value* is, or holds, an object that may keep its data in
     another library's memory (a pandas, polars or Arrow object, a numpy
     view)."""
     return bool(_borrowers_in([value]))
+
+
+def data_arrays(value: Any) -> list[Any]:
+    """The numpy arrays a variable's own data sits in, in a fixed order: a
+    numpy array itself, a pandas Series' or frame's blocks that numpy
+    holds (not its axes, nor an extension array's parts). Empty for
+    anything else, and when pandas will not say."""
+    family = _family(value)
+    if family == _NUMPY:
+        return [value]
+    if family != _PANDAS or isinstance(value, sys.modules["pandas"].Index):
+        return []
+    np = sys.modules["numpy"]
+    try:
+        blocks = value._mgr.blocks
+    except Exception:  # noqa: BLE001 - internals changed: no home here
+        return []
+    return [block.values for block in blocks if type(block.values) is np.ndarray]
+
+
+@dataclass(frozen=True)
+class MemoryHome:
+    """Where a numpy view sits in a variable's data: in ``data_arrays(var)
+    [index]``, *offset* bytes from its start, with *shape*, *strides* and
+    dtype *dtype* (``dtype.str``); *digest* is its bytes' when stored."""
+
+    name: str
+    index: int
+    offset: int
+    shape: tuple[int, ...]
+    strides: tuple[int, ...]
+    dtype: str
+    readonly: bool
+    digest: str
+
+
+def _flat_bytes(array: Any) -> Any:
+    """*array*'s memory as one byte array, a view of it; None when it is not
+    one contiguous run."""
+    flags = array.flags
+    if flags.c_contiguous:
+        flat = array.reshape(-1)
+    elif flags.f_contiguous:
+        flat = array.reshape(-1, order="F")
+    else:
+        return None
+    return flat.view(sys.modules["numpy"].uint8)
+
+
+def _bytes_digest(array: Any) -> str:
+    np = sys.modules["numpy"]
+    return hashlib.blake2b(np.ascontiguousarray(array).view(np.uint8), digest_size=16).hexdigest()
+
+
+def memory_home(array: Any, variables: Mapping[str, Any]) -> MemoryHome | None:
+    """Where the numpy view *array* sits in one of *variables*' data
+    (`data_arrays`), whole, within one contiguous array: what a restore
+    builds the view on again (`rebuild_view`). None when it sits in none,
+    holds objects, which a view built over memory cannot, or can be written
+    through: a write through it would change the variable, which a restore
+    cannot tell from the variable's own (``y.to_numpy()`` under pandas'
+    copy-on-write is read-only, ``X[:100]`` is not)."""
+    np = sys.modules.get("numpy")
+    if np is None or type(array) is not np.ndarray or array.base is None or array.dtype.hasobject or not array.size:
+        return None
+    if array.flags.writeable:
+        return None
+    (low, high), *_ = _ndarray_spans(array)
+    for name, value in variables.items():
+        for index, base in enumerate(data_arrays(value)):
+            if base is array or not base.size or base.dtype.hasobject or _flat_bytes(base) is None:
+                continue
+            (start, end), *_ = _ndarray_spans(base)
+            if start <= low and high <= end:
+                return MemoryHome(
+                    name,
+                    index,
+                    array.__array_interface__["data"][0] - start,
+                    tuple(array.shape),
+                    tuple(array.strides),
+                    array.dtype.str,
+                    not array.flags.writeable,
+                    _bytes_digest(array),
+                )
+    return None
+
+
+def rebuild_view(home: MemoryHome, value: Any) -> Any:
+    """The view *home* describes, built on the data of *value*, the live
+    variable: it shares that memory, as the stored one shared its
+    variable's. KeyError when the data is laid out otherwise, or the bytes
+    there are not the ones stored."""
+    np = sys.modules["numpy"]
+    arrays = data_arrays(value)
+    if home.index >= len(arrays):
+        raise KeyError(f"{home.name!r} keeps its data otherwise")
+    flat = _flat_bytes(arrays[home.index])
+    if flat is None:
+        raise KeyError(f"{home.name!r} keeps its data otherwise")
+    try:
+        view = np.ndarray(home.shape, np.dtype(home.dtype), buffer=flat, offset=home.offset, strides=home.strides)
+    except (TypeError, ValueError) as exc:
+        raise KeyError(f"{home.name!r} keeps its data otherwise") from exc
+    if _bytes_digest(view) != home.digest:
+        raise KeyError(f"the data of {home.name!r} the entry's arrays sit in changed")
+    if home.readonly:
+        view.flags.writeable = False
+    return view

@@ -16,11 +16,10 @@ from cash import rewrite_in_place
 from cash._clock import perf_counter as _perf_counter
 from cash.exceptions import CacheBackendError, CacheSerializationError
 from cash.notebook import helper_memos
-from cash.notebook.anchors import resolve_anchors
+from cash.notebook.anchors import link_anchors, resolve_anchors
 from cash.notebook.cache_status import CacheStatus
 from cash.notebook.statement import in_place
 from cash.notebook.statement.control_body import is_one_structure
-from cash.notebook.statement.derivation_edges import record_shared_object_edges
 from cash.notebook.statement.results import COST_MODEL_KEYS
 from cash.notebook.statement.run import ECHO_FIELD, MEMO_CHANGES_FIELD, echoes
 
@@ -150,10 +149,11 @@ class CacheHitServer:
 
             if metadata is not None and metadata.anchor_links:
                 user_ns = self._restorer.shell.user_ns
-                record_shared_object_edges(
+                link_anchors(
                     self.tracking_state.derivation_edges,
                     [name for name in metadata.outputs or () if name in user_ns],
                     [name for name in metadata.anchor_links if name in user_ns],
+                    metadata.anchors,
                 )
             self._report_hit(run, cached_data, metadata)
             return metrics
