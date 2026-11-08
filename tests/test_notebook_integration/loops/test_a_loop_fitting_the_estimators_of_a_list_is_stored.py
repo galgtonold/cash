@@ -90,6 +90,24 @@ def test_a_restart_and_run_all_fits_nothing(nb_runner):
     assert _shown(nb_runner, len(CELLS)) == shown
 
 
+@pytest.mark.fresh_kernel
+def test_a_loop_over_a_dicts_values_is_served_after_a_restart(nb_runner):
+    """The same loop over ``models.values()``, a plain dict: stored as a
+    change to ``models``, served after a restart and Run All."""
+    make = (
+        "models = {'a': SlowForest(n_estimators=10, random_state=1), 'b': SlowForest(n_estimators=10, random_state=2)}"
+    )
+    loop = "for estimator in models.values():\n    estimator.fit(X_train, y_train)"
+    read = "print({k: round(e.score(X_valid, y_valid), 6) for k, e in models.items()}, estimator is models['b'])"
+    cells = ["%cash_badge print", MARK, SETUP, DATA, make, loop, read]
+    shown = _first_run(nb_runner, cells)
+    _restart_and_run_all(nb_runner)
+    assert _fits(nb_runner) == [], nb_runner.get_raw_output(LOOP_CELL)
+    assert shows_cached(nb_runner.get_raw_output(LOOP_CELL)), nb_runner.get_raw_output(LOOP_CELL)
+    assert _shown(nb_runner, len(cells)) == shown
+    assert shown.endswith("True"), shown
+
+
 @pytest.mark.parametrize("restart", [False, True], ids=["same kernel", "after a restart"])
 def test_an_edit_of_the_data_above_fits_them_again(nb_runner, restart):
     """Three features instead of five: the estimators are fitted on the

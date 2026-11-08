@@ -145,6 +145,29 @@ def _rebound_names(node: ast.For) -> set[str]:
     }
 
 
+#: The views of a dict a loop walks its values through.
+_DICT_VIEWS = frozenset({"values", "items"})
+
+
+def _a_plain_dicts_view(iter_node: ast.expr, user_ns: dict[str, Any]) -> bool:
+    """Whether the header is ``name.values()`` or ``name.items()`` with no
+    arguments, *name* bound to a dict of the builtin type itself: the view
+    runs no code of the notebook or of a library, so the unit may evaluate
+    it (``for est in models.values(): est.fit(X, y)``). Only the dict's own
+    type is read; a subclass may define the method its own way."""
+    if not (
+        isinstance(iter_node, ast.Call)
+        and not iter_node.args
+        and not iter_node.keywords
+        and isinstance(iter_node.func, ast.Attribute)
+        and iter_node.func.attr in _DICT_VIEWS
+        and isinstance(iter_node.func.value, ast.Name)
+    ):
+        return False
+    name = iter_node.func.value.id
+    return name in user_ns and type(user_ns[name]) is dict
+
+
 def _no_cache(annotation) -> bool:
     return annotation is not None and bool(annotation.no_cache)
 
@@ -379,7 +402,10 @@ class ForLoopHandler:
         walked = _helpers.walked_names_it_changes(self.shell, self.statement_processor, node)
         if not walked or single_unit_policy.writes_files(node.body):
             return frozenset()
-        if not single_unit_policy.header_may_be_left_to_the_unit(node.iter, user_ns):
+        if not (
+            single_unit_policy.header_may_be_left_to_the_unit(node.iter, user_ns)
+            or _a_plain_dicts_view(node.iter, user_ns)
+        ):
             return frozenset()
         store = self._split_policy.store()
         if store is None:

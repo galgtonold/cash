@@ -65,7 +65,7 @@ def _loop_statuses(cash_magics):
 
 
 @pytest.mark.usefixtures("store_everything")
-def test_the_loop_is_stored_and_a_hit_refills_the_list(cash_magics, mock_shell):
+def test_the_loop_is_stored_and_a_hit_restores_the_list(cash_magics, mock_shell):
     cells = [SETUP, MAKE, LOOP]
     for cell in cells:
         run_cash_cell(cash_magics, cell, cells=cells)
@@ -84,9 +84,47 @@ def test_the_loop_is_stored_and_a_hit_refills_the_list(cash_magics, mock_shell):
 
 @pytest.mark.usefixtures("store_everything")
 def test_a_loop_over_a_tuple_keeps_its_passes(cash_magics, mock_shell):
-    """A tuple is no container a hit refills: the loop keeps one entry per
-    pass, as before."""
+    """Items out of a tuple are not walked as the items of a list: the loop
+    keeps one entry per pass, as before."""
     cells = [SETUP, MAKE.replace("[", "(").replace("]", ")"), LOOP]
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    assert len(_loop_statuses(cash_magics)) == 2
+
+
+MODELS = "models = {'a': Model(1), 'b': Model(2)}"
+
+
+@pytest.mark.usefixtures("store_everything")
+@pytest.mark.parametrize(
+    "loop",
+    ["for est in models.values():\n    est.fit(X)", "for name, est in models.items():\n    est.fit(X)"],
+    ids=["values", "items"],
+)
+def test_a_loop_over_a_dicts_values_is_stored(cash_magics, mock_shell, loop):
+    """``.values()`` and ``.items()`` of a plain dict run no code of their
+    own: the unit evaluates the header, and a hit binds ``models`` to the
+    stored dict of fitted models."""
+    cells = [SETUP, MODELS, loop]
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    assert len(_loop_statuses(cash_magics)) == 1
+
+    ns = mock_shell.user_ns
+    run_cash_cell(cash_magics, MODELS, cells=cells)
+    run_cash_cell(cash_magics, loop, cells=cells)
+    assert "RESTORED" in str(_loop_statuses(cash_magics)), _loop_statuses(cash_magics)
+    assert {k: m.w[0][0][0][0] for k, m in ns["models"].items()} == {"a": [1, 2, 3], "b": [2, 4, 6]}
+    assert ns["est"] is ns["models"]["b"]
+
+
+@pytest.mark.usefixtures("store_everything")
+def test_a_dict_subclass_view_keeps_its_passes(cash_magics, mock_shell):
+    """A subclass of dict may define ``values()`` its own way: only a dict
+    of the builtin type is walked, and the loop keeps one entry per pass."""
+    make = "class Models(dict):\n    pass\n" + MODELS.replace("{", "Models({").replace("}", "})")
+    loop = "for est in models.values():\n    est.fit(X)"
+    cells = [SETUP, make, loop]
     for cell in cells:
         run_cash_cell(cash_magics, cell, cells=cells)
     assert len(_loop_statuses(cash_magics)) == 2
