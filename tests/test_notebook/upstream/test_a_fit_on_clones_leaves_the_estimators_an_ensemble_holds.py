@@ -53,6 +53,7 @@ ENSEMBLE = [
     "vote = VotingClassifier(named)",
     "vote.fit(X, y)",
     "out = vote.score(X, y)",
+    "depth = a.get_depth()",
 ]
 SCORES = 4  # index into the cells, DEFINE first
 
@@ -109,20 +110,27 @@ def test_the_scoring_cell_run_again_fits_nothing(cash_magics, tmp_path):
     assert _fits(log) == 4  # plain Python: a, b, and the ensemble's two clones
     scores, out = ns["scores"], ns["out"]
 
+    depth = ns["depth"]
+
     run_cash_cell(cash_magics, cells[SCORES], cells=cells)
+    run_cash_cell(cash_magics, cells[-2], cells=cells)
+    # Below the ensemble's fit: the simulation keeps ``a``'s lineage there
+    # as the run did, by the alias the run recorded, whether or not the
+    # fit was stored.
     run_cash_cell(cash_magics, cells[-1], cells=cells)
 
     assert _fits(log) == 0
     assert ns["scores"] == scores
     assert ns["out"] == out
+    assert ns["depth"] == depth
     assert ns["vote"].estimators[0][1] is ns["a"]
 
 
 @pytest.mark.usefixtures("store_everything", "share_check")
 def test_the_ensembles_fit_keeps_the_lineages_of_what_it_holds(cash_magics, tmp_path):
-    _, cells = _start(cash_magics, tmp_path, ENSEMBLE, upto=-2)
+    _, cells = _start(cash_magics, tmp_path, ENSEMBLE, upto=-3)
 
-    before, after = _lineage_across(cash_magics, cells, cells[-2], "a")
+    before, after = _lineage_across(cash_magics, cells, cells[-3], "a")
 
     assert after == before
 
@@ -148,20 +156,20 @@ def test_a_digest_not_taken_in_time_moves_the_estimators_on(cash_magics, tmp_pat
     a session digest too: it runs out of time as well."""
     monkeypatch.setattr(processor, "HOLDER_DIGEST_BUDGET_S", 0.0)
     monkeypatch.setattr(processor, "HOLDER_DIGEST_FACTOR", 0.0)
-    _, cells = _start(cash_magics, tmp_path, ENSEMBLE, upto=-2)
+    _, cells = _start(cash_magics, tmp_path, ENSEMBLE, upto=-3)
     ns = cash_magics.shell.user_ns
     scores = ns["scores"]
 
-    def out_of_time(value, compute_hash):
+    def out_of_time(*args, **kwargs):
         raise TimeoutError("past its budget")
 
     with monkeypatch.context() as m:
         m.setattr(processor.value_hash, "budgeted_hash", out_of_time)
-        before, after = _lineage_across(cash_magics, cells, cells[-2], "a")
-    run_cash_cell(cash_magics, cells[-1], cells=cells)
+        before, after = _lineage_across(cash_magics, cells, cells[-3], "a")
+    run_cash_cell(cash_magics, cells[-2], cells=cells)
     out = ns["out"]
     run_cash_cell(cash_magics, cells[SCORES], cells=cells)
-    run_cash_cell(cash_magics, cells[-1], cells=cells)
+    run_cash_cell(cash_magics, cells[-2], cells=cells)
 
     assert after != before
     assert ns["scores"] == scores

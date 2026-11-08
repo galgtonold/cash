@@ -483,6 +483,7 @@ class StatementLineageBuilder:
         code: str | None = None,
         kept: set[str] | frozenset[str] = frozenset(),
         before: dict[str, frozenset[str]] | None = None,
+        resolve: bool = True,
     ) -> set[str]:
         """Move on the variables a statement with *outputs* changed through
         another name (`bump_derived_lineages`); the names moved. *code*, the
@@ -520,6 +521,7 @@ class StatementLineageBuilder:
             kept=kept,
             code=code,
             before=before,
+            resolve=resolve,
         )
         for target, lineage_hash in moved.items():
             if target in tracking_state.current_session_hashes:

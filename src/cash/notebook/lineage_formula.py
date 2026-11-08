@@ -353,7 +353,7 @@ def use_lineage_alias_store(store: Any) -> None:
             _LINEAGE_ALIASES.setdefault(lineage, earlier)
 
 
-def held_lineage(before: str, cache_key: str) -> str:
+def held_lineage(before: str, cache_key: str, resolve: bool = True) -> str:
     """The lineage of a variable stored with a statement's outputs because it
     holds one of their objects too (``StatementCacheMetadata.holders``), from
     its lineage *before* the statement and the statement's *cache_key*.
@@ -364,9 +364,12 @@ def held_lineage(before: str, cache_key: str) -> str:
     entry written before this change.
 
     Unless the statement was seen to leave the variable's content as it was
-    (`keep_held_lineage`): then it keeps *before*.
+    (`keep_held_lineage`): then it keeps *before*. Not with *resolve* false:
+    for a run that saw the content change, which an earlier run of the same
+    statement, keyed alike, did not.
     """
-    return resolve_lineage_alias(_held_hash(before, cache_key))
+    held = _held_hash(before, cache_key)
+    return resolve_lineage_alias(held) if resolve else held
 
 
 def keep_held_lineage(before: str, cache_key: str) -> None:

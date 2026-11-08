@@ -286,14 +286,20 @@ SHARE_CHECK_FLOOR_S = 0.1
 #: (`referring_names`).
 SHARE_FALLBACK_FLOOR_S = 1.0
 #: How long the in-place-edit digests of the variables a statement may leave
-#: holding a changed object take (`StatementRun.holder_digests`): this much,
-#: or a share of what the statement last took when that is more, before the
-#: statement runs, and again after it. Each value is read within the budget
-#: of any change check (`budgeted_hash`); none is started past this one. One
-#: not digested in time moves on, as every holder did before. A forest of
-#: 100 trees, 85 MB pickled, digests in 0.06 s.
+#: holding a changed object take (`StatementRun.holder_digests`), each way
+#: (before the statement runs, and after): `HOLDER_DIGEST_FACTOR` of what
+#: the statement last took, at least `HOLDER_DIGEST_FLOOR_S` and at most
+#: `HOLDER_DIGEST_BUDGET_S`. No value is read past it, nor marked costly for
+#: other checks by it (`budgeted_hash`, ``remember=False``). One not digested
+#: in time moves on, as every holder did before. A forest of 100 trees, 85
+#: MB pickled, digests in 0.06 s; ``a[0] = 1.0`` on an array 22 names hold
+#: reads none of them (`_holds_one_of`).
 HOLDER_DIGEST_BUDGET_S = 1.0
-HOLDER_DIGEST_FACTOR = 0.1
+HOLDER_DIGEST_FLOOR_S = 0.1
+HOLDER_DIGEST_FACTOR = 0.5
+#: How deep, and over how many objects, `_holds_one_of` looks.
+_HOLDS_DEPTH = 2
+_HOLDS_ITEMS = 2000
 #: The packages of the kernel's own objects, left out of the share check
 #: (`StatementProcessor._kernel_object`).
 _KERNEL_PACKAGES = frozenset({"IPython", "ipykernel"})
@@ -327,14 +333,15 @@ class _TooCostly(Exception):
     """A value's digest did not finish within its budget."""
 
 
-def _bounded_fingerprint(value: Any, compute_hash: Callable[[Any], str]) -> str | None:
-    """*value*'s ``mutation_fingerprint``, its content read within the budget
-    of a change check (`budgeted_hash`); None when it cannot be taken or not
-    in time. Not a shorter budget: one that runs out marks the value costly
-    (`is_costly`) for every other check too."""
+def _bounded_fingerprint(value: Any, compute_hash: Callable[[Any], str], seconds: float) -> str | None:
+    """*value*'s ``mutation_fingerprint``, its content read within *seconds*
+    (`budgeted_hash`, not run on past them, nor marking the value costly for
+    other checks); None when it cannot be taken or not in time."""
+    if seconds <= 0:
+        return None
 
     def content(obj: Any) -> str:
-        digest = value_hash.budgeted_hash(obj, compute_hash)
+        digest = value_hash.budgeted_hash(obj, compute_hash, seconds, remember=False)
         if digest is None:
             raise _TooCostly
         return digest
@@ -343,6 +350,39 @@ def _bounded_fingerprint(value: Any, compute_hash: Callable[[Any], str]) -> str 
         return mutation_fingerprint(value, content)
     except Exception:  # noqa: BLE001 - user code in a value's hash or pickle, or too costly: count it as changed
         return None
+
+
+def _holds_one_of(value: Any, ids: set[int]) -> bool:
+    """Whether *value* is, or holds within `_HOLDS_DEPTH` steps (items of a
+    list, tuple, set or dict, attributes of an object), an object whose id
+    is in *ids*: a holder of the very object a statement may change, which
+    moves with it and is not worth a digest (``k0 = [a]`` before
+    ``a[0] = 1.0``). Counts objects, not time, so the answer does not
+    depend on the machine's load; past `_HOLDS_ITEMS` it says no."""
+    seen: set[int] = set()
+    frontier = [value]
+    for _ in range(_HOLDS_DEPTH + 1):
+        nxt: list[Any] = []
+        for obj in frontier:
+            if id(obj) in ids:
+                return True
+            if id(obj) in seen or len(seen) >= _HOLDS_ITEMS:
+                continue
+            seen.add(id(obj))
+            t = type(obj)
+            try:
+                if t in (list, tuple, set, frozenset):
+                    nxt.extend(obj)
+                elif t is dict:
+                    nxt.extend(obj.values())
+                elif not issubclass(t, (str, bytes, int, float, complex, bool, type(None), type)):
+                    attrs = attribute_or(obj, "__dict__", None)
+                    if type(attrs) is dict:
+                        nxt.extend(attrs.values())
+            except Exception:  # noqa: BLE001 - a value whose iteration raises: looked no further
+                continue
+        frontier = nxt[:_HOLDS_ITEMS]
+    return False
 
 
 def share_check_budget(cost: float) -> float:
@@ -3556,6 +3596,8 @@ class StatementProcessor:
             code=run.code,
             kept=run.holders_unchanged,
             before=before,
+            # What this run's digests saw, not an alias an earlier run left.
+            resolve=False,
         )
         self._report_saved(run, saved_metadata)
         self._tell_past_budget(run, execution.cost or execution.wall_time or 0.0)
@@ -4802,11 +4844,13 @@ class StatementProcessor:
         for name in run.holders_unchanged & set(holders):
             keep_held_lineage(holders[name], cache_key)
         for name, before in holders.items():
+            # One this run did not see unchanged moves on, whatever an
+            # earlier run of the statement saw (a kept alias).
             apply_held_var(
                 self.tracking_state,
                 name,
                 self.shell.user_ns.get(name),
-                held_lineage(before, cache_key),
+                held_lineage(before, cache_key, resolve=name in run.holders_unchanged),
                 compute_hash=self.compute_hash,
             )
         return set(holders)
@@ -4838,9 +4882,11 @@ class StatementProcessor:
         the share checks recorded (``shared_object_partners``) -- for
         `_unchanged_holders` to compare with after.
 
-        Within `HOLDER_DIGEST_BUDGET_S` (`_holder_digest_budget`) in all:
-        one not digested by then is left out, and moves on as a holder as
-        before. A variable no edge links is not looked for: it moves.
+        Not a variable holding the very object the statement may change
+        (`_holds_one_of`): that one moves with it. Each object digested once
+        (``b = a``). Within `_holder_digest_budget` in all: one not digested
+        by then is left out, and moves on as a holder as before. A variable
+        no edge links is not looked for: it moves.
         """
         if not run.bound_before or self.compute_hash is None:
             return {}
@@ -4852,30 +4898,33 @@ class StatementProcessor:
         present = sorted(name for name in names - run.outputs if name in user_ns)
         if not present:
             return {}
+        changed = {run.bound_before[name] for name in run.bound_before if name in user_ns}
         digests: dict[str, str] = {}
+        by_object: dict[int, str | None] = {}
         run.holder_digest_budget = self._holder_digest_budget(run)
         deadline = _perf_counter() + run.holder_digest_budget
         for name in present:
-            if _perf_counter() >= deadline:
-                break
             value = user_ns[name]
             try:
-                if not _may_hold_memory(value) or _changed_by_rebinding_only(value):
+                if not _may_hold_memory(value) or _changed_by_rebinding_only(value) or _holds_one_of(value, changed):
                     continue
             except Exception:  # noqa: BLE001 - a value whose attribute lookups raise: not digested, it moves
                 continue
-            digest = _bounded_fingerprint(value, self.compute_hash)
+            if id(value) not in by_object:
+                by_object[id(value)] = _bounded_fingerprint(value, self.compute_hash, deadline - _perf_counter())
+            digest = by_object[id(value)]
             if digest is not None:
                 digests[name] = digest
         return digests
 
     def _holder_digest_budget(self, run: StatementRun) -> float:
         """Seconds the digests of *run*'s possible holders may take, each
-        way: `HOLDER_DIGEST_BUDGET_S`, or `HOLDER_DIGEST_FACTOR` of what the
-        statement last took when that is more (an 11 s ensemble fit may
-        spend 1.1 s on the forests it holds)."""
+        way: `HOLDER_DIGEST_FACTOR` of what the statement last took, between
+        `HOLDER_DIGEST_FLOOR_S` and `HOLDER_DIGEST_BUDGET_S` (an 11 s
+        ensemble fit may spend 1 s on the forests it holds; a 0.02 s
+        assignment, 0.1 s)."""
         expected = self._expected_run_time(run.code) or 0.0
-        return max(HOLDER_DIGEST_BUDGET_S, HOLDER_DIGEST_FACTOR * expected)
+        return min(HOLDER_DIGEST_BUDGET_S, max(HOLDER_DIGEST_FLOOR_S, HOLDER_DIGEST_FACTOR * expected))
 
     def _unchanged_holders(self, run: StatementRun, holders: dict[str, Any]) -> set[str]:
         """The *holders* the statement left as they were: it changed the
@@ -4912,14 +4961,16 @@ class StatementProcessor:
         if not run.holder_digests or self.compute_hash is None:
             return set()
         unchanged: set[str] = set()
+        by_object: dict[int, str | None] = {}
         deadline = _perf_counter() + run.holder_digest_budget
         for name in sorted(holders):
             before = run.holder_digests.get(name)
             if before is None:
                 continue
-            if _perf_counter() >= deadline:
-                break
-            if _bounded_fingerprint(holders[name], self.compute_hash) == before:
+            value = holders[name]
+            if id(value) not in by_object:
+                by_object[id(value)] = _bounded_fingerprint(value, self.compute_hash, deadline - _perf_counter())
+            if by_object[id(value)] == before:
                 unchanged.add(name)
         return unchanged
 

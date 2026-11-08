@@ -225,7 +225,13 @@ class _Check:
         return self.deadline
 
 
-def budgeted_hash(obj: Any, hash_fn: Callable[[Any], str] | None = None, seconds: float | None = None) -> str | None:
+def budgeted_hash(
+    obj: Any,
+    hash_fn: Callable[[Any], str] | None = None,
+    seconds: float | None = None,
+    *,
+    remember: bool = True,
+) -> str | None:
     """``hash_fn(obj)`` (`compute_hash` by default) for a check whether
     *obj* changed, or None when pickling it takes longer than *seconds*
     (`CHANGE_CHECK_BUDGET_S`); *obj* is then remembered as costly
@@ -238,6 +244,11 @@ def budgeted_hash(obj: Any, hash_fn: Callable[[Any], str] | None = None, seconds
     a value that hashes in about the budget is not cut short one run in a
     few by a loaded machine, and does not count as changed for it. A value
     nothing is known of, or a clear overrun, stops at the budget.
+
+    With *remember* false the check neither runs on past *seconds* nor
+    marks *obj* costly when it gives up: for a look whose budget is its
+    own (a share of what the statement costs), which says nothing of what
+    reading the value costs every other check.
 
     None means "cannot say": every caller treats the value as changed, or
     as one whose content it does not compare -- never as unchanged. Only
@@ -252,15 +263,17 @@ def budgeted_hash(obj: Any, hash_fn: Callable[[Any], str] | None = None, seconds
         try:
             return (hash_fn or compute_hash)(obj)
         except HashBudgetExceeded:
-            _remember_costly(obj, outer.deadline - outer.start)
+            if remember:
+                _remember_costly(obj, outer.deadline - outer.start)
             return None
-    check = _Check(CHANGE_CHECK_BUDGET_S if seconds is None else seconds, known_size(obj))
+    check = _Check(CHANGE_CHECK_BUDGET_S if seconds is None else seconds, known_size(obj) if remember else None)
     _budget.check = check
     try:
         with running_on(check.ask):
             return (hash_fn or compute_hash)(obj)
     except HashBudgetExceeded:
-        _remember_costly(obj, check.deadline - check.start)
+        if remember:
+            _remember_costly(obj, check.deadline - check.start)
         return None
     finally:
         _budget.check = None

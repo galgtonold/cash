@@ -980,7 +980,19 @@ class MismatchClassifier:
         if check is None or check.current_cell_idx is None:
             return frozenset()
         idx = check.current_cell_idx
-        return frozenset(name for name, at in self.tracking_state.bound_in_cell.items() if at is not None and at > idx)
+        cells = check.notebook_cells
+        codes = self.tracking_state.bound_by
+        # The cell recorded must still hold the statement that bound it: a
+        # cell inserted, moved or deleted since shifts the positions, and a
+        # name then taken for one a cell below bound would not be rebuilt.
+        return frozenset(
+            name
+            for name, at in self.tracking_state.bound_in_cell.items()
+            if at is not None
+            and idx < at < len(cells)
+            and name in codes
+            and cell_holds_statement(cells[at], normalize_stmt(codes[name]))
+        )
 
     def _magic_bound(self, name: str, sim: SimulationResult) -> bool:
         """Whether a magic is the last to bind or change *name* above
