@@ -34,6 +34,7 @@ import types
 import weakref
 from typing import Any
 
+from .._gc_context import collecting
 from ..tracking.tracker_context import untracked
 
 __all__ = ["TOOL_NAME", "Recorder", "Unit", "other_thread_alive", "runs_user_code"]
@@ -280,6 +281,11 @@ class Recorder:
         stack = self.stack
         if not stack:
             return sys.monitoring.DISABLE
+        if collecting():
+            # A finalizer a garbage collection runs: no work of the unit,
+            # whatever allocation started the collection inside it
+            # (`cash._gc_context`). Not disabled: the unit may call it.
+            return None
         frame = sys._getframe(WATCHED_FRAME)
         g = frame.f_globals
         kind = self._kinds.get(id(g))
@@ -308,6 +314,8 @@ class Recorder:
         stack = self.stack
         if not stack or not code.co_flags & RESUMABLE:
             return sys.monitoring.DISABLE
+        if collecting():
+            return None
         unit = stack[-1]
         if code in unit.codes:
             return sys.monitoring.DISABLE

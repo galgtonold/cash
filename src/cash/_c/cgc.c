@@ -10,8 +10,10 @@
  * Python frame and reads no recursion limit, whatever the depth.
  *
  * `gc_own_context(phase, info)` does what the Python callback does: on
- * "start" it enters a new context and keeps it, on any other phase it leaves
- * the context it entered last, if any.
+ * "start" it enters a new context, sets `gc_collecting` (a context variable)
+ * to True in it and keeps it, on any other phase it leaves the context it
+ * entered last, if any. Code a collection runs reads `gc_collecting` True;
+ * the trace of a statement leaves it out (`trace_recorder`).
  */
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
@@ -23,6 +25,8 @@
 /* The contexts entered for collections not yet stopped, newest last. */
 static PyObject *entered = NULL;
 static PyObject *s_start = NULL;
+/* True in the context of a collection, unset anywhere else. */
+static PyObject *collecting = NULL;
 
 static PyObject *py_gc_own_context(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
     (void)self;
@@ -38,6 +42,13 @@ static PyObject *py_gc_own_context(PyObject *self, PyObject *const *args, Py_ssi
             Py_DECREF(context);
             return NULL;
         }
+        PyObject *token = PyContextVar_Set(collecting, Py_True);
+        if (!token) {
+            PyContext_Exit(context);
+            Py_DECREF(context);
+            return NULL;
+        }
+        Py_DECREF(token);
         int failed = PyList_Append(entered, context);
         Py_DECREF(context);
         if (failed < 0) return NULL;
@@ -70,6 +81,11 @@ int cgc_add_functions(PyObject *m) {
         s_start = PyUnicode_InternFromString("start");
         if (!s_start) return -1;
     }
+    if (!collecting) {
+        collecting = PyContextVar_New("cash_gc_collecting", NULL);
+        if (!collecting) return -1;
+    }
+    if (PyModule_AddObjectRef(m, "gc_collecting", collecting) < 0) return -1;
     return PyModule_AddFunctions(m, cgc_methods);
 }
 

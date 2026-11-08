@@ -31,6 +31,12 @@ outside the collection gets the ValueError of a token from another context
 (`reset_in_any_context` takes that), instead of changing the interrupted
 context at a moment nothing chose.
 
+In that context `collecting` reads True: the trace of a statement or a
+cached call leaves out the code a collection runs (`trace_recorder`), as the
+trackers do. A ``__del__`` of the user's that changed a global counted as a
+function the statement ran, and the statement was not stored; whether a
+collection fell inside it depended on what ran before.
+
 With the C extension (3.12 on) the callback is ``gc_own_context`` in C, which
 a collection can call at any depth; without it, a Python function that gives
 itself frames past the recursion limit for its own calls.
@@ -44,7 +50,7 @@ import platform
 import sys
 from typing import Any
 
-__all__ = ["INSTALLED"]
+__all__ = ["INSTALLED", "collecting"]
 
 #: Frames past the recursion limit a collection's enter and exit may use.
 _HEADROOM = 50
@@ -57,12 +63,34 @@ def _native_callback() -> Any:
     return getattr(cwatch, "gc_own_context", None)
 
 
+#: True in a collection's own context (`collecting`): the C extension's,
+#: or this module's for the Python callback. None where neither sets one
+#: (another interpreter, an extension built before it had one).
+_COLLECTING: contextvars.ContextVar[bool] | None = None
+
+
+def collecting() -> bool:
+    """Is the code running now code a garbage collection runs (a ``__del__``,
+    a weakref callback) in its own context? False where that is not known."""
+    var = _COLLECTING
+    return var is not None and var.get(False)
+
+
 def _install() -> bool:
+    global _COLLECTING
     if platform.python_implementation() != "CPython":
         return False
     native = _native_callback()
-    if any(getattr(callback, "_cash_own_context", False) or callback is native for callback in gc.callbacks):
-        return True  # a second import of this module: one context per collection
+    if native is not None:
+        from ._native import cwatch
+
+        _COLLECTING = getattr(cwatch, "gc_collecting", None)
+    for callback in gc.callbacks:
+        if getattr(callback, "_cash_own_context", False) or callback is native:
+            # A second import of this module: one context per collection.
+            if callback is not native:
+                _COLLECTING = getattr(callback, "_cash_collecting", None)
+            return True
     if native is not None:
         # Called from C, it takes no Python frame: the Python callback below
         # cannot even be called a frame short of the recursion limit, which on
@@ -78,6 +106,8 @@ def _install() -> bool:
     enter = prototype(("PyContext_Enter", ctypes.pythonapi))
     leave = prototype(("PyContext_Exit", ctypes.pythonapi))
     entered: list[contextvars.Context] = []
+    _COLLECTING = contextvars.ContextVar("cash_gc_collecting")
+    marker = _COLLECTING
     # The program's own limit while one is raised for a collection: a
     # collection that cannot put it back leaves it for the next one. Read
     # back from the raised value instead, the limit climbed 50 frames a
@@ -104,6 +134,7 @@ def _install() -> bool:
                     context = contextvars.Context()
                     enter(context)
                     entered.append(context)
+                    marker.set(True)
                 elif entered:
                     leave(entered.pop())
             finally:
@@ -115,6 +146,7 @@ def _install() -> bool:
             pass
 
     own_context._cash_own_context = True  # type: ignore[attr-defined]
+    own_context._cash_collecting = marker  # type: ignore[attr-defined]
     gc.callbacks.append(own_context)
     return True
 

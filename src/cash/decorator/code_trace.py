@@ -60,6 +60,7 @@ import weakref
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
+from .._gc_context import collecting
 from .._own_work import inside as own_work_inside
 from .._own_work import left_out as own_work_left_out
 from .._own_work import rearm_with as own_work_rearm_with
@@ -424,6 +425,11 @@ def _recorder_class() -> type:
             return unit
 
         def _on_start(self, code: types.CodeType, offset: int) -> Any:
+            if collecting():
+                # A finalizer a garbage collection runs: no work of any unit,
+                # whatever allocation started the collection inside it
+                # (`cash._gc_context`). Left armed: a unit may call it.
+                return None
             self.rearm.add(code)
             if self.active or self.stack:
                 frame = sys._getframe(rec.WATCHED_FRAME)
@@ -435,6 +441,8 @@ def _recorder_class() -> type:
             return DISABLE
 
         def _seen_start(self, code: types.CodeType, frame: Any, g: dict, kind: tuple) -> None:
+            if collecting():
+                return  # first seen in a collection (`_discover`): see `_on_start`
             if own_work_inside():
                 # Run by cash's own pickling of a value, not by the user's
                 # program (`cash._own_work`): armed again once that ends.
@@ -492,6 +500,8 @@ def _recorder_class() -> type:
             return bool(filename) and not is_pseudo_filename(filename) and is_user_path(filename)
 
         def _on_resume(self, code: types.CodeType, offset: int) -> Any:
+            if collecting():
+                return None
             self.rearm.add(code)
             if (self.active or self.stack) and code.co_flags & rec.RESUMABLE:
                 g = sys._getframe(rec.WATCHED_FRAME).f_globals
@@ -502,6 +512,8 @@ def _recorder_class() -> type:
             return DISABLE
 
         def _seen_resume(self, code: types.CodeType, g: dict, kind: tuple) -> None:
+            if collecting():
+                return
             if own_work_inside():
                 own_work_left_out(code)
                 return
