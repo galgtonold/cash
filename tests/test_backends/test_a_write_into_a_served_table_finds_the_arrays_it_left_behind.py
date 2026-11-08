@@ -203,7 +203,7 @@ def test_an_array_gone_by_the_end_of_the_statement_is_still_counted(backend):
 
 
 @pytest.mark.xfail(
-    reason="galgtonold/cash-tracker#239: an array of one hit counts against a write into another hit of the same entry",
+    reason="known limitation: an array keeps no trace of which hit it came from, so it counts against a write into another hit of the same entry",
     strict=True,
 )
 def test_an_array_of_another_hit_of_the_same_entry_is_not_a_reader(backend):
