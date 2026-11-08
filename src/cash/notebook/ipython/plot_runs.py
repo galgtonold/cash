@@ -24,6 +24,8 @@ from ...analysis.cacheability_decision import has_missing_lineage
 from ...analysis.code_analyzer import parse_cell_source
 from ...analysis.mutation_effects import statement_effects
 from ...tracking.env_reads import environment_unchanged
+from ...tracking.randomness import rng_virtual_var
+from .. import helper_memos
 from ..cache_key import CacheKeyContext, compute_cache_key
 from ..cache_status import CacheStatus
 from ..plot_outputs import (
@@ -67,6 +69,10 @@ _LOG = "[PLOT]"
 #: What pyplot's state reads as with no figure open (`pyplot_state`).
 _EMPTY = (None, ())
 
+#: The version of what a kept plot run holds: one without it carries no
+#: random streams or memos, which a run of it may have moved or filled.
+_FORMAT = 2
+
 
 def _changes_its_own(reason: str, bound: set[str]) -> bool:
     """Whether *reason* says only that the statement changed in place what
@@ -86,6 +92,11 @@ class ServedStatement:
 
     metrics: dict
     parts: list[tuple[str, str, list[dict]]]
+    #: Where its run left the random streams it moved, and the ones it seeded.
+    rng_state: dict = field(default_factory=dict)
+    rng_reseeded: frozenset[str] = frozenset()
+    #: What puts the answers its run added back into the helper memos.
+    memo_puts: list[Callable[[], None]] = field(default_factory=list)
 
 
 @dataclass
@@ -105,6 +116,10 @@ class _Open:
     shown: bool = False
     refused: str | None = None
     echo: Any = None
+    #: The random streams a statement drew from before one of the run seeded them.
+    rng_read: set[str] = field(default_factory=set)
+    #: The streams a statement of the run seeded before drawing from them.
+    rng_placed: set[str] = field(default_factory=set)
 
 
 class PlotRuns:
@@ -143,6 +158,7 @@ class PlotRuns:
         settings = figure_settings_digest(self.shell)
         if settings is None:
             return
+        self._adopt_unseen_seeds()
         lineage = dict(self._processor.tracking_state.variable_lineage)
         self._open = _Open(index, occurrence, settings, lineage, _perf_counter())
 
@@ -155,6 +171,9 @@ class PlotRuns:
         run.codes.append(code)
         parts = []
         seconds = 0.0
+        rng_state: dict = {}
+        reseeded: set[str] = set()
+        memos: list = []
         for row, fact in zip(rows, facts, strict=True):
             status = CacheStatus.parse(row.get("status"))
             if status is CacheStatus.ERROR:
@@ -174,6 +193,12 @@ class PlotRuns:
                 run.drew = run.drew or any(is_pyplot_reason(r) for r in fact.reasons)
                 run.bound |= fact.bound
                 run.env.update(fact.env)
+                run.rng_read |= set(fact.rng_read) - run.rng_placed
+                run.rng_placed |= set(fact.rng_seeded_first)
+                rng_state.update(fact.rng_state)
+                reseeded |= set(fact.rng_reseeded)
+                if fact.memos is not None:
+                    memos.append(list(fact.memos))
             rich = rich_records(row.get("rich_outputs") or ())
             if rich is None:
                 run.refused = "it showed an output that is not plain data"
@@ -183,7 +208,17 @@ class PlotRuns:
             seconds += float(row.get("execution_time") or 0.0)
             if ECHO_FIELD in row:
                 run.echo = row[ECHO_FIELD]
-        run.statements.append({"code": code, "display": display, "parts": parts, "seconds": seconds})
+        run.statements.append(
+            {
+                "code": code,
+                "display": display,
+                "parts": parts,
+                "seconds": seconds,
+                "rng_state": rng_state,
+                "rng_reseeded": sorted(reseeded),
+                "memos": memos,
+            }
+        )
         if not _no_figures():
             return
         self._open = None
@@ -261,6 +296,11 @@ class PlotRuns:
         if has_missing_lineage(inputs, self.shell.user_ns, lineage):
             logger.debug("%s not kept: an input has no lineage", _LOG)
             return
+        rng_reads = {rng_virtual_var(module): run.lineage.get(rng_virtual_var(module)) for module in run.rng_read}
+        if any(value is None for value in rng_reads.values()):
+            # Unseeded: a run from the top draws other numbers each time.
+            logger.debug("%s not kept: it draws from an unseeded random stream", _LOG)
+            return
         echo = None
         if run.echo is not None:
             echo = self._format_echo(run.echo)
@@ -286,6 +326,8 @@ class PlotRuns:
             "bound": bound,
             "env": run.env,
             "force_persist": bool(self._processor.persist_all),
+            "rng_reads": rng_reads,
+            "plot_format": _FORMAT,
         }
         backend.set(key, payload, metadata)
         self._note_shape(backend, run.codes, run.occurrence)
@@ -364,7 +406,7 @@ class PlotRuns:
             metadata, payload = backend.get(key)
         except Exception:  # noqa: BLE001 - an entry that cannot be read: the plot is drawn
             return None
-        if not isinstance(payload, dict) or metadata is None:
+        if not isinstance(payload, dict) or metadata is None or metadata.get("plot_format") != _FORMAT:
             return None
         last = index + len(shape) - 1
         if payload.get("flush") is not None and last != len(body) - 1:
@@ -382,6 +424,17 @@ class PlotRuns:
         statements = payload.get("statements") or []
         if len(statements) != len(shape):
             return None
+        why = self._rng_moved_on(metadata.get("rng_reads") or {})
+        if why is not None:
+            logger.debug("%s not served: %s", _LOG, why)
+            return None
+        puts: list[list[Callable[[], None]]] = []
+        for stored in statements:
+            put = self._memo_puts(stored.get("memos") or [])
+            if isinstance(put, str):
+                logger.debug("%s not served: %s", _LOG, put)
+                return None
+            puts.append(put)
         served: dict[int, ServedStatement] = {}
         for k, stored in enumerate(statements):
             row = {
@@ -395,7 +448,13 @@ class PlotRuns:
                 "uncacheable_reasons": [],
                 "plot_output": True,
             }
-            served[index + k] = ServedStatement(row, [tuple(p) for p in stored.get("parts") or []])
+            served[index + k] = ServedStatement(
+                row,
+                [tuple(p) for p in stored.get("parts") or []],
+                dict(stored.get("rng_state") or {}),
+                frozenset(stored.get("rng_reseeded") or ()),
+                puts[k],
+            )
         echo = payload.get("echo")
         if echo is not None:
             served[last].metrics[ECHO_FIELD] = StoredEcho(echo[0], echo[1])
@@ -408,6 +467,55 @@ class PlotRuns:
             self._processor.forget_variable(name)
         logger.debug("%s served %d statement(s) from %s", _LOG, len(shape), key[:24])
         return served
+
+    def settle(self, item: ServedStatement, code: str, occurrence: int) -> None:
+        """The served statement *code* (*item*) takes its place: the memos
+        and random streams its run changed are left as that run left them,
+        and the RNG ledgers move on as after it (`settle_served_plot_statement`)."""
+        for put in item.memo_puts:
+            put()
+        try:
+            self._processor.settle_served_plot_statement(code, occurrence, item.rng_state, item.rng_reseeded)
+        except Exception:
+            logger.debug("%s could not account for the served statement", _LOG, exc_info=True)
+
+    def _rng_moved_on(self, reads: dict[str, str]) -> str | None:
+        """Why the random streams a kept plot run drew from (*reads*, the
+        RNG variable and its lineage then) no longer stand where they did,
+        or None."""
+        if not reads:
+            return None
+        self._adopt_unseen_seeds()
+        state = self._processor.tracking_state
+        for var, lineage in reads.items():
+            if state.variable_lineage.get(var) != lineage:
+                return f"the random stream {var} stands elsewhere"
+            if any(rng_virtual_var(module) == var for module in state.rng_unplaced):
+                return f"the random stream {var} could not be placed"
+        return None
+
+    def _memo_puts(self, memos: list) -> list[Callable[[], None]] | str:
+        """What puts back what one statement of a kept plot run added to
+        the helper memos (*memos*, each ``[records, changes]``), or why
+        that cannot be done: a memo it read lacks what it read then."""
+        user_ns = self.shell.user_ns
+        puts: list[Callable[[], None]] = []
+        for records, changes in memos:
+            try:
+                why = helper_memos.unfilled(records, user_ns)
+                put = why if why is not None else helper_memos.put_back(records, changes, user_ns)
+            except Exception:  # noqa: BLE001 - a record this cannot read: the plot is drawn
+                return "its helper memos cannot be read back"
+            if isinstance(put, str):
+                return put
+            puts.append(put)
+        return puts
+
+    def _adopt_unseen_seeds(self) -> None:
+        try:
+            self._processor.adopt_unseen_seeds()
+        except Exception:
+            logger.debug("%s could not adopt an unseen seed", _LOG, exc_info=True)
 
     def _read_after(self, bound: frozenset[str], body: list[ast.stmt], last: int, source: str) -> str | bool:
         """The name of *bound* the code after statement *last* of the cell

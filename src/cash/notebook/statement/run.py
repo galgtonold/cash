@@ -260,6 +260,10 @@ class StatementRun:
     #: What it put into the helper memos it filled or emptied, stored with
     #: the outputs and put back on a hit (`helper_memos.used`'s *changes*).
     memo_changes: list[dict] | None = None
+    #: Refused only for drawing: ``(records, changes)`` of the helper memos
+    #: it called, as for an entry, or why a plot run holding it cannot carry
+    #: them (`PlotFacts.memos`).
+    plot_memos: tuple[list[dict] | None, list[dict] | None] | str | None = None
     #: For a statement that runs a magic or a shell command: the identity of
     #: every binding in the namespace before it ran (``calls_ipython``).
     ipython_bindings: dict[str, int] | None = None

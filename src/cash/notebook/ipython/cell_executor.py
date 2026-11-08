@@ -1216,9 +1216,9 @@ class CellExecutor:
                     )
                 if i in served:
                     # What the plot run showed when it was kept, in place of running it.
-                    buffered_result_outputs = self._show_served(
-                        served.pop(i), is_last, all_metrics, buffered_result_outputs
-                    )
+                    item = served.pop(i)
+                    plots.settle(item, stmt_code, occ)
+                    buffered_result_outputs = self._show_served(item, is_last, all_metrics, buffered_result_outputs)
                     continue
                 plots.before(i, occ)
                 rows_before = len(all_metrics)
