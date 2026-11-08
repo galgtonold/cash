@@ -188,7 +188,7 @@ In a notebook, a statement is checked against the files it read itself and
 the files its inputs were built from, so a changed CSV invalidates the whole
 chain that read it.
 
-<!-- claim: cash/tracking/file_watch.py:FileWatch.current @31588dc6, cash/tracking/file_watch.py:FileWatch.record @dc554483, cash/notebook/run_memo.py:stats_this_run @bc8bc3db, cash/tracking/file_watch.py:_VolumeChanges.add @bbc71473 -->
+<!-- claim: cash/tracking/file_watch.py:FileWatch.current @31588dc6, cash/tracking/file_watch.py:FileWatch.record @dc554483, cash/notebook/run_memo.py:stats_this_run @bc8bc3db, cash/tracking/file_watch.py:_VolumeChanges.add @bbc71473, cash/tracking/file_watch.py:status_line @05f76dc5 -->
 In a notebook, cash also asks the operating system to report changes to each
 folder holding a file it checked (inotify on Linux; on Windows one
 `ReadDirectoryChangesW` per drive, from its root, so no folder of yours is
@@ -204,7 +204,9 @@ else. Files cash cannot rely on the notifications for are checked before
 every cell as described above: on macOS, on a network drive or another
 file system without local notifications, through a symbolic link, with a
 second hard link, and past about 8,000 watched folders. Set
-`CASH_FILE_WATCH=0` to check every file before every cell. What the
+`CASH_FILE_WATCH=0` to check every file before every cell. `cash info`
+(`File watch`) and `%cash_status` (`file_watch`) say whether the watch is
+on, and if not, why. What the
 notifications miss is listed under
 [a change no folder reports](../known-limitations.md#a-change-no-folder-reports).
 

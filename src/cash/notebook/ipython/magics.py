@@ -24,7 +24,7 @@ from ..._console import safe_text
 from ...backends import _writes
 from ...backends.budget_notices import DiskBudget, claim_budget_notice, describe_budget
 from ...core import Cash
-from ...tracking import io_watch, log_lines, native_reads, reader_patches
+from ...tracking import file_watch, io_watch, log_lines, native_reads, reader_patches
 from ...tracking.function_tracker import FunctionTracker
 from ...tracking.randomness import capture_rng_state, rng_modules_changed, rng_virtual_var
 from ...value_hash import compute_hash
@@ -581,6 +581,10 @@ class CashMagics(Magics):
             - native_file_hook: the hook on files C libraries open, on by
               default (``CASH_NATIVE_FILE_HOOK=0`` turns it off): "on (...)", "off (...)" or
               "off: not supported here ..."
+            - file_watch: whether folders are watched for changes to the files
+              cells read, on by default (``CASH_FILE_WATCH=0`` turns it off):
+              "on (inotify, N folders watched)", "off (CASH_FILE_WATCH=0; ...)"
+              or "off: not supported on macOS; ..."
         """
 
         mode = parse_mode(line, ("", "print", "json", "dict"))
@@ -600,6 +604,7 @@ class CashMagics(Magics):
             "debug_enabled": self._debug,
             "fast_path": value_watch.status_line(),
             "native_file_hook": native_reads.status_line(),
+            "file_watch": file_watch.status_line(),
         }
         shadow_status = shadow.status()
         if shadow_status is not None:
