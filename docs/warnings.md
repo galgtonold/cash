@@ -667,7 +667,7 @@ code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/backends/frame_sharing.py:_warn_at_write @3bda0831, cash/backends/frame_sharing.py:_note_shared @b455aa07 -->
+<!-- claim: cash/backends/frame_sharing.py:_warn_at_write @3bda0831, cash/backends/frame_sharing.py:_note_shared @2c997658 -->
 **What happened.** A line of yours wrote into a pandas table that a cached
 function returned from the memory cache (`df.iloc[0, 0] = 100`), while a
 NumPy array taken from the table before the write (`v = df["t"].to_numpy()`,
