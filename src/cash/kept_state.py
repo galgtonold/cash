@@ -2322,10 +2322,8 @@ def _reduce_by_reference_for_key(obj: Any, reducer: Any) -> Any:
     level it read before. Inside `folding_by_reference` its attributes are
     keyed as a pickle by value would hold them, as `left_out_attrs` keys
     what a class of the user's leaves out: one that cannot be pickled (a
-    handler holding a lock and a stream) by its type. A cache the object
-    fills as it is read (a private attribute named for one, as ``_cache``)
-    is derived from the rest and left out, or every read would count as a
-    change.
+    handler holding a lock and a stream) by its type. A cache it fills as
+    it is read (a logger's levels found enabled) is part of what it holds.
 
     Elsewhere -- a variable's content digest, which every "did it change?"
     check of the notebook compares -- it is keyed by its name, as pickle
@@ -2350,9 +2348,9 @@ def _reduce_by_reference_for_key(obj: Any, reducer: Any) -> Any:
 
 
 def _own_attrs(obj: Any) -> dict:
-    """*obj*'s attributes (`_instance_attrs`) that are its own state: not a
-    cache it fills as it is read (a private attribute named for one,
-    ``_cache``), and not an object its class holds under the same name.
+    """*obj*'s attributes (`_instance_attrs`) that are its own state: all
+    but an object its class holds under the same name -- the very object,
+    by identity, not one equal to it.
 
     Every logger holds its class's one manager, which holds every logger in
     the process: keyed with it, a value holding a logger changed whenever
@@ -2365,8 +2363,6 @@ def _own_attrs(obj: Any) -> dict:
     t = type(obj)
     own = {}
     for name, value in attrs.items():
-        if name.startswith("_") and name.rstrip("_").lower().endswith("cache"):
-            continue
         if any(klass.__dict__.get(name, _NOT_HELD) is value for klass in t.__mro__):
             continue
         own[name] = value

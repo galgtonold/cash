@@ -117,6 +117,10 @@ def test_code_a_registered_value_holds_is_not_in_the_key(tmp_path, logger, regis
     not change the result."""
     handler = Echo(upper)
     logger.addHandler(handler)
+    # A logger is keyed with its state, which holds the levels it found
+    # enabled: the first ``log.info`` fills that in, and a key taken before
+    # it is not one taken after. Asked once here, the calls find it filled.
+    logger.isEnabledFor(logging.INFO)
     c = _cash(tmp_path, register=register)
 
     @c.cache

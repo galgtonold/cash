@@ -83,3 +83,39 @@ def test_a_users_object_pickled_by_its_name_keys_on_its_attributes(monkeypatch):
     before = compute_hash({"s": SINGLETON})
     SINGLETON.setting = 2
     assert compute_hash({"s": SINGLETON}) != before
+
+
+class Registry:
+    """A library's object found again by a lookup, as a logger is, whose
+    state is what it holds in a private attribute named as a cache."""
+
+    def __init__(self) -> None:
+        self._cache: dict[str, int] = {}
+
+    def __reduce__(self):
+        return find_registry, ("main",)
+
+
+Registry.__module__ = "logging"
+REGISTRY = Registry()
+
+
+def find_registry(name: str) -> Registry:
+    return REGISTRY
+
+
+def test_what_a_library_object_holds_as_a_cache_is_keyed(cash, monkeypatch):
+    """A private attribute named as a cache is keyed as any other: its name
+    says nothing of whether it is derived from the rest."""
+    monkeypatch.setattr(REGISTRY, "_cache", {"rows": 1})
+    runs = []
+
+    @cash.cache
+    def rows(reg):
+        runs.append(1)
+        return reg._cache["rows"]
+
+    assert rows(REGISTRY) == 1
+    REGISTRY._cache["rows"] = 2
+    assert rows(REGISTRY) == 2
+    assert len(runs) == 2

@@ -26,6 +26,10 @@ _SETUP = (
     "import cash\n"
     "logging.basicConfig(level=logging.INFO)\n"
     "log = logging.getLogger('work')\n"
+    # A logger is keyed with its state, which holds the levels it found
+    # enabled: the first ``log.info`` fills that in, and a key taken before
+    # it is not one taken after. Asked once here, the calls find it filled.
+    "log.isEnabledFor(logging.INFO)\n"
     "\n"
     "@cash.cache\n"
     "def step(n):\n"

@@ -102,7 +102,7 @@ pickled, such as a lock, is keyed by its type; one that holds the object
 leaving it out is keyed by its content, as pickle stores the cycle. A
 library's class is keyed by what it pickles.
 
-<!-- claim: cash/kept_state.py:_own_attrs @f77e88c7, cash/kept_state.py:_reduce_by_reference_for_key @d92a868c, cash/kept_state.py:stands_by_reference @f8f477fc -->
+<!-- claim: cash/kept_state.py:_own_attrs @47165357, cash/kept_state.py:_reduce_by_reference_for_key @a587f5e4, cash/kept_state.py:stands_by_reference @f8f477fc -->
 An object that pickles by reference, by its name or by a call that looks it
 up (a logger pickles as `getLogger(name)`), is keyed with the attributes it
 holds, as a pickle by value would hold them, in an argument and in a global
@@ -111,8 +111,9 @@ the function reads: `log.setLevel(10)`, or
 given a value holding `log`. One that cannot be pickled, such as a handler
 holding a lock, is keyed by its type, as above. An object its class holds
 under the same name (every logger's one manager, which holds every logger in
-the process) is the class's, and left out, and so is a cache it fills as it
-is read (a private attribute named for one, such as a logger's `_cache`).
+the process) is the class's, and left out. A cache the object fills as it
+is read is part of its state: a logger's first `log.info` notes the level as
+enabled, so a call that logs at a level for the first time misses once more.
 Functions, classes, modules and bound methods are pickled by name with
 nothing of their own to add; their code and attributes are keyed where they
 are read.
