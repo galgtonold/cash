@@ -11,10 +11,10 @@ the argument changes with it.
 
 The answer here is exact or there is none: `Unknown` names why it cannot
 be given (code that looks names up by a string, a closure made outside the
-call, more to walk than is walked), and the caller then neither stores the
-state nor serves it. Memory is compared by the address ranges arrays span,
-which says "shared" for two arrays interleaved in one buffer: a refusal,
-never a wrong hit.
+call), and the caller then neither stores the state nor serves it. It
+walks all of what it looks at, however much that is. Memory is compared
+by the address ranges arrays span, which says "shared" for two arrays
+interleaved in one buffer: a refusal, never a wrong hit.
 
 What is walked: containers, an object's attributes and what the garbage
 collector says any other object refers to, NumPy arrays and their memory,
@@ -35,9 +35,6 @@ from typing import Any
 from .value_types import IMMUTABLE_LEAF_TYPES
 
 __all__ = ["Unknown", "Targets", "memory_of", "reads_of", "read_values", "shared_in"]
-
-#: Objects one answer walks at most: past it the answer is `Unknown`.
-WALK_LIMIT = 1_000_000
 
 #: Global names whose use means the code may reach any global by a string.
 BY_STRING = frozenset({"globals", "vars", "locals", "eval", "exec", "__import__", "import_module"})
@@ -190,8 +187,6 @@ class _Walk:
             if key in self.seen:
                 continue
             self.seen.add(key)
-            if len(self.seen) > WALK_LIMIT:
-                raise Unknown(f"it would take walking more than {WALK_LIMIT:,} objects")
             if not self.collect and key in self.targets.ids:
                 return True
             kind = type(obj)
