@@ -42,9 +42,11 @@ import enum
 import fractions
 import gc
 import inspect
+import io
 import itertools
 import operator
 import pathlib
+import pickle
 import re
 import sys
 import types
@@ -2391,6 +2393,8 @@ def _check_group(
             )
         shared = _owners_of(owner, excess)
         if user_ns is None:
+            if _arrays_only(nodes, excess) and _hidden_holders_come_back(group, nodes, inbound, excess, value_types):
+                return set(), None
             return shared, None
         named = {id(mapping) for mapping, _key in named_held if mapping is not user_ns}
         internal |= {id(group), id(bindings), id(cash_held), id(named_held), id(nodes), *nodes, *named}
@@ -2405,6 +2409,14 @@ def _check_group(
                 if gave_up is not None:
                     gave_up.names |= in_frames
                 return shared, None
+        # Arrays held from where the walk cannot see (a search tree's C-level
+        # view of its data): asked of a copy first, which costs the group's
+        # pickle without its data, not a search of every object the garbage
+        # collector tracks per array -- 1.8 s of a 0.01 s cell on E6.
+        if _arrays_only(nodes, excess) and _hidden_holders_come_back(group, nodes, inbound, excess, value_types):
+            return _inside_library_objects(
+                group, nodes, owner, value_types, user_ns, bindings, cash_held, gave_up, leaves
+            )
         partial = GaveUp() if gave_up is not None else None
         found = _find_holders([nodes[k] for k in excess], internal, user_ns, set(group) | discounted, partial)
         if found is not None or breaks.isdisjoint(excess):
@@ -2437,6 +2449,65 @@ def _check_group(
         gave_up.names |= earlier.names
         gave_up.modules |= earlier.modules
     return shared, None
+
+
+def _arrays_only(nodes: dict[int, Any], excess: list[int]) -> bool:
+    """Whether each of *excess* is a numpy array of plain data."""
+    np = sys.modules.get("numpy")
+    return np is not None and all(
+        instance_of(nodes[key], np.ndarray) and not nodes[key].dtype.hasobject for key in excess
+    )
+
+
+def _hidden_holders_come_back(
+    group: Mapping[str, Any], nodes: dict[int, Any], inbound: dict[int, int], excess: list[int], value_types: tuple
+) -> bool:
+    """Whether a copy of *group* made by pickle holds the copy of each
+    *excess* node from places the walk cannot see as many times as the
+    node itself is held from them.
+
+    A fitted ``KNeighborsRegressor`` keeps its training data in ``_fit_X``
+    and in the search tree it builds over it, whose C-level view of the
+    data lists no referents: the array reads as held from outside, by
+    something the search up cannot name. Whether the tree's references
+    belong to the group is not asked of the library: the group goes
+    through the pickle round trip a restore makes, and the references
+    are counted again on the copy. When each copy is held from unseen
+    places at least as often as its original, the holders came back with
+    the group; a holder outside it (another object, a registry) would not
+    have. A root among *excess*, or a value pickle cannot copy, is no
+    such case."""
+    roots = list(group.values())
+    root_ids = {id(root) for root in roots}
+    keys = [key for key in excess if key not in root_ids]
+    if not keys or len(keys) != len(excess) or len(nodes) > _WITHIN_MAX_NODES:
+        return False
+    left = {key: sys.getrefcount(nodes[key]) - inbound[key] for key in keys}
+    try:
+        # The arrays' data out of band: the copies sit on the same memory,
+        # so the check costs the group's structure, not its data.
+        buffers: list[pickle.PickleBuffer] = []
+        stream = io.BytesIO()
+        pickler = pickle.Pickler(stream, 5, buffer_callback=buffers.append)
+        pickler.dump(roots)
+        index = {key: entry[0] for key, entry in pickler.memo.copy().items() if key in left}
+        del pickler
+        unpickler = pickle.Unpickler(io.BytesIO(stream.getvalue()), buffers=buffers)
+        copies = unpickler.load()
+        by_index = unpickler.memo.copy()
+        del unpickler
+    except Exception:  # noqa: BLE001 - a value pickle cannot copy: no copy to count
+        return False
+    del roots
+    if len(index) != len(keys):
+        return False
+    twins = {key: id(by_index[at]) for key, at in index.items()}
+    del by_index
+    copy_nodes, copy_inbound, _checked, _owner, _breaks = _walk({"": copies}, [], value_types, fast=False)
+    for key, twin in twins.items():
+        if twin not in copy_nodes or sys.getrefcount(copy_nodes[twin]) - copy_inbound[twin] < left[key]:
+            return False
+    return True
 
 
 #: Most objects `_held_within` reads inside the walk's leaves, and most
