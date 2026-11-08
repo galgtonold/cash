@@ -485,10 +485,9 @@ def walked_names_it_changes(shell, statement_processor, node: ast.For) -> frozen
     Run per iteration, each body statement changing a target runs every
     time: a restore brings back what it binds, not the item in the list
     (``MutationRouting._route_receivers``). Run as one unit, the loop
-    stores these names as its outputs, as it does any name its body
-    changes (``MutationRouting._route_unit``), and a hit refills the
-    container with the stored items (`in_place.restore_into`): the items
-    are new objects, the container the one the notebook holds."""
+    stores these names as its outputs, with the variables sharing their
+    objects, and a hit binds them all to the stored copies: new values, as
+    for any output, the items and the container alike."""
     user_ns = shell.user_ns
     resolve = statement_processor.resolve_live_function_source
     changed = changed_loop_targets(node, user_ns, lambda name: is_module_name(name, user_ns), resolve)

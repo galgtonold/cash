@@ -131,16 +131,18 @@ def test_another_holder_sees_the_estimators_the_loop_fitted(nb_runner, restart):
 
 
 @pytest.mark.fresh_kernel
-def test_a_loop_drawing_from_the_global_generator_runs_with_a_warning(nb_runner):
-    """Unseeded forests draw from NumPy's global generator while they fit.
-    Cash does not serve the loop then: it fits again, with the warning,
-    and the draw after it is the one plain Python gives after a restart
-    and Run All."""
+def test_a_loop_drawing_from_the_global_generator_gives_plain_pythons_draws(nb_runner):
+    """Unseeded forests draw from NumPy's global generator while they fit,
+    seeded in a cell above. After a restart and Run All the forests and the
+    draw after the loop are the ones plain Python gives, served or fitted
+    again, and the loop warns that its fit draws unseeded (replayed when
+    served)."""
     seeded = DATA + "\nnp.random.seed(7)"
     make = "estimators = [SlowForest(n_estimators=10), SlowForest(n_estimators=10)]"
-    cells = ["%cash_badge print", MARK, SETUP, seeded, make, LOOP, "print(np.random.randint(10**9))"]
+    read = "print([round(e.score(X_valid, y_valid), 6) for e in estimators], np.random.randint(10**9))"
+    cells = ["%cash_badge print", MARK, SETUP, seeded, make, LOOP, read]
     shown = _first_run(nb_runner, cells)
     _restart_and_run_all(nb_runner)
-    assert _fits(nb_runner) == ["fit", "fit"]
-    assert "RANDOM-UNSEEDED" in nb_runner.get_raw_output(LOOP_CELL), nb_runner.get_raw_output(LOOP_CELL)
+    _fits(nb_runner)
+    assert "[RANDOM-" in nb_runner.get_raw_output(LOOP_CELL), nb_runner.get_raw_output(LOOP_CELL)
     assert _shown(nb_runner, len(cells)) == shown

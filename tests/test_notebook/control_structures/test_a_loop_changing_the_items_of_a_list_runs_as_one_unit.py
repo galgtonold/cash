@@ -3,7 +3,8 @@
 ``for est in estimators: est.fit(X)`` changes the objects ``estimators``
 holds. Run per iteration, each pass changes its loop variable in place and
 runs every time. Run as one unit, the loop stores ``estimators`` with what
-it changed, and a hit refills the list with the stored items.
+it changed as an output on every run, and a hit binds it, with every
+variable sharing its objects, to the stored copies.
 
 The fitted items hold more than the share check reads (`_DEPTH_READ`
 levels), where the unfitted ones did not: the classes with state of the

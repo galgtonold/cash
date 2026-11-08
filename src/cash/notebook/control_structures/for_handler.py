@@ -251,8 +251,9 @@ class ForLoopHandler:
         logger.debug("[CONTROL] Processing FOR loop with targets: %s", target_names)
 
         try:
-            if header is None and self._whole_for_its_items(node):
-                logger.debug("[CONTROL] Loop changes the items it walks: executing as single unit")
+            walked = self._walked_whole(node) if header is None else frozenset()
+            if walked:
+                logger.debug("[CONTROL] Loop changes the items of %s: executing as single unit", sorted(walked))
                 user_ns = attribute_or(self.shell, "user_ns", None) or {}
                 return self._run_unit(
                     node,
@@ -262,6 +263,7 @@ class ForLoopHandler:
                     raw_cell,
                     inherited_annotation,
                     prior_nodes,
+                    walked=walked,
                 )
             if header is None and self._whole_before_evaluating(node):
                 # The unit evaluates the header, once (`runs_whole_unevaluated`).
@@ -352,15 +354,19 @@ class ForLoopHandler:
             logger.debug("[LOOP_SPLIT] verdict lookup failed", exc_info=True)
             return False
 
-    def _whole_for_its_items(self, node: ast.For) -> bool:
-        """Whether the loop runs as one unit because it changes in place the
-        items it walks (``for est in estimators: est.fit(X, y)``).
+    def _walked_whole(self, node: ast.For) -> frozenset[str]:
+        """The names the loop takes its items from, when it runs as one unit
+        because it changes those items in place (``for est in estimators:
+        est.fit(X, y)``); empty when it does not.
 
         Per iteration it caches nothing of that: each statement changing a
         target runs every time, as a restore brings back what it binds, not
         the item in the list. As one unit it stores the names it takes them
-        from (`helpers.walked_names_it_changes`), with every variable sharing
-        their objects, and a hit restores them all.
+        from (`helpers.walked_names_it_changes`) as its outputs, with every
+        variable sharing their objects, and a hit binds them all to what it
+        stored. They are outputs on every run, so the run that stores them
+        and one too quick to store (`MutationRouting._route_unit`) give them
+        the same lineage.
 
         Only with its header left to the unit
         (`single_unit_policy.header_may_be_left_to_the_unit`): a header
@@ -370,20 +376,19 @@ class ForLoopHandler:
         (`single_unit_policy.writes_files`), or one with a recorded split
         verdict, which `_run_whole` splits."""
         user_ns = attribute_or(self.shell, "user_ns", None) or {}
-        if not _helpers.walked_names_it_changes(self.shell, self.statement_processor, node):
-            return False
-        if single_unit_policy.writes_files(node.body):
-            return False
+        walked = _helpers.walked_names_it_changes(self.shell, self.statement_processor, node)
+        if not walked or single_unit_policy.writes_files(node.body):
+            return frozenset()
         if not single_unit_policy.header_may_be_left_to_the_unit(node.iter, user_ns):
-            return False
+            return frozenset()
         store = self._split_policy.store()
         if store is None:
-            return True
+            return walked
         try:
-            return store.get(loop_source_hash(node)) is None
+            return walked if store.get(loop_source_hash(node)) is None else frozenset()
         except (OSError, ValueError, RecursionError):
             logger.debug("[LOOP_SPLIT] verdict lookup failed", exc_info=True)
-            return False
+            return frozenset()
 
     def _evaluate_iterable(self, iter_code: str) -> _Header:
         """Evaluate the loop's iterator, and the files evaluating it read.
@@ -554,22 +559,28 @@ class ForLoopHandler:
         inherited_annotation,
         prior_nodes: Sequence[ast.stmt],
         header: _Header | None = None,
+        walked: frozenset[str] = frozenset(),
     ) -> ControlStructureResult:
         """Run the loop as one unit, and keep what its iterations cost when
         it actually computed (a restore measures nothing).
 
         With *header*, the unit iterates the value it holds; without, the
-        unit evaluates the header itself (``runs_whole_unevaluated``)."""
+        unit evaluates the header itself (``runs_whole_unevaluated``).
+        *walked* are names whose items it changes, stored as its outputs
+        (`_walked_whole`)."""
         handed = {}
         if header is not None:
             handed = {"header_value": header.value, "header_files": header.files, "header_remote": header.remote}
+        force_outputs = self._single_unit_outputs(node, prior_nodes)
+        if walked:
+            force_outputs = (force_outputs or set()) | set(walked)
         result = self.dispatcher.execute_as_single_unit(
             node,
             ttl,
             silent,
             raw_cell,
             inherited_annotation,
-            force_outputs=self._single_unit_outputs(node, prior_nodes),
+            force_outputs=force_outputs,
             **handed,
         )
         if result.success and n_iterations and len(result.metrics) == 1:
