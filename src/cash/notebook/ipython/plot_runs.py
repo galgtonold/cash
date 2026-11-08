@@ -10,6 +10,7 @@ output in place of running them.
 from __future__ import annotations
 
 import ast
+import hashlib
 import logging
 import re
 import sys
@@ -70,8 +71,27 @@ _LOG = "[PLOT]"
 _EMPTY = (None, ())
 
 #: The version of what a kept plot run holds: one without it carries no
-#: random streams or memos, which a run of it may have moved or filled.
-_FORMAT = 2
+#: random streams or memos, which a run of it may have moved or filled,
+#: and keeps one run of its statements, not one per condition (`_variants`).
+_FORMAT = 3
+
+#: The most runs of the same statements kept under one key, each found
+#: under another condition (`_condition`).
+_VARIANTS_KEPT = 4
+
+
+def _condition(variant: dict) -> str:
+    """What decides where a kept run of a plot run's statements can stand
+    in for a run: the environment variables it read, the random streams it
+    drew from, and what it found in the helper memos it called.
+
+    The same statements may run under several: a tutorial calls
+    ``run(tsp, random_cities(10))`` again further down, where the memo
+    already holds the cities the first call computed. Kept as one, each
+    place's run replaced the other's, and neither place was ever served."""
+    memos = [[records for records, _changes in stored.get("memos") or []] for stored in variant["statements"]]
+    text = repr((sorted(variant["env"].items()), sorted(variant["rng_reads"].items()), memos))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _changes_its_own(reason: str, bound: set[str]) -> bool:
@@ -320,29 +340,61 @@ class PlotRuns:
         backend = self._backend()
         if backend is None:
             return
-        bound = sorted(run.bound | (_HISTORY_NAMES if echo is not None else set()))
-        payload = {"statements": run.statements, "flush": flush, "echo": echo}
+        variant = {
+            "statements": run.statements,
+            "flush": flush,
+            "echo": echo,
+            "bound": sorted(run.bound | (_HISTORY_NAMES if echo is not None else set())),
+            "env": run.env,
+            "rng_reads": rng_reads,
+            "seconds": seconds,
+            "size": size,
+        }
+        variants = self._variants_with(backend, key, variant)
         metadata = {
             "plot_outputs": True,
             "ttl": attribute_or(self._cell, "ttl", None),
-            "execution_time": seconds,
-            "size": size,
-            "bound": bound,
-            "env": run.env,
+            "execution_time": max(v["seconds"] for v in variants),
+            "size": sum(v["size"] for v in variants),
             "force_persist": bool(self._processor.persist_all),
-            "rng_reads": rng_reads,
             "plot_format": _FORMAT,
         }
-        backend.set(key, payload, metadata)
+        backend.set(key, {"variants": variants}, metadata)
         self._note_shape(backend, run.codes, run.occurrence)
         logger.debug(
-            "%s kept %d statement(s) under %s (inputs %s, settings %s)",
+            "%s kept %d statement(s) under %s (inputs %s, settings %s, %d condition(s))",
             _LOG,
             len(run.codes),
             key[:24],
             sorted(inputs),
             run.settings[:12],
+            len(variants),
         )
+
+    @staticmethod
+    def _variants_with(backend: Any, key: str, variant: dict) -> list[dict]:
+        """*variant* first, then the runs kept under *key* found under
+        other conditions (`_condition`), as many as `_VARIANTS_KEPT` and
+        `PLOT_RECORD_CAP` allow."""
+        try:
+            metadata, payload = backend.get(key)
+        except Exception:  # noqa: BLE001 - an entry that cannot be read: this run alone is kept
+            metadata, payload = None, None
+        kept = [variant]
+        if metadata is None or metadata.get("plot_format") != _FORMAT or not isinstance(payload, dict):
+            return kept
+        condition = _condition(variant)
+        size = variant["size"]
+        for other in payload.get("variants") or []:
+            if len(kept) >= _VARIANTS_KEPT:
+                break
+            if not isinstance(other, dict) or _condition(other) == condition:
+                continue
+            size += other["size"]
+            if size > PLOT_RECORD_CAP:
+                break
+            kept.append(other)
+        return kept
 
     # -- serving -----------------------------------------------------------
 
@@ -413,22 +465,36 @@ class PlotRuns:
         if not isinstance(payload, dict) or metadata is None or metadata.get("plot_format") != _FORMAT:
             return None
         last = index + len(shape) - 1
-        if payload.get("flush") is not None and last != len(body) - 1:
+        for variant in payload.get("variants") or []:
+            puts = self._variant_puts(variant, shape, last, body, source)
+            if puts is not None:
+                return self._serve_variant(variant, puts, shape, index, last, key)
+        return None
+
+    def _variant_puts(
+        self, variant: Any, shape: list[str], last: int, body: list[ast.stmt], source: str
+    ) -> list[list[Callable[[], None]]] | None:
+        """What puts back what each statement of the kept run *variant*
+        added to the helper memos, or None when it cannot stand in for a
+        run of *shape*, ending at statement *last* of the cell, here."""
+        if not isinstance(variant, dict):
             return None
-        if payload.get("echo") is not None and last != len(body) - 1:
+        if variant.get("flush") is not None and last != len(body) - 1:
             return None
-        if not environment_unchanged(metadata.get("env") or {}):
+        if variant.get("echo") is not None and last != len(body) - 1:
+            return None
+        if not environment_unchanged(variant.get("env") or {}):
             logger.debug("%s not served: an environment variable it read changed", _LOG)
             return None
-        bound = frozenset(metadata.get("bound") or ())
+        bound = frozenset(variant.get("bound") or ())
         read = self._read_after(bound, body, last, source)
         if read is not False:
             logger.debug("%s not served: %s", _LOG, read)
             return None
-        statements = payload.get("statements") or []
+        statements = variant.get("statements") or []
         if len(statements) != len(shape):
             return None
-        why = self._rng_moved_on(metadata.get("rng_reads") or {})
+        why = self._rng_moved_on(variant.get("rng_reads") or {})
         if why is not None:
             logger.debug("%s not served: %s", _LOG, why)
             return None
@@ -439,6 +505,21 @@ class PlotRuns:
                 logger.debug("%s not served: %s", _LOG, put)
                 return None
             puts.append(put)
+        return puts
+
+    def _serve_variant(
+        self,
+        variant: dict,
+        puts: list[list[Callable[[], None]]],
+        shape: list[str],
+        index: int,
+        last: int,
+        key: str,
+    ) -> dict[int, ServedStatement]:
+        """The statements of *shape* from *index* on, served from the kept
+        run *variant* (`_variant_puts` gave *puts*)."""
+        statements = variant["statements"]
+        bound = frozenset(variant.get("bound") or ())
         served: dict[int, ServedStatement] = {}
         for k, stored in enumerate(statements):
             row = {
@@ -459,10 +540,10 @@ class PlotRuns:
                 frozenset(stored.get("rng_reseeded") or ()),
                 puts[k],
             )
-        echo = payload.get("echo")
+        echo = variant.get("echo")
         if echo is not None:
             served[last].metrics[ECHO_FIELD] = StoredEcho(echo[0], echo[1])
-        self._pending = (payload.get("flush") or None, bound)
+        self._pending = (variant.get("flush") or None, bound)
         logger.debug("%s serving %d statement(s) from %s", _LOG, len(shape), key[:24])
         return served
 
