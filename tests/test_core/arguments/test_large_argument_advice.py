@@ -31,7 +31,7 @@ def test_changing_an_argument_in_place_says_what_a_hit_does(full_warning_text, d
             feats["x"] = 0
             return len(feats)
 
-        winsorize({"x": 5})
+        winsorize({"x": 5, "rows": []})  # a dict holding a list: not written back
     text = " ".join(str(w.message) for w in rec if "IMPURE-SIDE-EFFECTS" in str(w.message))
     assert "changes the argument 'feats' in place" in text, text
     assert "a cache hit would not make that change, so a call that makes it is not stored" in text

@@ -12,10 +12,12 @@ change this way: an int or str rebound inside the body is invisible to the
 caller and must not trigger it.
 
 Decided 2026-11-03: an array, a frame or Series, or a list, dict or set of
-plain values is stored with the state the call left it in, from the second
-call on, and a hit writes that state back into the caller's object
-(`test_a_call_that_changes_its_argument_in_place_is_stored`). Every warm
-call still leaves the caller's array as the uncached call does.
+plain values is stored with the state the call left it in, and a hit writes
+that state back into the caller's object
+(`test_a_call_that_changes_its_argument_in_place_is_stored`); from the first
+call on when the key holds the argument by its content
+(`test_the_first_call_that_changes_its_argument_in_place_is_stored`). Every
+warm call still leaves the caller's array as the uncached call does.
 """
 
 from __future__ import annotations
@@ -76,9 +78,9 @@ def test_a_call_that_changes_an_array_argument_leaves_it_as_an_uncached_call_doe
             body(expected)  # what the uncached call does to it
             cached(a)
             assert np.array_equal(a, expected), "the caller's array was left unchanged"
-    # The first call learns that it changes its argument, the second is
-    # stored with the array's new state, the third is a hit that writes it.
-    assert len(runs) == 2
+    # The first call is stored with the array's new state; the others are
+    # hits that write it.
+    assert len(runs) == 1
     named = [w for w in rec if "'a'" in str(w.message) and "in place" in str(w.message)]
     assert named, "no warning named the argument"
 
@@ -91,7 +93,7 @@ def test_a_call_that_changes_an_array_argument_leaves_it_as_an_uncached_call_doe
     ],
     ids=["list-append", "list-sort"],
 )
-def test_a_list_argument_changed_by_a_library_call_is_not_stored(tmp_path, mutate):
+def test_a_list_argument_changed_by_a_library_call_is_written_back(tmp_path, mutate):
     c = Cash(cache_dir=str(tmp_path / "cache"))
     runs = []
 
@@ -102,10 +104,11 @@ def test_a_list_argument_changed_by_a_library_call_is_not_stored(tmp_path, mutat
         return len(rows)
 
     for _ in range(2):
-        rows = [3, 1, 2]
+        rows, expected = [3, 1, 2], [3, 1, 2]
+        mutate(expected)
         f(rows)
-        assert rows != [3, 1, 2]
-    assert len(runs) == 2
+        assert rows == expected
+    assert len(runs) == 1
 
 
 def test_an_immutable_argument_rebound_in_the_body_still_caches(tmp_path):

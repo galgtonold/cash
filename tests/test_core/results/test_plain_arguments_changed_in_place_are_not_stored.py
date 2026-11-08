@@ -49,7 +49,7 @@ def _shrink_and_regrow(rows):
 
 
 #: ``(change, make, written back)``: whether a hit can write the new state
-#: back, so the change is stored from the second call on.
+#: back, so the change is stored from the first call on.
 CASES = [
     (_sort, lambda: [5, 3, 9, 1, 7], True),
     (_append, lambda: [1, 2, 3, 4], True),
@@ -75,16 +75,20 @@ def test_a_change_in_place_is_seen_and_made_again_on_the_warm_run(disk_cash, cha
     f(rows)
     without_cash = repr(rows)
     outcome = next(o for k, o in disk_cash._misses.outcomes.items() if "work" in k)
-    assert "in place" in (outcome.get("not_stored") or ""), outcome
+    if written_back:
+        assert not outcome.get("not_stored"), outcome
+    else:
+        assert "in place" in (outcome.get("not_stored") or ""), outcome
     for _ in range(2):
         rows = make()
         f(rows)
         assert repr(rows) == without_cash, "the warm run skipped the change"
-    assert len(runs) == (2 if written_back else 3)
+    assert len(runs) == (1 if written_back else 3)
 
 
-def test_a_plain_list_beside_a_changed_dict_is_not_stored(disk_cash):
-    """A list proved unchanged by identity does not vouch for a dict beside it."""
+def test_a_plain_list_beside_a_changed_dict_is_seen_changing_it(disk_cash):
+    """A list proved unchanged by identity does not vouch for a dict beside
+    it: the dict's change is seen, and a hit makes it again."""
     runs = []
 
     @disk_cash.cache
@@ -93,9 +97,11 @@ def test_a_plain_list_beside_a_changed_dict_is_not_stored(disk_cash):
         seen["n"] = seen.get("n", 0) + 1
         return len(rows)
 
-    work([1, 2, 3], {})
-    work([1, 2, 3], {})
-    assert len(runs) == 2
+    for _ in range(2):
+        seen = {}
+        work([1, 2, 3], seen)
+        assert seen == {"n": 1}
+    assert len(runs) == 1
 
 
 def test_plain_data_only_read_is_stored(disk_cash):

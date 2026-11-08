@@ -8,7 +8,7 @@ cases that need a change on your side, and what that change is.
 
 ## Arguments cash cannot hash
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @cba92fc6 -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @7fa6c84b -->
 An argument that cannot be pickled (a lock, an open file, a live connection)
 cannot be keyed. The call runs uncached and warns
 [`KEY-UNHASHABLE-ARG`](warnings.md#key-unhashable-arg); any other failure while
@@ -316,7 +316,8 @@ paths from the project root or pass absolute paths.
 - A result that can't be pickled is not stored
   ([`STORE-FAILED`](warnings.md#store-failed)), unless the function is
   `frozen=True`.
-<!-- claim: cash/decorator/runtime.py:CallRunner.arguments_left @0d78c0b2, cash/decorator/runtime.py:CallRunner._arguments_to_write @40e35e09, cash/rewrite_in_place.py:refusal @cece1b9e -->
+<!-- claim: cash/decorator/runtime.py:CallRunner.arguments_left @5d0fd426, cash/decorator/runtime.py:CallRunner._arguments_to_write @0895402c, cash/rewrite_in_place.py:refusal @cece1b9e -->
+<!-- claim: cash/decorator/runtime.py:CallRunner.arguments_before @b57998e9, cash/decorator/arg_hashing.py:ContentKeyed.covers @4d5faf1a -->
 - A call that changed its argument in place is stored with the state it left
   the argument in when the argument is a NumPy array (not of objects), a
   pandas frame or Series whose index, columns and dtypes it kept (a Series of
@@ -324,13 +325,37 @@ paths from the project root or pass absolute paths.
   strings and the like. A hit checks that the
   argument handed in is in the state the entry was stored from, then writes
   the stored state into that very object, so your other names for it and the
-  views of an array see the change. The first call seen changing an argument
-  is not stored: from then on, each miss fingerprints those arguments before
-  the body runs. A call keyed with `key=`, one whose result shares memory
-  with the argument (`return X[:2]`), and any other argument (an object of
-  your class, a list of lists, a frame given a new column) are not stored,
-  so they run every time. Return a modified copy instead
-  (`rows = sorted(rows)`).
+  views of an array see the change. The cache key already holds such an
+  argument by its content, so the first call is stored and the next call
+  with the same values is a hit; nothing is hashed a second time for it.
+  A hit writes a frame's columns as the call did: into the column's own
+  array where the call wrote into it, as a new array where it gave the
+  column one, so a name for a column's array (`h = df["a"].array`) sees
+  what it sees after a plain run. Which of the two pandas does depends on
+  whether another pandas object shares the column, so a hit is served
+  only on a frame shared the way the stored one was. cash's own hold on a
+  frame it has hashed makes pandas copy a column before writing it: cash
+  lets go of the frame before the body of a function seen changing its
+  arguments, or whose own source changes this one. A first call that
+  changes a frame in a helper runs while cash still holds it, and is
+  stored from the next call on.
+  (After a call that changed none of its arguments, cash stops looking at
+  them before the body: a later call that starts changing one is not
+  stored, the calls after it are.)
+  When the key holds the argument some other way (a
+  [registered hasher](tutorials/feature-guides/custom-hashers.md) for its
+  type), the first call seen changing it is not stored: from then on, each
+  miss fingerprints it before the body runs. A call keyed with `key=`, one whose
+  result shares memory with the argument (`return X[:2]`), one whose changed
+  argument is, is held by or shares memory with another argument
+  (`f(a, a[::-1])`, `f(a, {"v": a[:2]})`) or a value the code the call ran
+  reads (a global, read in a helper, a method or another module of yours),
+  one where cash cannot tell (the code looks names up by a string, as
+  `globals()["G"]` does, or the call is not recorded, as an `async`
+  function's is not), and any other
+  argument (an object of your class, a list of lists, a frame given a new
+  column) are not stored, so they run every time. Return a modified copy
+  instead (`rows = sorted(rows)`).
 - A set in a result comes back with the same items, but a `for` loop may
   meet them in a different order than in the call that made it: Python does
   not keep a set's order. Use `sorted(s)` where the order matters.

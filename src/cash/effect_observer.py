@@ -329,6 +329,14 @@ class EffectObserver:
         #: The parameters the call changed in place, once the decorator has
         #: compared (`PurityChecks.check_argument_mutation`); None when none did.
         self.mutated_args: list[str] | None = None
+        #: Of `mutated_args`, those not stored with this call only because
+        #: it was the first seen changing them: the next call takes their
+        #: state before the body and is stored (`CallRunner.arguments_left`).
+        self.stored_from_next: list[str] = []
+        #: The parameters no hit writes a state back into, whatever the call
+        #: did to them (`CallRunner._unwritable_args`): a finding that the
+        #: body changes one stands, seen or not.
+        self.unwritable_args: list[str] = []
 
     # -- lifecycle ---------------------------------------------------------
     def __enter__(self) -> "EffectObserver":

@@ -918,7 +918,12 @@ behave differently from the first.
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks.argument_identities @0b1d9a15, cash/_plain_data.py:identity_changed @c64ac6c0 -->
 A call that changes an argument is **not stored**, so it runs every time,
 unless cash can write the argument's new state back on a hit
-([which arguments](decorator-limitations.md#results-cash-refuses-to-store)). The
+([which arguments](decorator-limitations.md#results-cash-refuses-to-store)).
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks._report_written_back @4686d068 -->
+When it can write back every argument the call changed, the warning is one
+line saying so instead, with nothing to fix:
+`clip_in_place changed 'a' in place; cash stores the state it leaves 'a' in, and a hit writes it back.`
+The
 arguments are checked on every miss, whatever their size, except those
 [left out of the key with `ignore=`](decorator.md#leaving-arguments-out-of-the-key),
 which are not checked at all. A plain list or tuple (of numbers, strings,
@@ -1001,6 +1006,12 @@ Each finding has a line number and a label:
 | `ambient_read` | The clock, a fresh UUID, an environment variable named at run time | [KEY-AMBIENT-READ](#key-ambient-read) |
 | `network_read` | A GET request or a read-only SQL query | [KEY-NETWORK-READ](#key-network-read) |
 | `untrackable_dep` | `eval` / `exec` / `compile`, a call to a function that `exec` / `eval` built from a string into a namespace of no module (`ns = {}; exec(rules_text, ns)`), `getattr(obj, name)()`, `globals()[name]()`, `globals().get(name)()` or `vars(mod)[name]()`, `operator.attrgetter(name)` or `methodcaller(name)` with a run-time name, `importlib.import_module`, `sys.modules[name]` | [KEY-UNTRACKABLE-DEP](#key-untrackable-dep) |
+
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks._hold_argument_mutations @9cc0c5ec, cash/decorator/purity_checks.py:PurityChecks.surface_held_mutations @d0282e45 -->
+A line of the function's own body that changes one of its arguments in place
+(`rows.sort()`) is reported once that first call has run, and only when cash
+cannot write the argument's new state back on a hit; when it can, the one line
+of [IMPURE-OBSERVED-EFFECTS](#impure-observed-effects) says so instead.
 
 Log lines (`logging`, `print(..., file=sys.stderr)`) are not reported. A
 table of functions is not reported either, wherever it lives: a module-level

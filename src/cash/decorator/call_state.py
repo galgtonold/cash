@@ -94,10 +94,12 @@ class Call:
         "handed",
         "polars_args",
         "keyed_parts",
+        "content_keyed",
         "stored_in",
         "traced",
         "needs_trace",
         "trace_unit",
+        "ran_unit",
     )
 
     def __init__(self, args: tuple, kwargs: dict) -> None:
@@ -120,6 +122,9 @@ class Call:
         self.polars_args: Any = None
         #: What each list or tuple argument was keyed by (`arg_hashing.KEYED_PARTS`).
         self.keyed_parts: dict | None = None
+        #: Which arguments the key holds by all they hold
+        #: (`arg_hashing.ContentKeyed`).
+        self.content_keyed: Any = None
         #: The tiers the store put the result in (``storage``), once stored.
         self.stored_in: list[str] | None = None
         #: The key's `BuiltKey.traced` and ``needs_trace``, and what recorded
@@ -127,6 +132,9 @@ class Call:
         self.traced = False
         self.needs_trace = False
         self.trace_unit: Any = None
+        #: That record once the trace is built from it, for what the code
+        #: that ran reads (`argument_sharing.reads_of`).
+        self.ran_unit: Any = None
 
 
 class BodyRun:
@@ -147,6 +155,7 @@ class BodyRun:
         "rng_drew",
         "env_reads",
         "args_before",
+        "args_reads",
     )
 
 

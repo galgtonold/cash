@@ -30,6 +30,12 @@ import sys
 import warnings
 from typing import Any
 
+from ._paths import CELL_NAME_PREFIX
+
+#: The name a cell's line is shown under (``<cash>:N``), as cash's notebook
+#: warnings name it.
+CELL_LOCATION = "<cash>"
+
 # /en/latest/, not /en/stable/: the stable build is only rebuilt at a release,
 # so a warning code documented since then would link to a missing anchor.
 _DOCS_BASE = "https://cash-lib.readthedocs.io/en/latest/warnings/"
@@ -159,8 +165,9 @@ def _warn_at(instance: Warning, level: int | None, fallback: tuple[str, int] | N
     """Warn *instance* at *level* frames out -- counted from the caller of this
     function's caller -- or at *fallback* when there is no user frame.
 
-    Returns whether the active warning filters let it through: False for an
-    ``"ignore"`` filter. An ``"error"`` filter raises it instead of returning.
+    Returns whether it was shown: False for an ``"ignore"`` filter, and for
+    one a ``"default"``, ``"module"`` or ``"once"`` filter held back as
+    shown before. An ``"error"`` filter raises it instead of returning.
     """
     _hide_source_lines()
     if level is None and fallback is not None:
@@ -171,14 +178,57 @@ def _warn_at(instance: Warning, level: int | None, fallback: tuple[str, int] | N
         return shown
     if level is None:
         level = _stacklevel_of_first_user_frame() - 1
+    registry = None
     try:
         frame = sys._getframe(level)
         module, lineno = frame.f_globals.get("__name__", "<string>"), frame.f_lineno
     except ValueError:  # deeper than the stack: warnings blames `sys`
         module, lineno = "sys", 0
-    shown = _filter_action(instance, module, lineno) != "ignore"
+    else:
+        if frame.f_code.co_filename.startswith(CELL_NAME_PREFIX):
+            # A statement cash compiled in a cell, at its line in the cell:
+            # its name (``/<cash-1a2b>``) is a pseudo-filename the reader sees
+            # nowhere else, so the line is named in ``<cash>``, as cash's
+            # notebook warnings name a cell's lines.
+            # Filtered under its module's name (``__main__``), as any other
+            # line of the notebook's is: only the name shown changes.
+            action = _filter_action(instance, module, lineno)
+            registry = frame.f_globals.setdefault("__warningregistry__", {})
+            seen = _AlreadyShown(instance, action, registry, lineno)
+            warnings.warn_explicit(instance, type(instance), CELL_LOCATION, lineno, module=module, registry=registry)
+            return action != "ignore" and not seen.held_back()
+        registry = frame.f_globals.get("__warningregistry__")
+    action = _filter_action(instance, module, lineno)
+    seen = _AlreadyShown(instance, action, registry if lineno else None, lineno)
     warnings.warn(instance, stacklevel=level + 1)
-    return shown
+    return action != "ignore" and not seen.held_back()
+
+
+class _AlreadyShown:
+    """Whether *action* (``"default"``, ``"module"``, ``"once"``) held a
+    warning back as one shown before at that place: the key it is filed
+    under was in the registry before it was warned, and the registry was
+    not reset since (a changed filter resets it, and shows it again)."""
+
+    def __init__(self, instance: Warning, action: str, registry: dict | None, lineno: int) -> None:
+        text, category = str(instance), type(instance)
+        self.registry = registry
+        self.version = registry.get("version") if registry is not None else None
+        self.where: dict | None = None
+        if action == "once":
+            self.where, self.key = warnings.onceregistry, (text, category)
+        elif action == "module" and registry is not None:
+            self.where, self.key = registry, (text, category, 0)
+        elif action == "default" and registry is not None:
+            self.where, self.key = registry, (text, category, lineno)
+        self.before = self.where is not None and bool(self.where.get(self.key))
+
+    def held_back(self) -> bool:
+        if not self.before:
+            return False
+        if self.where is warnings.onceregistry:
+            return True
+        return self.registry is not None and self.registry.get("version") == self.version
 
 
 def _filter_action(instance: Warning, module: str, lineno: int) -> str:
@@ -439,7 +489,8 @@ def format_diagnostic(code: str, what: str, fix: str) -> str:
           Fix: raise max_cache_size, or cache fewer values.
           https://cash-lib.readthedocs.io/en/latest/warnings/#cache-thrash
 
-    *what* is one sentence of what happened; *fix* is one imperative sentence.
+    *what* is one sentence of what happened; *fix* is one imperative sentence,
+    or empty for a notice that leaves the reader nothing to change.
     Everything else belongs in the doc section the link points at, so the
     message stays short.
 
@@ -447,6 +498,9 @@ def format_diagnostic(code: str, what: str, fix: str) -> str:
     and what a warning shows under ``warning_detail = "full"``. By default a
     warning shows :func:`short_diagnostic` instead.
     """
+    if not fix.strip():
+        # Says what cash does, with nothing for the reader to change.
+        return f"[{code}] {what}\n  {doc_url(code)}"
     return f"[{code}] {what}\n  Fix: {fix}\n  {doc_url(code)}"
 
 
@@ -586,11 +640,25 @@ def warn_diagnostic(
     instance = category(message)
     instance.code = code
     level = _user_frame_level()
+    if location is not None and location[0] == CELL_LOCATION and location[1] <= 0:
+        # No cell to name (``<cash>:0`` named none): the cell running now,
+        # else the nearest frame outside cash.
+        location = _running_cell()
+        if location is None:
+            _warn_at(instance, level, None)
+            return
     if location is None and not _blames_user_code(level):
         location = _running_cell()
     if location is not None:
         _hide_source_lines()
-        warnings.warn_explicit(instance, category, filename=location[0], lineno=location[1], registry=None)
+        filename, lineno = location
+        if filename == CELL_LOCATION:
+            # A notebook's cell runs as ``__main__``: filtered as such,
+            # whatever name the line is shown under.
+            warnings.warn_explicit(instance, category, filename, lineno, module="__main__", registry=None)
+        else:
+            # No ``module=`` at all: an explicit None drops the warning.
+            warnings.warn_explicit(instance, category, filename, lineno, registry=None)
         return
     _warn_at(instance, level, None)
 
@@ -623,7 +691,8 @@ def _running_cell() -> tuple[str, int] | None:
         return None
     from .notebook.ipython.cell_count import running_cell_count  # the notebook package imports this one
 
-    return ("<cash>", running_cell_count(shell))
+    count = running_cell_count(shell)
+    return (CELL_LOCATION, count) if count > 0 else None
 
 
 def warn_diagnostic_message(

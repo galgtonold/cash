@@ -282,6 +282,11 @@ class CachedFunction:
     #: arguments a hit could write a stored state back into are fingerprinted
     #: before its body runs (`CallRunner.arguments_before`).
     changes_arguments: bool = False
+    #: A missed call of this definition ran and changed no argument in place:
+    #: until one does (`changes_arguments`), nothing of its arguments is taken
+    #: before its body, so a function that never changes them pays for that
+    #: on its first miss alone (`CallRunner.arguments_before`).
+    leaves_arguments_alone: bool = False
     #: The ``key=`` function has been watched for file reads (`KeyBuilder.key_arguments`).
     key_reads_checked: bool = False
     #: Its fast hits (`hit_memo.HitMemo`), made on the first ordinary hit.
