@@ -192,6 +192,8 @@ def _note_shared(refs: Any) -> None:
     if not _counts_exact():
         _warn_unchecked()
         return
+    if _BEING_STORED:
+        _wait_until_stored(pin)
     try:
         left = _read_elsewhere(pin)
     except Exception:
@@ -208,6 +210,86 @@ def _left_behind(left: list[Any]) -> None:
             _LEFT.append(left)
     else:
         _warn_at_write()
+
+
+#: ``id(root) -> how many disk writes`` are serializing a frozen table
+#: whose memory *root* owns (`being_stored`): their pickler and buffers
+#: hold it, unseen by the count.
+_BEING_STORED: dict[int, int] = {}
+_STORED_CHANGED = threading.Condition()
+_STORING_THREADS: set[int] = set()
+#: How long a write waits for such a disk write before counting anyway
+#: (conservatively: the disk write's references count as readers).
+_STORE_WAIT = 5.0
+
+
+class being_stored:
+    """Around a disk write serializing *value* off the caller's thread: a
+    write into a served table sharing its memory waits for it to end
+    before counting who reads that memory (`_note_shared`). `release`
+    ends it early, once the serialized payload no longer holds that
+    memory."""
+
+    def __init__(self, value: Any) -> None:
+        self._keys = _frozen_roots_in(value)
+        self._thread = threading.get_ident()
+
+    def __enter__(self) -> being_stored:
+        if self._keys:
+            with _STORED_CHANGED:
+                for key in self._keys:
+                    _BEING_STORED[key] = _BEING_STORED.get(key, 0) + 1
+                _STORING_THREADS.add(self._thread)
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.release()
+
+    def release(self) -> None:
+        if not self._keys:
+            return
+        with _STORED_CHANGED:
+            for key in self._keys:
+                left = _BEING_STORED.pop(key, 1) - 1
+                if left > 0:
+                    _BEING_STORED[key] = left
+            _STORING_THREADS.discard(self._thread)
+            _STORED_CHANGED.notify_all()
+        self._keys = []
+
+
+def _frozen_roots_in(value: Any, depth: int = 0) -> list[int]:
+    """The ids of the roots of the frozen blocks of the pandas tables in
+    *value*, as deep as the RAM tier looks for tables."""
+    kind = type(value)
+    if kind in (dict, list, tuple):
+        if depth >= 2:
+            return []
+        items = value.values() if kind is dict else value
+        return [key for item in items for key in _frozen_roots_in(item, depth + 1)]
+    mgr = getattr(value, "_mgr", None)
+    if mgr is None or not kind.__module__.startswith("pandas"):
+        return []
+    keys = []
+    for block in getattr(mgr, "blocks", ()):
+        if _pin_of(block.refs) is not None:
+            keys.extend(id(_root(array)) for _name, array in _ndarray_parts(block.values) or ())
+    return keys
+
+
+def _wait_until_stored(pin: _PinRef) -> None:
+    """Wait, a while at most, for the disk writes serializing *pin*'s
+    memory to end (`being_stored`)."""
+    if threading.get_ident() in _STORING_THREADS:
+        return
+    keys = set()
+    for ref in pin.roots:
+        root = ref()
+        if root is not None:
+            keys.add(id(root))
+        del root
+    with _STORED_CHANGED:
+        _STORED_CHANGED.wait_for(lambda: not keys.intersection(_BEING_STORED), timeout=_STORE_WAIT)
 
 
 def defer_reports(on: bool) -> None:
