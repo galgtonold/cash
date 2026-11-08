@@ -521,6 +521,7 @@ class CallEntries:
         env_reads: dict[str, str] | None = None,
         helper_memos: list[dict] | None = None,
         body_imported: list[str] | None = None,
+        reference_states: dict[str, str] | None = None,
     ) -> tuple[str, Any] | None:
         """Write through ``backend.set(key, value, metadata)`` -- the same
         two-positional-argument shape the statement path uses
@@ -577,6 +578,10 @@ class CallEntries:
         if helper_memos:
             # What the helper memos it called held (`helper_memos.used`).
             metadata["helper_memos"] = helper_memos
+        if reference_states:
+            # The state of each object pickled by reference it read: the
+            # call unit serves the entry only while each is as it was.
+            metadata["reference_states"] = reference_states
         if body_imported:
             # What it imported in its callees' bodies, imported again by a
             # hit (`cache_key.import_body_modules`).

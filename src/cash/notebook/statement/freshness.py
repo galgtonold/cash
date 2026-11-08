@@ -35,6 +35,7 @@ from ... import _plain_data
 from ..._clock import perf_counter as _perf_counter
 from ...backends._base import ttl_expired
 from ...backends.no_file_writes import no_file_writes
+from ...tracking import reference_states
 from ...tracking.env_reads import environment_unchanged
 from ...tracking.file_dep_snapshot import FreshnessMemo, snapshot_is_fresh
 from ...value_types import IMMUTABLE_LEAF_TYPES
@@ -232,6 +233,11 @@ class CacheFreshnessChecker:
             if cached_data and metadata.env_reads and not environment_unchanged(metadata.env_reads):
                 self.last_miss_reason = "an environment variable installed code read changed"
                 cached_data = None
+            if cached_data and metadata.reference_states:
+                why = reference_states.changed(metadata.reference_states)
+                if why is not None:
+                    self.last_miss_reason = why
+                    cached_data = None
             if cached_data and metadata.helper_memos and isinstance(bound, Mapping):
                 unfilled = memos_unfilled(metadata.helper_memos, bound)
                 if unfilled:
@@ -378,6 +384,22 @@ class CacheFreshnessChecker:
                 self.last_miss_reason = f"'{name}', stored with this statement's outputs, has changed"
                 return None
         return cached_data
+
+    def inherited_reference_states(self, tracking_state: "TrackingState", inputs: set[str]) -> dict[str, str]:
+        """The ``reference_states`` the entries that made *inputs* recorded:
+        what their values were made from. ``z = seen + 1`` after
+        ``seen = level_of(cfg)`` read the logger's level through ``seen``,
+        and a lookup of ``z`` checks it too, as for a file an input was read
+        from. Read from metadata alone, once per input."""
+        inherited: dict[str, str] = {}
+        for input_var in sorted(inputs):
+            source_cache_key = tracking_state.variable_sources.get(input_var)
+            if not source_cache_key:
+                continue
+            raw_source_meta = self._backend.peek_metadata(source_cache_key)
+            for key, digest in ((raw_source_meta or {}).get("reference_states") or {}).items():
+                inherited.setdefault(key, digest)
+        return inherited
 
     def _source_file_deps(self, tracking_state: "TrackingState", input_var: str) -> dict | None:
         """The file dependencies *input_var*'s producer recorded, or None.

@@ -15,6 +15,7 @@ does. It is used wherever cash pickles a value it keys or stores.
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import copy
 import copyreg
 import datetime
@@ -1643,8 +1644,10 @@ def _watched_by_reference(reducer: Any, watch: list) -> Callable[[Any], Any]:
 
     def by_reference(obj: Any) -> Any:
         reduced = reducer(obj)
-        if stands_by_reference(reduced) and _own_attrs(obj):
-            watch.append(True)
+        if stands_by_reference(reduced):
+            _note_met(obj, reduced)
+            if _FOLDING.get() and _own_attrs(obj):
+                watch.append(True)
         return reduced
 
     return by_reference
@@ -2316,14 +2319,27 @@ def _reduce_by_reference_for_key(obj: Any, reducer: Any) -> Any:
     parent are what the name finds then. Keyed by its name alone, a value
     holding one digested the same after ``log.setLevel(10)``: the call was
     taken to change nothing, and a reader of the logger was served the
-    level it read before. Its attributes are keyed as a pickle by value
-    would hold them, as `left_out_attrs` keys what a class of the user's
-    leaves out: one that cannot be pickled (a handler holding a lock and a
-    stream) by its type. A cache the object fills as it is read (a private
-    attribute named for one, as ``_cache``) is derived from the rest and
-    left out, or every read would count as a change."""
+    level it read before. Inside `folding_by_reference` its attributes are
+    keyed as a pickle by value would hold them, as `left_out_attrs` keys
+    what a class of the user's leaves out: one that cannot be pickled (a
+    handler holding a lock and a stream) by its type. A cache the object
+    fills as it is read (a private attribute named for one, as ``_cache``)
+    is derived from the rest and left out, or every read would count as a
+    change.
+
+    Elsewhere -- a variable's content digest, which every "did it change?"
+    check of the notebook compares -- it is keyed by its name, as pickle
+    stores it, and noted for `met_by_reference`: the name finds the object
+    from anywhere, so it changes through calls that name no variable
+    holding it (``logging.getLogger('app').setLevel(10)``), and a statement
+    reading it is checked by its state instead (`reference_states`). Keyed
+    there with its state, a call that only logged changed the model holding
+    the logger, and everything read from the model ran again on every run."""
     reduced = reducer(obj)
     if not stands_by_reference(reduced):
+        return reduced
+    _note_met(obj, reduced)
+    if not _FOLDING.get():
         return reduced
     attrs = left_out_attrs(obj, None, own_only=True)
     if not attrs:
@@ -2358,6 +2374,110 @@ def _own_attrs(obj: Any) -> dict:
 
 
 _NOT_HELD = object()
+
+
+#: Whether a key's pickle reduces an object pickled by reference with its
+#: state (`folding_by_reference`).
+_FOLDING: contextvars.ContextVar[bool] = contextvars.ContextVar("cash_folding_by_reference", default=False)
+
+
+@contextlib.contextmanager
+def folding_by_reference() -> Iterator[None]:
+    """Within it, a key's pickle of an object pickled by reference (a
+    logger) holds the attributes it holds (`_reduce_by_reference_for_key`):
+    for an argument of a cached function, and for the state a lookup of a
+    statement compares (`state_digest`)."""
+    token = _FOLDING.set(True)
+    try:
+        yield
+    finally:
+        _FOLDING.reset(token)
+
+
+def state_digest(obj: Any) -> str:
+    """The digest of *obj*'s keyed pickle with the state of each object
+    pickled by reference in it (`folding_by_reference`). Raises what
+    pickling raises."""
+    with folding_by_reference():
+        return hashlib.sha256(dumps(obj, keyed=True)).hexdigest()
+
+
+class _Met(threading.local):
+    """`met_by_reference`'s list, on this thread."""
+
+    found: list | None = None
+
+
+_MET = _Met()
+
+
+def met_by_reference() -> list | None:
+    """The list `_note_met` adds to on this thread, or None when no one
+    collects (`value_hash.compute_hash` sets it)."""
+    return _MET.found
+
+
+def collect_met(found: list | None) -> list | None:
+    """Make *found* the list `_note_met` adds to on this thread; the one
+    before is returned, to set back."""
+    before = _MET.found
+    _MET.found = found
+    return before
+
+
+def _note_met(obj: Any, reduced: Any) -> None:
+    """Note *obj*, reduced by reference to *reduced*, for the collector
+    (`met_by_reference`): its recipe (`reference_recipe`) and the object,
+    when the reduce looks it up (`looks_up`)."""
+    found = _MET.found
+    if found is not None and looks_up(reduced):
+        found.append((reduced, obj))
+
+
+def looks_up(reduced: Any) -> bool:
+    """May *reduced*, a reduce that stands by reference
+    (`stands_by_reference`), find its object by a name: a string, or a call
+    given only names and numbers (``getLogger('app')``)? A call given bytes
+    or a container is given content (a tensor's storage pickles as
+    ``_load_from_bytes(data)``) and builds an object from it. Whether the
+    call finds this very object is asked of its recipe
+    (`finds_itself`)."""
+    return isinstance(reduced, str) or _all_atoms(reduced[1])
+
+
+def _all_atoms(value: Any) -> bool:
+    if type(value) is tuple:
+        return all(_all_atoms(item) for item in value)
+    return value is None or type(value) in (str, int, float, bool)
+
+
+def finds_itself(obj: Any, recipe: bytes) -> bool:
+    """Does *recipe* (`reference_recipe`) find *obj* itself, as a lookup
+    does, rather than build another object? Only then is the state a
+    pickle of it leaves out the state of the object every holder of it
+    shares, and the object found later by the recipe the one it was."""
+    try:
+        return find_by_recipe(recipe) is obj
+    except Exception:  # noqa: BLE001 - whatever loading the recipe raises: not found
+        return False
+
+
+def reference_recipe(obj: Any, reduced: Any) -> bytes | None:
+    """The bytes that find *obj* again from its reduce value *reduced*, as
+    loading a pickle of it does (`find_by_recipe`); None when they cannot
+    be pickled."""
+    recipe = (by_name, (pickle.whichmodule(obj, reduced), reduced)) if isinstance(reduced, str) else reduced[:2]
+    try:
+        return pickle.dumps(recipe, protocol=4)
+    except Exception:  # noqa: BLE001 - whatever stops this pickle: no recipe
+        return None
+
+
+def find_by_recipe(recipe: bytes) -> Any:
+    """The object *recipe* (`reference_recipe`) finds now: what a pickle of
+    it would load. Raises what loading raises."""
+    rebuild, args = pickle.loads(recipe)
+    return rebuild(*args)
 
 
 def _by_name_reduce(obj: Any, name: str, state: Any) -> tuple:

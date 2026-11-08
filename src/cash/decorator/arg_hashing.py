@@ -19,7 +19,7 @@ import weakref
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from .. import _cash_views, _plain_data, value_watch
+from .. import _cash_views, _plain_data, kept_state, value_watch
 from .._clock import perf_counter as _perf_counter
 from .._memo import ARGUMENTS, FRAMES, LruMemo
 from .._type_memo import TypeMemo, type_key
@@ -2222,7 +2222,17 @@ class ArgHasher:
         handler on the way out and ended the user's call. It is raised as the
         ``TypeError`` of an unhashable argument instead, so the call runs
         uncached with KEY-UNHASHABLE-ARG.
+
+        An object pickled by reference (a logger) is keyed with its state
+        (`kept_state.folding_by_reference`): ``level_of(cfg)`` keyed on the
+        logger's name alone was served the level it read before
+        ``log.setLevel(10)``.
         """
+        with kept_state.folding_by_reference():
+            return self._hash_payload(args, kwargs)
+
+    def _hash_payload(self, args: tuple, kwargs: dict) -> str:
+        """`hash_payload`, its state folded."""
         if not (self.override_hashers or self.type_hashers or self._frozen.arrays or self._frozen.containers):
             # Every argument a number, a string, None: the canonical bytes
             # built directly, the same ones the walk below makes (a

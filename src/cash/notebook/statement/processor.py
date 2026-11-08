@@ -41,6 +41,7 @@ from cash.notebook.cache_key import (
     THE_STATEMENT,
     CacheKeyContext,
     CacheKeyResult,
+    called_function_globals,
     compute_cache_key,
     import_body_modules,
     imported_since,
@@ -165,6 +166,7 @@ from ...analysis.namespace_effects import (
     statement_starting_workers,
 )
 from ...analytics import AnalyticsManager
+from ...tracking import reference_states
 from ...tracking.env_reads import environment_digests
 from ...tracking.env_reads import recording as recording_env_reads
 from ...tracking.file_dep_snapshot import file_state_epoch, probe_answers, young_digests_kept
@@ -2666,6 +2668,24 @@ class StatementProcessor:
         if run.exec_code is not code:
             run.exec_source = None
 
+    def _note_reference_states(self, run: StatementRun, known: dict[str, str]) -> None:
+        """Before *run* executes: the state of each object pickled by
+        reference (a logger) that its inputs, or the globals the functions it
+        calls read, hold now, and those the entries that made its inputs
+        recorded (`reference_states`). A lookup serves its entry only while
+        each is as it was: a change through the name that finds it
+        (``logging.getLogger('app').setLevel(10)``) moves no variable."""
+        user_ns = self.shell.user_ns
+        names = set(run.inputs)
+        try:
+            names |= called_function_globals(run.inputs, user_ns, variable_lineage=self.tracking_state.variable_lineage)
+        except Exception:
+            logger.debug("%s could not read what %r calls", _LOG_PROCESSOR, run.code[:80], exc_info=True)
+        found = reference_states.states(names, self.tracking_state.current_session_hashes, known) or {}
+        for key, digest in self._freshness.inherited_reference_states(self.tracking_state, run.inputs).items():
+            found.setdefault(key, digest)
+        run.reference_states = found or None
+
     @contextmanager
     def _executing(self, run: StatementRun) -> Generator[CodeRunner, None, None]:
         """Run *run*'s code under output capture and cash's observers.
@@ -2751,6 +2771,11 @@ class StatementProcessor:
         figures_before = None if run.skip_cache else pyplot_state()
         lineage = self.tracking_state.variable_lineage
         run.entry_lineages = {name: lineage[name] for name in run.inputs if name in lineage}
+        # The objects pickled by reference known now, as they are: what the
+        # run changes of them is seen (`reference_states`), by the statement
+        # and by each call in it the call cache keeps.
+        references_before = reference_states.known_states()
+        self._note_reference_states(run, references_before)
         unordered = sparse_order.unordered_sparse(run.inputs, self.shell.user_ns)
         unloaded = unloaded_body_imports(run.cache_key)
         env_reads: set[str] = set()
@@ -2777,6 +2802,7 @@ class StatementProcessor:
                     observe_writes() as written_paths,
                     FileAccessTracker(self.shell.user_ns, hash_on_read=not run.skip_cache) as file_tracker,
                     helper_memos.watching_clears(memos_before) as memos_cleared,
+                    reference_states.running(references_before, run.reference_states),
                 ):
                     user_ns = self.shell.user_ns
                     shadowed = user_ns.get(LOOP_ITERABLE_NAME, NO_LOOP_ITERABLE) if handed else None
@@ -2845,6 +2871,15 @@ class StatementProcessor:
         ):
             run.skip_cache = True
             run.metrics["uncacheable_reasons"].append(CHANGED_PYPLOT_REASON)
+        if references_before and not run.skip_cache:
+            changed_references = reference_states.moved(references_before)
+            if changed_references:
+                # A hit could not change it again: a pickle of it holds its
+                # name, and loading it finds it as it is.
+                run.skip_cache = True
+                run.metrics["uncacheable_reasons"].append(
+                    f"it changed {', '.join(changed_references)}, which is pickled by reference"
+                )
         if memos_before is not None and run.skip_cache and execution.result.success:
             self._note_plot_memos(run, memos_before, memos_cleared)
         if env_reads:

@@ -38,6 +38,7 @@ import warnings
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from cash import kept_state
 from cash._clock import perf_counter as _perf_counter
 from cash._user_attrs import attribute_or, instance_of
 from cash.analysis.analysis_budget import (
@@ -93,6 +94,7 @@ from cash.notebook.pyplot_state import pyplot_state
 from cash.notebook.read_handles import reaches_read_handle
 from cash.notebook.write_observer import WrittenPaths, kept_writes, observe_writes
 from cash.sizing import estimate_object_size
+from cash.tracking import reference_states
 from cash.tracking.env_reads import environment_digests, note_reads
 from cash.tracking.env_reads import recording as recording_env_reads
 from cash.tracking.file_dep_snapshot import probe_answers
@@ -446,6 +448,9 @@ class _Call:
     mutated_globals: tuple[str, ...]
     args: tuple
     kwargs: dict
+    #: The state of each object pickled by reference it reads, as it was
+    #: before it ran (`reference_states.for_call`); None when it reads none.
+    reference_states: dict[str, str] | None = None
 
 
 def _ran_unseen_writes(call: Any, unit: Any) -> bool:
@@ -955,15 +960,25 @@ class CallUnit:
             # empty, so an ordinary call pays one memo lookup.
             key_started = _perf_counter()
             mutated_globals = callee_mutated_globals(fn)
-            key = self._keys.key(
-                site,
-                args,
-                kwargs,
-                global_digests(fn, mutated_globals) if mutated_globals else None,
-                # A callee that writes globals keys on their state, not on
-                # what it receives.
-                fn=None if mutated_globals else fn,
-            )
+            # The objects pickled by reference its key's digests hold (a
+            # logger, keyed by its name): a hit is served only while each is
+            # as it was (`reference_states.for_call`).
+            met: list = []
+            outer = kept_state.collect_met(met)
+            try:
+                key = self._keys.key(
+                    site,
+                    args,
+                    kwargs,
+                    global_digests(fn, mutated_globals) if mutated_globals else None,
+                    # A callee that writes globals keys on their state, not on
+                    # what it receives.
+                    fn=None if mutated_globals else fn,
+                )
+            finally:
+                kept_state.collect_met(outer)
+                if outer is not None:
+                    outer.extend(met)
             if key is None:
                 # Either the key build raised, or `call_cache_key` itself
                 # refused (arg-digest count mismatch, by design). Either way
@@ -986,9 +1001,16 @@ class CallUnit:
                 # it plain -- never look it up, never store over it.
                 return self._run_unkeyed(fn, args, kwargs, key_started)
 
-            call = _Call(fn, site, func_name, key, mutated_globals, args, kwargs)
+            call = _Call(fn, site, func_name, key, mutated_globals, args, kwargs, reference_states.for_call(met))
             hit_started = _perf_counter()
             hit, value, recorded_cost, metadata = self._entries.lookup(key)
+            if hit and metadata.get("reference_states"):
+                # A logger it reads, found by its name from anywhere, has the
+                # state it had when the call ran (`reference_states.changed`).
+                moved = reference_states.changed(metadata["reference_states"])
+                if moved is not None:
+                    self._memo_misses[site] = moved
+                    hit, value, recorded_cost, metadata = False, None, 0.0, {}
             if hit and holds_a_stream(fn):
                 if self._invoked_keys:
                     self._invoked_keys[-1] = None
@@ -1187,6 +1209,10 @@ class CallUnit:
             and not call_tracker.work_outlived_block
             and not _inputs_moved(call_tracker)
             and not _ran_unseen_writes(call, unit)
+            # Nor when an object pickled by reference (a logger) changed
+            # since the statement around it started: a hit would not change
+            # it again, as loading it finds it as it is.
+            and not reference_states.moved_in_statement()
         ):
             stored = self._store_result(
                 call,
@@ -1381,6 +1407,7 @@ class CallUnit:
             env_reads=env_reads or None,
             helper_memos=memos,
             body_imported=body_imported,
+            reference_states=call.reference_states,
         )
         if held:
             self._hold(call.key, result, *held)

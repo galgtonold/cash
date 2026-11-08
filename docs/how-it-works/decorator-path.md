@@ -102,17 +102,20 @@ pickled, such as a lock, is keyed by its type; one that holds the object
 leaving it out is keyed by its content, as pickle stores the cycle. A
 library's class is keyed by what it pickles.
 
-<!-- claim: cash/kept_state.py:_own_attrs @f77e88c7, cash/kept_state.py:_reduce_by_reference_for_key @07729437, cash/kept_state.py:stands_by_reference @f8f477fc -->
-An object that pickles by reference, by its name or by a call that looks it up
-(a logger pickles as `getLogger(name)`), is keyed with the attributes it
-holds, as a pickle by value would hold them: `log.setLevel(10)` changes the
-key of a value holding `log`. One that cannot be pickled, such as a handler
-holding a lock, is keyed by its type, as above. A cache it fills as it is read
-(a private attribute named for one, such as a logger's `_cache`) is left out,
-and so is an object its class holds under the same name (every logger's one
-manager, which holds every logger in the process). Functions, classes, modules
-and bound methods are pickled by name with nothing of their own to add; their
-code and attributes are keyed where they are read.
+<!-- claim: cash/kept_state.py:_own_attrs @f77e88c7, cash/kept_state.py:_reduce_by_reference_for_key @d92a868c, cash/kept_state.py:stands_by_reference @f8f477fc -->
+An object that pickles by reference, by its name or by a call that looks it
+up (a logger pickles as `getLogger(name)`), is keyed with the attributes it
+holds, as a pickle by value would hold them, in an argument and in a global
+the function reads: `log.setLevel(10)`, or
+`logging.getLogger("app").setLevel(10)` anywhere, changes the key of a call
+given a value holding `log`. One that cannot be pickled, such as a handler
+holding a lock, is keyed by its type, as above. An object its class holds
+under the same name (every logger's one manager, which holds every logger in
+the process) is the class's, and left out, and so is a cache it fills as it
+is read (a private attribute named for one, such as a logger's `_cache`).
+Functions, classes, modules and bound methods are pickled by name with
+nothing of their own to add; their code and attributes are keyed where they
+are read.
 
 Inside a list, tuple, set or dict argument, a value a registered hasher, a
 `__cash_key__` or a built-in content hasher covers is hashed by it too;

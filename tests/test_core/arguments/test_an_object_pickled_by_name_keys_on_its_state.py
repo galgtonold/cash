@@ -1,12 +1,11 @@
-"""An object that pickles by name is keyed by the state it holds.
+"""A cached call reading an object that pickles by name is keyed by its state.
 
 A logger pickles as ``getLogger(name)``, which loads whatever the name finds
 then: its level, handlers and parent are not in the pickle. Keyed by its
 name alone, ``level_of({'log': log})`` was served 30 after
-``log.setLevel(10)``. Such an object is keyed with its attributes, as a
-pickle by value would hold them; a cache it fills as it is read is not one
-of them, and functions, classes and bound methods (pickled by name, with no
-attributes of their own to key) key as before.
+``log.setLevel(10)``, and so was a function reading the logger as a global.
+An argument, or a global a cached function reads, holding such an object is
+keyed with its attributes, as a pickle by value would hold them.
 """
 
 from __future__ import annotations
@@ -17,8 +16,9 @@ import pytest
 
 from cash import Cash
 from cash.backends import InMemoryBackend
-from cash.stored_pickle import object_digest
 from cash.value_hash import compute_hash
+
+NAME = "cash_test_pickled_by_name"
 
 
 @pytest.fixture
@@ -28,7 +28,7 @@ def cash():
 
 @pytest.fixture
 def log(monkeypatch):
-    logger = logging.getLogger("cash_test_pickled_by_name")
+    logger = logging.getLogger(NAME)
     monkeypatch.setattr(logger, "level", 30)
     monkeypatch.setattr(logging.root, "handlers", [])
     return logger
@@ -44,19 +44,28 @@ def test_a_cached_call_reads_the_loggers_new_level(cash, log):
 
     cfg = {"a": {"log": log}}
     assert level_of(cfg) == 30
-    log.setLevel(10)
+    assert level_of(cfg) == 30
+    logging.getLogger(NAME).setLevel(10)
     assert level_of(cfg) == 10
     assert len(runs) == 2
 
 
-@pytest.mark.parametrize("digest", [compute_hash, object_digest], ids=["key", "store"])
-def test_the_digest_moves_with_the_level_and_not_with_a_log_call(log, digest):
-    cfg = {"a": [log]}
-    before = digest(cfg)
-    log.warning("filled into the logger's cache of enabled levels")
-    assert digest(cfg) == before
-    log.setLevel(10)
-    assert digest(cfg) != before
+LOG = logging.getLogger(NAME)
+GLOBAL_RUNS: list[int] = []
+
+
+def global_level():
+    GLOBAL_RUNS.append(1)
+    return LOG.level
+
+
+def test_a_cached_function_reading_the_logger_as_a_global(cash, log):
+    GLOBAL_RUNS.clear()
+    level = cash.cache(global_level)
+    assert level() == 30
+    logging.getLogger(NAME).setLevel(10)
+    assert level() == 10
+    assert len(GLOBAL_RUNS) == 2
 
 
 class Singleton:

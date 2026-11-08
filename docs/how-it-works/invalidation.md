@@ -95,6 +95,16 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
     - **A file it or an input read** ([files](#files), below).
     - **An environment variable it reads** by name, in its own text or in a
       function or method of yours it calls, defined in a cell or a module.
+    <!-- claim: cash/tracking/reference_states.py:changed @1949e458, cash/notebook/statement/processor.py:StatementProcessor._note_reference_states @9d595005, cash/tracking/reference_states.py:for_call @fafe1936 -->
+    - **An object that pickles by reference** (by its name, as a logger
+      pickles as `getLogger(name)`) held by a value it reads, or by a global
+      a function it calls reads, or by a value it reads was made from. Its
+      name finds it from anywhere, so `logging.getLogger("app").setLevel(10)`,
+      in a cell or in a function, changes it without naming a variable. The
+      entry keeps each such object's state as the statement found it, and
+      is served only while each is the same; so is a call the call cache
+      keeps. A statement or a kept call that changed one runs again the
+      next time, as a hit could not change it again.
     - **Its age**, when a `ttl` applies. A statement that calls a
       `@cash.cache` function with a shorter `ttl` takes that shorter one.
     - **An in-place change** to a variable it reads

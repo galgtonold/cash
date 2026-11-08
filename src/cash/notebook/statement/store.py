@@ -1028,6 +1028,7 @@ class StatementStore:
             sparse_ordered=run.sparse_ordered or None,
             body_imported=run.body_imported,
             env_reads=run.env_reads,
+            reference_states=run.reference_states,
             helper_memos=run.helper_memos,
             holders=run.holders or None,
             holders_moved=True if run.holders and run.moves_holders else None,

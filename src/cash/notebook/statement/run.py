@@ -258,6 +258,9 @@ class StatementRun:
     #: name -> digest of the environment variables installed code read while
     #: it ran (`env_reads.environment_digests`).
     env_reads: dict[str, str] | None = None
+    #: ``{recipe: digest}`` of the objects pickled by reference its inputs
+    #: held, before it ran (`reference_states.states`).
+    reference_states: dict[str, str] | None = None
     #: The ``functools`` memos of the user's it called, with what each held
     #: after it ran (`helper_memos.used`).
     helper_memos: list[dict] | None = None
