@@ -95,3 +95,44 @@ def test_a_cell_reading_it_by_a_string_gets_the_repaired_value(either):
     v2 = ["n, m = [5], [8]", *v1[1:]]
     _run(either, v2, 1)
     assert ns["seen"] == ([8], [5])
+
+
+UNSEEN = {
+    "callee_globals": ("def show():\n    return list(globals()['n'])", "seen = (list(m), show())"),
+    "callee_eval": ("def show():\n    return list(eval('n'))", "seen = (list(m), show())"),
+    "main_module": ("import __main__", "seen = (list(m), list(__main__.n))"),
+    "sys_modules": ("import sys", "seen = (list(m), list(sys.modules['__main__'].n))"),
+    "aliased_globals": ("g = globals", "seen = (list(m), list(g()['n']))"),
+    "frame_globals": ("import sys", "seen = (list(m), list(sys._getframe().f_globals['n']))"),
+}
+
+
+@pytest.mark.parametrize("case", sorted(UNSEEN))
+def test_a_name_a_cell_below_bound_is_not_put_back_for_any_read(either, case):
+    """However the cell reads ``n`` -- by a string in a function it calls,
+    through ``__main__``, ``sys.modules``, an alias of ``globals`` or a
+    frame -- it reads what a run from the top gives it: ``n`` bound below
+    is never put back for it."""
+    pre, cur = UNSEEN[case]
+    ns = either.shell.user_ns
+    v1 = [pre, "n, m = [1], [7]", cur, "n = [2]"]
+    _run(either, v1, 0, 1, 2, 3)
+    v2 = [pre, "n, m = [5], [8]", cur, "n = [2]"]
+    _run(either, v2, 2)
+    assert ns["seen"] == ([8], [5])
+
+
+@pytest.mark.parametrize("case", sorted(UNSEEN))
+def test_the_partner_rule_sees_each_read_as_unseen(magics, case):
+    """The rule that keeps a name a cell below bound out of a repair
+    (``MismatchClassifier._made_below``) asks the same question: each of
+    these cells may read a name it does not show."""
+    from cash.notebook.string_lookups import cell_reads_names_unseen
+
+    pre, cur = UNSEEN[case]
+    cells = [pre, "n, m = [1], [7]"]
+    _run(magics, cells, 0, 1)
+    state = magics.tracking_state
+    inputs = {"m", "show", "g", "sys", "__main__"} & set(magics.shell.user_ns)
+    assert cell_reads_names_unseen(cur, inputs, magics.shell.user_ns, state.variable_lineage)
+    assert not cell_reads_names_unseen("seen = list(m)", {"m"}, magics.shell.user_ns, state.variable_lineage)

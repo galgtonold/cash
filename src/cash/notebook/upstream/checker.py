@@ -102,26 +102,6 @@ def _binds_unconditionally(cell: str, code: str | None, name: str) -> bool:
     return False
 
 
-#: Calls through which a cell reads names its text does not show.
-_NAMESPACE_READERS = frozenset({"globals", "locals", "vars", "eval", "exec", "dir", "getattr"})
-
-
-def _reads_names_unseen(cell_code: str) -> bool:
-    """Whether *cell_code* may read a global by a name its text does not
-    show: through ``globals()``, ``vars()``, ``eval``/``exec``, an
-    attribute look-up by string, or a module's ``__dict__``; or does not
-    parse."""
-    tree = parse_cell_source(cell_code)
-    if tree is None:
-        return True
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in _NAMESPACE_READERS:
-            return True
-        if isinstance(node, ast.Attribute) and node.attr == "__dict__":
-            return True
-    return False
-
-
 def _notebook_statement_texts(notebook_cells: tuple[str, ...]) -> frozenset[str]:
     """Every statement of the notebook: asked on every cell run while an
     unsaved run is on record, so once per notebook version."""
@@ -850,12 +830,10 @@ class UpstreamChecker:
         bound_by: dict[str, str],
         sessions: dict[str, str],
         current_cell_idx: int,
-        required_inputs: set[str],
         notebook_cells: list[str],
-        cell_code: str,
     ) -> None:
         """Put back the live binding of each name the repair rebound from a
-        cell above the one whose run bound it last.
+        cell above the one whose run bound it last, itself above the cell.
 
         Restoring or re-running a statement binds every name it binds:
         ``X, y = make_moons(...)``, run again on the way to a ``voting_clf``,
@@ -867,41 +845,39 @@ class UpstreamChecker:
         repair (``bound_in_cell``). Put back with its lineage, its
         statement and its session digest.
 
-        A cell above the cell must still bind it as it did: the live lineage
-        is the one a run from the top has where the cell starts
-        (``simulated_lineage``).
+        Only where the live value is provably the one a run from the top
+        has where the cell starts, so that however the cell reads the name
+        (``globals()['n']`` in a function it calls, ``__main__.n``) it reads
+        what a run from the top gives it:
 
-        Not a name the cell reads that the cell itself or a cell below it
-        bound: a run from the top gives the cell what the repair gave it
-        (``b = b * 10`` run again reads ``b`` as the cell above made it).
+        - the statement that bound it stands, as it ran, at the top level
+          of that cell and binds the name unconditionally by its text
+          (`_binds_unconditionally`; ``if m[0] > 7: n = [2]`` may not bind
+          it next time);
+        - the live lineage is the one a run from the top has where the cell
+          starts (``simulated_lineage``).
 
-        Only where the binding provably happens again the same way: the
-        statement that bound it stands, as it ran, at the top level of that
-        cell and binds the name unconditionally by its text
-        (`_binds_unconditionally`). ``if m[0] > 7: n = [2]`` may not bind
-        ``n`` next time, and a run from the top then has the repaired one.
-        And, for a name a cell at or below the cell bound, only when the
-        cell cannot read it unseen (`_reads_names_unseen`: ``globals()['n']``).
-        A name not put back keeps what the repair gave it, and
-        NOTEBOOK-CHANGED-BELOW says so (`_warn_rebuilt_changed_below`).
+        Not a name the cell itself or a cell below it bound: a run from the
+        top gives the cell what the repair gave it (``b = b * 10`` run again
+        reads ``b`` as the cell above made it). Such a name keeps what the
+        repair gave it, and NOTEBOOK-CHANGED-BELOW says so
+        (`_warn_rebuilt_changed_below`); the partner rule keeps a name a
+        cell below bound out of a repair to begin with
+        (``MismatchClassifier._made_below``).
         """
         user_ns = self.shell.user_ns
         state = self.tracking_state
-        unseen = None
         for name, repaired_at in sorted(rebound.items()):
             at = cells.get(name)
-            if at is None or at <= repaired_at or not 0 <= at < len(notebook_cells):
+            if at is None or at <= repaired_at or not 0 <= at < current_cell_idx:
+                # Bound by the cell itself or one below it: a run from the
+                # top gives the cell what the repair gave it, and however the
+                # cell reads the name (``globals()['n']`` in a function it
+                # calls, ``__main__.n``), that is what it must read.
                 continue
-            if at >= current_cell_idx:
-                if name in required_inputs:
-                    continue
-                if unseen is None:
-                    unseen = _reads_names_unseen(cell_code)
-                if unseen:
-                    continue
             if not _binds_unconditionally(notebook_cells[at], bound_by.get(name), name):
                 continue
-            if at < current_cell_idx and state.simulated_lineage.get(name) != lineages.get(name):
+            if state.simulated_lineage.get(name) != lineages.get(name):
                 # The statement that bound it is no longer what the cell
                 # there says (``data = data + [4]`` commented out).
                 continue
@@ -1105,9 +1081,7 @@ class UpstreamChecker:
                 bound_by_before,
                 session_before,
                 current_cell_idx,
-                required_inputs,
                 notebook_cells,
-                cell_code,
             )
             self.rng.label_rerun_metrics(executed_metrics, rng_rerun)
             total_execution_time = self.replay.sum_execution_times(executed_metrics)
