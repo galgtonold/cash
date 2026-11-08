@@ -316,8 +316,8 @@ paths from the project root or pass absolute paths.
 - A result that can't be pickled is not stored
   ([`STORE-FAILED`](warnings.md#store-failed)), unless the function is
   `frozen=True`.
-<!-- claim: cash/decorator/runtime.py:CallRunner.arguments_left @ff3b9a75, cash/decorator/runtime.py:CallRunner._arguments_to_write @0d227488, cash/rewrite_in_place.py:refusal @cece1b9e -->
-<!-- claim: cash/decorator/runtime.py:CallRunner.arguments_before @2623e9e1, cash/decorator/arg_hashing.py:ContentKeyed.covers @4d5faf1a -->
+<!-- claim: cash/decorator/runtime.py:CallRunner.arguments_left @59138535, cash/decorator/runtime.py:CallRunner._arguments_to_write @b9fed6a4, cash/rewrite_in_place.py:refusal @cece1b9e -->
+<!-- claim: cash/decorator/runtime.py:CallRunner.arguments_before @39fead21, cash/decorator/arg_hashing.py:ContentKeyed.covers @4d5faf1a -->
 - A call that changed its argument in place is stored with the state it left
   the argument in when the argument is a NumPy array (not of objects), a
   pandas frame or Series whose index, columns and dtypes it kept (a Series of
@@ -335,7 +335,9 @@ paths from the project root or pass absolute paths.
   [registered hasher](tutorials/feature-guides/custom-hashers.md) for its
   type), the first call seen changing it is not stored: from then on, each
   miss fingerprints it before the body runs. A call keyed with `key=`, one whose
-  result shares memory with the argument (`return X[:2]`), and any other
+  result shares memory with the argument (`return X[:2]`), one whose changed
+  argument shares memory with another argument (`f(a, a[::-1])`) or with a
+  global the function reads, and any other
   argument (an object of your class, a list of lists, a frame given a new
   column) are not stored, so they run every time. Return a modified copy
   instead (`rows = sorted(rows)`).

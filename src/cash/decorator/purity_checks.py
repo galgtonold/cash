@@ -1470,9 +1470,7 @@ class PurityChecks:
             return True
         named = [(f"*args[{i}]", v) for i, v in enumerate(canon_args)] + list(canon_kwargs.items())
         hashed = {name for name, digest in (snapshot or {}).items() if digest}
-        return any(
-            name not in identities and name not in hashed and not _cannot_change(value) for name, value in named
-        )
+        return any(name not in identities and name not in hashed and not _cannot_change(value) for name, value in named)
 
     def _mutated_argument_names(self, func_name: str, args: tuple, kwargs: dict, observer: EffectObserver) -> list[str]:
         """The parameters whose value moved across the call, by name."""

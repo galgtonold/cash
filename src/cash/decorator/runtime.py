@@ -1528,9 +1528,45 @@ class CallRunner:
                 left[name] = (fingerprint, rewrite_in_place.snapshot(value, shape.arrays))
             except Exception:  # noqa: BLE001 - not copied: not stored
                 return None
+        shared = self._shared_with(spec.func, spec.name, [before[name][0] for name in left], arguments)
+        if shared is not None:
+            observer.reword(
+                "argument mutation",
+                " in place -- the result was not stored",
+                f" in place, and it shares memory with {shared}, which a hit writing it back would leave "
+                f"as no plain run does -- the result was not stored",
+            )
+            return None
         observer.mutated_args = None
         observer.forget("argument mutation")
         return left
+
+    def _shared_with(self, func: Callable, func_name: str, changed: list, arguments: tuple[tuple, dict]) -> str | None:
+        """What an argument in *changed*, the arguments the call changes in
+        place, shares memory with, if anything: another argument, or a
+        global or closure value *func* or a function it reaches may read
+        (`rewrite_in_place.values_read`). The key hashes each argument by
+        its content alone, so ``f(a, a[::-1])`` keys like ``f(a, b)`` with
+        ``b`` an equal, independent array while the body sees different
+        data, and a hit writing ``a`` back would not leave the view as a
+        plain run does. Neither is stored nor served from an entry.
+        Conservative: identity, one level of containment, or arrays whose
+        memory may overlap (`rewrite_in_place.shares_state`)."""
+        named = self._named_args(func_name, *arguments)
+        read = None
+        for value in changed:
+            itself = False
+            for other_name, other in named:
+                if other is value and not itself:
+                    itself = True  # the argument itself, once
+                    continue
+                if rewrite_in_place.shares_state(value, other):
+                    return f"the argument {other_name!r}"
+            if read is None:
+                read = rewrite_in_place.values_read(func)
+            if any(rewrite_in_place.shares_state(value, other) for other in read):
+                return "a value the function reads outside its arguments"
+        return None
 
     def _arguments_to_write(
         self,
@@ -1567,6 +1603,10 @@ class CallRunner:
             if why is not None:
                 return [], f"the state the call left {name!r} in cannot be written back: {why}"
             writes.append((live, state))
+        spec = self._registry.cached.get(func_name)
+        shared = self._shared_with(spec.func, func_name, [live for live, _ in writes], arguments) if spec else None
+        if shared is not None:
+            return [], f"an argument it changes in place shares memory with {shared}"
         return writes, None
 
     def _named_args(self, func_name: str, args: tuple, kwargs: dict) -> list[tuple[str, Any]]:
