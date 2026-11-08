@@ -316,7 +316,7 @@ paths from the project root or pass absolute paths.
 - A result that can't be pickled is not stored
   ([`STORE-FAILED`](warnings.md#store-failed)), unless the function is
   `frozen=True`.
-<!-- claim: cash/decorator/runtime.py:CallRunner.arguments_left @59138535, cash/decorator/runtime.py:CallRunner._arguments_to_write @b9fed6a4, cash/rewrite_in_place.py:refusal @cece1b9e -->
+<!-- claim: cash/decorator/runtime.py:CallRunner.arguments_left @f36bbc19, cash/decorator/runtime.py:CallRunner._arguments_to_write @0895402c, cash/rewrite_in_place.py:refusal @cece1b9e -->
 <!-- claim: cash/decorator/runtime.py:CallRunner.arguments_before @39fead21, cash/decorator/arg_hashing.py:ContentKeyed.covers @4d5faf1a -->
 - A call that changed its argument in place is stored with the state it left
   the argument in when the argument is a NumPy array (not of objects), a
@@ -336,8 +336,12 @@ paths from the project root or pass absolute paths.
   type), the first call seen changing it is not stored: from then on, each
   miss fingerprints it before the body runs. A call keyed with `key=`, one whose
   result shares memory with the argument (`return X[:2]`), one whose changed
-  argument shares memory with another argument (`f(a, a[::-1])`) or with a
-  global the function reads, and any other
+  argument is, is held by or shares memory with another argument
+  (`f(a, a[::-1])`, `f(a, {"v": a[:2]})`) or a value the code the call ran
+  reads (a global, read in a helper, a method or another module of yours),
+  one where cash cannot tell (the code looks names up by a string, as
+  `globals()["G"]` does, or the call is not recorded, as an `async`
+  function's is not), and any other
   argument (an object of your class, a list of lists, a frame given a new
   column) are not stored, so they run every time. Return a modified copy
   instead (`rows = sorted(rows)`).

@@ -182,6 +182,9 @@ class StoreRequest:
     #: changed in place (`CallRunner.arguments_left`): stored with the
     #: result, written back into the arguments on a hit.
     args_left: dict[str, tuple[Any, Any]] | None = None
+    #: What the code that call ran reads outside its arguments
+    #: (`argument_sharing.reads_of`), kept with them for a hit to check.
+    args_reads: tuple | None = None
 
 
 @dataclass
@@ -737,7 +740,7 @@ class ResultStore:
             meta_dict = meta.to_dict()
             if dynamic is not None:
                 self._store_sources(dynamic)
-            stored = ArgumentsLeft(result, request.args_left) if request.args_left else result
+            stored = ArgumentsLeft(result, request.args_left, request.args_reads) if request.args_left else result
             self._backend_slot.backend.set(cache_key, stored, meta_dict, serializer=serializer)
             call.stored_in = (
                 None

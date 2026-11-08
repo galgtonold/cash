@@ -12,9 +12,12 @@ or shares memory with, the argument it changes.
 
 from __future__ import annotations
 
+import functools
+import importlib
 import warnings
 
 import numpy as np
+import pytest
 
 
 def _view_sum(a, b):
@@ -84,3 +87,144 @@ def test_the_warning_says_the_call_runs_every_time(disk_cash):
     text = " ".join(str(w.message) for w in caught)
     assert "runs every time" in text, text
     assert "a hit writes it back" not in text, text
+
+
+# -- held deeper, or reached through other code --------------------------------
+
+
+def _first_held(a, held):
+    a[0] = 99.0
+    return float(np.asarray(_dig(held)).sum())
+
+
+def _dig(held):
+    while not isinstance(held, np.ndarray):
+        held = held["v"] if isinstance(held, dict) else held.v if hasattr(held, "v") else held[0]
+    return held
+
+
+class _Holder:
+    def __init__(self, v):
+        self.v = v
+
+
+HOLDINGS = {
+    "a dict value": lambda view: {"v": view},
+    "a tuple element": lambda view: (view,),
+    "two lists down": lambda view: [[view]],
+    "an attribute": _Holder,
+}
+
+
+@pytest.mark.parametrize("how", list(HOLDINGS))
+def test_a_view_held_inside_another_argument_is_seen(disk_cash, how):
+    """Stored from an independent pair, then handed a view of the changed
+    array inside the other argument: a plain run sums the changed view."""
+    wrap = HOLDINGS[how]
+    cached = disk_cash.cache(_first_held)
+    _quiet(cached, np.arange(4.0), wrap(np.arange(2.0)))
+    for _ in range(2):
+        a = np.arange(4.0)
+        plain_a = np.arange(4.0)
+        plain = _first_held(plain_a, wrap(plain_a[:2]))
+        assert _quiet(cached, a, wrap(a[:2])) == plain == 100.0
+
+
+G_STATIC = np.arange(4.0)
+G_METHOD = np.arange(4.0)
+G_LRU = np.arange(4.0)
+G_BY_NAME = np.arange(4.0)
+
+
+class _Reader:
+    @staticmethod
+    def static():
+        return float(G_STATIC.sum())
+
+    def method(self):
+        return float(G_METHOD.sum())
+
+
+_READER = _Reader()
+
+
+@functools.lru_cache
+def _lru():
+    return G_LRU
+
+
+def _via_static(a):
+    a[0] = 99.0
+    return _Reader.static()
+
+
+def _via_method(a):
+    a[0] = 99.0
+    return _READER.method()
+
+
+def _via_lru(a):
+    a[0] = 99.0
+    return float(_lru().sum())
+
+
+def _via_globals(a):
+    a[0] = 99.0
+    return float(globals()["G_BY_NAME"].sum())
+
+
+INDIRECT = {
+    "a staticmethod": (_via_static, G_STATIC),
+    "a method": (_via_method, G_METHOD),
+    "an lru_cache helper": (_via_lru, G_LRU),
+    "globals()": (_via_globals, G_BY_NAME),
+}
+
+
+def _stored_then_global(cached, body, global_array):
+    _quiet(cached, np.arange(4.0))
+    global_array[:] = np.arange(4.0)
+    plain = body(global_array)
+    global_array[:] = np.arange(4.0)
+    got = _quiet(cached, global_array)
+    global_array[:] = np.arange(4.0)
+    return got, plain
+
+
+@pytest.mark.parametrize("how", list(INDIRECT))
+def test_a_global_read_through_other_code_is_seen(disk_cash, how):
+    body, global_array = INDIRECT[how]
+    got, plain = _stored_then_global(disk_cash.cache(body), body, global_array)
+    assert got == plain == 105.0
+
+
+def test_a_global_of_another_module_is_seen(disk_cash, tmp_path, monkeypatch):
+    (tmp_path / "held_elsewhere.py").write_text(
+        "import numpy as np\nM = np.arange(4.0)\n\ndef total():\n    return float(M.sum())\n", encoding="utf-8"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    module = importlib.import_module("held_elsewhere")
+
+    def body(a):
+        a[0] = 99.0
+        return module.total()
+
+    got, plain = _stored_then_global(disk_cash.cache(body), body, module.M)
+    assert got == plain == 105.0
+
+
+def test_the_warning_names_the_parameter(disk_cash):
+    """``np.put`` changes ``a`` where reading the source does not see it,
+    so the warning is the one the run gives."""
+
+    def body(a, b):
+        np.put(a, 0, 99.0)
+        return float(b.sum())
+
+    cached = disk_cash.cache(body)
+    a = np.arange(4.0)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        cached(a, a[:2])
+    text = " ".join(str(w.message) for w in caught)
+    assert "shares memory with the argument 'b'" in text, text

@@ -99,6 +99,7 @@ class Call:
         "traced",
         "needs_trace",
         "trace_unit",
+        "ran_unit",
     )
 
     def __init__(self, args: tuple, kwargs: dict) -> None:
@@ -131,6 +132,9 @@ class Call:
         self.traced = False
         self.needs_trace = False
         self.trace_unit: Any = None
+        #: That record once the trace is built from it, for what the code
+        #: that ran reads (`argument_sharing.reads_of`).
+        self.ran_unit: Any = None
 
 
 class BodyRun:
@@ -151,6 +155,7 @@ class BodyRun:
         "rng_drew",
         "env_reads",
         "args_before",
+        "args_reads",
     )
 
 

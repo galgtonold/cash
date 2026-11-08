@@ -26,8 +26,6 @@ it was and the computation runs on it.
 from __future__ import annotations
 
 import sys
-import types
-from collections.abc import Callable
 from typing import Any, NamedTuple
 
 from cash._user_attrs import attribute_or
@@ -44,8 +42,6 @@ __all__ = [
     "mismatch",
     "refusal",
     "rewritable_kind",
-    "shares_state",
-    "values_read",
     "rewrite",
     "shape_change",
     "shape_of",
@@ -220,121 +216,6 @@ def column_arrays(frame: Any) -> tuple:
     return tuple(tokens)
 
 
-def _arrays_in(obj: Any) -> list:
-    """The NumPy arrays and extension arrays whose memory *obj* is: itself
-    for an array, its columns for a frame, its values for a Series."""
-    if _numpy_array(obj):
-        return [obj]
-    kind = _pandas_kind(obj)
-    if kind is None:
-        return []
-    np = sys.modules["numpy"]
-    # The manager's arrays are the blocks the columns are views of: the
-    # same memory, without a Series built per column.
-    blocks = attribute_or(attribute_or(obj, "_mgr", None), "arrays", None)
-    if not isinstance(blocks, list):
-        blocks = [obj.iloc[:, i].array for i in range(obj.shape[1])] if kind == "frame" else [obj.array]
-    return [np.asarray(values) if type(values).__name__ == "NumpyExtensionArray" else values for values in blocks]
-
-
-def shares_state(changed: Any, other: Any) -> bool:
-    """Whether *other*, another argument or a value the function reads, is
-    *changed* or holds it, or may share memory with it: a hit writing
-    *changed* back would leave *other* as no plain run does, and their
-    keys, taken from content alone, cannot tell a shared pair from two
-    equal ones. Errs toward sharing."""
-    if other is changed:
-        return True
-    kind = type(other)
-    if kind in (list, tuple, set, frozenset) or kind is dict:
-        try:
-            items = other.values() if kind is dict else other
-            if any(item is changed for item in items):
-                return True
-        except Exception:  # noqa: BLE001 - not readable: treated as sharing
-            return True
-    elif kind not in IMMUTABLE_LEAF_TYPES:
-        held = attribute_or(other, "__dict__", None)
-        if type(held) is dict and any(item is changed for item in held.values()):
-            return True
-    mine = _arrays_in(changed)
-    if not mine:
-        return False
-    theirs = _arrays_in(other)
-    if not theirs:
-        return False
-    np = sys.modules["numpy"]
-    for a in mine:
-        for b in theirs:
-            if a is b:
-                return True
-            if isinstance(a, np.ndarray) and isinstance(b, np.ndarray) and np.may_share_memory(a, b):
-                return True
-    return False
-
-
-def values_read(func: Callable, limit: int = 200) -> list:
-    """The global and closure values *func* may read, and those of the
-    functions in the user's own code it reaches the same way: what an argument the call
-    changes in place may share memory with without being another argument.
-    From ``co_names``, which also holds attribute names: a name that is no
-    global is skipped, one that is reads as read. At most *limit*
-    functions are walked."""
-    from cash._paths import is_pseudo_filename
-    from cash.install_paths import is_user_path
-
-    found: list = []
-    seen_values: set[int] = set()
-    seen: set[int] = set()
-    pending = [func]
-    while pending and len(seen) < limit:
-        current = pending.pop()
-        if id(current) in seen:
-            continue
-        wrapped = attribute_or(current, "__wrapped__", None)
-        if wrapped is not None:
-            # A decorated helper (a cached one among them): its own code
-            # is the decorator's, what it reads is the wrapped function's.
-            seen.add(id(current))
-            pending.append(wrapped)
-            continue
-        code = getattr(current, "__code__", None)
-        if code is None:
-            continue
-        seen.add(id(current))
-        filename = code.co_filename or ""
-        if current is not func and not (is_pseudo_filename(filename) or is_user_path(filename)):
-            continue  # a library's function reads its library's globals
-        namespace = getattr(current, "__globals__", None) or {}
-        values = [namespace[name] for name in _names_in(code) if name in namespace]
-        values += [cell.cell_contents for cell in (getattr(current, "__closure__", None) or ()) if _filled(cell)]
-        for value in values:
-            if isinstance(value, types.FunctionType):
-                pending.append(value)
-            elif isinstance(value, (types.ModuleType, type)) or id(value) in seen_values:
-                continue
-            else:
-                seen_values.add(id(value))
-                found.append(value)
-    return found
-
-
-def _names_in(code: types.CodeType) -> set[str]:
-    names = set(code.co_names)
-    for const in code.co_consts:
-        if isinstance(const, types.CodeType):
-            names |= _names_in(const)
-    return names
-
-
-def _filled(cell: Any) -> bool:
-    try:
-        cell.cell_contents  # an empty cell raises
-    except ValueError:
-        return False
-    return True
-
-
 class FrameState(NamedTuple):
     """A frame's state after a call, and the *replaced* positions of the
     columns the call gave a new array (``df["a"] = df["a"] + 1``); it wrote
@@ -449,11 +330,15 @@ class ArgumentsLeft:
     hit writes each state into the argument the caller handed in, while
     that argument is in the state *before* names."""
 
-    __slots__ = ("result", "states")
+    __slots__ = ("reads", "result", "states")
 
-    def __init__(self, result: Any, states: dict[str, tuple[str, Any]]) -> None:
+    def __init__(self, result: Any, states: dict[str, tuple[str, Any]], reads: tuple | None = None) -> None:
         self.result = result
         self.states = states
+        #: What the code the call ran reads outside its arguments
+        #: (`argument_sharing.reads_of`): a hit checks the arguments it
+        #: writes share nothing with it. None: not known, so not served.
+        self.reads = reads
 
     def __reduce__(self) -> tuple:
-        return (ArgumentsLeft, (self.result, self.states))
+        return (ArgumentsLeft, (self.result, self.states, self.reads))

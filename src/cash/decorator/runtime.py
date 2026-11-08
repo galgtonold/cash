@@ -19,7 +19,7 @@ import weakref
 from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any, NamedTuple
 
-from .. import rewrite_in_place
+from .. import argument_sharing, rewrite_in_place
 from .._active import EXPLAINING as _EXPLAINING
 from .._clock import perf_counter as _perf_counter
 from ..analysis.handed_callables import hands_a_state_changing_callable
@@ -1487,14 +1487,21 @@ class CallRunner:
         return before
 
     def arguments_left(
-        self, spec: CachedFunction, run: BodyRun, arguments: tuple[tuple, dict]
+        self, spec: CachedFunction, run: BodyRun, arguments: tuple[tuple, dict], ran: Any = None
     ) -> dict[str, tuple[Any, Any]] | None:
         """``{parameter: (before, state after)}`` when the body changed
         arguments in place and every one of them can be written back by a
         hit (`arguments_before`): the result is then stored with them, and
         the change no longer refuses the store; the warning says what a hit
         does instead once it is stored (`CallRunner.finish_miss`). None
-        otherwise, and the refusal stands."""
+        otherwise, and the refusal stands.
+
+        Nor when an argument it changed shares state with anything else the
+        call sees, or cash cannot tell whether it does (`_shared_with`):
+        *ran* is the record of the code the body ran, whose reads
+        (`argument_sharing.reads_of`) are kept in ``run.args_reads`` for
+        a hit to check again."""
+        run.args_reads = None
         observer = run.observer
         mutated = observer.mutated_args if observer is not None else None
         if not mutated:
@@ -1529,15 +1536,24 @@ class CallRunner:
                 left[name] = (fingerprint, rewrite_in_place.snapshot(value, shape.arrays))
             except Exception:  # noqa: BLE001 - not copied: not stored
                 return None
-        shared = self._shared_with(spec.func, spec.name, [before[name][0] for name in left], arguments)
+        try:
+            reads = argument_sharing.reads_of(ran, spec.func)
+            shared = self._shared_with(spec.func, [(name, before[name][0]) for name in left], arguments, reads)
+            if shared is not None:
+                shared = (
+                    f", and it shares memory with {shared}, which a hit writing it back would leave as no plain "
+                    f"run does"
+                )
+        except argument_sharing.Unknown as why:
+            shared = f", and cash cannot tell whether it shares memory with what else the call sees: {why}"
         if shared is not None:
             observer.reword(
                 "argument mutation",
                 " in place -- the result was not stored",
-                f" in place, and it shares memory with {shared}, which a hit writing it back would leave "
-                f"as no plain run does -- the result was not stored",
+                f" in place{shared} -- the result was not stored",
             )
             return None
+        run.args_reads = reads
         observer.mutated_args = None
         observer.forget("argument mutation")
         return left
@@ -1557,32 +1573,49 @@ class CallRunner:
             if not rewrite_in_place.rewritable_kind(value) or rewrite_in_place.refusal(value) is not None
         ]
 
-    def _shared_with(self, func: Callable, func_name: str, changed: list, arguments: tuple[tuple, dict]) -> str | None:
-        """What an argument in *changed*, the arguments the call changes in
-        place, shares memory with, if anything: another argument, or a
-        global or closure value *func* or a function it reaches may read
-        (`rewrite_in_place.values_read`). The key hashes each argument by
-        its content alone, so ``f(a, a[::-1])`` keys like ``f(a, b)`` with
-        ``b`` an equal, independent array while the body sees different
-        data, and a hit writing ``a`` back would not leave the view as a
-        plain run does. Neither is stored nor served from an entry.
-        Conservative: identity, one level of containment, or arrays whose
-        memory may overlap (`rewrite_in_place.shares_state`)."""
-        named = self._named_args(func_name, *arguments)
-        read = None
-        for value in changed:
+    def _shared_with(
+        self, func: Callable, changed: list[tuple[str, Any]], arguments: tuple[tuple, dict], reads: tuple
+    ) -> str | None:
+        """What an argument in *changed*, ``(parameter, value)`` of those
+        the call changes in place, is, is held by, or shares memory with,
+        if anything: another argument, by its parameter's name, or a value
+        the code the call ran reads (*reads*, `argument_sharing.reads_of`).
+        The key hashes each argument by its content alone, so ``f(a,
+        a[::-1])`` keys like ``f(a, b)`` with ``b`` an equal, independent
+        array while the body sees different data, and a hit writing ``a``
+        back would not leave the view as a plain run does. Exact, or
+        `argument_sharing.Unknown` says why it cannot be."""
+        bound = self._bound_arguments(func, arguments)
+        values = None
+        for name, value in changed:
+            targets = argument_sharing.Targets(value)
             itself = False
-            for other_name, other in named:
-                if other is value and not itself:
+            for other_name, other in bound:
+                if other is value and not itself and other_name in (name, None):
                     itself = True  # the argument itself, once
                     continue
-                if rewrite_in_place.shares_state(value, other):
-                    return f"the argument {other_name!r}"
-            if read is None:
-                read = rewrite_in_place.values_read(func)
-            if any(rewrite_in_place.shares_state(value, other) for other in read):
-                return "a value the function reads outside its arguments"
+                if other_name == name and isinstance(other, tuple) and any(item is value for item in other):
+                    # Its own ``*args``: the others in it are looked at.
+                    other = tuple(item for item in other if item is not value)
+                if argument_sharing.shared_in(targets, other):
+                    return f"the argument {other_name!r}" if other_name else "another argument"
+            if values is None:
+                values = list(argument_sharing.read_values(reads, func))
+            for what, other in values:
+                if argument_sharing.shared_in(targets, other):
+                    return what
         return None
+
+    @staticmethod
+    def _bound_arguments(func: Callable, arguments: tuple[tuple, dict]) -> list[tuple[str | None, Any]]:
+        """``(parameter, value)`` of each argument as the signature binds
+        it (``*args`` as one tuple); ``(None, value)`` each when it does not
+        bind."""
+        args, kwargs = arguments
+        try:
+            return list(inspect.signature(func).bind(*args, **kwargs).arguments.items())
+        except (TypeError, ValueError):
+            return [(None, value) for value in (*args, *kwargs.values())]
 
     def _arguments_to_write(
         self,
@@ -1620,7 +1653,13 @@ class CallRunner:
                 return [], f"the state the call left {name!r} in cannot be written back: {why}"
             writes.append((live, state))
         spec = self._registry.cached.get(func_name)
-        shared = self._shared_with(spec.func, func_name, [live for live, _ in writes], arguments) if spec else None
+        if spec is None or left.reads is None:
+            return [], "the entry does not say what the call it was stored from read"
+        live_named = [(name, named[name]) for name in left.states]
+        try:
+            shared = self._shared_with(spec.func, live_named, arguments, left.reads)
+        except argument_sharing.Unknown as why:
+            return [], f"cash cannot tell whether an argument it changes in place shares memory: {why}"
         if shared is not None:
             return [], f"an argument it changes in place shares memory with {shared}"
         return writes, None
@@ -1776,7 +1815,7 @@ class CallRunner:
             self._purity.check_argument_mutation(
                 func_name, *(call.checked or (args, kwargs)), call.call_args_hash, run.observer
             )
-        args_left = self.arguments_left(spec, run, call.checked or (args, kwargs))
+        args_left = self.arguments_left(spec, run, call.checked or (args, kwargs), call.ran_unit)
         self._files.credit_remembered_reads(func_name, run.tracker, args, kwargs)
         self._files.warn_unrecorded_reads(func_name, run.tracker)
         auto_file_deps = snapshot_tracked_deps(run.tracker, func.__module__)
@@ -1856,6 +1895,7 @@ class CallRunner:
                     env_reads=environment_digests(run.env_reads) if run.env_reads else None,
                     shared_result=shared,
                     args_left=args_left,
+                    args_reads=run.args_reads,
                 ),
                 res,
             )
@@ -1885,6 +1925,7 @@ class CallRunner:
         if not call.traced:
             return None, ""
         unit, call.trace_unit = call.trace_unit, None
+        call.ran_unit = unit
         if unit is None:
             return None, "no sys.monitoring tool id was free to record what it ran"
         # What the key covers: the function, the cached functions it calls
