@@ -34,8 +34,11 @@ from cash.value_types import IMMUTABLE_LEAF_TYPES
 __all__ = [
     "WRITTEN_BACK",
     "ArgumentsLeft",
+    "FrameState",
     "KeyedBefore",
     "Shape",
+    "before_call",
+    "column_arrays",
     "mismatch",
     "refusal",
     "rewritable_kind",
@@ -149,11 +152,22 @@ class Shape:
     and dtype, a frame's or Series' axes, dtypes, name, attrs and flags
     (`shape_of`). A list, dict or set has none."""
 
-    __slots__ = ("kind", "parts")
+    __slots__ = ("arrays", "kind", "parts")
 
     def __init__(self, kind: type, parts: tuple) -> None:
         self.kind = kind
         self.parts = parts
+        #: A frame's `column_arrays`, when taken (`before_call`).
+        self.arrays: tuple | None = None
+
+
+def before_call(obj: Any) -> Shape:
+    """*obj*'s `Shape` before a call that may change it, with a frame's
+    `column_arrays`, which `snapshot` compares after it."""
+    shape = shape_of(obj)
+    if _pandas_kind(obj) == "frame":
+        shape.arrays = column_arrays(obj)
+    return shape
 
 
 def shape_of(obj: Any) -> Shape:
@@ -167,6 +181,34 @@ def shape_of(obj: Any) -> Shape:
     if _pandas_kind(obj) == "frame":
         return Shape(type(obj), (obj.columns, obj.index, tuple(obj.dtypes), dict(obj.attrs), flags))
     return Shape(type(obj), (obj.index, obj.dtype, obj.name, dict(obj.attrs), flags))
+
+
+def column_arrays(frame: Any) -> tuple:
+    """Which array holds each column of *frame*: a NumPy column's memory
+    (address and strides), an extension column's array object. A column
+    whose entry differs after a call was given a new array; the others
+    were written into (`snapshot`)."""
+    np = sys.modules["numpy"]
+    tokens = []
+    for position in range(frame.shape[1]):
+        values = frame.iloc[:, position].array
+        if type(values).__name__ == "NumpyExtensionArray":
+            held = np.asarray(values)
+            tokens.append((held.__array_interface__["data"][0], held.strides))
+        else:
+            tokens.append(id(values))
+    return tuple(tokens)
+
+
+class FrameState(NamedTuple):
+    """A frame's state after a call, and the *replaced* positions of the
+    columns the call gave a new array (``df["a"] = df["a"] + 1``); it wrote
+    into the others (``df.loc[0, "a"] = 5``). A hit does the same, so a
+    name for a column's array (``h = df["a"].array``) sees the write as it
+    does in a plain run, or keeps the old array as it does there."""
+
+    frame: Any
+    replaced: tuple[int, ...]
 
 
 def _same(a: Any, b: Any) -> bool:
@@ -199,6 +241,8 @@ def shape_change(before: Shape, after: Any) -> str | None:
 def mismatch(live: Any, stored: Any) -> str | None:
     """Why *stored* cannot be written into *live*, or None when `rewrite`
     can write it without failing halfway."""
+    if isinstance(stored, FrameState):
+        stored = stored.frame
     if type(live) is not type(stored):
         return f"it is bound to a {type(live).__name__}, not a {type(stored).__name__}"
     why = refusal(live) or refusal(stored)
@@ -222,18 +266,36 @@ def rewrite(live: Any, stored: Any) -> None:
     elif _numpy_array(live):
         sys.modules["numpy"].copyto(live, stored, casting="no")
     elif _pandas_kind(live) == "frame":
-        for position in range(stored.shape[1]):
+        replaced = range(stored.shape[1]) if not isinstance(stored, FrameState) else stored.replaced
+        frame = stored.frame if isinstance(stored, FrameState) else stored
+        for position in range(frame.shape[1]):
             # The stored column's own array, so its dtype comes with it and
-            # nothing is aligned on labels.
-            live.isetitem(position, stored.iloc[:, position].array.copy())
+            # nothing is aligned on labels: as a new array where the call
+            # gave the column one, else written into the column's array.
+            values = frame.iloc[:, position].array.copy()
+            if position in replaced:
+                live.isetitem(position, values)
+            else:
+                live.iloc[:, position] = values
     else:
         live.iloc[:] = stored.to_numpy(copy=True)
 
 
-def snapshot(obj: Any) -> Any:
-    """A copy of *obj*'s state that nothing else holds, for an entry to keep."""
+def snapshot(obj: Any, arrays: tuple | None = None) -> Any:
+    """A copy of *obj*'s state that nothing else holds, for an entry to
+    keep. A frame's comes as a `FrameState`, whose replaced columns are
+    those whose array differs from *arrays*, its `column_arrays` before the
+    call (all of them when that was not taken)."""
     if type(obj) in _CONTAINERS:
         return type(obj)(obj)
+    if _pandas_kind(obj) == "frame":
+        now = column_arrays(obj)
+        replaced = tuple(
+            position
+            for position, token in enumerate(now)
+            if arrays is None or position >= len(arrays) or arrays[position] != token
+        )
+        return FrameState(obj.copy(), replaced)
     return obj.copy()
 
 

@@ -1469,7 +1469,7 @@ class CallRunner:
                 try:
                     before[name] = (
                         value,
-                        rewrite_in_place.shape_of(value),
+                        rewrite_in_place.before_call(value),
                         rewrite_in_place.KeyedBefore(call.args_hash),
                     )
                 except Exception:  # noqa: BLE001 - no shape: not stored with the result
@@ -1478,7 +1478,7 @@ class CallRunner:
             if not spec.changes_arguments or rewrite_in_place.refusal(value) is not None:
                 continue
             try:
-                shape = rewrite_in_place.shape_of(value)
+                shape = rewrite_in_place.before_call(value)
                 fingerprint = mutation_fingerprint(value)
             except Exception:  # noqa: BLE001 - not fingerprinted: not stored with the result
                 continue
@@ -1525,7 +1525,7 @@ class CallRunner:
             if rewrite_in_place.refusal(value) is not None or rewrite_in_place.shape_change(shape, value) is not None:
                 return None
             try:
-                left[name] = (fingerprint, rewrite_in_place.snapshot(value))
+                left[name] = (fingerprint, rewrite_in_place.snapshot(value, shape.arrays))
             except Exception:  # noqa: BLE001 - not copied: not stored
                 return None
         observer.mutated_args = None
