@@ -3,8 +3,8 @@
 Under the inline backend a plot ends where it began, with no figure open: it
 leaves only what it showed. Run again with the same code and inputs, cash
 shows that output and skips the drawing; the figure is then not live, so a
-plot whose figure a later cell reads is drawn again, and one that writes a
-file or reads its data from one still runs every time.
+plot that binds it (``fig, ax = plt.subplots()``) is drawn every time, as is
+one that writes a file or reads its data from one.
 
 Each drawing helper counts its calls with an ``os.open`` append, waived with
 ``# @cash:assume-safe`` (see the agent instructions): a hit cannot restore it.
@@ -115,7 +115,7 @@ def test_a_plot_whose_input_changed_is_drawn_again(nb_runner, tmp_path):
 def test_a_figure_drawn_to_the_end_of_the_cell_shows_after_its_value(nb_runner, tmp_path):
     """No ``plt.show()``: the inline backend shows the figure after the
     cell's value; served, it comes in the same place."""
-    plot = "fig, ax = plt.subplots()\nax.plot(*points(N))\nax.set_title('squares')"
+    plot = "plt.plot(*points(N))\nN * 2"
     log = _notebook(nb_runner, tmp_path, "N = 10", plot)
     nb_runner.run_all()
     first = nb_runner.get_cell(4)
@@ -128,16 +128,18 @@ def test_a_figure_drawn_to_the_end_of_the_cell_shows_after_its_value(nb_runner, 
     assert _images(again) == _images(first)
 
 
-def test_a_later_cell_reading_the_figure_has_it_drawn(nb_runner, tmp_path):
+def test_a_plot_binding_its_figure_is_drawn_every_time(nb_runner, tmp_path):
+    """Served, ``fig`` and ``ax`` would be unbound: a cell run later, in the
+    notebook or not yet, reads them as plain Python has them."""
     out = tmp_path / "fig.png"
     log = _notebook(nb_runner, tmp_path, "N = 10", "fig, ax = plt.subplots()\nax.plot(*points(N))")
     nb_runner.run_all()
     nb_runner.run_all()
-    assert _calls(log) == 1, "control: with nothing reading the figure, the plot is served"
+    assert _calls(log) == 2, "a plot binding fig and ax was served, leaving them unbound"
 
     nb_runner.add_cell(f"fig.savefig(r'{out}')", save=True)
     nb_runner.run_all()
-    assert _calls(log) == 2, "a plot whose figure a later cell saves was served, leaving no live figure"
+    assert _calls(log) == 3
     assert out.exists()
     assert "Error" not in nb_runner.get_output(5)
 
@@ -171,7 +173,7 @@ def test_a_plot_that_saves_a_file_runs_every_time(nb_runner, tmp_path):
 
 def test_a_pandas_plot_is_shown_again_without_running(nb_runner, tmp_path):
     pytest.importorskip("pandas")
-    cell = "import pandas as pd\npd.Series(points(N)[1]).plot(kind='barh')"
+    cell = "import pandas as pd\npd.Series(points(N)[1]).plot(kind='barh')\nplt.show()"
     log = _notebook(nb_runner, tmp_path, "N = 5", cell)
     nb_runner.run_all()
     first = _images(nb_runner.get_cell(4))

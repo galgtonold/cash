@@ -10,10 +10,14 @@ output in place of running them.
 from __future__ import annotations
 
 import ast
+import hashlib
+import io
 import logging
+import pickle
 import re
 import sys
-from collections.abc import Callable
+import types
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -31,7 +35,6 @@ from ..cache_status import CacheStatus
 from ..plot_outputs import (
     PLOT_FACTS,
     PLOT_RECORD_CAP,
-    StoredEcho,
     figure_settings_digest,
     first_read_after,
     inline_backend_closes_figures,
@@ -70,8 +73,27 @@ _LOG = "[PLOT]"
 _EMPTY = (None, ())
 
 #: The version of what a kept plot run holds: one without it carries no
-#: random streams or memos, which a run of it may have moved or filled.
-_FORMAT = 2
+#: random streams or memos, which a run of it may have moved or filled,
+#: and is not one of the runs its statements' record lists (`_condition`),
+#: or keeps what its last line echoed as text, not as the value, or may
+#: have unbound a name or bound ``_`` itself.
+_FORMAT = 6
+
+
+def _condition(env: dict, rng_reads: dict, memo_records: list) -> str:
+    """What decides where a kept run of a plot run's statements can stand
+    in for a run: the environment variables it read, the random streams it
+    drew from, and what it found in the helper memos it called.
+
+    The same statements may run under several: a tutorial calls
+    ``run(tsp, random_cities(10))`` again further down, where the memo
+    already holds the cities the first call computed. Kept as one, each
+    place's run replaced the other's, and neither place was ever served.
+    So each condition's run is an entry of its own, and the statements'
+    record (its key without a condition) lists them, most recently used
+    first."""
+    text = repr((sorted(env.items()), sorted(rng_reads.items()), memo_records))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _changes_its_own(reason: str, bound: set[str]) -> bool:
@@ -120,6 +142,15 @@ class _Open:
     rng_read: set[str] = field(default_factory=set)
     #: The streams a statement of the run seeded before drawing from them.
     rng_placed: set[str] = field(default_factory=set)
+    #: The counters of the memos `helper_memos` does not find, as it began.
+    hidden: dict = field(default_factory=dict)
+    #: The values bound in the notebook's namespace as it began, by name:
+    #: their ``id``, which a helper binding a name through ``__main__``
+    #: changes without naming it.
+    names: dict[str, int] = field(default_factory=dict)
+    #: Whether `hidden` was read after a look through every object
+    #: (`helper_memos.hidden_scan`): a memo not in it was built by the run.
+    fresh: bool = False
 
 
 class PlotRuns:
@@ -133,8 +164,25 @@ class PlotRuns:
         #: What a served plot run still does once it takes its place
         #: (`take_place`): the outputs shown after the cell, and the names
         #: its run bound, to drop.
-        self._pending: tuple[list | None, frozenset[str]] | None = None
+        self._pending: tuple[list | None, frozenset[str], dict[str, Any]] | None = None
+        #: ``(key of its record, condition)`` of the run being served:
+        #: noted as served once it takes its place (`_used_first`).
+        self._promote: tuple[str, str] | None = None
+        #: ``key of a record -> {condition: when}`` of the runs served in
+        #: this session, which the next keep lists first (`_note_variant`):
+        #: no write per hit, which a remote tier pays a round trip for.
+        self._served_last: dict[str, dict[str, int]] = {}
+        self._serves = 0
         self._cell: Any = None
+        #: ``(cell text, statement)`` where a plot run that drew began in
+        #: this session: a run beginning there again first looks through
+        #: every object for the memos cash does not find (`before`).
+        self._draw_starts: set[tuple[str, int]] = set()
+        #: The names a plot run bound or unbound in this session without its
+        #: text binding them (a helper setting ``__main__.zz``). Bound again
+        #: to the very object it holds, a name does not change, and a run
+        #: would seem to leave it alone: while one is bound, none is kept.
+        self._bound_unseen: set[str] = set()
         self._parsed: dict[str, list[tuple[str, ast.stmt | None]]] = {}
 
     # -- the cell ----------------------------------------------------------
@@ -165,6 +213,27 @@ class PlotRuns:
         self._adopt_unseen_seeds()
         lineage = dict(self._processor.tracking_state.variable_lineage)
         self._open = _Open(index, occurrence, settings, lineage, _perf_counter())
+        self._open.names = {name: id(value) for name, value in self.shell.user_ns.items()}
+        try:
+            if self._start_key(index) in self._draw_starts:
+                # Where a plot drew before: the memos it may empty are read
+                # now, so one emptied by it does not pass for one never
+                # called (`hidden_moved`). One look through every object
+                # per such run, not per statement.
+                self._open.hidden = helper_memos.hidden_scan(self.shell.user_ns)
+                self._open.fresh = True
+            else:
+                self._open.hidden = helper_memos.hidden_counters()
+        except Exception:
+            logger.debug("%s could not read the memos cash does not find", _LOG, exc_info=True)
+
+    def _start_key(self, index: int) -> tuple[str, int]:
+        return (str(attribute_or(self._cell, "raw_cell", None) or ""), index)
+
+    def _note_drew(self, run: _Open) -> None:
+        if len(self._draw_starts) > 4096:
+            self._draw_starts.clear()
+        self._draw_starts.add(self._start_key(run.start))
 
     def after(self, index: int, code: str, display: str | None, rows: list[ProcessResult]) -> None:
         """Statement *index* (*code*) ran, reporting *rows*."""
@@ -173,6 +242,13 @@ class PlotRuns:
         if run is None:
             return
         run.codes.append(code)
+        # What it may bind, read from its text: the rows of a loop's passes
+        # name no loop variable, and a branch not taken binds nothing now.
+        binds = _statement_binds(code)
+        if binds is None:
+            run.refused = f"cash could not read what {code[:40]!r} binds"
+        else:
+            run.bound |= binds
         parts = []
         seconds = 0.0
         rng_state: dict = {}
@@ -227,6 +303,7 @@ class PlotRuns:
             return
         self._open = None
         if run.drew:
+            self._note_drew(run)
             self._keep(run, flush=None)
         elif run.start != index:
             logger.debug("%s statements %d-%d drew nothing pyplot shows", _LOG, run.start, index)
@@ -237,6 +314,8 @@ class PlotRuns:
         run, self._open = self._open, None
         if run is None:
             return
+        if run.drew:
+            self._note_drew(run)
         if not run.drew or run.refused is not None or not inline_backend_closes_figures():
             logger.debug("%s open at the end of the cell, not kept: %s", _LOG, run.refused or "drew nothing")
             return
@@ -288,6 +367,30 @@ class PlotRuns:
         if figure_settings_digest(self.shell) != run.settings:
             logger.debug("%s not kept: it changed matplotlib's settings", _LOG)
             return
+        modules = _bound_modules(run.bound, self.shell.user_ns)
+        if run.bound - set(modules):
+            # Served, it would draw nothing and so have no figure, axes or
+            # value to bind them to: a cell run later, in the notebook or
+            # not, would find them unbound where plain Python has them. A
+            # module it imported is bound again to the module (`take_place`).
+            # ``_ = plt.plot(...)`` too: IPython's history then leaves the
+            # user's ``_`` alone, and served, it would hold an older echo.
+            names = ", ".join(sorted(run.bound - set(modules)))
+            logger.debug("%s not kept: it binds %s", _LOG, names)
+            return
+        changed = _names_changed(run.names, self.shell.user_ns, set(modules))
+        if changed:
+            # ``del tmp``, or a helper binding ``__main__.zz``: served, the
+            # names would stay as they were.
+            self._bound_unseen |= changed - run.bound
+            logger.debug("%s not kept: it binds or unbinds %s", _LOG, ", ".join(sorted(changed)))
+            return
+        again = self._bound_unseen & run.names.keys()
+        if again:
+            # A run binding one of them to the object it held would not show:
+            # after a restart, served, it would be left unbound.
+            logger.debug("%s not kept: %s was bound by a plot's helper", _LOG, ", ".join(sorted(again)))
+            return
         code = "\n".join(run.codes)
         inputs = self._inputs(code)
         if inputs is None or inputs & run.bound:
@@ -307,42 +410,110 @@ class PlotRuns:
             return
         echo = None
         if run.echo is not None:
-            echo = self._format_echo(run.echo)
+            # Kept as the value, which a hit shows and binds to ``_`` and
+            # ``Out`` as a run does; one holding a figure, axes or other
+            # artist of matplotlib's cannot be, and the run is not kept.
+            echo = _echo_bytes(run.echo)
             if echo is None:
+                logger.debug("%s not kept: what its last line echoed cannot be kept", _LOG)
                 return
         size = sum(record_size(p[2]) + len(p[0]) + len(p[1]) for s in run.statements for p in s["parts"])
-        size += record_size(flush or ())
+        size += record_size(flush or ()) + len(echo or b"")
         if size > PLOT_RECORD_CAP:
             return
-        key = self._key(code, inputs, run.occurrence, run.settings)
-        if key is None:
+        variants_key = self._key(code, inputs, run.occurrence, run.settings)
+        if variants_key is None:
+            return
+        try:
+            hidden = helper_memos.hidden_moved(run.hidden, self.shell.user_ns, fresh=run.fresh)
+        except Exception:  # noqa: BLE001 - not known to call none: not kept
+            hidden = "?"
+        if hidden is not None:
+            # What it left in that memo is in no record: served, the memo
+            # stays as it was, and a later call computes (prints, seeds a
+            # stream) where a run finds the answer.
+            logger.debug("%s not kept: it may call the memo %s, which cash cannot find", _LOG, hidden)
             return
         backend = self._backend()
         if backend is None:
             return
-        bound = sorted(run.bound | (_HISTORY_NAMES if echo is not None else set()))
+        memo_records = [[records for records, _changes in stored["memos"]] for stored in run.statements]
+        condition = _condition(run.env, rng_reads, memo_records)
+        key = self._key(code, inputs, run.occurrence, run.settings, condition)
+        if key is None:
+            return
         payload = {"statements": run.statements, "flush": flush, "echo": echo}
         metadata = {
             "plot_outputs": True,
             "ttl": attribute_or(self._cell, "ttl", None),
             "execution_time": seconds,
             "size": size,
-            "bound": bound,
+            "bound": sorted(run.bound | (_HISTORY_NAMES if echo is not None else set())),
             "env": run.env,
             "force_persist": bool(self._processor.persist_all),
             "rng_reads": rng_reads,
+            "memo_records": memo_records,
+            "modules": modules,
+            "flushes": flush is not None,
+            "echoes": echo is not None,
             "plot_format": _FORMAT,
         }
         backend.set(key, payload, metadata)
+        kept = self._note_variant(
+            backend,
+            variants_key,
+            condition,
+            size,
+            lambda c: self._key(code, inputs, run.occurrence, run.settings, c),
+            self._served_last.get(variants_key),
+        )
         self._note_shape(backend, run.codes, run.occurrence)
         logger.debug(
-            "%s kept %d statement(s) under %s (inputs %s, settings %s)",
+            "%s kept %d statement(s) under %s (inputs %s, settings %s, %d condition(s))",
             _LOG,
             len(run.codes),
             key[:24],
             sorted(inputs),
             run.settings[:12],
+            kept,
         )
+
+    @staticmethod
+    def _note_variant(
+        backend: Any,
+        variants_key: str,
+        condition: str,
+        size: int,
+        key_of: Callable[[str], str | None],
+        served: Mapping[str, int] | None = None,
+    ) -> int:
+        """List *condition*, the run just kept (of *size*), first in the
+        statements' record at *variants_key*, and drop from it the runs
+        that can no longer be served: those no tier holds any more, and the
+        least recently used ones the size a plot run may show leaves no
+        room for. *served*: ``condition -> when`` of the runs served in
+        this session (`_used_first`), listed before the others, the latest
+        first. Gives how many it lists."""
+        listed = _listed_variants(backend, variants_key)
+        if served:
+            order = {entry[0]: k for k, entry in enumerate(listed)}
+            listed.sort(key=lambda entry: (-served.get(entry[0], -1), order[entry[0]]))
+        kept: list[list] = [[condition, size]]
+        total = size
+        for other, other_size in listed:
+            if other == condition:
+                continue
+            other_key = key_of(other)
+            if other_key is None or backend.peek_metadata(other_key) is None:
+                continue
+            if total + other_size > PLOT_RECORD_CAP:
+                # Too big beside the newer ones; a smaller older one may fit.
+                _drop(backend, other_key)
+                continue
+            total += other_size
+            kept.append([other, other_size])
+        backend.set_metadata_only(variants_key, {"plot_variants": True, "variants": kept, "ttl": None})
+        return len(kept)
 
     # -- serving -----------------------------------------------------------
 
@@ -403,35 +574,49 @@ class PlotRuns:
         lineage = self._processor.tracking_state.variable_lineage
         if inputs is None or has_missing_lineage(inputs, self.shell.user_ns, lineage):
             return None
-        key = self._key(code, inputs, occurrence, settings)
-        if key is None:
-            return None
-        try:
-            metadata, payload = backend.get(key)
-        except Exception:  # noqa: BLE001 - an entry that cannot be read: the plot is drawn
-            return None
-        if not isinstance(payload, dict) or metadata is None or metadata.get("plot_format") != _FORMAT:
+        variants_key = self._key(code, inputs, occurrence, settings)
+        if variants_key is None:
             return None
         last = index + len(shape) - 1
-        if payload.get("flush") is not None and last != len(body) - 1:
+        listed = _listed_variants(backend, variants_key)
+        recent = self._served_last.get(variants_key)
+        if recent:
+            order = {entry[0]: k for k, entry in enumerate(listed)}
+            listed.sort(key=lambda entry: (-recent.get(entry[0], -1), order[entry[0]]))
+        # Each kept run is looked at without counting a use, and only one
+        # that fits the memos as they stand: none is filled to fit, as which
+        # of a memo's answers a run read is not recorded.
+        for condition, _size in listed:
+            key = self._key(code, inputs, occurrence, settings, condition)
+            if key is None or not self._fits(backend.peek_metadata(key), shape, last, body, source):
+                continue
+            served = self._read_variant(backend, key, shape, index, last)
+            if served is not None:
+                self._promote = (variants_key, condition)
+                return served
+        return None
+
+    def _read_variant(
+        self, backend: Any, key: str, shape: list[str], index: int, last: int
+    ) -> dict[int, ServedStatement] | None:
+        """The statements of *shape* served from the run kept at *key*, or
+        None when it cannot be read or put back here."""
+        try:
+            metadata, payload = backend.get(key)
+        except Exception:  # noqa: BLE001 - an entry that cannot be read: the next is tried
             return None
-        if payload.get("echo") is not None and last != len(body) - 1:
-            return None
-        if not environment_unchanged(metadata.get("env") or {}):
-            logger.debug("%s not served: an environment variable it read changed", _LOG)
-            return None
-        bound = frozenset(metadata.get("bound") or ())
-        read = self._read_after(bound, body, last, source)
-        if read is not False:
-            logger.debug("%s not served: %s", _LOG, read)
+        if not isinstance(payload, dict) or metadata is None or metadata.get("plot_format") != _FORMAT:
             return None
         statements = payload.get("statements") or []
         if len(statements) != len(shape):
             return None
-        why = self._rng_moved_on(metadata.get("rng_reads") or {})
-        if why is not None:
-            logger.debug("%s not served: %s", _LOG, why)
-            return None
+        echo = _NO_ECHO
+        if payload.get("echo") is not None:
+            try:
+                echo = pickle.loads(payload["echo"])
+            except Exception:
+                logger.debug("%s not served: its echoed value cannot be rebuilt", _LOG, exc_info=True)
+                return None
         puts: list[list[Callable[[], None]]] = []
         for stored in statements:
             put = self._memo_puts(stored.get("memos") or [])
@@ -439,6 +624,61 @@ class PlotRuns:
                 logger.debug("%s not served: %s", _LOG, put)
                 return None
             puts.append(put)
+        return self._serve_variant(payload, metadata, puts, echo, shape, index, last, key)
+
+    def _fits(self, metadata: Any, shape: list[str], last: int, body: list[ast.stmt], source: str) -> bool:
+        """Whether the kept run whose metadata is *metadata* can stand in
+        for a run of *shape*, ending at statement *last* of the cell, here."""
+        if not isinstance(metadata, dict) or metadata.get("plot_format") != _FORMAT:
+            return False
+        if (metadata.get("flushes") or metadata.get("echoes")) and last != len(body) - 1:
+            return False
+        if not environment_unchanged(metadata.get("env") or {}):
+            logger.debug("%s not served: an environment variable it read changed", _LOG)
+            return False
+        records = metadata.get("memo_records")
+        if not isinstance(records, list) or len(records) != len(shape):
+            return False
+        bound = frozenset(metadata.get("bound") or ())
+        modules = metadata.get("modules") or {}
+        if bound - _HISTORY_NAMES - set(modules) or not all(name in sys.modules for name in modules.values()):
+            # A module it imported that is not imported now: binding it
+            # would import it, which a hit does not do.
+            return False
+        read = self._read_after(bound, body, last, source)
+        if read is not False:
+            logger.debug("%s not served: %s", _LOG, read)
+            return False
+        why = self._rng_moved_on(metadata.get("rng_reads") or {})
+        if why is not None:
+            logger.debug("%s not served: %s", _LOG, why)
+            return False
+        flat = [record for statement in records for memo in statement for record in memo or ()]
+        try:
+            why = helper_memos.unfilled(flat, self.shell.user_ns, refill=False)
+        except Exception:  # noqa: BLE001 - a record this cannot read: the plot is drawn
+            return False
+        if why is not None:
+            logger.debug("%s not served: %s", _LOG, why)
+            return False
+        return True
+
+    def _serve_variant(
+        self,
+        payload: dict,
+        metadata: dict,
+        puts: list[list[Callable[[], None]]],
+        echo: Any,
+        shape: list[str],
+        index: int,
+        last: int,
+        key: str,
+    ) -> dict[int, ServedStatement]:
+        """The statements of *shape* from *index* on, served from the kept
+        run *payload* (with *metadata*; `_memo_puts` gave *puts*), its
+        last line echoing *echo* unless that is `_NO_ECHO`."""
+        statements = payload["statements"]
+        bound = frozenset(metadata.get("bound") or ())
         served: dict[int, ServedStatement] = {}
         for k, stored in enumerate(statements):
             row = {
@@ -459,10 +699,10 @@ class PlotRuns:
                 frozenset(stored.get("rng_reseeded") or ()),
                 puts[k],
             )
-        echo = payload.get("echo")
-        if echo is not None:
-            served[last].metrics[ECHO_FIELD] = StoredEcho(echo[0], echo[1])
-        self._pending = (payload.get("flush") or None, bound)
+        if echo is not _NO_ECHO:
+            served[last].metrics[ECHO_FIELD] = echo
+        modules = {name: sys.modules[module] for name, module in (metadata.get("modules") or {}).items()}
+        self._pending = (payload.get("flush") or None, bound, modules)
         logger.debug("%s serving %d statement(s) from %s", _LOG, len(shape), key[:24])
         return served
 
@@ -477,25 +717,38 @@ class PlotRuns:
         pending, self._pending = self._pending, None
         items = [served[k] for k in sorted(served)]
         if pending is None or len(items) != len(texts):
+            self._promote = None
             return False
         settled = self._processor.settle_served_plot_run(
             [(code, occ, item.rng_state, item.rng_reseeded) for (code, occ), item in zip(texts, items, strict=True)]
         )
         if not settled:
+            self._promote = None
             return False
         for item in items:
             for put in item.memo_puts:
                 put()
-        flush, bound = pending
+        flush, _bound, modules = pending
         if flush:
             self._show_after_cell(flush)
-        user_ns = self.shell.user_ns
-        for name in bound - _HISTORY_NAMES:
-            # Not drawn this time: what a run bound is gone, as after a restart.
-            user_ns.pop(name, None)
-            self._processor.forget_variable(name)
+        # The only names a kept run binds besides IPython's history: the
+        # modules it imported, bound as its import statement binds them.
+        self.shell.user_ns.update(modules)
+        self._used_first()
         logger.debug("%s served %d statement(s)", _LOG, len(items))
         return True
+
+    def _used_first(self) -> None:
+        """Note the kept run just served as the most recently used of its
+        statements' record, for the next keep to list first."""
+        promote, self._promote = self._promote, None
+        if promote is None:
+            return
+        variants_key, condition = promote
+        self._serves += 1
+        if len(self._served_last) > 4096:
+            self._served_last.clear()
+        self._served_last.setdefault(variants_key, {})[condition] = self._serves
 
     def _rng_moved_on(self, reads: dict[str, str]) -> str | None:
         """Why the random streams a kept plot run drew from (*reads*, the
@@ -520,7 +773,7 @@ class PlotRuns:
         puts: list[Callable[[], None]] = []
         for records, changes in memos:
             try:
-                why = helper_memos.unfilled(records, user_ns)
+                why = helper_memos.unfilled(records, user_ns, refill=False)
                 put = why if why is not None else helper_memos.put_back(records, changes, user_ns)
             except Exception:  # noqa: BLE001 - a record this cannot read: the plot is drawn
                 return "its helper memos cannot be read back"
@@ -608,13 +861,20 @@ class PlotRuns:
             return None
         return set(effects.inputs)
 
-    def _key(self, code: str, inputs: set[str], occurrence: int, settings: str) -> str | None:
+    def _key(
+        self, code: str, inputs: set[str], occurrence: int, settings: str, condition: str | None = None
+    ) -> str | None:
         """The key of the plot run *code* with *inputs*, under matplotlib's
         *settings*: ``compute_cache_key`` in the ``plot`` namespace, the
-        settings a line of its text."""
+        settings a line of its text. Without a *condition* (`_condition`),
+        the key of the record listing the runs kept of it; with one, the
+        key of the run kept under it, the condition another line."""
+        text = f"{code}\n# cash: matplotlib settings {settings}"
+        if condition is not None:
+            text += f"\n# cash: plot condition {condition}"
         try:
             result = compute_cache_key(
-                f"{code}\n# cash: matplotlib settings {settings}",
+                text,
                 inputs,
                 ctx=CacheKeyContext(
                     variable_lineage=self._processor.tracking_state.variable_lineage,
@@ -648,17 +908,6 @@ class PlotRuns:
         shapes.insert(0, list(codes))
         backend.set_metadata_only(key, {"plot_shapes": True, "shapes": shapes[:_SHAPES_KEPT], "ttl": None})
 
-    def _format_echo(self, value: Any) -> tuple[dict, dict] | None:
-        formatter = attribute_or(self.shell, "display_formatter", None)
-        if formatter is None:
-            return None
-        try:
-            data, metadata = formatter.format(value)
-        except Exception:  # noqa: BLE001 - a value its formatter refuses: the run is not kept
-            return None
-        rich = rich_records([{"data": data, "metadata": metadata}])
-        return (rich[0]["data"], rich[0]["metadata"]) if rich else None
-
     def _show_after_cell(self, outputs: list) -> None:
         """Show *outputs* where the inline backend shows a cell's figures:
         after the cell, its echoed value included."""
@@ -677,5 +926,148 @@ class PlotRuns:
         events.register("post_execute", show)
 
 
-#: IPython's output history, which a served echo puts a stand-in into.
+#: IPython's output history, which a served echo binds as a run does: what
+#: the cells below are checked for (`first_read_after`, which counts a read
+#: of a numbered ``_<n>`` as one of them). The input history (``In``,
+#: ``_i``, ``_i<n>``) is written for a served cell as for any other.
 _HISTORY_NAMES = frozenset({"_", "__", "___", "Out", "_oh"})
+
+
+def _listed_variants(backend: Any, variants_key: str) -> list[list]:
+    """``[condition, size]`` of each run kept of a plot run's statements,
+    most recently used first, as their record at *variants_key* lists them,
+    read without counting a use."""
+    try:
+        record = backend.peek_metadata(variants_key) or {}
+    except Exception:  # noqa: BLE001 - a store that cannot answer: none is listed
+        return []
+    listed = record.get("variants") if record.get("plot_variants") else None
+    return [
+        [entry[0], entry[1]]
+        for entry in listed or ()
+        if isinstance(entry, (list, tuple)) and len(entry) == 2 and isinstance(entry[0], str)
+    ]
+
+
+def _drop(backend: Any, key: str) -> None:
+    try:
+        backend.delete(key)
+    except Exception:  # left to the store's own eviction
+        logger.debug("%s could not drop %s", _LOG, key[:24], exc_info=True)
+
+
+#: A served run whose last line echoed nothing.
+_NO_ECHO = object()
+
+#: The packages whose objects an echoed value may not hold: a figure, axes
+#: or artist of theirs is the live figure a run drew, which a kept copy is
+#: not (and a copy of a figure registers itself with pyplot).
+_DRAWING_PACKAGES = frozenset({"matplotlib", "mpl_toolkits"})
+
+
+class _HoldsAFigure(Exception):
+    pass
+
+
+class _EchoPickler(pickle.Pickler):
+    def persistent_id(self, obj: Any) -> None:
+        module = attribute_or(type(obj), "__module__", None) or ""
+        if module.partition(".")[0] in _DRAWING_PACKAGES:
+            raise _HoldsAFigure(module)
+        return None
+
+
+def _echo_bytes(value: Any) -> bytes | None:
+    """*value*, what the last line of a plot run echoed, as the bytes a
+    hit rebuilds it from, or None when it cannot be kept: it holds an
+    object of matplotlib's, or it cannot be pickled."""
+    buffer = io.BytesIO()
+    try:
+        _EchoPickler(buffer, protocol=pickle.HIGHEST_PROTOCOL).dump(value)
+    except Exception:  # noqa: BLE001 - a figure, or a value pickle refuses
+        return None
+    return buffer.getvalue()
+
+
+def _bound_modules(names: set[str], user_ns: Mapping[str, Any]) -> dict[str, str]:
+    """``name -> module name`` of each of *names* bound to a module, as
+    ``import pandas as pd`` binds one."""
+    out: dict[str, str] = {}
+    for name in names:
+        value = user_ns.get(name)
+        module = attribute_or(value, "__name__", None) if isinstance(value, types.ModuleType) else None
+        if isinstance(module, str) and sys.modules.get(module) is value:
+            out[name] = module
+    return out
+
+
+def _statement_binds(code: str) -> set[str] | None:
+    """The names the top-level statement *code* may bind or unbind in the
+    notebook's namespace, in any branch or pass, or None when it cannot be
+    parsed: its targets, its imports, the functions and classes it defines,
+    ``except ... as`` and ``match`` captures, ``del``, and a walrus, also
+    one inside a comprehension. Not what a function or class body binds:
+    a helper setting a global is caught when it runs."""
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        return None
+    names: set[str] = set()
+
+    def visit(node: ast.AST, in_comprehension: bool) -> None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+            for sub in [*node.decorator_list, *attribute_or(node, "bases", ()), *attribute_or(node, "keywords", ())]:
+                visit(sub, in_comprehension)
+            if not isinstance(node, ast.ClassDef):
+                for default in [*node.args.defaults, *[d for d in node.args.kw_defaults if d is not None]]:
+                    visit(default, in_comprehension)
+            return
+        if isinstance(node, ast.Lambda):
+            return
+        if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+            for sub in ast.iter_child_nodes(node):
+                visit(sub, True)
+            return
+        if isinstance(node, ast.comprehension):
+            # Its own loop variable is the comprehension's.
+            visit(node.iter, in_comprehension)
+            for sub in node.ifs:
+                visit(sub, in_comprehension)
+            return
+        if isinstance(node, ast.NamedExpr):
+            names.add(node.target.id)
+            visit(node.value, in_comprehension)
+            return
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)) and not in_comprehension:
+            names.add(node.id)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                if alias.name != "*":
+                    names.add((alias.asname or alias.name).split(".")[0])
+                else:
+                    names.add("*")
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            names.add(node.name)
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
+            names.add(node.name)
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            names.add(node.rest)
+        for sub in ast.iter_child_nodes(node):
+            visit(sub, in_comprehension)
+
+    for statement in tree.body:
+        visit(statement, False)
+    return names
+
+
+def _names_changed(before: Mapping[str, int], user_ns: Mapping[str, Any], modules: set[str]) -> set[str]:
+    """The names of *user_ns* a run unbound, bound, or bound to another
+    value since *before* (``name -> id`` of its value then), but for the
+    *modules* it imported. Not cash's own (``__cash_call__``, which a
+    statement whose calls go through the cache binds)."""
+    changed = set(before.keys() - user_ns.keys())
+    for name, value in list(user_ns.items()):
+        if name not in modules and before.get(name, -1) != id(value):
+            changed.add(name)
+    return {name for name in changed if not name.startswith("__cash")}

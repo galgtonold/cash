@@ -65,6 +65,9 @@ __all__ = [
     "none_moved",
     "put_back",
     "reads_counters",
+    "hidden_counters",
+    "hidden_moved",
+    "hidden_scan",
     "unfilled",
     "used",
     "watched",
@@ -117,7 +120,12 @@ _FIXED_TYPES = (int, float, complex, str, bytes, bool, type(None), range)
 def _is_user_memo(value: Any) -> bool:
     if _LRU_WRAPPER is None or type(value) is not _LRU_WRAPPER:
         return False
-    code = attribute_or(attribute_or(value, "__wrapped__", None), "__code__", None)
+    wrapped = attribute_or(value, "__wrapped__", None)
+    if type(wrapped) is not types.FunctionType:
+        # A compiled library's function (Cython's) carries a code object
+        # whose file name is its source's relative path, as a cell's is not.
+        return False
+    code = attribute_or(wrapped, "__code__", None)
     return code is not None and is_user_code_file(code.co_filename)
 
 
@@ -1536,6 +1544,83 @@ def unfilled(records: list[dict] | None, ns: Mapping[str, Any], *, refill: bool 
         else:
             return f"the helper memo {label} does not hold the answers the statement read"
     return None
+
+
+#: The memos of the user's that `_where` does not find (one in a closure, a
+#: dict, a list, an object's attribute, a ``functools.partial``), met by a
+#: look through every object (`hidden_moved`): ``id -> memo``.
+_hidden: weakref.WeakValueDictionary[int, Any] = weakref.WeakValueDictionary()
+
+
+def hidden_counters() -> dict[int, tuple[int, int, int]]:
+    """``id -> (hits, misses, size)`` of each memo of the user's met where
+    `_where` does not look, before a run: what `hidden_moved` compares."""
+    out: dict[int, tuple[int, int, int]] = {}
+    for key, memo in list(_hidden.items()):
+        try:
+            info = memo.cache_info()
+        except Exception:  # noqa: BLE001 - a wrapper whose counters raise: seen as moved
+            continue
+        out[key] = (info.hits, info.misses, info.currsize)
+    return out
+
+
+def hidden_scan(ns: Mapping[str, Any]) -> dict[int, tuple[int, int, int]]:
+    """`hidden_counters` after a look through every object, as a run
+    begins: every memo of the user's that `_where` does not find is known
+    then, with its counters, so `hidden_moved` with ``fresh=True`` takes a
+    memo it meets for the first time for one the run built."""
+    for _name, _obj in _hidden_memos(ns):
+        _hidden[id(_obj)] = _obj
+    return hidden_counters()
+
+
+def _hidden_memos(ns: Mapping[str, Any]) -> list[tuple[str, Any]]:
+    """``(name, memo)`` of each memo of the user's that `_where` does not find."""
+    if _LRU_WRAPPER is None:
+        return []
+    import gc
+
+    located = {id(memo) for _, memo in _where(ns)}
+    out = []
+    for obj in gc.get_objects():
+        if type(obj) is not _LRU_WRAPPER or id(obj) in located or not _is_user_memo(obj):
+            continue
+        out.append((attribute_or(attribute_or(obj, "__wrapped__", None), "__qualname__", None) or "?", obj))
+    return out
+
+
+def hidden_moved(
+    before: Mapping[int, tuple[int, int, int]], ns: Mapping[str, Any], *, fresh: bool = False
+) -> str | None:
+    """The name of a memo of the user's that `_where` does not find and
+    that a run called: its counters moved since *before*
+    (`hidden_counters`). None when there is none. What a run left in such
+    a memo is in no record, so an entry of the run would leave it as it
+    was.
+
+    Every object is looked through (``gc.get_objects``): a memo can be held
+    anywhere, and a walk of values misses some. A memo not known before
+    the run has no counters to compare with. When *before* came from
+    `hidden_scan` (*fresh*), the run built it: it is named when it was
+    called, and not when it never was. Otherwise it may have been built
+    and filled before the run, and emptied by it (``cache_clear()``), which
+    leaves the counters of a memo never called: it is named. Either way it
+    is known for the next run."""
+    found: str | None = None
+    for name, obj in _hidden_memos(ns):
+        key = id(obj)
+        known = _hidden.get(key) is obj and key in before
+        _hidden[key] = obj
+        try:
+            info = obj.cache_info()
+        except Exception:  # noqa: BLE001 - counters that cannot be read: taken as moved
+            found = found or name
+            continue
+        now = (info.hits, info.misses, info.currsize)
+        if now != (before[key] if known else (0, 0, 0)) or (not known and not fresh):
+            found = found or name
+    return found
 
 
 def _refill_read(record: dict, memo: Any, refill: bool) -> list[str] | None:

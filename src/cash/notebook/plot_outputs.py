@@ -9,13 +9,15 @@ them. From "no figure open" to "no figure open", the statements in between
 
 So a plot run is kept as what it showed: per statement, its printed output
 and its displays (the rendered image among them), and what the cell's last
-line echoed. Run again with the same code and inputs, under the same
-matplotlib settings, it is served: the output is shown again and the
-statements are skipped. The figure is then not live, so a plot run is served
-only when nothing after it in the notebook reads a name it bound (``fig``,
-``ax``) before binding it again. One that wrote or read a file, drew random
-numbers, changed matplotlib's settings or anything else a skipped run would
-not do is never kept: it runs every time, as before.
+line echoed, as the value. Run again with the same code and inputs, under
+the same matplotlib settings, it is served: the output is shown again and
+the statements are skipped. The figure is then not live, so a plot run that
+may bind a name (``fig, ax = plt.subplots()``, a loop variable, ``_``) or
+unbind one is never kept: served, it would leave the name as it was where
+plain Python binds or unbinds it. Nor is one whose last
+line echoed a figure, axes or artist, or one that wrote or read a file,
+drew random numbers, changed matplotlib's settings or anything else a
+skipped run would not do: it runs every time, as before.
 """
 
 from __future__ import annotations
@@ -281,21 +283,6 @@ def rich_records(outputs: Iterable[Any]) -> list[dict] | None:
 def record_size(records: Iterable[dict]) -> int:
     """About how many bytes *records* hold."""
     return sum(len(str(v)) for record in records for v in record.get("data", {}).values())
-
-
-class StoredEcho:
-    """What the cell's last line echoed when its plot run was kept, shown
-    again as IPython shows a value."""
-
-    def __init__(self, data: Mapping[str, Any], metadata: Mapping[str, Any]) -> None:
-        self._data = dict(data)
-        self._metadata = dict(metadata)
-
-    def _repr_mimebundle_(self, include: Any = None, exclude: Any = None) -> tuple[dict, dict]:
-        return dict(self._data), dict(self._metadata)
-
-    def __repr__(self) -> str:
-        return str(self._data.get("text/plain", ""))
 
 
 # ---------------------------------------------------------------------------
