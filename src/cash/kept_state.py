@@ -195,6 +195,7 @@ def _dumps_also_keyed(
     sink: Any = None,
     reducer_override: Any = None,
     after: Any = None,
+    watch: list | None = None,
 ) -> tuple[bytes, bool]:
     """``dumps(value, protocol, ...)``, the bytes a store keeps, and whether
     they are also the *keyed* bytes of the same call: True when no object
@@ -213,8 +214,9 @@ def _dumps_also_keyed(
     is taken over its keyed bytes, which refuse it too.
     *reducer_override* is the pickler's hook of that name. *after* is
     called with the pickler once it has pickled *value*, its memo still
-    whole; not for a value pickled flat."""
-    differs: list[bool] = []
+    whole; not for a value pickled flat. *watch*, a list, is appended to
+    as each such object is met (a *sink* may stop the pickle there)."""
+    differs: list[bool] = [] if watch is None else watch
     table = _KeepDict(protocol, extra, watch=differs)
     if FLAT_FIRST and not _surely_shallow(value):
         walk = _Walk(getattr(sink, "walked", None), reducer_override)
