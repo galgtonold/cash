@@ -69,6 +69,9 @@ class TrackingState:
     # R: MismatchClassifier (``_rebuild_what_shares_a_rebuilt_object``),
     #    UpstreamChecker (``_keep_live_bindings``).
     bound_in_cell: dict[str, int | None] = field(default_factory=dict)
+    # Variable -> the statement whose run recorded ``bound_in_cell``, to
+    # check the cell there still holds it (cells inserted, moved, deleted).
+    bound_by: dict[str, str] = field(default_factory=dict)
 
     # Variable -> sha256 of every statement that defined it this session (a set:
     # a re-run cell, a loop body and a restore can each define it).

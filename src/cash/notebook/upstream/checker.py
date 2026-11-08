@@ -69,6 +69,59 @@ def _statement_texts(cell_code: str) -> frozenset[str]:
 
 
 @functools.lru_cache(maxsize=NOTEBOOK_VERSIONS)
+def _binds_unconditionally(cell: str, code: str | None, name: str) -> bool:
+    """Whether *code*, the statement that last bound *name*, stands as it is
+    at the top level of *cell* and binds *name* whenever it runs: an
+    assignment (not an augmented one, which reads what it binds), an import,
+    a ``def`` or a ``class``. Not one under an ``if``, a loop or a ``try``,
+    which may not bind it next time."""
+    if not code:
+        return False
+    tree = parse_cell_source(cell)
+    if tree is None:
+        return False
+    try:
+        wanted = {strip_markers(code).strip(), ast.unparse(ast.parse(strip_markers(code).strip()))}
+    except SyntaxError:
+        return False
+    for node in tree.body:
+        if ast.unparse(node) not in wanted:
+            continue
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            return any(
+                isinstance(t, ast.Name) and isinstance(t.ctx, ast.Store) and t.id == name
+                for target in targets
+                for t in ast.walk(target)
+            )
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            return any((alias.asname or alias.name.split(".")[0]) == name for alias in node.names)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            return node.name == name
+        return False
+    return False
+
+
+#: Calls through which a cell reads names its text does not show.
+_NAMESPACE_READERS = frozenset({"globals", "locals", "vars", "eval", "exec", "dir", "getattr"})
+
+
+def _reads_names_unseen(cell_code: str) -> bool:
+    """Whether *cell_code* may read a global by a name its text does not
+    show: through ``globals()``, ``vars()``, ``eval``/``exec``, an
+    attribute look-up by string, or a module's ``__dict__``; or does not
+    parse."""
+    tree = parse_cell_source(cell_code)
+    if tree is None:
+        return True
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in _NAMESPACE_READERS:
+            return True
+        if isinstance(node, ast.Attribute) and node.attr == "__dict__":
+            return True
+    return False
+
+
 def _notebook_statement_texts(notebook_cells: tuple[str, ...]) -> frozenset[str]:
     """Every statement of the notebook: asked on every cell run while an
     unsaved run is on record, so once per notebook version."""
@@ -794,9 +847,12 @@ class UpstreamChecker:
         lineages: dict[str, str],
         codes: dict[str, str],
         cells: dict[str, int | None],
+        bound_by: dict[str, str],
         sessions: dict[str, str],
         current_cell_idx: int,
         required_inputs: set[str],
+        notebook_cells: list[str],
+        cell_code: str,
     ) -> None:
         """Put back the live binding of each name the repair rebound from a
         cell above the one whose run bound it last.
@@ -818,14 +874,32 @@ class UpstreamChecker:
         Not a name the cell reads that the cell itself or a cell below it
         bound: a run from the top gives the cell what the repair gave it
         (``b = b * 10`` run again reads ``b`` as the cell above made it).
+
+        Only where the binding provably happens again the same way: the
+        statement that bound it stands, as it ran, at the top level of that
+        cell and binds the name unconditionally by its text
+        (`_binds_unconditionally`). ``if m[0] > 7: n = [2]`` may not bind
+        ``n`` next time, and a run from the top then has the repaired one.
+        And, for a name a cell at or below the cell bound, only when the
+        cell cannot read it unseen (`_reads_names_unseen`: ``globals()['n']``).
+        A name not put back keeps what the repair gave it, and
+        NOTEBOOK-CHANGED-BELOW says so (`_warn_rebuilt_changed_below`).
         """
         user_ns = self.shell.user_ns
         state = self.tracking_state
+        unseen = None
         for name, repaired_at in sorted(rebound.items()):
             at = cells.get(name)
-            if at is None or at <= repaired_at:
+            if at is None or at <= repaired_at or not 0 <= at < len(notebook_cells):
                 continue
-            if at >= current_cell_idx and name in required_inputs:
+            if at >= current_cell_idx:
+                if name in required_inputs:
+                    continue
+                if unseen is None:
+                    unseen = _reads_names_unseen(cell_code)
+                if unseen:
+                    continue
+            if not _binds_unconditionally(notebook_cells[at], bound_by.get(name), name):
                 continue
             if at < current_cell_idx and state.simulated_lineage.get(name) != lineages.get(name):
                 # The statement that bound it is no longer what the cell
@@ -839,6 +913,7 @@ class UpstreamChecker:
             if name in codes:
                 state.executed_cell_codes[name] = codes[name]
             state.bound_in_cell[name] = at
+            state.bound_by[name] = bound_by[name]
             if name in sessions:
                 state.current_session_hashes[name] = sessions[name]
             trace_event("kept_live_binding", name=name, bound_in=at, repaired_in=repaired_at)
@@ -947,6 +1022,7 @@ class UpstreamChecker:
             # digest, for the names a repair rebinds on the way
             # (`_keep_live_bindings`).
             cells_before = dict(self.tracking_state.bound_in_cell)
+            bound_by_before = dict(self.tracking_state.bound_by)
             session_before = dict(self.tracking_state.current_session_hashes)
             # The statement that last changed each name, before a restore
             # records the one it restored (`_warn_rebuilt_changed_below`).
@@ -1026,9 +1102,12 @@ class UpstreamChecker:
                 lineages_before,
                 codes_before,
                 cells_before,
+                bound_by_before,
                 session_before,
                 current_cell_idx,
                 required_inputs,
+                notebook_cells,
+                cell_code,
             )
             self.rng.label_rerun_metrics(executed_metrics, rng_rerun)
             total_execution_time = self.replay.sum_execution_times(executed_metrics)
