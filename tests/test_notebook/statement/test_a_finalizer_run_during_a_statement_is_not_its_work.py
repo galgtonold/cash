@@ -54,7 +54,18 @@ def _statuses(cash_magics):
     return [(str(s["status"]), s.get("uncacheable_reasons")) for s in cash_magics._last_cell_metrics["statements"]]
 
 
-@pytest.mark.usefixtures("store_everything")
+@pytest.fixture
+def collected_by_hand():
+    """No collection but the ones the test asks for: one started by an
+    allocation before the statement would free the garbage outside it."""
+    was = gc.isenabled()
+    gc.disable()
+    yield
+    if was:
+        gc.enable()
+
+
+@pytest.mark.usefixtures("store_everything", "collected_by_hand")
 def test_garbage_left_before_a_statement_keeps_it_out_once(cash_magics, mock_shell):
     LOG.clear()
     cells = [SETUP, STATEMENT]
