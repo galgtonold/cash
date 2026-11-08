@@ -616,10 +616,13 @@ def warn_diagnostic(
     if location is not None:
         _hide_source_lines()
         filename, lineno = location
-        # A notebook's cell runs as ``__main__``: filtered as such, whatever
-        # name the line is shown under.
-        module = "__main__" if filename == CELL_LOCATION else None
-        warnings.warn_explicit(instance, category, filename, lineno, module=module, registry=None)
+        if filename == CELL_LOCATION:
+            # A notebook's cell runs as ``__main__``: filtered as such,
+            # whatever name the line is shown under.
+            warnings.warn_explicit(instance, category, filename, lineno, module="__main__", registry=None)
+        else:
+            # No ``module=`` at all: an explicit None drops the warning.
+            warnings.warn_explicit(instance, category, filename, lineno, registry=None)
         return
     _warn_at(instance, level, None)
 
