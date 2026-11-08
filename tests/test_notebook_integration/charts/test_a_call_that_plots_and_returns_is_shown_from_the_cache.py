@@ -159,16 +159,18 @@ def test_a_plotting_call_of_changed_cities_runs(nb_runner, tmp_path):
     assert "11 cities" in _value(nb_runner.get_cell(5))
 
 
-def test_a_plotting_call_whose_figure_a_later_cell_saves_runs(nb_runner, tmp_path):
+def test_a_plotting_call_binding_its_result_and_figure_runs(nb_runner, tmp_path):
+    """Served, ``r`` and ``fig`` would be unbound where plain Python binds
+    them, so the call runs every time and a later cell can save the figure."""
     out = tmp_path / "tour.png"
     log = _notebook(nb_runner, tmp_path, f"r = {CALL}\nfig = plt.gcf()")
     nb_runner.run_all()
     nb_runner.run_all()
-    assert _calls(log) == 1, "control: with nothing reading the figure, the call is served"
+    assert _calls(log) == 2, "a call binding r and fig was served, leaving them unbound"
 
     nb_runner.add_cell(f"fig.savefig(r'{out}')", save=True)
     nb_runner.run_all()
-    assert _calls(log) == 2, "a call whose figure a later cell saves was served, leaving no live figure"
+    assert _calls(log) == 3
     assert out.exists()
     assert "Error" not in nb_runner.get_output(5)
 

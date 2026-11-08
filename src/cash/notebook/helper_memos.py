@@ -64,9 +64,9 @@ __all__ = [
     "new_statement",
     "put_back",
     "reads_counters",
-    "refillable",
+    "hidden_counters",
+    "hidden_moved",
     "unfilled",
-    "unlocated",
     "used",
     "watched",
     "watching_clears",
@@ -118,7 +118,12 @@ _FIXED_TYPES = (int, float, complex, str, bytes, bool, type(None), range)
 def _is_user_memo(value: Any) -> bool:
     if _LRU_WRAPPER is None or type(value) is not _LRU_WRAPPER:
         return False
-    code = attribute_or(attribute_or(value, "__wrapped__", None), "__code__", None)
+    wrapped = attribute_or(value, "__wrapped__", None)
+    if type(wrapped) is not types.FunctionType:
+        # A compiled library's function (Cython's) carries a code object
+        # whose file name is its source's relative path, as a cell's is not.
+        return False
+    code = attribute_or(wrapped, "__code__", None)
     return code is not None and is_user_code_file(code.co_filename)
 
 
@@ -1514,58 +1519,59 @@ def unfilled(records: list[dict] | None, ns: Mapping[str, Any], *, refill: bool 
     return None
 
 
-def refillable(records: list[dict] | None, ns: Mapping[str, Any]) -> bool:
-    """Whether every memo of *records* that `unfilled` without refilling
-    refuses is one it may refill: a helper recorded as computing from its
-    arguments alone, with the calls that fill it. Nothing is called: a
-    caller choosing among entries refills only for the one it serves."""
-    for record in records or ():
-        if unfilled([record], ns, refill=False) is not None and not (record.get("pure") and record.get("calls")):
-            return False
-    return True
+#: The memos of the user's that `_where` does not find (one in a closure, a
+#: dict, a list, an object's attribute, a ``functools.partial``), met by a
+#: look through every object (`hidden_moved`): ``id -> memo``.
+_hidden: weakref.WeakValueDictionary[int, Any] = weakref.WeakValueDictionary()
 
 
-def unlocated(functions: Any, ns: Mapping[str, Any]) -> str | None:
-    """The name of a memo of the user's that *functions* (the user's
-    functions a statement can call) reach through a closure, a default or
-    a global, and that this module does not find where it looks (`_where`),
-    or None. A run's answers in it are in no record: served, the memo
-    would stay as it was, and a later call would compute (and print, and
-    draw from a seeded stream) where a run finds the answer."""
+def hidden_counters() -> dict[int, tuple[int, int, int]]:
+    """``id -> (hits, misses, size)`` of each memo of the user's met where
+    `_where` does not look, before a run: what `hidden_moved` compares."""
+    out: dict[int, tuple[int, int, int]] = {}
+    for key, memo in list(_hidden.items()):
+        try:
+            info = memo.cache_info()
+        except Exception:  # noqa: BLE001 - a wrapper whose counters raise: seen as moved
+            continue
+        out[key] = (info.hits, info.misses, info.currsize)
+    return out
+
+
+def hidden_moved(before: Mapping[int, tuple[int, int, int]], ns: Mapping[str, Any]) -> str | None:
+    """The name of a memo of the user's that `_where` does not find and
+    that a run may have called: its counters moved since *before*
+    (`hidden_counters`), or it was not known then. None when there is
+    none. What a run left in such a memo is in no record, so an entry of
+    the run would leave it as it was.
+
+    Every object is looked through (``gc.get_objects``): a memo can be held
+    anywhere, and a walk of values misses some. A memo met for the first
+    time is reported once, then known for the next run."""
     if _LRU_WRAPPER is None:
         return None
-    found: dict[int, str] = {}
-    for fn in functions:
-        code = attribute_or(fn, "__code__", None)
-        values: list[tuple[str, Any]] = []
-        for name, cell in zip(attribute_or(code, "co_freevars", ()) or (), attribute_or(fn, "__closure__", None) or ()):
-            try:
-                values.append((name, cell.cell_contents))
-            except ValueError:  # an empty cell
-                continue
-        values.extend(("a default", value) for value in attribute_or(fn, "__defaults__", None) or ())
-        values.extend((name, value) for name, value in (attribute_or(fn, "__kwdefaults__", None) or {}).items())
-        fn_globals = attribute_or(fn, "__globals__", None)
-        if isinstance(fn_globals, dict) and code is not None:
-            for sub in _codes_in(code):
-                values.extend((name, fn_globals[name]) for name in sub.co_names if name in fn_globals)
-        for name, value in values:
-            for _, memo in _memos_in(value, [name], set()):
-                found.setdefault(id(memo), name)
-    if not found:
-        return None
+    import gc
+
     located = {id(memo) for _, memo in _where(ns)}
-    missing = sorted(name for key, name in found.items() if key not in located)
-    return missing[0] if missing else None
-
-
-def _codes_in(code: types.CodeType) -> Iterator[types.CodeType]:
-    """*code* and the code of the functions and comprehensions it defines."""
-    todo = [code]
-    while todo:
-        current = todo.pop()
-        yield current
-        todo.extend(const for const in current.co_consts if isinstance(const, types.CodeType))
+    found: str | None = None
+    for obj in gc.get_objects():
+        if type(obj) is not _LRU_WRAPPER or id(obj) in located or not _is_user_memo(obj):
+            continue
+        key = id(obj)
+        name = attribute_or(attribute_or(obj, "__wrapped__", None), "__qualname__", None) or "?"
+        known = _hidden.get(key) is obj and key in before
+        _hidden[key] = obj
+        if not known:
+            found = found or name
+            continue
+        try:
+            info = obj.cache_info()
+        except Exception:  # noqa: BLE001 - counters that cannot be read: taken as moved
+            found = found or name
+            continue
+        if (info.hits, info.misses, info.currsize) != before[key]:
+            found = found or name
+    return found
 
 
 def _refill_read(record: dict, memo: Any, refill: bool) -> list[str] | None:

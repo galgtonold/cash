@@ -6,8 +6,9 @@ memo already holds what the first call computed) are kept as entries of
 their own, listed in one record most recently used first, so a later run at
 either place finds its own. A run under a condition already listed takes
 its place at the front. The runs listed are bounded together by the size a
-kept plot run may show: past it the least recently used are dropped, and a
-smaller one after a big one still fits. A run no tier holds any more is
+kept plot run may show: past it the least recently used are dropped (the runs served in the session counted as
+used, without a write per hit), and a smaller one after a big one still
+fits. A run no tier holds any more is
 dropped from the record, as it can never be served.
 """
 
@@ -86,12 +87,15 @@ def test_a_run_no_tier_holds_is_dropped_from_the_record():
     assert _keep(backend, "c") == ["c", "b"]
 
 
-def test_a_served_run_is_listed_first():
+def test_runs_served_in_this_session_are_listed_first_at_the_next_keep():
     backend = _Backend()
     for condition in "abc":
         _keep(backend, condition)
     plots = PlotRuns(None, None, None)
-    plots._promote = (backend, RECORD, "a")
-    plots._used_first()
-    assert [c for c, _ in plot_runs._listed_variants(backend, RECORD)] == ["a", "c", "b"]
-    assert plots._promote is None
+    for condition in "ab":
+        plots._promote = (RECORD, condition)
+        plots._used_first()
+    assert [c for c, _ in plot_runs._listed_variants(backend, RECORD)] == ["c", "b", "a"], "a hit wrote the record"
+    backend.meta[_key("d")] = {"plot_format": plot_runs._FORMAT}
+    PlotRuns._note_variant(backend, RECORD, "d", 10, _key, plots._served_last.get(RECORD))
+    assert [c for c, _ in plot_runs._listed_variants(backend, RECORD)] == ["d", "b", "a", "c"]

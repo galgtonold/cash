@@ -192,6 +192,8 @@ def test_a_repeated_plotting_call_is_shown_at_both_places_after_a_restart(nb_run
     assert _images(nb_runner.get_cell(5)) == first
     assert _images(nb_runner.get_cell(6)) == again
     assert _value(nb_runner.get_cell(6)) == value
+    # IPython's history holds the value, as after a run: ``_.tour`` works.
+    assert nb_runner.peek("(type(_).__name__, len(_.tour))") == "('Run', 6)"
     assert _left(nb_runner) == _plain(tmp_path, cells)
 
     nb_runner.run_all()
@@ -337,3 +339,43 @@ def test_a_place_served_leaves_a_memo_as_plain_python_does(nb_runner, tmp_path):
     assert _calls(log) == "ss"
     assert nb_runner.peek("held") == plain, "serving the first place left another answer in the memo"
     assert _left(nb_runner) == _plain(tmp_path, cells)
+
+
+SHOW_SCALE = (
+    "@cache\n"
+    "def scale(n):\n"
+    "    return n * 2\n"
+    "\n"
+    "def scaled(k):\n"
+    "    count('s')\n"
+    f"    time.sleep({ABOVE_PERSISTENCE_FLOOR_S})\n"
+    "    plot_tour([complex(k, 0), complex(k + 1, 1)])\n"
+)
+
+
+@pytest.mark.fresh_kernel
+def test_a_place_added_later_is_not_served_by_filling_a_memo(nb_runner, tmp_path):
+    """The run kept further down found ``scale(1)`` and ``scale(2)`` in the
+    memo. A place written above it later, where the memo holds ``scale(1)``
+    alone, must not fill in ``scale(2)`` to be served from that run."""
+    log, cells = _notebook(
+        nb_runner,
+        tmp_path,
+        SHOW_SCALE,
+        "scale(1)",
+        "x = 1",
+        "held = scale.cache_info().currsize",
+        "scale(2)",
+        "scaled(scale(1))  # again",
+    )
+    nb_runner.run_all()
+    nb_runner.set_cell_source(7, "scaled(scale(1))")
+    cells[6] = "scaled(scale(1))"
+    for _ in range(2):
+        nb_runner.settle_writes()
+        nb_runner.restart()
+        nb_runner._init_cash()
+        nb_runner.run_all()
+        assert nb_runner.peek("held") == "1", "serving the place above filled the memo with an answer it did not read"
+    # The place above runs once, after the first restart, and is served from then on.
+    assert _calls(log) == "ss"

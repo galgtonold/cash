@@ -156,19 +156,17 @@ the reasoning.
 
 ### Plots shown from the cache
 
-<!-- claim: cash/notebook/ipython/plot_runs.py:PlotRuns.serve @0458b11a, cash/notebook/ipython/plot_runs.py:PlotRuns._store @3a1e2fe4, cash/notebook/plot_outputs.py:statement_plot_facts @b47a015b, cash/notebook/plot_outputs.py:first_read_after @1d857b84, cash/notebook/ipython/plot_runs.py:PlotRuns._served @52323bf8, cash/notebook/statement/processor.py:StatementProcessor.settle_served_plot_statement @cbfa94b7 -->
+<!-- claim: cash/notebook/ipython/plot_runs.py:PlotRuns.serve @0458b11a, cash/notebook/ipython/plot_runs.py:PlotRuns._store @12d069f1, cash/notebook/plot_outputs.py:statement_plot_facts @b47a015b, cash/notebook/plot_outputs.py:first_read_after @1d857b84, cash/notebook/ipython/plot_runs.py:PlotRuns._served @b75ad5cc, cash/notebook/statement/processor.py:StatementProcessor.settle_served_plot_statement @cbfa94b7 -->
 With the inline backend (the default in Jupyter), a plot begins with no
 figure open and ends when `plt.show()`, or the end of the cell, shows its
 figures and closes them. Cash keeps what such a plot showed: the image, what
-its statements printed, and the value the cell's last line echoed
-(`<Axes: ...>`). On a later run of the same statements with the same inputs,
+its statements printed, and the value the cell's last line echoed. On a later run of the same statements with the same inputs,
 under the same matplotlib settings (`rcParams`, a style or seaborn theme, the
 inline backend's formats), cash shows that output and skips the drawing; the
 badge marks those rows cached. This holds for `run(N)` calling a function of
 yours that draws and calls `plt.show()`, for `plt.plot(x, y)` then
-`plt.show()`, for `df.plot(...)` and seaborn calls, and for
-`fig, ax = plt.subplots()` then drawing on `ax` in the same cell, and for a
-call such as `run(tsp, cities)` that opens a figure with `plt.figure(...)`,
+`plt.show()`, for `df.plot(...)` and seaborn calls followed by `plt.show()`,
+and for a call such as `run(tsp, cities)` that opens a figure with `plt.figure(...)`,
 draws through helpers of yours and returns a value. It holds after a kernel
 restart when the plot was slow enough to be written to disk.
 
@@ -181,18 +179,26 @@ the drawing added, so the cells below draw and read as after a drawing. The same
 again further down, where the helper already holds what the first one
 computed or the generator stands elsewhere, is served at each place: the
 places share one entry, bounded by the size one plot's output may take,
-which drops the place served least recently first. A plot calling a
-`functools.cache` helper that cash cannot find (one defined inside another
-function) is drawn every time.
+which drops the place served least recently first.
 
-A served plot binds nothing: `fig`, `ax` and whatever else it assigned are
-not there afterwards. So it is drawn again, as before, when:
+A served plot draws nothing, so it has no figure, axes or value to bind a
+name to. A plot that assigns a name (`fig, ax = plt.subplots()`,
+`r = run(...)`) is therefore drawn every time, so that `fig` and `ax` are
+there afterwards as in a run from the top; only a module it imports
+(`import seaborn as sns`) is bound again, while that module is imported.
+It is also drawn again, as before, when:
 
-- code after it in the cell, or a cell below it, reads one of those names
-  before assigning it again (`fig.savefig(...)` in the next cell, or `Out`
-  and `_` when the cell echoed a value). A cell below that starts a figure
-  of its own (`plt.xlabel(...)`, `fig, ax = plt.subplots()`) draws on a new
-  figure whether the plot ran or not, so it changes nothing;
+- the cell's last line echoes a figure, axes or other matplotlib object
+  (`ax.set_title(...)`, `plt.plot(...)` without a `;` or `plt.show()`), or a
+  value that cannot be pickled: a served plot gives `_` and `Out` the
+  echoed value it kept;
+- code after it in the cell, or a cell below it, reads `Out` or `_` when
+  the cell echoed a value. A cell below that starts a figure of its own
+  (`plt.xlabel(...)`, `fig, ax = plt.subplots()`) draws on a new figure
+  whether the plot ran or not, so it changes nothing;
+- it calls a `functools.cache` helper that cash does not find in the
+  notebook's names or a module's (one held in a closure, a dict or an
+  object): what a drawing leaves there could not be put back;
 - cash cannot tell which cell is running, or cannot read the notebook's cells;
 - it writes a file (`plt.savefig`, `fig.savefig`), reads one other than
   matplotlib's fonts and style sheets, draws from a random generator no
