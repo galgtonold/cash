@@ -3727,6 +3727,7 @@ class StatementProcessor:
                     if not inputs_moved:
                         # What the statements below inherit from its outputs.
                         self._store.note_ran(run, execution)
+        self._compare_partner_digests(run)
         moved = self._move_holders(run, saved_metadata)
         # After the save: the entry records each input's lineage as the
         # statement read it, before its draw moved it on.
@@ -5190,6 +5191,31 @@ class StatementProcessor:
                 changed.add(name)
         run.holders_changed = changed - unchanged
         return unchanged
+
+    def _compare_partner_digests(self, run: StatementRun) -> None:
+        """Compare each variable *run* digested before it ran
+        (`_holder_digests`) and the share check did not already
+        (`_unchanged_holders`) with its digest now, within the same budget:
+        one left as it was keeps its lineage through the bump of its edges
+        (``kept``), one changed moves on (``moved_on``).
+
+        Whether or not the statement is stored. Only a stored one compared
+        them, so a share check out of time, which leaves the statement
+        unstored, moved every partner on: ``vote.fit(X, y)`` refused for
+        it linked ``vote`` with ``X`` and ``y`` (it may hold what it read),
+        its next run moved them through that link, and the cell below
+        rebuilt everything built on ``X`` -- where a check in time found
+        nothing holding them and moved none."""
+        if not run.holder_digests:
+            return
+        user_ns = self.shell.user_ns
+        seen = run.holders_unchanged | run.holders_changed
+        rest = {name: user_ns[name] for name in run.holder_digests if name in user_ns and name not in seen}
+        if not rest:
+            return
+        unchanged, changed = self._digested_unchanged(run, rest)
+        run.holders_unchanged = run.holders_unchanged | unchanged
+        run.holders_changed = run.holders_changed | changed
 
     def _digested_unchanged(self, run: StatementRun, holders: dict[str, Any]) -> tuple[set[str], set[str]]:
         """``(unchanged, changed)``: the *holders* whose in-place-edit digest

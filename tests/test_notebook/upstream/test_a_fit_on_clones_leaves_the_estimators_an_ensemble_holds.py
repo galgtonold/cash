@@ -252,3 +252,32 @@ def test_a_repair_whose_fit_moves_what_it_holds_reads_what_a_run_gives(cash_magi
 
     assert (ns["scores"], ns["out"], ns["depth"]) == (scores, out, depth)
     assert ns["vote"].estimators[0][1] is ns["a"]
+
+
+@pytest.mark.usefixtures("store_everything")
+def test_a_fit_its_share_check_left_unstored_moves_nothing_it_left_alone(cash_magics, tmp_path, monkeypatch):
+    """With no time for its share check, the ensemble's fit is not stored,
+    and ``vote`` is linked with what the fit read (``X``, ``y``), which it
+    may hold. Run again, the fit refits, as plain Python does; the digests
+    taken around it show ``X`` and ``y`` left as they were, so they keep
+    their lineages, as they do when the check finds in time that nothing
+    holds them. Moved on, the cell reading ``a`` below rebuilt everything
+    built on ``X`` and fitted the estimators again."""
+    monkeypatch.setattr(processor, "SHARE_CHECK_FLOOR_S", 0.0)
+    monkeypatch.setattr(processor, "SHARE_CHECK_FACTOR", 0.0)
+    monkeypatch.setattr(processor, "SHARE_FALLBACK_FLOOR_S", 0.0)
+    log, cells = _start(cash_magics, tmp_path, ENSEMBLE)
+    ns = cash_magics.shell.user_ns
+    lineage = cash_magics.tracking_state.variable_lineage
+    assert _fits(log) == 4
+    before = (lineage["X"], lineage["y"])
+
+    run_cash_cell(cash_magics, cells[-3], cells=cells)
+    assert _fits(log) == 2  # plain Python: the ensemble's two clones
+    assert (lineage["X"], lineage["y"]) == before
+
+    run_cash_cell(cash_magics, cells[-1], cells=cells)
+    run_cash_cell(cash_magics, cells[SCORES], cells=cells)
+    run_cash_cell(cash_magics, cells[-1], cells=cells)
+    assert _fits(log) == 0
+    assert ns["vote"].estimators[0][1] is ns["a"]
