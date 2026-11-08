@@ -144,8 +144,10 @@ class _Open:
     rng_placed: set[str] = field(default_factory=set)
     #: The counters of the memos `helper_memos` does not find, as it began.
     hidden: dict = field(default_factory=dict)
-    #: The names bound in the notebook's namespace as it began.
-    names: frozenset[str] = frozenset()
+    #: The values bound in the notebook's namespace as it began, by name:
+    #: their ``id``, which a helper binding a name through ``__main__``
+    #: changes without naming it.
+    names: dict[str, int] = field(default_factory=dict)
     #: Whether `hidden` was read after a look through every object
     #: (`helper_memos.hidden_scan`): a memo not in it was built by the run.
     fresh: bool = False
@@ -176,6 +178,11 @@ class PlotRuns:
         #: this session: a run beginning there again first looks through
         #: every object for the memos cash does not find (`before`).
         self._draw_starts: set[tuple[str, int]] = set()
+        #: The names a plot run bound or unbound in this session without its
+        #: text binding them (a helper setting ``__main__.zz``). Bound again
+        #: to the very object it holds, a name does not change, and a run
+        #: would seem to leave it alone: while one is bound, none is kept.
+        self._bound_unseen: set[str] = set()
         self._parsed: dict[str, list[tuple[str, ast.stmt | None]]] = {}
 
     # -- the cell ----------------------------------------------------------
@@ -206,7 +213,7 @@ class PlotRuns:
         self._adopt_unseen_seeds()
         lineage = dict(self._processor.tracking_state.variable_lineage)
         self._open = _Open(index, occurrence, settings, lineage, _perf_counter())
-        self._open.names = frozenset(self.shell.user_ns)
+        self._open.names = {name: id(value) for name, value in self.shell.user_ns.items()}
         try:
             if self._start_key(index) in self._draw_starts:
                 # Where a plot drew before: the memos it may empty are read
@@ -371,10 +378,18 @@ class PlotRuns:
             names = ", ".join(sorted(run.bound - set(modules)))
             logger.debug("%s not kept: it binds %s", _LOG, names)
             return
-        gone = run.names - self.shell.user_ns.keys()
-        if gone:
-            # ``del tmp``: served, the name would stay bound.
-            logger.debug("%s not kept: it unbinds %s", _LOG, ", ".join(sorted(gone)))
+        changed = _names_changed(run.names, self.shell.user_ns, set(modules))
+        if changed:
+            # ``del tmp``, or a helper binding ``__main__.zz``: served, the
+            # names would stay as they were.
+            self._bound_unseen |= changed - run.bound
+            logger.debug("%s not kept: it binds or unbinds %s", _LOG, ", ".join(sorted(changed)))
+            return
+        again = self._bound_unseen & run.names.keys()
+        if again:
+            # A run binding one of them to the object it held would not show:
+            # after a restart, served, it would be left unbound.
+            logger.debug("%s not kept: %s was bound by a plot's helper", _LOG, ", ".join(sorted(again)))
             return
         code = "\n".join(run.codes)
         inputs = self._inputs(code)
@@ -1044,3 +1059,15 @@ def _statement_binds(code: str) -> set[str] | None:
     for statement in tree.body:
         visit(statement, False)
     return names
+
+
+def _names_changed(before: Mapping[str, int], user_ns: Mapping[str, Any], modules: set[str]) -> set[str]:
+    """The names of *user_ns* a run unbound, bound, or bound to another
+    value since *before* (``name -> id`` of its value then), but for the
+    *modules* it imported. Not cash's own (``__cash_call__``, which a
+    statement whose calls go through the cache binds)."""
+    changed = set(before.keys() - user_ns.keys())
+    for name, value in list(user_ns.items()):
+        if name not in modules and before.get(name, -1) != id(value):
+            changed.add(name)
+    return {name for name in changed if not name.startswith("__cash")}

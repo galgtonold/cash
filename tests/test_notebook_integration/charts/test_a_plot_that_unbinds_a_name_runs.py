@@ -78,3 +78,34 @@ def test_a_plot_binding_underscore_leaves_it_bound(nb_runner, tmp_path, plot, sa
     nb_runner.run_cell(3)
     assert nb_runner.peek("r") == f"'{plain}'", "the served plot left _ as it was"
     assert _calls(log) == 3
+
+
+HELPERS = (
+    "def set_new():\n    import __main__\n    __main__.zz = 1\n"
+    "def set_old():\n    import __main__\n    __main__.tmp = [2]\n"
+)
+THROUGH_MAIN = {
+    "new name": ("set_new()", "r = globals().get('zz', 'unbound')", "1"),
+    "existing name": ("set_old()", "r = tmp", "[2]"),
+}
+
+
+@pytest.mark.fresh_kernel
+@pytest.mark.parametrize("case", list(THROUGH_MAIN))
+def test_a_plot_whose_helper_binds_a_name_through_main_leaves_it_bound(nb_runner, tmp_path, case):
+    """A helper binding a name through ``__main__`` binds it in the
+    notebook's namespace without naming it in the plot's text."""
+    log = tmp_path / "calls.log"
+    call, check, plain = THROUGH_MAIN[case]
+    plot = f"plt.figure()\n{call}\nplt.plot([1, 2]); count()"
+    nb_runner.create_notebook([HEAD.format(log=log) + HELPERS, "tmp = 1", plot, check])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert nb_runner.peek("r") == plain
+    nb_runner.run_all()
+    assert nb_runner.peek("r") == plain
+    nb_runner.settle_writes()
+    nb_runner.restart()
+    nb_runner._init_cash()
+    nb_runner.run_all()
+    assert nb_runner.peek("r") == plain, "the served plot left the name as it was"

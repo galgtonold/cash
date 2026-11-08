@@ -156,7 +156,7 @@ the reasoning.
 
 ### Plots shown from the cache
 
-<!-- claim: cash/notebook/ipython/plot_runs.py:PlotRuns.serve @0458b11a, cash/notebook/ipython/plot_runs.py:PlotRuns._store @d4272140, cash/notebook/plot_outputs.py:statement_plot_facts @b47a015b, cash/notebook/plot_outputs.py:first_read_after @1d857b84, cash/notebook/ipython/plot_runs.py:PlotRuns._served @b75ad5cc, cash/notebook/statement/processor.py:StatementProcessor.settle_served_plot_statement @cbfa94b7 -->
+<!-- claim: cash/notebook/ipython/plot_runs.py:PlotRuns.serve @0458b11a, cash/notebook/ipython/plot_runs.py:PlotRuns._store @09e26d89, cash/notebook/plot_outputs.py:statement_plot_facts @b47a015b, cash/notebook/plot_outputs.py:first_read_after @1d857b84, cash/notebook/ipython/plot_runs.py:PlotRuns._served @b75ad5cc, cash/notebook/statement/processor.py:StatementProcessor.settle_served_plot_statement @cbfa94b7 -->
 With the inline backend (the default in Jupyter), a plot begins with no
 figure open and ends when `plt.show()`, or the end of the cell, shows its
 figures and closes them. Cash keeps what such a plot showed: the image, what
@@ -184,7 +184,8 @@ which drops the place served least recently first.
 A served plot draws nothing, so it has no figure, axes or value to bind a
 name to. A plot that may assign a name (`fig, ax = plt.subplots()`,
 `r = run(...)`, `_ = plt.hist(...)`, a `for` loop's variable, in any
-branch) or delete one (`del tmp`) is therefore drawn every time, so that
+branch) or delete one (`del tmp`), itself or through a helper of yours
+(`__main__.zz = 1`), is therefore drawn every time, so that
 `fig` and `ax` are there afterwards as in a run from the top; only a module
 it imports (`import seaborn as sns`) is bound again, while that module is
 imported.
