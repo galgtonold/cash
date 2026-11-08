@@ -1540,14 +1540,17 @@ def hidden_counters() -> dict[int, tuple[int, int, int]]:
 
 def hidden_moved(before: Mapping[int, tuple[int, int, int]], ns: Mapping[str, Any]) -> str | None:
     """The name of a memo of the user's that `_where` does not find and
-    that a run may have called: its counters moved since *before*
-    (`hidden_counters`), or it was not known then. None when there is
-    none. What a run left in such a memo is in no record, so an entry of
-    the run would leave it as it was.
+    that a run called: its counters moved since *before*
+    (`hidden_counters`). None when there is none. What a run left in such
+    a memo is in no record, so an entry of the run would leave it as it
+    was.
 
     Every object is looked through (``gc.get_objects``): a memo can be held
-    anywhere, and a walk of values misses some. A memo met for the first
-    time is reported once, then known for the next run."""
+    anywhere, and a walk of values misses some. A memo not known before
+    the run (built by it, or by a cell since the last look) has no
+    counters to compare with: it is named when it was ever called, which
+    may have been by the run, and not when it never was, which the run
+    did not call either. Either way it is known for the next run."""
     if _LRU_WRAPPER is None:
         return None
     import gc
@@ -1561,15 +1564,13 @@ def hidden_moved(before: Mapping[int, tuple[int, int, int]], ns: Mapping[str, An
         name = attribute_or(attribute_or(obj, "__wrapped__", None), "__qualname__", None) or "?"
         known = _hidden.get(key) is obj and key in before
         _hidden[key] = obj
-        if not known:
-            found = found or name
-            continue
         try:
             info = obj.cache_info()
         except Exception:  # noqa: BLE001 - counters that cannot be read: taken as moved
             found = found or name
             continue
-        if (info.hits, info.misses, info.currsize) != before[key]:
+        now = (info.hits, info.misses, info.currsize)
+        if now != (before[key] if known else (0, 0, 0)):
             found = found or name
     return found
 

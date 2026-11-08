@@ -86,3 +86,22 @@ def test_the_plot_runs_at_both_places_and_prints_as_plain_python(nb_runner, tmp_
     assert "computing cities" not in _printed(nb_runner.get_cell(4)), "the second place showed the first's print"
     assert nb_runner.peek("after") == after
     assert _calls(log) == 8, "a plot calling a memo cash cannot find was served"
+
+
+@pytest.mark.fresh_kernel
+def test_a_memo_built_again_on_each_run_all_leaves_plots_that_never_call_it_served(nb_runner, tmp_path):
+    """A cell above that builds such a memo again on every Run All, and
+    that no plot calls, is no reason to draw the plots: one met with no
+    calls was not called by the run."""
+    log = tmp_path / "calls.log"
+    cells = [HEAD.format(log=log), COUNT + HOLDERS["dict"], "show([1, 2])", "show([2, 1])"]
+    nb_runner.create_notebook(cells)
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    nb_runner.run_all()
+    nb_runner.settle_writes()
+    nb_runner.restart()
+    nb_runner._init_cash()
+    drawn = _calls(log)
+    nb_runner.run_all()
+    assert _calls(log) == drawn, "a memo no plot calls kept the plots from being served"

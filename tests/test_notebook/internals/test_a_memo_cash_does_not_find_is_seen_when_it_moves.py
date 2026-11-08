@@ -2,15 +2,18 @@
 not look for memos (a closure, a dict, a list, an object's attribute, a
 ``functools.partial``) is named when a run may have called it.
 
-Such a memo is met by a look through every object. Met for the first time
-it is named, since its counters before the run are not known; known, it is
-named only when its counters moved since `hidden_counters` read them. A
-memo bound in the notebook is found where cash looks and never named.
+Such a memo is met by a look through every object. Known, it is named
+only when its counters moved since `hidden_counters` read them. Met for
+the first time, its counters before the run are not known: it is named
+when it was ever called, and not when it never was (a cell building it
+again on each Run All, which no plot calls). A memo bound in the notebook
+is found where cash looks and never named.
 """
 
 from __future__ import annotations
 
 import functools
+import gc
 
 import pytest
 
@@ -28,7 +31,9 @@ HOLDERS = {
 
 def _ns(code: str) -> tuple[dict, object]:
     """The namespace *code* leaves, and the memo it holds, which the
-    namespace itself does not bind."""
+    namespace itself does not bind. The memos earlier tests built and
+    called are collected first: they would be met here too."""
+    gc.collect()
     ns = {"functools": functools, "__name__": "__main__"}
     exec(compile("def _cities(n):\n    return n\n" + code, __file__, "exec"), ns)
     return ns, ns.pop("held", None)
@@ -37,7 +42,7 @@ def _ns(code: str) -> tuple[dict, object]:
 @pytest.mark.parametrize("code", list(HOLDERS.values()), ids=list(HOLDERS))
 def test_a_hidden_memo_is_named_when_it_moves(code):
     ns, memo = _ns(code)
-    assert helper_memos.hidden_moved({}, ns) is not None, "a memo met for the first time was not named"
+    assert helper_memos.hidden_moved({}, ns) is None, "a memo never called was named"
     before = helper_memos.hidden_counters()
     assert helper_memos.hidden_moved(before, ns) is None, "a known memo that did not move was named"
     memo(3)
@@ -50,3 +55,18 @@ def test_a_memo_bound_in_the_notebook_is_never_named():
     before = helper_memos.hidden_counters()
     ns["cities"](2)
     assert helper_memos.hidden_moved(before, ns) is None
+
+
+@pytest.mark.parametrize("code", list(HOLDERS.values()), ids=list(HOLDERS))
+def test_a_memo_met_for_the_first_time_is_named_once_called(code):
+    before = helper_memos.hidden_counters()
+    ns, memo = _ns(code)
+    memo(3)
+    assert helper_memos.hidden_moved(before, ns) is not None, "a memo built and called by the run went unseen"
+
+
+def test_a_memo_met_for_the_first_time_is_not_named_while_never_called():
+    before = helper_memos.hidden_counters()
+    ns, _ = _ns(HOLDERS["dict"])
+    assert helper_memos.hidden_moved(before, ns) is None
+    assert helper_memos.hidden_moved(helper_memos.hidden_counters(), ns) is None
