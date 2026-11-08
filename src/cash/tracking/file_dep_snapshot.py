@@ -465,6 +465,17 @@ def remembered_file_digest(path: str) -> str | None:
     return _remembered_digest(_stat_memo_key(path, st, st.st_size))
 
 
+def _digest_remembered_under(path: str, st: os.stat_result) -> str | None:
+    """The digest `file_content_hash` would give for *path* under *st*, a
+    stat of the file itself, without reading it: remembered for a settled
+    file (`_HASH_MEMO`, `digest_table`); None otherwise."""
+    if not st.st_ino or not _stat.S_ISREG(st.st_mode):
+        return None
+    if (time.time() - st.st_mtime) <= _HASH_MEMO_MIN_AGE_SECONDS or is_written_in_place(st, path):
+        return None
+    return _remembered_digest(_stat_memo_key(path, st, st.st_size))
+
+
 def _stat_memo_key(path: str, st: os.stat_result, size: int) -> tuple[str, int, int, int, int, int]:
     """A settled file's digest is remembered under ``_HASH_MEMO``'s key.
 
@@ -629,8 +640,9 @@ def snapshot_file_deps(
     *taken* maps a path to a stat of the file itself its owner took a
     moment before (the cell run's, ``run_memo.own_stats_this_run``): taken
     in place of a stat of its own where no digest is taken now, which an
-    older stat would not describe: a folder, or a file whose digest from
-    the read is still its own (*known*). Older than a stat taken here, it
+    older stat would not describe: a folder, a file whose digest from
+    the read is still its own (*known*), or one whose digest under that
+    stat is remembered (`_HASH_MEMO`). Older than a stat taken here, it
     can only find the file moved since sooner.
     """
     snapshot: dict[str, dict[str, Any]] = {}
@@ -655,12 +667,18 @@ def snapshot_file_deps(
         st = checked.get(f) if checked else None
         if st is not None and not (known and f in known and known[f][0] == stat_key(st)):
             st = None
+        remembered = None
         if st is None and taken is not None:
             st = taken.get(f)
             if st is not None and not (
                 _stat.S_ISDIR(st.st_mode) or (known and f in known and known[f][0] == stat_key(st))
             ):
-                st = None
+                # Or a file whose digest under that very stat is remembered
+                # (`_HASH_MEMO`): the stat and the digest describe the same
+                # bytes, as one taken now and its digest would.
+                remembered = _digest_remembered_under(f, st)
+                if remembered is None:
+                    st = None
         try:
             if st is None:
                 st = own_stat(f)
@@ -698,7 +716,7 @@ def snapshot_file_deps(
                     stats.pop(f, None)
                 continue
             hashed_at = time.time()  # before the read: an edit after it is not in the digest
-            content_hash = file_content_hash(f, st.st_size, st)
+            content_hash = remembered if remembered is not None else file_content_hash(f, st.st_size, st)
             if as_read is not None and digest_read is not None and content_hash != digest_read:
                 snapshot[f] = {_UNRESOLVED_MARKER: True}
                 if stats is not None:

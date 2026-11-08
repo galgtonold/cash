@@ -766,43 +766,59 @@ def own_stats_this_run() -> Mapping[str, os.stat_result] | None:
     through the other link, so such a file is stat-ed by itself. Nor one
     with no file identity (``st_ino`` 0). A folder with no such stat has
     the one the folder watch took of it as the run began
-    (`FileWatch.drain`). A statement that writes files
+    (`FileWatch.drain`). A path the run has not stat-ed has the stat the
+    folder watch keeps of it while its folder reports no change
+    (`FileWatch.current`, after a `FileWatch.drain` here), by the same
+    rules. A statement that writes files
     drops the run's stats (`forget_file_state_this_run`) before it is
     stored, so none of these predates a write of the cell's own.
 
     What the records of a statement stored in this cell run take in place
     of a stat of their own (`snapshot_file_deps`): the first stored below a
     read of 13,000 photos stat-ed each of them, and their 5,700 folders,
-    moments after the check before the cell had."""
+    moments after the check before the cell had. Where that check stat-ed
+    none of them (no entry above holds their records), the cells between
+    had, and the watch kept those stats: the store stat-ed 22,000 again."""
     epoch = _fds.HASH_EPOCH
     run = _FILE_STATE_THIS_RUN
     if epoch is None or run.get("epoch") != epoch:
         return None
     stats = run.get("stat") or {}
     folders = run.get("folder_stat") or {}
-    if not (stats or folders):
+    watch = run.get("watch")
+    if watch is not None:
+        watch.drain()  # its kept stats as good as a stat now
+    if not (stats or folders or watch is not None):
         return None
-    return _OwnStats(stats, run.get("listed") or set(), folders)
+    return _OwnStats(stats, run.get("listed") or set(), folders, watch)
 
 
 class _OwnStats(Mapping):
     """The run's stats (``run["stat"]``) but for the listed ones and those
     with no file identity (`own_stats_this_run`), and for a folder the
     run's stats do not hold so, its stat from the folder watch's first
-    drain of the run (``run["folder_stat"]``)."""
+    drain of the run (``run["folder_stat"]``); for any other path, the
+    stat the folder *watch* keeps of it, if not a listed one. Iterated,
+    only the run's own."""
 
-    __slots__ = ("_folders", "_listed", "_stats")
+    __slots__ = ("_folders", "_listed", "_stats", "_watch")
 
-    def __init__(self, stats: dict[str, Any], listed: set[str], folders: Mapping[str, Any]) -> None:
+    def __init__(self, stats: dict[str, Any], listed: set[str], folders: Mapping[str, Any], watch: Any = None) -> None:
         self._stats = stats
         self._listed = listed
         self._folders = folders
+        self._watch = watch
 
     def get(self, path: str, default: Any = None) -> Any:
         st = None if path in self._listed else self._stats.get(path)
         if st is None:
             st = self._folders.get(path)
             if st is not None and not _stat.S_ISDIR(st.st_mode):
+                st = None
+        if st is None and self._watch is not None:
+            watch = self._watch
+            st = watch.current(path)
+            if st is not None and watch.is_listed(path):
                 st = None
         if st is None or not st.st_ino:
             return default
