@@ -1333,19 +1333,22 @@ static PyObject *py_referrers_in(PyObject *self, PyObject *const *args, Py_ssize
     return out;
 }
 
-/* key_alias_id(seen, atoms, by_name, kinds, identityless, outside, obj):
+/* key_alias_id(seen, atoms, by_name, kinds, identityless, outside, sets, obj):
  * kept_state.key_aliases's persistent_id, answer for answer. A key pickle
  * asks it of every object it writes, and the Python one took most of the
  * time of keying a column of a million timestamps. *kinds* is
  * {type: bool} of the answers of *identityless* (a numpy dtype or number
- * type?) asked so far; *outside* is a dict or None. */
+ * type?) asked so far; *outside* is a dict or None. *sets* is None or the
+ * callable asked of an exact frozenset, and of an exact set met for the
+ * first time (kept_state.sorted_set_ids): its answer is this one. */
 static PyObject *py_key_alias_id(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
-    if (nargs != 7 || !PyDict_CheckExact(args[0]) || !PyAnySet_Check(args[1]) || !PyAnySet_Check(args[2]) ||
+    if (nargs != 8 || !PyDict_CheckExact(args[0]) || !PyAnySet_Check(args[1]) || !PyAnySet_Check(args[2]) ||
         !PyDict_CheckExact(args[3]) || (args[5] != Py_None && !PyDict_CheckExact(args[5]))) {
-        PyErr_SetString(PyExc_TypeError, "key_alias_id(dict, set, set, dict, callable, dict | None, obj)");
+        PyErr_SetString(PyExc_TypeError, "key_alias_id(dict, set, set, dict, callable, dict | None, sets, obj)");
         return NULL;
     }
-    PyObject *seen = args[0], *kinds = args[3], *outside = args[5], *obj = args[6];
+    PyObject *seen = args[0], *kinds = args[3], *outside = args[5], *sets = args[6], *obj = args[7];
+    if (sets != Py_None && Py_IS_TYPE(obj, &PyFrozenSet_Type)) return PyObject_CallOneArg(sets, obj);
     PyObject *t = (PyObject *)Py_TYPE(obj);
     int in = PySet_Contains(args[1], t);
     if (in == 0) in = PySet_Contains(args[2], t);
@@ -1399,7 +1402,192 @@ static PyObject *py_key_alias_id(PyObject *self, PyObject *const *args, Py_ssize
     Py_DECREF(entry);
     Py_DECREF(key);
     if (err < 0) return NULL;
+    if (sets != Py_None && Py_IS_TYPE(obj, &PySet_Type)) return PyObject_CallOneArg(sets, obj);
     Py_RETURN_NONE;
+}
+
+/* set_ops_scan(state, data) -> bool: does the pickle written so far hold a
+ * set with an item in it, or a frozenset with one? *data* is the next piece
+ * of a protocol 2-5 pickle as the pickler hands it to its file; *state* a
+ * bytearray from set_scan_state(), carried from one piece to the next. The
+ * opcodes are read one by one, each argument and each item's raw bytes
+ * skipped by their length, so the bytes of a number, a string or an array
+ * never read as a set (stored_pickle._Sink). A set's items are added by
+ * ADDITEMS, which nothing else writes; a frozenset with items is FROZENSET
+ * not straight after its MARK.
+ * An opcode not known here answers True: the caller then sorts. Once True,
+ * it stays True. */
+typedef struct {
+    uint64_t skip;
+    uint8_t hdr[9];
+    uint8_t have, need, varlen, last_mark, found;
+} SetScan;
+
+static int set_scan_shape(uint8_t op, uint8_t *argb, uint8_t *varlen) {
+    *varlen = 0;
+    switch (op) {
+    case '(': case ')': case '.': case '0': case '1': case '2': case 'N': case '}': case 'a': case 'b':
+    case 'd': case ']': case 'e': case 'l': case 's': case 'u': case 't': case 'R': case 'o': case 'Q':
+    case 0x81: case 0x85: case 0x86: case 0x87: case 0x88: case 0x89: case 0x8f: case 0x90: case 0x91:
+    case 0x92: case 0x93: case 0x94: case 0x97: case 0x98:
+        *argb = 0;
+        return 1;
+    case 'K': case 'h': case 'q': case 0x80: case 0x82:
+        *argb = 1;
+        return 1;
+    case 'U': case 'C': case 0x8a: case 0x8c:
+        *argb = 1;
+        *varlen = 1;
+        return 1;
+    case 'M': case 0x83:
+        *argb = 2;
+        return 1;
+    case 'J': case 'j': case 'r': case 0x84:
+        *argb = 4;
+        return 1;
+    case 'X': case 'T': case 'B': case 0x8b:
+        *argb = 4;
+        *varlen = 1;
+        return 1;
+    case 'G': case 0x95:
+        *argb = 8;
+        return 1;
+    case 0x8d: case 0x8e: case 0x96:
+        *argb = 8;
+        *varlen = 1;
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/* One whole opcode: *op*, its argument *arg* of *argb* bytes. */
+static void set_scan_op(SetScan *s, uint8_t op, const uint8_t *arg, uint8_t argb, uint8_t varlen) {
+    if (varlen) {
+        uint64_t n = 0;
+        for (int k = argb - 1; k >= 0; k--) n = (n << 8) | arg[k];
+        s->skip = n;
+        if (argb == 4 && (n & 0x80000000u) && (op == 'T' || op == 0x8b)) s->found = 1; /* a negative length */
+    }
+    /* What the memo or a frame puts between an opcode and the next says nothing. */
+    if (op == 0x94 || op == 'q' || op == 'r' || op == 0x95) return;
+    if (op == 0x90 || (op == 0x91 && !s->last_mark)) s->found = 1;
+    s->last_mark = op == '(';
+}
+
+static PyObject *py_set_scan_state(PyObject *self, PyObject *unused) {
+    PyObject *state = PyByteArray_FromStringAndSize(NULL, (Py_ssize_t)sizeof(SetScan));
+    if (state) memset(PyByteArray_AS_STRING(state), 0, sizeof(SetScan));
+    return state;
+}
+
+static PyObject *py_set_ops_scan(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs != 2 || !PyByteArray_CheckExact(args[0]) || PyByteArray_GET_SIZE(args[0]) != (Py_ssize_t)sizeof(SetScan)) {
+        PyErr_SetString(PyExc_TypeError, "set_ops_scan(state from set_scan_state(), data)");
+        return NULL;
+    }
+    SetScan s;
+    memcpy(&s, PyByteArray_AS_STRING(args[0]), sizeof s);
+    if (s.found) Py_RETURN_TRUE;
+    Py_buffer view;
+    if (PyObject_GetBuffer(args[1], &view, PyBUF_SIMPLE) < 0) return NULL;
+    const uint8_t *p = (const uint8_t *)view.buf;
+    uint64_t n = (uint64_t)view.len, i = 0;
+    while (i < n && !s.found) {
+        if (s.skip) {
+            uint64_t k = n - i < s.skip ? n - i : s.skip;
+            i += k;
+            s.skip -= k;
+            continue;
+        }
+        if (s.have == 0) {
+            uint8_t op = p[i], argb, varlen;
+            if (!set_scan_shape(op, &argb, &varlen)) {
+                s.found = 1;
+                break;
+            }
+            if (i + 1 + argb <= n) { /* the whole opcode in this piece */
+                set_scan_op(&s, op, p + i + 1, argb, varlen);
+                i += 1 + (uint64_t)argb;
+                continue;
+            }
+            s.hdr[0] = op;
+            s.have = 1;
+            s.need = (uint8_t)(1 + argb);
+            s.varlen = varlen;
+            i++;
+            continue;
+        }
+        s.hdr[s.have++] = p[i++];
+        if (s.have == s.need) {
+            set_scan_op(&s, s.hdr[0], s.hdr + 1, (uint8_t)(s.need - 1), s.varlen);
+            s.have = 0;
+        }
+    }
+    PyBuffer_Release(&view);
+    memcpy(PyByteArray_AS_STRING(args[0]), &s, sizeof s);
+    return PyBool_FromLong(s.found);
+}
+
+/* sorted_set_id(forms, made, spec, obj): kept_state.sorted_set_ids's
+ * persistent_id, answer for answer: None for anything but an exact set or
+ * frozenset of two or more items; else the form a key writes in its place,
+ * (spec[0], spec[1] for a set or spec[2] for a frozenset, its items sorted),
+ * kept in *made* ({id: (set, form)}) and given again for the same set. A set
+ * of strings alone, ints alone or bytes alone is sorted here; any other is
+ * left to *forms*, which keeps its own in *made*. A key pickle asks it of
+ * every object it writes, and a memo of 245,760 small frozensets took a
+ * Python call apiece. */
+static PyObject *py_sorted_set_id(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs != 4 || !PyDict_CheckExact(args[1]) || !PyTuple_CheckExact(args[2]) || PyTuple_GET_SIZE(args[2]) != 3) {
+        PyErr_SetString(PyExc_TypeError, "sorted_set_id(callable, dict, (mark, set name, frozenset name), obj)");
+        return NULL;
+    }
+    PyObject *made = args[1], *spec = args[2], *obj = args[3];
+    int frozen = Py_IS_TYPE(obj, &PyFrozenSet_Type);
+    if ((!frozen && !Py_IS_TYPE(obj, &PySet_Type)) || PySet_GET_SIZE(obj) < 2) Py_RETURN_NONE;
+    PyObject *key = PyLong_FromVoidPtr(obj);
+    if (!key) return NULL;
+    PyObject *found = PyDict_GetItemWithError(made, key); /* borrowed */
+    if (found) {
+        Py_DECREF(key);
+        if (!PyTuple_CheckExact(found) || PyTuple_GET_SIZE(found) != 2) {
+            PyErr_SetString(PyExc_TypeError, "sorted_set_id: made holds (set, form) pairs");
+            return NULL;
+        }
+        return Py_NewRef(PyTuple_GET_ITEM(found, 1));
+    }
+    if (PyErr_Occurred()) {
+        Py_DECREF(key);
+        return NULL;
+    }
+    PyObject *items = PySequence_List(obj);
+    if (!items) {
+        Py_DECREF(key);
+        return NULL;
+    }
+    PyTypeObject *kind = Py_TYPE(PyList_GET_ITEM(items, 0));
+    int plain = kind == &PyUnicode_Type || kind == &PyLong_Type || kind == &PyBytes_Type;
+    for (Py_ssize_t i = 1; plain && i < PyList_GET_SIZE(items); i++) plain = Py_IS_TYPE(PyList_GET_ITEM(items, i), kind);
+    if (!plain) {
+        Py_DECREF(items);
+        Py_DECREF(key);
+        return PyObject_CallOneArg(args[0], obj);
+    }
+    PyObject *sorted = PyList_Sort(items) < 0 ? NULL : PyList_AsTuple(items);
+    Py_DECREF(items);
+    PyObject *form = sorted ? PyTuple_Pack(3, PyTuple_GET_ITEM(spec, 0), PyTuple_GET_ITEM(spec, frozen ? 2 : 1), sorted)
+                            : NULL;
+    Py_XDECREF(sorted);
+    PyObject *entry = form ? PyTuple_Pack(2, obj, form) : NULL;
+    int err = entry ? PyDict_SetItem(made, key, entry) : -1;
+    Py_XDECREF(entry);
+    Py_DECREF(key);
+    if (err < 0) {
+        Py_XDECREF(form);
+        return NULL;
+    }
+    return form;
 }
 
 /* reduce_dict_apart(full, apart, protocol, obj): kept_state's reducer of a
@@ -1939,7 +2127,12 @@ static PyMethodDef cwalk_methods[] = {
     {"referrers_in", (PyCFunction)(void (*)(void))py_referrers_in, METH_FASTCALL,
      "referrers_in(heap, ids) -> list | NotImplemented"},
     {"key_alias_id", (PyCFunction)(void (*)(void))py_key_alias_id, METH_FASTCALL,
-     "key_alias_id(seen, atoms, by_name, kinds, identityless, outside, obj) -> None | mark"},
+     "key_alias_id(seen, atoms, by_name, kinds, identityless, outside, sets, obj) -> None | mark"},
+    {"set_scan_state", (PyCFunction)py_set_scan_state, METH_NOARGS, "set_scan_state() -> bytearray"},
+    {"set_ops_scan", (PyCFunction)(void (*)(void))py_set_ops_scan, METH_FASTCALL,
+     "set_ops_scan(state, data) -> bool"},
+    {"sorted_set_id", (PyCFunction)(void (*)(void))py_sorted_set_id, METH_FASTCALL,
+     "sorted_set_id(forms, made, spec, obj) -> None | form"},
     {"dated_records", (PyCFunction)(void (*)(void))py_dated_records, METH_FASTCALL,
      "dated_records(items, probe, levels) -> bytes | None | NotImplemented"},
     {"reduce_dict_apart", (PyCFunction)(void (*)(void))py_reduce_dict_apart, METH_FASTCALL,
