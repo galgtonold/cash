@@ -34,6 +34,7 @@ import types
 import weakref
 from typing import Any
 
+from .. import _weak
 from .._gc_context import collecting
 from ..tracking.tracker_context import untracked
 
@@ -413,7 +414,7 @@ def runs_user_code(t: threading.Thread, notebook_ns: Any) -> bool:
 
 #: Threads of what hosts the notebook that change none of its values (a test
 #: runner's watchdog), left out by `other_thread_alive`. Held weakly.
-HOST_THREADS: weakref.WeakSet[threading.Thread] = weakref.WeakSet()
+HOST_THREADS: weakref.WeakSet[threading.Thread] = _weak.WeakSet()
 
 #: The packages of what hosts the notebook whose threads `threading` does
 #: not list (a test runner's channel threads), left out by

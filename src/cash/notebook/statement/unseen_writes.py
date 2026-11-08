@@ -33,6 +33,7 @@ import types
 from collections.abc import Callable, Collection, Iterable, Mapping
 from typing import Any
 
+from ... import _weak
 from ..._user_attrs import attribute_or, has_attribute, instance_of, own_dict
 from ...analysis.ast_util import walk_tree
 from ...analysis.callee_effects import free_vars_mutated_in_function, scope_locals
@@ -197,7 +198,6 @@ def live_writers(
     still. Redefined (its name now gives other code) or gone, it is not.
     One that cannot be found at all stands as there for good."""
     import gc
-    import weakref
 
     names = {fn for fn, _ in found}
     out: list[Callable[[], bool]] = []
@@ -207,16 +207,14 @@ def live_writers(
             continue
         function = _named_function(module, qualname, notebook, notebook_name)
         if function is not None and function.__code__ is code:
-            out.append(
-                functools.partial(_still_named, weakref.ref(function), module, qualname, notebook, notebook_name)
-            )
+            out.append(functools.partial(_still_named, _weak.ref(function), module, qualname, notebook, notebook_name))
             continue
         # A lambda in a dict, a function made in another: what holds its
         # code (looked for once, for a statement refused).
         function = next(
             (f for f in gc.get_referrers(code) if type(f) is types.FunctionType and f.__code__ is code), None
         )
-        out.append(_always if function is None else functools.partial(_alive, weakref.ref(function)))
+        out.append(_always if function is None else functools.partial(_alive, _weak.ref(function)))
     return out or [_always]
 
 

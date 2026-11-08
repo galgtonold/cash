@@ -33,6 +33,8 @@ from cash.install_paths import is_user_code_file
 from cash.notebook.file_round_trips import quote
 from cash.source_norm import exact_source_digest
 
+from .. import _weak
+
 logger = logging.getLogger(__name__)
 
 __all__ = ["CODE", "BackgroundThreads", "user_code_of"]
@@ -88,11 +90,11 @@ class BackgroundThreads:
     _warned: set[str] = field(default_factory=set)
 
     def cell_starts(self) -> None:
-        self._before = weakref.WeakSet(threading.enumerate())
+        self._before = _weak.WeakSet(threading.enumerate())
 
     def cell_ends(self, raw_cell: str, cell_number: int | None) -> None:
         """Warn when a thread of the user's that this cell started is alive."""
-        before, self._before = self._before, weakref.WeakSet()
+        before, self._before = self._before, _weak.WeakSet()
         started = [t for t in threading.enumerate() if t not in before and t.is_alive()]
         if not started:
             return

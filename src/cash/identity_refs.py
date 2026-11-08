@@ -32,6 +32,8 @@ from collections.abc import Callable, Mapping
 from itertools import accumulate, chain, compress, islice
 from typing import Any
 
+from . import _weak
+
 __all__ = ["find", "named_objects", "put_back", "resolver"]
 
 #: Containers and objects a walk looks into before it gives up.
@@ -259,7 +261,7 @@ def _is_node_type(t: type) -> bool:
     return found
 
 
-_NODE_TYPE: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_NODE_TYPE: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()
 
 
 def _swap(value: Any, levels: list, swap: dict[int, Any]) -> Any:

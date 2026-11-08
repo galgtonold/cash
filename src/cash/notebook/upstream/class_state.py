@@ -26,6 +26,7 @@ from typing import Any
 
 from cash._user_attrs import has_attribute
 
+from ... import _weak
 from ...sizing import estimate_object_size
 
 #: Most bytes a cell's saved class state may take (estimated): above it the
@@ -69,7 +70,7 @@ class ClassState:
     """What the notebook classes around one class hold on themselves."""
 
     def __init__(self, cls: type, module: str, lineage: str | None = None) -> None:
-        self.cls = weakref.ref(cls)
+        self.cls = _weak.ref(cls)
         #: The class's lineage when saved: the state a run in order starts from.
         self.lineage = lineage
         self._saved: list[tuple[weakref.ref, dict[str, Any], dict[str, int]]] = []
@@ -81,7 +82,7 @@ class ClassState:
             if size > CLASS_STATE_BUDGET:
                 raise MemoryError(f"its class state is over {CLASS_STATE_BUDGET // (1024 * 1024)} MiB")
             ids = {name: id(value) for name, value in state.items()}
-            self._saved.append((weakref.ref(c), copy.deepcopy(state), ids))
+            self._saved.append((_weak.ref(c), copy.deepcopy(state), ids))
 
     def is_for(self, cls: Any) -> bool:
         return self.cls() is cls

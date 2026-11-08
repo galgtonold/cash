@@ -60,6 +60,7 @@ import weakref
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
+from .. import _weak
 from .._gc_context import collecting
 from .._own_work import inside as own_work_inside
 from .._own_work import left_out as own_work_left_out
@@ -239,12 +240,12 @@ def _recorder_class() -> type:
             # code of its own, and a long session kept every one of them.
             # Code that is gone cannot run again, so nothing it would have
             # recorded is lost; code still alive stays.
-            self.user_codes: weakref.WeakKeyDictionary[types.CodeType, int] = weakref.WeakKeyDictionary()
+            self.user_codes: weakref.WeakKeyDictionary[types.CodeType, int] = _weak.WeakKeyDictionary()
             self.rearm: set[types.CodeType] = set()
             #: The user's code that looks names up by a string in its own
             #: globals (`string_lookups`): what it calls is recorded for a
             #: notebook unit, the callable a string found among it.
-            self.by_string: weakref.WeakSet[types.CodeType] = weakref.WeakSet()
+            self.by_string: weakref.WeakSet[types.CodeType] = _weak.WeakSet()
             free = [tool for tool in self.tool_ids if mon.get_tool(tool) is None]
             if len(free) < 2:
                 held = {t: mon.get_tool(t) for t in self.tool_ids}

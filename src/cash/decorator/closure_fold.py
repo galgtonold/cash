@@ -15,6 +15,7 @@ import weakref
 from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any
 
+from .. import _weak
 from .._memo import CODE_OBJECTS, LruMemo
 from .._plain_data import identity_changed, identity_snapshot
 from ..analysis.annotations import assume_safe_block_lines
@@ -818,7 +819,7 @@ class ClosureFold:
         # a later function object can never inherit a dead one's entry by
         # id-reuse). Mutable defaults are deliberately absent: they must be
         # re-hashed per call to stay correct.
-        self._defaults_pins: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+        self._defaults_pins: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()
         # Set by `CodeArgs`: the walk of the code a value holds, for a captured
         # container of functions.
         self.code_args: CodeArgs | None = None

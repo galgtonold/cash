@@ -25,7 +25,7 @@ import types
 import weakref
 from typing import Any
 
-from . import _native, _plain_data
+from . import _native, _plain_data, _weak
 from ._user_attrs import attribute_or, builtin_items, instance_of, own_dict
 from .live_state import is_live_stream
 from .value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, PLAIN_SEQS, library_scalar_types
@@ -833,4 +833,4 @@ def slot_names(cls: type) -> tuple[str, ...]:
     return found
 
 
-_SLOTS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_SLOTS: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()

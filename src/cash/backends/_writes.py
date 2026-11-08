@@ -38,6 +38,7 @@ from cash.diagnostics import warn_diagnostic
 from cash.exceptions import CashCacheStoreFailedWarning
 from cash.tracking.tracker_context import untracked
 
+from .. import _weak
 from ..config.resolve import get_config
 from ..config.schema import CashConfig
 from . import write_cost
@@ -65,7 +66,7 @@ _WORKER_THREAD = threading.local()
 # ``Cash(...)`` built in a cell), and durability is a property of the kernel,
 # so anything flushing "the pending writes" must reach all of them. Weak, so a
 # backend going out of scope is not kept alive by this.
-_LIVE_WRITE_QUEUES: weakref.WeakSet = weakref.WeakSet()
+_LIVE_WRITE_QUEUES: weakref.WeakSet = _weak.WeakSet()
 
 
 def all_pending_writes() -> list[PendingWrites]:
@@ -176,7 +177,7 @@ CHILD_WAIT_S = 30.0
 
 #: Writes a child-process start already gave up waiting for: the next start
 #: does not wait for them again.
-_GIVEN_UP: weakref.WeakSet = weakref.WeakSet()
+_GIVEN_UP: weakref.WeakSet = _weak.WeakSet()
 
 
 def _finish_before_child(_args: tuple = ()) -> None:

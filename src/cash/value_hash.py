@@ -24,7 +24,7 @@ from collections.abc import Callable, Iterator
 from time import perf_counter
 from typing import Any
 
-from . import value_watch
+from . import _weak, value_watch
 from ._user_attrs import instance_of
 from .content_hashers import builtin_hash, builtin_hash_family, is_native_panic
 from .sizing import pandas_nbytes
@@ -410,7 +410,7 @@ def compute_hash(obj: Any) -> str:
         digest = _compute_hash(obj)
     if window is not None and type(obj) not in _ATOMS and _reusable(obj, digest):
         try:
-            window[id(obj)] = (weakref.ref(obj), digest)
+            window[id(obj)] = (_weak.ref(obj), digest)
         except TypeError:
             pass  # a list, dict or tuple: see `one_read`
     return digest

@@ -23,6 +23,8 @@ from cash.content_hashers import builtin_hash_family
 from cash.notebook.lineage_store import restore_frozen_tag
 from cash.value_hash import budgeted_hash, is_costly, note_size
 
+from .. import _weak
+
 if TYPE_CHECKING:
     from cash.notebook.statement._metadata import StatementCacheMetadata
     from cash.notebook.tracking_state import TrackingState
@@ -274,7 +276,7 @@ class HeldObject:
         self._id = id(obj)
         self._type = type(obj)
         try:
-            self._ref: weakref.ref[Any] | None = weakref.ref(obj)
+            self._ref: weakref.ref[Any] | None = _weak.ref(obj)
         except TypeError:
             self._ref = None
 

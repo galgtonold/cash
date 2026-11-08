@@ -24,6 +24,7 @@ import weakref
 from collections.abc import Callable
 from typing import Any
 
+from .. import _weak
 from .._memo import PURITY_REPORTS, LruMemo
 from .._paths import is_pseudo_filename
 from ..diagnostics import warn_diagnostic
@@ -52,7 +53,7 @@ class PurityAnalyzer:
         self._cache: LruMemo[str, tuple[PurityReport, Any]] = LruMemo(PURITY_REPORTS)
         self._cache_lock = threading.Lock()
         #: function -> (its code, its report), for `analyze_reached`.
-        self._reached: weakref.WeakKeyDictionary[Any, tuple[Any, PurityReport]] = weakref.WeakKeyDictionary()
+        self._reached: weakref.WeakKeyDictionary[Any, tuple[Any, PurityReport]] = _weak.WeakKeyDictionary()
 
     def analyze_reached(self, func: Callable[..., Any]) -> PurityReport:
         """`analyze` for a function that reaches a call as data: held in a
@@ -184,7 +185,7 @@ def _memo_key(func: Callable[..., Any]) -> tuple[str | None, Any]:
     # cache. So an entry holds the function it was built from, and
     # serves only while that function is alive in the same namespace.
     try:
-        owner = weakref.ref(target)
+        owner = _weak.ref(target)
     except TypeError:
         return None, None
     # A closure's names also resolve in its cells: two closures
@@ -235,9 +236,9 @@ class _SameCode:
     __slots__ = ("_code", "_function", "_inner")
 
     def __init__(self, function: Any, inner: types.FunctionType, code: types.CodeType) -> None:
-        self._function = weakref.ref(function)
-        self._inner = weakref.ref(inner)
-        self._code = weakref.ref(code)
+        self._function = _weak.ref(function)
+        self._inner = _weak.ref(inner)
+        self._code = _weak.ref(code)
 
     def __call__(self) -> Any:
         function, inner = self._function(), self._inner()

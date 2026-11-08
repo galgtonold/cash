@@ -40,7 +40,7 @@ from contextlib import contextmanager
 from time import perf_counter
 from typing import Any
 
-from . import _native, kept_state
+from . import _native, _weak, kept_state
 from .bulk_digest import TAG, fold_buffer
 
 __all__ = [
@@ -640,7 +640,7 @@ def _keeps(value: Any) -> bool:
 
 def _weakly_held(value: Any) -> bool:
     try:
-        weakref.ref(value)
+        _weak.ref(value)
     except TypeError:
         return False
     return True
