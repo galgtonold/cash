@@ -10,7 +10,9 @@ classifier an earlier section of the notebook fitted under the same name:
 the next cell, ``voting_clf.score(...)``, then raised (that classifier was
 fitted on two features). Plain Python re-runs nothing and scores the
 ensemble. Found in E8 (homl ch07), where the same chain re-ran 36 s of fits
-for a 0.3 s score cell.
+for a 0.3 s score cell. The repair now leaves a name a cell below bound
+alone, and the fit keeps the lineage of each estimator whose digest before
+and after it is the same.
 """
 
 import pytest
@@ -95,10 +97,6 @@ def test_the_ensemble_below_keeps_its_binding(nb_runner):
     assert nb_runner.get_output(len(CELLS)).strip() == first.strip(), nb_runner.get_output(len(CELLS))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="the ensemble's fit moves the lineages of the estimators it holds, so a cell above re-fits them",
-)
 def test_a_scoring_cell_run_again_refits_nothing(nb_runner):
     """Plain Python fits nothing to run the scoring cell again."""
     refits, error, _ = _run_scores_again(nb_runner)

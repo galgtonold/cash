@@ -281,6 +281,15 @@ class StatementRun:
     #: The ``holders`` the run left as they were, by their content digest:
     #: they keep their lineage (``lineage_formula.keep_held_lineage``).
     holders_unchanged: set[str] = field(default_factory=set)
+    #: The in-place-edit digest (`mutation_fingerprint`) of each variable
+    #: sharing an object with an output or receiver bound before the run
+    #: (``shared_object_partners``), taken just before it ran: a holder
+    #: whose digest after is the same was left as it was
+    #: (``VotingClassifier.fit`` fits clones of the estimators it holds).
+    #: Within ``holder_digest_budget`` each way; one not digested in time
+    #: moves.
+    holder_digests: dict[str, str] = field(default_factory=dict)
+    holder_digest_budget: float = 0.0
     #: The variables whose objects the outputs hold that are stored as the
     #: variable, not copied, each with its content digest: a restore binds
     #: the live object again, when its digest is still this one
