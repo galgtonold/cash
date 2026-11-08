@@ -1,11 +1,14 @@
-"""A kept plot run holds one run of its statements per condition.
+"""A plot run keeps one run of its statements per condition.
 
 The same statements run where the helper memos, the random streams or the
 environment stand otherwise (a call written again further down, where the
-memo already holds what the first call computed) keep their runs side by
-side under the one key, so a later run at either place finds its own. A
-run under a condition already kept replaces that one. How many are kept is
-bounded by count and by the size a kept plot run may show.
+memo already holds what the first call computed) are kept as entries of
+their own, listed in one record most recently used first, so a later run at
+either place finds its own. A run under a condition already listed takes
+its place at the front. The runs listed are bounded together by the size a
+kept plot run may show: past it the least recently used are dropped, and a
+smaller one after a big one still fits. A run no tier holds any more is
+dropped from the record, as it can never be served.
 """
 
 from __future__ import annotations
@@ -14,70 +17,81 @@ from cash.notebook.ipython import plot_runs
 from cash.notebook.ipython.plot_runs import PlotRuns
 from cash.notebook.plot_outputs import PLOT_RECORD_CAP
 
-KEY = "plot:abc"
+RECORD = "plot:record"
 
 
 class _Backend:
+    """What the record is read and written through: metadata looked at
+    without counting a use, metadata-only writes, and deletes."""
+
     def __init__(self) -> None:
-        self.entries: dict[str, tuple[dict, dict]] = {}
+        self.meta: dict[str, dict] = {}
+        self.deleted: list[str] = []
+
+    def peek_metadata(self, key):
+        found = self.meta.get(key)
+        return dict(found) if found is not None else None
+
+    def set_metadata_only(self, key, metadata):
+        self.meta[key] = dict(metadata)
+
+    def delete(self, key):
+        self.deleted.append(key)
+        self.meta.pop(key, None)
 
     def get(self, key):
-        return self.entries.get(key, (None, None))
+        raise AssertionError("keeping a run read a kept run's payload")
 
-    def set(self, key, payload, metadata):
-        self.entries[key] = (metadata, payload)
-
-
-def _variant(memo: str, size: int = 10, tag: str = "") -> dict:
-    return {
-        "statements": [{"code": "run()", "memos": [[[{"where": ["random_cities"], "items": [memo]}], None]]}],
-        "flush": None,
-        "echo": tag,
-        "bound": [],
-        "env": {},
-        "rng_reads": {},
-        "seconds": 1.0,
-        "size": size,
-    }
+    get_metadata = get
 
 
-def _keep(backend: _Backend, variant: dict) -> list[dict]:
-    variants = PlotRuns._variants_with(backend, KEY, variant)
-    backend.set(KEY, {"variants": variants}, {"plot_format": plot_runs._FORMAT})
-    return variants
+def _key(condition: str) -> str:
+    return f"plot:{condition}"
 
 
-def test_a_run_under_another_memo_is_kept_beside_the_first():
+def _keep(backend: _Backend, condition: str, size: int = 10) -> list[str]:
+    backend.meta[_key(condition)] = {"plot_format": plot_runs._FORMAT}
+    PlotRuns._note_variant(backend, RECORD, condition, size, _key)
+    return [c for c, _ in plot_runs._listed_variants(backend, RECORD)]
+
+
+def test_runs_under_other_conditions_are_listed_newest_first():
     backend = _Backend()
-    _keep(backend, _variant("filled", tag="first place"))
-    kept = _keep(backend, _variant("read", tag="second place"))
-    assert [v["echo"] for v in kept] == ["second place", "first place"]
+    for condition in "abcdef":
+        listed = _keep(backend, condition)
+    assert listed == list("fedcba"), "a run under a sixth condition dropped one that fits"
 
 
-def test_a_run_under_a_kept_condition_replaces_it():
+def test_a_run_under_a_listed_condition_moves_to_the_front():
     backend = _Backend()
-    _keep(backend, _variant("filled", tag="old"))
-    _keep(backend, _variant("read"))
-    kept = _keep(backend, _variant("filled", tag="new"))
-    assert [v["echo"] for v in kept] == ["new", ""]
+    _keep(backend, "a")
+    _keep(backend, "b")
+    assert _keep(backend, "a") == ["a", "b"]
 
 
-def test_the_oldest_conditions_are_dropped_past_the_count():
+def test_past_the_size_the_least_recently_used_are_dropped_and_a_small_one_still_fits():
     backend = _Backend()
-    for n in range(plot_runs._VARIANTS_KEPT + 2):
-        kept = _keep(backend, _variant(str(n), tag=str(n)))
-    newest = [str(n) for n in reversed(range(plot_runs._VARIANTS_KEPT + 2))]
-    assert [v["echo"] for v in kept] == newest[: plot_runs._VARIANTS_KEPT]
+    _keep(backend, "small", size=10)
+    _keep(backend, "big", size=PLOT_RECORD_CAP // 2 + 1)
+    listed = _keep(backend, "new", size=PLOT_RECORD_CAP // 2 + 1)
+    assert listed == ["new", "small"]
+    assert backend.deleted == [_key("big")]
 
 
-def test_runs_past_the_size_a_plot_may_show_are_dropped():
+def test_a_run_no_tier_holds_is_dropped_from_the_record():
     backend = _Backend()
-    _keep(backend, _variant("a", size=PLOT_RECORD_CAP // 2 + 1, tag="a"))
-    kept = _keep(backend, _variant("b", size=PLOT_RECORD_CAP // 2 + 1, tag="b"))
-    assert [v["echo"] for v in kept] == ["b"]
+    _keep(backend, "a")
+    _keep(backend, "b")
+    del backend.meta[_key("a")]
+    assert _keep(backend, "c") == ["c", "b"]
 
 
-def test_an_entry_of_another_format_is_not_read():
+def test_a_served_run_is_listed_first():
     backend = _Backend()
-    backend.set(KEY, {"statements": []}, {"plot_format": plot_runs._FORMAT - 1})
-    assert [v["echo"] for v in PlotRuns._variants_with(backend, KEY, _variant("a", tag="a"))] == ["a"]
+    for condition in "abc":
+        _keep(backend, condition)
+    plots = PlotRuns(None, None, None)
+    plots._promote = (backend, RECORD, "a")
+    plots._used_first()
+    assert [c for c, _ in plot_runs._listed_variants(backend, RECORD)] == ["a", "c", "b"]
+    assert plots._promote is None

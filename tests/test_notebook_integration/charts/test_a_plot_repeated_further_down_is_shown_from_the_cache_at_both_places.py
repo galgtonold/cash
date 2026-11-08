@@ -261,3 +261,79 @@ def test_a_graph_drawn_on_the_tour_of_its_cell_is_drawn_on_that_figure(nb_runner
     assert _calls(log) == "tm", "the unchanged tour and graph were drawn again"
     assert _images(nb_runner.get_cell(5)) == shown
     assert _left(nb_runner) == _plain(tmp_path, cells)
+
+
+SAMPLED = (
+    "def sampled_tour(n):\n"
+    "    count('s')\n"
+    f"    time.sleep({ABOVE_PERSISTENCE_FLOOR_S})\n"
+    "    plot_tour([complex(random.random(), random.random()) for _ in range(n)])\n"
+)
+
+
+@pytest.mark.fresh_kernel
+def test_a_plot_written_under_many_seeds_is_shown_at_every_place(nb_runner, tmp_path):
+    """Six places, each under its own seed: none is dropped for the others,
+    and each is shown from the cache after a restart, Run All after Run All."""
+    places = []
+    for seed in range(1, 7):
+        places += [f"random.seed({seed})", f"sampled_tour(5)  # place {seed}"]
+    log, cells = _notebook(nb_runner, tmp_path, SAMPLED, *places)
+    nb_runner.run_all()
+    assert _calls(log) == "s" * 6
+    images = [_images(nb_runner.get_cell(7 + 2 * k)) for k in range(6)]
+    assert all(len(shown) == 1 for shown in images)
+    for _ in range(2):
+        nb_runner.settle_writes()
+        nb_runner.restart()
+        nb_runner._init_cash()
+        nb_runner.run_all()
+        assert _calls(log) == "s" * 6, "a place of the seeded plot was drawn again"
+        assert [_images(nb_runner.get_cell(7 + 2 * k)) for k in range(6)] == images
+        assert _left(nb_runner) == _plain(tmp_path, cells)
+
+
+PURE = (
+    "@cache\n"
+    "def scale(n):\n"
+    "    return n * 2\n"
+    "\n"
+    "@cache\n"
+    "def points(n):\n"
+    "    random.seed(n)\n"
+    "    return [complex(random.random(), random.random()) for _ in range(n)]\n"
+    "\n"
+    "def scaled_tour(k):\n"
+    "    count('s')\n"
+    f"    time.sleep({ABOVE_PERSISTENCE_FLOOR_S})\n"
+    "    plot_tour([complex(c.real * k, c.imag) for c in points(5)])\n"
+)
+SCALED = "scaled_tour(scale(1))"
+
+
+@pytest.mark.fresh_kernel
+def test_a_place_served_leaves_a_memo_as_plain_python_does(nb_runner, tmp_path):
+    """The first place finds ``scale(1)`` computed above and computes
+    ``points(5)``; the second finds ``scale(2)`` and ``points(5)`` there
+    too. Looking at the second place's run, which ``scale`` alone could be
+    filled for, must not fill it for the first: it holds what plain
+    Python's does."""
+    log, cells = _notebook(
+        nb_runner,
+        tmp_path,
+        PURE,
+        "scale(1)",
+        SCALED,
+        "held = scale.cache_info().currsize",
+        "scale(2)",
+        SCALED + "  # again",
+    )
+    nb_runner.run_all()
+    plain = nb_runner.peek("held")
+    nb_runner.settle_writes()
+    nb_runner.restart()
+    nb_runner._init_cash()
+    nb_runner.run_all()
+    assert _calls(log) == "ss"
+    assert nb_runner.peek("held") == plain, "serving the first place left another answer in the memo"
+    assert _left(nb_runner) == _plain(tmp_path, cells)

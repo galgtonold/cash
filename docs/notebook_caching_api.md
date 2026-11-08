@@ -156,7 +156,7 @@ the reasoning.
 
 ### Plots shown from the cache
 
-<!-- claim: cash/notebook/ipython/plot_runs.py:PlotRuns.serve @0458b11a, cash/notebook/ipython/plot_runs.py:PlotRuns._store @ec42fca9, cash/notebook/plot_outputs.py:statement_plot_facts @b47a015b, cash/notebook/plot_outputs.py:first_read_after @1d857b84, cash/notebook/ipython/plot_runs.py:PlotRuns._served @f905d1b5, cash/notebook/statement/processor.py:StatementProcessor.settle_served_plot_statement @cbfa94b7 -->
+<!-- claim: cash/notebook/ipython/plot_runs.py:PlotRuns.serve @0458b11a, cash/notebook/ipython/plot_runs.py:PlotRuns._store @3a1e2fe4, cash/notebook/plot_outputs.py:statement_plot_facts @b47a015b, cash/notebook/plot_outputs.py:first_read_after @1d857b84, cash/notebook/ipython/plot_runs.py:PlotRuns._served @52323bf8, cash/notebook/statement/processor.py:StatementProcessor.settle_served_plot_statement @cbfa94b7 -->
 With the inline backend (the default in Jupyter), a plot begins with no
 figure open and ends when `plt.show()`, or the end of the cell, shows its
 figures and closes them. Cash keeps what such a plot showed: the image, what
@@ -179,7 +179,11 @@ draws since are the same. A served plot leaves the generator where its
 drawing left it, and puts back into a `functools.cache` helper the answers
 the drawing added, so the cells below draw and read as after a drawing. The same plot written
 again further down, where the helper already holds what the first one
-computed, is kept apart from the first and served at each place.
+computed or the generator stands elsewhere, is served at each place: the
+places share one entry, bounded by the size one plot's output may take,
+which drops the place served least recently first. A plot calling a
+`functools.cache` helper that cash cannot find (one defined inside another
+function) is drawn every time.
 
 A served plot binds nothing: `fig`, `ax` and whatever else it assigned are
 not there afterwards. So it is drawn again, as before, when:

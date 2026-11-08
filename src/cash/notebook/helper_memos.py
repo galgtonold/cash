@@ -64,7 +64,9 @@ __all__ = [
     "new_statement",
     "put_back",
     "reads_counters",
+    "refillable",
     "unfilled",
+    "unlocated",
     "used",
     "watched",
     "watching_clears",
@@ -1510,6 +1512,60 @@ def unfilled(records: list[dict] | None, ns: Mapping[str, Any], *, refill: bool 
         else:
             return f"the helper memo {label} does not hold the answers the statement read"
     return None
+
+
+def refillable(records: list[dict] | None, ns: Mapping[str, Any]) -> bool:
+    """Whether every memo of *records* that `unfilled` without refilling
+    refuses is one it may refill: a helper recorded as computing from its
+    arguments alone, with the calls that fill it. Nothing is called: a
+    caller choosing among entries refills only for the one it serves."""
+    for record in records or ():
+        if unfilled([record], ns, refill=False) is not None and not (record.get("pure") and record.get("calls")):
+            return False
+    return True
+
+
+def unlocated(functions: Any, ns: Mapping[str, Any]) -> str | None:
+    """The name of a memo of the user's that *functions* (the user's
+    functions a statement can call) reach through a closure, a default or
+    a global, and that this module does not find where it looks (`_where`),
+    or None. A run's answers in it are in no record: served, the memo
+    would stay as it was, and a later call would compute (and print, and
+    draw from a seeded stream) where a run finds the answer."""
+    if _LRU_WRAPPER is None:
+        return None
+    found: dict[int, str] = {}
+    for fn in functions:
+        code = attribute_or(fn, "__code__", None)
+        values: list[tuple[str, Any]] = []
+        for name, cell in zip(attribute_or(code, "co_freevars", ()) or (), attribute_or(fn, "__closure__", None) or ()):
+            try:
+                values.append((name, cell.cell_contents))
+            except ValueError:  # an empty cell
+                continue
+        values.extend(("a default", value) for value in attribute_or(fn, "__defaults__", None) or ())
+        values.extend((name, value) for name, value in (attribute_or(fn, "__kwdefaults__", None) or {}).items())
+        fn_globals = attribute_or(fn, "__globals__", None)
+        if isinstance(fn_globals, dict) and code is not None:
+            for sub in _codes_in(code):
+                values.extend((name, fn_globals[name]) for name in sub.co_names if name in fn_globals)
+        for name, value in values:
+            for _, memo in _memos_in(value, [name], set()):
+                found.setdefault(id(memo), name)
+    if not found:
+        return None
+    located = {id(memo) for _, memo in _where(ns)}
+    missing = sorted(name for key, name in found.items() if key not in located)
+    return missing[0] if missing else None
+
+
+def _codes_in(code: types.CodeType) -> Iterator[types.CodeType]:
+    """*code* and the code of the functions and comprehensions it defines."""
+    todo = [code]
+    while todo:
+        current = todo.pop()
+        yield current
+        todo.extend(const for const in current.co_consts if isinstance(const, types.CodeType))
 
 
 def _refill_read(record: dict, memo: Any, refill: bool) -> list[str] | None:
