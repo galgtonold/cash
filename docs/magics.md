@@ -149,14 +149,17 @@ explains each line.
 ```
 
 ### `%cash_status`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_status @d0186748 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_status @17cd0ee5 -->
 
 **Usage:** `%cash_status [dict|json]`
 
 Returns the last cell's statements (status, code, outputs, times), the session's
 variable lineage, whether caching is on, and whether the C extension is in
 use (`fast_path`: `on`, or `off` with the reason; see
-[The C fast path](getting-started/installation.md#the-c-fast-path)). With no argument it prints JSON and
+[The C fast path](getting-started/installation.md#the-c-fast-path)), and
+whether folders are watched for changes to the files cells read
+(`file_watch`: `on` with how many folders, or `off` with the reason; see
+[invalidation](how-it-works/invalidation.md#files)). With no argument it prints JSON and
 returns the dict; `dict` returns it without printing; `json` returns a JSON
 string. Statuses use the enum names: `COMPUTED` for the badge's EXECUTED,
 `RESTORED` for CACHED, and `MIXED` for a statement that ran while calls inside

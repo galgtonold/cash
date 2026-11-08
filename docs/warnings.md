@@ -1870,7 +1870,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-ANALYSIS-FAILED](#notebook-analysis-failed) | notebook | a safety check raised; the statement ran uncached |
 | [NOTEBOOK-BAILOUT](#notebook-bailout) | notebook | an internal error; the cell ran uncached |
 | [NOTEBOOK-CALLABLE-UNREAD](#notebook-callable-unread) | notebook | a function the statement calls or hands over cannot be read, so it runs every time |
-| [NOTEBOOK-MEMO-UNREAD](#notebook-memo-unread) | notebook | a `functools.cache` memo the statement read holds more answers than cash checks, so it runs every time |
+| [NOTEBOOK-MEMO-UNREAD](#notebook-memo-unread) | notebook | a `functools.cache` memo the statement filled or read holds more answers than cash checks, so it runs every time |
 | [NOTEBOOK-MEMO-SHARED](#notebook-memo-shared) | notebook | an answer the statement put into a `functools.cache` memo is held outside its outputs too, so it runs every time |
 | [NOTEBOOK-CELL-SYNTAX](#notebook-cell-syntax) | notebook | an earlier cell does not parse |
 | [NOTEBOOK-CELL-UNPLACED](#notebook-cell-unplaced) | notebook | the cell run is not in the saved notebook and no cell id places it, so the cells above it were not checked |
@@ -1988,16 +1988,19 @@ module, by its name, so cash can read it.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_memo_unread @62d11beb -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_memo_unread @77028361 -->
 **What happened.** The statement called a helper memoised with
 `functools.cache` or `functools.lru_cache`, and that memo holds more answers
 than cash checks (4,096). A served statement must leave the memo as a real
 run would, so cash compares every answer it holds; past the limit it does
 not, and the statement was not stored. The message names the memo and how
-many answers it holds. It is shown once per statement. A statement that
+many answers it holds, and says the statement *fills* it when the statement
+made the helper compute new answers, or *reads* it when it only looked
+answers up. It is shown once per statement. A statement that
 empties the memo before any call of it (`f.cache_clear()` first) is stored
 however many answers it holds, so it does not get this warning for that
-memo.
+memo. Nor does a cell of only `def` and `class` statements that calls no
+memo: defining a function that calls `f.cache_clear()` does not call it.
 
 **Why it matters.** Your results are correct: the statement runs every
 time, as plain Python runs it. Only the time is lost.

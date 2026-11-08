@@ -62,6 +62,7 @@ __all__ = [
     "lifted",
     "misses_before",
     "new_statement",
+    "none_moved",
     "put_back",
     "reads_counters",
     "unfilled",
@@ -335,6 +336,23 @@ def misses_before(before: list[tuple[list[str], Any, int, int, int, Any]] | None
     """``id(memo) -> its miss count`` in what `watched` saw before a run:
     a memo's count unmoved since, the run did not fill it."""
     return {id(memo): misses for _, memo, _, misses, *_ in before or ()}
+
+
+def none_moved(before: list[tuple[list[str], Any, int, int, int, Any]] | None, cleared: Clears | None = None) -> bool:
+    """After a run: whether every memo of *before* (`watched`) has the
+    counters and size it had then and was not cleared in it (*cleared*):
+    the run called none of them. A memo whose counters raise is taken to
+    have moved."""
+    if cleared is not None and cleared.fired:
+        return False
+    for _, memo, hits, misses, size, _ in before or ():
+        try:
+            info = memo.cache_info()
+        except Exception:  # noqa: BLE001 - a wrapper whose counters raise
+            return False
+        if (info.hits, info.misses, info.currsize) != (hits, misses, size):
+            return False
+    return True
 
 
 def bodies_run(
@@ -808,8 +826,10 @@ def used(
     each taken as empty before it. *site*: ``(code, fn)``, the statement's
     text or the function called, read for the memos whose ``cache_clear``
     it names, which the warning names first (`_changed_label`). *unread*
-    names the memo when the reason is that it holds more than `MAX_KEYED`
-    answers, for the statement's warning, else None.
+    says what the run did to the memo and names it when the reason is that
+    it holds more than `MAX_KEYED` answers (``"fills the helper memo f,
+    which holds 5,000 answers"``, or ``"reads ..."`` when its miss count
+    and size did not move), for the statement's warning, else None.
 
     *changes*: given (a list, by a statement whose code reads no memo's
     counters), a memo the run filled or emptied is recorded rather than
@@ -936,9 +956,15 @@ def used(
         elif info.misses < misses or info.hits < hits:
             why = f"It emptied the helper memo {label}"
         elif items is None or len(items) > MAX_KEYED:
-            why = f"It read the helper memo {label}, which holds more answers than cash checks ({MAX_KEYED})"
+            # Filled: it made the helper compute (a miss) or grew or
+            # cleared the memo; else it only looked answers up.
+            filled = info.misses != misses or info.currsize != size or fired
+            why = (
+                f"It {'filled' if filled else 'read'} the helper memo {label}, "
+                f"which holds more answers than cash checks ({MAX_KEYED})"
+            )
             if items is not None:
-                unread = f"{label}, which holds {len(items):,} answers"
+                unread = f"{'fills' if filled else 'reads'} the helper memo {label}, which holds {len(items):,} answers"
         elif moved:
             why = f"It changed an answer the helper memo {label} holds in place"
         elif info.misses != misses:

@@ -179,9 +179,12 @@ def cmd_info(args: argparse.Namespace) -> None:
     # Whether the C extension is skipping re-hashes of unchanged values, or
     # why not: the one place a decorator user can see it.
     print(f"  Fast path:  {_native.status_line()}")
-    from cash.tracking import native_reads
+    from cash.tracking import file_watch, native_reads
 
     print(f"  File hook:  {native_reads.status_line()}")
+    # Whether a notebook takes folder change notifications for the files
+    # its cells read, or checks each file before every cell, and why.
+    print(f"  File watch: {file_watch.status_line()}")
     if config.tiers:
         print(f"  Tiers:      {', '.join(_tier_text(t) for t in config.tiers)}")
     # Where this run looked, and what each layer set: the Source line names

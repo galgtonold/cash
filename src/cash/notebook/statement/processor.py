@@ -742,6 +742,16 @@ def _cut_short_why(what: str, budget: float) -> str:
     return f"{what} would take longer than {budget:.1f}s, more than the statement is worth, so it re-runs every time"
 
 
+def _only_defines(tree: ast.Module | None) -> bool:
+    """Whether *tree* is only ``def`` and ``class`` statements, which bind a
+    function or class and call no body of theirs."""
+    return (
+        tree is not None
+        and bool(tree.body)
+        and all(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) for node in tree.body)
+    )
+
+
 def _bound_names(tree: ast.AST | None) -> set[str] | None:
     """The names *tree* binds: assigned, defined, imported; None when there
     is no tree to read them from."""
@@ -1762,7 +1772,13 @@ class StatementProcessor:
         self, run: StatementRun, memos_before: list | None, memos_cleared: helper_memos.Clears | None
     ) -> tuple[Any, list[dict] | None]:
         """What *run*'s statement did to the helper memos it called
-        (`helper_memos.used`), with the changes an entry carries."""
+        (`helper_memos.used`), with the changes an entry carries. A
+        statement of ``def`` and ``class`` blocks only binds: one that called
+        no memo (its decorators, defaults and class body ran none, and
+        cleared none) used none, though its text names ``cache_clear`` and
+        a memo it can reach holds more answers than `helper_memos.used` reads."""
+        if _only_defines(run.tree) and helper_memos.none_moved(memos_before, memos_cleared):
+            return None, None
         user_ns = self.shell.user_ns
         clears = bool(memos_before) and helper_memos.clears(run.code, user_ns)
         # What it put into a memo is stored with the outputs, unless it
@@ -4801,16 +4817,17 @@ class StatementProcessor:
         location = ("<cash>", running_cell_count(self.shell))
         warn_diagnostic(CashWarning, "NOTEBOOK-SHARE-UNCHECKED", what, fix, location=location)
 
-    def _warn_memo_unread(self, run: StatementRun, memo: str) -> None:
+    def _warn_memo_unread(self, run: StatementRun, did: str) -> None:
         """Warn, once per statement, that it runs every time because a
-        helper memo it read holds more answers than cash checks
+        helper memo it filled or read holds more answers than cash checks
         (``NOTEBOOK-MEMO-UNREAD``): only the badge said so, and the cell
-        was just slow."""
+        was just slow. *did*: what it did to which memo, as `helper_memos.used`
+        words it (``"fills the helper memo f, which holds 5,000 answers"``)."""
         if run.source_hash in self._memo_unread_warned:
             return
         self._memo_unread_warned.add(run.source_hash)
         what = (
-            f"this statement reads the helper memo {memo}; cash checks a memo of up to "
+            f"this statement {did}; cash checks a memo of up to "
             f"{helper_memos.MAX_KEYED:,} answers, so this statement runs every time."
         )
         fix = (

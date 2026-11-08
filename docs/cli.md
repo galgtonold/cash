@@ -62,6 +62,7 @@ Cash v<!-- docnum:version -->0.14.0<!-- /docnum -->
   Persist:    cost model (0.1s compute floor, 20% savings required; notebook statements: 0.01s store floor, 0.05s restore budget)
   Fast path:  on (C extension cash._cwatch, API 1)
   File hook:  on (14 slots in 3 libraries)
+  File watch: on (inotify)
   Config files:
     user         /home/me/.config/cash/config.toml  (not found)
     project      /home/me/project/pyproject.toml  (read)
@@ -83,6 +84,10 @@ Cash v<!-- docnum:version -->0.14.0<!-- /docnum -->
   themselves (the
   [native file hook](known-limitations.md#reads-through-a-loader-cash-cannot-see)),
   and in how many places it is hooked, or why it is off.
+- `File watch` says whether a notebook watches folders for changes to the
+  files its cells read (`CASH_FILE_WATCH`, on by default; see
+  [invalidation](how-it-works/invalidation.md#files)), or why
+  not: `off (CASH_FILE_WATCH=0; ...)`, or `off: not supported on macOS; ...`.
 - `Config files` lists every file looked for: `read`, `not found`,
   `no [tool.cash] section`, or `could not be read`.
 - `Settings` lists each setting some layer set, with the layer that won
@@ -264,7 +269,7 @@ Running `on` again with the same mode does nothing. To switch modes, run
 `cash autoload off` first, or pass `--force`: `on` refuses to overwrite an
 existing hook with a different body.
 
-<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @016a8acb -->
+<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @1442fa70 -->
 ## Exit codes
 
 | Code | When |

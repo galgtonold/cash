@@ -59,7 +59,7 @@ from typing import Any
 
 from .read_classification import own_lstat, own_stat
 
-__all__ = ["FileWatch", "watcher", "reset"]
+__all__ = ["FileWatch", "watcher", "reset", "status_line"]
 
 logger = logging.getLogger(__name__)
 
@@ -652,6 +652,8 @@ LOCAL_FILE_SYSTEMS = frozenset(
 
 class _Inotify:
     """One inotify instance, read without blocking."""
+
+    NAME = "inotify"
 
     def __init__(self) -> None:
         import ctypes
@@ -1339,6 +1341,8 @@ class _VolumeChanges:
     or rename of it or of a folder above it (`_Volume.located`); one found
     before the volume was watched is not kept."""
 
+    NAME = "folder change notifications"
+
     def __init__(self, kernel: Any = None) -> None:
         self.kernel = kernel if kernel is not None else _Win32()
         self._volumes: dict[str, _Volume] = {}
@@ -1532,10 +1536,14 @@ class _VolumeChanges:
 
 _WATCH: FileWatch | None = None
 _TRIED_IN: int | None = None
+#: Why the last `watcher` started none, as `status_line` says it.
+_WHY_NONE: str | None = None
+
+ENV = "CASH_FILE_WATCH"
 
 
 def _switched_off() -> bool:
-    return os.environ.get("CASH_FILE_WATCH", "").strip().lower() in ("0", "false", "no", "off")
+    return os.environ.get(ENV, "").strip().lower() in ("0", "false", "no", "off")
 
 
 def _backend() -> Any:
@@ -1550,7 +1558,7 @@ def watcher() -> FileWatch | None:
     """The process's `FileWatch`, started on first use; None where folders
     cannot be watched here (or ``CASH_FILE_WATCH=0``). A forked child starts
     its own: the parent's events are the parent's to read."""
-    global _WATCH, _TRIED_IN
+    global _WATCH, _TRIED_IN, _WHY_NONE
     pid = os.getpid()
     if _WATCH is not None and _WATCH.pid == pid:
         return _WATCH
@@ -1559,15 +1567,47 @@ def watcher() -> FileWatch | None:
     _TRIED_IN = pid
     _WATCH = None
     if _switched_off():
+        _WHY_NONE = f"off ({ENV}={os.environ.get(ENV, '').strip()}; unset it to watch folders for file changes)"
         return None
     try:
         backend = _backend()
-    except Exception:  # no watch: stat-ed every time
+        why = f"not supported on {_platform_name()}"
+    except Exception as exc:  # no watch: stat-ed every time
         logger.debug("file watch unavailable", exc_info=True)
         backend = None
+        why = f"could not start ({type(exc).__name__}: {exc})"
+    _WHY_NONE = (
+        None if backend is not None else f"off: {why}; every file a cached statement read is checked before each cell"
+    )
     if backend is not None:
         _WATCH = FileWatch(backend)
     return _WATCH
+
+
+def _platform_name() -> str:
+    return "macOS" if sys.platform == "darwin" else sys.platform
+
+
+def status_line() -> str:
+    """One line for ``cash info`` and ``%cash_status``: whether folders are
+    watched for file changes, and if not, why. Starts the process's watch
+    (`watcher`), as the first cell reading a file would, so a watch that
+    cannot start says why. While on, how many folders are watched, and how
+    many the last cell's checks found cannot be (a network or FUSE file
+    system, the watch limit), which are checked file by file."""
+    watch = watcher()
+    if watch is None:
+        return _WHY_NONE or "off"
+    report = watch.report()
+    watched = report["folders watched"]
+    name = getattr(watch._backend, "NAME", "folder watch")
+    line = f"on ({name}" + (f", {watched} folder{'s' if watched != 1 else ''} watched" if watched else "")
+    refused = report["folders that cannot be watched"]
+    if refused:
+        line += f", {refused} that cannot be (checked file by file)"
+    if report["watch limit reached"]:
+        line += ", watch limit reached"
+    return line + ")"
 
 
 def reset() -> None:
