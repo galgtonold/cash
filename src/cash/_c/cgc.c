@@ -12,8 +12,8 @@
  * `gc_own_context(phase, info)` does what the Python callback does: on
  * "start" it enters a new context, sets `gc_collecting` (a context variable)
  * to True in it and keeps it, on any other phase it leaves the context it
- * entered last, if any. Code a collection runs reads `gc_collecting` True;
- * the trace of a statement leaves it out (`trace_recorder`).
+ * entered last, if any. Code a collection runs reads `gc_collecting` True,
+ * and the trace of a statement marks it (`trace_recorder.Unit.collected`).
  */
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>

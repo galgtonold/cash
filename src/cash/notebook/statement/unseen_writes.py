@@ -30,7 +30,7 @@ import json
 import os
 import sys
 import types
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from typing import Any
 
 from ..._user_attrs import attribute_or, has_attribute, instance_of, own_dict
@@ -42,12 +42,14 @@ from ...install_paths import is_user_code_file
 from ...source_reading import getsource
 
 __all__ = [
+    "COLLECTED_ONLY_REASON",
     "UNSEEN_WRITES_REASON",
     "COULD_RUN_REASON",
     "COULD_RUN_TOO_BIG_REASON",
     "library_made",
     "live_writers",
     "called_methods",
+    "finalizer_writer",
     "own_writes",
     "unseen_writers",
     "writers_without_a_trace",
@@ -90,6 +92,14 @@ UNREADABLE_REASON = (
     "sys.monitoring); the statement runs every time"
 )
 
+#: Why a statement whose only unseen writer ran inside a garbage collection
+#: is not stored this once: its next run collects first (`collect_first`).
+COLLECTED_ONLY_REASON = (
+    "{fn}() ran in this statement inside a garbage collection, and garbage earlier work left behind cannot be "
+    "told from the statement's own: its next run collects the garbage first, and is stored unless a "
+    "finalizer still runs inside it"
+)
+
 #: ``CASH_UNSEEN_LOG=<path>``: each function found, one JSON line, to count them.
 _LOG_ENV = "CASH_UNSEEN_LOG"
 
@@ -102,12 +112,16 @@ def unseen_writers(
     outputs: Iterable[str],
     namespace: Mapping[str, Any],
     statement: str = "",
+    collected: Collection[types.CodeType] = frozenset(),
 ) -> list[tuple[str, tuple[str, ...]]]:
     """``(function, what it changes)`` for each function of *codes* (code ->
     its globals and module, as the trace records them) that changes
     something outside its objects the statement's *outputs* do not hold.
     The statement's own code (*statement_codes*, with the functions and
-    comprehensions inside it) is the statement's analysis's, not looked at."""
+    comprehensions inside it) is the statement's analysis's, not looked at.
+    Code of *collected* ran only inside a garbage collection (a weakref
+    callback): on its own, never as part of the text that made it, so it
+    is looked at wherever it was made."""
     own: set[types.CodeType] = set()
     pending = list(statement_codes)
     while pending:
@@ -122,7 +136,8 @@ def unseen_writers(
     inside = {c for code in codes for c in code.co_consts if isinstance(c, types.CodeType)}
     found: list[tuple[str, tuple[str, ...]]] = []
     for code, (globals_, _module) in list(codes.items()):
-        if code in own or code in inside or code.co_name == "<module>" or library_made(code, globals_):
+        made_inside = (code in own or code in inside) and code not in collected
+        if made_inside or code.co_name == "<module>" or library_made(code, globals_):
             continue
         writes = own_writes(code) | set(_method_writes(code, globals_))
         if not writes:
@@ -142,6 +157,13 @@ def unseen_writers(
     if found:
         _log(found, statement)
     return found
+
+
+def finalizer_writer(callback: str) -> tuple[str, tuple[str, ...]]:
+    """`unseen_writers`' entry for a ``weakref.finalize`` whose callback is
+    a builtin bound to an object (``LOG.append``): no code of it is traced,
+    and it changes that object (`trace_recorder.note_finalizer`)."""
+    return (f"weakref.finalize's callback {callback}", ("the object it is bound to",))
 
 
 def _held_as(code: types.CodeType, spaces: Iterable[Mapping[str, Any]]) -> str:

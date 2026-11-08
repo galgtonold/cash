@@ -86,7 +86,9 @@ class Unit:
     __slots__ = (
         "cells",
         "codes",
+        "collected",
         "extra",
+        "finalizers",
         "kind",
         "markers",
         "notes",
@@ -105,6 +107,13 @@ class Unit:
         self.receivers: dict[types.CodeType, type] = {}
         #: code -> its closure cells' digests as it first started (`start_cells`).
         self.cells: dict[types.CodeType, tuple] = {}
+        #: The codes of `codes` seen run only inside a garbage collection (a
+        #: ``__del__``, a weakref callback): left over from earlier work, or
+        #: the unit's own garbage, which the trace alone cannot tell apart.
+        self.collected: set[types.CodeType] = set()
+        #: ``(callback, inside a collection)`` for each ``weakref.finalize``
+        #: that ran in the unit a callback no trace sees (`note_finalizer`).
+        self.finalizers: list[tuple[str, bool]] = []
         self.markers: set[str] = set()
         self.notes: set[str] = set()
         #: Item lists of cached calls served inside the unit (they did not run).
@@ -118,6 +127,9 @@ class Unit:
         self.threads_before: frozenset[int] = frozenset()
 
     def absorb(self, inner: Unit) -> None:
+        outside = (self.codes.keys() - self.collected) | (inner.codes.keys() - inner.collected)
+        self.collected = (self.collected | inner.collected) - outside
+        self.finalizers.extend(inner.finalizers)
         for code, where in inner.codes.items():
             self.codes.setdefault(code, where)
         for code, cls in inner.receivers.items():
@@ -281,11 +293,6 @@ class Recorder:
         stack = self.stack
         if not stack:
             return sys.monitoring.DISABLE
-        if collecting():
-            # A finalizer a garbage collection runs: no work of the unit,
-            # whatever allocation started the collection inside it
-            # (`cash._gc_context`). Not disabled: the unit may call it.
-            return None
         frame = sys._getframe(WATCHED_FRAME)
         g = frame.f_globals
         kind = self._kinds.get(id(g))
@@ -297,7 +304,11 @@ class Recorder:
                 unit.pyplot_ran = True
             elif (kind[2], code.co_qualname) in POOL_STARTS:
                 unit.markers.add("process_pool")
+            elif code is FINALIZE_CALL:
+                note_finalizer([unit], frame)
             return sys.monitoring.DISABLE
+        inside_collection = collecting()
+        note_collected(unit, code, inside_collection)
         unit.codes[code] = (g, kind[1])
         if threading.get_ident() != unit.thread:
             unit.notes.add("other_thread")
@@ -308,14 +319,14 @@ class Recorder:
                 recv = None
             if recv is not None:
                 unit.receivers[code] = recv if isinstance(recv, type) else type(recv)
-        return sys.monitoring.DISABLE
+        # Code a garbage collection runs is left armed: a run of it by the
+        # unit's own code is told apart (`Unit.collected`).
+        return None if inside_collection else sys.monitoring.DISABLE
 
     def _on_resume(self, code: types.CodeType, offset: int) -> Any:
         stack = self.stack
         if not stack or not code.co_flags & RESUMABLE:
             return sys.monitoring.DISABLE
-        if collecting():
-            return None
         unit = stack[-1]
         if code in unit.codes:
             return sys.monitoring.DISABLE
@@ -327,6 +338,42 @@ class Recorder:
             unit.codes[code] = (g, kind[1])
             unit.markers.add("generator_resumed")
         return sys.monitoring.DISABLE
+
+
+#: The code ``weakref.finalize`` calls its callback from.
+FINALIZE_CALL: types.CodeType = weakref.finalize.__call__.__code__
+
+
+def note_collected(unit: Unit, code: types.CodeType, inside_collection: bool) -> None:
+    """Keep `Unit.collected` for *code*, which starts in *unit*: in it while
+    every run of it seen was inside a garbage collection."""
+    if inside_collection:
+        if code not in unit.codes:
+            unit.collected.add(code)
+    else:
+        unit.collected.discard(code)
+
+
+def note_finalizer(units: Any, frame: Any) -> None:
+    """A ``weakref.finalize`` (*frame* is its ``__call__``) runs in *units*.
+    A callback of the user's in Python is seen as it runs; a builtin bound
+    to an object (``LOG.append``) runs no code a trace sees, and changes
+    that object: noted in `Unit.finalizers`. A library's own finalizers
+    (a module's function: ``os.close``, a temporary folder's cleanup) are
+    not the user's."""
+    try:
+        info = weakref.finalize._registry.get(frame.f_locals.get("self"))  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 - a frame whose locals cannot be read: nothing known to note
+        return
+    func = getattr(info, "func", None) if info is not None else None
+    if not isinstance(func, (types.BuiltinFunctionType, types.BuiltinMethodType)):
+        return
+    owner = getattr(func, "__self__", None)
+    if owner is None or isinstance(owner, types.ModuleType):
+        return
+    entry = (f"{type(owner).__name__}.{getattr(func, '__name__', '?')}", collecting())
+    for unit in units:
+        unit.finalizers.append(entry)
 
 
 def is_user_file(path: str) -> bool:

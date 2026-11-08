@@ -31,11 +31,13 @@ outside the collection gets the ValueError of a token from another context
 (`reset_in_any_context` takes that), instead of changing the interrupted
 context at a moment nothing chose.
 
-In that context `collecting` reads True: the trace of a statement or a
-cached call leaves out the code a collection runs (`trace_recorder`), as the
-trackers do. A ``__del__`` of the user's that changed a global counted as a
-function the statement ran, and the statement was not stored; whether a
-collection fell inside it depended on what ran before.
+In that context `collecting` reads True, and the trace of a statement marks
+the code a collection runs in it (`trace_recorder.Unit.collected`). A
+``__del__`` of the user's that changes a global may be garbage the
+statement made, whose change a stored result would leave out, or garbage
+earlier work left, which kept the statement out of the cache whenever a
+collection fell inside it. A statement refused only for such code runs
+next after a collection of its own (`StatementProcessor._collect_first`).
 
 With the C extension (3.12 on) the callback is ``gc_own_context`` in C, which
 a collection can call at any depth; without it, a Python function that gives

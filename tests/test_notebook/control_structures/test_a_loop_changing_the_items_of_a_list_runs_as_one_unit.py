@@ -15,6 +15,7 @@ read as one it changed.
 from __future__ import annotations
 
 import ast
+import gc
 
 import pytest
 
@@ -58,6 +59,11 @@ LOOP = "for est in estimators:\n    est.fit(X)"
 def store_everything(cash_instance):
     cash_instance.config.min_execution_time_to_cache_seconds = 0.0
     cash_instance.config.call_cost_floor_seconds = 0.0
+    # Garbage an earlier test left, freed by a collection inside a loop
+    # here, keeps that run out of the cache once (its next run collects
+    # first: `test_a_finalizer_run_during_a_statement_is_not_its_work.py`),
+    # and these tests count on their first run being stored.
+    gc.collect()
 
 
 def _loop_statuses(cash_magics):
