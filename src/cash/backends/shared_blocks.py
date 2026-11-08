@@ -258,7 +258,10 @@ def _remember_copy(source: Any, stored: Any) -> None:
     made: list[tuple[Any, Any]] = []
 
     def forget(_ref: Any) -> None:
-        with _LOCK:
+        lock = _LOCK
+        if lock is None:  # at interpreter exit, the module's globals cleared
+            return
+        with lock:
             if made and _COPIED_FROM.get(at) is made[0]:
                 del _COPIED_FROM[at]
 
