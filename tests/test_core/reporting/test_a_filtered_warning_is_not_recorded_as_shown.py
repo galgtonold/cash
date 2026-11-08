@@ -60,3 +60,25 @@ def test_a_shown_warning_is_still_once_per_cache(tmp_path):
     """The control: shown once, the next run on the cache stays quiet."""
     assert "IMPURE-SIDE-EFFECTS" in _run(tmp_path, "none", 1).stderr
     assert "IMPURE-SIDE-EFFECTS" not in _run(tmp_path, "none", 2).stderr
+
+
+def test_a_warning_the_default_filter_holds_back_is_not_reported_shown():
+    """Under ``"default"`` a warning already shown at a line is held back
+    the second time; reported shown, it was recorded as seen by a reader
+    who never saw it."""
+    import warnings
+
+    from cash.diagnostics import warn_diagnostic_message
+    from cash.exceptions import CashImpurityWarning
+
+    def emit():
+        return warn_diagnostic_message(CashImpurityWarning, "IMPURE-SIDE-EFFECTS", "a test notice")
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("default")
+        globals().pop("__warningregistry__", None)
+        shown = [emit(), emit()]
+        warnings.simplefilter("always")
+        shown.append(emit())
+    assert len(caught) == 2
+    assert shown == [True, False, True]

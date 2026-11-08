@@ -165,8 +165,9 @@ def _warn_at(instance: Warning, level: int | None, fallback: tuple[str, int] | N
     """Warn *instance* at *level* frames out -- counted from the caller of this
     function's caller -- or at *fallback* when there is no user frame.
 
-    Returns whether the active warning filters let it through: False for an
-    ``"ignore"`` filter. An ``"error"`` filter raises it instead of returning.
+    Returns whether it was shown: False for an ``"ignore"`` filter, and for
+    one a ``"default"``, ``"module"`` or ``"once"`` filter held back as
+    shown before. An ``"error"`` filter raises it instead of returning.
     """
     _hide_source_lines()
     if level is None and fallback is not None:
@@ -177,6 +178,7 @@ def _warn_at(instance: Warning, level: int | None, fallback: tuple[str, int] | N
         return shown
     if level is None:
         level = _stacklevel_of_first_user_frame() - 1
+    registry = None
     try:
         frame = sys._getframe(level)
         module, lineno = frame.f_globals.get("__name__", "<string>"), frame.f_lineno
@@ -190,13 +192,43 @@ def _warn_at(instance: Warning, level: int | None, fallback: tuple[str, int] | N
             # notebook warnings name a cell's lines.
             # Filtered under its module's name (``__main__``), as any other
             # line of the notebook's is: only the name shown changes.
-            shown = _filter_action(instance, module, lineno) != "ignore"
+            action = _filter_action(instance, module, lineno)
             registry = frame.f_globals.setdefault("__warningregistry__", {})
+            seen = _AlreadyShown(instance, action, registry, lineno)
             warnings.warn_explicit(instance, type(instance), CELL_LOCATION, lineno, module=module, registry=registry)
-            return shown
-    shown = _filter_action(instance, module, lineno) != "ignore"
+            return action != "ignore" and not seen.held_back()
+        registry = frame.f_globals.get("__warningregistry__")
+    action = _filter_action(instance, module, lineno)
+    seen = _AlreadyShown(instance, action, registry if lineno else None, lineno)
     warnings.warn(instance, stacklevel=level + 1)
-    return shown
+    return action != "ignore" and not seen.held_back()
+
+
+class _AlreadyShown:
+    """Whether *action* (``"default"``, ``"module"``, ``"once"``) held a
+    warning back as one shown before at that place: the key it is filed
+    under was in the registry before it was warned, and the registry was
+    not reset since (a changed filter resets it, and shows it again)."""
+
+    def __init__(self, instance: Warning, action: str, registry: dict | None, lineno: int) -> None:
+        text, category = str(instance), type(instance)
+        self.registry = registry
+        self.version = registry.get("version") if registry is not None else None
+        self.where: dict | None = None
+        if action == "once":
+            self.where, self.key = warnings.onceregistry, (text, category)
+        elif action == "module" and registry is not None:
+            self.where, self.key = registry, (text, category, 0)
+        elif action == "default" and registry is not None:
+            self.where, self.key = registry, (text, category, lineno)
+        self.before = self.where is not None and bool(self.where.get(self.key))
+
+    def held_back(self) -> bool:
+        if not self.before:
+            return False
+        if self.where is warnings.onceregistry:
+            return True
+        return self.registry is not None and self.registry.get("version") == self.version
 
 
 def _filter_action(instance: Warning, module: str, lineno: int) -> str:
