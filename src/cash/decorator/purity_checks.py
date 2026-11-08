@@ -1413,6 +1413,15 @@ class PurityChecks:
             if moved:
                 for name in moved:
                     self._frozen.forget_container(identities[name][0])
+                if not observer.arg_identities_cover_all or watched_moved:
+                    # The identities speak for the plain lists alone: what
+                    # else changed is named as the hash names it, and an
+                    # argument it cannot name stands as "an argument", so a
+                    # hit never writes back only part of what the call did.
+                    others = self._mutated_argument_names(func_name, args, kwargs, observer)
+                    moved = list(dict.fromkeys([*moved, *others]))
+                    if self._unnamed_may_change(func_name, args, kwargs, identities, observer.arg_snapshot):
+                        moved.append("an argument")
                 observer.mutated_args = moved
                 observer.record(
                     "argument mutation",
@@ -1446,6 +1455,23 @@ class PurityChecks:
         observer.record(
             "argument mutation",
             f"the call changed {shown} in place -- the result was not stored, so this call runs every time",
+        )
+
+    def _unnamed_may_change(
+        self, func_name: str, args: tuple, kwargs: dict, identities: dict, snapshot: dict | None
+    ) -> bool:
+        """Whether an argument besides the plain lists in *identities* may
+        have changed with nothing to say so: one that can change, with no
+        hash of its own taken before the body (*snapshot*,
+        `argument_snapshot`)."""
+        try:
+            canon_args, canon_kwargs = self._checked_arguments(func_name, args, kwargs)
+        except Exception:  # noqa: BLE001 - unbindable: assume the worst
+            return True
+        named = [(f"*args[{i}]", v) for i, v in enumerate(canon_args)] + list(canon_kwargs.items())
+        hashed = {name for name, digest in (snapshot or {}).items() if digest}
+        return any(
+            name not in identities and name not in hashed and not _cannot_change(value) for name, value in named
         )
 
     def _mutated_argument_names(self, func_name: str, args: tuple, kwargs: dict, observer: EffectObserver) -> list[str]:
