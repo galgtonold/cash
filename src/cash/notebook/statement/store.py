@@ -19,7 +19,7 @@ import types
 from collections.abc import Callable, Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
-from cash import cost_model, handed_digests, kept_state, stored_pickle
+from cash import cost_model, handed_digests, kept_state, stored_pickle, value_hash
 from cash._clock import perf_counter as _perf_counter
 from cash._memo import PRODUCER_SNAPSHOTS, LruMemo
 from cash._user_attrs import attribute_or, instance_of
@@ -483,6 +483,8 @@ class StatementStore:
         self._amplification = amplification
         self._rebuild_cost = rebuild_cost
         self._calls = calls
+        #: Whether the last `save` ran the user's pickling and sizing hooks.
+        self._ran_hooks = False
         #: Names a later top-level statement of the running cell writes
         #: (:meth:`set_written_later_in_cell`).
         self.written_later_in_cell: frozenset[str] = frozenset()
@@ -555,16 +557,22 @@ class StatementStore:
 
         all_file_deps, inherited = self._inherit(run, execution)
         as_run = self._note_as_run(run, execution, all_file_deps, inherited)
-        return self._store(
-            run,
-            execution,
-            captured_vars,
-            file_dependencies=all_file_deps,
-            miss_guarded=miss_guarded,
-            inherited=inherited,
-            seed_epochs=seed_epochs,
-            as_run=as_run,
-        )
+        self._ran_hooks = False
+        try:
+            return self._store(
+                run,
+                execution,
+                captured_vars,
+                file_dependencies=all_file_deps,
+                miss_guarded=miss_guarded,
+                inherited=inherited,
+                seed_epochs=seed_epochs,
+                as_run=as_run,
+            )
+        finally:
+            if self._ran_hooks:
+                # They may have changed a value read before or while they ran.
+                value_hash.forget_reads()
 
     def note_ran(self, run: StatementRun, execution: StatementExecution) -> None:
         """Keep, for the statements below, the file records *run* makes of
@@ -970,6 +978,10 @@ class StatementStore:
                 # What it showed is kept for a cell run that skips it.
                 return self._store_metadata_only(run, execution, None, {})
             return None
+        # From here the user's pickling and sizing hooks run: what a digest
+        # read before them stands no more (`value_hash.forget_reads`).
+        self._ran_hooks = True
+        value_hash.forget_reads()
         try:
             payload, referenced = self._payload(run, execution, captured_vars, seed_epochs)
         except _AnchorsUnstorable as exc:
