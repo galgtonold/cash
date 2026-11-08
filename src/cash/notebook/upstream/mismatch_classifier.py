@@ -934,7 +934,7 @@ class MismatchClassifier:
         user_ns = self.shell.user_ns
         produced = {out for entry in simulation_trace or () for out in entry.outputs or ()}
         in_cells: set[str] | None = None
-        made_below = self._made_below(check)
+        made_below = _made_below(self.tracking_state, user_ns, check)
         for root in sorted(broken_vars):
             if root not in broken_vars:
                 continue
@@ -966,41 +966,6 @@ class MismatchClassifier:
                 "[UPSTREAM_DEBUG]   -> %s share an object with rebuilt '%s'. Marking broken.", sorted(added), root
             )
             broken_vars |= added
-
-    def _made_below(self, check: CellCheck | None) -> frozenset[str]:
-        """The names whose live binding a cell below *check*'s made
-        (``TrackingState.bound_in_cell``): not rebuilt with a partner the
-        cell needs. The producer above the cell is of an older binding of
-        the name -- ``voting_clf`` an earlier section fitted on two features,
-        where the ensemble a cell below built holds the estimators the
-        repair refits -- and binding it back hands every cell below, which
-        does not run again, a value a run from the top never gives it there.
-        Left as it is, the name is what a plain re-run of the cell leaves,
-        and the check of a cell below that reads it rebuilds it from its own
-        cells, above that one."""
-        if check is None or check.current_cell_idx is None:
-            return frozenset()
-        idx = check.current_cell_idx
-        cells = check.notebook_cells
-        text = check.cell_code if check.cell_code is not None else cells[idx] if 0 <= idx < len(cells) else ""
-        if cell_reads_names_unseen(
-            text, check.required_inputs or (), self.shell.user_ns, self.tracking_state.variable_lineage
-        ):
-            # It may read one of them by a string, or through a function
-            # that does: rebuilt, as a run from the top has it there.
-            return frozenset()
-        codes = self.tracking_state.bound_by
-        # The cell recorded must still hold the statement that bound it: a
-        # cell inserted, moved or deleted since shifts the positions, and a
-        # name then taken for one a cell below bound would not be rebuilt.
-        return frozenset(
-            name
-            for name, at in self.tracking_state.bound_in_cell.items()
-            if at is not None
-            and idx < at < len(cells)
-            and name in codes
-            and cell_holds_statement(cells[at], normalize_stmt(codes[name]))
-        )
 
     def _magic_bound(self, name: str, sim: SimulationResult) -> bool:
         """Whether a magic is the last to bind or change *name* above
@@ -1493,6 +1458,43 @@ class MismatchClassifier:
                 )
             logger.debug("[UPSTREAM] Variable '%s' should exist but is missing.", var_name)
             broken_vars.add(var_name)
+
+
+def _made_below(tracking_state: TrackingState, user_ns: dict, check: CellCheck | None) -> frozenset[str]:
+    """The names whose live binding a cell below *check*'s made
+    (``TrackingState.bound_in_cell``): not rebuilt with a partner the cell
+    needs. The producer above the cell is of an older binding of the name
+    -- ``voting_clf`` an earlier section fitted on two features, where the
+    ensemble a cell below built holds the estimators the repair refits --
+    and binding it back hands every cell below, which does not run again, a
+    value a run from the top never gives it there. Left as it is, the name
+    is what a plain re-run of the cell leaves, and the check of a cell below
+    that reads it rebuilds it from its own cells, above that one.
+
+    Only a name the cell recorded still holds the binding statement of
+    (``bound_by``): a cell inserted, moved or deleted since shifts the
+    positions. And none when the cell may read a name it does not show
+    (`cell_reads_names_unseen`): it is rebuilt, as a run from the top has
+    it there."""
+    if check is None or check.current_cell_idx is None:
+        return frozenset()
+    idx = check.current_cell_idx
+    cells = check.notebook_cells
+    codes = tracking_state.bound_by
+    below = frozenset(
+        name
+        for name, at in tracking_state.bound_in_cell.items()
+        if at is not None
+        and idx < at < len(cells)
+        and name in codes
+        and cell_holds_statement(cells[at], normalize_stmt(codes[name]))
+    )
+    if not below:
+        return below
+    text = check.cell_code if check.cell_code is not None else cells[idx] if 0 <= idx < len(cells) else ""
+    if cell_reads_names_unseen(text, check.required_inputs or (), user_ns, tracking_state.variable_lineage):
+        return frozenset()
+    return below
 
 
 def _bound_in_cells(check: CellCheck | None) -> set[str]:
