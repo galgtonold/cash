@@ -26,6 +26,7 @@ from ..cache_key import statement_source_hash
 from ..cache_status import CacheStatus
 from ..lineage_store import statement_tag
 from ..statement.derivation_edges import shared_object_partners
+from ..string_lookups import cell_reads_names_unseen
 from ..tracking_state import TrackingState
 from ._types import (
     CellCheck,
@@ -981,6 +982,13 @@ class MismatchClassifier:
             return frozenset()
         idx = check.current_cell_idx
         cells = check.notebook_cells
+        text = check.cell_code if check.cell_code is not None else cells[idx] if 0 <= idx < len(cells) else ""
+        if cell_reads_names_unseen(
+            text, check.required_inputs or (), self.shell.user_ns, self.tracking_state.variable_lineage
+        ):
+            # It may read one of them by a string, or through a function
+            # that does: rebuilt, as a run from the top has it there.
+            return frozenset()
         codes = self.tracking_state.bound_by
         # The cell recorded must still hold the statement that bound it: a
         # cell inserted, moved or deleted since shifts the positions, and a

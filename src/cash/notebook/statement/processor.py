@@ -34,7 +34,7 @@ from cash.exceptions import (
     CashWarning,
 )
 from cash.lineage_tag import clear_tags, tags_untrusted
-from cash.mutation_fingerprint import mutation_fingerprint
+from cash.mutation_fingerprint import mutation_fingerprint, reads_beyond_content
 from cash.notebook import shadow as _shadow
 from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol
 from cash.notebook.cache_key import (
@@ -338,6 +338,12 @@ def _bounded_fingerprint(value: Any, compute_hash: Callable[[Any], str], seconds
     (`budgeted_hash`, not run on past them, nor marking the value costly for
     other checks); None when it cannot be taken or not in time."""
     if seconds <= 0:
+        return None
+    try:
+        if reads_beyond_content(value):
+            # Read part by part, past the budget's reach: moves on.
+            return None
+    except Exception:  # noqa: BLE001 - a value whose attribute lookups raise: moves on
         return None
 
     def content(obj: Any) -> str:

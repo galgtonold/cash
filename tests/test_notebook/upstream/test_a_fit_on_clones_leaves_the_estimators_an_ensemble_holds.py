@@ -64,6 +64,15 @@ CHAIN = [
 ]
 
 
+@pytest.fixture(autouse=True)
+def _digests_a_busy_machine_cannot_cut_short(monkeypatch):
+    """The holder digests run within a share of the statement's time
+    (`HOLDER_DIGEST_FLOOR_S`); a loaded worker could run past it and move
+    the estimators on. Pinned far above, unless a test sets it."""
+    monkeypatch.setattr(processor, "HOLDER_DIGEST_FLOOR_S", 30.0)
+    monkeypatch.setattr(processor, "HOLDER_DIGEST_BUDGET_S", 30.0)
+
+
 @pytest.fixture
 def store_everything(cash_instance):
     cash_instance.config.min_execution_time_to_cache_seconds = 0.0
@@ -154,6 +163,7 @@ def test_a_digest_not_taken_in_time_moves_the_estimators_on(cash_magics, tmp_pat
     move on as before, and running the scoring cell again still shows what
     plain Python shows."""
     monkeypatch.setattr(processor, "HOLDER_DIGEST_BUDGET_S", 0.0)
+    monkeypatch.setattr(processor, "HOLDER_DIGEST_FLOOR_S", 0.0)
     monkeypatch.setattr(processor, "HOLDER_DIGEST_FACTOR", 0.0)
     _, cells = _start(cash_magics, tmp_path, ENSEMBLE, upto=-3)
     ns = cash_magics.shell.user_ns
