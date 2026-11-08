@@ -5,16 +5,19 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from cash.notebook.tracking_state import TrackingState
+from cash.notebook.upstream._types import CellCheck
 from cash.notebook.upstream.mismatch_classifier import MismatchClassifier
 
 
 def _closed(edges, broken, user_ns, trace_outputs, cells=None):
-    fake = SimpleNamespace(
-        tracking_state=SimpleNamespace(derivation_edges=edges), shell=SimpleNamespace(user_ns=user_ns)
-    )
+    state = TrackingState()
+    state.derivation_edges.update(edges)
+    fake = SimpleNamespace(tracking_state=state, shell=SimpleNamespace(user_ns=user_ns))
     trace = [SimpleNamespace(outputs=set(trace_outputs), inputs=set())]
     broken = set(broken)
-    check = None if cells is None else SimpleNamespace(notebook_cells=cells, cell_code=None)
+    # The first cell is the one running.
+    check = None if cells is None else CellCheck(current_cell_idx=0, notebook_cells=cells)
     MismatchClassifier._rebuild_what_shares_a_rebuilt_object(fake, broken, trace, check)
     return broken
 
