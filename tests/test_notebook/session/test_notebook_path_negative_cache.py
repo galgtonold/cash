@@ -344,17 +344,20 @@ def test_the_advisory_says_what_still_works_and_blames_no_kernel_file(monkeypatc
     upstream tracking was disabled, which read as if re-running an edited cell
     were unsafe. It says what is off (re-running edited cells above), what
     still works (each statement keyed on its own code and inputs), and names
-    cash as the place, not a file of the kernel's."""
+    cash as the place, not a file of the kernel's: the cell running, never
+    a line 0 (``<cash>:0``)."""
     from cash.notebook import live_cells
 
     monkeypatch.setattr(live_cells, "_store", {"seq": 0, "cells": None})
     monkeypatch.setattr(sd, "in_colab", lambda: False)
+    shell = types.SimpleNamespace(execution_count=5)
+    monkeypatch.setitem(sys.modules, "IPython", types.SimpleNamespace(get_ipython=lambda: shell))
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         sd.warn_notebook_not_found_once()
     [advisory] = [w for w in caught if issubclass(w.category, sd.CashNotebookDiscoveryWarning)]
     text = str(advisory.message)
-    assert advisory.filename == "<cash>"
+    assert (advisory.filename, advisory.lineno) == ("<cash>", 5)
     assert "will not re-run an edited cell above" in text
     assert "still cached by its own code and inputs" in text
     assert "disabled" not in text
