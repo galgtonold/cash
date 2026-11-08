@@ -74,7 +74,7 @@
 
 #include "cwalk.h"
 
-#define CWATCH_API_VERSION 3
+#define CWATCH_API_VERSION 4
 #define CWATCH_VERSION "0.1.0"
 
 #if PY_VERSION_HEX < 0x030C0000

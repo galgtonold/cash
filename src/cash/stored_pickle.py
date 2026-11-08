@@ -145,15 +145,27 @@ class Part:
         self.size = size
 
 
+#: What the pickler writes (protocol 4 and up, with the memo) for a set of
+#: one item or more (``EMPTY_SET``, ``MEMOIZE``, the ``MARK`` before its
+#: items) and after a frozenset's items (``FROZENSET``, ``MEMOIZE``): where
+#: a digest may meet a set (`_Sink.sets`).
+_SET_OPS = (b"\x8f\x94(", b"\x91\x94")
+
+
 class _Sink:
     """Where the pickler writes: hashed as it comes, kept when asked, and
     stopped once *deadline* has passed (`HashBudgetExceeded`, raised from
     ``write``, which the pickler calls a frame, at most 64 KiB, or one big
     item at a time, and from `check`, called for each buffer) and no later
     one is given (`run_on`), or once the pickle holds more than *limit*
-    bytes, stream and out-of-band buffers (*apart*)."""
+    bytes, stream and out-of-band buffers (*apart*).
 
-    __slots__ = ("_deadline", "_limit", "_parts", "apart", "sha", "size")
+    *sets* turns True once the bytes may hold a set (`_SET_OPS`): never
+    False for a pickle that holds one; the bytes of a number, a string or
+    an array can look like one too (`_settle_sets`). *memos* counts the
+    bytes that may be a ``MEMOIZE``: at least the objects in the memo."""
+
+    __slots__ = ("_deadline", "_limit", "_parts", "_tail", "apart", "memos", "sets", "sha", "size")
 
     def __init__(self, deadline: float | None, keep: bool, digest: bool, limit: int | None = None) -> None:
         self.sha = hashlib.sha256() if digest else None
@@ -162,10 +174,24 @@ class _Sink:
         self._limit = limit
         self.apart = 0
         self.size = 0
+        self.sets = False
+        self._tail = b""
+        self.memos = 0
 
     def write(self, data: Any) -> int:
         n = len(data)
         self.size += n
+        if self.sets:
+            pass
+        elif type(data) is bytes:
+            # The pickler hands its own buffer (bytes) for opcodes; any other
+            # type is an item's raw data, which no opcode runs across.
+            seam = self._tail + data[:2]
+            self.sets = any(op in seam or op in data for op in _SET_OPS)
+            self._tail = data[-2:]
+            self.memos += data.count(b"\x94")
+        else:
+            self._tail = b""
         if self.sha is not None:
             self.sha.update(data)
         if self._parts is not None:
@@ -286,6 +312,11 @@ def _pickle_value(
         readonly.clear()
         apart = sink.apart = 0
 
+    def checked(pickler: Any) -> None:
+        _settle_sets(sink, pickler)
+        if after is not None:
+            after(pickler)
+
     stream, also_keyed = kept_state.dumps_also_keyed(
         value,
         protocol=5,
@@ -294,14 +325,16 @@ def _pickle_value(
         on_retry=retry,
         sink=sink if sunk else None,
         reducer_override=reducer_override,
-        after=after,
+        after=checked if digest else after,
     )
     found = None
     if digest:
-        if also_keyed:
+        if also_keyed and not sink.sets:
             found = _final(_HEAD, sink.sha.digest(), folded.digest())
-        elif as_keyed:
-            found = _keyed_digest(value, deadline, keyed_override)[0]
+        elif also_keyed or as_keyed:
+            # A set's items are keyed sorted (`kept_state.sorted_set_ids`),
+            # where the store keeps them as the set iterates.
+            found = _keyed_digest(value, deadline, keyed_override, sorted_sets=also_keyed)[0]
     if sunk:
         if keep:
             stream = sink.stream()
@@ -315,23 +348,55 @@ def _final(head: bytes, stream_digest: bytes, buffers_digest: bytes) -> str:
     return hashlib.sha256(head + stream_digest + buffers_digest).hexdigest()
 
 
-def _keyed_digest(value: Any, deadline: float | None, reducer_override: Any = None) -> tuple[str, int]:
+def _keyed_digest(
+    value: Any, deadline: float | None, reducer_override: Any = None, sorted_sets: bool = False
+) -> tuple[str, int]:
     """The digest and size of *value*'s keyed pickle: what a value whose
-    store bytes leave something out is digested over. A function whose
-    cell ran again is pickled as `pickle_value` pickles it."""
+    store bytes leave something out, or hold a set, is digested over. A
+    function whose cell ran again is pickled as `pickle_value` pickles it.
+    *sorted_sets*: *value* may hold a set (`_keyed_digest_once`)."""
     if reducer_override is not None:
-        return _keyed_digest_once(value, deadline, reducer_override)
+        return _keyed_digest_once(value, deadline, reducer_override, sorted_sets=sorted_sets)
     try:
-        return _keyed_digest_once(value, deadline, None)
+        return _keyed_digest_once(value, deadline, None, sorted_sets=sorted_sets)
     except pickle.PicklingError as exc:
         if not kept_state.stopped_at_defined_again(exc):
             raise
-    return _keyed_digest_once(value, deadline, kept_state.defined_again())
+    return _keyed_digest_once(value, deadline, kept_state.defined_again(), sorted_sets=sorted_sets)
+
+
+#: Bytes of pickle per object in its memo from which a pickle that may hold
+#: a set is asked its memo (`_settle_sets`). Below it, reading the memo costs
+#: about what pickling the value again does.
+MEMO_CHECK_BYTES = 32
+
+
+def _settle_sets(sink: _Sink, pickler: Any) -> None:
+    """Once *pickler* is done: does a pickle *sink* took for one that may
+    hold a set (`_Sink.sets`) hold one of two or more items, whose order a
+    key leaves to `kept_state.sorted_set_ids`? Every set it wrote is in its
+    memo, which is read when that is cheap: a list of floats whose bytes
+    look like a set, with nothing in the memo. A pickle with as many objects
+    in its memo as items (ints such as 38033, written as the bytes of a
+    frozenset) is left to be pickled again with its sets sorted, which costs
+    about what the memo would and digests a value with none as before."""
+    if not sink.sets or sink.memos * MEMO_CHECK_BYTES > sink.size:
+        return
+    for _, obj in pickler.memo.copy().values():
+        t = type(obj)
+        if (t is set or t is frozenset) and len(obj) > 1:
+            return
+    sink.sets = False
 
 
 def _keyed_digest_once(
-    value: Any, deadline: float | None, reducer_override: Any, aliases: bool = False
+    value: Any, deadline: float | None, reducer_override: Any, aliases: bool = False, sorted_sets: bool = False
 ) -> tuple[str, int]:
+    """The digest and size of *value*'s keyed pickle, each set in it written
+    with its items sorted (`kept_state.sorted_set_ids`). Pickled as pickle
+    writes it first; only a value found to hold a set is pickled again with
+    them sorted (*sorted_sets*), so no other value pays for asking. Bytes
+    with *aliases* sort them always (`kept_state.key_aliases`)."""
     sink = _Sink(deadline, False, True)
     folded = hashlib.sha256()
     size = 0
@@ -348,6 +413,9 @@ def _keyed_digest_once(
         sink.check()
         return False
 
+    def checked(pickler: Any) -> None:
+        _settle_sets(sink, pickler)
+
     kept_state.dumps(
         value,
         protocol=5,
@@ -357,7 +425,11 @@ def _keyed_digest_once(
         sink=sink,
         reducer_override=reducer_override,
         aliases=aliases,
+        sorted_sets=sorted_sets,
+        after=None if aliases or sorted_sets else checked,
     )
+    if sink.sets and not aliases and not sorted_sets:
+        return _keyed_digest_once(value, deadline, reducer_override, sorted_sets=True)
     return _final(_UNSHARED_HEAD if aliases else _HEAD, sink.sha.digest(), folded.digest()), size + sink.size
 
 

@@ -19,6 +19,7 @@ import copy
 import copyreg
 import datetime
 import functools
+import hashlib
 import io
 import itertools
 import operator
@@ -53,6 +54,7 @@ __all__ = [
     "restore_with_dict",
     "restores_alike_apart",
     "same_definition",
+    "sorted_set_ids",
     "stopped_at_defined_again",
     "store_memo",
     "too_deep",
@@ -109,6 +111,8 @@ def _dumps_value(
     aliases: bool | dict = False,
     sink: Any = None,
     reducer_override: Any = None,
+    sorted_sets: bool = False,
+    after: Any = None,
 ) -> bytes:
     """``pickle.dumps(value, protocol)``, keeping the instance attributes a C
     base's reduce drops. *fast* is the pickler's memo-less mode; *extra*
@@ -132,9 +136,16 @@ def _dumps_value(
     come, and whoever reads them can stop the pickle by raising from
     ``write`` (`value_hash.budgeted_hash`). Only for *keyed* bytes, which
     are never pickled flat. *reducer_override* is the pickler's hook of
-    that name; a value pickled flat is pickled without it."""
+    that name; a value pickled flat is pickled without it.
+
+    *sorted_sets* (key bytes only) writes each set and frozenset of two or
+    more items with its items sorted (`sorted_set_ids`), as *aliases* bytes
+    always do. *after* is called with the pickler once it has pickled
+    *value*; not for a value walked first or pickled flat."""
     if sink is not None and not keyed:
         raise ValueError("dumps: a sink takes keyed bytes only")
+    if keyed and sorted_sets and not aliases:
+        persistent_id = _sets_first(persistent_id, sorted_set_ids(protocol, extra))
     if FLAT_FIRST and not _surely_shallow(value):
         return _dumps_walked_first(
             value, protocol, fast, buffer_callback, extra, persistent_id, keyed, aliases, sink, reducer_override
@@ -152,6 +163,7 @@ def _dumps_value(
             sink,
             None,
             reducer_override,
+            after,
         )
     except (RecursionError, MemoryError) as exc:
         if keyed or not too_deep(exc):
@@ -573,7 +585,9 @@ def _dumps(
         # Key bytes: sharing marked for the objects whose sharing means
         # something, never through pickle's memo (`key_aliases`).
         pickler.fast = True
-        pickler.persistent_id = key_aliases(aliases if type(aliases) is dict else None)
+        pickler.persistent_id = key_aliases(
+            aliases if type(aliases) is dict else None, sorted_set_ids(protocol, extra) if keyed else None
+        )
     if table is None:
         # Without the memo (and without a hook that marks an object met
         # again), an object's state cannot be set by a state setter: pickle
@@ -648,7 +662,7 @@ class _Overriding(pickle.Pickler):
         return self.override(obj)
 
 
-def key_aliases(outside: dict[int, Any] | None = None) -> Callable[[Any], Any]:
+def key_aliases(outside: dict[int, Any] | None = None, sets: Any = None) -> Callable[[Any], Any]:
     """A key pickle's ``persistent_id`` (`dumps` with *aliases*): an object
     that can change met a second time is written as a mark naming its first
     appearance; anything else is written in full every time.
@@ -674,6 +688,10 @@ def key_aliases(outside: dict[int, Any] | None = None) -> Callable[[Any], Any]:
     pickle whole holding a list the walk keyed too, or a plain argument
     keyed by its own digest, keyed like an equal copy before
     (`canonical_form.canonical_bytes`).
+
+    *sets*, when given, is asked of each set and frozenset written in full
+    (`sorted_set_ids`): a set met again is marked as any changeable object
+    is, and only its first appearance is written sorted.
     """
     seen: dict[int, tuple[int, Any]] = {}
     atoms = _ATOMS
@@ -681,10 +699,12 @@ def key_aliases(outside: dict[int, Any] | None = None) -> Callable[[Any], Any]:
     kernel = getattr(_native.kernels, "key_alias_id", None)
     if kernel is not None:
         # The same answers at C speed: asked of every object a key writes.
-        return functools.partial(kernel, seen, atoms, by_name, {}, _identityless, outside)
+        return functools.partial(kernel, seen, atoms, by_name, {}, _identityless, outside, sets)
 
     def persistent_id(obj: Any, type: Any = type, id: Any = id) -> Any:
         t = type(obj)
+        if t is frozenset and sets is not None:
+            return sets(obj)
         if t in atoms or t in by_name or issubclass(t, type) or _identityless(t):
             return None
         found = seen.get(id(obj))
@@ -695,9 +715,128 @@ def key_aliases(outside: dict[int, Any] | None = None) -> Callable[[Any], Any]:
             if where is not None:
                 return ("__cash_held__", where)
         seen[id(obj)] = (len(seen), obj)
-        return None
+        return sets(obj) if t is set and sets is not None else None
 
     return persistent_id
+
+
+#: What a key pickle writes for a set or frozenset of two or more items, in
+#: place of the set (`sorted_set_ids`): this mark, the set's type and its
+#: items in sorted order.
+SET_MARK = "__cash_set__"
+
+
+def sorted_set_ids(protocol: int, extra: dict | None) -> Callable[[Any], Any]:
+    """A key pickle's ``persistent_id`` that writes each set and frozenset
+    of two or more items as ``(SET_MARK, its type's name, its items
+    sorted)``, and lets the pickle write anything else as it would: None.
+
+    Pickle writes a set's items in the order the set iterates in, its hash
+    table's slot order. That order is not the set's content: it depends on
+    the order the items went in and, for strings, on ``PYTHONHASHSEED``,
+    and a set rebuilt from a pickle can iterate in another order than the
+    one pickled. A frozenset a ``functools.cache`` memo answered with,
+    restored from a store, digested apart from the one stored, and read as
+    changed. Sorted (`_sorted_items`), equal sets write equal bytes in any
+    process. A set of one item, or none, has one order, and is written as
+    it always was.
+
+    The same set met again gets the same tuple, which the pickle's memo
+    writes as a back-reference, as it did the set: one set held twice
+    still keys apart from two equal sets. Every set answered for is kept
+    for the dump, so no other object takes its id. *protocol* and *extra*
+    are the pickle's, for an item whose order is told by its own pickle.
+
+    With the C extension, asked at C speed (``cwalk.c``'s
+    ``sorted_set_id``, which sorts a set of strings, ints or bytes alone
+    itself): the pickle asks it of every object it writes.
+    """
+    made: dict[int, tuple[Any, tuple]] = {}
+
+    def forms(obj: Any) -> tuple | None:
+        if len(obj) < 2:
+            return None
+        key = id(obj)
+        found = made.get(key)
+        if found is not None:
+            return found[1]
+        written = (SET_MARK, _SET_NAMES[type(obj)], tuple(_sorted_items(obj, protocol, extra)))
+        made[key] = (obj, written)
+        return written
+
+    kernel = getattr(_native.kernels, "sorted_set_id", None)
+    if kernel is not None:
+        return functools.partial(kernel, forms, made, _SET_SPEC)
+
+    def persistent_id(obj: Any, type: Any = type) -> Any:
+        t = type(obj)
+        return forms(obj) if t is set or t is frozenset else None
+
+    return persistent_id
+
+
+def _sets_first(persistent_id: Any, sets: Callable[[Any], Any]) -> Callable[[Any], Any]:
+    """*sets* (`sorted_set_ids`), then *persistent_id* when given."""
+    if persistent_id is None:
+        return sets
+
+    def both(obj: Any) -> Any:
+        found = sets(obj)
+        return found if found is not None else persistent_id(obj)
+
+    return both
+
+
+#: Items a set of only these sorts by their own values: no two equal.
+_SELF_ORDERED = frozenset({str, int, bytes})
+
+_SET_NAMES = {set: "set", frozenset: "frozenset"}
+#: What ``cwalk.c``'s ``sorted_set_id`` writes a form of: these very objects,
+#: so a pickle's memo writes each once, as for the Python hook's forms.
+_SET_SPEC = (SET_MARK, _SET_NAMES[set], _SET_NAMES[frozenset])
+
+
+#: A complex number's place among others with no NaN in them.
+_COMPLEX_PARTS = operator.attrgetter("real", "imag")
+
+
+def _sorted_items(items: Any, protocol: int, extra: dict | None) -> list:
+    """The items of a set in an order its content alone decides, whatever
+    order it iterates in (`sorted_set_ids`). Strings, ints or bytes alone
+    sort as they are, and so do floats or complex numbers alone, none of
+    them NaN; anything else by `_order_key`. Which way a set sorts depends
+    on its items alone, so equal sets sort alike."""
+    kinds = set(map(type, items))
+    if len(kinds) == 1:
+        kind = next(iter(kinds))
+        if kind in _SELF_ORDERED:
+            return sorted(items)
+        if kind is float and all(x == x for x in items):
+            return sorted(items)
+        if kind is complex and all(z == z for z in items):
+            return sorted(items, key=_COMPLEX_PARTS)
+    return sorted(items, key=functools.partial(_order_key, protocol=protocol, extra=extra))
+
+
+def _order_key(item: Any, protocol: int, extra: dict | None) -> tuple:
+    """Where *item* sorts among a set's items (`_sorted_items`): its type's
+    name, then its value -- by itself for a string, an int or bytes, by its
+    ``repr`` for another number or None, item by item for a tuple or
+    frozenset -- or, for anything else, the SHA-256 of its key pickle,
+    written with its own sets sorted and blind to which of its parts are one
+    object (`key_aliases`). Two items share a key only when their content
+    pickles alike; such items keep the order the set gives them."""
+    t = type(item)
+    if t is str or t is int or t is bytes:
+        return (t.__name__, item)
+    if t is float or t is complex or t is bool or item is None:
+        return (t.__name__, repr(item))
+    if t is tuple:
+        return ("tuple", tuple(_order_key(part, protocol, extra) for part in item))
+    if t is frozenset:
+        return ("frozenset", tuple(sorted(_order_key(part, protocol, extra) for part in item)))
+    pickled = dumps(item, protocol, extra=extra, keyed=True, aliases=True)
+    return ("", hashlib.sha256(pickled).digest())
 
 
 #: Types whose instances cannot change and are pickled by value (tuples and
