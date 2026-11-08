@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 from cash import cost_model, handed_digests, kept_state, stored_pickle
 from cash._clock import perf_counter as _perf_counter
 from cash._memo import PRODUCER_SNAPSHOTS, LruMemo
+from cash._settled import unsettle
 from cash._user_attrs import attribute_or, instance_of
 from cash.backends import memory_backend
 from cash.backends.persistence_policy import PersistencePolicy, restore_kind
@@ -970,6 +971,9 @@ class StatementStore:
                 # What it showed is kept for a cell run that skips it.
                 return self._store_metadata_only(run, execution, None, {})
             return None
+        # From here the user's pickling and sizing hooks run, and may change
+        # a value: no digest taken before is handed on past them.
+        unsettle()
         try:
             payload, referenced = self._payload(run, execution, captured_vars, seed_epochs)
         except _AnchorsUnstorable as exc:

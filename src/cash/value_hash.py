@@ -25,6 +25,8 @@ from time import perf_counter
 from typing import Any
 
 from . import value_watch
+from ._settled import EPOCH as _EPOCH
+from ._settled import unsettle
 from ._user_attrs import instance_of
 from .content_hashers import builtin_hash, builtin_hash_family, is_native_panic
 from .sizing import pandas_nbytes
@@ -402,17 +404,16 @@ def compute_hash(obj: Any) -> str:
     window = _one_read.memo
     if window is not None and type(obj) not in _ATOMS:
         found = window.get(id(obj))
-        if found is not None and found[0]() is obj:
+        if found is not None and found[2] == _EPOCH[0] and found[0]() is obj:
             return found[1]
     if value_watch.WATCHING and type(obj) not in _ATOMS:
         digest = value_watch.digest(obj, _compute_hash, value_watch.KIND_VALUE, _reusable)
     else:
         digest = _compute_hash(obj)
     if window is not None and type(obj) not in _ATOMS and _reusable(obj, digest):
-        try:
-            window[id(obj)] = (weakref.ref(obj), digest)
-        except TypeError:
-            pass  # a list, dict or tuple: see `one_read`
+        anchor = _anchor(obj)
+        if anchor is not None:
+            window[id(obj)] = (anchor, digest, _EPOCH[0])
     return digest
 
 
@@ -452,16 +453,23 @@ def unshared_hash(obj: Any) -> str:
 
 
 class _OneRead(threading.local):
-    """`one_read`'s digests, on the thread that opened it only."""
+    """`one_read`'s digests, on the thread that opened it only: those of
+    the open window (*memo*), and those `handed_on` keeps between windows
+    (*kept*, None outside it). Each is ``id -> (anchor, digest, epoch)``:
+    *anchor* gives back the object while it is the one digested, and the
+    digest stands only in its `_settled` epoch."""
 
-    memo: dict[int, tuple[weakref.ref, str]] | None = None
+    memo: dict[int, tuple[Callable[[], Any], str, int]] | None = None
+    kept: dict[int, tuple[Callable[[], Any], str, int]] | None = None
+    #: Whether the open window may anchor a digest by weak reference.
+    weak: bool = True
 
 
 _one_read = _OneRead()
 
 
 @contextlib.contextmanager
-def one_read() -> Iterator[None]:
+def one_read(*, weak: bool = True) -> Iterator[None]:
     """Within it, `compute_hash` reads a value once on this thread: every
     later digest of the same object is the first one's.
 
@@ -474,20 +482,107 @@ def one_read() -> Iterator[None]:
     already taken spares it), so the bytes are the same. The caller vouches
     that no code of the user's runs inside, on any thread.
 
-    Kept by weak reference, and only for a value that takes one: a
-    reference held here would count as a holder to the checks that tell a
-    value shared (`_plain_data`), and a list's digest follows those. A
-    plain list, dict or tuple is read each time, as before. The identity
-    tier's digest is never kept. Nested, the outer one holds.
+    Kept by weak reference, or for a list, dict, tuple or set (which takes
+    none) by the name the notebook binds it to (`_anchor`): a reference
+    held here would count as a holder to the checks that tell a value
+    shared (`_plain_data`). One no name holds is read each time, as before.
+    The identity tier's digest is never kept. Nested, the outer one holds.
+
+    With *weak* False it takes no weak reference at all, and keeps only
+    what a name holds: for checks that count an object's weak references
+    (`identity_holders`, `in_place`), which one held here would mislead.
+
+    Within `handed_on`, what a window read under a name is handed to the
+    next window, while nothing `_settled.unsettle`s it in between; what it
+    held by weak reference is let go as the window closes, so no reference
+    of cash's outlives it.
     """
     if _one_read.memo is not None:
         yield
         return
-    _one_read.memo = {}
+    kept = _one_read.kept
+    _one_read.memo = kept if kept is not None else {}
+    _one_read.weak = weak
     try:
         yield
     finally:
         _one_read.memo = None
+        _one_read.weak = True
+        if kept is not None:
+            for key in [key for key, found in kept.items() if not isinstance(found[0], _Named)]:
+                del kept[key]
+
+
+@contextlib.contextmanager
+def handed_on() -> Iterator[None]:
+    """Within it, a digest a `one_read` window took stands in the next
+    window too, until `_settled.unsettle` is called: a window after one
+    statement ran and the window before the next statement runs read the
+    same objects, with only cash's code between.
+
+    The caller vouches that whatever between its windows may change a value
+    the notebook holds unsettles first: the user's code (a statement runs
+    between `unsettle` calls, `StatementProcessor._executing`), a restore,
+    a random stream put back. Nested, the outer one holds; `not_handed_on`
+    suspends it.
+    """
+    if _one_read.kept is not None:
+        yield
+        return
+    _one_read.kept = {}
+    try:
+        yield
+    finally:
+        _one_read.kept = None
+
+
+@contextlib.contextmanager
+def not_handed_on() -> Iterator[None]:
+    """Suspend `handed_on` within: around code that runs the user's between
+    windows without unsettling (a loop's header and its passes), each window
+    reads for itself, and nothing taken before is handed on after it."""
+    kept = _one_read.kept
+    _one_read.kept = None
+    unsettle()
+    try:
+        yield
+    finally:
+        unsettle()
+        _one_read.kept = kept
+
+
+def _anchor(obj: Any) -> Callable[[], Any] | None:
+    """What gives *obj* back while it is the object digested: the name a
+    notebook namespace binds it to (`_Named`), which holds no reference to
+    it; else, where the window takes them (`one_read`), a weak reference;
+    else None, and its digest is not kept."""
+    for namespace in value_watch.namespaces():
+        for name, value in namespace.items():
+            if value is obj:
+                return _Named(namespace, name)
+    if not _one_read.weak:
+        return None
+    try:
+        return weakref.ref(obj)
+    except TypeError:
+        return None
+
+
+class _Named:
+    """A value by the name a notebook namespace binds it to. Bound there,
+    it is alive; and only an `unsettle` can bind the name
+    to another object (a statement running, a restore), so within its epoch
+    an object found under the name at the same id is the one digested,
+    never a new one made at a freed one's address."""
+
+    __slots__ = ("name", "namespace")
+
+    def __init__(self, namespace: dict, name: str) -> None:
+        self.namespace = namespace
+        self.name = name
+
+    def __call__(self) -> Any:
+        return self.namespace.get(self.name)
 
 
 def _reusable(obj: Any, digest: str) -> bool:

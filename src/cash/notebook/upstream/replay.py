@@ -15,7 +15,7 @@ import re
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from cash import kept_state
+from cash import kept_state, value_hash
 from cash.control_markers import strip_markers
 
 from ..._memo import NOTEBOOK_CELLS, NOTEBOOK_VERSIONS
@@ -257,108 +257,115 @@ class StatementReplay:
         executed_metrics = []
         total_upstream_steps = len(statements)
 
-        for stmt_idx, stmt_code in enumerate(statements):
-            # The badge's "Upstream" section is what tells the user; this line
-            # is for ``%cash_debug`` (and the integration tests that read it).
-            if logger.isEnabledFor(logging.DEBUG):
-                stmt_short = stmt_code.split("\n")[0][:40]
-                if len(stmt_code) > 40:
-                    stmt_short += "..."
-                logger.debug("Cash: Auto-executing upstream statement: %s", stmt_short)
-            if before_statement is not None:
-                before_statement(stmt_idx)
+        # A statement's digests stand for the next one's holder digests where
+        # only cash's code runs between: what writes unsettles them
+        # (`value_hash.handed_on`). A control structure runs the user's code
+        # between its statements (its header, its passes): not handed on.
+        with value_hash.handed_on():
+            for stmt_idx, stmt_code in enumerate(statements):
+                # The badge's "Upstream" section is what tells the user; this line
+                # is for ``%cash_debug`` (and the integration tests that read it).
+                if logger.isEnabledFor(logging.DEBUG):
+                    stmt_short = stmt_code.split("\n")[0][:40]
+                    if len(stmt_code) > 40:
+                        stmt_short += "..."
+                    logger.debug("Cash: Auto-executing upstream statement: %s", stmt_short)
+                if before_statement is not None:
+                    before_statement(stmt_idx)
 
-            try:
-                # Check if this is a control structure (for/if/try/with/while).
-                # If so, delegate to the control structure callback which handles
-                # per-iteration caching for loops instead of executing monolithically.
-                ctrl_node = self._try_parse_control_structure(stmt_code)
-                if ctrl_node is not None and control_structure_callback is not None:
-                    logger.debug("[UPSTREAM] Delegating control structure to per-iteration processor")
-                    ctrl_annotation = (annotations or {}).get(stmt_code)
-                    # Its body's output kept, not shown: ``silent`` there still
-                    # streams each body statement's lines (the cell's own
-                    # loop runs that way), and the loop is ANOTHER cell's --
-                    # ``print("Training the", estimator)`` in a training loop
-                    # re-run for ``voting_clf.score(...)`` printed under the
-                    # score, which a plain run of that cell never shows.
-                    with capture_output(stdout=True, stderr=True, display=True):
-                        ctrl_result = (
-                            control_structure_callback(
-                                ctrl_node, ttl=global_ttl, silent=True, inherited_annotation=ctrl_annotation
-                            )
-                            if ctrl_annotation is not None
-                            else control_structure_callback(ctrl_node, ttl=global_ttl, silent=True)
-                        )
-                    for m in ctrl_result.metrics:
-                        if m:
-                            m["is_upstream"] = True
-                            m.setdefault("upstream_statement", stmt_code)
-                            executed_metrics.append(m)
-                    if not ctrl_result.success:
-                        raise ctrl_result.error or RuntimeError("Error in upstream control structure")
-                else:
-                    # Silent, like the control-structure branch above: this is
-                    # ANOTHER cell's statement, and its output belongs to that
-                    # cell -- a plain run of this cell never prints it. Re-running
-                    # a figure's history (``print('panels', len(axes))`` among
-                    # its fills) put that line into an unrelated cell's output.
-                    # A failure still
-                    # surfaces: the processor reports it in ``result['error']``.
-                    extra: dict[str, Any] = {}
-                    stmt_annotation = (annotations or {}).get(stmt_code)
-                    if stmt_annotation is not None:
-                        extra["annotation"] = stmt_annotation
-                    exec_source = (exec_sources or {}).get(stmt_code)
-                    if exec_source is not None:
-                        extra["exec_source"] = exec_source
-                    result = process_callback(stmt_code, global_ttl, silent=True, **extra)
-                    logger.debug("[UPSTREAM] Callback result for '%s...': %s", stmt_code[:20], result)
-                    if result:
-                        result["is_upstream"] = True  # Mark as upstream so badge categorizes correctly
-                        executed_metrics.append(result)
-                        # The processor reports statement failures via the
-                        # 'error' field instead of raising - surface those
-                        # through the same loud path below.
-                        # With its type: ``str(KeyError('f1'))`` is just ``'f1'``,
-                        # and nothing below could tell a NameError from it --
-                        # every repair failure took this path and got
-                        # "fix the upstream cell" for a cell with nothing wrong.
-                        error = result.get("error")
-                        if error:
-                            text = (
-                                f"{type(error).__name__}: {error}" if isinstance(error, BaseException) else str(error)
-                            )
-                            raise self._failure(error, text, stmt_code, statements[:stmt_idx], notebook_cells)
-            except UpstreamStateError:
-                raise
-            except Exception as e:
-                # ANY exception, not a list of the ones user code was expected
-                # to raise. The statement being re-run is the user's, so what it
-                # raises is the user's failure to hear about. The list used to
-                # be (RuntimeError, NameError, KeyError, TypeError, ValueError),
-                # and an ImportError went straight past it into the executor's
-                # catch-all for cash's own bugs: a notebook whose cell wrote an
-                # .xlsx without openpyxl installed told the user "cash hit an
-                # internal error ... Nothing in your code caused this ... Please
-                # report it" on the FOLLOWING cell.
-                # Swallowing here served the downstream cell a STALE value
-                # while the upstream producer was silently broken -
-                # the worst failure mode for a caching layer. Fail the user's
-                # cell with the upstream failure instead, like a plain
-                # top-to-bottom run would.
-                logger.error("[ERROR] Failed to auto-execute statement: %s", e)
-                raise self._failure(
-                    e, f"{type(e).__name__}: {e}", stmt_code, statements[:stmt_idx], notebook_cells
-                ) from e
-
-            # Report progress after each statement
-            if progress_callback is not None:
                 try:
-                    all_so_far = (restored_info or []) + executed_metrics
-                    progress_callback(all_so_far, stmt_code, stmt_idx + 1, total_upstream_steps)
-                except (TypeError, ValueError, AttributeError):
-                    pass  # Don't let progress reporting break execution
+                    # Check if this is a control structure (for/if/try/with/while).
+                    # If so, delegate to the control structure callback which handles
+                    # per-iteration caching for loops instead of executing monolithically.
+                    ctrl_node = self._try_parse_control_structure(stmt_code)
+                    if ctrl_node is not None and control_structure_callback is not None:
+                        logger.debug("[UPSTREAM] Delegating control structure to per-iteration processor")
+                        ctrl_annotation = (annotations or {}).get(stmt_code)
+                        # Its body's output kept, not shown: ``silent`` there still
+                        # streams each body statement's lines (the cell's own
+                        # loop runs that way), and the loop is ANOTHER cell's --
+                        # ``print("Training the", estimator)`` in a training loop
+                        # re-run for ``voting_clf.score(...)`` printed under the
+                        # score, which a plain run of that cell never shows.
+                        with capture_output(stdout=True, stderr=True, display=True), value_hash.not_handed_on():
+                            ctrl_result = (
+                                control_structure_callback(
+                                    ctrl_node, ttl=global_ttl, silent=True, inherited_annotation=ctrl_annotation
+                                )
+                                if ctrl_annotation is not None
+                                else control_structure_callback(ctrl_node, ttl=global_ttl, silent=True)
+                            )
+                        for m in ctrl_result.metrics:
+                            if m:
+                                m["is_upstream"] = True
+                                m.setdefault("upstream_statement", stmt_code)
+                                executed_metrics.append(m)
+                        if not ctrl_result.success:
+                            raise ctrl_result.error or RuntimeError("Error in upstream control structure")
+                    else:
+                        # Silent, like the control-structure branch above: this is
+                        # ANOTHER cell's statement, and its output belongs to that
+                        # cell -- a plain run of this cell never prints it. Re-running
+                        # a figure's history (``print('panels', len(axes))`` among
+                        # its fills) put that line into an unrelated cell's output.
+                        # A failure still
+                        # surfaces: the processor reports it in ``result['error']``.
+                        extra: dict[str, Any] = {}
+                        stmt_annotation = (annotations or {}).get(stmt_code)
+                        if stmt_annotation is not None:
+                            extra["annotation"] = stmt_annotation
+                        exec_source = (exec_sources or {}).get(stmt_code)
+                        if exec_source is not None:
+                            extra["exec_source"] = exec_source
+                        result = process_callback(stmt_code, global_ttl, silent=True, **extra)
+                        logger.debug("[UPSTREAM] Callback result for '%s...': %s", stmt_code[:20], result)
+                        if result:
+                            result["is_upstream"] = True  # Mark as upstream so badge categorizes correctly
+                            executed_metrics.append(result)
+                            # The processor reports statement failures via the
+                            # 'error' field instead of raising - surface those
+                            # through the same loud path below.
+                            # With its type: ``str(KeyError('f1'))`` is just ``'f1'``,
+                            # and nothing below could tell a NameError from it --
+                            # every repair failure took this path and got
+                            # "fix the upstream cell" for a cell with nothing wrong.
+                            error = result.get("error")
+                            if error:
+                                text = (
+                                    f"{type(error).__name__}: {error}"
+                                    if isinstance(error, BaseException)
+                                    else str(error)
+                                )
+                                raise self._failure(error, text, stmt_code, statements[:stmt_idx], notebook_cells)
+                except UpstreamStateError:
+                    raise
+                except Exception as e:
+                    # ANY exception, not a list of the ones user code was expected
+                    # to raise. The statement being re-run is the user's, so what it
+                    # raises is the user's failure to hear about. The list used to
+                    # be (RuntimeError, NameError, KeyError, TypeError, ValueError),
+                    # and an ImportError went straight past it into the executor's
+                    # catch-all for cash's own bugs: a notebook whose cell wrote an
+                    # .xlsx without openpyxl installed told the user "cash hit an
+                    # internal error ... Nothing in your code caused this ... Please
+                    # report it" on the FOLLOWING cell.
+                    # Swallowing here served the downstream cell a STALE value
+                    # while the upstream producer was silently broken -
+                    # the worst failure mode for a caching layer. Fail the user's
+                    # cell with the upstream failure instead, like a plain
+                    # top-to-bottom run would.
+                    logger.error("[ERROR] Failed to auto-execute statement: %s", e)
+                    raise self._failure(
+                        e, f"{type(e).__name__}: {e}", stmt_code, statements[:stmt_idx], notebook_cells
+                    ) from e
+
+                # Report progress after each statement
+                if progress_callback is not None:
+                    try:
+                        all_so_far = (restored_info or []) + executed_metrics
+                        progress_callback(all_so_far, stmt_code, stmt_idx + 1, total_upstream_steps)
+                    except (TypeError, ValueError, AttributeError):
+                        pass  # Don't let progress reporting break execution
 
         return executed_metrics
 

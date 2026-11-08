@@ -105,7 +105,7 @@ def test_a_model_changed_in_place_is_read_once_after_its_statement(cash_magics, 
     run_cash_cell(cash_magics, MAKE)
     windows = []
     real_window = value_hash.one_read
-    monkeypatch.setattr(value_hash, "one_read", lambda: windows.append(1) or real_window())
+    monkeypatch.setattr(value_hash, "one_read", lambda **kw: windows.append(1) or real_window(**kw))
     reads = _reads_of(monkeypatch, mock_shell, "m")
     after = []
     real_post = type(cash_magics._statement_processor)._post_execute_reading_once
@@ -138,7 +138,7 @@ def test_a_thread_changing_the_model_between_two_checks_is_seen(cash_magics, moc
     run_cash_cell(cash_magics, "worker = threading.Thread(target=change_it, daemon=True)\nworker.start()")
     windows = []
     real_window = value_hash.one_read
-    monkeypatch.setattr(value_hash, "one_read", lambda: windows.append(1) or real_window())
+    monkeypatch.setattr(value_hash, "one_read", lambda **kw: windows.append(1) or real_window(**kw))
     routing = cash_magics._statement_processor._mutation_routing
     real_observe = routing.observe
 
