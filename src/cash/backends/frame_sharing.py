@@ -192,8 +192,6 @@ def _note_shared(refs: Any) -> None:
     if not _counts_exact():
         _warn_unchecked()
         return
-    if _BEING_STORED:
-        _wait_until_stored(pin)
     try:
         left = _read_elsewhere(pin)
     except Exception:
@@ -212,84 +210,109 @@ def _left_behind(left: list[Any]) -> None:
         _warn_at_write()
 
 
-#: ``id(root) -> how many disk writes`` are serializing a frozen table
-#: whose memory *root* owns (`being_stored`): their pickler and buffers
-#: hold it, unseen by the count.
-_BEING_STORED: dict[int, int] = {}
-_STORED_CHANGED = threading.Condition()
-_STORING_THREADS: set[int] = set()
-#: How long a write waits for such a disk write before counting anyway
-#: (conservatively: the disk write's references count as readers).
-_STORE_WAIT = 5.0
+#: ``id(root) -> references`` the views `for_storing` made hold to *root*:
+#: cash's own, credited when a write counts who reads that memory.
+_STORE_HELD: dict[int, int] = {}
+_STORE_LOCK = threading.Lock()
+#: How many `for_storing` calls are running, on whatever thread: their
+#: locals hold the blocks' values for a moment (`_held_by_pandas_and_cash`).
+_DETACHING = [0]
 
 
-class being_stored:
-    """Around a disk write serializing *value* off the caller's thread: a
-    write into a served table sharing its memory waits for it to end
-    before counting who reads that memory (`_note_shared`). `release`
-    ends it early, once the serialized payload no longer holds that
-    memory."""
+def for_storing(value: Any) -> Any:
+    """*value* for a disk write to serialize off the caller's thread: each
+    frozen pandas table in it (as deep as the RAM tier looks for tables)
+    replaced by an equal one whose frozen columns are fresh views of the
+    same memory, outside its copy-on-write group.
 
-    def __init__(self, value: Any) -> None:
-        self._keys = _frozen_roots_in(value)
-        self._thread = threading.get_ident()
-
-    def __enter__(self) -> being_stored:
-        if self._keys:
-            with _STORED_CHANGED:
-                for key in self._keys:
-                    _BEING_STORED[key] = _BEING_STORED.get(key, 0) + 1
-                _STORING_THREADS.add(self._thread)
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        self.release()
-
-    def release(self) -> None:
-        if not self._keys:
-            return
-        with _STORED_CHANGED:
-            for key in self._keys:
-                left = _BEING_STORED.pop(key, 1) - 1
-                if left > 0:
-                    _BEING_STORED[key] = left
-            _STORING_THREADS.discard(self._thread)
-            _STORED_CHANGED.notify_all()
-        self._keys = []
+    The pickler and the payload's buffers then hold only those views, which
+    a write into a served table does not count as readers, while each view
+    itself is credited for as long as it lives (`_STORE_HELD`): the count
+    stays exact while the disk write runs. *value* itself when it holds no
+    frozen table, or when a table cannot be rebuilt so; the disk write's
+    references then count as readers (a write warns, never misses)."""
+    with _STORE_LOCK:
+        _DETACHING[0] += 1
+    try:
+        return _for_storing(value, {}, 0)
+    except Exception:
+        logger.debug("cash: a table stored to disk as it is", exc_info=True)
+        return value
+    finally:
+        with _STORE_LOCK:
+            _DETACHING[0] -= 1
 
 
-def _frozen_roots_in(value: Any, depth: int = 0) -> list[int]:
-    """The ids of the roots of the frozen blocks of the pandas tables in
-    *value*, as deep as the RAM tier looks for tables."""
+def _for_storing(value: Any, done: dict[int, Any], depth: int) -> Any:
+    if id(value) in done:
+        return done[id(value)]
     kind = type(value)
     if kind in (dict, list, tuple):
         if depth >= 2:
-            return []
-        items = value.values() if kind is dict else value
-        return [key for item in items for key in _frozen_roots_in(item, depth + 1)]
-    mgr = getattr(value, "_mgr", None)
-    if mgr is None or not kind.__module__.startswith("pandas"):
-        return []
-    keys = []
-    for block in getattr(mgr, "blocks", ()):
+            return value
+        if kind is dict:
+            items = {key: _for_storing(item, done, depth + 1) for key, item in value.items()}
+            changed = any(items[key] is not value[key] for key in value)
+            result = items if changed else value
+        else:
+            parts = [_for_storing(item, done, depth + 1) for item in value]
+            changed = any(new is not old for new, old in zip(parts, value, strict=True))
+            result = kind(parts) if changed else value
+    elif getattr(value, "_mgr", None) is not None and kind.__module__.startswith("pandas"):
+        result = _detached(value)
+    else:
+        return value
+    done[id(value)] = result
+    return result
+
+
+def _detached(table: Any) -> Any:
+    """*table* rebuilt on fresh views of its frozen columns (`for_storing`);
+    *table* itself when none of its blocks is frozen."""
+    mgr = table._mgr
+    if not any(_pin_of(block.refs) is not None for block in mgr.blocks):
+        return table
+    blocks = []
+    for block in mgr.blocks:
+        values = block.values
         if _pin_of(block.refs) is not None:
-            keys.extend(id(_root(array)) for _name, array in _ndarray_parts(block.values) or ())
-    return keys
+            values = _fresh_view(values)
+        blocks.append(block.make_block_same_class(values))
+    if table.ndim == 2:
+        fresh = type(mgr)(tuple(blocks), list(mgr.axes), verify_integrity=False)
+    else:
+        fresh = type(mgr)(blocks[0], mgr.axes[0], verify_integrity=False)
+    return table._constructor_from_mgr(fresh, axes=fresh.axes).__finalize__(table)
 
 
-def _wait_until_stored(pin: _PinRef) -> None:
-    """Wait, a while at most, for the disk writes serializing *pin*'s
-    memory to end (`being_stored`)."""
-    if threading.get_ident() in _STORING_THREADS:
-        return
-    keys = set()
-    for ref in pin.roots:
-        root = ref()
-        if root is not None:
-            keys.add(id(root))
-        del root
-    with _STORED_CHANGED:
-        _STORED_CHANGED.wait_for(lambda: not keys.intersection(_BEING_STORED), timeout=_STORE_WAIT)
+def _fresh_view(values: Any) -> Any:
+    """A new view of the frozen *values*, credited to its root while alive."""
+    import numpy as np
+
+    if type(values) is np.ndarray:
+        view = values.view()
+        fresh = view
+    else:
+        parts = _ndarray_parts(values)
+        if not parts:
+            return values  # Arrow: no numpy memory to count
+        view = values._ndarray.view()
+        fresh = values._from_backing_data(view)
+        if getattr(values, "_freq", None) is not None:
+            fresh._freq = values._freq
+    key = id(_root(view))
+    # Credited only once it exists: in between, it counts as a reader.
+    with _STORE_LOCK:
+        _STORE_HELD[key] = _STORE_HELD.get(key, 0) + 1
+    weakref.finalize(view, _store_view_gone, key).atexit = False
+    return fresh
+
+
+def _store_view_gone(key: int) -> None:
+    with _STORE_LOCK:
+        left = _STORE_HELD.pop(key, 1) - 1
+        if left > 0:
+            _STORE_HELD[key] = left
 
 
 def defer_reports(on: bool) -> None:
@@ -1896,7 +1919,8 @@ def _unaccounted(blocks: list[Any], root_ref: Any) -> bool:
     if root is None:
         return False
     objects[id(root)] = root
-    holders.setdefault(id(root), 0)
+    # The views a disk write serializes from are cash's own (`for_storing`).
+    holders[id(root)] = holders.get(id(root), 0) + _STORE_HELD.get(id(root), 0)
     del root
     held_here = _held_by_pandas_and_cash(objects)
     for key in list(objects):
@@ -1905,6 +1929,16 @@ def _unaccounted(blocks: list[Any], root_ref: Any) -> bool:
         if sys.getrefcount(objects[key]) > holders[key] + held_here.get(key, 0) + 2:
             return True
     return False
+
+
+def _credit_locals(frame: Any, objects: dict[int, Any], counted: dict[int, int], np: Any) -> None:
+    """Credit the references *frame*'s locals hold to *objects*, directly
+    or (with *np*) through a numpy view's base."""
+    for value in list(frame.f_locals.values()):
+        if objects.get(id(value)) is value:
+            counted[id(value)] = counted.get(id(value), 0) + 1
+        elif np is not None and isinstance(value, np.ndarray) and value.base is not None and id(value.base) in objects:
+            counted[id(value.base)] = counted.get(id(value.base), 0) + 1
 
 
 def _held_by_pandas_and_cash(objects: dict[int, Any]) -> dict[int, int]:
@@ -1922,12 +1956,18 @@ def _held_by_pandas_and_cash(objects: dict[int, Any]) -> dict[int, int]:
     frame = sys._getframe(2)  # past `_unaccounted`, which holds `objects` alone
     while frame is not None:
         if frame.f_code.co_filename.startswith(inside):
-            for value in list(frame.f_locals.values()):
-                if objects.get(id(value)) is value:
-                    counted[id(value)] = counted.get(id(value), 0) + 1
-                elif isinstance(value, np.ndarray) and value.base is not None and id(value.base) in objects:
-                    counted[id(value.base)] = counted.get(id(value.base), 0) + 1
+            _credit_locals(frame, objects, counted, np)
         frame = frame.f_back
+    if _DETACHING[0]:
+        here = threading.get_ident()
+        for thread, frame in list(sys._current_frames().items()):
+            while frame is not None and thread != here:
+                if frame.f_code.co_filename == __file__:
+                    # Direct references only: a fresh view's base is
+                    # credited once registered (`_fresh_view`), and before
+                    # that it counts, so the count errs towards a warning.
+                    _credit_locals(frame, objects, counted, None)
+                frame = frame.f_back
     return counted
 
 

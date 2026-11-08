@@ -667,7 +667,7 @@ code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/backends/frame_sharing.py:_warn_at_write @3bda0831, cash/backends/frame_sharing.py:_note_shared @2c997658 -->
+<!-- claim: cash/backends/frame_sharing.py:_warn_at_write @3bda0831, cash/backends/frame_sharing.py:_note_shared @b455aa07 -->
 **What happened.** A line of yours wrote into a pandas table that a cached
 function returned from the memory cache (`df.iloc[0, 0] = 100`), while a
 NumPy array taken from the table before the write (`v = df["t"].to_numpy()`,
@@ -696,8 +696,9 @@ reads the table's memory, not which column or which table, so it also
 warns when the array is of another column the write leaves alone, of
 another hit of the same cached call (`a = load(); b = load()`, an array of
 `b`, a write into `a`), or when another table shared the column anyway, as
-in a chained write (`df["t"].iloc[0] = 100`) that plain Python copies too
-([cash-tracker#239](https://github.com/galgtonold/cash-tracker/issues/239)).
+in a chained write (`df["t"].iloc[0] = 100`) that plain Python copies too.
+An array keeps no trace of which hit or column it was taken from, so these
+cannot be told apart from an array the write does miss.
 
 ### CACHE-THRASH {#cache-thrash}
 
@@ -2519,8 +2520,8 @@ the write, or the array would not have changed anyway: when another table
 shared the column (`y = df["t"]` with `df` still held), plain Python copies
 it too. cash counts who reads the table's memory, not which column or which
 table, so it also warns for an array of another column the write leaves
-alone, or of another hit of the same cached result
-([cash-tracker#239](https://github.com/galgtonold/cash-tracker/issues/239)).
+alone, or of another hit of the same cached result: an array keeps no trace
+of which hit or column it was taken from.
 
 ### NOTEBOOK-SHARE-UNCHECKED {#notebook-share-unchecked}
 

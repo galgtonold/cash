@@ -1082,21 +1082,17 @@ class FileBackend(CacheBackend):
         """`_do_set_sync` for a `set` ``private`` value: serialize it here, on
         the writer, without copying its buffers."""
         value, serializer = work
-        # A served table sharing *value*'s memory waits to count its readers
-        # (`frame_sharing.being_stored`) while this write's buffers hold it.
-        with frame_sharing.being_stored(value) as stored:
-            try:
-                serialized_value = self._serialize(value, serializer, copy=False)
-            except Exception as exc:
-                logger.debug("Cache set failed for key %r: %s", key, exc)
-                raise CacheBackendError(f"Cache set failed for key {key!r}: {exc}") from exc
-            del value, work  # the buffers hold what the write needs
-            if not isinstance(serialized_value, SplitPayload):
-                stored.release()  # one stream of bytes: the memory is free again
-            try:
-                self._do_set_sync(key, path, metadata, serialized_value)
-            finally:
-                del serialized_value
+        # A frozen table is serialized from views of its memory that a write
+        # into a served table sharing that memory credits as cash's own
+        # (`frame_sharing.for_storing`), not from its blocks.
+        value = frame_sharing.for_storing(value)
+        try:
+            serialized_value = self._serialize(value, serializer, copy=False)
+        except Exception as exc:
+            logger.debug("Cache set failed for key %r: %s", key, exc)
+            raise CacheBackendError(f"Cache set failed for key {key!r}: {exc}") from exc
+        del value, work  # the buffers hold what the write needs
+        self._do_set_sync(key, path, metadata, serialized_value)
 
     def _call_refs_of(self, keys) -> set[str]:
         refs: set[str] = set()
