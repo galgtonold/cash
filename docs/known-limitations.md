@@ -1023,8 +1023,12 @@ default argument or base class does. **Fix:** move the binding above this cell.
   `df.iloc` and `df["x"] = ...` work as usual, but a NumPy array taken
   from the table before such a write (`v = df["x"].to_numpy()`) keeps the
   old values where plain Python shows it the write; cash warns with
-  [NOTEBOOK-SERVED-VIEW](warnings.md#notebook-served-view). A table read
-  from disk, as after a restart, is your own and behaves as in plain Python.
+  [NOTEBOOK-SERVED-VIEW](warnings.md#notebook-served-view). The warning can
+  also come when the array would not have changed: it is of another column
+  of the same block, or of another hit of the same cached result
+  ([cash-tracker#239](https://github.com/galgtonold/cash-tracker/issues/239)).
+  A table read from disk, as after a restart, is your own and behaves as in
+  plain Python.
   See [the tiers](how-it-works/storage.md#the-tiers).
 - **A file you save from a restored object may differ in its bytes.** A
   value restored from the cache equals the one the code computed, but its

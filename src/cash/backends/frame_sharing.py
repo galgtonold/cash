@@ -108,10 +108,11 @@ class _PinRef(weakref.ref):
     good, so pandas always copies the block before writing it. One per
     group, holding the arrays that own the group's frozen memory (*roots*)
     and the blocks cash knows to be in the group (*blocks*, weakly), so
-    `views_left_behind` can count who still reads that memory once pandas
-    has copied a block of the group to write it (`_install_write_watch`)."""
+    that a write can count who still reads that memory (`_note_shared`).
+    *writes* and *left*: how many writes pandas checked the group before,
+    and whether the last left a reader behind (`_watch_self_test`)."""
 
-    __slots__ = ("__weakref__", "blocks", "roots")
+    __slots__ = ("__weakref__", "blocks", "left", "roots", "writes")
 
     def __new__(cls, roots: list[Any]) -> _PinRef:
         return super().__new__(cls, _PIN_TARGET)
@@ -120,6 +121,8 @@ class _PinRef(weakref.ref):
         super().__init__(_PIN_TARGET)
         self.roots = [weakref.ref(root) for root in roots]
         self.blocks: list[Any] = []
+        self.writes = 0
+        self.left = False
 
     def know(self, block: Any) -> None:
         """Remember *block*, one of the group's, to find the group by."""
@@ -127,13 +130,9 @@ class _PinRef(weakref.ref):
         self.blocks.append(weakref.ref(block))
 
 
-#: The frozen groups pandas found shared before writing one of their blocks
-#: since `forget_asked` (`_install_write_watch`): ``id(pin) -> weak
-#: reference to the pin``.
-_ASKED: dict[int, Any] = {}
-
-#: ``id(root) -> pins of the groups whose frozen memory *root* owns``; a
-#: column the RAM tier keeps for two entries is in two groups.
+#: ``id(root) -> {id(pin): weak reference to pin}`` for the groups whose
+#: frozen memory *root* owns; a column the RAM tier keeps for two entries is
+#: in two groups.
 _PINS_BY_ROOT: dict[int, Any] = {}
 
 
@@ -157,40 +156,119 @@ def has_pin(block: Any) -> bool:
     return _pin_of(block.refs) is not None
 
 
+# ------------------------------------------------- writes a view does not see
+#
+# A served table shares its memory with the RAM tier's copy, so pandas
+# copies a column before writing it, and a numpy array taken from the
+# column before (``v = s.to_numpy()``, ``s.values``, ``s.array``) keeps the
+# old values, where a plain run writes the column in place and the array
+# sees the write. That cannot be matched without copying every hit, so the
+# write is counted as pandas checks the column (`_install_write_watch`),
+# and warned about: at the end of the statement in a notebook cell cash
+# runs (`defer_reports`, `views_left_behind`), at the write itself
+# anywhere else (`_warn_at_write`).
+
+#: What writes left behind while reports are deferred, oldest first: for
+#: each, weak references to the roots still read.
+_LEFT: list[list[Any]] = []
+_LEFT_LOCK = threading.Lock()
+#: How many callers defer the reports (`defer_reports`).
+_DEFERRING: list[int] = [0]
+#: This thread's `_watch_self_test` writes: counted, never reported.
+_QUIET = threading.local()
+#: The places `_warn_at_write` warned about, ``(file, line)``.
+_WARNED_AT: set[tuple[str, int]] = set()
+_UNCHECKED_WARNED: list[bool] = []
+
+
 def _note_shared(refs: Any) -> None:
-    """pandas found the group *refs* shared, before a write: note it when
-    cash froze it (`views_left_behind`). Where no statement checks follow
-    (`checked_by_statements`: a script or a notebook without ``%cash_on``,
-    whose served tables come from ``@cash.cache``), count now and warn
-    (`_warn_at_write`)."""
+    """pandas found the group *refs* shared before writing one of its
+    blocks: when cash froze it, count who still reads its memory besides
+    pandas' blocks (`_read_elsewhere`), and report it (`_left_behind`)."""
     pin = _pin_of(refs)
     if pin is None:
         return
-    _ASKED[id(pin)] = weakref.ref(pin)
-    if _STATEMENT_CHECKS or _QUIET:
+    pin.writes += 1
+    if not _counts_exact():
+        _warn_unchecked()
         return
     try:
         left = _read_elsewhere(pin)
     except Exception:
         logger.debug("cash: could not count the readers of a written table", exc_info=True)
         return
-    if left:
+    pin.left = bool(left)
+    if left and not getattr(_QUIET, "on", False):
+        _left_behind(left)
+
+
+def _left_behind(left: list[Any]) -> None:
+    if _DEFERRING[0] > 0:
+        with _LEFT_LOCK:
+            _LEFT.append(left)
+    else:
         _warn_at_write()
 
 
-#: Set once the notebook checks each statement (`checked_by_statements`).
-_STATEMENT_CHECKS: list[bool] = []
-#: Non-empty while `_self_test` writes its own tables.
-_QUIET: list[bool] = []
-#: The places `_warn_at_write` warned about, ``(file, line)``.
-_WARNED_AT: set[tuple[str, int]] = set()
+def defer_reports(on: bool) -> None:
+    """While on, a write that leaves an array behind is kept for
+    `views_left_behind` rather than warned about where it happens: the
+    notebook warns at the end of the statement, naming the variables.
+    Calls nest; each ``True`` is matched by a ``False``."""
+    with _LEFT_LOCK:
+        _DEFERRING[0] = max(0, _DEFERRING[0] + (1 if on else -1))
 
 
-def checked_by_statements() -> None:
-    """The notebook counts the readers of written tables after each
-    statement (`views_left_behind`): from now on a write is only noted."""
-    if not _STATEMENT_CHECKS:
-        _STATEMENT_CHECKS.append(True)
+def forget_asked() -> None:
+    """Drop what `views_left_behind` would report."""
+    with _LEFT_LOCK:
+        _LEFT.clear()
+
+
+def views_left_behind() -> tuple[int, list[Any]]:
+    """The writes kept since the last call (`defer_reports`) that left a
+    numpy array reading a served table's old memory, and the arrays owning
+    that memory still alive (an array taken inside a function is gone by
+    the end of the statement; its write is still counted).
+
+    In a plain run the write reaches the array when no other table shares
+    the column; that is not told apart, so a write pandas would have
+    copied anyway is reported too."""
+    with _LEFT_LOCK:
+        taken = list(_LEFT)
+        _LEFT.clear()
+    roots: list[Any] = []
+    for refs in taken:
+        for ref in refs:
+            root = ref()
+            if root is not None and not any(root is seen for seen in roots):
+                roots.append(root)
+    return len(taken), roots
+
+
+def _counts_exact() -> bool:
+    """Are reference counts exact here? Not on a free-threaded CPython
+    with the GIL off, where another thread's references are counted
+    apart."""
+    gil = getattr(sys, "_is_gil_enabled", None)
+    return gil is None or bool(gil())
+
+
+def _warn_unchecked() -> None:
+    """Said once: writes into served tables cannot be checked here."""
+    if _UNCHECKED_WARNED or getattr(_QUIET, "on", False):
+        return
+    _UNCHECKED_WARNED.append(True)
+    from ..diagnostics import warn_diagnostic
+    from ..exceptions import CashWarning
+
+    what = (
+        "a pandas table served from the cache was written, and this free-threaded Python counts "
+        "references inexactly, so cash cannot tell whether a numpy array taken from the table before "
+        "the write still holds the old values (in a plain run it would see the write)."
+    )
+    fix = "take arrays from a served table after writing it, or copy the table first (df = df.copy())."
+    warn_diagnostic(CashWarning, "CACHE-SERVED-VIEW", what, fix, location=_write_site())
 
 
 def _write_site() -> tuple[str, int]:
@@ -290,6 +368,8 @@ def enabled() -> bool:
     except Exception:
         logger.debug("cash: pandas tables are copied, not shared", exc_info=True)
         ok = False
+    if not ok:
+        _uninstall_write_watch()  # the self-test may have put it in
     _ENABLED.append(ok)
     return ok
 
@@ -327,22 +407,7 @@ def _self_test(pd: Any) -> bool:
         if pickle.loads(pickle.dumps(kept)).index.freq != original.index.freq:
             return False
     del stored
-    _QUIET.append(True)
-    try:
-        return _self_test_writes(pd, hit, other, columns)
-    finally:
-        _QUIET.clear()
-
-
-def _self_test_writes(pd: Any, hit: Any, other: Any, columns: dict) -> bool:
-    """`_self_test`'s writes into a hit, with the stored table gone."""
-    asked = dict(_ASKED)
-    _ASKED.clear()
-    hit.iloc[0, 0] = 100.0
-    noted = bool(_ASKED)  # the write was seen (`views_left_behind`)
-    _ASKED.clear()
-    _ASKED.update(asked)
-    if not noted:
+    if not _watch_self_test(pd, hit, stored_series):
         return False
     hit.iloc[1, 2] = pd.Timestamp("2021-01-01")
     hit.iloc[3, 1] = 9
@@ -359,6 +424,61 @@ def _self_test_writes(pd: Any, hit: Any, other: Any, columns: dict) -> bool:
     else:
         return False
     return bool(other["f"].iloc[1] == 1.0)
+
+
+def _watch_self_test(pd: Any, hit: Any, stored_series: Any) -> bool:
+    """Does the write watch see writes into a hit, through each place it
+    hooks, count a write with nothing else holding the data as clean, and
+    one with a numpy array taken before it as leaving it behind? When not,
+    tables are not shared (`enabled` takes the watch out again): copied,
+    they behave as in a plain run."""
+    import numpy as np
+
+    if not _counts_exact():
+        return True  # nothing is counted: a write says once it cannot be (`_warn_unchecked`)
+    _QUIET.on = True
+    try:
+        ok = _watch_checks(pd, np, hit, stored_series)
+    except Exception:
+        logger.debug("cash: the write watch failed its self-test", exc_info=True)
+        ok = False
+    finally:
+        _QUIET.on = False
+    return ok
+
+
+def _watch_checks(pd: Any, np: Any, hit: Any, stored_series: Any) -> bool:
+    def written(table: Any, write: Any) -> tuple[bool, bool]:
+        """Did writing *table* count as a write (`_note_shared`), and did
+        it leave a reader behind?"""
+        mgr = table._mgr
+        pin = _pin_of(mgr.blocks[mgr.blknos[0] if table.ndim == 2 else 0].refs)
+        if pin is None:
+            return False, False
+        before = pin.writes
+        write(table)
+        return pin.writes > before, pin.left
+
+    clean = (True, False)
+    # A frame's block, through the manager (`_has_no_reference_block`).
+    if written(hand_out(hit), lambda t: t.iloc.__setitem__((0, 0), 100.0)) != clean:
+        return False
+    # A Series (`SingleBlockManager._has_no_reference`).
+    if written(hand_out(stored_series), lambda t: t.iloc.__setitem__(0, 100.0)) != clean:
+        return False
+    # Block methods writing in place: `_maybe_copy` (mask, where) and
+    # `_get_refs_and_copy` (ffill, fillna, interpolate).
+    if written(hand_out(stored_series), lambda t: t.mask(t > 1, 0.0, inplace=True)) != clean:
+        return False
+    if written(hand_out(stored_series), lambda t: t.ffill(inplace=True)) != clean:
+        return False
+    # An array taken before the write still reads the old memory. Kept in
+    # a list, as a caller's would be: the locals of cash's own frames are
+    # counted as the write's (`_held_by_pandas_and_cash`).
+    frame = hand_out(hit)
+    kept = [frame["f"].to_numpy()]
+    seen = written(frame, lambda t: t.iloc.__setitem__((0, 0), 100.0))
+    return seen == (True, True) and kept[0][0] != 100.0
 
 
 # ---------------------------------------------------------------- freezing
@@ -677,7 +797,8 @@ def _freeze_in_place(frame: Any) -> None:
             journal.pins.append((refs.referenced_blocks, pin))
             refs.referenced_blocks.append(pin)
             for root in pin.roots:
-                _PINS_BY_ROOT.setdefault(id(root()), weakref.WeakSet()).add(pin)
+                # By id: pins are weak references to one target, so all compare equal.
+                _PINS_BY_ROOT.setdefault(id(root()), {})[id(pin)] = weakref.ref(pin)
         for other in group:
             pin.know(other)
     for name in ("index",) if frame.ndim == 1 else ("index", "columns"):
@@ -1606,48 +1727,7 @@ def _private_axes(frame: Any) -> None:
             setattr(frame, name, fresh)
 
 
-# ------------------------------------------------- writes a view does not see
-
-
-def forget_asked() -> None:
-    """Start over: the writes `views_left_behind` reports are those after
-    this call."""
-    _ASKED.clear()
-
-
-def views_left_behind() -> list[Any]:
-    """The arrays owning frozen memory that pandas copied a block of before
-    writing it since `forget_asked` (`_install_write_watch`), and that
-    something besides pandas' own blocks still reads: a numpy array taken
-    from a served table (``s.to_numpy()``, ``s.values``, ``s.array``)
-    before the write.
-
-    pandas copied the block before writing it, as its memory is the RAM
-    tier's (`_PinRef`), so that array kept the old values. In a plain run
-    the write reaches it when no other table shares the column; that is
-    not told apart here, so a write pandas would have copied anyway is
-    reported too.
-
-    Exact for what it counts: every reference to the memory, to the arrays
-    over it and to the wrappers holding them, against those the live blocks
-    of each group over it account for. A group none of whose blocks cash
-    knows to be alive cannot be counted, and is reported."""
-    if not _ASKED:
-        return []
-    pins = [ref() for ref in _ASKED.values()]
-    _ASKED.clear()
-    found: list[Any] = []
-    for pin in pins:
-        if pin is None:
-            continue
-        try:
-            for ref in _read_elsewhere(pin):
-                if not any(ref is seen for seen in found):
-                    found.append(ref)
-        except Exception:
-            logger.debug("cash: could not count the readers of a written table", exc_info=True)
-    roots = [ref() for ref in found]
-    return [root for root in roots if root is not None]
+# ------------------------------------------------- readers of a written table
 
 
 def reads_memory_of(value: Any, roots: list[Any]) -> bool:
@@ -1698,7 +1778,8 @@ def _read_elsewhere(pin: _PinRef) -> list[Any]:
         root = ref()
         if root is None:
             continue
-        pins = list(_PINS_BY_ROOT.get(id(root), ())) or [pin]
+        known = [ref() for ref in list(_PINS_BY_ROOT.get(id(root), {}).values())]
+        pins = [other for other in known if other is not None] or [pin]
         del root
         blocks: dict[int, Any] = {}
         countable = True
@@ -1735,11 +1816,37 @@ def _unaccounted(blocks: list[Any], root_ref: Any) -> bool:
     objects[id(root)] = root
     holders.setdefault(id(root), 0)
     del root
+    held_here = _held_by_pandas_and_cash(objects)
     for key in list(objects):
-        # Besides those counted: `objects`, the call's argument.
-        if sys.getrefcount(objects[key]) > holders[key] + 2:
+        # Besides those counted: `objects`, the call's argument, and the
+        # locals of the pandas and cash code writing (`values = self.values`).
+        if sys.getrefcount(objects[key]) > holders[key] + held_here.get(key, 0) + 2:
             return True
     return False
+
+
+def _held_by_pandas_and_cash(objects: dict[int, Any]) -> dict[int, int]:
+    """How many references to each of *objects* the locals of the pandas
+    and cash frames on this thread's stack hold, directly or through a
+    numpy view whose base is one of them: the write under way, not a
+    reader the caller keeps."""
+    import os
+
+    import numpy as np
+    import pandas as pd
+
+    inside = (os.path.dirname(pd.__file__) + os.sep, os.path.dirname(os.path.dirname(__file__)) + os.sep)
+    counted: dict[int, int] = {}
+    frame = sys._getframe(2)  # past `_unaccounted`, which holds `objects` alone
+    while frame is not None:
+        if frame.f_code.co_filename.startswith(inside):
+            for value in list(frame.f_locals.values()):
+                if objects.get(id(value)) is value:
+                    counted[id(value)] = counted.get(id(value), 0) + 1
+                elif isinstance(value, np.ndarray) and value.base is not None and id(value.base) in objects:
+                    counted[id(value.base)] = counted.get(id(value.base), 0) + 1
+        frame = frame.f_back
+    return counted
 
 
 def _block_holders(blocks: list[Any]) -> tuple[dict[int, Any], dict[int, int]]:
@@ -1854,18 +1961,20 @@ def _install_pickling() -> None:
         _PICKLING_INSTALLED.append(True)
 
 
-_WATCH_INSTALLED: list[bool] = []
+#: The pandas methods `_install_write_watch` replaced: ``(owner, name, original)``.
+_WATCH_INSTALLED: list[tuple[Any, str, Any]] = []
+_WATCH_DONE: list[bool] = []
 
 
 def _install_write_watch() -> None:
     """Note each frozen group pandas finds shared before a write
     (`_note_shared`): the places pandas' copy-on-write asks whether a block
     it is about to write in place is shared. Once per process, before the
-    first table is frozen; `_self_test` checks a write is noted."""
-    if _WATCH_INSTALLED:
+    first table is frozen; `_watch_self_test` checks it."""
+    if _WATCH_DONE:
         return
     with _INSTALL_LOCK:
-        if _WATCH_INSTALLED:
+        if _WATCH_DONE:
             return
         from pandas.core.internals.blocks import Block
         from pandas.core.internals.managers import BaseBlockManager, SingleBlockManager
@@ -1888,7 +1997,7 @@ def _install_write_watch() -> None:
             return alone
 
         def _maybe_copy(self: Any, inplace: bool, deep: bool = True) -> Any:
-            if inplace:
+            if inplace and deep:  # a shallow copy keeps the frozen memory: no write follows
                 _note_shared(self.refs)
             return maybe_copy(self, inplace, deep)
 
@@ -1897,8 +2006,20 @@ def _install_write_watch() -> None:
                 _note_shared(self.refs)
             return refs_and_copy(self, inplace)
 
-        BaseBlockManager._has_no_reference_block = _has_no_reference_block
-        SingleBlockManager._has_no_reference = _has_no_reference
-        Block._maybe_copy = _maybe_copy
-        Block._get_refs_and_copy = _get_refs_and_copy
-        _WATCH_INSTALLED.append(True)
+        for owner, name, original, wrapper in (
+            (BaseBlockManager, "_has_no_reference_block", no_reference_block, _has_no_reference_block),
+            (SingleBlockManager, "_has_no_reference", single_no_reference, _has_no_reference),
+            (Block, "_maybe_copy", maybe_copy, _maybe_copy),
+            (Block, "_get_refs_and_copy", refs_and_copy, _get_refs_and_copy),
+        ):
+            _WATCH_INSTALLED.append((owner, name, original))
+            setattr(owner, name, wrapper)
+        _WATCH_DONE.append(True)
+
+
+def _uninstall_write_watch() -> None:
+    """Put back the pandas methods `_install_write_watch` replaced."""
+    with _INSTALL_LOCK:
+        while _WATCH_INSTALLED:
+            owner, name, original = _WATCH_INSTALLED.pop()
+            setattr(owner, name, original)

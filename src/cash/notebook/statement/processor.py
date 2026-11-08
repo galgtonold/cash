@@ -4646,6 +4646,14 @@ class StatementProcessor:
 
         self._served_writes.check(self.shell.user_ns, code, ("<cash>", running_cell_count(self.shell)))
 
+    def end_cell_served_writes(self) -> None:
+        """The cell's last `check_served_writes`; later writes, made between
+        cells or with cash off, warn where they are made."""
+        try:
+            self.check_served_writes()
+        finally:
+            self._served_writes.cell_ends()
+
     def _warn_holders_unfound(self, run: StatementRun, classes: list[str], cost: float) -> None:
         """Warn (``NOTEBOOK-SHARE-UNCHECKED``) that the variables holding an
         object of a class defined anew were not all found, so every variable

@@ -667,7 +667,7 @@ code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/backends/frame_sharing.py:_warn_at_write @3bda0831, cash/backends/frame_sharing.py:_note_shared @5d34f551 -->
+<!-- claim: cash/backends/frame_sharing.py:_warn_at_write @3bda0831, cash/backends/frame_sharing.py:_note_shared @b455aa07 -->
 **What happened.** A line of yours wrote into a pandas table that a cached
 function returned from the memory cache (`df.iloc[0, 0] = 100`), while a
 NumPy array taken from the table before the write (`v = df["t"].to_numpy()`,
@@ -675,10 +675,14 @@ NumPy array taken from the table before the write (`v = df["t"].to_numpy()`,
 the cache's copy, so pandas copies the column before writing it, and the
 array keeps the old values. In plain Python, with no other table sharing
 the column, pandas writes it in place and the array sees the write. The
-warning names the line that writes, once per line. A table the call
-computed, or one read from disk, is your own and never gets this warning.
-In a notebook with `%cash_on`, the same write warns
-[NOTEBOOK-SERVED-VIEW](#notebook-served-view) instead.
+warning names the line that writes, once per line, and comes as the write
+is made, so an array taken and dropped inside a function counts too. A
+table the call computed, or one read from disk, is your own and never gets
+this warning. In a notebook cell cash runs, the same write warns
+[NOTEBOOK-SERVED-VIEW](#notebook-served-view) instead; after `%cash_off`
+it warns this code. On a free-threaded Python with the GIL off, reference
+counts are not exact, so cash cannot tell an array held from none: the
+first write into a served table warns once that it cannot check.
 
 **Why it matters.** Code that reads the array after the write (`v[0]`)
 gets the old value where plain Python gets the new one.
@@ -687,10 +691,14 @@ gets the old value where plain Python gets the new one.
 (`df = df.copy()`) and take the array from the copy.
 
 **When it is safe to ignore.** When the code does not read the array after
-the write, or another table shared the column anyway: plain Python copies
-the column then too. A few pandas methods that write in place
-(`fillna(..., inplace=True)`, `replace(..., inplace=True)`) hold the column
-themselves while they decide, and warn even with no array of yours held.
+the write, or the array would not have changed anyway. cash counts who
+reads the table's memory, not which column or which table, so it also
+warns when the array is of another column the write leaves alone, of
+another hit of the same cached call (`a = load(); b = load()`, an array of
+`b`, a write into `a`), or when another table shared the column anyway, as
+in a chained write (`df["t"].iloc[0] = 100`) that plain Python copies too
+([cash-tracker#239](https://github.com/galgtonold/cash-tracker/issues/239)).
+
 ### CACHE-THRASH {#cache-thrash}
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
@@ -2486,16 +2494,19 @@ file on disk is the one you want.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/statement/served_frame_writes.py:ServedFrameWrites._warn @888e30a2, cash/backends/frame_sharing.py:views_left_behind @d828ef56 -->
+<!-- claim: cash/notebook/statement/served_frame_writes.py:ServedFrameWrites._warn @980e2815, cash/backends/frame_sharing.py:views_left_behind @ece653dd -->
 **What happened.** A statement wrote into a pandas table served from the
 memory tier (`y.iloc[0] = 100`), while a NumPy array taken from the table
 before the write (`v = y.to_numpy()`, `y.values`) was still held. A served
 table shares its memory with the cache's copy, so pandas copied the column
 before writing it, and the array kept the old values. In plain Python,
 with no other table sharing the column, pandas writes it in place and the
-array sees the write. The message names the variables that hold such an
-array. It is shown once per statement. A table read from disk, as after a
-restart, is your own and never gets this warning.
+array sees the write. The write is counted as it is made, and the warning
+shown at the end of its statement, naming the variables that still hold
+such an array (an array taken inside a function and gone by then is
+counted too, unnamed). It is shown once per statement each time the cell
+runs. A table read from disk, as after a restart, is your own and never
+gets this warning.
 
 **Why it matters.** Code that reads the array after the write (`v[0]`)
 gets the old value where plain Python gets the new one.
@@ -2504,9 +2515,12 @@ gets the old value where plain Python gets the new one.
 is served (`df = df.copy()`) and take the array from the copy.
 
 **When it is safe to ignore.** When the code does not read the array after
-the write, or another table shared the column anyway (`y = df["t"]` with
-`df` still held): plain Python copies the column then too, and cash cannot
-always tell the two apart, so it warns.
+the write, or the array would not have changed anyway: when another table
+shared the column (`y = df["t"]` with `df` still held), plain Python copies
+it too. cash counts who reads the table's memory, not which column or which
+table, so it also warns for an array of another column the write leaves
+alone, or of another hit of the same cached result
+([cash-tracker#239](https://github.com/galgtonold/cash-tracker/issues/239)).
 
 ### NOTEBOOK-SHARE-UNCHECKED {#notebook-share-unchecked}
 

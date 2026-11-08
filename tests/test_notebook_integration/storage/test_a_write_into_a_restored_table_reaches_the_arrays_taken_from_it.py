@@ -111,10 +111,48 @@ def test_a_second_run_all_warns_that_the_array_kept_the_old_values(nb_runner, ca
 
     nb_runner.run_all()
 
-    printed = nb_runner.get_output(len(cells) + 1)
-    if printed != _plain(cells):
-        assert "NOTEBOOK-SERVED-VIEW" in nb_runner.get_raw_output(write), nb_runner.get_raw_output(write)
-        assert "'v'" in nb_runner.get_raw_output(write)
+    assert nb_runner.get_output(len(cells) + 1) != _plain(cells), "setup: the served table's write is copied"
+    assert "NOTEBOOK-SERVED-VIEW" in nb_runner.get_raw_output(write), nb_runner.get_raw_output(write)
+    assert "'v'" in nb_runner.get_raw_output(write)
+
+    nb_runner.run_all()  # warned again: once per statement of each cell run, not once per kernel
+    assert "NOTEBOOK-SERVED-VIEW" in nb_runner.get_raw_output(write), nb_runner.get_raw_output(write)
+
+
+def test_an_array_taken_inside_a_function_is_warned_about(nb_runner):
+    """The array is gone by the end of the statement, so the write is
+    counted as it happens and warned about at the statement's end."""
+    cells = [
+        FRAME,
+        "def first_after_write(d):\n    v = d['t'].to_numpy()\n    d.iloc[0, 0] = 100.0\n    return v[0]",
+        "print(first_after_write(df))",
+    ]
+    nb_runner.create_notebook([SETUP, *cells])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert nb_runner.get_output(4) == "100.0", "control: the first run is plain"
+    nb_runner.run_all()
+    assert nb_runner.get_output(4) == "0.0", "setup: the served table's write is copied"
+    assert "NOTEBOOK-SERVED-VIEW" in nb_runner.get_raw_output(4), nb_runner.get_raw_output(4)
+
+
+def test_with_cash_turned_off_the_write_still_warns(nb_runner):
+    """After ``%cash_off`` cash checks no statements, so the write warns as
+    it happens (CACHE-SERVED-VIEW)."""
+    cells = [
+        SETUP,
+        FRAME,
+        "%cash_off",
+        "v = df['t'].to_numpy()",
+        "df.iloc[0, 0] = 100.0",
+        "print(v[0])",
+    ]
+    nb_runner.create_notebook(cells)
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    nb_runner.run_all()  # SETUP turns cash on again: the table is served, then cash turned off
+    assert nb_runner.get_output(6) == "0.0", "setup: the table is served"
+    assert "CACHE-SERVED-VIEW" in nb_runner.get_raw_output(5), nb_runner.get_raw_output(5)
 
 
 def test_a_write_into_a_served_table_with_no_array_taken_does_not_warn(nb_runner):
