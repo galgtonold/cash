@@ -156,7 +156,7 @@ the reasoning.
 
 ### Plots shown from the cache
 
-<!-- claim: cash/notebook/ipython/plot_runs.py:PlotRuns.serve @0458b11a, cash/notebook/ipython/plot_runs.py:PlotRuns._store @12d069f1, cash/notebook/plot_outputs.py:statement_plot_facts @b47a015b, cash/notebook/plot_outputs.py:first_read_after @1d857b84, cash/notebook/ipython/plot_runs.py:PlotRuns._served @b75ad5cc, cash/notebook/statement/processor.py:StatementProcessor.settle_served_plot_statement @cbfa94b7 -->
+<!-- claim: cash/notebook/ipython/plot_runs.py:PlotRuns.serve @0458b11a, cash/notebook/ipython/plot_runs.py:PlotRuns._store @bd1b1be0, cash/notebook/plot_outputs.py:statement_plot_facts @b47a015b, cash/notebook/plot_outputs.py:first_read_after @1d857b84, cash/notebook/ipython/plot_runs.py:PlotRuns._served @b75ad5cc, cash/notebook/statement/processor.py:StatementProcessor.settle_served_plot_statement @cbfa94b7 -->
 With the inline backend (the default in Jupyter), a plot begins with no
 figure open and ends when `plt.show()`, or the end of the cell, shows its
 figures and closes them. Cash keeps what such a plot showed: the image, what
@@ -182,10 +182,12 @@ places share one entry, bounded by the size one plot's output may take,
 which drops the place served least recently first.
 
 A served plot draws nothing, so it has no figure, axes or value to bind a
-name to. A plot that assigns a name (`fig, ax = plt.subplots()`,
-`r = run(...)`) is therefore drawn every time, so that `fig` and `ax` are
-there afterwards as in a run from the top; only a module it imports
-(`import seaborn as sns`) is bound again, while that module is imported.
+name to. A plot that may assign a name (`fig, ax = plt.subplots()`,
+`r = run(...)`, `_ = plt.hist(...)`, a `for` loop's variable, in any
+branch) or delete one (`del tmp`) is therefore drawn every time, so that
+`fig` and `ax` are there afterwards as in a run from the top; only a module
+it imports (`import seaborn as sns`) is bound again, while that module is
+imported.
 It is also drawn again, as before, when:
 
 - the cell's last line echoes a figure, axes or other matplotlib object
@@ -198,7 +200,10 @@ It is also drawn again, as before, when:
   whether the plot ran or not, so it changes nothing;
 - it calls a `functools.cache` helper that cash does not find in the
   notebook's names or a module's (one held in a closure, a dict or an
-  object): what a drawing leaves there could not be put back;
+  object): what a drawing leaves there could not be put back. Such a
+  helper that the plot does not call is no reason to draw it, even when a
+  cell above builds it again on every run; one first met after it was
+  called, though, may have been called by the plot;
 - cash cannot tell which cell is running, or cannot read the notebook's cells;
 - it writes a file (`plt.savefig`, `fig.savefig`), reads one other than
   matplotlib's fonts and style sheets, draws from a random generator no

@@ -75,8 +75,9 @@ _EMPTY = (None, ())
 #: The version of what a kept plot run holds: one without it carries no
 #: random streams or memos, which a run of it may have moved or filled,
 #: and is not one of the runs its statements' record lists (`_condition`),
-#: or keeps what its last line echoed as text, not as the value.
-_FORMAT = 5
+#: or keeps what its last line echoed as text, not as the value, or may
+#: have unbound a name or bound ``_`` itself.
+_FORMAT = 6
 
 
 def _condition(env: dict, rng_reads: dict, memo_records: list) -> str:
@@ -143,6 +144,8 @@ class _Open:
     rng_placed: set[str] = field(default_factory=set)
     #: The counters of the memos `helper_memos` does not find, as it began.
     hidden: dict = field(default_factory=dict)
+    #: The names bound in the notebook's namespace as it began.
+    names: frozenset[str] = frozenset()
 
 
 class PlotRuns:
@@ -196,6 +199,7 @@ class PlotRuns:
         self._adopt_unseen_seeds()
         lineage = dict(self._processor.tracking_state.variable_lineage)
         self._open = _Open(index, occurrence, settings, lineage, _perf_counter())
+        self._open.names = frozenset(self.shell.user_ns)
         try:
             self._open.hidden = helper_memos.hidden_counters()
         except Exception:
@@ -208,6 +212,13 @@ class PlotRuns:
         if run is None:
             return
         run.codes.append(code)
+        # What it may bind, read from its text: the rows of a loop's passes
+        # name no loop variable, and a branch not taken binds nothing now.
+        binds = _statement_binds(code)
+        if binds is None:
+            run.refused = f"cash could not read what {code[:40]!r} binds"
+        else:
+            run.bound |= binds
         parts = []
         seconds = 0.0
         rng_state: dict = {}
@@ -323,14 +334,21 @@ class PlotRuns:
         if figure_settings_digest(self.shell) != run.settings:
             logger.debug("%s not kept: it changed matplotlib's settings", _LOG)
             return
-        modules = _bound_modules(run.bound - _HISTORY_NAMES, self.shell.user_ns)
-        if run.bound - _HISTORY_NAMES - set(modules):
+        modules = _bound_modules(run.bound, self.shell.user_ns)
+        if run.bound - set(modules):
             # Served, it would draw nothing and so have no figure, axes or
             # value to bind them to: a cell run later, in the notebook or
             # not, would find them unbound where plain Python has them. A
             # module it imported is bound again to the module (`take_place`).
-            names = ", ".join(sorted(run.bound - _HISTORY_NAMES - set(modules)))
+            # ``_ = plt.plot(...)`` too: IPython's history then leaves the
+            # user's ``_`` alone, and served, it would hold an older echo.
+            names = ", ".join(sorted(run.bound - set(modules)))
             logger.debug("%s not kept: it binds %s", _LOG, names)
+            return
+        gone = run.names - self.shell.user_ns.keys()
+        if gone:
+            # ``del tmp``: served, the name would stay bound.
+            logger.debug("%s not kept: it unbinds %s", _LOG, ", ".join(sorted(gone)))
             return
         code = "\n".join(run.codes)
         inputs = self._inputs(code)
@@ -867,7 +885,10 @@ class PlotRuns:
         events.register("post_execute", show)
 
 
-#: IPython's output history, which a served echo puts a stand-in into.
+#: IPython's output history, which a served echo binds as a run does: what
+#: the cells below are checked for (`first_read_after`, which counts a read
+#: of a numbered ``_<n>`` as one of them). The input history (``In``,
+#: ``_i``, ``_i<n>``) is written for a served cell as for any other.
 _HISTORY_NAMES = frozenset({"_", "__", "___", "Out", "_oh"})
 
 
@@ -937,3 +958,63 @@ def _bound_modules(names: set[str], user_ns: Mapping[str, Any]) -> dict[str, str
         if isinstance(module, str) and sys.modules.get(module) is value:
             out[name] = module
     return out
+
+
+def _statement_binds(code: str) -> set[str] | None:
+    """The names the top-level statement *code* may bind or unbind in the
+    notebook's namespace, in any branch or pass, or None when it cannot be
+    parsed: its targets, its imports, the functions and classes it defines,
+    ``except ... as`` and ``match`` captures, ``del``, and a walrus, also
+    one inside a comprehension. Not what a function or class body binds:
+    a helper setting a global is caught when it runs."""
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        return None
+    names: set[str] = set()
+
+    def visit(node: ast.AST, in_comprehension: bool) -> None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+            for sub in [*node.decorator_list, *attribute_or(node, "bases", ()), *attribute_or(node, "keywords", ())]:
+                visit(sub, in_comprehension)
+            if not isinstance(node, ast.ClassDef):
+                for default in [*node.args.defaults, *[d for d in node.args.kw_defaults if d is not None]]:
+                    visit(default, in_comprehension)
+            return
+        if isinstance(node, ast.Lambda):
+            return
+        if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+            for sub in ast.iter_child_nodes(node):
+                visit(sub, True)
+            return
+        if isinstance(node, ast.comprehension):
+            # Its own loop variable is the comprehension's.
+            visit(node.iter, in_comprehension)
+            for sub in node.ifs:
+                visit(sub, in_comprehension)
+            return
+        if isinstance(node, ast.NamedExpr):
+            names.add(node.target.id)
+            visit(node.value, in_comprehension)
+            return
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)) and not in_comprehension:
+            names.add(node.id)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                if alias.name != "*":
+                    names.add((alias.asname or alias.name).split(".")[0])
+                else:
+                    names.add("*")
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            names.add(node.name)
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
+            names.add(node.name)
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            names.add(node.rest)
+        for sub in ast.iter_child_nodes(node):
+            visit(sub, in_comprehension)
+
+    for statement in tree.body:
+        visit(statement, False)
+    return names

@@ -12,8 +12,9 @@ and its displays (the rendered image among them), and what the cell's last
 line echoed, as the value. Run again with the same code and inputs, under
 the same matplotlib settings, it is served: the output is shown again and
 the statements are skipped. The figure is then not live, so a plot run that
-binds a name (``fig, ax = plt.subplots()``) is never kept: served, it would
-leave the name unbound where plain Python binds it. Nor is one whose last
+may bind a name (``fig, ax = plt.subplots()``, a loop variable, ``_``) or
+unbind one is never kept: served, it would leave the name as it was where
+plain Python binds or unbinds it. Nor is one whose last
 line echoed a figure, axes or artist, or one that wrote or read a file,
 drew random numbers, changed matplotlib's settings or anything else a
 skipped run would not do: it runs every time, as before.
