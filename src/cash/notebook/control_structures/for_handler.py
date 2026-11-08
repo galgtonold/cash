@@ -251,6 +251,18 @@ class ForLoopHandler:
         logger.debug("[CONTROL] Processing FOR loop with targets: %s", target_names)
 
         try:
+            if header is None and self._whole_for_its_items(node):
+                logger.debug("[CONTROL] Loop changes the items it walks: executing as single unit")
+                user_ns = attribute_or(self.shell, "user_ns", None) or {}
+                return self._run_unit(
+                    node,
+                    single_unit_policy.estimated_iterations(node.iter, single_unit_policy.UNEVALUATED, user_ns),
+                    ttl,
+                    silent,
+                    raw_cell,
+                    inherited_annotation,
+                    prior_nodes,
+                )
             if header is None and self._whole_before_evaluating(node):
                 # The unit evaluates the header, once (`runs_whole_unevaluated`).
                 logger.debug("[CONTROL] Fast-loop: executing as single unit, header unevaluated")
@@ -330,6 +342,39 @@ class ForLoopHandler:
             return False
         user_ns = attribute_or(self.shell, "user_ns", None) or {}
         if not single_unit_policy.runs_whole_unevaluated(node, user_ns):
+            return False
+        store = self._split_policy.store()
+        if store is None:
+            return True
+        try:
+            return store.get(loop_source_hash(node)) is None
+        except (OSError, ValueError, RecursionError):
+            logger.debug("[LOOP_SPLIT] verdict lookup failed", exc_info=True)
+            return False
+
+    def _whole_for_its_items(self, node: ast.For) -> bool:
+        """Whether the loop runs as one unit because it changes in place the
+        items it walks (``for est in estimators: est.fit(X, y)``).
+
+        Per iteration it caches nothing of that: each statement changing a
+        target runs every time, as a restore brings back what it binds, not
+        the item in the list. As one unit it stores the names it takes them
+        from (`helpers.walked_names_it_changes`), with every variable sharing
+        their objects, and a hit restores them all.
+
+        Only with its header left to the unit
+        (`single_unit_policy.header_may_be_left_to_the_unit`): a header
+        evaluated here would hold the list while the unit runs, and the
+        share check would count that as a holder no restore can reach. Nor
+        for a loop that writes files, which keeps its iterations
+        (`single_unit_policy.writes_files`), or one with a recorded split
+        verdict, which `_run_whole` splits."""
+        user_ns = attribute_or(self.shell, "user_ns", None) or {}
+        if not _helpers.walked_names_it_changes(self.shell, self.statement_processor, node):
+            return False
+        if single_unit_policy.writes_files(node.body):
+            return False
+        if not single_unit_policy.header_may_be_left_to_the_unit(node.iter, user_ns):
             return False
         store = self._split_policy.store()
         if store is None:

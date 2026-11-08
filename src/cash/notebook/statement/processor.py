@@ -4438,7 +4438,13 @@ class StatementProcessor:
         # creation puts there is not known before it runs.
         named = {id(value): name for name, value in user_ns.items() if instance_of(value, type)}
         derived = {named[id(cls)] for base in bases for cls in base.__mro__ if id(cls) in named}
-        if unread:
+        # An input it changes in place may hold more after it than the read
+        # reaches (``for est in estimators: est.fit(X, y)``: two unfitted
+        # forests before, two hundred trees after), and the read then gives
+        # up only afterwards: without each state taken now, every class with
+        # state of the notebook read as one it may have changed.
+        grows = (run.outputs | run.est_fit | run.in_place) & run.inputs
+        if unread or grows:
             # Past the items read, any class with state may be the one the
             # call reaches (`_link_inputs_kept_by`): each one's state now,
             # to tell the classes it changed from those it left alone.
