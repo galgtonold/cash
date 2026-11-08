@@ -31,6 +31,7 @@ not a view of it was filled meanwhile.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import pickle
 import threading
 import weakref
@@ -39,7 +40,7 @@ from contextlib import contextmanager
 from time import perf_counter
 from typing import Any
 
-from . import kept_state
+from . import _native, kept_state
 from .bulk_digest import TAG, fold_buffer
 
 __all__ = [
@@ -61,6 +62,10 @@ __all__ = [
     "sized_object_digest",
     "unshared_digest",
 ]
+
+
+class _SetMet(Exception):
+    """A digest's first pickle met a set (`_Sink.stop_at_sets`)."""
 
 
 class HashBudgetExceeded(Exception):
@@ -145,7 +150,12 @@ class Part:
         self.size = size
 
 
-#: What the pickler writes (protocol 4 and up, with the memo) for a set of
+#: The C extension's reader of a pickle's opcodes (``cwalk.c``'s
+#: ``set_ops_scan``), which tells exactly whether a pickle holds a set.
+_SCAN = getattr(_native.kernels, "set_ops_scan", None)
+_SCAN_STATE = getattr(_native.kernels, "set_scan_state", None)
+
+#: Without it: what the pickler writes (protocol 4 and up, with the memo) for a set of
 #: one item or more (``EMPTY_SET``, ``MEMOIZE``, the ``MARK`` before its
 #: items) and after a frozenset's items (``FROZENSET``, ``MEMOIZE``): where
 #: a digest may meet a set (`_Sink.sets`).
@@ -160,12 +170,26 @@ class _Sink:
     one is given (`run_on`), or once the pickle holds more than *limit*
     bytes, stream and out-of-band buffers (*apart*).
 
-    *sets* turns True once the bytes may hold a set (`_SET_OPS`): never
-    False for a pickle that holds one; the bytes of a number, a string or
-    an array can look like one too (`_settle_sets`). *memos* counts the
-    bytes that may be a ``MEMOIZE``: at least the objects in the memo."""
+    *sets* turns True once the bytes hold a set with an item in it. With
+    the C extension the opcodes are read (`_SCAN`), which tells exactly, at
+    about no cost. Without it the bytes are searched for those a set is
+    written as (`_SET_OPS`), which the bytes of a number, a string or an
+    array can look like too (`_settle_sets`); *memos* then counts the bytes
+    that may be a ``MEMOIZE``: at least the objects in the memo."""
 
-    __slots__ = ("_deadline", "_limit", "_parts", "_tail", "apart", "memos", "sets", "sha", "size")
+    __slots__ = (
+        "_deadline",
+        "_limit",
+        "_parts",
+        "_scan",
+        "_tail",
+        "apart",
+        "memos",
+        "sets",
+        "sha",
+        "size",
+        "stop_at_sets",
+    )
 
     def __init__(self, deadline: float | None, keep: bool, digest: bool, limit: int | None = None) -> None:
         self.sha = hashlib.sha256() if digest else None
@@ -177,12 +201,20 @@ class _Sink:
         self.sets = False
         self._tail = b""
         self.memos = 0
+        self._scan = _SCAN_STATE() if _SCAN_STATE is not None else None
+        #: Raise `_SetMet` as soon as the scan finds a set: the pickle is
+        #: made again with its sets sorted, and the rest of this one is waste.
+        self.stop_at_sets = False
 
     def write(self, data: Any) -> int:
         n = len(data)
         self.size += n
         if self.sets:
             pass
+        elif self._scan is not None:
+            self.sets = _SCAN(self._scan, data)
+            if self.sets and self.stop_at_sets:
+                raise _SetMet
         elif type(data) is bytes:
             # The pickler hands its own buffer (bytes) for opcodes; any other
             # type is an item's raw data, which no opcode runs across.
@@ -380,7 +412,7 @@ def _settle_sets(sink: _Sink, pickler: Any) -> None:
     in its memo as items (ints such as 38033, written as the bytes of a
     frozenset) is left to be pickled again with its sets sorted, which costs
     about what the memo would and digests a value with none as before."""
-    if not sink.sets or sink.memos * MEMO_CHECK_BYTES > sink.size:
+    if not sink.sets or sink._scan is not None or sink.memos * MEMO_CHECK_BYTES > sink.size:
         return
     for _, obj in pickler.memo.copy().values():
         t = type(obj)
@@ -396,8 +428,13 @@ def _keyed_digest_once(
     with its items sorted (`kept_state.sorted_set_ids`). Pickled as pickle
     writes it first; only a value found to hold a set is pickled again with
     them sorted (*sorted_sets*), so no other value pays for asking. Bytes
-    with *aliases* sort them always (`kept_state.key_aliases`)."""
+    with *aliases* sort them always (`kept_state.key_aliases`). With the C
+    extension the first pickle stops where it meets a set; and a value that
+    is a set, or a short container holding one, is pickled sorted at once."""
+    if not aliases and not sorted_sets and _set_on_top(value):
+        sorted_sets = True
     sink = _Sink(deadline, False, True)
+    sink.stop_at_sets = not aliases and not sorted_sets
     folded = hashlib.sha256()
     size = 0
     smallest = _out_of_band_min()
@@ -416,21 +453,49 @@ def _keyed_digest_once(
     def checked(pickler: Any) -> None:
         _settle_sets(sink, pickler)
 
-    kept_state.dumps(
-        value,
-        protocol=5,
-        buffer_callback=take,
-        keyed=True,
-        extra=_stored_reducers(),
-        sink=sink,
-        reducer_override=reducer_override,
-        aliases=aliases,
-        sorted_sets=sorted_sets,
-        after=None if aliases or sorted_sets else checked,
-    )
+    try:
+        kept_state.dumps(
+            value,
+            protocol=5,
+            buffer_callback=take,
+            keyed=True,
+            extra=_stored_reducers(),
+            sink=sink,
+            reducer_override=reducer_override,
+            aliases=aliases,
+            sorted_sets=sorted_sets,
+            after=None if aliases or sorted_sets else checked,
+        )
+    except _SetMet:
+        pass
     if sink.sets and not aliases and not sorted_sets:
         return _keyed_digest_once(value, deadline, reducer_override, sorted_sets=True)
     return _final(_UNSHARED_HEAD if aliases else _HEAD, sink.sha.digest(), folded.digest()), size + sink.size
+
+
+#: The most items `_set_on_top` looks through.
+_TOP_ITEMS = 64
+
+
+def _set_on_top(value: Any) -> bool:
+    """Is *value* a set or frozenset of two or more items, or a list, tuple
+    or dict of at most `_TOP_ITEMS` items holding one (as a key or value)?
+    Such a value is pickled with its sets sorted at once, not after a first
+    pickle finds one: ``{"rows": ..., "tags": {"a", "b"}}``."""
+    t = type(value)
+    if t is set or t is frozenset:
+        return len(value) > 1
+    if t is dict:
+        if len(value) > _TOP_ITEMS:
+            return False
+        items = itertools.chain(value, value.values())
+    elif t is list or t is tuple:
+        if len(value) > _TOP_ITEMS:
+            return False
+        items = value
+    else:
+        return False
+    return any((type(x) is set or type(x) is frozenset) and len(x) > 1 for x in items)
 
 
 def unshared_digest(value: Any) -> str:

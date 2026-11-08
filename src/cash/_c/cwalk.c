@@ -1406,6 +1406,129 @@ static PyObject *py_key_alias_id(PyObject *self, PyObject *const *args, Py_ssize
     Py_RETURN_NONE;
 }
 
+/* set_ops_scan(state, data) -> bool: does the pickle written so far hold a
+ * set with an item in it, or a frozenset with one? *data* is the next piece
+ * of a protocol 2-5 pickle as the pickler hands it to its file; *state* a
+ * bytearray from set_scan_state(), carried from one piece to the next. The
+ * opcodes are read one by one, each argument and each item's raw bytes
+ * skipped by their length, so the bytes of a number, a string or an array
+ * never read as a set (stored_pickle._Sink). A set's items are added by
+ * ADDITEMS, which nothing else writes; a frozenset with items is FROZENSET
+ * not straight after its MARK.
+ * An opcode not known here answers True: the caller then sorts. Once True,
+ * it stays True. */
+typedef struct {
+    uint64_t skip;
+    uint8_t hdr[9];
+    uint8_t have, need, varlen, last_mark, found;
+} SetScan;
+
+static int set_scan_shape(uint8_t op, uint8_t *argb, uint8_t *varlen) {
+    *varlen = 0;
+    switch (op) {
+    case '(': case ')': case '.': case '0': case '1': case '2': case 'N': case '}': case 'a': case 'b':
+    case 'd': case ']': case 'e': case 'l': case 's': case 'u': case 't': case 'R': case 'o': case 'Q':
+    case 0x81: case 0x85: case 0x86: case 0x87: case 0x88: case 0x89: case 0x8f: case 0x90: case 0x91:
+    case 0x92: case 0x93: case 0x94: case 0x97: case 0x98:
+        *argb = 0;
+        return 1;
+    case 'K': case 'h': case 'q': case 0x80: case 0x82:
+        *argb = 1;
+        return 1;
+    case 'U': case 'C': case 0x8a: case 0x8c:
+        *argb = 1;
+        *varlen = 1;
+        return 1;
+    case 'M': case 0x83:
+        *argb = 2;
+        return 1;
+    case 'J': case 'j': case 'r': case 0x84:
+        *argb = 4;
+        return 1;
+    case 'X': case 'T': case 'B': case 0x8b:
+        *argb = 4;
+        *varlen = 1;
+        return 1;
+    case 'G': case 0x95:
+        *argb = 8;
+        return 1;
+    case 0x8d: case 0x8e: case 0x96:
+        *argb = 8;
+        *varlen = 1;
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/* One whole opcode: *op*, its argument *arg* of *argb* bytes. */
+static void set_scan_op(SetScan *s, uint8_t op, const uint8_t *arg, uint8_t argb, uint8_t varlen) {
+    if (varlen) {
+        uint64_t n = 0;
+        for (int k = argb - 1; k >= 0; k--) n = (n << 8) | arg[k];
+        s->skip = n;
+        if (argb == 4 && (n & 0x80000000u) && (op == 'T' || op == 0x8b)) s->found = 1; /* a negative length */
+    }
+    /* What the memo or a frame puts between an opcode and the next says nothing. */
+    if (op == 0x94 || op == 'q' || op == 'r' || op == 0x95) return;
+    if (op == 0x90 || (op == 0x91 && !s->last_mark)) s->found = 1;
+    s->last_mark = op == '(';
+}
+
+static PyObject *py_set_scan_state(PyObject *self, PyObject *unused) {
+    PyObject *state = PyByteArray_FromStringAndSize(NULL, (Py_ssize_t)sizeof(SetScan));
+    if (state) memset(PyByteArray_AS_STRING(state), 0, sizeof(SetScan));
+    return state;
+}
+
+static PyObject *py_set_ops_scan(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs != 2 || !PyByteArray_CheckExact(args[0]) || PyByteArray_GET_SIZE(args[0]) != (Py_ssize_t)sizeof(SetScan)) {
+        PyErr_SetString(PyExc_TypeError, "set_ops_scan(state from set_scan_state(), data)");
+        return NULL;
+    }
+    SetScan s;
+    memcpy(&s, PyByteArray_AS_STRING(args[0]), sizeof s);
+    if (s.found) Py_RETURN_TRUE;
+    Py_buffer view;
+    if (PyObject_GetBuffer(args[1], &view, PyBUF_SIMPLE) < 0) return NULL;
+    const uint8_t *p = (const uint8_t *)view.buf;
+    uint64_t n = (uint64_t)view.len, i = 0;
+    while (i < n && !s.found) {
+        if (s.skip) {
+            uint64_t k = n - i < s.skip ? n - i : s.skip;
+            i += k;
+            s.skip -= k;
+            continue;
+        }
+        if (s.have == 0) {
+            uint8_t op = p[i], argb, varlen;
+            if (!set_scan_shape(op, &argb, &varlen)) {
+                s.found = 1;
+                break;
+            }
+            if (i + 1 + argb <= n) { /* the whole opcode in this piece */
+                set_scan_op(&s, op, p + i + 1, argb, varlen);
+                i += 1 + (uint64_t)argb;
+                continue;
+            }
+            s.hdr[0] = op;
+            s.have = 1;
+            s.need = (uint8_t)(1 + argb);
+            s.varlen = varlen;
+            i++;
+            continue;
+        }
+        s.hdr[s.have++] = p[i++];
+        if (s.have == s.need) {
+            set_scan_op(&s, s.hdr[0], s.hdr + 1, (uint8_t)(s.need - 1), s.varlen);
+            s.have = 0;
+        }
+    }
+    PyBuffer_Release(&view);
+    memcpy(PyByteArray_AS_STRING(args[0]), &s, sizeof s);
+    return PyBool_FromLong(s.found);
+}
+
 /* sorted_set_id(forms, made, spec, obj): kept_state.sorted_set_ids's
  * persistent_id, answer for answer: None for anything but an exact set or
  * frozenset of two or more items; else the form a key writes in its place,
@@ -2005,6 +2128,9 @@ static PyMethodDef cwalk_methods[] = {
      "referrers_in(heap, ids) -> list | NotImplemented"},
     {"key_alias_id", (PyCFunction)(void (*)(void))py_key_alias_id, METH_FASTCALL,
      "key_alias_id(seen, atoms, by_name, kinds, identityless, outside, sets, obj) -> None | mark"},
+    {"set_scan_state", (PyCFunction)py_set_scan_state, METH_NOARGS, "set_scan_state() -> bytearray"},
+    {"set_ops_scan", (PyCFunction)(void (*)(void))py_set_ops_scan, METH_FASTCALL,
+     "set_ops_scan(state, data) -> bool"},
     {"sorted_set_id", (PyCFunction)(void (*)(void))py_sorted_set_id, METH_FASTCALL,
      "sorted_set_id(forms, made, spec, obj) -> None | form"},
     {"dated_records", (PyCFunction)(void (*)(void))py_dated_records, METH_FASTCALL,

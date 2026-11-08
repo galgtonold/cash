@@ -159,3 +159,22 @@ def test_a_value_without_sets_digests_as_before():
     for value in ([1, "a", (2.5, None)], {"k": frozenset({1})}, [set()], {1: b"\x8f\x94\x91\x94"}):
         assert stored_pickle.object_digest_and_size(value)[0] == compute_hash(value)
         assert b"__cash_set__" not in kept_state.dumps(value, protocol=5, keyed=True)
+
+
+@pytest.mark.skipif(getattr(_native.kernels, "set_ops_scan", None) is None, reason=f"no C scan: {_native.REASON}")
+def test_a_value_without_sets_is_pickled_once_even_where_its_bytes_look_like_one(monkeypatch):
+    """The C extension reads the pickle's opcodes: ints such as 38031 and
+    38033, or bytes of a set's opcodes, do not cost a second, sorted pickle."""
+    asked = []
+    real = kept_state.sorted_set_ids
+
+    def counted(*args):
+        asked.append(args)
+        return real(*args)
+
+    monkeypatch.setattr(kept_state, "sorted_set_ids", counted)
+    stored_pickle.object_digest_and_size({i: (i, str(i)) for i in range(38000, 38100)} | {"b": b"\x90\x8f\x94(\x91"})
+    stored_pickle.object_digest_and_size([set(), frozenset(), [frozenset()]])
+    assert asked == []
+    stored_pickle.object_digest_and_size([list(range(100)), {"x": [frozenset({A, B})]}])
+    assert len(asked) == 1
