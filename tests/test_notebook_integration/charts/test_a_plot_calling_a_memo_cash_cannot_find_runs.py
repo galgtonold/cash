@@ -105,3 +105,28 @@ def test_a_memo_built_again_on_each_run_all_leaves_plots_that_never_call_it_serv
     drawn = _calls(log)
     nb_runner.run_all()
     assert _calls(log) == drawn, "a memo no plot calls kept the plots from being served"
+
+
+@pytest.mark.fresh_kernel
+def test_a_plot_clearing_such_a_memo_through_a_helper_runs(nb_runner, tmp_path):
+    """Cleared by the plot, the memo's counters read as a memo never
+    called; they were not before the plot, which cash reads as it starts."""
+    log = tmp_path / "calls.log"
+    defs = COUNT + HOLDERS["dict"] + "def reset():\n    H['c'].cache_clear()\n"
+    cells = [
+        HEAD.format(log=log),
+        defs,
+        "pts = get_cities(6)",
+        "plt.figure()\nreset()\nshow([1, 2])",
+        "again = get_cities(6)",
+    ]
+    nb_runner.create_notebook(cells)
+    nb_runner.start_kernel()
+    for _ in range(2):
+        nb_runner.run_all()
+        assert "computing cities" in _printed(nb_runner.get_cell(5))
+    nb_runner.settle_writes()
+    nb_runner.restart()
+    nb_runner._init_cash()
+    nb_runner.run_all()
+    assert "computing cities" in _printed(nb_runner.get_cell(5)), "the plot clearing the memo was served"

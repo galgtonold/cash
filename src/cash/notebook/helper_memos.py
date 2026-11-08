@@ -66,6 +66,7 @@ __all__ = [
     "reads_counters",
     "hidden_counters",
     "hidden_moved",
+    "hidden_scan",
     "unfilled",
     "used",
     "watched",
@@ -1538,7 +1539,34 @@ def hidden_counters() -> dict[int, tuple[int, int, int]]:
     return out
 
 
-def hidden_moved(before: Mapping[int, tuple[int, int, int]], ns: Mapping[str, Any]) -> str | None:
+def hidden_scan(ns: Mapping[str, Any]) -> dict[int, tuple[int, int, int]]:
+    """`hidden_counters` after a look through every object, as a run
+    begins: every memo of the user's that `_where` does not find is known
+    then, with its counters, so `hidden_moved` with ``fresh=True`` takes a
+    memo it meets for the first time for one the run built."""
+    for _name, _obj in _hidden_memos(ns):
+        _hidden[id(_obj)] = _obj
+    return hidden_counters()
+
+
+def _hidden_memos(ns: Mapping[str, Any]) -> list[tuple[str, Any]]:
+    """``(name, memo)`` of each memo of the user's that `_where` does not find."""
+    if _LRU_WRAPPER is None:
+        return []
+    import gc
+
+    located = {id(memo) for _, memo in _where(ns)}
+    out = []
+    for obj in gc.get_objects():
+        if type(obj) is not _LRU_WRAPPER or id(obj) in located or not _is_user_memo(obj):
+            continue
+        out.append((attribute_or(attribute_or(obj, "__wrapped__", None), "__qualname__", None) or "?", obj))
+    return out
+
+
+def hidden_moved(
+    before: Mapping[int, tuple[int, int, int]], ns: Mapping[str, Any], *, fresh: bool = False
+) -> str | None:
     """The name of a memo of the user's that `_where` does not find and
     that a run called: its counters moved since *before*
     (`hidden_counters`). None when there is none. What a run left in such
@@ -1547,21 +1575,15 @@ def hidden_moved(before: Mapping[int, tuple[int, int, int]], ns: Mapping[str, An
 
     Every object is looked through (``gc.get_objects``): a memo can be held
     anywhere, and a walk of values misses some. A memo not known before
-    the run (built by it, or by a cell since the last look) has no
-    counters to compare with: it is named when it was ever called, which
-    may have been by the run, and not when it never was, which the run
-    did not call either. Either way it is known for the next run."""
-    if _LRU_WRAPPER is None:
-        return None
-    import gc
-
-    located = {id(memo) for _, memo in _where(ns)}
+    the run has no counters to compare with. When *before* came from
+    `hidden_scan` (*fresh*), the run built it: it is named when it was
+    called, and not when it never was. Otherwise it may have been built
+    and filled before the run, and emptied by it (``cache_clear()``), which
+    leaves the counters of a memo never called: it is named. Either way it
+    is known for the next run."""
     found: str | None = None
-    for obj in gc.get_objects():
-        if type(obj) is not _LRU_WRAPPER or id(obj) in located or not _is_user_memo(obj):
-            continue
+    for name, obj in _hidden_memos(ns):
         key = id(obj)
-        name = attribute_or(attribute_or(obj, "__wrapped__", None), "__qualname__", None) or "?"
         known = _hidden.get(key) is obj and key in before
         _hidden[key] = obj
         try:
@@ -1570,7 +1592,7 @@ def hidden_moved(before: Mapping[int, tuple[int, int, int]], ns: Mapping[str, An
             found = found or name
             continue
         now = (info.hits, info.misses, info.currsize)
-        if now != (before[key] if known else (0, 0, 0)):
+        if now != (before[key] if known else (0, 0, 0)) or (not known and not fresh):
             found = found or name
     return found
 

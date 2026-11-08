@@ -146,6 +146,9 @@ class _Open:
     hidden: dict = field(default_factory=dict)
     #: The names bound in the notebook's namespace as it began.
     names: frozenset[str] = frozenset()
+    #: Whether `hidden` was read after a look through every object
+    #: (`helper_memos.hidden_scan`): a memo not in it was built by the run.
+    fresh: bool = False
 
 
 class PlotRuns:
@@ -169,6 +172,10 @@ class PlotRuns:
         self._served_last: dict[str, dict[str, int]] = {}
         self._serves = 0
         self._cell: Any = None
+        #: ``(cell text, statement)`` where a plot run that drew began in
+        #: this session: a run beginning there again first looks through
+        #: every object for the memos cash does not find (`before`).
+        self._draw_starts: set[tuple[str, int]] = set()
         self._parsed: dict[str, list[tuple[str, ast.stmt | None]]] = {}
 
     # -- the cell ----------------------------------------------------------
@@ -201,9 +208,25 @@ class PlotRuns:
         self._open = _Open(index, occurrence, settings, lineage, _perf_counter())
         self._open.names = frozenset(self.shell.user_ns)
         try:
-            self._open.hidden = helper_memos.hidden_counters()
+            if self._start_key(index) in self._draw_starts:
+                # Where a plot drew before: the memos it may empty are read
+                # now, so one emptied by it does not pass for one never
+                # called (`hidden_moved`). One look through every object
+                # per such run, not per statement.
+                self._open.hidden = helper_memos.hidden_scan(self.shell.user_ns)
+                self._open.fresh = True
+            else:
+                self._open.hidden = helper_memos.hidden_counters()
         except Exception:
             logger.debug("%s could not read the memos cash does not find", _LOG, exc_info=True)
+
+    def _start_key(self, index: int) -> tuple[str, int]:
+        return (str(attribute_or(self._cell, "raw_cell", None) or ""), index)
+
+    def _note_drew(self, run: _Open) -> None:
+        if len(self._draw_starts) > 4096:
+            self._draw_starts.clear()
+        self._draw_starts.add(self._start_key(run.start))
 
     def after(self, index: int, code: str, display: str | None, rows: list[ProcessResult]) -> None:
         """Statement *index* (*code*) ran, reporting *rows*."""
@@ -273,6 +296,7 @@ class PlotRuns:
             return
         self._open = None
         if run.drew:
+            self._note_drew(run)
             self._keep(run, flush=None)
         elif run.start != index:
             logger.debug("%s statements %d-%d drew nothing pyplot shows", _LOG, run.start, index)
@@ -283,6 +307,8 @@ class PlotRuns:
         run, self._open = self._open, None
         if run is None:
             return
+        if run.drew:
+            self._note_drew(run)
         if not run.drew or run.refused is not None or not inline_backend_closes_figures():
             logger.debug("%s open at the end of the cell, not kept: %s", _LOG, run.refused or "drew nothing")
             return
@@ -384,7 +410,7 @@ class PlotRuns:
         if variants_key is None:
             return
         try:
-            hidden = helper_memos.hidden_moved(run.hidden, self.shell.user_ns)
+            hidden = helper_memos.hidden_moved(run.hidden, self.shell.user_ns, fresh=run.fresh)
         except Exception:  # noqa: BLE001 - not known to call none: not kept
             hidden = "?"
         if hidden is not None:

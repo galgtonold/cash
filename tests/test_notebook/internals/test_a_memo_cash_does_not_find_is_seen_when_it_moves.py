@@ -4,10 +4,13 @@ not look for memos (a closure, a dict, a list, an object's attribute, a
 
 Such a memo is met by a look through every object. Known, it is named
 only when its counters moved since `hidden_counters` read them. Met for
-the first time, its counters before the run are not known: it is named
-when it was ever called, and not when it never was (a cell building it
-again on each Run All, which no plot calls). A memo bound in the notebook
-is found where cash looks and never named.
+the first time, its counters before the run are not known. When the run
+began with a look through every object (`hidden_scan`), the run built it:
+it is named when it was called, and not when it never was (a cell
+building it again on each Run All, which no plot calls). Otherwise it may
+have been filled before the run and emptied by it, which leaves the
+counters of a memo never called: it is named. A memo bound in the
+notebook is found where cash looks and never named.
 """
 
 from __future__ import annotations
@@ -41,8 +44,11 @@ def _ns(code: str) -> tuple[dict, object]:
 
 @pytest.mark.parametrize("code", list(HOLDERS.values()), ids=list(HOLDERS))
 def test_a_hidden_memo_is_named_when_it_moves(code):
+    gc.collect()
+    # Every memo already held elsewhere (another test's) is known first.
+    start = helper_memos.hidden_scan({})
     ns, memo = _ns(code)
-    assert helper_memos.hidden_moved({}, ns) is None, "a memo never called was named"
+    assert helper_memos.hidden_moved(start, ns, fresh=True) is None, "a memo never called was named"
     before = helper_memos.hidden_counters()
     assert helper_memos.hidden_moved(before, ns) is None, "a known memo that did not move was named"
     memo(3)
@@ -68,5 +74,25 @@ def test_a_memo_met_for_the_first_time_is_named_once_called(code):
 def test_a_memo_met_for_the_first_time_is_not_named_while_never_called():
     before = helper_memos.hidden_counters()
     ns, _ = _ns(HOLDERS["dict"])
-    assert helper_memos.hidden_moved(before, ns) is None
+    assert helper_memos.hidden_moved(before, ns, fresh=True) is None
     assert helper_memos.hidden_moved(helper_memos.hidden_counters(), ns) is None
+
+
+@pytest.mark.parametrize("code", list(HOLDERS.values()), ids=list(HOLDERS))
+def test_a_memo_emptied_by_the_run_is_named(code):
+    ns, memo = _ns(code)
+    memo(3)
+    before = helper_memos.hidden_scan(ns)
+    memo.cache_clear()
+    assert helper_memos.hidden_moved(before, ns, fresh=True) is not None, "a memo the run emptied went unseen"
+
+
+@pytest.mark.parametrize("code", list(HOLDERS.values()), ids=list(HOLDERS))
+def test_a_memo_met_first_without_a_look_at_the_start_is_named(code):
+    """Filled before the run and emptied by it, it reads as never called:
+    without its counters from the start, that cannot be told apart."""
+    before = helper_memos.hidden_counters()
+    ns, memo = _ns(code)
+    memo(3)
+    memo.cache_clear()
+    assert helper_memos.hidden_moved(before, ns) is not None
