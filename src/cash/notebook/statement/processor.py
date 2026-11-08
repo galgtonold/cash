@@ -4853,7 +4853,10 @@ class StatementProcessor:
             if _perf_counter() >= deadline:
                 break
             value = user_ns[name]
-            if not _may_hold_memory(value) or _changed_by_rebinding_only(value):
+            try:
+                if not _may_hold_memory(value) or _changed_by_rebinding_only(value):
+                    continue
+            except Exception:  # noqa: BLE001 - a value whose attribute lookups raise: not digested, it moves
                 continue
             digest = _bounded_fingerprint(value, self.compute_hash)
             if digest is not None:

@@ -68,6 +68,7 @@ from .derivation_edges import (
     bump_derived_lineages,
     clear_edges_for,
     detect_derivation_edges,
+    note_bound_in_cell,
     rebound_outputs,
 )
 from .file_deps import compute_file_hash_component
@@ -556,7 +557,7 @@ class StatementLineageBuilder:
         tracking_state.executed_cell_hashes[var_name].add(source_hash)
 
         tracking_state.executed_cell_codes[var_name] = code
-        tracking_state.bound_in_cell[var_name] = tracking_state.running_cell
+        note_bound_in_cell(tracking_state, var_name, code)
 
         self._update_module_attribute_deps(tracking_state, var_name, code, user_ns)
         self._update_variable_content_hashes(tracking_state, var_name, value, output_lineage_hash, taken)

@@ -641,6 +641,17 @@ def shared_object_partners(derivation_edges: dict[str, set[str]], var: str) -> s
     return partners
 
 
+def note_bound_in_cell(state: Any, name: str, code: str | None) -> None:
+    """Record the running cell as where *name* was bound
+    (``TrackingState.bound_in_cell``), when *code*, the statement that
+    produced it, binds it by its text: a change in place leaves the cell
+    that bound it. Without a text to read, or one that does not parse, it
+    counts as bound."""
+    bound = text_bound_names(code) if code else None
+    if bound is None or name in bound:
+        state.bound_in_cell[name] = state.running_cell
+
+
 def text_bound_names(code: str) -> frozenset[str] | None:
     """The names *code*'s own text binds -- assignment, ``for``, ``with`` and
     walrus targets, imports, ``def`` and ``class`` names, ``except ... as``

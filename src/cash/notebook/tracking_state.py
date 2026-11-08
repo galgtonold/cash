@@ -60,12 +60,14 @@ class TrackingState:
     executed_cell_codes: dict[str, str] = field(default_factory=dict)
 
     # Variable -> the notebook position (0-based) of the cell whose own run
-    # last bound or produced it (``running_cell`` then); None when the
-    # upstream repair of another cell did. Tells a partner a cell below made
-    # from one the cells above made, which the statement's text alone cannot
-    # when two cells hold the same text (``voting_clf.fit(X_train, y_train)``).
-    # W: StatementLineageBuilder, both restorers, the carrier advance.
-    # R: MismatchClassifier (``_rebuild_what_shares_a_rebuilt_object``).
+    # last bound it, by its text (``running_cell`` then; `note_bound_in_cell`);
+    # None when the upstream repair of another cell did. A change in place
+    # (``BIG.append(...)``, ``voting_clf.fit(...)``) leaves it. Tells a name a
+    # cell below bound anew from one the cells above made, which the
+    # statement's text alone cannot when two cells hold the same text.
+    # W: StatementLineageBuilder, both restorers.
+    # R: MismatchClassifier (``_rebuild_what_shares_a_rebuilt_object``),
+    #    UpstreamChecker (``_keep_live_bindings``).
     bound_in_cell: dict[str, int | None] = field(default_factory=dict)
 
     # Variable -> sha256 of every statement that defined it this session (a set:

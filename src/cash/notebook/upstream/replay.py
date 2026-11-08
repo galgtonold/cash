@@ -115,6 +115,18 @@ def _statement_order(notebook_cells: tuple[str, ...]) -> tuple[dict[str, int], i
     return order, place
 
 
+def statement_cells(notebook_cells: list[str] | tuple[str, ...]) -> dict[str, int]:
+    """``{statement code: the index of the cell it first appears in}``, keyed
+    as `StatementReplay.in_notebook_order` reads a metric's code."""
+    cells: dict[str, int] = {}
+    for idx, cell in enumerate(notebook_cells):
+        per_node, _ = _cell_statement_codes(cell)
+        for codes in per_node:
+            for code in codes:
+                cells.setdefault(code, idx)
+    return cells
+
+
 class StatementReplay:
     """Re-runs scheduled upstream statements, in order, loudly on failure."""
 

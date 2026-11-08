@@ -17,6 +17,7 @@ from ...diagnostics import warn_diagnostic
 from ...exceptions import AmbiguousCellError, CashWarning, UpstreamStateError
 from ...value_types import BUILTIN_NAMES
 from .._protocols import CashInstanceProtocol, ShellProtocol
+from .._trace import trace_event
 from ..cache_key import called_function_globals, statement_source_hash
 from ..server_discovery import (
     get_notebook_cells,
@@ -32,7 +33,7 @@ from ..statement.carrier_advances import reachable_generators
 from ..tracking_state import TrackingState
 from .changed_below import warn_changed_below
 from .notebook_vetting import NotebookVetter
-from .replay import StatementReplay, UpstreamRepairGap
+from .replay import StatementReplay, UpstreamRepairGap, statement_cells
 from .rng_rewind import RngRewind
 from .simulator import NotebookSimulator
 
@@ -757,6 +758,91 @@ class UpstreamChecker:
                 else:
                     made_by.pop(name, None)
 
+    @staticmethod
+    def _repair_cells(
+        statements: list[str], restored_info: list[ProcessResult], notebook_cells: list[str]
+    ) -> dict[str, int]:
+        """``{name: the index of the last cell}`` a statement the repair
+        re-ran or restored that touches the name stands in: one it restored
+        binding it, or one it re-ran reading or binding it (``y.append(2)``
+        binds nothing by its text, yet changes ``y``). A statement not found
+        in the notebook leaves its names out."""
+        cells = statement_cells(tuple(notebook_cells))
+        found: dict[str, int] = {}
+
+        def note(code: str, names: Any) -> None:
+            at = cells.get(strip_markers(code).strip())
+            if at is None:
+                return
+            for name in names:
+                found[name] = max(at, found.get(name, at))
+
+        for stmt in statements:
+            try:
+                reads, binds = CodeAnalyzer.analyze_code_block(stmt)
+            except SyntaxError:
+                continue
+            note(stmt, reads | binds)
+        for metrics in restored_info:
+            note(metrics.get("code") or "", metrics.get("restored_vars") or ())
+        return found
+
+    def _keep_live_bindings(
+        self,
+        rebound: dict[str, int],
+        bindings: dict[str, Any],
+        lineages: dict[str, str],
+        codes: dict[str, str],
+        cells: dict[str, int | None],
+        sessions: dict[str, str],
+        current_cell_idx: int,
+        required_inputs: set[str],
+    ) -> None:
+        """Put back the live binding of each name the repair rebound from a
+        cell above the one whose run bound it last.
+
+        Restoring or re-running a statement binds every name it binds:
+        ``X, y = make_moons(...)``, run again on the way to a ``voting_clf``,
+        bound ``X`` and ``y`` to the moons data where a cell below had bound
+        other arrays to them, and the cell ran on that, where plain Jupyter
+        and a run from the top both have what the cell below bound. *rebound*
+        is the cell of the last repair statement binding each name
+        (`_repair_cells`); *cells*, the cell whose run bound it before the
+        repair (``bound_in_cell``). Put back with its lineage, its
+        statement and its session digest.
+
+        A cell above the cell must still bind it as it did: the live lineage
+        is the one a run from the top has where the cell starts
+        (``simulated_lineage``).
+
+        Not a name the cell reads that the cell itself or a cell below it
+        bound: a run from the top gives the cell what the repair gave it
+        (``b = b * 10`` run again reads ``b`` as the cell above made it).
+        """
+        user_ns = self.shell.user_ns
+        state = self.tracking_state
+        for name, repaired_at in sorted(rebound.items()):
+            at = cells.get(name)
+            if at is None or at <= repaired_at:
+                continue
+            if at >= current_cell_idx and name in required_inputs:
+                continue
+            if at < current_cell_idx and state.simulated_lineage.get(name) != lineages.get(name):
+                # The statement that bound it is no longer what the cell
+                # there says (``data = data + [4]`` commented out).
+                continue
+            before = bindings.get(name, _UNBOUND)
+            if before is _UNBOUND or name not in user_ns or user_ns[name] is before or name not in lineages:
+                continue
+            user_ns[name] = before
+            state.lineage.reset_to(name, lineages[name])
+            if name in codes:
+                state.executed_cell_codes[name] = codes[name]
+            state.bound_in_cell[name] = at
+            if name in sessions:
+                state.current_session_hashes[name] = sessions[name]
+            trace_event("kept_live_binding", name=name, bound_in=at, repaired_in=repaired_at)
+
     def _warn_rebuilt_changed_below(
         self,
         rebuilt: set[str],
@@ -857,6 +943,11 @@ class UpstreamChecker:
             # the repair restores is not refused for the objects they keep.
             hold_repair_snapshot(bindings_before)
             lineages_before = dict(self.tracking_state.variable_lineage)
+            # Where each name's live binding came from, and its session
+            # digest, for the names a repair rebinds on the way
+            # (`_keep_live_bindings`).
+            cells_before = dict(self.tracking_state.bound_in_cell)
+            session_before = dict(self.tracking_state.current_session_hashes)
             # The statement that last changed each name, before a restore
             # records the one it restored (`_warn_rebuilt_changed_below`).
             codes_before = dict(self.tracking_state.executed_cell_codes)
@@ -929,6 +1020,16 @@ class UpstreamChecker:
                     self._put_back(bindings_before, lineages_before, codes_before)
                     cache.entries, cache.cell_hashes = seen_before
                     raise
+            self._keep_live_bindings(
+                self._repair_cells(statements_to_reexecute, restored_info, notebook_cells),
+                bindings_before,
+                lineages_before,
+                codes_before,
+                cells_before,
+                session_before,
+                current_cell_idx,
+                required_inputs,
+            )
             self.rng.label_rerun_metrics(executed_metrics, rng_rerun)
             total_execution_time = self.replay.sum_execution_times(executed_metrics)
             self._warn_rebuilt_changed_below(rebuilt, bindings_before, codes_before, notebook_cells, current_cell_idx)
