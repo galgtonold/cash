@@ -1542,6 +1542,21 @@ class CallRunner:
         observer.forget("argument mutation")
         return left
 
+    def _unwritable_args(self, func_name: str, arguments: tuple[tuple, dict]) -> list[str]:
+        """The parameters whose argument no hit writes a state back into
+        (`rewrite_in_place.refusal`), so a change cash may not see in it --
+        an object keyed by ``__cash_key__`` or a registered hasher hashes
+        alike before and after -- is not made by a hit. Every parameter
+        when they cannot be bound."""
+        named = self._checked_named(func_name, *arguments)
+        if named is None:
+            return [name for name, _ in self._named_args(func_name, *arguments)] or ["an argument"]
+        return [
+            name
+            for name, value in named.items()
+            if not rewrite_in_place.rewritable_kind(value) or rewrite_in_place.refusal(value) is not None
+        ]
+
     def _shared_with(self, func: Callable, func_name: str, changed: list, arguments: tuple[tuple, dict]) -> str | None:
         """What an argument in *changed*, the arguments the call changes in
         place, shares memory with, if anything: another argument, or a
@@ -1807,6 +1822,8 @@ class CallRunner:
             # Changed and not stored after all: what reading the source
             # found on them stands (`PurityChecks.surface_held_mutations`).
             run.observer.mutated_args = list(args_left)
+        if run.observer is not None and self._purity.holds_mutations(func_name):
+            run.observer.unwritable_args = self._unwritable_args(func_name, call.checked or (args, kwargs))
         self._purity.report_observed_effects(func_name, run.observer)
         if refusal is not None:
             self._misses.note_not_stored(call.cache_key, refusal)

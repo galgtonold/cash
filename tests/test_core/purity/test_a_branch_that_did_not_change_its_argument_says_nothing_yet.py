@@ -34,20 +34,43 @@ def test_only_the_line_saying_a_hit_writes_it_back(disk_cash):
     assert any("a hit writes it back" in t for t in texts), texts
 
 
-def test_a_call_that_changes_it_where_no_hit_can_write_back_is_still_warned(disk_cash):
-    """A tuple holding a list is not written back: the finding stands."""
+def test_an_argument_no_hit_can_write_back_is_warned_about_at_once(disk_cash):
+    """A tuple holding a list is not written back: no later call can make
+    the finding wrong, so it is said on the first call, changed or not."""
 
     def nested(a, flag):
         if flag:
             a[0].sort()
-            a[0].append(0)
         return 0
 
     cached = disk_cash.cache(nested)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         cached(([3, 1],), False)
-        assert not [w for w in caught if "IMPURE" in str(w.message)]
-        cached(([3, 1],), True)
     texts = [str(w.message) for w in caught if "IMPURE" in str(w.message)]
     assert any("runs every time" in t for t in texts), texts
+
+
+class _Keyed:
+    def __init__(self):
+        self.items = []
+
+    def __cash_key__(self):
+        return "v1"
+
+
+def test_an_argument_no_hit_writes_back_is_warned_about_on_the_first_call(disk_cash):
+    """Its key hashes alike before and after the body, so no call is seen
+    changing it: waiting for one held the finding forever, and nothing
+    said that a hit skips the change."""
+
+    def add(k):
+        k.items.append(1)
+        return 0
+
+    cached = disk_cash.cache(add)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        cached(_Keyed())
+    texts = [str(w.message) for w in caught if "IMPURE" in str(w.message)]
+    assert any("'k' in place" in t for t in texts), texts

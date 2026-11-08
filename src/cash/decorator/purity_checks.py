@@ -1517,6 +1517,7 @@ class PurityChecks:
             written = [d for k, d in observer.effects if k == WRITTEN_BACK]
             deferred = observer.stored_from_next
             changed = [name for name in observer.mutated_args or () if name not in deferred]
+            changed += [name for name in observer.unwritable_args if name not in changed]
             self.surface_held_mutations(func_name, written, changed)
             # Reading the source saw the change this call was the first to
             # make, and the next such call is stored: the line saying so
@@ -1590,6 +1591,11 @@ class PurityChecks:
             return issues
         self._held_mutations[func_name] = (held, per_report)
         return [issue for issue in issues if not any(issue is h for h in held)]
+
+    def holds_mutations(self, func_name: str) -> bool:
+        """Whether findings on *func_name*'s arguments are held back
+        (`_hold_argument_mutations`)."""
+        return func_name in self._held_mutations
 
     def surface_held_mutations(
         self, func_name: str, written: list[str] | None = None, changed: list[str] | None = None
