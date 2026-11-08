@@ -26,13 +26,15 @@ it was and the computation runs on it.
 from __future__ import annotations
 
 import sys
-from typing import Any
+from typing import Any, NamedTuple
 
 from cash._user_attrs import attribute_or
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
 __all__ = [
+    "WRITTEN_BACK",
     "ArgumentsLeft",
+    "KeyedBefore",
     "Shape",
     "mismatch",
     "refusal",
@@ -42,6 +44,10 @@ __all__ = [
     "shape_of",
     "snapshot",
 ]
+
+#: The kind of effect a call's observer records for the arguments whose
+#: state after the call its entry stores, and a hit writes back.
+WRITTEN_BACK = "argument written back"
 
 #: Containers rewritten by their contents.
 _CONTAINERS = (list, dict, set)
@@ -231,11 +237,20 @@ def snapshot(obj: Any) -> Any:
     return obj.copy()
 
 
+class KeyedBefore(NamedTuple):
+    """The state an argument was in before the call, as the key held it:
+    by all it holds, under the key's argument hash *args_hash*. A hit whose
+    key holds the argument the same way is on an argument in that state."""
+
+    args_hash: str
+
+
 class ArgumentsLeft:
     """A decorated call's result, stored with the state it left the
-    arguments it changed in place in: ``{parameter: (fingerprint before,
-    state after)}``. A hit writes each state into the argument the caller
-    handed in, while that argument's fingerprint is the one before."""
+    arguments it changed in place in: ``{parameter: (before, state
+    after)}``, *before* a `KeyedBefore` or the argument's fingerprint. A
+    hit writes each state into the argument the caller handed in, while
+    that argument is in the state *before* names."""
 
     __slots__ = ("result", "states")
 

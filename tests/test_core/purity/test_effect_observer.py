@@ -343,7 +343,8 @@ def test_a_library_mutating_the_callers_argument_is_observed(tmp_path):
     assert result == 1
     assert rows != original, "the probe did not actually mutate anything"
     assert warned, "a library mutating the caller's list was not observed"
-    assert "argument mutation" in str(warned[0].message)
+    # A list of numbers is written back by a hit, which the warning says.
+    assert "changed 'rows' in place" in str(warned[0].message)
 
 
 def test_a_function_that_leaves_its_arguments_alone_is_silent(tmp_path):

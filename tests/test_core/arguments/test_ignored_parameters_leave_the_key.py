@@ -231,8 +231,12 @@ def test_a_keyed_argument_beside_an_ignored_one_is_still_checked(cash_instance):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         run([3, 1, 2], [0])
-        run([3, 1, 2], [0])
-    assert run.cache_info()["hits"] == 0  # 'rows' changed in place: never stored
+        rows = [3, 1, 2]
+        run(rows, [0])
+    # 'rows' changed in place was seen: stored with its new state, which the
+    # hit writes back.
+    assert run.cache_info()["hits"] == 1
+    assert rows == [1, 2, 3]
 
 
 def test_a_miss_does_not_hash_an_ignored_argument(cash_instance):

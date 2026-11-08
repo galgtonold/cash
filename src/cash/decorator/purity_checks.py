@@ -47,6 +47,7 @@ from ..exceptions import (
 )
 from ..install_paths import is_user_code_module, is_user_module
 from ..kept_state import reduce_counted
+from ..rewrite_in_place import WRITTEN_BACK
 from ..source_reading import getsource, getsourcelines
 from ..tracking.randomness import capture_argument_carrier_states, moved_carriers, rng_carrier_kind
 from ..value_types import IMMUTABLE_VALUE_TYPES, writable_types
@@ -1489,6 +1490,10 @@ class PurityChecks:
         if func_name in self._static_flagged:
             covered = static_effect_kinds(self._registry.purity_reports.get(func_name))
         effects = [(kind, detail) for kind, detail in observer.effects if kind not in covered]
+        written = [detail for kind, detail in effects if kind == WRITTEN_BACK]
+        if written:
+            effects = [(kind, detail) for kind, detail in effects if kind != WRITTEN_BACK]
+            self._report_written_back(func_name, written)
         network = [detail for kind, detail in effects if kind == _NETWORK_LABEL]
         if network:
             effects = [(kind, detail) for kind, detail in effects if kind != _NETWORK_LABEL]
@@ -1515,6 +1520,23 @@ class PurityChecks:
             "the whole function instead, including effects added later.",
             short=f"@cash.cache on {func_name}: the first call had effects static analysis did not see, "
             f"which a cache hit will not repeat: {list_gist(lines, 'effect')}",
+        )
+
+    def _report_written_back(self, func_name: str, names: list[str]) -> None:
+        """The call changed arguments in place that its entry stores the
+        state of, and a hit writes back (`CallRunner.arguments_left`): what
+        a hit does, said once, in place of a hazard it no longer is."""
+        shown = list(dict.fromkeys(repr(name) for name in names))
+        changed = shown[0] if len(shown) == 1 else ", ".join(shown[:-1]) + " and " + shown[-1]
+        them = shown[0] if len(shown) == 1 else "them"
+        self._notices.warn_once(
+            CashImpurityWarning,
+            func_name,
+            "argument_written_back",
+            f"{func_name.rpartition('.')[2]} changed {changed} in place; cash stores the state it leaves {them} in, "
+            f"and a hit writes it back.",
+            code="IMPURE-OBSERVED-EFFECTS",
+            fix="",
         )
 
     def _report_observed_network(self, func_name: str, connections: list[str]) -> None:

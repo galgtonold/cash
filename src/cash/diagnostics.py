@@ -435,7 +435,8 @@ def format_diagnostic(code: str, what: str, fix: str) -> str:
           Fix: raise max_cache_size, or cache fewer values.
           https://cash-lib.readthedocs.io/en/latest/warnings/#cache-thrash
 
-    *what* is one sentence of what happened; *fix* is one imperative sentence.
+    *what* is one sentence of what happened; *fix* is one imperative sentence,
+    or empty for a notice that leaves the reader nothing to change.
     Everything else belongs in the doc section the link points at, so the
     message stays short.
 
@@ -443,6 +444,9 @@ def format_diagnostic(code: str, what: str, fix: str) -> str:
     and what a warning shows under ``warning_detail = "full"``. By default a
     warning shows :func:`short_diagnostic` instead.
     """
+    if not fix.strip():
+        # Says what cash does, with nothing for the reader to change.
+        return f"[{code}] {what}\n  {doc_url(code)}"
     return f"[{code}] {what}\n  Fix: {fix}\n  {doc_url(code)}"
 
 

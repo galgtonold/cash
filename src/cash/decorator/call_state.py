@@ -94,6 +94,7 @@ class Call:
         "handed",
         "polars_args",
         "keyed_parts",
+        "content_keyed",
         "stored_in",
         "traced",
         "needs_trace",
@@ -120,6 +121,9 @@ class Call:
         self.polars_args: Any = None
         #: What each list or tuple argument was keyed by (`arg_hashing.KEYED_PARTS`).
         self.keyed_parts: dict | None = None
+        #: Which arguments the key holds by all they hold
+        #: (`arg_hashing.ContentKeyed`).
+        self.content_keyed: Any = None
         #: The tiers the store put the result in (``storage``), once stored.
         self.stored_in: list[str] | None = None
         #: The key's `BuiltKey.traced` and ``needs_trace``, and what recorded

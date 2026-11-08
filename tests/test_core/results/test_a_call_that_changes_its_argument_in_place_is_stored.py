@@ -3,12 +3,11 @@ it left the argument in, and a hit writes that state back into the argument.
 
 ``W, H = fit_nmf(X, k)`` with ``fit_nmf`` writing into ``X`` was never
 stored: a hit would have returned ``W`` and ``H`` and left the caller's ``X``
-as it was. Once a function has been seen changing an argument, each later
-miss fingerprints the arguments a hit could write into before the body runs,
-and stores their state after it with the result. A hit checks that the
-argument handed in is in the state the entry was stored from, then writes the
-stored state into that very object: the caller's other names for it, and
-views of an array, see the change as after a plain call.
+as it was. It is stored with the state it left the arguments a hit could
+write into in after the body. A hit checks that the argument handed in is in
+the state the entry was stored from, then writes the stored state into that
+very object: the caller's other names for it, and views of an array, see the
+change as after a plain call.
 
 Only NumPy arrays, pandas frames and Series whose axes and dtypes the call
 kept, and lists, dicts and sets of plain values are written back. Anything
@@ -78,13 +77,12 @@ def test_the_state_left_in_the_argument_is_written_back_on_a_hit(disk_cash, kind
         return _change(v)
 
     make = KINDS[kind]
-    work(make())  # learns that it changes its argument
     work(make())  # stored, with the state it left the argument in
-    assert len(runs) == 2
+    assert len(runs) == 1
     v = make()
     alias = v
     result = work(v)
-    assert len(runs) == 2, f"the {kind} the call changes in place sent it back to run"
+    assert len(runs) == 1, f"the {kind} the call changes in place sent it back to run"
     expected = make()
     assert result == _change(expected)
     assert alias is v
@@ -101,13 +99,12 @@ def test_a_view_of_the_argument_sees_the_write(disk_cash):
         np.clip(X, 0.25, None, out=X)
         return X[:k].copy(), float(X.sum()) * k
 
-    for _ in range(2):
-        fit_nmf(np.arange(12, dtype=float).reshape(3, 4) / 20, 2)
+    fit_nmf(np.arange(12, dtype=float).reshape(3, 4) / 20, 2)
     base = np.arange(12, dtype=float) / 20
     X = base.reshape(3, 4)
     row = X[0]
     W, H = fit_nmf(X, 2)
-    assert len(runs) == 2
+    assert len(runs) == 1
     assert np.shares_memory(X, base)
     assert base.min() == 0.25 and row.tolist() == X[0].tolist() == [0.25, 0.25, 0.25, 0.25]
     assert W.tolist() == X[:2].tolist()
@@ -121,11 +118,10 @@ def test_an_argument_in_another_state_misses(disk_cash):
         runs.append(1)
         return _change(v)
 
-    for _ in range(2):
-        work(np.zeros(4))
+    work(np.zeros(4))
     v = np.ones(4)
     assert work(v) == 4.0
-    assert len(runs) == 3
+    assert len(runs) == 2
 
 
 def test_a_key_function_keeps_it_running_every_time(disk_cash):

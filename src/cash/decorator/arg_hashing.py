@@ -1087,6 +1087,56 @@ CALL_POLARS: contextvars.ContextVar[Any] = contextvars.ContextVar("cash_call_pol
 KEYED_PARTS: contextvars.ContextVar[dict | None] = contextvars.ContextVar("cash_keyed_parts", default=None)
 
 
+class ContentKeyed:
+    """Which arguments of a call the key holds by their whole content (set
+    by the decorator around its key build, in `CONTENT_KEYED`): a content
+    digest of their own, or their content walked into the payload with no
+    hook standing in for anything in it. A hit's key match then says such
+    an argument holds what it held when the entry was stored, which is what
+    an entry stored with the state a call left it in needs
+    (`CallRunner.arguments_before`). An argument keyed by ``__cash_key__``,
+    a registered hasher, a lineage tag, a frozen result's digest or code's
+    stand-in is not one: its key part is not what it holds."""
+
+    __slots__ = ("armed", "digested", "hooked", "walked")
+
+    def __init__(self) -> None:
+        #: Set while the key hashes the call's arguments, and only then:
+        #: a value hashed for another part of the key is not noted.
+        self.armed = False
+        #: ``{id(argument): argument}`` keyed by a content digest of its own.
+        self.digested: dict[int, Any] = {}
+        #: ``{id(argument): argument}`` walked into the payload as it is.
+        self.walked: dict[int, Any] = {}
+        #: The walk keyed something by a hook (`ArgHasher._nested_hasher`):
+        #: a walked argument may hold it, so none counts.
+        self.hooked = False
+
+    def covers(self, value: Any) -> bool:
+        """Is *value* one of the call's arguments, keyed by all it holds?"""
+        if self.digested.get(id(value)) is value:
+            return True
+        return not self.hooked and self.walked.get(id(value)) is value
+
+
+#: The `ContentKeyed` of the call whose key is being built, or None.
+CONTENT_KEYED: contextvars.ContextVar[ContentKeyed | None] = contextvars.ContextVar("cash_content_keyed", default=None)
+
+
+#: How an argument's key part stands for it (`ArgHasher.key_part`).
+_NOT_CONTENT, _DIGESTED, _WALKED = 0, 1, 2
+
+
+def _hooked(stand_in: Any) -> Any:
+    """*stand_in*, a hook's answer for a value inside an argument, noted in
+    `CONTENT_KEYED`: no walked argument of this call counts as keyed by its
+    content."""
+    content = CONTENT_KEYED.get()
+    if content is not None and content.armed:
+        content.hooked = True
+    return stand_in
+
+
 class WatchedSince:
     """A plain list's identity snapshot in `KEYED_PARTS` while the watchers
     track it: the arm it had before its key's walk (*gen*). The check before
@@ -2089,20 +2139,21 @@ class ArgHasher:
         ``Store`` inside a list was pickled instead, which failed on the lock
         it holds), then the class's ``__cash_key__``. Asked of every
         non-primitive value a key walk meets, so what a type is gets decided
-        once per type (`_hook_kind`).
+        once per type (`_hook_kind`). A stand-in it gives is noted in
+        `CONTENT_KEYED` (`_hooked`).
         """
         if self.override_hashers or self.type_hashers:
             for registry in (self.override_hashers, self.type_hashers):
                 for type_, (hasher_fn, src_hash) in registry.items():
                     if isinstance(value, type_):
-                        return ("__cash_hashed__", f"{src_hash}:{hasher_fn(value)}")
+                        return _hooked(("__cash_hashed__", f"{src_hash}:{hasher_fn(value)}"))
         if type(value) is types.FunctionType:
             stand_in = code_value_stand_in(value)
             if stand_in is not None:
-                return stand_in
+                return _hooked(stand_in)
         kind = _hook_kind(type(value))
         if kind is _KEYED:
-            return ("__cash_hashed__", self.cash_key_hash(value, cash_key_method(value)))
+            return _hooked(("__cash_hashed__", self.cash_key_hash(value, cash_key_method(value))))
         if kind is _JIT:
             # numba's `@njit`: by the name of the function it compiles, as a
             # function is, and its compile options. The code itself is the
@@ -2110,7 +2161,7 @@ class ArgHasher:
             # beside it (ctypes pointers, type contexts) is no input.
             compiled = jit_python_function(value)
             if compiled is not None:
-                return ("__cash_jit__", f"{compiled.__module__}.{compiled.__qualname__}", jit_options(value))
+                return _hooked(("__cash_jit__", f"{compiled.__module__}.{compiled.__qualname__}", jit_options(value)))
         return NOT_HOOKED
 
     def _memo_content_digest(self, value: Any) -> str | None:
@@ -2174,9 +2225,13 @@ class ArgHasher:
         # Timed per argument -- two clock reads each -- so that a
         # CACHE-NET-LOSS verdict can name the argument that costs the time.
         cost = _CostliestArg(self._frozen)
+        content = CONTENT_KEYED.get()
+        hash_one = (
+            self.arg_hash if content is None or not content.armed else functools.partial(self._noted_arg_hash, content)
+        )
         try:
-            hashed_args = tuple(cost.timed(f"#{i}", a, self.arg_hash) for i, a in enumerate(args))
-            hashed_kwargs = {k: cost.timed(k, v, self.arg_hash) for k, v in kwargs.items()}
+            hashed_args = tuple(cost.timed(f"#{i}", a, hash_one) for i, a in enumerate(args))
+            hashed_kwargs = {k: cost.timed(k, v, hash_one) for k, v in kwargs.items()}
         except BaseException as exc:
             _raise_panic_as_unhashable(exc)
             raise
@@ -2199,6 +2254,16 @@ class ArgHasher:
             cost.charge_payload(raw, _perf_counter() - payload_t0)
         ARG_COST.last = cost.costliest
         return hashlib.sha256(args_bytes).hexdigest()
+
+    def _noted_arg_hash(self, content: ContentKeyed, arg: Any) -> Any:
+        """`arg_hash` of *arg*, noting in *content* when it stands for all
+        *arg* holds."""
+        part, kind = self.key_part(arg)
+        if kind == _DIGESTED:
+            content.digested[id(arg)] = arg
+        elif kind == _WALKED:
+            content.walked[id(arg)] = arg
+        return part
 
     def _payload_bytes(self, args: tuple, kwargs: dict, hashed_args: tuple, hashed_kwargs: dict) -> bytes:
         """The canonical bytes of the hashed arguments (`canonical_bytes`).
@@ -2360,21 +2425,29 @@ class ArgHasher:
         8. A hasher registered for the type.
         9. The value itself, which the payload walk pickles.
         """
+        return self.key_part(arg)[0]
+
+    def key_part(self, arg: Any) -> tuple[Any, int]:
+        """`arg_hash` of *arg*, and how it stands for *arg*: `_DIGESTED`, a
+        digest of all it holds, read now or kept for this very object by an
+        exact check; `_WALKED`, the value itself, for the payload walk; or
+        `_NOT_CONTENT`, anything else (`ContentKeyed`)."""
         method = cash_key_method(arg)
         if method is not None and not (
             (self.override_hashers or self.type_hashers) and self.keys_by_registration_only(arg)
         ):
-            return self.cash_key_hash(arg, method)
+            return self.cash_key_hash(arg, method), _NOT_CONTENT
         lineage = self._trusted_lineage(arg)
         frozen_hash = self._frozen_digest(arg)
         if frozen_hash is not None:
-            return frozen_hash
+            return frozen_hash, _NOT_CONTENT
         if lineage is not None:
             entry = self._memo.get(id(arg))
             if entry is not None:
                 wref, memo_lineage, content_hash = entry
                 if memo_lineage == lineage and wref() is arg:
-                    return content_hash
+                    # Trusted by its tag, not read: not counted as its content.
+                    return content_hash, _NOT_CONTENT
         # Overriding hashers, ahead of everything cash would do itself.
         # The user has said their identity for this type beats content
         # hashing, which is the only way to stop re-reading a 800MB array
@@ -2386,7 +2459,7 @@ class ArgHasher:
         if self.override_hashers:
             for type_, (hasher_fn, src_hash) in self.override_hashers.items():
                 if isinstance(arg, type_):
-                    return f"{src_hash}:{hasher_fn(arg)}"
+                    return f"{src_hash}:{hasher_fn(arg)}", _NOT_CONTENT
         # A frozen result's content hash, taken when it was stored and
         # brought back with it (`FrozenResults.carry_digest`): the same
         # digest `builtin_hash` would give, without reading every byte.
@@ -2394,7 +2467,7 @@ class ArgHasher:
             carried = self._frozen.carried_digest(arg, lineage)
             if carried is not None:
                 self._memo_arg_hash(arg, lineage, carried)
-                return carried
+                return carried, _NOT_CONTENT
 
         # pandas >= 3 copy-on-write: an exact "has this frame changed?"
         # check instead of a trusted tag. See `_frame_memo_lookup`. Asked
@@ -2408,7 +2481,7 @@ class ArgHasher:
             if content_hash is not None:
                 if lineage is not None:
                     self._memo_arg_hash(arg, lineage, content_hash)
-                return content_hash
+                return content_hash, _DIGESTED
 
         since = exposure_mark()
         content_digest = None
@@ -2429,24 +2502,24 @@ class ArgHasher:
                 self._memo_arg_hash(arg, lineage, content_digest)
             elif frame_memo:
                 self._frame_memo_store(arg, content_digest, since)
-            return content_digest
+            return content_digest, _DIGESTED
         # Notebook lineage hash: the authoritative, cheap identity for
         # values that carry NO content hasher (custom objects). Kept ahead
         # of registered hashers so a lineage-carrying object short-circuits
         # its (possibly expensive) registered hasher within a session
         # (test_hasher_priority_cash_hash_first).
         if lineage is not None:
-            return lineage
+            return lineage, _NOT_CONTENT
         for type_, (hasher_fn, src_hash) in self.type_hashers.items():
             if isinstance(arg, type_):
                 # Embed the hasher source hash so that changing the
                 # hasher's body invalidates dependent cache entries
                 # even when the hasher's output coincidentally matches.
-                return f"{src_hash}:{hasher_fn(arg)}"
+                return f"{src_hash}:{hasher_fn(arg)}", _NOT_CONTENT
         stand_in = code_value_stand_in(arg)
         if stand_in is not None:
-            return stand_in
-        return arg
+            return stand_in, _NOT_CONTENT
+        return arg, _WALKED
 
     def _trusted_lineage(self, arg: Any) -> str | None:
         """*arg*'s own lineage tag, when it is one the key may trust: a

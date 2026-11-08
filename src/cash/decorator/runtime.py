@@ -42,7 +42,16 @@ from ..tracking.randomness import (
     replayable,
 )
 from . import code_trace, hit_memo
-from .arg_hashing import CALL_POLARS, HANDED_DIGESTS, KEYED_PARTS, PLAIN_CENSUS, CallPolarsDigests, call_polars
+from .arg_hashing import (
+    CALL_POLARS,
+    CONTENT_KEYED,
+    HANDED_DIGESTS,
+    KEYED_PARTS,
+    PLAIN_CENSUS,
+    CallPolarsDigests,
+    ContentKeyed,
+    call_polars,
+)
 from .arg_key import keyed_arguments
 from .cache_metadata import CacheMetadata
 from .cached_function import CachedFunction
@@ -731,12 +740,21 @@ class KeyBuilder:
                     dynamic_sources, _resolution_of(spec, spec.dynamic_depends_on, args, kwargs, dynamic_sources)
                 )
             failure: list = []
-            if keyed is normalized_args:
-                args_hash = self._args.serialize_args(
-                    func_name, args, kwargs, normalized=normalized_args, failure=failure
-                )
-            else:
-                args_hash = self._keyed_args_hash(keyed, failure)
+            # Which arguments it keys by all they hold, noted while it hashes
+            # them and only then (`ContentKeyed`).
+            content = CONTENT_KEYED.get()
+            if content is not None:
+                content.armed = True
+            try:
+                if keyed is normalized_args:
+                    args_hash = self._args.serialize_args(
+                        func_name, args, kwargs, normalized=normalized_args, failure=failure
+                    )
+                else:
+                    args_hash = self._keyed_args_hash(keyed, failure)
+            finally:
+                if content is not None:
+                    content.armed = False
             self._args.note_arg_cost(func_name)
         finally:
             KEY_BUILD_DIGESTS.reset(digests_token)
@@ -971,6 +989,7 @@ class CallRunner:
         ttl: int | None,
         needs_trace: bool = False,
         arguments: tuple[tuple, dict] | None = None,
+        content_keyed: ContentKeyed | None = None,
     ) -> Any:
         """Return cached_data if valid, else CACHE_MISS sentinel.
 
@@ -993,7 +1012,7 @@ class CallRunner:
             writes: list[tuple[Any, Any]] = []
             if verdict is None and isinstance(cached_data, rewrite_in_place.ArgumentsLeft):
                 left = cached_data
-                writes, why = self._arguments_to_write(func_name, left, arguments)
+                writes, why = self._arguments_to_write(func_name, left, arguments, args_hash, content_keyed)
                 if why is not None:
                     verdict = MissReason(MissKind.ARGS, why)
                 cached_data = left.result
@@ -1250,6 +1269,8 @@ class CallRunner:
         copies = self._keys.split_for_key(spec, args, kwargs)
         call.keyed_parts = {}
         keyed_token = KEYED_PARTS.set(call.keyed_parts)
+        call.content_keyed = ContentKeyed()
+        content_token = CONTENT_KEYED.set(call.content_keyed)
         try:
             if copies is None:
                 built, call.capture_watch, call.ledger = self._keys.resolve(spec, args, kwargs)
@@ -1259,6 +1280,7 @@ class CallRunner:
                     spec, copies.args, copies.kwargs, split, refused=copies.refused
                 )
         finally:
+            CONTENT_KEYED.reset(content_token)
             KEYED_PARTS.reset(keyed_token)
             CALL_POLARS.reset(polars_token)
             if token is not None:
@@ -1291,6 +1313,7 @@ class CallRunner:
             call.ttl,
             call.needs_trace,
             (args, kwargs),
+            call.content_keyed,
         )
         call.cash_overhead = _perf_counter() - overhead_t0
         if hit is not CACHE_MISS:
@@ -1383,6 +1406,7 @@ class CallRunner:
             call.ttl,
             call.needs_trace,
             (call.args, call.kwargs),
+            call.content_keyed,
         )
         if hit is CACHE_MISS:
             return CACHE_MISS
@@ -1399,21 +1423,49 @@ class CallRunner:
             return None
 
     def arguments_before(self, spec: CachedFunction, call: Call, args: tuple, kwargs: dict) -> dict[str, tuple]:
-        """For a function seen changing an argument in place, ``{parameter:
-        (value, shape, fingerprint)}`` of each argument a hit could write a
-        stored state back into (`rewrite_in_place`), taken before the body
-        runs. Empty for any other function, so a call that changes nothing
-        pays nothing; a call keyed by ``key=``, or on copies of its
-        arguments, is never stored with them."""
-        if not spec.changes_arguments or call.checked is not None:
+        """``{parameter: (value, shape, before)}`` of each argument a hit
+        could write a stored state back into (`rewrite_in_place`), taken
+        before the body runs. *before* is what a hit checks the argument
+        handed in against:
+
+        * `rewrite_in_place.KeyedBefore`, the key's argument hash, for an
+          argument the key holds by all it holds (`arg_hashing.ContentKeyed`):
+          a hit's key match already says it is in the state the entry was
+          stored from. Nothing is hashed for it, so even the first call
+          seen changing it is stored.
+        * a `mutation_fingerprint` for any other argument, once the function
+          has been seen changing an argument in place: until then a call
+          that changes nothing pays nothing.
+
+        A call keyed by ``key=``, or on copies of its arguments, is never
+        stored with them."""
+        if call.checked is not None:
             return {}
         arg_key = getattr(spec, "arg_key", None)
         if arg_key is not None and arg_key.key_fn is not None:
             return {}
+        content = call.content_keyed
+        keyed = content is not None and call.args_hash is not None
+        if not spec.changes_arguments and not (
+            keyed and any(map(rewrite_in_place.rewritable_kind, (*args, *kwargs.values())))
+        ):
+            return {}
         named = self._checked_named(spec.name, args, kwargs) or {}
         before: dict[str, tuple] = {}
         for name, value in named.items():
-            if not rewrite_in_place.rewritable_kind(value) or rewrite_in_place.refusal(value) is not None:
+            if not rewrite_in_place.rewritable_kind(value):
+                continue
+            if keyed and content.covers(value):
+                try:
+                    before[name] = (
+                        value,
+                        rewrite_in_place.shape_of(value),
+                        rewrite_in_place.KeyedBefore(call.args_hash),
+                    )
+                except Exception:  # noqa: BLE001 - no shape: not stored with the result
+                    pass
+                continue
+            if not spec.changes_arguments or rewrite_in_place.refusal(value) is not None:
                 continue
             try:
                 shape = rewrite_in_place.shape_of(value)
@@ -1426,12 +1478,12 @@ class CallRunner:
 
     def arguments_left(
         self, spec: CachedFunction, run: BodyRun, arguments: tuple[tuple, dict]
-    ) -> dict[str, tuple[str, Any]] | None:
-        """``{parameter: (fingerprint before, state after)}`` when the body
-        changed arguments in place and every one of them can be written back
-        by a hit (`arguments_before`): the result is then stored with them,
-        and the change no longer refuses the store. None otherwise, and the
-        refusal stands."""
+    ) -> dict[str, tuple[Any, Any]] | None:
+        """``{parameter: (before, state after)}`` when the body changed
+        arguments in place and every one of them can be written back by a
+        hit (`arguments_before`): the result is then stored with them, and
+        the change no longer refuses the store; the warning says what a hit
+        does instead. None otherwise, and the refusal stands."""
         observer = run.observer
         mutated = observer.mutated_args if observer is not None else None
         if not mutated:
@@ -1439,23 +1491,23 @@ class CallRunner:
         learnt = not spec.changes_arguments
         spec.changes_arguments = True
         before = getattr(run, "args_before", None) or {}
-        if learnt and not before:
-            # Its first change seen: nothing was taken before the body, so
-            # this result is not stored; the next calls are.
-            named = self._checked_named(spec.name, *arguments) or {}
-            values = [named.get(name) for name in mutated]
-            if all(rewrite_in_place.rewritable_kind(v) and rewrite_in_place.refusal(v) is None for v in values):
-                observer.reword(
-                    "argument mutation",
-                    "so this call runs every time",
-                    "so this call ran; from the next call on, the state it leaves the argument in is stored with "
-                    "the result and a hit writes it back",
-                )
+        if any(name not in before for name in mutated):
+            if learnt:
+                # Its first change seen, on an argument nothing was taken of
+                # before the body: this result is not stored; the next
+                # calls fingerprint it first and are.
+                named = self._checked_named(spec.name, *arguments) or {}
+                values = [named.get(name) for name in mutated]
+                if all(rewrite_in_place.rewritable_kind(v) and rewrite_in_place.refusal(v) is None for v in values):
+                    observer.reword(
+                        "argument mutation",
+                        "so this call runs every time",
+                        "so this call ran; from the next call on, the state it leaves the argument in is stored "
+                        "with the result and a hit writes it back",
+                    )
             return None
-        left: dict[str, tuple[str, Any]] = {}
+        left: dict[str, tuple[Any, Any]] = {}
         for name in mutated:
-            if name not in before:
-                return None
             value, shape, fingerprint = before[name]
             if rewrite_in_place.refusal(value) is not None or rewrite_in_place.shape_change(shape, value) is not None:
                 return None
@@ -1465,26 +1517,42 @@ class CallRunner:
                 return None
         observer.mutated_args = None
         observer.forget("argument mutation")
+        for name in left:
+            observer.record(rewrite_in_place.WRITTEN_BACK, name)
         return left
 
     def _arguments_to_write(
-        self, func_name: str, left: rewrite_in_place.ArgumentsLeft, arguments: tuple[tuple, dict] | None
+        self,
+        func_name: str,
+        left: rewrite_in_place.ArgumentsLeft,
+        arguments: tuple[tuple, dict] | None,
+        args_hash: str | None,
+        content_keyed: ContentKeyed | None,
     ) -> tuple[list[tuple[Any, Any]], str | None]:
         """``(writes, why)``: the ``(argument, state)`` pairs a hit on *left*
         writes, or why it cannot: an argument missing, of another shape, or
-        not in the state the entry was stored from. All are checked before
-        any is written."""
+        not in the state the entry was stored from. An argument stored with
+        `rewrite_in_place.KeyedBefore` is in that state when this call's key,
+        whose argument hash is *args_hash*, holds it by its content too
+        (*content_keyed*) and that hash is the one stored; any other when its
+        `mutation_fingerprint` is the stored one. All are checked before any
+        is written."""
         named = self._checked_named(func_name, *arguments) if arguments is not None else None
         if named is None:
             return [], "the arguments it changes in place could not be found"
         writes: list[tuple[Any, Any]] = []
-        for name, (fingerprint, state) in left.states.items():
+        for name, (before, state) in left.states.items():
             if name not in named:
                 return [], f"the argument {name!r} it changes in place was not handed in"
             live = named[name]
             why = rewrite_in_place.mismatch(live, state)
-            if why is None and mutation_fingerprint(live) != fingerprint:
-                why = "it is not in the state the entry was stored from"
+            if why is None:
+                if isinstance(before, rewrite_in_place.KeyedBefore):
+                    same = content_keyed is not None and content_keyed.covers(live) and before.args_hash == args_hash
+                else:
+                    same = mutation_fingerprint(live) == before
+                if not same:
+                    why = "it is not in the state the entry was stored from"
             if why is not None:
                 return [], f"the state the call left {name!r} in cannot be written back: {why}"
             writes.append((live, state))

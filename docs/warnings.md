@@ -880,7 +880,12 @@ behave differently from the first.
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks.argument_identities @0b1d9a15, cash/_plain_data.py:identity_changed @c64ac6c0 -->
 A call that changes an argument is **not stored**, so it runs every time,
 unless cash can write the argument's new state back on a hit
-([which arguments](decorator-limitations.md#results-cash-refuses-to-store)). The
+([which arguments](decorator-limitations.md#results-cash-refuses-to-store)).
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks._report_written_back @4686d068 -->
+When it can write back every argument the call changed, the warning is one
+line saying so instead, with nothing to fix:
+`clip_in_place changed 'a' in place; cash stores the state it leaves 'a' in, and a hit writes it back.`
+The
 arguments are checked on every miss, whatever their size, except those
 [left out of the key with `ignore=`](decorator.md#leaving-arguments-out-of-the-key),
 which are not checked at all. A plain list or tuple (of numbers, strings,

@@ -178,10 +178,10 @@ class StoreRequest:
     #: What the result shared with an object outside the call, as the
     #: warning said it (`PurityChecks.warn_shared_result`): a hit says it too.
     shared_result: str | None = None
-    #: ``{parameter: (fingerprint before, state after)}`` of the arguments
-    #: the call changed in place (`CallRunner.arguments_left`): stored with
-    #: the result, written back into the arguments on a hit.
-    args_left: dict[str, tuple[str, Any]] | None = None
+    #: ``{parameter: (before, state after)}`` of the arguments the call
+    #: changed in place (`CallRunner.arguments_left`): stored with the
+    #: result, written back into the arguments on a hit.
+    args_left: dict[str, tuple[Any, Any]] | None = None
 
 
 @dataclass
