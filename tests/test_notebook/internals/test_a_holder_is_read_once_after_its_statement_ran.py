@@ -92,16 +92,18 @@ def test_no_weak_reference_is_taken_once_weak_reads_are_off(monkeypatch):
     namespace = {}
     monkeypatch.setattr(value_watch, "namespaces", lambda: (namespace,))
     monkeypatch.setattr(value_watch, "WATCHING", False)
-
     named = namespace["named"] = argparse.Namespace(rows=[[1, 2.0]])
     unnamed = argparse.Namespace(rows=[[3, 4.0]])
+    other = argparse.Namespace(rows=[[5, 6.0]])
     with value_hash.one_read():
         value_hash.compute_hash(named)
-        assert weakref.getweakrefcount(named) == 1
-        value_hash.no_weak_reads()
-        assert weakref.getweakrefcount(named) == 0, "the weak reference taken before is let go"
         value_hash.compute_hash(unnamed)
-        assert weakref.getweakrefcount(unnamed) == 0
+        assert weakref.getweakrefcount(named) == 0, "kept by its name"
+        assert weakref.getweakrefcount(unnamed) == 1
+        value_hash.no_weak_reads()
+        assert weakref.getweakrefcount(unnamed) == 0, "the weak reference taken before is let go"
+        value_hash.compute_hash(other)
+        assert weakref.getweakrefcount(other) == 0
         reads = []
         real = value_hash._compute_hash
         monkeypatch.setattr(value_hash, "_compute_hash", lambda v: reads.append(v) or real(v))

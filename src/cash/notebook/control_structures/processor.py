@@ -39,6 +39,7 @@ import types
 from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
+from cash import value_hash
 from cash._user_attrs import attribute_or, instance_of
 
 from ...analysis.cacheability import statement_writes_files
@@ -715,20 +716,24 @@ class ControlStructureProcessor:
                 inherited_annotation,
             )
             top = self._unit_occurrence
-            metrics = self.statement_processor.process_statement(
-                code,
-                ttl,
-                silent,
-                annotation=annotation,
-                occurrence_index=top[1] if top is not None and top[0] is node else 0,
-                stream_output=True,
-                force_outputs=force_outputs,
-                walked=walked,
-                loop_iterable=header_value,
-                header_files=header_files,
-                header_remote=header_remote,
-            )
-            return self._finalize_single_unit(node, code, metrics, update_lineage)
+            # Only cash's code runs between the unit's last read of what it
+            # changed and the lineage update below: read once for both.
+            with value_hash.handed_on():
+                metrics = self.statement_processor.process_statement(
+                    code,
+                    ttl,
+                    silent,
+                    annotation=annotation,
+                    occurrence_index=top[1] if top is not None and top[0] is node else 0,
+                    stream_output=True,
+                    force_outputs=force_outputs,
+                    walked=walked,
+                    loop_iterable=header_value,
+                    header_files=header_files,
+                    header_remote=header_remote,
+                )
+                with self.statement_processor.reading_once():
+                    return self._finalize_single_unit(node, code, metrics, update_lineage)
         except Exception as e:  # broad fallback wrapping arbitrary user code executed as a unit
             # Handed back to the cell, which raises it; logged above debug it
             # would print the traceback a second time.

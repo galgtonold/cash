@@ -15,6 +15,7 @@ import sys
 from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
+from cash._settled import unsettle
 from cash._user_attrs import instance_of
 
 from .detect import KIND_NP_GENERATOR, KIND_NP_RANDOMSTATE, KIND_PY_RANDOM
@@ -112,6 +113,8 @@ def restore_rng_state(state: dict, displaced: dict | None = None) -> None:
             if module in current:
                 displaced.setdefault(module, current[module])
 
+    # An object the notebook holds may be a global stream (``rs = np.random.mtrand._rand``).
+    unsettle()
     CASH_SETS_STATE[0] += 1
     try:
         _restore_global_streams(state)
@@ -276,6 +279,7 @@ def restore_object_rng_states(
     """
     if not states:
         return
+    unsettle()
 
     for name, entry in states.items():
         try:

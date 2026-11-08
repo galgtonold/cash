@@ -23,6 +23,7 @@ from typing import Any
 from cash import _plain_data, rewrite_in_place, stored_pickle, value_hash
 from cash._active import default_cash
 from cash._clock import perf_counter as _perf_counter
+from cash._settled import unsettle
 from cash._user_attrs import attribute_or, instance_of, is_routine
 from cash.backends import memory_backend
 from cash.backends.persistence_policy import COMPUTE_FLOOR_S, PersistencePolicy
@@ -1608,6 +1609,9 @@ class StatementProcessor:
         self._randomness.stamp_random_effect(run.metrics, run.code, run.unseeded_calls, unseeded_fits)
 
         metadata, cached_data = self._lookup(run, analysis_time, hash_time)
+        if cached_data is not None:
+            # Loading an entry ran its objects' own unpickling code.
+            unsettle()
         if run.must_run:
             # It learns what it changes as it runs: a restore would not.
             metadata, cached_data = None, None
@@ -1679,7 +1683,10 @@ class StatementProcessor:
         run.bound_before = {
             name: id(user_ns[name]) for name in run.outputs | run.mut_observe | run.mut_assumed if name in user_ns
         }
-        run.holder_digests = self._holder_digests(run)
+        # Read once; the last statement's digests stand where only cash's
+        # code ran since (`value_hash.handed_on`).
+        with self.reading_once():
+            run.holder_digests = self._holder_digests(run)
         self._route_calls(run)
         return None
 
@@ -2399,6 +2406,8 @@ class StatementProcessor:
     ) -> ProcessResult | None:
         """Restore *run* from its entry; the finished result, or None when the
         restore failed and the statement must run after all."""
+        # It writes what the notebook holds, whether or not it is served.
+        unsettle()
         # The modules its callees imported in their body as its run did.
         if metadata is not None:
             import_body_modules(metadata.body_imported)
@@ -2458,17 +2467,22 @@ class StatementProcessor:
                 recorded = self._records.recorded_share_edges(run.source_hash)
             if recorded:
                 apply_share_record(self.tracking_state.derivation_edges, (), recorded, self.shell.user_ns)
-        bumped = self.lineage_builder.replay_derivation_bumps(
-            self.tracking_state, run.outputs, run.inputs, skip=moved, code=run.code, kept=kept, before=before
-        )
-        # The restore put the generators where the run left them; their
-        # lineages follow, as the run's did, and move what holds them
-        # through their edges, as the simulation's hit moves them.
-        self._advance_carriers(run.source_hash, advanced, run.cache_key, run.code)
-        if advanced:
-            self.lineage_builder.replay_derivation_bumps(
-                self.tracking_state, set(advanced), run.inputs, skip=moved | bumped, code=run.code, before=before
+        # From here only cash's code runs, reading what the restore wrote:
+        # each value is read once, and handed to the next statement's holder
+        # digests (`_holder_digests`) where nothing runs between.
+        unsettle()
+        with self.reading_once():
+            bumped = self.lineage_builder.replay_derivation_bumps(
+                self.tracking_state, run.outputs, run.inputs, skip=moved, code=run.code, kept=kept, before=before
             )
+            # The restore put the generators where the run left them; their
+            # lineages follow, as the run's did, and move what holds them
+            # through their edges, as the simulation's hit moves them.
+            self._advance_carriers(run.source_hash, advanced, run.cache_key, run.code)
+            if advanced:
+                self.lineage_builder.replay_derivation_bumps(
+                    self.tracking_state, set(advanced), run.inputs, skip=moved | bumped, code=run.code, before=before
+                )
         self.analytics_manager.record_event(
             status="HIT",
             execution_time=hit_result["total_time"],
@@ -2631,6 +2645,7 @@ class StatementProcessor:
                 lineage.reset_to(name, before)
             if user_ns.get(name) is FORWARD_PROBE_PLACEHOLDER:
                 user_ns.pop(name, None)
+        unsettle()
         run.skip_cache = True
         listed = ", ".join(f"'{name}'" for name in stale)
         reason = (
@@ -2788,9 +2803,13 @@ class StatementProcessor:
                     start_time = _perf_counter()
                     env_scope = recording_env_reads()
                     env_reads = env_scope.__enter__()
+                    # The user's code runs: no digest taken before it, nor
+                    # one a statement it runs takes, is handed on past it.
+                    unsettle()
                     try:
                         yield runner
                     finally:
+                        unsettle()
                         env_scope.__exit__(None, None, None)
                         wall_time = max(0.0, _perf_counter() - start_time - run.record_time)
                         if memo is not None:
@@ -3538,6 +3557,13 @@ class StatementProcessor:
         """`trace_recorder.other_thread_alive` in the notebook's namespace."""
         return other_thread_alive(self.shell.user_ns)
 
+    def reading_once(self, alive: bool | None = None) -> contextlib.AbstractContextManager[None]:
+        """`value_hash.one_read`, unless another thread is alive (*alive*,
+        asked when None) and could change a value between two reads."""
+        if alive is None:
+            alive = self._other_thread_alive()
+        return contextlib.nullcontext() if alive else value_hash.one_read()
+
     def _binds_a_stream(self, run: StatementRun) -> bool:
         """Whether the statement bound an open file, or read from one: a
         handle is a new stream at its start on every run, and a read leaves it
@@ -3703,7 +3729,8 @@ class StatementProcessor:
                 saved_metadata = None
                 # The store runs the user's pickling and sizing hooks, which
                 # may change an output another check walked; it never reads
-                # the facts over wider leaves those checks took.
+                # the facts over wider leaves those checks took (nor, where
+                # it runs them, a digest taken before: `StatementStore._store`).
                 _plain_data.forget_wider_facts()
                 if not run.skip_cache and reducer_writes.writes_into(run.reducer_mark, self.shell.user_ns):
                     # A reducer of the user's that cash ran wrote: stored, the
@@ -3738,19 +3765,22 @@ class StatementProcessor:
         # of it moves it (`held_lineage`), not through its edges, so a hit,
         # a run and the simulation leave it alike. The generators it drew
         # from move what holds them through their edges, as the simulation
-        # moves them (``box = deque([it])``, then ``next(it)``).
-        self.lineage_builder.replay_derivation_bumps(
-            self.tracking_state,
-            run.outputs | (run.carriers_advanced or set()),
-            run.inputs,
-            skip=moved,
-            code=run.code,
-            kept=run.holders_unchanged,
-            before=before,
-            # What this run's digests saw change moves on, whatever alias an
-            # earlier run left; the rest as the simulation moves it.
-            moved_on=run.holders_changed,
-        )
+        # moves them (``box = deque([it])``, then ``next(it)``). Each value
+        # read once, and handed to the next statement's holder digests
+        # (`_holder_digests`) where nothing runs between.
+        with self.reading_once(alive):
+            self.lineage_builder.replay_derivation_bumps(
+                self.tracking_state,
+                run.outputs | (run.carriers_advanced or set()),
+                run.inputs,
+                skip=moved,
+                code=run.code,
+                kept=run.holders_unchanged,
+                before=before,
+                # What this run's digests saw change moves on, whatever alias
+                # an earlier run left; the rest as the simulation moves it.
+                moved_on=run.holders_changed,
+            )
         self._report_saved(run, saved_metadata)
         self._tell_past_budget(run, execution.cost or execution.wall_time or 0.0)
         storage = (saved_metadata.storage if saved_metadata else None) or ()
@@ -4963,6 +4993,9 @@ class StatementProcessor:
         # ``@cash.cache`` call ran (`kept_state.reducers_run`) wrote all the
         # same, in the statement whose own pickle refused it.
         found = reducer_writes.writers(run.reducer_mark)
+        if found:
+            # It wrote while cash read values: no digest taken then stands.
+            unsettle()
         user_ns = self.shell.user_ns
         names = reducer_writes.reach(found, user_ns) if found else set()
         if names is not None and not names:
