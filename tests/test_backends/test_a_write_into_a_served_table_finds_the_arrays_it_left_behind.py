@@ -18,7 +18,12 @@ import pytest
 from cash.backends import frame_sharing
 from cash.backends.memory_backend import InMemoryBackend
 
-pytestmark = pytest.mark.skipif(not frame_sharing.enabled(), reason="needs pandas copy-on-write")
+pytestmark = [
+    pytest.mark.skipif(not frame_sharing.enabled(), reason="needs pandas copy-on-write"),
+    # Outside a notebook the write also warns as it happens; that is
+    # tested on its own (test_a_write_into_a_served_table_with_an_array_taken_warns).
+    pytest.mark.filterwarnings("ignore:.*CACHE-SERVED-VIEW"),
+]
 
 
 def _served(backend: InMemoryBackend) -> pd.DataFrame:

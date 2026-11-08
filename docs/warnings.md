@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @b532e776 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @49ee50f0 -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -159,6 +159,7 @@ Caching happened, or refused to, and it is worth saying. Every code here starts 
 | [CACHE-PER-ITEM-RERUN](#cache-per-item-rerun) | notebook | a slow step ran again over a whole collection, though most of it is unchanged |
 | [CACHE-RETURNS-AWAITABLE](#cache-returns-awaitable) | decorator | a sync function returned a coroutine, which is not stored |
 | [CACHE-RESULT-SHARED](#cache-result-shared) | decorator | the result shares state with an object outside the call |
+| [CACHE-SERVED-VIEW](#cache-served-view) | decorator | a write into a pandas table a cached function returned from the cache will not reach a NumPy array taken from the table before it |
 | [CACHE-THRASH](#cache-thrash) | both | the cache is full and evicts what it just stored |
 | [CACHE-VALUE-TOO-BIG](#cache-value-too-big) | both | a value is bigger than the disk cap |
 | [CACHE-WRITE-ABANDONED](#cache-write-abandoned) | both | the process exited before its writes finished |
@@ -662,6 +663,34 @@ carries this finding, so neither `# @cash:assume-safe` nor
 `with cash.assume_safe():` applies. See [Silencing one
 code](#silencing-one-code).
 
+### CACHE-SERVED-VIEW {#cache-served-view}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/backends/frame_sharing.py:_warn_at_write @3bda0831, cash/backends/frame_sharing.py:_note_shared @5d34f551 -->
+**What happened.** A line of yours wrote into a pandas table that a cached
+function returned from the memory cache (`df.iloc[0, 0] = 100`), while a
+NumPy array taken from the table before the write (`v = df["t"].to_numpy()`,
+`.values`, `.array`) was still held. A served table shares its memory with
+the cache's copy, so pandas copies the column before writing it, and the
+array keeps the old values. In plain Python, with no other table sharing
+the column, pandas writes it in place and the array sees the write. The
+warning names the line that writes, once per line. A table the call
+computed, or one read from disk, is your own and never gets this warning.
+In a notebook with `%cash_on`, the same write warns
+[NOTEBOOK-SERVED-VIEW](#notebook-served-view) instead.
+
+**Why it matters.** Code that reads the array after the write (`v[0]`)
+gets the old value where plain Python gets the new one.
+
+**What to do.** Take the array after the write, or copy the returned table
+(`df = df.copy()`) and take the array from the copy.
+
+**When it is safe to ignore.** When the code does not read the array after
+the write, or another table shared the column anyway: plain Python copies
+the column then too. A few pandas methods that write in place
+(`fillna(..., inplace=True)`, `replace(..., inplace=True)`) hold the column
+themselves while they decide, and warn even with no array of yours held.
 ### CACHE-THRASH {#cache-thrash}
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>

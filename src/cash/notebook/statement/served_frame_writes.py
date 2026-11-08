@@ -37,7 +37,10 @@ class ServedFrameWrites:
 
     @staticmethod
     def cell_starts() -> None:
-        """Forget writes made before the cell: cash's own, between cells."""
+        """Forget writes made before the cell: cash's own, between cells.
+        From the first cell on, a write is counted after its statement
+        rather than when pandas makes it (`frame_sharing.checked_by_statements`)."""
+        frame_sharing.checked_by_statements()
         frame_sharing.forget_asked()
 
     def check(self, user_ns: dict[str, Any], code: str | None, location: tuple[str, int] | None) -> None:

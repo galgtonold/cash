@@ -159,10 +159,79 @@ def has_pin(block: Any) -> bool:
 
 def _note_shared(refs: Any) -> None:
     """pandas found the group *refs* shared, before a write: note it when
-    cash froze it (`views_left_behind`)."""
+    cash froze it (`views_left_behind`). Where no statement checks follow
+    (`checked_by_statements`: a script or a notebook without ``%cash_on``,
+    whose served tables come from ``@cash.cache``), count now and warn
+    (`_warn_at_write`)."""
     pin = _pin_of(refs)
-    if pin is not None:
-        _ASKED[id(pin)] = weakref.ref(pin)
+    if pin is None:
+        return
+    _ASKED[id(pin)] = weakref.ref(pin)
+    if _STATEMENT_CHECKS or _QUIET:
+        return
+    try:
+        left = _read_elsewhere(pin)
+    except Exception:
+        logger.debug("cash: could not count the readers of a written table", exc_info=True)
+        return
+    if left:
+        _warn_at_write()
+
+
+#: Set once the notebook checks each statement (`checked_by_statements`).
+_STATEMENT_CHECKS: list[bool] = []
+#: Non-empty while `_self_test` writes its own tables.
+_QUIET: list[bool] = []
+#: The places `_warn_at_write` warned about, ``(file, line)``.
+_WARNED_AT: set[tuple[str, int]] = set()
+
+
+def checked_by_statements() -> None:
+    """The notebook counts the readers of written tables after each
+    statement (`views_left_behind`): from now on a write is only noted."""
+    if not _STATEMENT_CHECKS:
+        _STATEMENT_CHECKS.append(True)
+
+
+def _write_site() -> tuple[str, int]:
+    """The line of the caller's own code that wrote the table: the first
+    frame outside pandas and cash."""
+    import os
+
+    import pandas as pd
+
+    skip = (os.path.dirname(pd.__file__) + os.sep, os.path.dirname(os.path.dirname(__file__)) + os.sep)
+    frame = sys._getframe(2)
+    while frame is not None and frame.f_code.co_filename.startswith(skip):
+        frame = frame.f_back
+    if frame is None:
+        return "<cash>", 0
+    return frame.f_code.co_filename, frame.f_lineno
+
+
+def _warn_at_write() -> None:
+    """CACHE-SERVED-VIEW, once per line of the caller's that writes: a
+    table ``@cash.cache`` served is about to be written while a numpy
+    array taken from it still reads its old memory (`_note_shared`)."""
+    from ..diagnostics import warn_diagnostic
+    from ..exceptions import CashWarning
+
+    site = _write_site()
+    if site in _WARNED_AT:
+        return
+    _WARNED_AT.add(site)
+    what = (
+        "this line writes into a pandas table a cached function returned from the cache, while a numpy "
+        "array taken from the table before (with .to_numpy(), .values or .array) is still held. The "
+        "served table shares its memory with the cache's copy, so pandas copies the column before "
+        "writing it, and the array keeps the old values. In a plain run the write reaches the array "
+        "whenever no other table shares the column."
+    )
+    fix = (
+        "take the array after the write, or copy the returned table (df = df.copy()) and take the "
+        "array from the copy, so that it sees later writes as in a plain run."
+    )
+    warn_diagnostic(CashWarning, "CACHE-SERVED-VIEW", what, fix, location=site)
 
 
 #: ``id(array) -> weak reference`` for each array whose memory `freeze` made
@@ -258,6 +327,15 @@ def _self_test(pd: Any) -> bool:
         if pickle.loads(pickle.dumps(kept)).index.freq != original.index.freq:
             return False
     del stored
+    _QUIET.append(True)
+    try:
+        return _self_test_writes(pd, hit, other, columns)
+    finally:
+        _QUIET.clear()
+
+
+def _self_test_writes(pd: Any, hit: Any, other: Any, columns: dict) -> bool:
+    """`_self_test`'s writes into a hit, with the stored table gone."""
     asked = dict(_ASKED)
     _ASKED.clear()
     hit.iloc[0, 0] = 100.0
