@@ -918,6 +918,22 @@ class UpstreamChecker:
                 continue
             warn_changed_below(name, codes_before.get(name), notebook_cells, current_cell_idx, warned, along=True)
 
+    @staticmethod
+    def _written_in(statements: list[str], written: list[tuple[int, Any]], notebook_cells: list[str]) -> dict[str, int]:
+        """``{name: cell}``: for each name a re-run statement wrote the
+        lineage of, the cell of the last such statement. *written* holds a
+        watch begun before each statement, which sees that statement's
+        writes and every one after it."""
+        cells = statement_cells(tuple(notebook_cells))
+        found: dict[str, int] = {}
+        for index, watch in written:
+            cell = cells.get(strip_markers(statements[index]).strip()) if index < len(statements) else None
+            if cell is None:
+                continue
+            for name in watch.lineages:
+                found[name] = max(found.get(name, cell), cell)
+        return found
+
     def _rebuilt_names(self, statements: list[str], restored_info: list[ProcessResult]) -> set[str]:
         """What the planned re-runs bind, and what the simulation restored."""
         names: set[str] = set()
@@ -1041,6 +1057,14 @@ class UpstreamChecker:
             self._refuse_to_undo(unsaved, rebuilt)
 
             executed_metrics = []
+            # What each re-run statement wrote, by the cell it is in: the
+            # sync below gives no snapshot above that cell the lineage.
+            written: list[tuple[int, Any]] = []
+
+            def before_statement(index: int) -> None:
+                self.rng.before_statement(index)
+                written.append((index, self.tracking_state.lineage.watch()))
+
             if statements_to_reexecute:
                 try:
                     executed_metrics = self.replay.reexecute(
@@ -1053,7 +1077,7 @@ class UpstreamChecker:
                         annotations=self.replay.statement_directives(notebook_cells),
                         exec_sources=self.replay.statement_exec_sources(notebook_cells),
                         notebook_cells=notebook_cells,
-                        before_statement=self.rng.before_statement,
+                        before_statement=before_statement,
                     )
                 except UpstreamRepairGap:
                     self._put_back(bindings_before, lineages_before)
@@ -1072,6 +1096,8 @@ class UpstreamChecker:
                     self._put_back(bindings_before, lineages_before, codes_before)
                     cache.entries, cache.cell_hashes = seen_before
                     raise
+            written_in = self._written_in(statements_to_reexecute, written, notebook_cells)
+            written.clear()
             self._keep_live_bindings(
                 self._repair_cells(statements_to_reexecute, restored_info, notebook_cells),
                 bindings_before,
@@ -1092,7 +1118,7 @@ class UpstreamChecker:
             # last thing to touch them before the cell.
             self.rng.restore_position_rng_state(cell_code, notebook_cells, current_cell_idx)
 
-            self.simulator.resync_after_replay(records_before)
+            self.simulator.resync_after_replay(records_before, written_in)
             self.simulator.record_consumable_bases(required_inputs, current_cell_idx, cell_code)
             # The same cell-entry baseline for a frame, an array or a large
             # collection the cell may change in place: the very object it
