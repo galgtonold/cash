@@ -38,6 +38,7 @@ from cash.tracking.randomness import (
     seed_generation,
     seeding_modules_now,
     stream_position,
+    streams_seeded_from_entropy,
     streams_set_by_the_statement,
     unseeded_streams,
     warn_observed_draw,
@@ -198,6 +199,9 @@ class StatementRandomness:
         #: The streams the LAST statement seeded with a value before it drew
         #: from them (`close_seed_watch`).
         self.seeded_first: frozenset[str] = frozenset()
+        #: The streams the LAST statement seeded from the system's entropy,
+        #: anywhere in it (`streams_seeded_from_entropy`).
+        self.entropy_seeded: frozenset[str] = frozenset()
         #: Streams a hit put where its run, which seeded them unseen, left
         #: them: adopted as that run's seed was (`adopt_seeds_of_a_hit`).
         self._seeded_by_a_hit: set[str] = set()
@@ -360,6 +364,7 @@ class StatementRandomness:
         self._positions_moved = set()
         self.reseeded_streams = frozenset()
         self.seeded_first = frozenset()
+        self.entropy_seeded = frozenset()
         self.draw_newly_seen = False
         self.newly_seen_draws = set()
         # A seed set inside a function the statement calls is seen as it is
@@ -867,6 +872,7 @@ class StatementRandomness:
         """
         try:
             set_itself = streams_set_by_the_statement(pre_rng)
+            self.entropy_seeded = streams_seeded_from_entropy(pre_rng)
             seeded_first = self.seeded_first = close_seed_watch(pre_rng)
             post = capture_rng_state()
             changed = rng_modules_changed(pre_rng, post)

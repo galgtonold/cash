@@ -156,7 +156,7 @@ the reasoning.
 
 ### Plots shown from the cache
 
-<!-- claim: cash/notebook/ipython/plot_runs.py:PlotRuns.serve @0458b11a, cash/notebook/ipython/plot_runs.py:PlotRuns._store @5180bb40, cash/notebook/plot_outputs.py:statement_plot_facts @5e20ef0c, cash/notebook/plot_outputs.py:first_read_after @1d857b84 -->
+<!-- claim: cash/notebook/ipython/plot_runs.py:PlotRuns.serve @0458b11a, cash/notebook/ipython/plot_runs.py:PlotRuns._store @2133f20f, cash/notebook/plot_outputs.py:statement_plot_facts @b47a015b, cash/notebook/plot_outputs.py:first_read_after @1d857b84, cash/notebook/ipython/plot_runs.py:PlotRuns._served @876245f3, cash/notebook/statement/processor.py:StatementProcessor.settle_served_plot_statement @cbfa94b7 -->
 With the inline backend (the default in Jupyter), a plot begins with no
 figure open and ends when `plt.show()`, or the end of the cell, shows its
 figures and closes them. Cash keeps what such a plot showed: the image, what
@@ -167,8 +167,17 @@ inline backend's formats), cash shows that output and skips the drawing; the
 badge marks those rows cached. This holds for `run(N)` calling a function of
 yours that draws and calls `plt.show()`, for `plt.plot(x, y)` then
 `plt.show()`, for `df.plot(...)` and seaborn calls, and for
-`fig, ax = plt.subplots()` then drawing on `ax` in the same cell. It holds
-after a kernel restart when the plot was slow enough to be written to disk.
+`fig, ax = plt.subplots()` then drawing on `ax` in the same cell, and for a
+call such as `run(tsp, cities)` that opens a figure with `plt.figure(...)`,
+draws through helpers of yours and returns a value. It holds after a kernel
+restart when the plot was slow enough to be written to disk.
+
+A plot that seeds Python's or NumPy's global random generator and then draws
+from it (`random.seed(n)` inside a helper it calls) is served too, and so is
+one that draws from a generator a cell above seeded, while that seed and the
+draws since are the same. A served plot leaves the generator where its
+drawing left it, and puts back into a `functools.cache` helper the answers
+the drawing added, so the cells below draw and read as after a drawing.
 
 A served plot binds nothing: `fig`, `ax` and whatever else it assigned are
 not there afterwards. So it is drawn again, as before, when:
@@ -180,9 +189,13 @@ not there afterwards. So it is drawn again, as before, when:
   figure whether the plot ran or not, so it changes nothing;
 - cash cannot tell which cell is running, or cannot read the notebook's cells;
 - it writes a file (`plt.savefig`, `fig.savefig`), reads one other than
-  matplotlib's fonts and style sheets, draws from a global random generator,
-  changes matplotlib's settings, sets a global through a function, or holds
-  a statement that is not stored for a reason other than drawing;
+  matplotlib's fonts and style sheets, draws from a random generator no
+  cell seeded (or one other than Python's and NumPy's global ones), seeds
+  one from the system's entropy, changes matplotlib's settings, sets a
+  global through a function, or holds a statement that is not stored for a
+  reason other than drawing;
+- a `functools.cache` helper it read no longer holds the answers it found
+  there;
 - an environment variable it read holds another value, the backend is not
   the inline one, or the inline backend keeps figures open
   (`InlineBackend.close_figures = False`).

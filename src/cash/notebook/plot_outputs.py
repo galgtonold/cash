@@ -72,6 +72,21 @@ class PlotFacts:
     #: held (`environment_digests`): a plot run is served only while they
     #: hold the same.
     env: Mapping[str, str] = field(default_factory=dict)
+    #: Where it left the global random streams it moved or seeded: a served
+    #: plot run puts them there, as a hit does.
+    rng_state: Mapping[str, Any] = field(default_factory=dict)
+    #: The streams it seeded as it ran.
+    rng_reseeded: frozenset[str] = frozenset()
+    #: The streams it drew from without seeding them first: what it drew
+    #: depends on where they stood, so a plot run holding it is served only
+    #: while they stand at the same lineage.
+    rng_read: frozenset[str] = frozenset()
+    #: The streams it seeded with a value before drawing from them.
+    rng_seeded_first: frozenset[str] = frozenset()
+    #: ``(records, changes)`` of the helper memos it called
+    #: (`helper_memos.used`): a served plot run must find what it read
+    #: there and puts back what it added, as a hit does.
+    memos: tuple[Any, Any] | None = None
 
 
 def is_pyplot_reason(reason: object) -> bool:
@@ -86,29 +101,71 @@ def is_pyplot_reason(reason: object) -> bool:
     return "pyplot's current figure" in text
 
 
-def statement_plot_facts(run: Any, execution: Any, *, drew_random: bool) -> PlotFacts:
-    """The :class:`PlotFacts` of the statement *run*, which ran as *execution*."""
+#: The global streams whose position a lineage follows: a plot run that
+#: draws from another one without seeding it first is not kept.
+_LINEAGED_STREAMS = frozenset({"random", "numpy.random"})
+
+
+def statement_plot_facts(
+    run: Any,
+    execution: Any,
+    *,
+    drew: Iterable[str],
+    seeded_first: Iterable[str],
+    unplaced: bool,
+) -> PlotFacts:
+    """The :class:`PlotFacts` of the statement *run*, which ran as *execution*.
+
+    *drew*: the global streams it moved; *seeded_first*: those it seeded
+    with a value before drawing from them; *unplaced*: it drew from a stream
+    the upstream check could not put where a run from the top has it."""
     blockers: list[str] = []
     # A write from a line the user waived (``# @cash:assume-safe``) is one a
     # skipped run may leave out.
     written = set(execution.written_paths or ()) - set(execution.waived_paths or ())
     if written or execution.unseen_writer or execution.children_running:
         blockers.append("writes files or starts processes")
-    read = sorted(
+    files = sorted(
         {path for path in execution.accessed_files or () if not _drawing_file(path)}
         | set(execution.accessed_remote or ())
     )
-    if read:
+    if files:
         # What it read is in no key of a plot run.
-        blockers.append(f"reads files ({', '.join(read[:3])})")
-    if execution.rng_moved or execution.rng_reseeded or drew_random:
-        blockers.append("draws random numbers")
+        blockers.append(f"reads files ({', '.join(files[:3])})")
+    seeded_first = frozenset(seeded_first)
+    reseeded = frozenset(execution.rng_reseeded or ())
+    moved = dict(execution.rng_moved or {})
+    streams_read = frozenset((set(moved) | set(drew)) - seeded_first)
+    if reseeded - seeded_first:
+        # Seeded after a draw, or from the system's entropy: not a position
+        # its code and inputs alone decide.
+        blockers.append("seeds a random stream other than before its draws")
+    elif streams_read - _LINEAGED_STREAMS:
+        blockers.append(f"draws random numbers ({', '.join(sorted(streams_read - _LINEAGED_STREAMS))})")
+    elif streams_read and unplaced:
+        blockers.append("draws from a random stream cash could not place")
+    memos = attribute_or(run, "plot_memos", None)
+    if memos is None and attribute_or(run, "helper_memos", None):
+        # Stored on its own: its entry carries them, as the plot run must.
+        memos = (run.helper_memos, attribute_or(run, "memo_changes", None))
+    if isinstance(memos, str):
+        blockers.append(memos)
     if run.state_modules or run.process_state or run.rebound_modules:
         blockers.append("changes module state")
     if attribute_or(run, "callee_globals", None):
         blockers.append("sets globals through a function")
     reasons = tuple(str(r) for r in run.metrics.get("uncacheable_reasons") or ())
-    return PlotFacts(reasons, tuple(blockers), frozenset(run.outputs or ()), dict(run.env_reads or {}))
+    return PlotFacts(
+        reasons,
+        tuple(blockers),
+        frozenset(run.outputs or ()),
+        dict(run.env_reads or {}),
+        rng_state=moved,
+        rng_reseeded=reseeded,
+        rng_read=streams_read,
+        rng_seeded_first=seeded_first,
+        memos=memos if isinstance(memos, tuple) else None,
+    )
 
 
 #: Files a renderer reads to draw text: the fonts matplotlib loads the first

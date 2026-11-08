@@ -168,10 +168,12 @@ from ...tracking.file_tracker import FileAccessTracker
 from ...tracking.function_tracker import FunctionTracker
 from ...tracking.randomness import (
     advanced_rng_lineage,
+    capture_rng_state,
     carrier_positions,
     drawn_rng_vars,
     hidden_lineage_writes,
     moved_carrier_names,
+    restore_rng_state,
     rng_carrier_kind,
     rng_virtual_var,
 )
@@ -358,6 +360,12 @@ HINT_ERROR_LEVEL = logging.DEBUG
 
 #: What `_keeping_outputs` reads an unbound name as.
 _ABSENT = object()
+
+
+def _describe_streams(streams: frozenset[str] | set[str]) -> str:
+    """*streams*, global random stream modules, as a reason names them."""
+    names = {"random": "Python's random stream", "numpy.random": "NumPy's global random stream"}
+    return " and ".join(names.get(module, f"{module}'s random stream") for module in sorted(streams))
 
 
 def _entry_values(cached_data: Any) -> dict[str, Any] | None:
@@ -1154,6 +1162,56 @@ class StatementProcessor:
         (see :meth:`StatementRandomness.adopt_unseen_seeds`)."""
         self._randomness.adopt_unseen_seeds()
 
+    def settle_served_plot_run(self, statements: list[tuple[str, int, dict | None, frozenset[str]]]) -> bool:
+        """Account for each statement of a served plot run, in order
+        (`settle_served_plot_statement`), given as ``(code, occurrence,
+        rng_state, reseeded)``. False when one cannot be: the random streams,
+        the RNG variables' lineages and the seed ledger are then put back as
+        they stood, and the plot run is to run instead."""
+        prefix = rng_virtual_var("")
+        lineage = self.tracking_state.variable_lineage
+        streams = capture_rng_state()
+        lineages = {var: value for var, value in lineage.items() if var.startswith(prefix)}
+        epochs = dict(self._randomness.seed_epochs)
+        try:
+            for code, occurrence, rng_state, reseeded in statements:
+                self.settle_served_plot_statement(code, occurrence, rng_state, reseeded)
+        except Exception:
+            logger.warning("cash could not account for a plot shown from the cache; it is drawn again", exc_info=True)
+            restore_rng_state(streams)
+            for var in [var for var in lineage if var.startswith(prefix) and var not in lineages]:
+                self.tracking_state.lineage.discard(var)
+            for var, value in lineages.items():
+                self.tracking_state.lineage.record(var, value)
+            self._randomness.seed_epochs.clear()
+            self._randomness.seed_epochs.update(epochs)
+            return False
+        return True
+
+    def settle_served_plot_statement(
+        self, code: str, occurrence_index: int, rng_state: dict | None, reseeded: frozenset[str] | set[str]
+    ) -> None:
+        """Account for the statement *code* of a served plot run as for a hit
+        on it: keyed as its run was (the seeds it spells are recorded under
+        that key), the random streams it moved put where its run left them
+        (*rng_state*), the seeds it set unseen (*reseeded*) adopted, and the
+        RNG variables it drew from moved on. The statements below then key
+        and draw as after its run."""
+        run = StatementRun(code, occurrence_index=occurrence_index)
+        run.metrics = {"uncacheable_reasons": []}
+        self._randomness.adopt_unseen_seeds()
+        run.tree = parse_cached(code.strip())
+        self._analyze(run)
+        self._note_entry_lineages(run)
+        if rng_state:
+            before = self._randomness.before_hit()
+            restore_rng_state(dict(rng_state), self.tracking_state.rng_live_states)
+            self._randomness.observe_hit(before, rng_state)
+        self._randomness.adopt_seeds_of_a_hit(reseeded, code)
+        self._advance_rng(run)
+        self._adopt_seeds_it_set(run)
+        self._remember_rng_positions(run)
+
     def unseed_streams_not_seeded_above(self, cells_above: list[str]) -> None:
         """Count a stream no cell above seeds as unseeded for the cell about
         to run (see :meth:`StatementRandomness.unseed_streams_not_seeded_above`)."""
@@ -1439,15 +1497,7 @@ class StatementProcessor:
         except AnalysisBudgetExceeded:
             run.analysis_budget.tripped = True
         self._settle_budget(run)
-        lineage = self.tracking_state.variable_lineage
-        entry = {name: lineage[name] for name in run.inputs if name in lineage}
-        self.tracking_state.statement_entry_lineages[run.code] = entry
-        history = self.tracking_state.statement_entry_history.setdefault(run.code, [])
-        if entry in history:
-            history.remove(entry)
-        history.append(entry)
-        if len(history) > ENTRY_HISTORY:
-            del history[0]
+        entry = self._note_entry_lineages(run)
         if self._calls.in_loop:
             run.pass_slot = pass_slot(run.code, self._calls.current_loop_var_digests_for_call_key())
             run.pass_lineages_before = note_pass_entry(self.tracking_state, run.pass_slot, entry)
@@ -1535,6 +1585,19 @@ class StatementProcessor:
         self._route_calls(run)
         return None
 
+    def _note_entry_lineages(self, run: StatementRun) -> dict[str, str]:
+        """Record the lineages *run*'s inputs have as it begins."""
+        lineage = self.tracking_state.variable_lineage
+        entry = {name: lineage[name] for name in run.inputs if name in lineage}
+        self.tracking_state.statement_entry_lineages[run.code] = entry
+        history = self.tracking_state.statement_entry_history.setdefault(run.code, [])
+        if entry in history:
+            history.remove(entry)
+        history.append(entry)
+        if len(history) > ENTRY_HISTORY:
+            del history[0]
+        return entry
+
     def _expected_run_time(self, code: str) -> float | None:
         """What *code* last took to run (`expected_run_time`); None when
         unknown or when asking fails."""
@@ -1606,6 +1669,50 @@ class StatementProcessor:
         showed is what keeps it (`plot_outputs`)."""
         reasons = run.metrics.get("uncacheable_reasons") or ()
         return run.keep_displays and bool(reasons) and all(is_pyplot_reason(r) for r in reasons)
+
+    def _memos_used(
+        self, run: StatementRun, memos_before: list | None, memos_cleared: helper_memos.Clears | None
+    ) -> tuple[Any, list[dict] | None]:
+        """What *run*'s statement did to the helper memos it called
+        (`helper_memos.used`), with the changes an entry carries."""
+        user_ns = self.shell.user_ns
+        clears = bool(memos_before) and helper_memos.clears(run.code, user_ns)
+        # What it put into a memo is stored with the outputs, unless it
+        # reads a memo's counters, which no hit gives back.
+        changes: list[dict] | None = None if clears and helper_memos.reads_counters(run.code, user_ns) else []
+        memos = helper_memos.used(
+            memos_before, clears=clears, ns=user_ns, site=(run.code, None), changes=changes, cleared=memos_cleared
+        )
+        return memos, changes
+
+    def _note_plot_memos(
+        self, run: StatementRun, memos_before: list, memos_cleared: helper_memos.Clears | None
+    ) -> None:
+        """For a statement refused only for drawing: what a served plot run
+        holding it must find in the memos it read and put into the ones it
+        filled, as a hit does (`PlotFacts.memos`)."""
+        if not self._keeps_plot_displays(run):
+            return
+        try:
+            memos, changes = self._memos_used(run, memos_before, memos_cleared)
+        except Exception:  # noqa: BLE001 - not read: the plot run is not kept
+            run.plot_memos = "cash could not read the helper memos it called"
+            return
+        run.plot_memos = memos[1] if isinstance(memos, tuple) else (memos, changes or None)
+
+    def _refuse_entropy_seed(self, run: StatementRun, execution: StatementExecution) -> None:
+        """Refuse *run* when it seeded a global random stream from the
+        system's entropy (``random.seed()``), at any point: a run leaves the
+        stream somewhere new each time, which no stored run can stand in for,
+        so it runs every time, as a plot run holding it does."""
+        streams = self._randomness.entropy_seeded
+        if not streams or not execution.result.success:
+            return
+        run.skip_cache = True
+        run.metrics["uncacheable_reasons"].append(
+            f"it seeds {_describe_streams(streams)} from the system's entropy, which a run leaves "
+            "somewhere new each time: it runs every time"
+        )
 
     @staticmethod
     def _refuse_if_it_drew(run: StatementRun, execution: StatementExecution) -> None:
@@ -2544,7 +2651,10 @@ class StatementProcessor:
         unloaded = unloaded_body_imports(run.cache_key)
         env_reads: set[str] = set()
         helper_memos.new_statement()
-        memos_before = None if run.skip_cache else helper_memos.watched(self.shell.user_ns)
+        # One refused only for drawing too: what it does to a memo decides
+        # whether the plot run holding it may be skipped (`plot_outputs`).
+        watch_memos = not run.skip_cache or self._keeps_plot_displays(run)
+        memos_before = helper_memos.watched(self.shell.user_ns) if watch_memos else None
         memos_cleared: helper_memos.Clears | None = None
         try:
             with (
@@ -2621,6 +2731,7 @@ class StatementProcessor:
             unshown_output(e, execution.captured, run.silent, run.stream_output)
             raise
         self._refuse_if_it_drew(run, execution)
+        self._refuse_entropy_seed(run, execution)
         self._refuse_unseen_writes(run, execution, memos_before, memos_cleared)
         if (
             figures_before is not None
@@ -2630,6 +2741,8 @@ class StatementProcessor:
         ):
             run.skip_cache = True
             run.metrics["uncacheable_reasons"].append(CHANGED_PYPLOT_REASON)
+        if memos_before is not None and run.skip_cache and execution.result.success:
+            self._note_plot_memos(run, memos_before, memos_cleared)
         if env_reads:
             # What the environment variables installed code read held: a
             # lookup checks them again (`env_reads`).
@@ -2638,13 +2751,7 @@ class StatementProcessor:
             # What the helper memos it called held: a lookup checks them
             # again. One it made compute is changed, as a list appended to.
             user_ns = self.shell.user_ns
-            clears = bool(memos_before) and helper_memos.clears(run.code, user_ns)
-            # What it put into a memo is stored with the outputs, unless it
-            # reads a memo's counters, which no hit gives back.
-            changes: list[dict] | None = None if clears and helper_memos.reads_counters(run.code, user_ns) else []
-            memos = helper_memos.used(
-                memos_before, clears=clears, ns=user_ns, site=(run.code, None), changes=changes, cleared=memos_cleared
-            )
+            memos, changes = self._memos_used(run, memos_before, memos_cleared)
             if isinstance(memos, tuple):
                 # What it returns can differ run to run with the memo's
                 # state, which no key holds: its outputs are keyed by value.
@@ -2934,7 +3041,16 @@ class StatementProcessor:
         metrics["status"] = CacheStatus.COMPUTED
         metrics["evaluated_vars"] = list(run.outputs) if run.outputs else []
         # For the cell: whether a plot run holding it may be skipped (`plot_outputs`).
-        metrics[PLOT_FACTS] = statement_plot_facts(run, execution, drew_random=bool(self._randomness.observed_draw))
+        metrics[PLOT_FACTS] = statement_plot_facts(
+            run,
+            execution,
+            drew=self._randomness.observed_draw,
+            seeded_first=self._randomness.seeded_first,
+            unplaced=bool(
+                set(self._randomness.observed_draw)
+                & (self.tracking_state.rng_unplaced - set(self._randomness.seeded_first))
+            ),
+        )
         # Input names, so provenance and badge tooltips can rebuild the
         # dependency graph. The no-name inputs the AST sometimes emits are dropped.
         metrics["inputs"] = [v for v in (run.inputs or []) if isinstance(v, str)]

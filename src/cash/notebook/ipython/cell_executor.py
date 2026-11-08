@@ -434,6 +434,21 @@ async def _drive_async(
         return done.value
 
 
+def _served_texts(
+    served: dict, first: int, code: str, source: str, body: list[ast.stmt], occurrence: int, counts: dict[str, int]
+) -> list[tuple[str, int]]:
+    """The code and occurrence in the cell of each statement of the plot
+    run *served* that starts at statement *first* (*code*, *occurrence*),
+    as the cell will count them: *counts* holds the occurrences up to *first*."""
+    texts = [(code, occurrence)]
+    seen: dict[str, int] = {}
+    for k in sorted(served)[1:]:
+        text = _statement_code(source, body[k]) or ""
+        texts.append((text, counts.get(text, 0) + seen.get(text, 0)))
+        seen[text] = seen.get(text, 0) + 1
+    return texts
+
+
 def _statement_code(source: str, node: ast.stmt) -> str | None:
     """The keyed text of *node*, a statement of the cell *source*."""
     texts = statement_texts(source, node)
@@ -1203,17 +1218,18 @@ class CellExecutor:
                     continue
                 is_last = i == len(tree.body) - 1
                 if i not in served and not plots.recording:
-                    served = (
-                        plots.serve(
-                            i,
-                            occ,
-                            lambda k, i=i, code=stmt_code: code if k == i else _statement_code(source, tree.body[k]),
-                            tree.body,
-                            source,
-                            blocked=lambda k: k in planned or k in jump_runs,
-                        )
-                        or served
+                    found = plots.serve(
+                        i,
+                        occ,
+                        lambda k, i=i, code=stmt_code: code if k == i else _statement_code(source, tree.body[k]),
+                        tree.body,
+                        source,
+                        blocked=lambda k: k in planned or k in jump_runs,
                     )
+                    if found and plots.take_place(
+                        found, _served_texts(found, i, stmt_code, source, tree.body, occ, stmt_occurrence_counts)
+                    ):
+                        served = found
                 if i in served:
                     # What the plot run showed when it was kept, in place of running it.
                     buffered_result_outputs = self._show_served(

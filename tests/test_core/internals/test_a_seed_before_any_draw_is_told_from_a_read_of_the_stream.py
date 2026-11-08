@@ -4,7 +4,9 @@ it from one that read the stream first.
 Only the first kind may leave the stream out of its key: what it draws
 comes from its own seed. A draw, a ``getstate`` or ``setstate`` before the
 seed, a ``seed(None)``, or a ``setstate`` after the seed (the stream put
-back where it began) all make it a read.
+back where it began) all make it a read. So does a ``seed(None)`` after the
+seeded draws: the stream then ends at fresh entropy, which the watch also
+reports (``streams_seeded_from_entropy``).
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from cash.tracking.randomness import (
     capture_rng_state,
     close_seed_watch,
     restore_rng_state,
+    streams_seeded_from_entropy,
     streams_set_by_the_statement,
     watch_first_seeds,
     watch_seeds,
@@ -54,6 +57,7 @@ def test_a_seed_then_draws_is_seeded_first():
         ),
         pytest.param(lambda: (random.seed(3), random.setstate(random.getstate())), id="setstate-after-seed"),
         pytest.param(lambda: random.random(), id="no-seed"),
+        pytest.param(lambda: (random.seed(3), random.random(), random.seed()), id="entropy-seed-after"),
     ],
 )
 def test_a_read_of_the_stream_is_not_seeded_first(body):
@@ -100,3 +104,20 @@ def test_a_statement_that_puts_the_stream_back_set_it_itself():
 
 def test_cash_putting_the_stream_back_is_not_the_statement_setting_it():
     assert _set_by_the_statement(lambda: restore_rng_state(capture_rng_state())) == frozenset()
+
+
+@pytest.mark.parametrize(
+    ("body", "entropy"),
+    [
+        pytest.param(lambda: (random.seed(3), random.random(), random.seed()), {"random"}, id="after-draws"),
+        pytest.param(lambda: (random.seed(None), random.random()), {"random"}, id="first"),
+        pytest.param(lambda: (random.seed(3), random.random()), set(), id="a-value"),
+    ],
+)
+def test_a_seed_from_entropy_anywhere_is_reported(body, entropy):
+    start = capture_rng_state()
+    watch_first_seeds(start)
+    body()
+    found = streams_seeded_from_entropy(start)
+    close_seed_watch(start)
+    assert found == entropy

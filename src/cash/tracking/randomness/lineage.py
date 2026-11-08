@@ -169,6 +169,10 @@ _SEEDED_FIRST: set[str] = set()
 #: (``setstate``, not cash's own restores): where it leaves them depends on
 #: a state it held, which it may have read from the stream as it began.
 _STATE_SET: set[str] = set()
+#: The streams the statement watched now seeded from the system's entropy
+#: (``seed()``, ``seed(None)``) at any point: where it leaves them differs
+#: from run to run, so no stored run may stand in for it.
+_ENTROPY_SEEDED: set[str] = set()
 #: The snapshot the watch now was opened with (`watch_first_seeds`).
 _FIRST_SEED_OWNER: list = [None]
 #: The streams this watch covers: the two the notebook's draw ledger keys.
@@ -182,6 +186,7 @@ def watch_first_seeds(start: dict) -> None:
     _FIRST_SEED_WATCH.clear()
     _SEEDED_FIRST.clear()
     _STATE_SET.clear()
+    _ENTROPY_SEEDED.clear()
     _FIRST_SEED_OWNER[0] = start
     for module in _FIRST_SEED_STREAMS:
         if module in start:
@@ -197,6 +202,15 @@ def streams_set_by_the_statement(start: dict) -> frozenset[str]:
     return frozenset(_STATE_SET)
 
 
+def streams_seeded_from_entropy(start: dict) -> frozenset[str]:
+    """The streams the statement watched with *start* seeded from the
+    system's entropy at any point, asked before `close_seed_watch`.
+    Nothing when another watch was opened since."""
+    if _FIRST_SEED_OWNER[0] is not start:
+        return frozenset()
+    return frozenset(_ENTROPY_SEEDED)
+
+
 def close_seed_watch(start: dict) -> frozenset[str]:
     """Close the watch opened with *start*: the streams the statement seeded
     with a value before it drew from them. Nothing when another watch was
@@ -208,6 +222,7 @@ def close_seed_watch(start: dict) -> frozenset[str]:
     _FIRST_SEED_WATCH.clear()
     _SEEDED_FIRST.clear()
     _STATE_SET.clear()
+    _ENTROPY_SEEDED.clear()
     return seeded
 
 
@@ -257,6 +272,11 @@ def _seed_wrapper(module: str, original):
     def seed(*args, **kwargs):
         if _FIRST_SEED_WATCH:
             _first_seed(module, args, kwargs)
+        if _FIRST_SEED_OWNER[0] is not None and (args[0] if args else kwargs.get("seed", kwargs.get("a"))) is None:
+            # Seeded from entropy: not where its own seed took it, wherever
+            # in the statement that seed came.
+            _ENTROPY_SEEDED.add(module)
+            _SEEDED_FIRST.discard(module)
         result = original(*args, **kwargs)
         _note_seed(module, args, kwargs)
         return result
