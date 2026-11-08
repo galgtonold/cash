@@ -1931,14 +1931,36 @@ def _unaccounted(blocks: list[Any], root_ref: Any) -> bool:
     return False
 
 
-def _credit_locals(frame: Any, objects: dict[int, Any], counted: dict[int, int], np: Any) -> None:
-    """Credit the references *frame*'s locals hold to *objects*, directly
-    or (with *np*) through a numpy view's base."""
+def _credit_locals(
+    frame: Any, objects: dict[int, Any], counted: dict[int, int], views: dict[int, list[Any]] | None
+) -> None:
+    """Credit the references *frame*'s locals hold to *objects*: one per
+    slot holding one of them. With *views*, also note each slot holding a
+    numpy view of one of them (`_credit_views`)."""
+    import numpy as np
+
     for value in list(frame.f_locals.values()):
         if objects.get(id(value)) is value:
             counted[id(value)] = counted.get(id(value), 0) + 1
-        elif np is not None and isinstance(value, np.ndarray) and value.base is not None and id(value.base) in objects:
-            counted[id(value.base)] = counted.get(id(value.base), 0) + 1
+        elif (
+            views is not None and isinstance(value, np.ndarray) and value.base is not None and id(value.base) in objects
+        ):
+            noted = views.setdefault(id(value), [value, 0])
+            noted[1] += 1
+
+
+def _credit_views(views: dict[int, list[Any]], counted: dict[int, int]) -> None:
+    """Credit the base of each view the stack's locals hold, once per view
+    (one view holds its base once, however many slots hold the view), and
+    only when those slots are all that hold the view: a view the caller
+    also holds, such as the array a write is given (``df.iloc[:, 0] = v``),
+    is the caller's reader, not the write's."""
+    for key in list(views):
+        view, slots = views.pop(key)
+        # Besides the slots: `view`, getrefcount's argument.
+        if sys.getrefcount(view) - 2 <= slots:
+            counted[id(view.base)] = counted.get(id(view.base), 0) + 1
+        del view
 
 
 def _held_by_pandas_and_cash(objects: dict[int, Any]) -> dict[int, int]:
@@ -1948,16 +1970,17 @@ def _held_by_pandas_and_cash(objects: dict[int, Any]) -> dict[int, int]:
     reader the caller keeps."""
     import os
 
-    import numpy as np
     import pandas as pd
 
     inside = (os.path.dirname(pd.__file__) + os.sep, os.path.dirname(os.path.dirname(__file__)) + os.sep)
     counted: dict[int, int] = {}
+    views: dict[int, list[Any]] = {}
     frame = sys._getframe(2)  # past `_unaccounted`, which holds `objects` alone
     while frame is not None:
         if frame.f_code.co_filename.startswith(inside):
-            _credit_locals(frame, objects, counted, np)
+            _credit_locals(frame, objects, counted, views)
         frame = frame.f_back
+    _credit_views(views, counted)
     if _DETACHING[0]:
         here = threading.get_ident()
         for thread, frame in list(sys._current_frames().items()):

@@ -249,3 +249,28 @@ def test_a_column_two_entries_keep_is_no_reader_of_either():
     df.iloc[0, 0] = 100.0
     assert _clean()
     assert stored.get("a")[1]["t"].iloc[0] == 0.0
+
+
+# The array a write is given is the caller's, though pandas' own frames
+# hold it while they write: written from, it is still left behind.
+GIVEN = {
+    "iloc_column": lambda df, v: df.iloc.__setitem__((slice(None), 0), v),
+    "loc_column": lambda df, v: df.loc.__setitem__((slice(None), "t"), v),
+    "iloc_all": lambda df, v: df.iloc.__setitem__((slice(None), slice(None)), v),
+    "loc_masked_part": lambda df, v: df.loc.__setitem__((df["t"] > 1, "t"), v[2:]),
+    "mask": lambda df, v: df.mask(df > 1, v, inplace=True),
+    "where": lambda df, v: df.where(df > 1, v, inplace=True),
+}
+#: The array a frame-shaped write is given: the table's own, whole.
+WHOLE = {"iloc_all", "mask", "where"}
+
+
+@pytest.mark.parametrize("write", list(GIVEN))
+def test_an_array_the_write_is_given_is_still_found(write):
+    stored = InMemoryBackend()
+    stored.set("k", pd.DataFrame({"t": [0.0, 1.0, 2.0, 3.0]}), {"execution_time": 1.0})
+    df = _served(stored)
+    v = df.to_numpy() if write in WHOLE else df["t"].to_numpy()
+    frame_sharing.forget_asked()
+    GIVEN[write](df, v)
+    assert frame_sharing.reads_memory_of(v, _left())

@@ -26,6 +26,14 @@ CASES = {
     "to_numpy": [FRAME, "y = df['t']", "df = df.copy()", "v = y.to_numpy()", "y.iloc[0] = 100", "print(v[0])"],
     "values": [FRAME, "y = df['t']", "df = df.copy()", "v = y.values", "y.iloc[0] = 100", "print(v[0])"],
     "frame_to_numpy": [FRAME, "v = df.to_numpy()", "df.iloc[0, 0] = 100", "print(v[0, 0])"],
+    # The array is also what the table is written from: pandas holds it
+    # while it writes, and it is still the notebook's.
+    "written_from_the_array": [
+        FRAME,
+        "v = df['t'].to_numpy()",
+        "df.iloc[:, 0] = v\ndf.iloc[0, 0] = 100",
+        "print(v[0])",
+    ],
     "array_in_its_own_stored_cell": [
         FRAME,
         "y = df['t']",

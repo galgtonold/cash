@@ -147,3 +147,22 @@ def test_without_exact_reference_counts_it_warns_once_that_it_cannot_check(tmp_p
     done = run_python(script, cwd=tmp_path)
     assert done.stderr.count("CACHE-SERVED-VIEW") == 1, done.stderr
     assert "cannot tell" in done.stderr, done.stderr
+
+
+@pytest.mark.parametrize(
+    ("take", "write"),
+    [
+        ("df['t'].to_numpy()", "df.iloc[:, 0] = v"),
+        ("df['t'].to_numpy()", "df.loc[:, 't'] = v"),
+        ("df.to_numpy()", "df.iloc[:, :] = v"),
+        ("df.to_numpy()", "df.mask(df > 1, v, inplace=True)"),
+    ],
+    ids=["iloc", "loc", "whole", "mask"],
+)
+def test_writing_from_the_array_itself_warns(tmp_path, take, write):
+    """The array the write is given is held by pandas while it writes, and
+    by the caller: it is still the caller's reader."""
+    done = _run(tmp_path, f"v = {take}\n{write}\ndf.iloc[0, 0] = 100.0\nvalue = v.ravel()[0]\n")
+    assert "computed 100.0" in done.stdout, done.stdout
+    assert "served 0.0" in done.stdout, done.stdout
+    assert "CACHE-SERVED-VIEW" in done.stderr, done.stderr
