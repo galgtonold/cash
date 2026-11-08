@@ -98,6 +98,7 @@ __all__ = [
     "cell_effects",
     "captured_call_receiver_names",
     "captured_call_receivers",
+    "changed_loop_targets",
     "classify_receivers",
     "comprehension_watch_candidates",
     "condition_mutations",
@@ -866,6 +867,22 @@ def loop_target_roots(
     in place is a change to what those hold (`_through_loop_targets`)."""
     roots = frozenset(_iterable_roots(node.iter, _LoopNames(is_module, namespace, resolve_source)))
     return {target: roots for target in _loop_targets(node)}
+
+
+def changed_loop_targets(
+    node: ast.For,
+    namespace: Mapping[str, Any] | None,
+    is_module: Callable[[str], bool],
+    resolve_source: SourceResolver | None = None,
+) -> frozenset[str]:
+    """The targets of the loop *node* its body changes in place, by the
+    rules :func:`control_structure_mutations` reads them with: ``est`` in
+    ``for est in estimators: est.fit(X, y)``, ``r`` in ``for r in rows:
+    r['tax'] = 1``. A target only rebound (``line = line.strip()``) is not
+    one."""
+    names = _LoopNames(is_module, namespace, resolve_source)
+    in_place, _rebound, called = _branch_mutations(_branches(node), names)
+    return frozenset((in_place | called) & _loop_targets(node))
 
 
 def statement_watch_candidates(

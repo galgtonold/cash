@@ -161,7 +161,8 @@ def test_a_pipelines_fit_still_moves_the_step_it_fits(cash_magics, tmp_path):
 def test_a_digest_not_taken_in_time_moves_the_estimators_on(cash_magics, tmp_path, monkeypatch):
     """Guard: with no time to digest them (a big forest), the estimators
     move on as before, and running the scoring cell again still shows what
-    plain Python shows."""
+    plain Python shows. The loop that fitted them stored them, so they have
+    a session digest too: it runs out of time as well."""
     monkeypatch.setattr(processor, "HOLDER_DIGEST_BUDGET_S", 0.0)
     monkeypatch.setattr(processor, "HOLDER_DIGEST_FLOOR_S", 0.0)
     monkeypatch.setattr(processor, "HOLDER_DIGEST_FACTOR", 0.0)
@@ -169,7 +170,12 @@ def test_a_digest_not_taken_in_time_moves_the_estimators_on(cash_magics, tmp_pat
     ns = cash_magics.shell.user_ns
     scores = ns["scores"]
 
-    before, after = _lineage_across(cash_magics, cells, cells[-3], "a")
+    def out_of_time(*args, **kwargs):
+        raise TimeoutError("past its budget")
+
+    with monkeypatch.context() as m:
+        m.setattr(processor.value_hash, "budgeted_hash", out_of_time)
+        before, after = _lineage_across(cash_magics, cells, cells[-3], "a")
     run_cash_cell(cash_magics, cells[-2], cells=cells)
     out = ns["out"]
     run_cash_cell(cash_magics, cells[SCORES], cells=cells)

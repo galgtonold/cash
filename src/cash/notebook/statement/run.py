@@ -116,6 +116,9 @@ class StatementRun:
     keep_displays: bool = False
     #: Extra outputs to capture and restore (the accumulator-loop fast path).
     force_outputs: set[str] | None = None
+    #: Of those, the names a loop takes the items it changes from
+    #: (``estimators`` in ``for est in estimators: est.fit(X, y)``).
+    walked: frozenset[str] = frozenset()
     is_last: bool = True
     #: For a loop run as one unit whose header cash already evaluated: the
     #: value that evaluation gave, which the loop iterates in place of
@@ -218,6 +221,9 @@ class StatementRun:
     #: Before it ran: the state of each class with state its method calls
     #: reach (``_class_states_around``), None when it calls none.
     class_state_before: dict[str, tuple | None] | None = None
+    #: Of those, the classes taken only in case the read after the run gives
+    #: up (``walked``): compared only then.
+    class_state_spare: frozenset[str] = frozenset()
     #: Before it ran: the class each of its top-level ``class`` statements
     #: rebinds, by name (``_classes_it_redefines``).
     classes_before: dict[str, type] = field(default_factory=dict)

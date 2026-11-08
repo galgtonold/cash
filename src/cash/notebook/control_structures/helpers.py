@@ -32,6 +32,7 @@ from ...analysis.annotations import (
 from ...analysis.ast_util import walk_tree
 from ...analysis.code_analyzer import CodeAnalyzer
 from ...analysis.mutation_effects import (
+    changed_loop_targets,
     condition_mutations,
     control_structure_mutations,
     is_module_name,
@@ -471,6 +472,34 @@ def target_roots(shell, statement_processor, node: ast.For) -> dict[str, frozens
         lambda name: is_module_name(name, user_ns),
         statement_processor.resolve_live_function_source,
     )
+
+
+def walked_names_it_changes(shell, statement_processor, node: ast.For) -> frozenset[str]:
+    """The variables the loop *node* takes the items from that its body
+    changes in place through its targets: ``estimators`` in ``for est in
+    estimators: est.fit(X, y)``. Empty when it changes no target, or when
+    an item comes out of anything but a variable of the notebook bound to a
+    list, a dict or a set (a module, a function, an object of a class, a
+    listing of files).
+
+    Run per iteration, each body statement changing a target runs every
+    time: a restore brings back what it binds, not the item in the list
+    (``MutationRouting._route_receivers``). Run as one unit, the loop
+    stores these names as its outputs, with the variables sharing their
+    objects, and a hit binds them all to the stored copies: new values, as
+    for any output, the items and the container alike."""
+    user_ns = shell.user_ns
+    resolve = statement_processor.resolve_live_function_source
+    changed = changed_loop_targets(node, user_ns, lambda name: is_module_name(name, user_ns), resolve)
+    if not changed:
+        return frozenset()
+    roots = target_roots(shell, statement_processor, node)
+    walked = frozenset().union(*(roots.get(target, frozenset()) for target in changed))
+    if not walked:
+        return frozenset()
+    if not all(name in user_ns and type(user_ns[name]) in (list, dict, set) for name in walked):
+        return frozenset()
+    return walked
 
 
 def _without_branches(stmts: list[ast.stmt]) -> list[ast.stmt]:
