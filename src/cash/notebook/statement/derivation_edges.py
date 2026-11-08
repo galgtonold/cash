@@ -806,7 +806,7 @@ def bump_derived_lineages(
     kept: Iterable[str] = (),
     code: str | None = None,
     before: dict[str, frozenset[str]] | None = None,
-    resolve: bool = True,
+    moved_on: Iterable[str] = (),
 ) -> set[str]:
     """Replay derivation bumps after outputs' lineages were written.
 
@@ -851,15 +851,20 @@ def bump_derived_lineages(
         and the bump each would have taken recorded as an alias of the
         lineage it keeps (`record_lineage_alias`), which a walk without
         *kept* -- the simulation's -- resolves to the same.
-    resolve:
-        Whether a bump is resolved by those aliases: the simulation's is;
-        the runtime's is not, as it knows by its own digests what it kept,
-        and a target its digests did not see unchanged moves on whatever an
-        earlier run of the statement, keyed alike, saw.
         ``pre.fit_transform(X)`` fits clones of the pipeline ``pre`` holds;
         moved on by ``pre``'s lineage, the pipeline came out of a session
         that fitted twice with another lineage than a Run All after a
         restart, which fitted once, and the fit missed.
+    moved_on:
+        Those the statement's digests saw change, before and after it: a
+        bump of one is not resolved by an alias an earlier run of the
+        statement, keyed alike, left. Every other bump is, here as in the
+        simulation, so a run that took no digest -- its share check out of
+        time, its holders past the digest budget -- moves a target as the
+        run that digested it did. Else ``cv_res = pd.DataFrame(
+        grid_search.cv_results_)`` moved the pipelines the search holds on
+        the Run All whose share check gave up, though the first run had
+        seen them unchanged, and every cell below re-ran upstream.
     code:
         The statement's text. An output it changed without naming it -- a
         global a function it calls changes (``bump()`` doing
@@ -875,6 +880,7 @@ def bump_derived_lineages(
         return bumped
     skip = set(skip)
     kept = set(kept)
+    moved_on = set(moved_on)
 
     visited: set[str] = set()
     # Seed the walk with what the statement changed in place: an output it
@@ -930,7 +936,7 @@ def bump_derived_lineages(
                 if old:
                     record_lineage_alias(new_hash, old)
                 continue
-            if resolve:
+            if target not in moved_on:
                 new_hash = resolve_lineage_alias(new_hash)
             if new_hash == old:
                 continue

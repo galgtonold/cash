@@ -3744,8 +3744,9 @@ class StatementProcessor:
             code=run.code,
             kept=run.holders_unchanged,
             before=before,
-            # What this run's digests saw, not an alias an earlier run left.
-            resolve=False,
+            # What this run's digests saw change moves on, whatever alias an
+            # earlier run left; the rest as the simulation moves it.
+            moved_on=run.holders_changed,
         )
         self._report_saved(run, saved_metadata)
         self._tell_past_budget(run, execution.cost or execution.wall_time or 0.0)
@@ -5041,13 +5042,15 @@ class StatementProcessor:
         for name in run.holders_unchanged & set(holders):
             keep_held_lineage(holders[name], cache_key)
         for name, before in holders.items():
-            # One this run did not see unchanged moves on, whatever an
-            # earlier run of the statement saw (a kept alias).
+            # One this run saw change moves on, whatever an earlier run of
+            # the statement saw (a kept alias). One it has no digest of moves
+            # as the simulation moves it, by the alias: else whether it moved
+            # turned on whether the digests finished in time.
             apply_held_var(
                 self.tracking_state,
                 name,
                 self.shell.user_ns.get(name),
-                held_lineage(before, cache_key, resolve=name in run.holders_unchanged),
+                held_lineage(before, cache_key, resolve=name not in run.holders_changed),
                 compute_hash=self.compute_hash,
             )
         return set(holders)
@@ -5162,8 +5165,10 @@ class StatementProcessor:
         way within `_holder_digest_budget`; or the session digest of the
         content their lineage was recorded with. A lineage standing in for a
         big value's content, an identity digest, or a digest not finished in
-        time says nothing: the holder moves on."""
-        unchanged = self._digested_unchanged(run, holders)
+        time says nothing: the holder moves on, as the simulation moves it.
+
+        Those a digest saw change go to ``run.holders_changed``."""
+        unchanged, changed = self._digested_unchanged(run, holders)
         session = self.tracking_state.current_session_hashes
         lineage = self.tracking_state.variable_lineage
         for name, value in holders.items():
@@ -5176,16 +5181,25 @@ class StatementProcessor:
                 after = value_hash.budgeted_hash(value, self.compute_hash)
             except Exception:  # noqa: BLE001 - a value that cannot be read moves on
                 continue
-            if after == before and not value_hash.is_identity_fallback_hash(value, after):
+            if after is None or value_hash.is_identity_fallback_hash(value, after):
+                continue
+            if after == before:
                 unchanged.add(name)
+                changed.discard(name)
+            else:
+                changed.add(name)
+        run.holders_changed = changed - unchanged
         return unchanged
 
-    def _digested_unchanged(self, run: StatementRun, holders: dict[str, Any]) -> set[str]:
-        """The *holders* whose in-place-edit digest is the one taken before
-        *run* executed (`_holder_digests`), within the same budget."""
+    def _digested_unchanged(self, run: StatementRun, holders: dict[str, Any]) -> tuple[set[str], set[str]]:
+        """``(unchanged, changed)``: the *holders* whose in-place-edit digest
+        is, or is not, the one taken before *run* executed
+        (`_holder_digests`), within the same budget. One not digested both
+        times is in neither."""
         if not run.holder_digests or self.compute_hash is None:
-            return set()
+            return set(), set()
         unchanged: set[str] = set()
+        changed: set[str] = set()
         by_object: dict[int, str | None] = {}
         deadline = _perf_counter() + run.holder_digest_budget
         for name in sorted(holders):
@@ -5195,9 +5209,12 @@ class StatementProcessor:
             value = holders[name]
             if id(value) not in by_object:
                 by_object[id(value)] = _bounded_fingerprint(value, self.compute_hash, deadline - _perf_counter())
-            if by_object[id(value)] == before:
+            after = by_object[id(value)]
+            if after == before:
                 unchanged.add(name)
-        return unchanged
+            elif after is not None:
+                changed.add(name)
+        return unchanged, changed
 
     def _take_holders(self, run: StatementRun, captured_vars: dict[str, Any], holders: dict[str, Any]) -> str | None:
         """Store *holders*, the variables holding an output's object too, with
