@@ -168,6 +168,7 @@ from ...tracking.file_tracker import FileAccessTracker
 from ...tracking.function_tracker import FunctionTracker
 from ...tracking.randomness import (
     advanced_rng_lineage,
+    capture_rng_state,
     carrier_positions,
     drawn_rng_vars,
     hidden_lineage_writes,
@@ -1160,6 +1161,32 @@ class StatementProcessor:
         """Record a seed no statement set, before the cell's upstream check
         (see :meth:`StatementRandomness.adopt_unseen_seeds`)."""
         self._randomness.adopt_unseen_seeds()
+
+    def settle_served_plot_run(self, statements: list[tuple[str, int, dict | None, frozenset[str]]]) -> bool:
+        """Account for each statement of a served plot run, in order
+        (`settle_served_plot_statement`), given as ``(code, occurrence,
+        rng_state, reseeded)``. False when one cannot be: the random streams,
+        the RNG variables' lineages and the seed ledger are then put back as
+        they stood, and the plot run is to run instead."""
+        prefix = rng_virtual_var("")
+        lineage = self.tracking_state.variable_lineage
+        streams = capture_rng_state()
+        lineages = {var: value for var, value in lineage.items() if var.startswith(prefix)}
+        epochs = dict(self._randomness.seed_epochs)
+        try:
+            for code, occurrence, rng_state, reseeded in statements:
+                self.settle_served_plot_statement(code, occurrence, rng_state, reseeded)
+        except Exception:
+            logger.warning("cash could not account for a plot shown from the cache; it is drawn again", exc_info=True)
+            restore_rng_state(streams)
+            for var in [var for var in lineage if var.startswith(prefix) and var not in lineages]:
+                self.tracking_state.lineage.discard(var)
+            for var, value in lineages.items():
+                self.tracking_state.lineage.record(var, value)
+            self._randomness.seed_epochs.clear()
+            self._randomness.seed_epochs.update(epochs)
+            return False
+        return True
 
     def settle_served_plot_statement(
         self, code: str, occurrence_index: int, rng_state: dict | None, reseeded: frozenset[str] | set[str]

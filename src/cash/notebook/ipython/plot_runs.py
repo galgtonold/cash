@@ -130,6 +130,10 @@ class PlotRuns:
         self._processor = statement_processor
         self._checker = upstream_checker
         self._open: _Open | None = None
+        #: What a served plot run still does once it takes its place
+        #: (`take_place`): the outputs shown after the cell, and the names
+        #: its run bound, to drop.
+        self._pending: tuple[list | None, frozenset[str]] | None = None
         self._cell: Any = None
         self._parsed: dict[str, list[tuple[str, ast.stmt | None]]] = {}
 
@@ -458,26 +462,40 @@ class PlotRuns:
         echo = payload.get("echo")
         if echo is not None:
             served[last].metrics[ECHO_FIELD] = StoredEcho(echo[0], echo[1])
-        if payload.get("flush"):
-            self._show_after_cell(payload["flush"])
+        self._pending = (payload.get("flush") or None, bound)
+        logger.debug("%s serving %d statement(s) from %s", _LOG, len(shape), key[:24])
+        return served
+
+    def take_place(self, served: dict[int, ServedStatement], texts: list[tuple[str, int]]) -> bool:
+        """The plot run *served* (from `serve`, its statements' code and
+        occurrence in *texts*, in order) takes its place, before any of it
+        is shown: the random streams and memos its run changed are left as
+        that run left them, the RNG ledgers move on as after it
+        (`settle_served_plot_run`), what it showed after the cell is queued
+        and the names it bound are dropped. False when that cannot be done:
+        nothing is changed then, and its statements are to run."""
+        pending, self._pending = self._pending, None
+        items = [served[k] for k in sorted(served)]
+        if pending is None or len(items) != len(texts):
+            return False
+        settled = self._processor.settle_served_plot_run(
+            [(code, occ, item.rng_state, item.rng_reseeded) for (code, occ), item in zip(texts, items, strict=True)]
+        )
+        if not settled:
+            return False
+        for item in items:
+            for put in item.memo_puts:
+                put()
+        flush, bound = pending
+        if flush:
+            self._show_after_cell(flush)
         user_ns = self.shell.user_ns
         for name in bound - _HISTORY_NAMES:
             # Not drawn this time: what a run bound is gone, as after a restart.
             user_ns.pop(name, None)
             self._processor.forget_variable(name)
-        logger.debug("%s served %d statement(s) from %s", _LOG, len(shape), key[:24])
-        return served
-
-    def settle(self, item: ServedStatement, code: str, occurrence: int) -> None:
-        """The served statement *code* (*item*) takes its place: the memos
-        and random streams its run changed are left as that run left them,
-        and the RNG ledgers move on as after it (`settle_served_plot_statement`)."""
-        for put in item.memo_puts:
-            put()
-        try:
-            self._processor.settle_served_plot_statement(code, occurrence, item.rng_state, item.rng_reseeded)
-        except Exception:
-            logger.debug("%s could not account for the served statement", _LOG, exc_info=True)
+        logger.debug("%s served %d statement(s)", _LOG, len(items))
+        return True
 
     def _rng_moved_on(self, reads: dict[str, str]) -> str | None:
         """Why the random streams a kept plot run drew from (*reads*, the
