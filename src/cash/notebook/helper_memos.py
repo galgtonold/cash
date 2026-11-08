@@ -110,8 +110,15 @@ _digests: weakref.WeakKeyDictionary[Any, tuple[list[Any], list[str] | None]] = w
 #: ``memo -> {id(answer): (answer, digest)}`` for the answers that can be
 #: changed in place, as the last statement that called the memo left them:
 #: what tells a statement that changed one in place (``f(1).append(5)``)
-#: from one that only read it.
-_answers_seen: weakref.WeakKeyDictionary[Any, dict[int, tuple[Any, str | bytes]]] = weakref.WeakKeyDictionary()
+#: from one that only read it. An answer nothing can change in place
+#: (`_fixed`) is there with `_FIXED` for its digest: told so once, not
+#: walked again before every statement (a ``subsegments(N)`` memo's tuple
+#: of 100,000 pairs).
+_answers_seen: weakref.WeakKeyDictionary[Any, dict[int, tuple[Any, Any]]] = weakref.WeakKeyDictionary()
+
+#: The digest `_answers_seen` gives an answer `_fixed` holds: it equals no
+#: digest, and the answer, the very object kept with it, stays fixed.
+_FIXED = object()
 
 #: The types whose values nothing can change in place.
 _FIXED_TYPES = (int, float, complex, str, bytes, bool, type(None), range)
@@ -540,7 +547,8 @@ def _item_digests(memo: Any) -> list[str] | None:
         known is not None
         and len(known[0]) == len(flat)
         and all(a is b for a, b in zip(known[0], flat))
-        and all(_fixed(k, key=True) and _fixed(v) for k, v in items)
+        and all(_fixed(k, key=True) for k, _ in items)
+        and _answers_fixed(memo, items)
     ):
         return known[1]
     try:
@@ -742,9 +750,10 @@ def _changed_in_place(
     memo held before a run that added others)."""
     if seen is None:
         seen = _answers_seen.get(memo, {})
-    now: dict[int, tuple[Any, str | bytes]] = {}
+    now: dict[int, tuple[Any, Any]] = {}
     for _, answer in items:
-        if _fixed(answer):
+        if _fixed_as_seen(answer, seen):
+            now[id(answer)] = (answer, _FIXED)
             continue
         try:
             now[id(answer)] = (answer, _answer_digest(answer))
@@ -752,7 +761,7 @@ def _changed_in_place(
             continue
     verdict: bool | None = False
     for _, answer in items if judged is None else judged:
-        if _fixed(answer):
+        if _fixed_as_seen(answer, now):
             continue
         current = now.get(id(answer))
         if current is None and judged is not None:
@@ -767,6 +776,22 @@ def _changed_in_place(
             verdict = True
     _answers_seen[memo] = now
     return verdict
+
+
+def _fixed_as_seen(answer: Any, seen: Mapping[int, tuple[Any, Any]]) -> bool:
+    """`_fixed` of *answer*, from *seen* (`_answers_seen`) where it holds the
+    very object as fixed: a value nothing can change in place stays so."""
+    known = seen.get(id(answer))
+    if known is not None and known[0] is answer:
+        return known[1] is _FIXED
+    return _fixed(answer)
+
+
+def _answers_fixed(memo: Any, items: list[tuple[Any, Any]]) -> bool:
+    """Whether nothing can change any answer of *items*, pairs *memo*
+    holds, in place (`_fixed_as_seen`)."""
+    seen = _answers_seen.get(memo, {})
+    return all(_fixed_as_seen(answer, seen) for _, answer in items)
 
 
 def _held(memo: Any) -> tuple[frozenset[tuple[int, int]], list[tuple[Any, Any]], Any] | None:
@@ -794,14 +819,15 @@ def _seen_now(memo: Any, items: list[tuple[Any, Any]]) -> dict[int, tuple[Any, s
     stored ("It filled the helper memo ...")."""
     seen = _answers_seen.get(memo)
     missing = [
-        answer
-        for _, answer in items
-        if not _fixed(answer) and ((known := (seen or {}).get(id(answer))) is None or known[0] is not answer)
+        answer for _, answer in items if (known := (seen or {}).get(id(answer))) is None or known[0] is not answer
     ]
     if not missing:
         return seen
     taken = dict(seen or {})
     for answer in missing:
+        if _fixed(answer):
+            taken[id(answer)] = (answer, _FIXED)
+            continue
         try:
             taken[id(answer)] = (answer, _answer_digest(answer))
         except Exception:  # noqa: BLE001 - an answer with no digest: left unseen
@@ -928,7 +954,7 @@ def used(
                 # is called again where the memo lacks a key (`_refill`),
                 # and served where the memo holds it already.
                 calls = _calls_of(memo, items)
-                if calls is not None and all(_fixed(answer) for _, answer in items) and _pure(memo):
+                if calls is not None and _answers_fixed(memo, items) and _pure(memo):
                     out.append({"where": where, "items": _item_digests(memo), "pure": True, "calls": calls})
                     continue
             if not _unbounded(memo):
@@ -977,7 +1003,7 @@ def used(
             why = f"It changed an answer the helper memo {label} holds in place"
         elif info.misses != misses:
             calls = _calls_of(memo, items)
-            if calls is not None and all(_fixed(answer) for _, answer in items) and _pure(memo):
+            if calls is not None and _answers_fixed(memo, items) and _pure(memo):
                 out.append({"where": where, "items": _item_digests(memo), "pure": True, "calls": calls})
                 continue
             why = f"It filled the helper memo {label}: served, the memo would stay as it was"
@@ -994,7 +1020,7 @@ def used(
                 # the memo holds, as the share check refuses an output
                 # holding one the memo held when it ran. A call cash
                 # caches is not walked so, and keeps to fixed answers.
-                fixed = all(_fixed(answer) for _, answer in items)
+                fixed = _answers_fixed(memo, items)
                 strict = not fixed and changes is not None and calls is not None and _calls_only_pure(memo)
                 pure = calls is not None and ((fixed and _pure(memo)) or strict)
                 record = {"where": where, "items": digests, "pure": pure, "calls": calls if pure else None}
@@ -1189,7 +1215,8 @@ def _digests_of(memo: Any, items: list[tuple[Any, Any]]) -> list[str]:
         and known[1] is not None
         and len(known[0]) == len(flat)
         and all(a is b for a, b in zip(known[0], flat))
-        and all(_fixed(k, key=True) and _fixed(v) for k, v in items)
+        and all(_fixed(k, key=True) for k, _ in items)
+        and _answers_fixed(memo, items)
     ):
         return known[1]
     return sorted({_pair_digest(key, answer) for key, answer in items})
