@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import pytest
 
+from cash.notebook import call_effects
+from cash.notebook.statement import processor
 from cash.value_hash import compute_hash
 from tests._cell_driver import run_cash_cell
 
@@ -59,7 +61,15 @@ def touch(g):
 
 
 @pytest.fixture
-def magics(cash_magics):
+def magics(cash_magics, monkeypatch):
+    # The statement takes the call's digest only while no other thread could
+    # change the value in between (`trace_recorder.other_thread_alive`, asked
+    # as the call stores and as the statement ends). A thread an earlier test
+    # left running can start one while this test runs, which the suite's
+    # host threads do not cover: then the statement rightly read the value
+    # again. What this test pins is the case with no other thread.
+    for module in (call_effects, processor):
+        monkeypatch.setattr(module, "other_thread_alive", lambda _ns: False)
     run_cash_cell(cash_magics, SETUP)
     PICKLED.clear()
     return cash_magics
