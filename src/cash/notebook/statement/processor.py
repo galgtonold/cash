@@ -3177,6 +3177,12 @@ class StatementProcessor:
                 reason = input_change_reason(self.tracking_state, run.inputs, run.outputs)
             if reason is None:
                 reason = random_state_change_reason(self.tracking_state, run.code)
+            if reason is None:
+                # This very key ran before and left no entry on disk: that is
+                # why, whatever a version stored since by another cell of the
+                # same text was built from (``voting_clf.fit(X_train,
+                # y_train)`` in c10, kept in memory only, and in c47 on MNIST).
+                reason = self._unstored.reason(run.cache_key)
             if reason is None and (run.pass_slot is None or has_marker(run.code)):
                 # A statement of a pass carries the pass in its text, and so
                 # in its versions' slot; a loop run as one unit in a pass does not.
