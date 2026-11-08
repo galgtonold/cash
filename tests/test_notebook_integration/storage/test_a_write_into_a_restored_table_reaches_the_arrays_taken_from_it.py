@@ -44,7 +44,9 @@ CASES = {
     ],
     # A fitted model keeping a read-only view of its labels (``model._y``),
     # with numpy in place of the model: the labels are their own Series,
-    # built in the slow cell that takes the view.
+    # built in the slow cell that takes the view. cash runs that cell again
+    # rather than restore a holder sharing memory with ``y``; this pins that
+    # the restart still matches a plain run.
     "labels_held_by_an_object": [
         "y = pd.Series([0.0, 1.0, 2.0])\nheld = (time.sleep(0.3), {'_y': y.to_numpy()})[1]",
         "y.iloc[0] = 100",
