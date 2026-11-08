@@ -27,10 +27,16 @@ class Graphish:
     """An object of a class of its own holding dicts, as a networkx graph
     does (no array: a result with arrays its statement only binds is not
     digested by its call, `CallEntries._too_big_to_digest`), counted each
-    time it is pickled."""
+    time it is pickled.
+
+    Its nodes are named, not numbered: without the C extension a digest
+    looks for sets by the bytes a set is pickled as (`stored_pickle._Sink`),
+    and node 38033 (``0x9491``) is pickled as those bytes. Its digest is
+    then taken over a second pickle with sets sorted, by design, in the
+    call's own store, where this test counts what the statement adds."""
 
     def __init__(self) -> None:
-        self.adj = {i: {i + 1: {"weight": 1.0}} for i in range(100_000)}
+        self.adj = {f"n{i}": {f"n{i + 1}": {"weight": 1.0}} for i in range(100_000)}
         self.tags = {"a": 1}
 
     def __reduce_ex__(self, protocol):
