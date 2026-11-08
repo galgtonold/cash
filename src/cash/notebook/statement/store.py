@@ -1452,7 +1452,11 @@ class StatementStore:
             user_ns = self.shell.user_ns
             held = {"variables": variables, ECHO_FIELD: payload.get(ECHO_FIELD)}
             try:
-                held = with_anchor_refs(held, {name: user_ns[name] for name in run.anchors})
+                held = with_anchor_refs(
+                    held,
+                    {name: user_ns[name] for name in run.anchors},
+                    homes=[name for name in run.anchors if name in run.inputs],
+                )
             except AnchorUnrebuilt as exc:
                 cause = exc.__cause__ or exc
                 raise _AnchorsUnstorable(f"{type(cause).__name__}: {cause}", [exc.name] if exc.name else ()) from cause

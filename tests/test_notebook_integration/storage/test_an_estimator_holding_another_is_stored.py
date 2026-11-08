@@ -10,6 +10,11 @@ None was stored, so the search ran again on every Run All and after a
 restart. A restored object must still be the one the notebook's variables
 name, as in plain Python: the search's pipeline holds ``knn_transformer``
 itself, and a later change to ``knn_reg`` shows through the transformer.
+
+The regressor searches by brute force here: a fitted KD or ball tree holds
+its training data through a C-level view no reference count names, and the
+share check still refuses an output holding one (the default ``auto``
+picks a tree for few features, as on E6).
 """
 
 from __future__ import annotations
@@ -79,7 +84,7 @@ CELLS = [
     CLASSES,
     PREPROCESSING,
     "from sklearn.neighbors import KNeighborsRegressor\n"
-    "knn_reg = KNeighborsRegressor(n_neighbors=3, weights='distance')\n"
+    "knn_reg = KNeighborsRegressor(n_neighbors=3, weights='distance', algorithm='brute')\n"
     "knn_transformer = FeatureFromRegressor(knn_reg)\n"
     "geo_feats = knn_transformer.fit_transform(geo_features, housing_labels)",
     "transformers = [(name, clone(transformer), columns) for name, transformer, columns in preprocessing.transformers]\n"
@@ -217,3 +222,48 @@ def test_a_write_to_the_labels_reaches_the_restored_search(nb_runner):
     assert "svr" not in _fits(nb_runner), _fits(nb_runner)
     shown = [line for line in nb_runner.get_output(len(cells)).splitlines() if line.startswith("pred")]
     assert shown == expected, (shown, expected)
+
+
+BOX = [
+    "import cash\n%cash_on",
+    MARK,
+    "import numpy as np, time\n"
+    "class Box:\n"
+    "    def __init__(self, arr):\n"
+    "        mark('box')\n"
+    "        self.v = arr[2:]\n"
+    "        self.v.flags.writeable = False\n"
+    f"        time.sleep({ABOVE_PERSISTENCE_FLOOR_S})",
+    "a = np.arange(10.0)\nb = a",
+    "m = Box(b)",
+    "b[3] = 99.0",
+    "print('seen', m.v[1])",
+]
+
+
+@pytest.mark.fresh_kernel
+def test_the_view_is_built_on_the_input_not_on_another_name_for_its_data(nb_runner):
+    """``m`` holds a read-only view of ``b``'s data, which ``a`` names too
+    when the entry is stored. Inserted above ``m = Box(b)``, ``a =
+    np.arange(10.0)`` binds ``a`` to equal bytes elsewhere and leaves the
+    key as it was: the restored view must sit on ``b``, the input, so the
+    write to ``b`` reaches ``m`` as in plain Python."""
+    cells = BOX[:4] + ["a = np.arange(10.0)"] + BOX[4:]
+    ns: dict = {}
+    with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(io.StringIO()) as out:
+        for cell in cells[1:]:
+            exec(cell.replace("os.path.abspath('fits.log')", repr(os.path.join(tmp, "fits.log"))), ns)
+    expected = [line for line in out.getvalue().splitlines() if line.startswith("seen")]
+    nb_runner.create_notebook(BOX)
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    nb_runner.settle_writes()
+    nb_runner.insert_cell(5, "a = np.arange(10.0)")
+    nb_runner.restart()
+    _clear(nb_runner)
+
+    nb_runner.run_all()
+
+    assert _fits(nb_runner) == [], _fits(nb_runner)  # served from the entry: the check is not vacuous
+    shown = [line for line in nb_runner.get_output(len(cells)).splitlines() if line.startswith("seen")]
+    assert shown == expected == ["seen 99.0"], (shown, expected)

@@ -4813,7 +4813,7 @@ class StatementProcessor:
         user_ns = self.shell.user_ns
         names = set(homes.values())
         for name in sorted(names):
-            if name in run.outputs or name in holders or name not in user_ns:
+            if name in run.outputs or name in holders or name not in run.inputs or name not in user_ns:
                 return (
                     f"Live-alias object: an output holds a view of '{name}', which the statement "
                     "changed; re-derived from live base, not cached."

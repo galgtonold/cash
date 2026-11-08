@@ -336,13 +336,23 @@ def _is_alias(value: Any, user_ns: dict, cash_held: Iterable[Any], inputs: Itera
 
 
 def _homed(value: Any, user_ns: dict, cash_held: Iterable[Any], inputs: Iterable[str], homes: dict[int, str]) -> bool:
-    """Whether each live alias inside *value* is a numpy view of a
-    variable's data (`memory_home`), adding those variables to *homes*:
-    the views a restore can build on the live data again."""
+    """Whether each live alias inside *value* is a numpy view of the data
+    of one of the statement's *inputs* (`memory_home`), adding those inputs
+    to *homes*: the views a restore can build on the live data again. An
+    input, as the key holds its lineage: another variable naming the same
+    data when the entry was stored (``a`` after ``b = a``, the frame ``y =
+    df['t']`` came from) may be bound to other data on a later run whose
+    key is the same, and the view built on it would not be the one the
+    statement made."""
     np = _imported("numpy")
     if np is None or _aliases_in(value, np, _pandas_refholder_types())[1]:
         return False  # a ref-holder
-    variables = {name: obj for name, obj in user_ns.items() if not name.startswith("_") and data_arrays(obj)}
+    inputs = set(inputs)
+    variables = {
+        name: user_ns[name]
+        for name in sorted(inputs)
+        if name in user_ns and not name.startswith("_") and data_arrays(user_ns[name])
+    }
     found: dict[int, str] = {}
     others: list[Any] = []
     for obj, family in borrowers_in([value]):

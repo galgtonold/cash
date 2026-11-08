@@ -127,18 +127,24 @@ def _round_trip(value: Any, name_of: Callable[[Any], Any], load: Callable[[Any],
         raise AnchorUnrebuilt(loaded[-1] if loaded else None) from exc
 
 
-def with_anchor_refs(value: Any, anchors: Mapping[str, Any]) -> Any:
+def with_anchor_refs(value: Any, anchors: Mapping[str, Any], homes: Iterable[str] = ()) -> Any:
     """A copy of *value* with an `AnchorRef` in each place it holds one of
     the objects of *anchors* (``{name: object}``), and the `MemoryHome` of
-    each numpy view it holds that sits in an anchor's data."""
+    each numpy view it holds that sits in the data of an anchor *homes*
+    names: the statement's inputs, whose lineage its key holds. One view
+    held in two places is one `MemoryHome`, so it comes back as one."""
     by_id = {id(obj): name for name, obj in anchors.items()}
-    homes = {name: obj for name, obj in anchors.items() if data_arrays(obj)}
+    homes = set(homes)
+    data = {name: obj for name, obj in anchors.items() if name in homes and data_arrays(obj)}
     ndarray = getattr(sys.modules.get("numpy"), "ndarray", None)
+    placed: dict[int, Any] = {}
 
     def name_of(obj: Any) -> Any:
         name = by_id.get(id(obj))
-        if name is None and homes and type(obj) is ndarray and obj.base is not None:
-            return memory_home(obj, homes)
+        if name is None and data and type(obj) is ndarray and obj.base is not None:
+            if id(obj) not in placed:
+                placed[id(obj)] = memory_home(obj, data)
+            return placed[id(obj)]
         return name
 
     def load(pid: Any) -> Any:
@@ -230,11 +236,16 @@ def resolve_anchors(
             return obj
         return obj.name if type(obj) is AnchorRef else None
 
+    built: dict[int, Any] = {}
+
     def load(pid: Any) -> Any:
         if type(pid) is MemoryHome:
             if pid.name not in live:
                 raise pickle.UnpicklingError(f"unknown anchor {pid.name!r}")
-            return rebuild_view(pid, live[pid.name])  # KeyError: laid out otherwise, or changed
+            # One view held in two places is one `MemoryHome` object: built once.
+            if id(pid) not in built:
+                built[id(pid)] = (pid, rebuild_view(pid, live[pid.name]))  # KeyError: laid out otherwise, or changed
+            return built[id(pid)][1]
         if pid not in live:
             raise pickle.UnpicklingError(f"unknown anchor {pid!r}")
         return live[pid]

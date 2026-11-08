@@ -42,7 +42,7 @@ def _read_only_view(series, stop=None):
 def test_a_restored_view_sits_on_the_live_labels():
     y = _labels()
     model = types.SimpleNamespace(y_=_read_only_view(y, 6))
-    stored = pickle.loads(pickle.dumps(with_anchor_refs({"model": model}, {"y": y})))
+    stored = pickle.loads(pickle.dumps(with_anchor_refs({"model": model}, {"y": y}, homes={"y"})))
 
     restored = resolve_anchors(stored, {"y": MEMORY_HOME}, {"y": y})["model"]
 
@@ -54,7 +54,9 @@ def test_a_restored_view_sits_on_the_live_labels():
 
 def test_a_restore_after_a_restart_sits_on_the_labels_built_again():
     before = _labels()
-    stored = pickle.dumps(with_anchor_refs({"model": types.SimpleNamespace(y_=_read_only_view(before))}, {"y": before}))
+    stored = pickle.dumps(
+        with_anchor_refs({"model": types.SimpleNamespace(y_=_read_only_view(before))}, {"y": before}, homes={"y"})
+    )
     y = _labels()  # what the notebook builds again
 
     restored = resolve_anchors(pickle.loads(stored), {"y": MEMORY_HOME}, {"y": y})["model"]
@@ -64,7 +66,7 @@ def test_a_restore_after_a_restart_sits_on_the_labels_built_again():
 
 def test_labels_with_other_bytes_are_a_miss():
     y = _labels()
-    stored = pickle.dumps(with_anchor_refs({"m": types.SimpleNamespace(y_=_read_only_view(y))}, {"y": y}))
+    stored = pickle.dumps(with_anchor_refs({"m": types.SimpleNamespace(y_=_read_only_view(y))}, {"y": y}, homes={"y"}))
 
     with pytest.raises(KeyError):
         resolve_anchors(pickle.loads(stored), {"y": MEMORY_HOME}, {"y": _labels() + 1})
@@ -72,7 +74,7 @@ def test_labels_with_other_bytes_are_a_miss():
 
 def test_labels_that_are_gone_are_a_miss():
     y = _labels()
-    stored = pickle.dumps(with_anchor_refs({"m": types.SimpleNamespace(y_=_read_only_view(y))}, {"y": y}))
+    stored = pickle.dumps(with_anchor_refs({"m": types.SimpleNamespace(y_=_read_only_view(y))}, {"y": y}, homes={"y"}))
 
     with pytest.raises(KeyError):
         resolve_anchors(pickle.loads(stored), {"y": MEMORY_HOME}, {})
@@ -98,21 +100,64 @@ def test_a_home_rebuilds_a_strided_view():
     assert np.shares_memory(rebuilt, a)
 
 
-def _refusal(outputs, user_ns, homes):
+def _refusal(outputs, user_ns, homes, inputs=None):
+    if inputs is None:
+        inputs = set(user_ns) - set(outputs)
     return unrestorable_output_reason(
-        set(outputs), {name: user_ns[name] for name in outputs}, user_ns, holders={}, homes=homes
+        set(outputs), {name: user_ns[name] for name in outputs}, user_ns, holders={}, inputs=inputs, homes=homes
     )
 
 
-def test_an_object_holding_a_read_only_view_is_no_live_alias():
+def test_an_object_holding_a_read_only_view_is_stored():
     user_ns = {"y": _labels()}
     user_ns["model"] = types.SimpleNamespace(y_=_read_only_view(user_ns["y"]))
     homes: dict[int, str] = {}
 
     reason = _refusal(["model"], user_ns, homes)
 
-    assert reason is None or "Live-alias" not in reason, reason
+    assert reason is None, reason
     assert set(homes.values()) == {"y"}
+
+
+def test_a_view_of_data_no_input_names_still_refuses():
+    """``y = df['t']`` shares ``df``'s data, and ``model`` was fitted on
+    ``y``: the view's home is ``y``, the input, never ``df``, which a later
+    run may bind to a copy under the same key. With only ``df`` holding
+    that data among the variables, there is no home and the model is
+    refused as before."""
+    df = pd.DataFrame({"x": np.arange(10.0), "t": np.arange(10.0) * 2})
+    y = df["t"]
+    user_ns = {"df": df, "y": y, "model": types.SimpleNamespace(y_=_read_only_view(y))}
+    homes: dict[int, str] = {}
+
+    assert _refusal(["model"], user_ns, homes, inputs={"y"}) is None
+    assert set(homes.values()) == {"y"}
+
+    homes.clear()
+    reason = _refusal(["model"], {"df": df, "model": user_ns["model"]}, homes, inputs=set())
+    assert reason is not None and "Live-alias" in reason, reason
+
+
+def test_a_view_held_twice_comes_back_as_one_object():
+    y = _labels()
+    view = _read_only_view(y, 6)
+    m = types.SimpleNamespace(a=view, b=view, c=_read_only_view(y, 6))
+    stored = pickle.loads(pickle.dumps(with_anchor_refs({"m": m}, {"y": y}, homes={"y"})))
+
+    restored = resolve_anchors(stored, {"y": MEMORY_HOME}, {"y": y})["m"]
+
+    assert restored.a is restored.b
+    assert restored.c is not restored.a  # another view of the same data, as in plain Python
+    assert np.shares_memory(restored.a, y.to_numpy())
+
+
+def test_a_view_of_an_anchor_that_is_no_home_is_stored_as_a_copy():
+    y = _labels()
+    stored = with_anchor_refs({"m": types.SimpleNamespace(y_=_read_only_view(y))}, {"y": y})
+
+    restored = resolve_anchors(stored, {"y": MEMORY_HOME}, {"y": y})["m"]
+
+    assert not np.shares_memory(restored.y_, y.to_numpy())
 
 
 @pytest.mark.parametrize(
