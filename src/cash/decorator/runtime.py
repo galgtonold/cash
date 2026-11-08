@@ -967,6 +967,9 @@ class CallRunner:
     def _run_uncached(self, spec: CachedFunction, call: Call, why: MissReason) -> Any:
         """Run a call that has no key, log it as a miss, and hand back its result."""
         note_unentered_body(spec.name)
+        # Nothing is stored, so nothing is written back: findings of an
+        # argument changed in place stand as they are.
+        self._purity.surface_held_mutations(spec.name)
         result = spec.func(*call.args, **call.kwargs)
         self._calls.log(
             spec.name,
@@ -1483,7 +1486,8 @@ class CallRunner:
         arguments in place and every one of them can be written back by a
         hit (`arguments_before`): the result is then stored with them, and
         the change no longer refuses the store; the warning says what a hit
-        does instead. None otherwise, and the refusal stands."""
+        does instead once it is stored (`CallRunner.finish_miss`). None
+        otherwise, and the refusal stands."""
         observer = run.observer
         mutated = observer.mutated_args if observer is not None else None
         if not mutated:
@@ -1517,8 +1521,6 @@ class CallRunner:
                 return None
         observer.mutated_args = None
         observer.forget("argument mutation")
-        for name in left:
-            observer.record(rewrite_in_place.WRITTEN_BACK, name)
         return left
 
     def _arguments_to_write(
@@ -1710,7 +1712,6 @@ class CallRunner:
                 func_name, *(call.checked or (args, kwargs)), call.call_args_hash, run.observer
             )
         args_left = self.arguments_left(spec, run, call.checked or (args, kwargs))
-        self._purity.report_observed_effects(func_name, run.observer)
         self._files.credit_remembered_reads(func_name, run.tracker, args, kwargs)
         self._files.warn_unrecorded_reads(func_name, run.tracker)
         auto_file_deps = snapshot_tracked_deps(run.tracker, func.__module__)
@@ -1746,6 +1747,13 @@ class CallRunner:
             # caller's next draw repeats what this call drew. One only a
             # closure holds cannot be found again by a later process.
             refusal = "it drew from a random generator a cached result cannot advance"
+        if refusal is None and args_left and run.observer is not None:
+            # Stored with the state it left them in: the warning says what
+            # a hit does. Said after the refusals above, which a call
+            # sharing its result with an argument meets.
+            for name in args_left:
+                run.observer.record(rewrite_in_place.WRITTEN_BACK, name)
+        self._purity.report_observed_effects(func_name, run.observer)
         if refusal is not None:
             self._misses.note_not_stored(call.cache_key, refusal)
         else:

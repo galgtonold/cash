@@ -11,6 +11,7 @@ import hashlib
 import inspect
 import itertools
 import logging
+import re
 import sys
 import textwrap
 import types
@@ -818,6 +819,11 @@ class PurityChecks:
         # observer stays quiet for these: it would be a second warning about
         # the same function, and the user has already been told.
         self._static_flagged: set[str] = set()
+        #: ``{function: (issues, per_report)}``: the static findings that the
+        #: body changes one of its arguments in place, held back from the
+        #: first call's warning until its body has run
+        #: (`PurityChecks._hold_argument_mutations`).
+        self._held_mutations: dict[str, tuple[list, bool]] = {}
 
     def warn_shared_result(self, func, func_name: str, result, args, kwargs) -> str | None:
         """Say so when the result shares state with something the caller holds.
@@ -1482,6 +1488,9 @@ class PurityChecks:
           did not run is unobserved. That is why this supplements the static
           pass rather than replacing it.
         """
+        if func_name in self._held_mutations:
+            written = [d for k, d in observer.effects if k == WRITTEN_BACK] if observer is not None else []
+            self.surface_held_mutations(func_name, written)
         if observer is None or not observer.effects:
             return
         if self._registry.purity_mode(func_name) == "silent":
@@ -1521,6 +1530,53 @@ class PurityChecks:
             short=f"@cash.cache on {func_name}: the first call had effects static analysis did not see, "
             f"which a cache hit will not repeat: {list_gist(lines, 'effect')}",
         )
+
+    def _hold_argument_mutations(self, func_name: str, issues: list, per_report: bool) -> list:
+        """*issues* without the findings that the function's own body changes
+        one of its arguments in place, which are held back
+        (`_held_mutations`) and returned to once
+        the first call's body has run (`surface_held_mutations`).
+
+        Whether such a call runs every time depends on the argument handed
+        in: a hit writes the state an array, a frame or a plain container
+        was left in back into it (`CallRunner.arguments_left`). Said before
+        the body ran, "a call that makes it is not stored and runs every
+        time" was wrong for exactly those, beside the line that says the
+        hit writes the state back."""
+        cf = self._registry.cached.get(func_name)
+        own = {func_name, getattr(getattr(cf, "func", None), "__qualname__", None)}
+        held = [
+            issue
+            for issue in issues
+            if getattr(issue, "where", None) in own
+            and _MUTATED_PARAMETER.search(getattr(issue, "description", "")) is not None
+        ]
+        if not held:
+            return issues
+        self._held_mutations[func_name] = (held, per_report)
+        return [issue for issue in issues if not any(issue is h for h in held)]
+
+    def surface_held_mutations(self, func_name: str, written: list[str] | None = None) -> None:
+        """Warn about the held-back findings (`_hold_argument_mutations`) on
+        an argument the call just made did not leave in a state its entry
+        stores and a hit writes back (*written*, none for a call that is
+        not stored); the others are said by the one line of
+        `_report_written_back`."""
+        found = self._held_mutations.pop(func_name, None)
+        if found is None:
+            return
+        held, per_report = found
+        written = written or []
+        rest = []
+        for issue in held:
+            found = _MUTATED_PARAMETER.search(getattr(issue, "description", ""))
+            if found is None or found.group(1) not in written:
+                rest.append(issue)
+        if not rest or self._registry.purity_mode(func_name) == "silent":
+            return
+        self._static_flagged.add(func_name)
+        summary = format_issues_summary(rest)
+        self._warn_side_effects(func_name, summary, per_report, slot="purity-arguments")
 
     def _report_written_back(self, func_name: str, names: list[str]) -> None:
         """The call changed arguments in place that its entry stores the
@@ -1666,6 +1722,7 @@ class PurityChecks:
             issues = self._warn_untrackable(func_name, issues, per_report)
             issues = self._warn_ambient_reads(func_name, issues, per_report)
             issues = self._warn_network_reads(func_name, issues, per_report)
+            issues = self._hold_argument_mutations(func_name, issues, per_report)
         if not issues:
             return
         self._static_flagged.add(func_name)
@@ -1837,12 +1894,13 @@ class PurityChecks:
             )
         return issues
 
-    def _warn_side_effects(self, func_name: str, summary: str, per_report: bool) -> None:
-        """The ``warn``-mode warning for the side effects in *summary*."""
+    def _warn_side_effects(self, func_name: str, summary: str, per_report: bool, slot: str = "purity") -> None:
+        """The ``warn``-mode warning for the side effects in *summary*, in
+        the dedup *slot* (`_warning_slot`)."""
         self._notices.warn_once(
             CashImpurityWarning,
             func_name,
-            _warning_slot("purity", summary, per_report),
+            _warning_slot(slot, summary, per_report),
             f"@cash.cache on {func_name}: reading the source found likely "
             f"side effects or scope mutations, so cached results may not "
             f"reflect what the body does.\n{summary}",
@@ -1863,6 +1921,11 @@ class PurityChecks:
             ),
             once_per_version=True,
         )
+
+
+#: A static finding that a body changes its own parameter in place, and the
+#: parameter's name (`PurityVisitor._mutation_kind`).
+_MUTATED_PARAMETER = re.compile(r"changes the argument '([^']+)' in place; " + re.escape(ARGUMENT_MUTATION_NOT_STORED))
 
 
 def _warning_slot(kind: str, findings: str, per_report: bool) -> str:

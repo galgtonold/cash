@@ -969,6 +969,12 @@ Each finding has a line number and a label:
 | `network_read` | A GET request or a read-only SQL query | [KEY-NETWORK-READ](#key-network-read) |
 | `untrackable_dep` | `eval` / `exec` / `compile`, a call to a function that `exec` / `eval` built from a string into a namespace of no module (`ns = {}; exec(rules_text, ns)`), `getattr(obj, name)()`, `globals()[name]()`, `globals().get(name)()` or `vars(mod)[name]()`, `operator.attrgetter(name)` or `methodcaller(name)` with a run-time name, `importlib.import_module`, `sys.modules[name]` | [KEY-UNTRACKABLE-DEP](#key-untrackable-dep) |
 
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks._hold_argument_mutations @9cc0c5ec, cash/decorator/purity_checks.py:PurityChecks.surface_held_mutations @d0282e45 -->
+A line of the function's own body that changes one of its arguments in place
+(`rows.sort()`) is reported once that first call has run, and only when cash
+cannot write the argument's new state back on a hit; when it can, the one line
+of [IMPURE-OBSERVED-EFFECTS](#impure-observed-effects) says so instead.
+
 Log lines (`logging`, `print(..., file=sys.stderr)`) are not reported. A
 table of functions is not reported either, wherever it lives: a module-level
 one (`HANDLERS[kind]()`) is hashed as a global, one built in the body

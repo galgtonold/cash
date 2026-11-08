@@ -272,3 +272,67 @@ def test_the_warning_says_what_a_hit_does_when_it_writes_the_state_back(full_war
     assert len(shown) == len(logged) == 1, shown
     assert "Every cache HIT from here on returns the stored value WITHOUT repeating them" in logged[0]
     assert "the call changed 'box' in place -- the result was not stored, so this call runs every time" in logged[0]
+
+
+def test_a_change_written_in_the_body_is_said_once(full_warning_text, disk_cash):
+    """``v.sort()`` in the body is read from the source too. Where a hit
+    writes the list back, the one line is the only warning; a list of lists,
+    which a hit cannot write back, keeps the source finding."""
+
+    @disk_cash.cache
+    def sort_values(v):
+        v.sort()
+        return len(v)
+
+    @disk_cash.cache
+    def sort_rows(rows):
+        rows.sort()
+        return len(rows)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        for _ in range(2):
+            v = [3, 1, 2]
+            sort_values(v)
+            assert v == [1, 2, 3]
+    shown = [(w.message.code, str(w.message).splitlines()[0]) for w in caught if hasattr(w.message, "code")]
+    assert shown == [
+        (
+            "IMPURE-OBSERVED-EFFECTS",
+            "[IMPURE-OBSERVED-EFFECTS] sort_values changed 'v' in place; cash stores the state it leaves 'v' in, "
+            "and a hit writes it back.",
+        )
+    ], shown
+    assert sort_values.cache_info()["hits"] == 1
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        for _ in range(2):
+            sort_rows([[2], [1]])
+    texts = [str(w.message) for w in caught if getattr(w.message, "code", None) == "IMPURE-SIDE-EFFECTS"]
+    assert len(texts) == 1, [str(w.message) for w in caught]
+    assert "changes the argument 'rows' in place; a cache hit would not make that change" in texts[0]
+    assert sort_rows.cache_info()["hits"] == 0
+
+
+def test_a_call_not_stored_after_all_does_not_say_a_hit_writes_back(disk_cash):
+    """``return X[:2]`` shares the argument's memory, so the call is not
+    stored: no line may say a hit writes the state back. The same change
+    returning a copy is stored and says so."""
+
+    @disk_cash.cache
+    def head_view(X):
+        X *= 2
+        return X[:2]
+
+    @disk_cash.cache
+    def head_copy(X):
+        X *= 2
+        return X[:2].copy()
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        head_view(np.arange(4.0))
+        head_copy(np.arange(4.0))
+    said = [str(w.message) for w in caught if "a hit writes it back" in str(w.message)]
+    assert len(said) == 1 and "head_copy changed 'X'" in said[0], said

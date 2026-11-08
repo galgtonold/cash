@@ -316,7 +316,7 @@ paths from the project root or pass absolute paths.
 - A result that can't be pickled is not stored
   ([`STORE-FAILED`](warnings.md#store-failed)), unless the function is
   `frozen=True`.
-<!-- claim: cash/decorator/runtime.py:CallRunner.arguments_left @b3503303, cash/decorator/runtime.py:CallRunner._arguments_to_write @0d227488, cash/rewrite_in_place.py:refusal @cece1b9e -->
+<!-- claim: cash/decorator/runtime.py:CallRunner.arguments_left @cc53a991, cash/decorator/runtime.py:CallRunner._arguments_to_write @0d227488, cash/rewrite_in_place.py:refusal @cece1b9e -->
 <!-- claim: cash/decorator/runtime.py:CallRunner.arguments_before @c4f0d8ed, cash/decorator/arg_hashing.py:ContentKeyed.covers @4d5faf1a -->
 - A call that changed its argument in place is stored with the state it left
   the argument in when the argument is a NumPy array (not of objects), a
