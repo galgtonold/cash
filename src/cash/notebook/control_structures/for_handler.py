@@ -581,6 +581,7 @@ class ForLoopHandler:
             raw_cell,
             inherited_annotation,
             force_outputs=force_outputs,
+            walked=walked,
             **handed,
         )
         if result.success and n_iterations and len(result.metrics) == 1:

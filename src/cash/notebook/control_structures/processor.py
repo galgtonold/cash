@@ -671,6 +671,7 @@ class ControlStructureProcessor:
         header_value: Any = NO_LOOP_ITERABLE,
         header_files: frozenset[str] = frozenset(),
         header_remote: frozenset[str] = frozenset(),
+        walked: frozenset[str] = frozenset(),
     ) -> ControlStructureResult:
         """
         Execute an entire control structure as a single unit.
@@ -700,7 +701,8 @@ class ControlStructureProcessor:
         random permutation, find a drained queue empty or run a property
         again. The key, the badge and the outputs still come from the loop as
         written. *header_files* / *header_remote* are what that evaluation
-        read, the unit's reads too.
+        read, the unit's reads too. *walked* are the names among
+        *force_outputs* whose items the loop changes in place.
         """
         try:
             code = ast.unparse(node)
@@ -721,6 +723,7 @@ class ControlStructureProcessor:
                 occurrence_index=top[1] if top is not None and top[0] is node else 0,
                 stream_output=True,
                 force_outputs=force_outputs,
+                walked=walked,
                 loop_iterable=header_value,
                 header_files=header_files,
                 header_remote=header_remote,

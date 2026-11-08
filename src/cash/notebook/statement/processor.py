@@ -1267,6 +1267,7 @@ class StatementProcessor:
         force_outputs: set[str] | None = None,
         is_last: bool = True,
         loop_iterable: Any = NO_LOOP_ITERABLE,
+        walked: frozenset[str] = frozenset(),
         header_files: frozenset[str] = frozenset(),
         header_remote: frozenset[str] = frozenset(),
     ) -> ProcessResult:
@@ -1339,6 +1340,7 @@ class StatementProcessor:
                 stream_output=stream_output,
                 keep_displays=keep_displays,
                 force_outputs=force_outputs,
+                walked=walked,
                 is_last=is_last,
                 loop_iterable=loop_iterable,
                 header_files=header_files,
@@ -4028,7 +4030,10 @@ class StatementProcessor:
         registering = {
             name
             for name in before
-            if name in user_ns and name not in defined and _class_state(user_ns[name]) != before[name]
+            if name in user_ns
+            and name not in defined
+            and name not in run.class_state_spare
+            and _class_state(user_ns[name]) != before[name]
         }
         changed |= defined | registering
         around, unread = _classes_with_state(
@@ -4480,17 +4485,25 @@ class StatementProcessor:
         # creation puts there is not known before it runs.
         named = {id(value): name for name, value in user_ns.items() if instance_of(value, type)}
         derived = {named[id(cls)] for base in bases for cls in base.__mro__ if id(cls) in named}
-        # An input it changes in place may hold more after it than the read
-        # reaches (``for est in estimators: est.fit(X, y)``: two unfitted
-        # forests before, two hundred trees after), and the read then gives
-        # up only afterwards: without each state taken now, every class with
-        # state of the notebook read as one it may have changed.
-        grows = (run.outputs | run.est_fit | run.in_place) & run.inputs
-        if unread or grows:
+        if unread:
             # Past the items read, any class with state may be the one the
             # call reaches (`_link_inputs_kept_by`): each one's state now,
             # to tell the classes it changed from those it left alone.
             around.update((name, set()) for name in named.values() if _has_class_state(user_ns[name], value_types))
+        elif run.walked & run.inputs:
+            # A loop changing the items it walks may leave them holding more
+            # than the read reaches (``for est in estimators: est.fit(X, y)``:
+            # two unfitted forests before, two hundred trees after), so the
+            # read gives up only afterwards: without each state taken now,
+            # every class with state of the notebook read as one it may have
+            # changed. Compared only if that read gives up.
+            spare = {
+                name
+                for name in named.values()
+                if name not in around and name not in derived and _has_class_state(user_ns[name], value_types)
+            }
+            run.class_state_spare = frozenset(spare)
+            around.update((name, set()) for name in spare)
         return {name: _class_state(user_ns[name]) for name in set(around) | derived}
 
     def _warn_classes_unread(self, run: StatementRun) -> None:
