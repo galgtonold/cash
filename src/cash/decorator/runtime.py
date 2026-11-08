@@ -1512,6 +1512,7 @@ class CallRunner:
                 named = self._checked_named(spec.name, *arguments) or {}
                 values = [named.get(name) for name in mutated]
                 if all(rewrite_in_place.rewritable_kind(v) and rewrite_in_place.refusal(v) is None for v in values):
+                    observer.stored_from_next = list(mutated)
                     observer.reword(
                         "argument mutation",
                         "so this call runs every time",
@@ -1802,6 +1803,10 @@ class CallRunner:
             # sharing its result with an argument meets.
             for name in args_left:
                 run.observer.record(rewrite_in_place.WRITTEN_BACK, name)
+        elif args_left and run.observer is not None:
+            # Changed and not stored after all: what reading the source
+            # found on them stands (`PurityChecks.surface_held_mutations`).
+            run.observer.mutated_args = list(args_left)
         self._purity.report_observed_effects(func_name, run.observer)
         if refusal is not None:
             self._misses.note_not_stored(call.cache_key, refusal)

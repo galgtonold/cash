@@ -1512,9 +1512,18 @@ class PurityChecks:
           did not run is unobserved. That is why this supplements the static
           pass rather than replacing it.
         """
-        if func_name in self._held_mutations:
-            written = [d for k, d in observer.effects if k == WRITTEN_BACK] if observer is not None else []
-            self.surface_held_mutations(func_name, written)
+        deferred_seen = False
+        if func_name in self._held_mutations and observer is not None:
+            written = [d for k, d in observer.effects if k == WRITTEN_BACK]
+            deferred = observer.stored_from_next
+            changed = [name for name in observer.mutated_args or () if name not in deferred]
+            self.surface_held_mutations(func_name, written, changed)
+            # Reading the source saw the change this call was the first to
+            # make, and the next such call is stored: the line saying so
+            # once it is (`_report_written_back`) is all there is to say.
+            still = self._held_mutations.get(func_name, ((), False))[0]
+            seen = {m.group(1) for m in (_MUTATED_PARAMETER.search(getattr(i, "description", "")) for i in still) if m}
+            deferred_seen = bool(deferred) and set(deferred) <= seen
         if observer is None or not observer.effects:
             return
         if self._registry.purity_mode(func_name) == "silent":
@@ -1522,6 +1531,8 @@ class PurityChecks:
         covered: set[str] = set()
         if func_name in self._static_flagged:
             covered = static_effect_kinds(self._registry.purity_reports.get(func_name))
+        if deferred_seen:
+            covered.add("argument mutation")
         effects = [(kind, detail) for kind, detail in observer.effects if kind not in covered]
         written = [detail for kind, detail in effects if kind == WRITTEN_BACK]
         if written:
@@ -1580,27 +1591,51 @@ class PurityChecks:
         self._held_mutations[func_name] = (held, per_report)
         return [issue for issue in issues if not any(issue is h for h in held)]
 
-    def surface_held_mutations(self, func_name: str, written: list[str] | None = None) -> None:
+    def surface_held_mutations(
+        self, func_name: str, written: list[str] | None = None, changed: list[str] | None = None
+    ) -> None:
         """Warn about the held-back findings (`_hold_argument_mutations`) on
-        an argument the call just made did not leave in a state its entry
-        stores and a hit writes back (*written*, none for a call that is
-        not stored); the others are said by the one line of
-        `_report_written_back`."""
-        found = self._held_mutations.pop(func_name, None)
+        an argument the call just made changed in place (*changed*, every
+        finding when None: a call with nothing watched) and did not leave
+        in a state its entry stores and a hit writes back (*written*); those
+        are said by the one line of `_report_written_back` and are dropped.
+        A finding on an argument the call left alone stays held: an
+        ``if flag: a.sort()`` that did not sort has shown nothing yet, and
+        warning that the call runs every time would be wrong once a later
+        call sorts and is stored."""
+        found = self._held_mutations.get(func_name)
         if found is None:
             return
         held, per_report = found
         written = written or []
-        rest = []
+        unnamed = changed is None or any(name not in self._parameter_names(func_name) for name in changed)
+        rest, kept = [], []
         for issue in held:
-            found = _MUTATED_PARAMETER.search(getattr(issue, "description", ""))
-            if found is None or found.group(1) not in written:
+            match = _MUTATED_PARAMETER.search(getattr(issue, "description", ""))
+            name = match.group(1) if match is not None else None
+            if name is not None and name in written:
+                continue
+            if unnamed or name is None or name in changed:
                 rest.append(issue)
+            else:
+                kept.append(issue)
+        if kept:
+            self._held_mutations[func_name] = (kept, per_report)
+        else:
+            self._held_mutations.pop(func_name, None)
         if not rest or self._registry.purity_mode(func_name) == "silent":
             return
         self._static_flagged.add(func_name)
         summary = format_issues_summary(rest)
         self._warn_side_effects(func_name, summary, per_report, slot="purity-arguments")
+
+    def _parameter_names(self, func_name: str) -> set[str]:
+        """The parameters of *func_name* by name; empty when unreadable."""
+        cf = self._registry.cached.get(func_name)
+        try:
+            return set(inspect.signature(cf.func).parameters)
+        except Exception:  # noqa: BLE001 - no signature: no name is known
+            return set()
 
     def _report_written_back(self, func_name: str, names: list[str]) -> None:
         """The call changed arguments in place that its entry stores the
