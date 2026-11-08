@@ -447,6 +447,7 @@ class CacheRestorer:
                     state.value_cutoff.remember(output_digests[var], lin)
             if stored_code:
                 state.executed_cell_codes[var] = stored_code
+            state.bound_in_cell[var] = state.running_cell
             if stored_hash:
                 state.executed_cell_hashes.setdefault(var, set()).add(stored_hash)
             if input_hashes:

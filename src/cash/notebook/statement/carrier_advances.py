@@ -92,6 +92,7 @@ def advance_carriers(
                 name, advanced_carrier_lineage(draw_key(statement_key), name), value=user_ns[name]
             )
             tracking_state.executed_cell_codes[name] = code
+            tracking_state.bound_in_cell[name] = tracking_state.running_cell
 
 
 def carriers_an_entry_advanced(payload: Any, user_ns: dict[str, Any]) -> frozenset[str] | None:

@@ -63,11 +63,10 @@ def _fits(nb_runner):
     return lines
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="the ensemble's fit moves the lineages of the estimators it holds, so a cell above re-fits them",
-)
-def test_a_scoring_cell_run_again_refits_nothing(nb_runner):
+def _run_scores_again(nb_runner):
+    """Run All, then the scoring cell again, then the last cell: the fits
+    the scoring cell's run made, the error the last cell raised, and what
+    the last cell showed after Run All."""
     n = len(CELLS)
     nb_runner.create_notebook(CELLS)
     nb_runner.start_kernel()
@@ -83,9 +82,26 @@ def test_a_scoring_cell_run_again_refits_nothing(nb_runner):
         error = None
     except CellExecutionError as e:
         error = str(e)[-300:]
+    return refits, error, first
+
+
+def test_the_ensemble_below_keeps_its_binding(nb_runner):
+    """The repair for the scoring cell leaves ``voting_clf``, which a cell
+    below bound, as it is: the ensemble cell scores as after Run All."""
+    refits, error, first = _run_scores_again(nb_runner)
 
     assert error is None, (refits, error)
-    # Plain Python: the scores again, no fit, and the ensemble below scores.
     assert "scores" in nb_runner.get_output(SCORES)
-    assert nb_runner.get_output(n).strip() == first.strip(), nb_runner.get_output(n)
+    assert nb_runner.get_output(len(CELLS)).strip() == first.strip(), nb_runner.get_output(len(CELLS))
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="the ensemble's fit moves the lineages of the estimators it holds, so a cell above re-fits them",
+)
+def test_a_scoring_cell_run_again_refits_nothing(nb_runner):
+    """Plain Python fits nothing to run the scoring cell again."""
+    refits, error, _ = _run_scores_again(nb_runner)
+
+    assert error is None, (refits, error)
     assert refits == [], refits

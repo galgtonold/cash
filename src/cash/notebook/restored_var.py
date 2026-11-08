@@ -186,6 +186,7 @@ def apply_restored_var(
             state.executed_cell_hashes.setdefault(name, set()).add(metadata.source_hash)
         if metadata.code:
             state.executed_cell_codes[name] = metadata.code
+        state.bound_in_cell[name] = state.running_cell
         # Exactly the entry's files, not those of whatever the name held before.
         if metadata.file_dependencies:
             state.executed_file_deps[name] = set(metadata.file_dependencies)
