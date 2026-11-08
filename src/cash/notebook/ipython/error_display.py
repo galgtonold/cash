@@ -143,7 +143,7 @@ def _explain_read_only(exc: BaseException) -> None:
     run writes it; read before the traceback is cut to the user's frames."""
     try:
         note = frame_sharing.read_only_note(exc)
-        if note is not None and note not in (getattr(exc, "__notes__", None) or ()):
+        if note is not None and note not in (attribute_or(exc, "__notes__") or ()):
             exc.add_note(note)
     except Exception:
         logger.debug("could not explain a read-only error", exc_info=True)
