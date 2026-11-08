@@ -49,7 +49,7 @@ from cash._user_attrs import attribute_or, instance_of
 
 from ... import _plain_data
 from ...analysis.ast_util import parse_cached, walk_tree
-from ..borrowed_memory import borrowed_memory_names
+from ..borrowed_memory import borrowed_memory_names, borrowers_in, data_arrays, memory_home
 from ..shared_objects import (
     EXACT_CONTAINER_TYPES,
     VALUE_TYPES,
@@ -61,6 +61,7 @@ from ..shared_objects import (
     library_value_types,
     object_free_leaves,
     value_record_lists,
+    view_base_names,
     view_bases,
 )
 
@@ -73,7 +74,9 @@ __all__ = [
     "detect_derivation_edges",
     "edges_among",
     "link",
+    "link_memory_homes",
     "logging_edges",
+    "read_only_view_homes",
     "read_share_edges",
     "bump_derived_lineages",
     "clear_edges_for",
@@ -255,7 +258,13 @@ def read_share_edges(record: dict | None) -> frozenset[tuple[str, str]] | None:
         return None
 
 
-def is_uncacheable_alias(value: Any, user_ns: dict, cash_held: Iterable[Any] = (), inputs: Iterable[str] = ()) -> bool:
+def is_uncacheable_alias(
+    value: Any,
+    user_ns: dict,
+    cash_held: Iterable[Any] = (),
+    inputs: Iterable[str] = (),
+    homes: dict[int, str] | None = None,
+) -> bool:
     """True if *value* is, or holds, a live-alias of a ``user_ns`` object that
     must NOT be cache-restored.
 
@@ -284,7 +293,25 @@ def is_uncacheable_alias(value: Any, user_ns: dict, cash_held: Iterable[Any] = (
     restoring an independent copy of those is correct, so they stay cacheable.
     A ``.copy()`` (numpy ``base is None`` / independent pandas frame) is likewise
     not an alias — the over-invalidation guard.
+
+    With *homes*, an alias deeper in *value* than itself that is a numpy
+    view of a variable's data (a fitted ``KNeighborsRegressor`` keeps
+    ``y.to_numpy()`` of the labels it was fitted on) does not refuse: the
+    entry stores where it sits (`memory_home`), and a restore builds it on
+    the live variable's data again, so a write to the variable still
+    reaches it. *homes* gets those views, by id, each with its variable's
+    name. The value itself
+    being a view (``X_train = X[:1000]``), a pandas ref-holder, a frame
+    over a variable's memory, or a view whose base lives anywhere but in a
+    variable's data, still refuses.
     """
+    if not _is_alias(value, user_ns, cash_held, inputs):
+        return False
+    return homes is None or not _homed(value, user_ns, cash_held, inputs, homes)
+
+
+def _is_alias(value: Any, user_ns: dict, cash_held: Iterable[Any], inputs: Iterable[str]) -> bool:
+    """`is_uncacheable_alias` without homes."""
     np = _imported("numpy")
     refholder_types = _pandas_refholder_types()
     if np is None and not refholder_types:
@@ -306,6 +333,64 @@ def is_uncacheable_alias(value: Any, user_ns: dict, cash_held: Iterable[Any] = (
             return True
     del refholders
     return bool(views) and _bases_are_live(views, user_ns, list(cash_held))
+
+
+def _homed(value: Any, user_ns: dict, cash_held: Iterable[Any], inputs: Iterable[str], homes: dict[int, str]) -> bool:
+    """Whether each live alias inside *value* is a numpy view of a
+    variable's data (`memory_home`), adding those variables to *homes*:
+    the views a restore can build on the live data again."""
+    np = _imported("numpy")
+    if np is None or _aliases_in(value, np, _pandas_refholder_types())[1]:
+        return False  # a ref-holder
+    variables = {name: obj for name, obj in user_ns.items() if not name.startswith("_") and data_arrays(obj)}
+    found: dict[int, str] = {}
+    others: list[Any] = []
+    for obj, family in borrowers_in([value]):
+        if obj is value:
+            return False  # the value is a view or a frame itself
+        home = memory_home(obj, variables) if family == "numpy" else None
+        if home is not None:
+            found[id(obj)] = home.name
+        elif family == "numpy":
+            others.append(obj)
+        elif borrowed_memory_names([obj], user_ns, containers=set(inputs)):
+            return False  # a frame over a variable's memory
+    obj = None  # no local reference to a view may be left while the counts are read
+    if others and (
+        borrowed_memory_names(others, user_ns, containers=set(inputs))
+        or _bases_are_live(others, user_ns, list(cash_held))
+    ):
+        return False
+    homes.update(found)
+    return True
+
+
+def read_only_view_homes(value: Any, user_ns: Mapping[str, Any], inputs: Iterable[str] = ()) -> set[str]:
+    """The variables whose data *value* holds only read-only numpy views of
+    (`memory_home`): a fitted ``KNeighborsRegressor`` keeps
+    ``y.to_numpy()``. A write to such a variable in place reaches *value*,
+    but nothing written through *value* reaches the variable, so the edge
+    between them goes one way only (`link_memory_homes`). Not when *value*
+    is the view itself, nor for a variable it also reaches another way (a
+    writable view, a frame over its memory)."""
+    if _imported("numpy") is None:
+        return set()
+    variables = {name: obj for name, obj in user_ns.items() if not name.startswith("_") and data_arrays(obj)}
+    if not variables:
+        return set()
+    homed: set[str] = set()
+    others: list[Any] = []
+    for obj, family in borrowers_in([value]):
+        home = memory_home(obj, variables) if family == "numpy" and obj is not value else None
+        if home is not None:
+            homed.add(home.name)
+        else:
+            others.append(obj)
+    obj = None
+    if homed and others:
+        homed -= view_base_names(others, user_ns)
+        homed -= borrowed_memory_names(others, user_ns, containers=set(inputs))
+    return homed
 
 
 def _aliases_in(value: Any, np: Any, refholder_types: tuple[type, ...]) -> tuple[list[Any], list[Any]]:
@@ -595,6 +680,18 @@ def _detect_pandas_refholder_edge(
         # Edge points FROM the frame name TO the derived object: mutating the
         # frame bumps the derived object.
         link(derivation_edges, nm, out)
+
+
+def link_memory_homes(derivation_edges: dict[str, set[str]], homes: Iterable[str], outputs: Iterable[str]) -> None:
+    """Record that each of *outputs* holds a read-only view of the data of
+    each of *homes* (`memory_home`): a write to the variable in place
+    reaches the output, so the edge goes from the variable to the output.
+    Not back: nothing written through the output reaches the variable."""
+    outputs = list(outputs)
+    for home in homes:
+        for out in outputs:
+            if out != home:
+                link(derivation_edges, home, out)
 
 
 def record_shared_object_edges(
