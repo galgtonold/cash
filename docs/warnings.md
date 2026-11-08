@@ -2680,6 +2680,11 @@ it. Not when you are measuring how much a result varies.
 `random.seed()`), asking for a new random stream every run. Cached values
 below it cannot follow.
 
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._refuse_entropy_seed @02888d14 -->
+The statement itself is never stored, and a plot holding it is never shown
+from the cache: it runs every time, wherever in it the seed comes, inside a
+function it calls and after draws from a fixed seed included.
+
 **Why it matters.** New draws and restored values from the old stream appear
 side by side with nothing to tell them apart.
 

@@ -361,6 +361,12 @@ HINT_ERROR_LEVEL = logging.DEBUG
 _ABSENT = object()
 
 
+def _describe_streams(streams: frozenset[str] | set[str]) -> str:
+    """*streams*, global random stream modules, as a reason names them."""
+    names = {"random": "Python's random stream", "numpy.random": "NumPy's global random stream"}
+    return " and ".join(names.get(module, f"{module}'s random stream") for module in sorted(streams))
+
+
 def _entry_values(cached_data: Any) -> dict[str, Any] | None:
     """The values a stored entry held, by name; None when it says none."""
     variables = cached_data.get("variables") if isinstance(cached_data, dict) else None
@@ -1667,6 +1673,20 @@ class StatementProcessor:
             return
         run.plot_memos = memos[1] if isinstance(memos, tuple) else (memos, changes or None)
 
+    def _refuse_entropy_seed(self, run: StatementRun, execution: StatementExecution) -> None:
+        """Refuse *run* when it seeded a global random stream from the
+        system's entropy (``random.seed()``), at any point: a run leaves the
+        stream somewhere new each time, which no stored run can stand in for,
+        so it runs every time, as a plot run holding it does."""
+        streams = self._randomness.entropy_seeded
+        if not streams or not execution.result.success:
+            return
+        run.skip_cache = True
+        run.metrics["uncacheable_reasons"].append(
+            f"it seeds {_describe_streams(streams)} from the system's entropy, which a run leaves "
+            "somewhere new each time: it runs every time"
+        )
+
     @staticmethod
     def _refuse_if_it_drew(run: StatementRun, execution: StatementExecution) -> None:
         """Refuse *run*, cached on the condition that it does not touch
@@ -2684,6 +2704,7 @@ class StatementProcessor:
             unshown_output(e, execution.captured, run.silent, run.stream_output)
             raise
         self._refuse_if_it_drew(run, execution)
+        self._refuse_entropy_seed(run, execution)
         self._refuse_unseen_writes(run, execution, memos_before, memos_cleared)
         if (
             figures_before is not None

@@ -125,24 +125,24 @@ def statement_plot_facts(
     written = set(execution.written_paths or ()) - set(execution.waived_paths or ())
     if written or execution.unseen_writer or execution.children_running:
         blockers.append("writes files or starts processes")
-    read = sorted(
+    files = sorted(
         {path for path in execution.accessed_files or () if not _drawing_file(path)}
         | set(execution.accessed_remote or ())
     )
-    if read:
+    if files:
         # What it read is in no key of a plot run.
-        blockers.append(f"reads files ({', '.join(read[:3])})")
+        blockers.append(f"reads files ({', '.join(files[:3])})")
     seeded_first = frozenset(seeded_first)
     reseeded = frozenset(execution.rng_reseeded or ())
     moved = dict(execution.rng_moved or {})
-    read = frozenset((set(moved) | set(drew)) - seeded_first)
+    streams_read = frozenset((set(moved) | set(drew)) - seeded_first)
     if reseeded - seeded_first:
         # Seeded after a draw, or from the system's entropy: not a position
         # its code and inputs alone decide.
         blockers.append("seeds a random stream other than before its draws")
-    elif read - _LINEAGED_STREAMS:
-        blockers.append(f"draws random numbers ({', '.join(sorted(read - _LINEAGED_STREAMS))})")
-    elif read and unplaced:
+    elif streams_read - _LINEAGED_STREAMS:
+        blockers.append(f"draws random numbers ({', '.join(sorted(streams_read - _LINEAGED_STREAMS))})")
+    elif streams_read and unplaced:
         blockers.append("draws from a random stream cash could not place")
     memos = attribute_or(run, "plot_memos", None)
     if memos is None and attribute_or(run, "helper_memos", None):
@@ -162,7 +162,7 @@ def statement_plot_facts(
         dict(run.env_reads or {}),
         rng_state=moved,
         rng_reseeded=reseeded,
-        rng_read=read,
+        rng_read=streams_read,
         rng_seeded_first=seeded_first,
         memos=memos if isinstance(memos, tuple) else None,
     )
