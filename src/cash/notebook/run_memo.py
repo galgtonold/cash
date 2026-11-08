@@ -526,7 +526,8 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
             elif p not in stats:
                 stats[p] = st
                 dates[p] = at
-                from_listing.add(p)
+                if watch.is_listed(twin):
+                    from_listing.add(p)
         todo = rest
     if todo:
         at = time.monotonic()

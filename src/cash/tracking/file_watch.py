@@ -373,7 +373,8 @@ class FileWatch:
         last reported a change (`keep_listing`), kept as *path*'s own stat
         by `record`'s rules (a regular file with a single link, or a folder
         whose own watch agrees); None when there is no such entry or it
-        is not kept. Ask after a `drain`, as for `current`."""
+        is not kept. A stat kept already (`current`) is given instead, and
+        `is_listed` says which it is. Ask after a `drain`, as for `current`."""
         folder, name = os.path.split(path)
         d = self._dirs.get(folder)
         if d is None:
@@ -385,6 +386,14 @@ class FileWatch:
         st = listing.get(os.path.normcase(name))
         if st is None:
             return None
+        kept = self.current(path)
+        if kept is not None:
+            # A stat kept since, from this listing or of the file itself:
+            # taken again from the listing, a folder's was looked at again
+            # (`record`'s ``lstat``) before every cell asking for it by
+            # another spelling, and a file's own stat was put back by one
+            # with no file identity.
+            return kept
         self.record((d, version), path, st, listed=True)
         return st if d.records.get(path) is st else None
 
