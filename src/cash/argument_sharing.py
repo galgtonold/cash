@@ -11,8 +11,9 @@ the argument changes with it.
 
 The answer here is exact or there is none: `Unknown` names why it cannot
 be given (code that looks names up by a string, a closure made outside the
-call), and the caller then neither stores the state nor serves it. It
-walks all of what it looks at, however much that is. Memory is compared
+call, a ``weakref.proxy``), and the caller then neither stores the state
+nor serves it. It walks all of what it looks at, however much that is,
+weak references included. Memory is compared
 by the address ranges arrays span, which says "shared" for two arrays
 interleaved in one buffer: a refusal, never a wrong hit.
 
@@ -29,6 +30,7 @@ from __future__ import annotations
 import gc
 import sys
 import types
+import weakref
 from collections.abc import Callable, Iterator
 from typing import Any
 
@@ -194,14 +196,33 @@ class _Walk:
                 continue
             if (kind.__module__ or "").startswith("cash."):
                 continue  # cash's own state holds copies, never the caller's objects
+            if issubclass(kind, weakref.ref):
+                # What it points to, which the garbage collector does not
+                # report: ``WeakMethod``, the ``KeyedRef`` of a
+                # ``WeakValueDictionary`` and the refs a ``WeakSet`` or
+                # ``WeakKeyDictionary`` keeps in ``.data`` alike.
+                held = obj()
+                if held is not None:
+                    pending.append(held)
+                continue
+            if kind in weakref.ProxyTypes:
+                # Before any ``isinstance``, which a proxy answers for what
+                # it points to; that object itself cannot be reached.
+                try:
+                    obj.__class__  # raises once it is dead
+                except ReferenceError:
+                    continue
+                if not self.collect:
+                    raise Unknown("it reads a weakref.proxy, which cash cannot follow to what it points to")
+                continue
             if kind in (list, tuple, set, frozenset):
                 if not set(map(type, obj)) <= _LEAVES:
                     pending.extend(obj)
                 continue
             if kind is dict:
-                values = obj.values()
-                if not set(map(type, values)) <= _LEAVES:
-                    pending.extend(values)
+                for part in (obj.values(), obj.keys()):
+                    if not set(map(type, part)) <= _LEAVES:
+                        pending.extend(part)
                 continue
             if _ndarray(obj):
                 if self._memory(_bounds(obj), obj):
