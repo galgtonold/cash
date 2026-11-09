@@ -47,6 +47,7 @@ __all__ = [
     "IMPORT_STEP_CODE",
     "changed",
     "finalizers_made",
+    "importing",
     "register_atexit",
     "registering_imports",
     "snapshot",
@@ -432,6 +433,13 @@ def _load_unlocked(spec: Any) -> Any:
         if registered and isinstance(name, str) and name in sys.modules:
             for each in watching:
                 each.imported.append(name)
+
+
+def importing() -> bool:
+    """Is a module being first imported on this thread while a snapshot is
+    open? What it does then is the module's, as what it does to the
+    registries is (`_load_unlocked`)."""
+    return bool(attribute_or(_importing, "depth", 0))
 
 
 #: The code of `_load_unlocked`, which `snapshot` puts in ``importlib``'s

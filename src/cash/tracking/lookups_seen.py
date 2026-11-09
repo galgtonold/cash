@@ -15,7 +15,10 @@ event on the statement's own code, and on each function of the user's
 that it calls (`_is_users`), names the callee, and a PY_RETURN event on
 the callee's code hands over what it returns. A callee written in C hands
 nothing over; the user's code that called it is seen, and what it returns
-reaches the statement as a value, which a digest reads.
+reaches the statement as a value, which a digest reads. What a module's
+first import finds is the module's, as what it registers with the process
+is (`process_registries`): ``logging.getLogger('lib').setLevel(10)`` at
+its top level is not the statement changing a logger.
 """
 
 from __future__ import annotations
@@ -42,6 +45,7 @@ from ..diagnostics import log_diagnostic, warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning, CashWarning
 from ..install_paths import is_cash_path, is_user_path
 from ..value_hash import HASH_ERRORS, note_known_by_reference, recipes_met
+from .process_registries import importing
 
 __all__ = ["available", "collecting", "note", "watching"]
 
@@ -757,7 +761,9 @@ def _on_return(code: types.CodeType, offset: int, retval: Any, _type: type = typ
     kind = _type(retval)
     if kind in _plain or _ACTIVE is None:
         return None
-    if not _may_note(kind) or _THREAD.busy:
+    if not _may_note(kind) or _THREAD.busy or importing():
+        # Found by a module's first import: the module's, set up once a
+        # process as its registrations are (``process_registries``).
         return None
     _THREAD.busy = True
     try:

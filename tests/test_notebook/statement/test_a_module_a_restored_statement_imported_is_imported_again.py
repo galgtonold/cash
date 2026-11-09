@@ -127,3 +127,32 @@ def test_reading_a_statement_s_import_does_not_run_the_package_s_getattr():
         visitor.visit(ast.parse(f"from {PACKAGE} import sub"))
 
     assert not _reading(read)
+
+
+@pytest.mark.usefixtures("store_everything", "lazy_package")
+def test_the_module_is_imported_again_after_a_logger_was_looked_up(cash_magics):
+    """A statement above found a logger by its name, so the loggers calls
+    return are watched. The one the module's import set is the module's,
+    as the process registries it changes are: the statement is stored on
+    its first run, which imported the module, and the hit imports it."""
+    cells = [
+        "import logging\nlv = logging.getLogger('zz.looked_up').level",
+        f"import {PACKAGE}",
+        f"v = {PACKAGE}.compute() * 2",
+    ]
+    _fresh()
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    statuses = [str(s["status"]) for s in cash_magics._last_cell_metrics["statements"]]
+    assert statuses == ["COMPUTED"], statuses
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    statuses = [str(s["status"]) for s in cash_magics._last_cell_metrics["statements"]]
+    assert statuses == ["RESTORED"], statuses
+    cash_magics.tracking_state.reset_session_state()
+    cash_magics._upstream_checker.simulator.cache.reset()
+    _fresh()
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    assert f"{PACKAGE}.sub" in sys.modules
+    assert logging.getLogger("zz.lazy").level == 10
