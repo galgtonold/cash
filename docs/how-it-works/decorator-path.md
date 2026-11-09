@@ -94,7 +94,7 @@ Each argument is fingerprinted by the first rule that applies:
    sorted order, since `list(s)` and `s.pop()` read it; strings key alike in
    any order, as `PYTHONHASHSEED` picks theirs per process.
 
-<!-- claim: cash/kept_state.py:chooses_its_state @2d177a27, cash/kept_state.py:left_out_attrs @28c3abed -->
+<!-- claim: cash/kept_state.py:chooses_its_state @2d177a27, cash/kept_state.py:left_out_attrs @83bfa732 -->
 A class of yours whose own `__getstate__`, `__reduce__` or `__reduce_ex__`,
 or a reducer registered for it with `copyreg.pickle`, leaves instance
 attributes out of what it pickles (a precision, a device, a lock) is keyed
@@ -104,6 +104,37 @@ value (a portable default in place of the live setting). One that cannot be
 pickled, such as a lock, is keyed by its type; one that holds the object
 leaving it out is keyed by its content, as pickle stores the cycle. A
 library's class is keyed by what it pickles.
+
+<!-- claim: cash/kept_state.py:logger_state @37d45541, cash/kept_state.py:_handler_state @5efc2fe1, cash/kept_state.py:_stream_key @a8ddcfa6, cash/kept_state.py:_held_key @016e4acc, cash/kept_state.py:_formatter_state @42510fc6, cash/tracking/reference_states.py:_describe @c8b61130, cash/kept_state.py:_own_attrs @d8122464, cash/kept_state.py:_reduce_by_reference_for_key @3e124d7b, cash/kept_state.py:stands_by_reference @930b26cd -->
+An object that pickles by reference, by its name or by a call that looks it
+up (a logger pickles as `getLogger(name)`), is keyed with the attributes it
+holds, as a pickle by value would hold them, in an argument and in a global
+the function reads: `log.setLevel(10)`, or
+`logging.getLogger("app").setLevel(10)` anywhere, changes the key of a call
+given a value holding `log`. One that cannot be pickled, such as a handler
+holding a lock, is keyed by its type, as above. An object its class holds
+under the same name (every logger's one manager, which holds every logger in
+the process) is the class's, and left out. A cache the object fills as it
+is read is part of its state, except a standard library logger's: it is
+keyed by what its output follows (its name, level, parent, `propagate`,
+`disabled`, filters and handlers, and `logging.disable`'s setting), and
+the levels it notes as enabled when it logs are left out, so a call that
+logs changes no key. A standard library handler is keyed by its level,
+formatter, filters and the file it writes to, by its name; a stream with no
+name (an `io.StringIO`) by the very object, through a token new in each
+session, so `handler.setStream(buf)` changes the key and an entry keyed on
+one is not served after a restart. A handler or formatter of a class
+defined elsewhere is keyed by its plain values (level, format, file name),
+the code it holds by its type, and each other object it holds as that very
+object: one set to write elsewhere changes the key, records it gathers do
+not. A handler that holds
+each record it handles (a `MemoryHandler`'s buffer, a `QueueHandler`'s
+queue) changes the logger with every record logged: a call that logs to it
+runs every time, and the reason given names the handler. A subclass of `logging.Logger` defined elsewhere is keyed
+by all its attributes.
+Functions, classes, modules and bound methods are pickled by name with
+nothing of their own to add; their code and attributes are keyed where they
+are read.
 
 Inside a list, tuple, set or dict argument, a value a registered hasher, a
 `__cash_key__` or a built-in content hasher covers is hashed by it too;

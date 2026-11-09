@@ -23,6 +23,7 @@ from cash._user_attrs import attribute_or
 from cash.notebook.cache_status import ExecutionResult
 from cash.notebook.compiled_source import is_cash_filename, line_offset, register_cell_source, shifted
 from cash.notebook.statement.capture import NoCapture
+from cash.tracking import lookups_seen
 
 if TYPE_CHECKING:
     import types
@@ -258,6 +259,9 @@ class StatementRun:
     #: name -> digest of the environment variables installed code read while
     #: it ran (`env_reads.environment_digests`).
     env_reads: dict[str, str] | None = None
+    #: ``{recipe: digest}`` of the objects pickled by reference its inputs
+    #: held, before it ran (`reference_states.states`).
+    reference_states: dict[str, str] | None = None
     #: The ``functools`` memos of the user's it called, with what each held
     #: after it ran (`helper_memos.used`).
     helper_memos: list[dict] | None = None
@@ -557,7 +561,10 @@ class CodeRunner:
     def run(self) -> None:
         """Run the statement."""
         value = None
-        for unit in self._units(0):
+        units = self._units(0)
+        # What its calls return is seen (`lookups_seen`).
+        lookups_seen.arm(units, self.namespace)
+        for unit in units:
             value = eval(unit, self.namespace, self.namespace)
         _remember_future_imports(self.tree)
         self._show(value)
@@ -570,7 +577,10 @@ class CodeRunner:
         ``CO_COROUTINE`` and runs exactly as :meth:`run` runs it.
         """
         value = None
-        for unit in self._units(ast.PyCF_ALLOW_TOP_LEVEL_AWAIT):
+        units = self._units(ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
+        # What its calls return is seen (`lookups_seen`).
+        lookups_seen.arm(units, self.namespace)
+        for unit in units:
             value = eval(unit, self.namespace, self.namespace)
             if unit.co_flags & inspect.CO_COROUTINE:
                 value = await value

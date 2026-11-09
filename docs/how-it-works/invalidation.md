@@ -95,6 +95,38 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
     - **A file it or an input read** ([files](#files), below).
     - **An environment variable it reads** by name, in its own text or in a
       function or method of yours it calls, defined in a cell or a module.
+    <!-- claim: cash/tracking/reference_states.py:changed @1949e458, cash/notebook/statement/processor.py:StatementProcessor._note_reference_states @24a22d30, cash/tracking/reference_states.py:for_call @fafe1936, cash/tracking/lookups_seen.py:_on_call @a5e765f6, cash/tracking/lookups_seen.py:_note_reads @025b3e9f, cash/tracking/lookups_seen.py:_note_globals @68b1cf88, cash/tracking/lookups_seen.py:_warn_unseen_once @51c2c97b -->
+    - **An object that pickles by reference** (by its name, as a logger
+      pickles as `getLogger(name)`) held by a value it reads, or by a global
+      a function it calls reads, or by a value it reads was made from. Its
+      name finds it from anywhere, so `logging.getLogger("app").setLevel(10)`,
+      in a cell or in a function, changes it without naming a variable. On
+      Python 3.12 or newer, so is one it finds as it runs: one a call made
+      by its code, or by a function of yours, returns
+      (`logging.getLogger("app").level`), and one its code reads through a
+      module: an attribute of the module (`logging.root`), of a class or an
+      object it holds, or an item of a dict, list or tuple held there
+      (`logging.Logger.manager.loggerDict`). Where this cannot be watched,
+      [NOTEBOOK-LOOKUPS-UNSEEN](../warnings.md#notebook-lookups-unseen)
+      says so once
+      ([what is not seen](../known-limitations.md#an-object-found-by-a-lookup-cash-does-not-see)).
+      The entry keeps each such
+      object's state as the statement found it, and is served only while
+      each is the same; so is a call the call cache keeps. A statement or a
+      kept call that changed one runs again the next time, as a hit could
+      not change it again.
+      <!-- claim: cash/kept_state.py:logger_state @37d45541, cash/kept_state.py:_handler_state @5efc2fe1, cash/kept_state.py:buffering_handlers @83e6a999, cash/kept_state.py:_reduce_by_reference_for_key @3e124d7b -->
+      A standard library logger's state is what its output follows: its
+      name, level, parent, `propagate`, `disabled`, handlers (each with
+      its level, formatter, filters and the file or stream it writes to,
+      a stream with no name as that very object, so one set to write
+      elsewhere changes the logger) and filters, and
+      `logging.disable`'s setting. The levels it finds enabled as it logs
+      are left out, so a statement that only logged changed nothing: run
+      again, it is served. A logger whose handler holds each record (a
+      `MemoryHandler`, a `QueueHandler`) changes with every record: a
+      statement logging to it runs every time, and its reason names the
+      handler.
     - **Its age**, when a `ttl` applies. A statement that calls a
       `@cash.cache` function with a shorter `ttl` takes that shorter one.
     - **An in-place change** to a variable it reads

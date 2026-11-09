@@ -679,6 +679,9 @@ class TrackingState:
         and may hold its containers too; a replaced dict would leave them
         reading the old one.
         """
+        from cash.tracking import lookups_seen
+
+        lookups_seen.forget()
         for f in fields(self):
             current = getattr(self, f.name)
             if has_attribute(current, "clear"):

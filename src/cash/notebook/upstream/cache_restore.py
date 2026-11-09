@@ -24,6 +24,7 @@ from ...analysis.cacheability import analyze_statement
 from ...analysis.code_analyzer import CodeAnalyzer, clean_cell_source, parse_cell_source, statement_code
 from ...analysis.handed_callables import forget_held_answers
 from ...backends._base import ttl_expired
+from ...tracking import reference_states
 from ...tracking.env_reads import environment_unchanged
 from ...tracking.file_dep_snapshot import snapshot_is_fresh
 from .. import shadow as _shadow
@@ -202,6 +203,11 @@ class CacheRestorer:
                 fresh, stale = snapshot_is_fresh(file_deps)
                 if not fresh:
                     logger.debug("[UPSTREAM] Restore failed: stale file dependency (%s)", stale)
+                    return set(), _perf_counter() - start_time, 0.0
+                moved = reference_states.changed(metadata.get("reference_states"))
+                if moved is not None:
+                    # As at a lookup (``CacheFreshnessChecker``).
+                    logger.debug("[UPSTREAM] Restore failed: %s", moved)
                     return set(), _perf_counter() - start_time, 0.0
 
                 if _shadow.SHADOW is not None and _shadow.SHADOW.entry_stale(cache_key):
@@ -650,7 +656,8 @@ class CacheRestorer:
         """Would the statement's lookup refuse the entry the probe found, as
         `StatementFreshness.check_cache` does: past its *ttl*, a variable
         stored with its outputs (``holders``) that is bound now with another
-        lineage, or an environment variable it read changed? The probe keys a broken var it
+        lineage, an environment variable it read changed, or an object pickled
+        by reference it read (`reference_states`)? The probe keys a broken var it
         resolves by the lineage the hit gives it, and leaves its value as it
         is: refused after all, the statement ran on that value (``w -= 1``
         run again alone, its result stored with ``layers``, reached -2)."""
@@ -665,7 +672,9 @@ class CacheRestorer:
         if recorded.helper_memos and memos_unfilled(recorded.helper_memos, user_ns, refill=False):
             return True
         env_reads = recorded.env_reads
-        return bool(env_reads) and not environment_unchanged(env_reads)
+        if env_reads and not environment_unchanged(env_reads):
+            return True
+        return reference_states.changed(recorded.reference_states) is not None
 
     def drop_probe_placeholders(self) -> None:
         """Unbind the names the forward probe held that no restore filled.

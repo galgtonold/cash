@@ -105,6 +105,11 @@ class StatementCacheMetadata:
     #: The environment variables installed code read while it ran, each with
     #: a digest of its value: the entry is served only while all match.
     env_reads: dict[str, str] | None = None
+    #: ``{recipe: digest}`` of each object pickled by reference (a logger)
+    #: a value it read held, as it was when the statement ran: the entry is
+    #: served only while each, found again, digests the same
+    #: (`reference_states`).
+    reference_states: dict[str, str] | None = None
     #: The ``functools`` memos of the user's the statement called, each with
     #: the answers it held after the run: served only while they hold them
     #: again (`helper_memos.unfilled`).

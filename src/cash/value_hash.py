@@ -24,7 +24,7 @@ from collections.abc import Callable, Iterator
 from time import perf_counter
 from typing import Any
 
-from . import _weak, value_watch
+from . import _weak, kept_state, value_watch
 from ._user_attrs import instance_of
 from .content_hashers import builtin_hash, builtin_hash_family, is_native_panic
 from .sizing import pandas_nbytes
@@ -399,20 +399,132 @@ def compute_hash(obj: Any) -> str:
     and an ``Int64`` column, a tz-naive and a tz-aware one, or a C- and an
     F-ordered array holding equal values hash apart.
     """
+    if type(obj) in _ATOMS:
+        return _compute_hash(obj)
     window = _one_read.memo
-    if window is not None and type(obj) not in _ATOMS:
+    if window is not None:
         found = window.get(id(obj))
         if found is not None and found[0]() is obj:
+            _met_again(found[1])
             return found[1]
-    if value_watch.WATCHING and type(obj) not in _ATOMS:
-        digest = value_watch.digest(obj, _compute_hash, value_watch.KIND_VALUE, _reusable)
-    else:
-        digest = _compute_hash(obj)
+    met = kept_state.met_by_reference()
+    outer = met
+    if met is None:
+        met = []
+        kept_state.collect_met(met)
+    start = len(met)
+    try:
+        if value_watch.WATCHING:
+            digest = value_watch.digest(obj, _compute_hash, value_watch.KIND_VALUE, _reusable)
+        else:
+            digest = _compute_hash(obj)
+    finally:
+        if outer is None:
+            kept_state.collect_met(None)
+    if len(met) > start:
+        _note_held_by_reference(digest, met[start:])
+    elif outer is not None:
+        # Handed back unread (`value_watch.digest`): what it holds counts
+        # for the value hashed around it as well.
+        _met_again(digest)
     if window is not None and type(obj) not in _ATOMS and _reusable(obj, digest):
         anchor = _anchor(obj)
         if anchor is not None:
             window[id(obj)] = (anchor, digest)
     return digest
+
+
+#: ``content digest -> {recipe: None}``: the objects pickled by reference
+#: (`kept_state.stands_by_reference`) a value of that digest holds, by the
+#: bytes that find each again (`kept_state.reference_recipe`). The newest
+#: digests are kept.
+_HELD_BY_REFERENCE: dict[str, tuple[bytes | None, ...]] = {}
+
+#: How many digests `_HELD_BY_REFERENCE` keeps.
+_HELD_BY_REFERENCE_MAX = 4096
+
+
+def _note_held_by_reference(digest: str, met: list) -> None:
+    """Remember that a value digesting to *digest* holds the objects *met*
+    (``(reduce value, object)`` pairs, `kept_state.met_by_reference`)."""
+    recipes = recipes_met(met)
+    _HELD_BY_REFERENCE.pop(digest, None)
+    _HELD_BY_REFERENCE[digest] = recipes
+    if len(_HELD_BY_REFERENCE) > _HELD_BY_REFERENCE_MAX:
+        del _HELD_BY_REFERENCE[next(iter(_HELD_BY_REFERENCE))]
+    for recipe in recipes:
+        _KNOWN_BY_REFERENCE[recipe] = None
+
+
+def recipes_met(met: list) -> tuple[bytes | None, ...]:
+    """The recipes (`kept_state.reference_recipe`) of the objects *met*
+    (``(reduce value, object)`` pairs, `kept_state.met_by_reference`) holds
+    that their recipe finds again (`_finds_itself`); None for one no recipe
+    can be written for."""
+    recipes: dict[bytes | None, None] = {}
+    for reduced, obj in met:
+        if reduced is _RECIPE:
+            recipes[obj] = None
+            continue
+        recipe = kept_state.reference_recipe(obj, reduced)
+        if recipe is None or _finds_itself(obj, recipe):
+            recipes[recipe] = None
+    return tuple(recipes)
+
+
+#: ``recipe -> whether it finds the object it was written for``
+#: (`kept_state.finds_itself`), asked once per recipe.
+_FINDS_ITSELF: dict[bytes, bool] = {}
+
+
+def _finds_itself(obj: Any, recipe: bytes) -> bool:
+    """Does *recipe* find *obj* itself? A recipe that builds another object
+    holds what it builds from (it is pickled by value), and a recipe found
+    once to look its object up finds it again: told once per recipe."""
+    found = _FINDS_ITSELF.get(recipe)
+    if found is None:
+        found = _FINDS_ITSELF[recipe] = kept_state.finds_itself(obj, recipe)
+        if len(_FINDS_ITSELF) > _HELD_BY_REFERENCE_MAX:
+            del _FINDS_ITSELF[next(iter(_FINDS_ITSELF))]
+    return found
+
+
+#: In a `kept_state.met_by_reference` list, beside a recipe met again.
+_RECIPE = object()
+
+
+def _met_again(digest: str) -> None:
+    """A digest handed back without pickling (`one_read`): the objects held
+    by reference its value holds count as met again."""
+    recipes = _HELD_BY_REFERENCE.get(digest)
+    met = kept_state.met_by_reference()
+    if recipes and met is not None:
+        met.extend((_RECIPE, recipe) for recipe in recipes)
+
+
+#: Every recipe `_note_held_by_reference` was given in this process: the
+#: objects pickled by reference a value of the user's was seen holding.
+_KNOWN_BY_REFERENCE: dict[bytes | None, None] = {}
+
+
+def note_known_by_reference(recipe: bytes | None) -> None:
+    """Count *recipe* among `known_by_reference`: an object a statement
+    found by a lookup (`tracking.lookups_seen`)."""
+    _KNOWN_BY_REFERENCE[recipe] = None
+
+
+def known_by_reference() -> tuple[bytes | None, ...]:
+    """The recipes of every object pickled by reference that a value hashed
+    in this process held (`held_by_reference`)."""
+    return tuple(_KNOWN_BY_REFERENCE)
+
+
+def held_by_reference(digest: str | None) -> tuple[bytes | None, ...]:
+    """The recipes (`kept_state.reference_recipe`, None for one that cannot
+    be written) of the objects pickled by reference that a value whose
+    `compute_hash` was *digest* holds: a logger, found again by its name.
+    Empty when it holds none, or no value of that digest was hashed here."""
+    return _HELD_BY_REFERENCE.get(digest, ()) if digest else ()
 
 
 def _holds_bulky(obj: Any) -> bool:
