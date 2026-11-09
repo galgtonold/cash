@@ -10,7 +10,8 @@ own closure was seen; these shapes were served, and the write was lost:
 - a ``partial`` over a builtin function that writes its argument
   (``setattr``, ``operator.setitem``, ``heapq.heappush``);
 - a writer held one step further: in a helper's closure, in a dict of hooks,
-  on an object's attribute, on a class the notebook names;
+  on an object's attribute, on a class the notebook names (or in a dict, a
+  list or an object such a class holds);
 - a ``partial`` handing ``out=`` a mutable array, or over ``np.copyto``;
 - an ``operator.methodcaller`` of a method that writes;
 - ``defaultdict.__getitem__``, which inserts a missing key.
@@ -62,6 +63,21 @@ SHAPES = {
     "on_a_named_class": (
         "class H:\n    note = calls.append\ndef mk():\n    h = H\n    def g(x):\n        h.note(x)\n        return x\n"
         "    return g\nf = mk()",
+        "calls",
+    ),
+    "in_a_dict_on_a_named_class": (
+        "class H:\n    hooks = {'n': calls.append}\ndef mk():\n    h = H\n    def g(x):\n        h.hooks['n'](x)\n"
+        "        return x\n    return g\nf = mk()",
+        "calls",
+    ),
+    "in_a_list_on_a_named_class": (
+        "class H:\n    hooks = [calls.append]\ndef mk():\n    h = H\n    def g(x):\n        h.hooks[0](x)\n"
+        "        return x\n    return g\nf = mk()",
+        "calls",
+    ),
+    "on_an_object_on_a_named_class": (
+        "sink = R()\nsink.w = calls.append\nclass H:\n    s = sink\ndef mk():\n    h = H\n    def g(x):\n"
+        "        h.s.w(x)\n        return x\n    return g\nf = mk()",
         "calls",
     ),
     "counter_update": (
@@ -123,7 +139,7 @@ READERS = {
     "a_read_only_method": "note2 = calls.count",
     "a_dict_of_readers": "note2 = {'n': d.get}['n']",
     "a_library_method_in_python": "note2 = pd.Series([1, 2]).get",
-    "an_arrays_reader": "note2 = np.arange(4).__getitem__",
+    "an_arrays_reader": "note2 = np.arange(4).searchsorted",
     "a_numpy_scalars_method": "note2 = np.float64(2.0).__mul__",
     "a_struct_reader": "note2 = (lambda u: lambda x: u(b'\\x01\\x00\\x00\\x00'))(struct.Struct('<i').unpack)",
     "a_methodcaller_of_a_reader": "note2 = (lambda m: lambda x: m({1: 2}))(operator.methodcaller('get', 1))",
@@ -145,3 +161,24 @@ def test_a_function_holding_only_readers_is_still_served(cash_magics, cash_insta
     cells = [INIT + body, f"y = (f(1), {SLEEP})", "seen = y[0]"]
     assert _run_twice(cash_magics, cells) == [1, 1]
     assert log == [1], "the second run after the restart was served"
+
+
+#: Held ``arr.__getitem__``: a slice of it is a view of ``arr``, which a
+#: stored result is not. Each way round: the array written after the call,
+#: and the result written.
+WRITTEN_AFTER = {
+    "the_array": ("arr[0] = 99.0", "repr(y[0].tolist())"),
+    "the_result": ("y[0][...] = 7.0", "repr(arr.tolist())"),
+}
+
+
+@pytest.mark.parametrize("after", WRITTEN_AFTER)
+def test_a_held_array_lookup_hands_back_a_view_after_a_restart(cash_magics, cash_instance, after):
+    cash_instance.config.call_cost_floor_seconds = 0.0
+    write, probe = WRITTEN_AFTER[after]
+    body = "def mk():\n    gi = arr.__getitem__\n    def g(x):\n        return gi(slice(0, 2))\n    return g\nf = mk()"
+    cells = [INIT + body, f"y = (f(1), {SLEEP})", write, f"seen = {probe}"]
+    plain: dict = {}
+    for cell in cells:
+        exec(cell, plain)
+    assert _run_twice(cash_magics, cells) == [plain["seen"]] * 2

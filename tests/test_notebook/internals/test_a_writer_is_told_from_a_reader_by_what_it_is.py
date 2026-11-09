@@ -41,6 +41,7 @@ def test_writers_are_refused():
         functools.partial(np.copyto, arr),
         operator.methodcaller("append", 1),
         collections.defaultdict(int).__getitem__,
+        np.zeros(2).__getitem__,  # a slice is a view, which a stored copy is not
         arr.sum,  # takes ``out=``: the call it is given is not read
         functools.partial(np.add, arr, 1),  # named ``add``, handed an array
     ):
@@ -56,7 +57,6 @@ def test_readers_are_not():
         len,
         str.join,
         pd.Series([1]).get,
-        arr.__getitem__,
         arr.astype,
         arr.tolist,
         arr.searchsorted,

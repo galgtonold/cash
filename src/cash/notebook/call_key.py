@@ -711,16 +711,10 @@ def _methodcaller_writes(caller) -> bool:
     return name not in _READER_NAMES or _hands_out_a_mutable(keywords)
 
 
-def _named_class_writes(kind: type) -> bool:
-    """A class of the user's its module names, which `held_by` does not look
-    into, holding a writer as an attribute of its own (``class H: note =
-    calls.append``): what it holds deeper is the live class's, as for a
-    named class's memo, but a call of that attribute changes its object."""
-    if not _users_type(kind):
-        return False
-    return any(
-        _a_writer(value) for base in _CLASS_MRO(kind) if _users_type(base) for value in _CLASS_DICT(base).values()
-    )
+def _named_class_members(kind: type) -> list:
+    """What a class of the user's its module names, and its user's bases,
+    hold, read without asking it."""
+    return [value for base in _CLASS_MRO(kind) if _users_type(base) for value in _CLASS_DICT(base).values()]
 
 
 def _class_lookup(kind: type, name: str) -> Any:
@@ -790,20 +784,23 @@ _READERS = frozenset(
 _READER_NAMES = _READERS - {"__getitem__"}
 
 
-def _read_only_methods(extra: Iterable[type] = ()) -> frozenset:
+def _read_only_methods() -> frozenset:
     """The methods that only read the object, of the standard containers,
-    ``struct.Struct``, ``array.array`` and *extra* (numpy's array): each
-    the method object its class holds, so a method of another class with
-    the same name is not one of them. None of numpy's takes ``out=``."""
+    ``struct.Struct`` and ``array.array``: each the method object its class
+    holds, so a method of another class with the same name is not one of
+    them. ``ndarray``'s are added once numpy is imported (`_NumpyParts`);
+    none of those takes ``out=``."""
     import array
     import re
     import struct
 
     classes = (
         object, type, list, dict, set, bytearray, collections.deque, collections.OrderedDict,
-        collections.defaultdict, re.Pattern, struct.Struct, array.array, *extra,
+        collections.defaultdict, re.Pattern, struct.Struct, array.array,
     )  # fmt: skip
-    return frozenset(method for kind in classes for name, method in vars(kind).items() if name in _READERS)
+    return frozenset(
+        method for kind in classes for name, method in vars(kind).items() if name in _READERS and method is not None
+    )
 
 
 _WRITING_FUNCTIONS = _writing_functions()
@@ -827,7 +824,13 @@ class _NumpyParts:
             return
         ndarray, scalar, void = (vars(np).get(name) for name in ("ndarray", "generic", "void"))
         if isinstance(ndarray, type):
-            self.read_only = _read_only_methods((ndarray,))
+            # Not ``__getitem__``: a slice is a view of the array, which a
+            # stored copy is not.
+            self.read_only = self.read_only | frozenset(
+                method
+                for name, method in vars(ndarray).items()
+                if name in _READERS and name != "__getitem__" and method is not None
+            )
         if isinstance(scalar, type) and isinstance(void, type):
             self.scalar, self.void = scalar, void
         writers = (vars(np).get(name) for name in ("copyto", "put", "putmask", "place"))
@@ -1018,8 +1021,12 @@ class _StreamWalk:
                         held = held_by(item)
                         if held:
                             next_children.extend(held)
-                        elif held is None and kind is not _types.FunctionType and _named_class_writes(item):
-                            return _HOLDS
+                        elif held is None and kind is not _types.FunctionType and _users_type(item):
+                            # A class of the user's its module names, which
+                            # `held_by` leaves to the live class: a writer
+                            # on it (``class H: hooks = {'n': calls.append}``)
+                            # changes its object all the same.
+                            next_children.extend(_named_class_members(item))
                 elif way is _BUILTIN:
                     # ``calls.append``, ``setattr`` in a ``partial``: a call
                     # changes what it is bound to or handed (`_a_writer`).
