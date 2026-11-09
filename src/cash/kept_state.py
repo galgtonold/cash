@@ -29,6 +29,7 @@ import pickle
 import sys
 import threading
 import types
+import uuid
 import weakref
 from collections.abc import Callable, Iterator
 from typing import Any
@@ -2619,36 +2620,128 @@ def _stdlib_logging(obj: Any) -> bool:
 
 
 def _handler_state(handler: Any) -> Any:
-    """What a standard library handler's output follows: its attributes,
-    its formatter's (`_formatter_state`), and the stream it writes to by
-    its type and name, not its lock or the stream's content. Any other
-    handler by its type, as one holding a lock is when keyed as a value."""
-    if not _stdlib_logging(handler):
+    """What a handler's output follows: its attributes, its formatter's
+    (`_formatter_state`), and the stream it writes to (`_stream_key`), not
+    its lock or what the stream holds. A standard library handler's
+    attributes as they are. One of a subclass of ``logging.Handler``
+    defined elsewhere: its filters as they are and the rest as `_held_key`
+    keys them, so one set to write elsewhere is keyed otherwise and one
+    gathering what it handles (pytest's ``LogCaptureHandler``) is not
+    rekeyed by each record. Anything else in a logger's handlers by its
+    type."""
+    if logging.Handler not in type(handler).__mro__:
         return type(handler)
+    own = not _stdlib_logging(handler)
     state: dict[str, Any] = {"__class__": type(handler)}
-    for name, value in vars(handler).items():
+    for name, value in _instance_attrs(handler).items():
         if name in ("lock", "_builtin_open"):
             continue
-        if name == "stream":
-            value = (type(value), value.name if type(value) in _NAMED_STREAMS else None)
-        elif name == "formatter":
+        if name == "formatter":
             value = _formatter_state(value)
+        elif name == "stream":
+            value = _stream_key(value)
+        elif own and name != "filters":
+            value = _held_key(value)
         state[name] = value
     return state
+
+
+def _held_key(value: Any) -> Any:
+    """What a handler or formatter of a class defined elsewhere holds:
+    a plain value as it is; code (a function, a bound method) by its type's
+    name, as what a handler does with a record does not change a result;
+    any other object as that very object (`_stream_key`)."""
+    if type(value) in _HANDLER_VALUES:
+        return value
+    if callable(value):
+        kind = type(value)
+        return (kind.__module__, kind.__qualname__)
+    return _stream_key(value)
+
+
+#: What a handler of a class defined elsewhere holds that is keyed by value.
+_HANDLER_VALUES = (str, bytes, int, float, complex, bool, type(None))
 
 
 #: Streams whose ``name`` is read in C: the file a handler writes to.
 _NAMED_STREAMS = (io.TextIOWrapper, io.BufferedWriter, io.FileIO)
 
 
+def _stream_key(stream: Any) -> Any:
+    """A stream a handler writes to, or another object it holds: a file by
+    its type and name; any other (an ``io.StringIO``, a list) as the very
+    object, by a token of its own in this session (`_STREAM_TOKENS`), so a
+    handler set to write elsewhere is keyed otherwise. A token is new in each session: an entry keyed on one is
+    not served after a restart."""
+    if stream is None:
+        return None
+    if type(stream) in _NAMED_STREAMS:
+        name = stream.name
+        if type(name) is str:
+            return (type(stream), name)
+    key = id(stream)
+    known = _STREAM_TOKENS.get(key)
+    if known is not None and known[0]() is stream:
+        return (type(stream), known[1])
+    token = uuid.uuid4().hex
+    try:
+        held = weakref.ref(stream, lambda _gone, key=key: _STREAM_TOKENS.pop(key, None))
+    except TypeError:  # one that takes no weak reference: held, until the session ends
+        held = functools.partial(operator.itemgetter(0), (stream,))
+    _STREAM_TOKENS[key] = (held, token)
+    return (type(stream), token)
+
+
+#: ``id(stream) -> (a call giving the stream, token)`` (`_stream_key`): held
+#: weakly where it can be, and emptied with the session (`forget_streams`).
+_STREAM_TOKENS: dict[int, tuple[Any, str]] = {}
+
+
+def buffering_handlers(logger: Any) -> list[str]:
+    """The handlers a standard library *logger*'s records reach that hold
+    each record they handle (a ``MemoryHandler``'s buffer, a
+    ``QueueHandler``'s queue), by their class's name: keyed with it, every
+    record logged changes the logger's state."""
+    found: list[str] = []
+    seen: set[int] = set()
+    while type(logger) in _STDLIB_LOGGERS and id(logger) not in seen:
+        seen.add(id(logger))
+        for handler in _instance_attrs(logger).get("handlers") or ():
+            if logging.Handler in type(handler).__mro__ and {"buffer", "queue"} & _instance_attrs(handler).keys():
+                found.append(type(handler).__name__)
+        if not _instance_attrs(logger).get("propagate"):
+            break
+        logger = _instance_attrs(logger).get("parent")
+    return found
+
+
+def forget_streams() -> None:
+    """Forget the tokens of the streams handlers wrote to, as a fresh kernel
+    would."""
+    _STREAM_TOKENS.clear()
+
+
 def _formatter_state(formatter: Any) -> Any:
-    """A standard library formatter by its format, date format and style;
-    any other as it is."""
-    if formatter is None or not _stdlib_logging(formatter):
+    """A standard library formatter by its format, date format and style.
+    One of a class defined elsewhere (pytest's, colorlog's): what it holds
+    as `_held_key` keys it, as a handler of one is (`_handler_state`)."""
+    if formatter is None:
+        return None
+    own = not _stdlib_logging(formatter)
+    if own and logging.Formatter not in type(formatter).__mro__:
         return formatter
     style = vars(formatter).get("_style")
     defaults = vars(style).get("_defaults") if _stdlib_logging(style) else style
-    return (type(formatter), vars(formatter).get("_fmt"), vars(formatter).get("datefmt"), type(style), defaults)
+    if not own:
+        return (type(formatter), vars(formatter).get("_fmt"), vars(formatter).get("datefmt"), type(style), defaults)
+    state: dict[str, Any] = {"__class__": type(formatter)}
+    for name, value in _instance_attrs(formatter).items():
+        if name == "_style" and _stdlib_logging(style):
+            value = (type(style), defaults)
+        else:
+            value = _held_key(value)
+        state[name] = value
+    return state
 
 
 def _by_name_reduce(obj: Any, name: str, state: Any) -> tuple:

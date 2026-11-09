@@ -115,14 +115,18 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
       each is the same; so is a call the call cache keeps. A statement or a
       kept call that changed one runs again the next time, as a hit could
       not change it again.
-      <!-- claim: cash/kept_state.py:logger_state @37d45541, cash/kept_state.py:_reduce_by_reference_for_key @3e124d7b -->
+      <!-- claim: cash/kept_state.py:logger_state @37d45541, cash/kept_state.py:_handler_state @5efc2fe1, cash/kept_state.py:buffering_handlers @83e6a999, cash/kept_state.py:_reduce_by_reference_for_key @3e124d7b -->
       A standard library logger's state is what its output follows: its
-      name, level, parent, `propagate`, `disabled`, handlers (each
-      standard library one with its level, formatter, filters and stream or
-      file) and filters, and
+      name, level, parent, `propagate`, `disabled`, handlers (each with
+      its level, formatter, filters and the file or stream it writes to,
+      a stream with no name as that very object, so one set to write
+      elsewhere changes the logger) and filters, and
       `logging.disable`'s setting. The levels it finds enabled as it logs
       are left out, so a statement that only logged changed nothing: run
-      again, it is served.
+      again, it is served. A logger whose handler holds each record (a
+      `MemoryHandler`, a `QueueHandler`) changes with every record: a
+      statement logging to it runs every time, and its reason names the
+      handler.
     - **Its age**, when a `ttl` applies. A statement that calls a
       `@cash.cache` function with a shorter `ttl` takes that shorter one.
     - **An in-place change** to a variable it reads

@@ -13,6 +13,7 @@ when its cell ran again, leaving the level as it was.
 from __future__ import annotations
 
 import logging
+import logging.handlers
 import types
 import warnings
 
@@ -384,3 +385,103 @@ def test_a_logger_s_digest_follows_what_its_output_does():
     held = kept_state.state_digest(mine)
     mine.extra = 2
     assert kept_state.state_digest(mine) != held
+
+
+SWAP_SETUP = (
+    "import logging, io\n"
+    f"log = logging.getLogger('{NAME}.swap')\n"
+    "log.setLevel(logging.INFO)\n"
+    "log.propagate = False\n"
+    "class Mine(logging.StreamHandler):\n"
+    "    pass\n"
+    "first = io.StringIO()\n"
+    "second = io.StringIO()\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("handler", "swap"),
+    [
+        ("logging.StreamHandler(first)", "log.handlers[0].setStream(second)"),
+        ("Mine(first)", "log.handlers[0].setStream(second)"),
+    ],
+    ids=["set-stream", "a-subclass-of-yours"],
+)
+def test_a_handler_set_to_write_elsewhere_is_written_to(cash_magics, cash_instance, handler, swap):
+    """A handler given another stream (an ``io.StringIO``, which has no
+    name) changes the logger's state: the statement logging after it runs,
+    and the new stream gets the line."""
+    cash_instance.config.min_execution_time_to_cache_seconds = 0.0
+    cash_instance.config.call_cost_floor_seconds = 0.0
+    logs = "log.info('w%s', 5)\nx = 10"
+    cells = [f"{SWAP_SETUP}log.addHandler({handler})", logs, swap, logs.replace("x", "y"), "out = second.getvalue()"]
+    try:
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+    finally:
+        # pytest gives each non-propagating logger its capture handlers.
+        swapped = logging.getLogger(f"{NAME}.swap")
+        swapped.handlers.clear()
+        swapped.propagate = True
+        swapped.setLevel(logging.NOTSET)
+    assert cash_magics.shell.user_ns["out"] == "w5\n"
+
+
+def test_a_logger_whose_handler_holds_each_record_says_why_it_runs_again(cash_magics, cash_instance):
+    """A ``MemoryHandler`` holds each record logged, so a statement that
+    logs changes the logger and runs every time: its reason names the
+    handler."""
+    from cash.tracking import reference_states
+
+    logger = logging.getLogger(f"{NAME}.memory")
+    held = logging.handlers.MemoryHandler(10_000)
+    logger.addHandler(held)
+    try:
+        assert "MemoryHandler holds each record it logs" in reference_states._describe(logger)
+    finally:
+        logger.removeHandler(held)
+    assert "holds each record" not in reference_states._describe(logger)
+
+
+class Gathering(logging.StreamHandler):
+    """A handler keeping each record it handles, as pytest's does."""
+
+    def __init__(self, stream):
+        super().__init__(stream)
+        self.records = []
+
+    def emit(self, record):
+        self.records.append(record)
+        super().emit(record)
+
+
+class Shaded(logging.Formatter):
+    """A formatter holding a mapping of its own."""
+
+    def __init__(self):
+        super().__init__("%(levelname)s %(message)s")
+        self.shades = {logging.INFO: "plain"}
+
+
+def test_a_handler_of_yours_is_keyed_by_what_it_writes_to_not_what_it_gathered():
+    """A handler subclass that keeps each record (as pytest's does), with a
+    formatter subclass holding a mapping, keeps the logger's digest while
+    it logs; set to write to another stream, the digest changes."""
+    import io
+
+    from cash import kept_state
+
+    logger = logging.getLogger(f"{NAME}.gathering")
+    handler = Gathering(io.StringIO())
+    handler.setFormatter(Shaded())
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    try:
+        before = kept_state.state_digest(logger)
+        logger.info("a")
+        assert handler.records and kept_state.state_digest(logger) == before
+        handler.setStream(io.StringIO())
+        assert kept_state.state_digest(logger) != before
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(logging.NOTSET)

@@ -167,4 +167,12 @@ def _digest(obj: Any) -> str | None:
 
 def _describe(obj: Any) -> str:
     text = repr(obj)
-    return text if len(text) <= 80 else f"{text[:77]}..."
+    text = text if len(text) <= 80 else f"{text[:77]}..."
+    buffering = kept_state.buffering_handlers(obj)
+    if buffering:
+        # Each record it logs changes it: say so, or the statement seems to
+        # run again for nothing.
+        names = sorted(set(buffering))
+        held = f"{names[0]} holds" if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]} hold"
+        text += f" (its {held} each record it logs)"
+    return text
