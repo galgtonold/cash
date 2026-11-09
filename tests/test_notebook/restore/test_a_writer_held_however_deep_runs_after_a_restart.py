@@ -1,4 +1,4 @@
-"""A function that holds a builtin which changes what it is bound to or
+"""A function that holds something which changes what it is bound to or
 handed runs after a restart, wherever it holds it.
 
 ``f = mk()``, then ``y = f(1)``: ``f`` calls a writer it holds, and the
@@ -10,20 +10,22 @@ own closure was seen; these shapes were served, and the write was lost:
 - a ``partial`` over a builtin function that writes its argument
   (``setattr``, ``operator.setitem``, ``heapq.heappush``);
 - a writer held one step further: in a helper's closure, in a dict of hooks,
-  on an object's attribute.
+  on an object's attribute, on a class the notebook names;
+- a ``partial`` handing ``out=`` a mutable array, or over ``np.copyto``;
+- an ``operator.methodcaller`` of a method that writes;
+- ``defaultdict.__getitem__``, which inserts a missing key.
+
+A library's Python method named as one that writes (``counter.update``,
+``series.update``, ``UserList.append``) is kept as a writer: the trace
+records the user's code, not a library's.
 
 Every call is kept, so a hit is not left to timing. The controls hold only
 readers and count their runs through a note a hit may skip
 (`tests._run_log`): they are still served.
 """
 
-import functools
-
-import numpy as np
-import pandas as pd
 import pytest
 
-from cash.notebook.call_key import changes_its_closure, holds_a_stream
 from tests._cell_driver import run_cash_cell
 from tests._run_log import RunLog
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S as F
@@ -31,7 +33,7 @@ from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S as F
 SLEEP = f"(time.sleep({F}), 0)[1]"
 FACTORY = "def mk():\n    note = {held}\n    def g(x):\n        note({args})\n        return x\n    return g\nf = mk()"
 INIT = (
-    "import time, functools, operator, heapq\nimport numpy as np\n"
+    "import time, functools, operator, heapq, collections\nimport numpy as np, pandas as pd\n"
     "class R:\n    pass\n"
     "calls = []\nd = {}\nr = R()\narr = np.zeros(2)\n"
 )
@@ -56,6 +58,31 @@ SHAPES = {
         "w = R()\nw.note = calls.append\n"
         "def mk():\n    o = w\n    def g(x):\n        o.note(x)\n        return x\n    return g\nf = mk()",
         "calls",
+    ),
+    "on_a_named_class": (
+        "class H:\n    note = calls.append\ndef mk():\n    h = H\n    def g(x):\n        h.note(x)\n        return x\n"
+        "    return g\nf = mk()",
+        "calls",
+    ),
+    "counter_update": (
+        "c = collections.Counter()\n" + FACTORY.format(held="c.update", args="'ab'"),
+        "sorted(c.items())",
+    ),
+    "userlist_append": ("ul = collections.UserList()\n" + FACTORY.format(held="ul.append", args="x"), "list(ul)"),
+    "series_update": (
+        "ser = pd.Series([1, 2])\n" + FACTORY.format(held="ser.update", args="pd.Series([9], index=[0])"),
+        "ser.tolist()",
+    ),
+    "partial_out": (FACTORY.format(held="functools.partial(np.add, arr, 1, out=arr)", args=""), "arr.tolist()"),
+    "partial_copyto": (FACTORY.format(held="functools.partial(np.copyto, arr, 5.0)", args=""), "arr.tolist()"),
+    "methodcaller": (FACTORY.format(held="operator.methodcaller('append', 1)", args="calls"), "calls"),
+    "partial_of_a_methodcaller": (
+        FACTORY.format(held="functools.partial(operator.methodcaller('append', 1), calls)", args=""),
+        "calls",
+    ),
+    "defaultdict_getitem": (
+        "dd = collections.defaultdict(int)\n" + FACTORY.format(held="dd.__getitem__", args="x"),
+        "dict(dd)",
     ),
 }
 
@@ -95,7 +122,11 @@ READERS = {
     "nothing_else": "note2 = abs",
     "a_read_only_method": "note2 = calls.count",
     "a_dict_of_readers": "note2 = {'n': d.get}['n']",
-    "a_library_method_in_python": "note2 = pd.Series([1, 2]).add",
+    "a_library_method_in_python": "note2 = pd.Series([1, 2]).get",
+    "an_arrays_reader": "note2 = np.arange(4).__getitem__",
+    "a_numpy_scalars_method": "note2 = np.float64(2.0).__mul__",
+    "a_struct_reader": "note2 = (lambda u: lambda x: u(b'\\x01\\x00\\x00\\x00'))(struct.Struct('<i').unpack)",
+    "a_methodcaller_of_a_reader": "note2 = (lambda m: lambda x: m({1: 2}))(operator.methodcaller('get', 1))",
 }
 
 
@@ -107,34 +138,10 @@ def test_a_function_holding_only_readers_is_still_served(cash_magics, cash_insta
     # The event's name, not the log: what the log holds changes as it fills.
     cash_magics.shell.user_ns["EVENT"] = log.event
     body = (
-        "import sys, pandas as pd\n"
+        "import sys, struct\n"
         f"def mk():\n    note = functools.partial(sys.audit, EVENT)\n    {READERS[held]}\n"
         "    def g(x):\n        note(x)\n        note2(x)\n        return x\n    return g\nf = mk()"
     )
     cells = [INIT + body, f"y = (f(1), {SLEEP})", "seen = y[0]"]
     assert _run_twice(cash_magics, cells) == [1, 1]
     assert log == [1], "the second run after the restart was served"
-
-
-def test_a_writer_is_told_from_a_reader_by_what_it_is():
-    """Read off the method itself, not its name: ``Series.add`` and
-    ``Index.append`` are Python methods that hand back a new object, which
-    a name list of writers refused."""
-
-    def mk(held):
-        def g(x):
-            return held(x)
-
-        return g
-
-    calls, table = [], {}
-    for writer in (
-        calls.append,
-        table.__setitem__,
-        np.zeros(2).fill,
-        functools.partial(setattr, object()),
-        {"n": calls.append},
-    ):
-        assert holds_a_stream(mk(writer)) and changes_its_closure(mk(writer)), writer
-    for reader in (calls.count, table.get, len, str.join, pd.Series([1]).add, pd.Index([1]).append):
-        assert not holds_a_stream(mk(reader)) and not changes_its_closure(mk(reader)), reader
