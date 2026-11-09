@@ -25,7 +25,7 @@ import types
 from collections.abc import Mapping
 from typing import Any, Callable, Iterable
 
-from cash._user_attrs import attribute_or, has_attribute, instance_of
+from cash._user_attrs import attribute_or, has_attribute, instance_of, is_routine
 
 from .._memo import CODE_OBJECTS, NOTEBOOK_STATEMENTS, LruMemo
 from ..analysis.ast_util import parse_cached, walk_tree
@@ -1060,28 +1060,155 @@ def module_data_digest(label: str, value: Any) -> str:
         return UNHASHABLE + secrets.token_hex(16)
 
 
+#: How deep `held_code_at_digest` follows routines held by routines (a
+#: wrapper's closure holding the function it wraps, a method's function).
+_CODE_AT_DEPTH = 8
+
+
 def held_code_at_digest(value: Any) -> str:
-    """Which routine *value*, found at a module's attribute, is: the code it
-    holds (`held_code_digest`: a function's own, its defaults' and its
-    closure's), or, for one that is not the user's (``math.sqrt``), its
-    type and qualified name. Never its pickle, which a lambda has none of."""
+    """Which routine *value*, found at a module's attribute, is: everything
+    its answer turns on, digested the same in every process.
+
+    A function: the code it holds (`held_code_digest`), its own compiled
+    body and constants (two lambdas on one line have one source), and the
+    data its defaults and closure hold (``mk(1)`` and ``mk(2)``, a default
+    ``Random(1)`` or ``Random(2)``). A bound method: its function and the
+    content of the object it is bound to (``C(1).get``, ``{'a': 1}.get``,
+    ``'aaa'.count``). Another routine (``math.sqrt``, ``np.sum``): its type
+    and qualified name.
+
+    `UNHASHABLE` when a part cannot be digested: the key then matches no
+    entry (`compute_cache_key`)."""
     try:
-        code = held_code_digest(value)
+        parts: list[str] = []
+        _routine_parts(value, parts, 0, {})
     except Exception:
-        logger.debug("Could not digest the code at a module attribute", exc_info=True)
+        logger.debug("Could not digest the routine at a module attribute", exc_info=True)
         return UNHASHABLE + secrets.token_hex(16)
-    if code:
-        return "code:" + code
+    if any(part.startswith(UNHASHABLE) for part in parts):
+        return UNHASHABLE + secrets.token_hex(16)
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+
+
+def _routine_parts(value: Any, parts: list[str], depth: int, met: dict[int, int]) -> None:
+    """Add to *parts* what *value*'s answer turns on (`held_code_at_digest`).
+    A routine met before on the way (a recursive inner function its own
+    closure holds) is named by the order it was first met in."""
+    if id(value) in met:
+        parts.append(f"again:{met[id(value)]}")
+        return
+    if depth > _CODE_AT_DEPTH:
+        parts.append(UNHASHABLE)
+        return
+    met[id(value)] = len(met)
     kind = type(value)
+    if kind is types.FunctionType:
+        parts.append("fn:" + held_code_digest(value))
+        parts.append("body:" + _body_digest(value.__code__))
+        held: list[Any] = [*(value.__defaults__ or ()), *sorted((value.__kwdefaults__ or {}).items())]
+        for cell in value.__closure__ or ():
+            try:
+                held.append(cell.cell_contents)
+            except ValueError:  # an empty cell
+                held.append(None)
+        for item in held:
+            _held_part(item, parts, depth, met)
+        return
+    owner = attribute_or(value, "__self__", None)
+    if kind is types.MethodType:
+        _routine_parts(value.__func__, parts, depth + 1, met)
+        _held_part(owner, parts, depth, met)
+        return
     name = f"{attribute_or(value, '__module__', None)}.{attribute_or(value, '__qualname__', None)}"
-    return f"named:{kind.__module__}.{kind.__qualname__}:{name}"
+    parts.append(f"named:{kind.__module__}.{kind.__qualname__}:{name}")
+    if owner is not None and not instance_of(owner, types.ModuleType):
+        # A builtin bound to an object: ``{'a': 1}.get``, ``'aaa'.count``.
+        _held_part(owner, parts, depth, met)
+
+
+def _held_part(item: Any, parts: list[str], depth: int, met: dict[int, int]) -> None:
+    """A value a routine holds: a function or method by `_routine_parts`, a
+    class or module by its name, anything else by its content and the code
+    it holds, as `module_data_digest` keys module data; one hashed only by
+    which object it is, as none."""
+    if item is None or instance_of(item, types.ModuleType):
+        parts.append(f"held:{attribute_or(item, '__name__', None)}")
+    elif instance_of(item, type):
+        parts.append(f"class:{attribute_or(item, '__module__', None)}.{attribute_or(item, '__qualname__', None)}")
+    elif type(item) in (types.FunctionType, types.MethodType) or (
+        is_routine(item) and attribute_or(item, "__self__", None) is not None
+    ):
+        _routine_parts(item, parts, depth + 1, met)
+    else:
+        digest = compute_hash(item)
+        if is_identity_fallback_hash(item, digest):
+            # Which object, not what it holds: blind to a change in place,
+            # and another in the next process.
+            parts.append(UNHASHABLE)
+            return
+        code = held_code_digest(item)
+        parts.append(f"data:{digest}:{code}")
+
+
+def _body_digest(code: types.CodeType) -> str:
+    """*code*'s compiled body, constants and names, nested code included:
+    the same in every process, unlike its file name and positions."""
+    found: list[str] = []
+    stack = [code]
+    while stack:
+        co = stack.pop()
+        found.append(co.co_code.hex())
+        found.append(repr(co.co_names))
+        for const in co.co_consts:
+            if isinstance(const, types.CodeType):
+                stack.append(const)
+            elif isinstance(const, frozenset):
+                # ``x in {"a", "b"}``: its order follows the string hashes.
+                found.append(repr(sorted(map(repr, const))))
+            else:
+                found.append(repr(const))
+    return hashlib.sha256("\x00".join(found).encode("utf-8")).hexdigest()
 
 
 def held_code_component(reach: Reach) -> str:
     """The key component of the routines *reach* found at modules'
     attributes (`Reach.code_at`): empty when it found none."""
-    joined = ":".join(f"{label}={held_code_at_digest(value)}" for label, value in reach.code_at)
+    parts = []
+    for label, value in reach.code_at:
+        digest = held_code_at_digest(value)
+        if digest.startswith(UNHASHABLE):
+            _warn_unread_routine(label, value)
+        parts.append(f"{label}={digest}")
+    joined = ":".join(parts)
     return f":codeat:{joined}" if joined else ""
+
+
+def unread_routine_in(component: str) -> bool:
+    """Whether *component* (`held_code_component`'s) has a routine that
+    could not be digested: a key holding it must match no entry."""
+    return f"={UNHASHABLE}" in component.partition(":codeat:")[2]
+
+
+#: The labels `_warn_unread_routine` has warned about, in this process.
+_UNREAD_ROUTINES_WARNED: set[str] = set()
+
+
+def _warn_unread_routine(label: str, value: Any) -> None:
+    """Say once that a call reading the routine at *label* runs uncached."""
+    if label in _UNREAD_ROUTINES_WARNED:
+        return
+    _UNREAD_ROUTINES_WARNED.add(label)
+    from ..diagnostics import warn_diagnostic
+    from ..exceptions import CashCacheIneffectiveWarning
+
+    warn_diagnostic(
+        CashCacheIneffectiveWarning,
+        "KEY-UNHASHABLE-GLOBAL",
+        f"a call reads '{label.lstrip('@')}', a {type(value).__qualname__} holding a value cash could not hash, "
+        "so it cannot tell that routine from another put there: the call runs every time.",
+        "register a hasher for the type it holds with cash.register_hasher, or set a function that "
+        "holds plain values there.",
+    )
 
 
 def module_data_digests(reach: Reach) -> list[tuple[str, str]]:

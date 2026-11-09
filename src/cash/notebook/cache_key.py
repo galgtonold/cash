@@ -44,6 +44,7 @@ from .lineage_formula import (
     is_module_like,
     module_read_lineage,
     read_module_source_hash,
+    unread_routine_in,
 )
 from .recorded_reads import ReadRecord, choose, read_parts, watch
 from .string_lookups import (
@@ -1381,6 +1382,9 @@ def compute_cache_key(
     # when there is some, so every other key is unchanged.
     reads = _recorded_reads_component(code, ctx, f"{namespace}:{combined_hash_str}", held_code=namespace == "call")
     combined_hash_str += reads
+    # A routine at a module's attribute the call reads that could not be
+    # digested: what the call runs is not in the key (`held_code_at_digest`).
+    unread_routine = namespace == "call" and unread_routine_in(reads)
     combined_hash = hashlib.sha256(combined_hash_str.encode("utf-8")).hexdigest()
     cache_key = f"{namespace}:{combined_hash}"
     if unmatched:
@@ -1419,7 +1423,7 @@ def compute_cache_key(
     body_imported = [part.split(":")[1] for part in callee_deps if part.startswith("bodyimport:")]
     if body_imported:
         remember_body_imports(cache_key, body_imported)
-    if unfollowed or (by_string and not followed) or unkeyed_modules:
+    if unmatched or unread_routine:
         result.matches_nothing = True
     return result
 
