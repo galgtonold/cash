@@ -251,6 +251,7 @@ from ..shared_objects import (
 from ..value_cutoff import LineageAliasStore, ValueLineageLog, use_value_lineage_log
 from ..write_observer import child_works, children_left_running, keeps_a_write, kept_writes, observe_writes
 from . import hidden_generators, in_place
+from .collect_first import CollectFirstStore
 from .lineage import note_own_writes
 from .observed_draws import ObservedDrawStore
 from .thread_reach import ThreadReach
@@ -954,6 +955,8 @@ class StatementProcessor:
         self._as_written_prints: dict[str, tuple[int, str, str]] = {}
         self._key_parts: KeyParts | None = None
         self._randomness.use_draw_store(ObservedDrawStore(_guard_dir) if _guard_dir else None)
+        #: `TrackingState.collect_first`, kept across kernels.
+        self._collect_first_store = CollectFirstStore(_guard_dir) if _guard_dir else None
         self._evicted = EvictedRecomputes()
 
         # Statement-level file-dep tracker. Stateless w.r.t. tracking state —
@@ -1478,9 +1481,13 @@ class StatementProcessor:
         finalizers at a moment no code chooses, too: these only come sooner."""
         collect_first = self.tracking_state.collect_first
         place = _collect_place(run)
-        if place not in collect_first:
+        kept = self._collect_first_store
+        if place in collect_first:
+            del collect_first[place]
+        elif kept is None or place not in kept:
             return
-        del collect_first[place]
+        if kept is not None:
+            kept.discard(place)
         with untracked():
             gc.collect()
         run.collected_first = True
@@ -1915,6 +1922,8 @@ class StatementProcessor:
                     collect_first[_collect_place(run)] = None
                     while len(collect_first) > _UNSEEN_REFUSED_KEPT:
                         del collect_first[next(iter(collect_first))]
+                    if self._collect_first_store is not None:
+                        self._collect_first_store.add(_collect_place(run))
                     run.skip_cache = True
                     run.metrics["uncacheable_reasons"].append(COLLECTED_ONLY_REASON.format(fn=found[0][0]))
                     return
