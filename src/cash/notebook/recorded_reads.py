@@ -38,6 +38,7 @@ from ..sizing import estimate_object_size
 from .callee_reach import module_state_writes, names_read, notebook_module, reached_user_code
 from .lineage_formula import (
     UNHASHABLE,
+    held_code_component,
     module_data_digest,
     module_data_parts_component,
     statement_environment_reads,
@@ -70,6 +71,9 @@ class ReadParts(NamedTuple):
 
     env: tuple[tuple[str, str], ...] = ()
     mod: tuple[tuple[str, str], ...] = ()
+    #: `held_code_component` of the routines found at modules' attributes:
+    #: for a call's key only (`compute_cache_key`), not recorded or watched.
+    code_at: str = ""
 
     def component(self) -> str:
         """The key component: what ``compute_cache_key`` appends."""
@@ -133,7 +137,7 @@ def read_parts(code: str, user_ns: Mapping[str, Any] | None) -> ReadParts:
     reach = reached_user_code(code, user_ns)
     env = tuple(environment_digests(statement_environment_reads(code, user_ns, reach)))
     mod = tuple((label, _data_digest(label, value)) for label, value in reach.data)
-    return ReadParts(env, mod)
+    return ReadParts(env, mod, held_code_component(reach))
 
 
 def watch(parts: ReadParts, record: ReadRecord) -> None:

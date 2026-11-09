@@ -1060,6 +1060,30 @@ def module_data_digest(label: str, value: Any) -> str:
         return UNHASHABLE + secrets.token_hex(16)
 
 
+def held_code_at_digest(value: Any) -> str:
+    """Which routine *value*, found at a module's attribute, is: the code it
+    holds (`held_code_digest`: a function's own, its defaults' and its
+    closure's), or, for one that is not the user's (``math.sqrt``), its
+    type and qualified name. Never its pickle, which a lambda has none of."""
+    try:
+        code = held_code_digest(value)
+    except Exception:
+        logger.debug("Could not digest the code at a module attribute", exc_info=True)
+        return UNHASHABLE + secrets.token_hex(16)
+    if code:
+        return "code:" + code
+    kind = type(value)
+    name = f"{attribute_or(value, '__module__', None)}.{attribute_or(value, '__qualname__', None)}"
+    return f"named:{kind.__module__}.{kind.__qualname__}:{name}"
+
+
+def held_code_component(reach: Reach) -> str:
+    """The key component of the routines *reach* found at modules'
+    attributes (`Reach.code_at`): empty when it found none."""
+    joined = ":".join(f"{label}={held_code_at_digest(value)}" for label, value in reach.code_at)
+    return f":codeat:{joined}" if joined else ""
+
+
 def module_data_digests(reach: Reach) -> list[tuple[str, str]]:
     """``(label, digest)`` of each piece of module data *reach* reads, in its order."""
     return [(label, module_data_digest(label, value)) for label, value in reach.data]
