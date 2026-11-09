@@ -400,6 +400,36 @@ KEEPS_MEMORY.update(
             "        self.inner = Inner(a)\nkeep = Holder",
             "[model.kept_.inner.a is model.X_, float(np.abs(model.kept_.inner.a).max())]",
         ),
+        "dict_setitem_copies": (
+            None,
+            "class Holder(dict):\n"
+            "    def __init__(self, a):\n"
+            "        super().__init__(x=a)\n"
+            "    def __setitem__(self, k, v):\n"
+            "        super().__setitem__(k, np.array(v) if isinstance(v, np.ndarray) else v)\nkeep = Holder",
+            "[model.kept_['x'] is model.X_, float(np.abs(model.kept_['x']).max())]",
+        ),
+        "list_extend_copies": (
+            None,
+            "class Holder(list):\n"
+            "    def __init__(self, a):\n"
+            "        super().__init__([a])\n"
+            "    def extend(self, items):\n"
+            "        super().extend(np.array(v) if isinstance(v, np.ndarray) else v for v in items)\n"
+            "    def append(self, v):\n"
+            "        super().append(np.array(v) if isinstance(v, np.ndarray) else v)\nkeep = Holder",
+            "[model.kept_[0] is model.X_, float(np.abs(model.kept_[0]).max())]",
+        ),
+        "slots_setattr_copies": (
+            None,
+            "class Holder:\n"
+            "    __slots__ = ('a',)\n"
+            "    def __init__(self, a):\n"
+            "        object.__setattr__(self, 'a', a)\n"
+            "    def __setattr__(self, k, v):\n"
+            "        object.__setattr__(self, k, np.array(v) if isinstance(v, np.ndarray) else v)\nkeep = Holder",
+            _HELD,
+        ),
         "partial": (
             None,
             "import functools\ndef keep(a):\n    return functools.partial(np.sum, a)",
@@ -580,6 +610,38 @@ class _Steps:
 class _KeepsState(_Fit):
     def __getstate__(self):
         return dict(self.__dict__)
+
+
+class _Keyed(_Fit):
+    def __eq__(self, other):
+        return self is other
+
+    def __hash__(self):
+        return id(self)
+
+
+def test_an_object_hashed_by_its_own_methods_is_refused_as_a_key_only():
+    """``__eq__`` and ``__hash__`` of its own pass where pickling does not
+    call them, and refuse on a dict's key, which an unpickler hashes."""
+    X_train = np.arange(12.0).reshape(3, 4)[:2]
+    held = _Keyed(X_train)
+    assert array_memory_held_apart({"m": [held]}, {"X_train": X_train}) is None
+    assert array_memory_held_apart({"m": {held: 1}}, {"X_train": X_train}) == "X_train"
+
+
+def test_the_estimator_exception_holds_for_the_version_read_only(monkeypatch):
+    """``BaseEstimator``'s pickling passes in the scikit-learn version
+    whose code was read; in any other, an estimator is refused."""
+    sklearn = pytest.importorskip("sklearn")
+    from sklearn.neighbors import KNeighborsClassifier
+
+    X_train = np.arange(12.0).reshape(3, 4)[:2]
+    if sklearn.__version__ != "1.9.1":
+        pytest.skip("the exception is for scikit-learn 1.9.1")
+    knn = KNeighborsClassifier(n_neighbors=1, algorithm="brute").fit(X_train, [0, 1])
+    assert array_memory_held_apart({"m": knn}, {"X_train": X_train}) is None
+    monkeypatch.setattr(sklearn, "__version__", "1.9.2")
+    assert array_memory_held_apart({"m": knn}, {"X_train": X_train}) == "X_train"
 
 
 def test_only_objects_pickled_by_default_pass():
