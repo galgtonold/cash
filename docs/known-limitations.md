@@ -762,6 +762,22 @@ One that reads `globals()` or `vars()` counts as a change of every variable.
 **Fix:** have `__getstate__` / `__reduce__` only read, and change those values
 in the cell that needs them.
 
+### A class whose pickling copies an object it shares
+
+When a statement's result holds an object another variable also holds
+(`model = Model().fit(X)` keeping `X`), cash stores them together, so after a
+restart the model and `X` again hold one object. That only works if every
+part pickles that object as itself. A class defined in the notebook whose own
+`__reduce__`, `__getstate__`, `__setstate__` or `copyreg` reducer copies what
+it holds (`self.a.copy()`, `self.a.tolist()`, `copy.deepcopy(self.cfg)`) gets
+its own copy back on a hit: a later `X[0] = 1` or `cfg['lr'] = 0.5` reaches
+`X` or `cfg` but not that copy, where plain Python changes both. Library
+objects that keep an array's memory where pickling cannot see it (a torch
+tensor from `torch.from_numpy`, a scipy `cKDTree`) are already refused and run
+every time. **Fix:** have the class pickle the shared object itself (return
+`self.a`, not a copy), or copy it explicitly in the cell that builds it, so
+plain Python has two objects too.
+
 ### A loop variable changed before it is read
 
 <!-- claim: cash/notebook/control_structures/for_handler.py:ForLoopHandler._process_one_iteration @5304abe8 -->
