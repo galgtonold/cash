@@ -1353,7 +1353,8 @@ def standalone_method_call_receivers(tree: ast.Module | None) -> frozenset[tuple
 
 #: Module functions that change a setting the module keeps: ``pd.set_option``,
 #: ``plt.style.use``, ``np.seterr``, ``warnings.filterwarnings``. Matched with
-#: :func:`module_setting_receivers`, which also takes ``set`` and any ``set_*``.
+#: :func:`module_setting_receivers`, which also takes any setter name
+#: (:func:`is_setter_name`).
 MODULE_SETTING_FUNCTIONS = frozenset(
     {
         "use",
@@ -1366,6 +1367,15 @@ MODULE_SETTING_FUNCTIONS = frozenset(
         "reset_option",
     }
 )
+
+
+def is_setter_name(method: str) -> bool:
+    """``set``, ``set_*``, or ``set`` and a capital in camelCase: logging's
+    ``getLogger(n).setLevel(40)`` sets the level the module keeps for ``n``,
+    and was read as an unknown method on the module, which changes nothing,
+    so a reader of that level was served the one before it. Not
+    ``setdefault``: ``set`` then a lowercase letter is another word."""
+    return method == "set" or method.startswith("set_") or (method[3:4].isupper() and method.startswith("set"))
 
 
 def module_setting_receivers(tree: ast.Module | None) -> frozenset[str]:
@@ -1422,7 +1432,7 @@ def repeatable_setting_receiver(tree: ast.Module | None) -> str | None:
         return None
     base = chain.id
     method = func.attr
-    setter = method == "set" or method.startswith("set_") or method in MODULE_SETTING_FUNCTIONS
+    setter = is_setter_name(method) or method in MODULE_SETTING_FUNCTIONS
     rc_update = method == "update" and isinstance(func.value, ast.Attribute) and func.value.attr == "rcParams"
     if not (setter or rc_update):
         return None
@@ -1682,8 +1692,7 @@ class _TopLevelCallCollector:
         on_attribute = isinstance(func.value, ast.Attribute)
         if (
             (on_attribute and method in MUTATING_METHODS)
-            or method == "set"
-            or method.startswith("set_")
+            or is_setter_name(method)
             or method in MODULE_SETTING_FUNCTIONS
         ):
             self.setting_receivers.add(base)
@@ -1691,7 +1700,7 @@ class _TopLevelCallCollector:
             # handed, not on the module; a call handing no name, or any
             # other kind of setting, is the module's own.
             handed = frozenset()
-            if method == "set" or method.startswith("set_"):
+            if is_setter_name(method):
                 handed = frozenset(
                     arg.id for arg in [*call.args, *(kw.value for kw in call.keywords)] if isinstance(arg, ast.Name)
                 )
