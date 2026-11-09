@@ -130,6 +130,9 @@ from cash.notebook.statement.run import (
     over_the_handed_iterable,
 )
 from cash.notebook.statement.served_frame_writes import ServedFrameWrites
+from cash.notebook.statement.share_ran_out import Bindings as ShareBindings
+from cash.notebook.statement.share_ran_out import Outputs as ShareOutputs
+from cash.notebook.statement.share_ran_out import ShareRanOut, other_bindings, outputs_bindings
 from cash.notebook.statement.store import StatementStore
 from cash.notebook.statement.unstored import MEMORY_ONLY, UnstoredNotes
 from cash.notebook.tracking_state import ENTRY_HISTORY, TrackingState
@@ -744,6 +747,11 @@ _NO_STATE = (
 _PYTHON = ".".join(map(str, sys.version_info[:3]))
 
 
+#: What the share check of a statement's outputs looks for, as its refusal
+#: names it when it runs out of time (`_cut_short_why`).
+_SHARE_CHECK_WHAT = "finding which other variables hold objects of its outputs"
+
+
 def _cut_short_why(what: str, budget: float) -> str:
     """Why a statement whose share check was cut short re-runs: out of time,
     or a Python that cannot read what holds an object (`heap_unreadable`)."""
@@ -872,6 +880,9 @@ class StatementProcessor:
         self._refused_entry_digests: dict[str, tuple[Any, dict[str, str]]] = {}
         #: Statements the share check refused, by key (`_refused_again`).
         self._share_refused: dict[str, list] = {}
+        #: The share checks measured running out of their budget, by what
+        #: they walked (`_share_walk_of`).
+        self._share_ran_out = ShareRanOut(self._SHARE_REFUSED_MAX)
         #: Statements already warned NOTEBOOK-SHARE-UNCHECKED about.
         self._share_unchecked_warned: set[str] = set()
         #: Writes into served tables an array taken before did not see.
@@ -4021,6 +4032,13 @@ class StatementProcessor:
         # saves `cost`, and finding the holders of a loop variable that is
         # an element of a list of 40,000 sessions took 6 s after a 0.1 s loop.
         budget = share_check_budget(cost)
+        walked, others = self._share_walk_of(run, captured_vars, holders is None)
+        if self._share_ran_out.known(walked, budget, others):
+            # Measured running out of at least this budget over the same
+            # objects and content, with the notebook as it is: refused as
+            # the walk would refuse it, without walking it again.
+            self._refuse_cut_short(run, budget)
+            return None
         found: dict[str, Any] | None = None
         gave_up: list[GaveUp] = []
         anchors: dict[str, Any] = {}
@@ -4130,7 +4148,8 @@ class StatementProcessor:
                     }
         except WalkBudgetExceeded:
             run.share_unchecked = True
-            reason = _cut_short_why("finding which other variables hold objects of its outputs", budget)
+            reason = _cut_short_why(_SHARE_CHECK_WHAT, budget)
+            self._share_ran_out.note(walked, budget, others)
         finally:
             captured_vars.pop(MEMO_ANSWERS_NAME, None)
         if reason is None and anchors:
@@ -4160,6 +4179,39 @@ class StatementProcessor:
             run.metrics.setdefault("uncacheable_reasons", []).append(reason)
             return None
         return holders
+
+    def _share_walk_of(
+        self, run: StatementRun, captured_vars: Mapping[str, Any], control_body: bool
+    ) -> tuple[ShareOutputs | None, Callable[[], ShareBindings]]:
+        """What *run*'s share check walks, for `ShareRanOut`: its outputs by
+        object and content digest (None when that cannot tell the walk the
+        same: a control body's check, answers put into helper memos, an
+        output without a content digest, no value hash to take one), and
+        what gives the notebook's other variables, asked only when an entry
+        is found or noted."""
+        tracking = self.tracking_state
+        session, lineage = tracking.current_session_hashes, tracking.variable_lineage
+        user_ns = self.shell.user_ns
+        hidden = attribute_or(self.shell, "user_ns_hidden", None) or {}
+        outputs = run.outputs
+
+        def others() -> ShareBindings:
+            return other_bindings(
+                user_ns, lambda name: name in outputs or name in hidden or is_history_name(name), session, lineage
+            )
+
+        if control_body or run.memo_changes or self.compute_hash is None:
+            return None, others
+        return outputs_bindings(sorted(outputs), captured_vars, session, lineage), others
+
+    def _refuse_cut_short(self, run: StatementRun, budget: float) -> None:
+        """Refuse *run* as a share check that ran out of *budget* does."""
+        run.share_unchecked = True
+        reason = _cut_short_why(_SHARE_CHECK_WHAT, budget)
+        run.share_gave_up = None
+        self._note_share_refusal(run, reason)
+        run.skip_cache = True
+        run.metrics.setdefault("uncacheable_reasons", []).append(reason)
 
     #: Most statements `_share_refused` remembers, and the most runs one is
     #: refused in a row without the check.
