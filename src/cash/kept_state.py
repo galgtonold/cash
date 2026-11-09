@@ -2749,7 +2749,7 @@ def _stream_key(stream: Any) -> Any:
         return (type(stream), known[1])
     token = uuid.uuid4().hex
     try:
-        held = weakref.ref(stream, lambda _gone, key=key: _STREAM_TOKENS.pop(key, None))
+        held = _weak.ref(stream, lambda _gone, key=key: _STREAM_TOKENS.pop(key, None))
     except TypeError:  # one that takes no weak reference: held, until the session ends
         held = functools.partial(operator.itemgetter(0), (stream,))
     _STREAM_TOKENS[key] = (held, token)
