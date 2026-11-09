@@ -290,7 +290,7 @@ def pickled_size_estimate(value: Any, _depth: int = 0, _seen: set[int] | None = 
         return _items_estimate(value.values() if type(value) is dict else value, _depth + 1, seen)
     kind = type(value).__name__
     try:
-        if type(value).__module__.startswith("polars") and kind in ("DataFrame", "Series"):
+        if kind in ("DataFrame", "Series") and from_family(type(value), "polars"):
             # Its Arrow buffers, which is what the store pickles
             # (`serialization._reduce_polars`); polars sums them natively.
             return int(value.estimated_size())
@@ -466,7 +466,7 @@ def _data_size(obj: Any) -> int | None:
     if kind in CODELESS_PRIMS or kind in BUILTIN_CONTAINERS:
         return None
     type_name = kind.__name__
-    if type_name in ("DataFrame", "Series", "LazyFrame") and kind.__module__.startswith("polars"):
+    if type_name in ("DataFrame", "Series", "LazyFrame") and from_family(kind, "polars"):
         # Not a pandas frame: no block manager and no ``memory_usage``. Its
         # Arrow buffers are what ``estimated_size`` counts.
         try:

@@ -255,9 +255,9 @@ def _unwritable(value) -> bool:
     if isinstance(value, enum.Enum):
         return True
     kind = type(value)
-    if kind.__name__ in _PANDAS_SCALARS and (kind.__module__ or "").startswith("pandas"):
+    if kind.__name__ in _PANDAS_SCALARS and from_family(kind, "pandas"):
         return True  # a ``__dict__`` only for attributes set by hand
-    if any(k.__name__ == "ExtensionDtype" and (k.__module__ or "").startswith("pandas") for k in kind.__mro__):
+    if any(k.__name__ == "ExtensionDtype" and from_family(k, "pandas") for k in kind.__mro__):
         return True  # a dtype (``Int64Dtype()``, ``CategoricalDtype([...])``): immutable
     params = getattr(kind, "__dataclass_params__", None)
     if params is not None and getattr(params, "frozen", False):
@@ -490,9 +490,7 @@ def _exposes(frame, exposed: set[int], exposed_parts: list) -> bool:
 
 def _is_extension_array(value) -> bool:
     """A pandas ExtensionArray itself (``DF['c'].array``), not a column."""
-    return any(
-        k.__name__ == "ExtensionArray" and (k.__module__ or "").startswith("pandas") for k in type(value).__mro__
-    )
+    return any(k.__name__ == "ExtensionArray" and from_family(k, "pandas") for k in type(value).__mro__)
 
 
 def _held_arrays(result, depth: int | None = None) -> list:

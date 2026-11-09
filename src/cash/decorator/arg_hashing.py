@@ -1363,7 +1363,7 @@ def _handed_out_as_kept(handle: Any) -> bool:
 
 def _is_categorical(handle: Any) -> bool:
     t = type(handle)
-    return t.__name__ == "Categorical" and (t.__module__ or "").startswith("pandas")
+    return t.__name__ == "Categorical" and from_family(t, "pandas")
 
 
 def _held_string_array(handle: Any) -> bool:
@@ -1371,7 +1371,7 @@ def _held_string_array(handle: Any) -> bool:
     column's or an index's ``.values`` hands out that very array, writable
     (``s.values[0] = "x"`` writes into the frame), not a read-only view."""
     t = type(handle)
-    return t.__name__ == "StringArray" and (t.__module__ or "").startswith("pandas")
+    return t.__name__ == "StringArray" and from_family(t, "pandas")
 
 
 def _note_exposed(handle: Any) -> None:
@@ -1505,7 +1505,7 @@ class _CostliestArg:
                 producer = self._frozen.containers[id(value)][1]
             old_pandas = (
                 type(value).__name__ in ("DataFrame", "Series")
-                and (type(value).__module__ or "").startswith("pandas")
+                and from_family(type(value), "pandas")
                 and not is_cow_pandas(value)
             )
             self.costliest = (label, seconds, type(value).__name__, producer, old_pandas)

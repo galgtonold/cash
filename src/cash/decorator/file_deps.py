@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from .._clock import perf_counter as _perf_counter
 from .._paths import normalize_path
+from .._user_attrs import from_family
 from ..code_digest import own_source_digest
 from ..content_hashers import lazy_frame_sources
 from ..exceptions import CashCacheIneffectiveWarning, CashCacheStoreFailedWarning
@@ -364,7 +365,7 @@ class FileDeps:
                 values.extend(value.values())
         for value in values:
             cls = type(value)
-            if cls.__name__ != "LazyFrame" or not cls.__module__.startswith("polars"):
+            if cls.__name__ != "LazyFrame" or not from_family(cls, "polars"):
                 continue
             for path in lazy_frame_sources(value) or ():
                 _track_declared(tracker, path)

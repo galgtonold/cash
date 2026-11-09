@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 from .. import identity_refs
 from .._clock import perf_counter as _perf_counter
 from .._memo import RESULT_TYPES, LruMemo
+from .._user_attrs import from_family
 from ..backends.memory_backend import InMemoryBackend
 from ..backends.serialization import PickleSerializer
 from ..backends.tiered_backend import TieredBackend
@@ -93,7 +94,7 @@ UNTAGGABLE_TYPES: LruMemo[type, bool] = LruMemo(RESULT_TYPES)
 def _read_only_array(value: Any) -> bool | None:
     """False/True for a writable/read-only numpy array, None for anything else."""
     value_type = type(value)
-    if value_type.__name__ != "ndarray" or not (value_type.__module__ or "").startswith("numpy"):
+    if value_type.__name__ != "ndarray" or not from_family(value_type, "numpy"):
         return None
     return not value.flags.writeable
 
@@ -607,7 +608,7 @@ class ResultStore:
         if frozen and type(result) in (list, tuple, dict):
             self._frozen.remember_container(result, func_name, lineage_hash(cache_key, auto_file_deps))
             return
-        if frozen and type(result).__name__ == "ndarray" and (type(result).__module__ or "").startswith("numpy"):
+        if frozen and type(result).__name__ == "ndarray" and from_family(type(result), "numpy"):
             # An array cannot carry a tag, and read-only is a promise numpy
             # enforces: a write raises instead of going stale.
             try:

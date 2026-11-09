@@ -33,7 +33,7 @@ import types
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
-from ..._user_attrs import attribute_or, has_attribute, instance_of, own_dict
+from ..._user_attrs import attribute_or, from_family, has_attribute, instance_of, own_dict
 from ...analysis.ast_util import walk_tree
 from ...analysis.callee_effects import free_vars_mutated_in_function, scope_locals
 from ...analysis.mutations import MUTATING_METHODS
@@ -606,7 +606,7 @@ def _object_array(held: Any, pd: Any, np: Any) -> Any:
     if issubclass(type(held), pd.Categorical):
         categories = vars(pd.Categorical)["categories"].__get__(held, pd.Categorical)
         held = vars(pd.Index)["array"].__get__(categories, pd.Index)
-    if type(held).__name__ != "NumpyExtensionArray" or not type(held).__module__.startswith("pandas"):
+    if type(held).__name__ != "NumpyExtensionArray" or not from_family(type(held), "pandas"):
         return None
     found = held._ndarray
     return found if type(found) is np.ndarray and found.dtype == np.dtype(object) else None

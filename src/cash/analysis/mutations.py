@@ -11,6 +11,7 @@ import ast
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
+from .._user_attrs import from_family
 from .ast_util import plain_statement, walk_tree
 from .file_effects import SideEffectVisitor
 
@@ -1478,7 +1479,7 @@ def is_pandas_plot_call(method: str, receiver: object) -> bool:
     """
     if not (method in _PANDAS_PLOT_METHODS or method.startswith("plot.")):
         return False
-    return (type(receiver).__module__ or "").startswith("pandas")
+    return from_family(type(receiver), "pandas")
 
 
 def assigned_method_call_receivers(tree: ast.Module | None) -> frozenset[tuple[str, str]]:

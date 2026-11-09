@@ -72,8 +72,7 @@ def _ndarray(obj: Any) -> bool:
 def _arrow_ranges(obj: Any) -> list[tuple[int, int]] | None:
     """The address ranges of a pyarrow array's buffers, None for anything
     not a pyarrow array."""
-    module = type(obj).__module__ or ""
-    if not module.startswith("pyarrow"):
+    if not from_family(type(obj), "pyarrow"):
         return None
     chunks = getattr(obj, "chunks", None)
     arrays = chunks if isinstance(chunks, list) else [obj]

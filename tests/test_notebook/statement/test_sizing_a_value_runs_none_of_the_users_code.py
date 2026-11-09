@@ -10,8 +10,12 @@ before. A size is only a guess: cash reads it without calling the user.
 
 from __future__ import annotations
 
+import importlib
+import sys
+
 import pytest
 
+from cash import sizing
 from tests._cell_driver import run_cash_cell
 
 HOOKS = {
@@ -86,3 +90,75 @@ def test_a_class_named_like_a_librarys_is_not_sized_as_one(cash_magics, cash_ins
     for cell in cells:
         run_cash_cell(cash_magics, cell, cells=cells)
     assert cash_magics.shell.user_ns["CALLS"] == [], "cash ran the user's methods while sizing the value"
+
+
+#: A module of the user's whose name starts like a library's: its classes
+#: are the user's. Matched by module prefix, a ``polars_tools.DataFrame``
+#: had its ``estimated_size`` run as polars' own.
+LOOKALIKE = """
+CALLS = []
+
+
+class _Probed:
+    def __len__(self):
+        CALLS.append("len")
+        return 500
+
+    @property
+    def dtypes(self):
+        CALLS.append("dtypes")
+        return []
+
+    @property
+    def _mgr(self):
+        CALLS.append("_mgr")
+
+    def memory_usage(self, deep=False):
+        CALLS.append("memory_usage")
+        return 10
+
+    def estimated_size(self):
+        CALLS.append("estimated_size")
+        return 10
+
+
+class DataFrame(_Probed):
+    pass
+
+
+class Series(_Probed):
+    pass
+
+
+class LazyFrame(_Probed):
+    pass
+"""
+
+
+@pytest.mark.parametrize("module", ["polars_tools", "pandas_tools"])
+@pytest.mark.parametrize("name", ["DataFrame", "Series", "LazyFrame"])
+def test_a_class_in_a_module_named_like_a_librarys_is_not_sized_as_one(
+    cash_magics, cash_instance, tmp_path, monkeypatch, module, name
+):
+    (tmp_path / f"{module}.py").write_text(LOOKALIKE)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.delitem(sys.modules, module, raising=False)
+    imported = importlib.import_module(module)
+    cash_instance.config.min_execution_time_to_cache_seconds = 0.0
+    cash_magics.cash_on("")
+    cash_magics.badges.mode = "off"
+    cells = [
+        f"from {module} import {name}\ndef make():\n    return {name}()",
+        "x = make()",
+        "# again\nx = make()",
+        "y = [x]",
+    ]
+    try:
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+        x = cash_magics.shell.user_ns["x"]
+        for probe in (sizing._data_size, sizing.estimate_object_size, sizing.pickled_size_estimate):
+            probe(x)
+        assert imported.CALLS == [], "cash ran the user's methods while sizing the value"
+    finally:
+        sys.modules.pop(module, None)
