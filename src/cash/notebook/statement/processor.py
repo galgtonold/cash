@@ -3665,9 +3665,12 @@ class StatementProcessor:
                     settled=run.settled_digests,
                     file_stats=attribute_or(execution.file_tracker, "checked_stats", None),
                 )
-            # Let go of the values they hold: the checks below count references.
+            # Let go of the values they hold: the checks below count references,
+            # and weak references: the window takes none from here, and keeps
+            # what it read by the names the notebook binds, to the outputs'
+            # lineage below (`value_hash.no_weak_reads`).
             run.settled_digests = {}
-            reads.close()
+            value_hash.no_weak_reads()
             # The share check, the closure check and the RAM tier each look into
             # the outputs; JSON-like ones are walked once for all of them.
             with _plain_data.one_look(captured_vars):

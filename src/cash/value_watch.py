@@ -57,6 +57,7 @@ __all__ = [
     "digest",
     "enabled",
     "forget",
+    "namespaces",
     "gen",
     "peek",
     "reset",
@@ -292,6 +293,11 @@ def add_namespace(shell: Any) -> None:
 def shells() -> list:
     """The shells cash runs a notebook in (`add_namespace`) still alive."""
     return [shell for shell in (ref() for ref in _SHELLS) if shell is not None]
+
+
+def namespaces() -> tuple:
+    """The namespaces the notebook binds its variables in (`_anchors`)."""
+    return _anchors()
 
 
 def _anchors() -> tuple:
