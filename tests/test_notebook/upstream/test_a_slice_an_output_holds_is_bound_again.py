@@ -16,7 +16,7 @@ import warnings
 import pytest
 
 from cash.backends.file_backend import FileBackend
-from cash.notebook.anchors import array_digest, resolve_anchors, with_anchor_refs
+from cash.notebook.anchors import array_digest, array_memory_held_apart, resolve_anchors, with_anchor_refs
 from cash.notebook.cache_status import CacheStatus
 from tests._cell_driver import run_cash_cell
 
@@ -34,7 +34,7 @@ KEEPER = (
 )
 FIT = "model = Keeper().fit(X_train)"
 CELLS = [KEEPER, "X = np.arange(24.0).reshape(6, 4).copy()", "X_train = X[:4]", FIT]
-NAMES = ["time", "np", "Keeper", "X", "X_train", "model", "model2", "train", "path"]
+NAMES = ["time", "np", "Keeper", "X", "X_train", "model", "model2", "train", "path", "M", "keep", "Buf", "load_buf"]
 #: Run after the cells, in plain Python and under cash: a write each way
 #: through the slice, and what each side then sees.
 PROBE = (
@@ -262,12 +262,99 @@ def test_a_model_keeping_the_slice_in_a_tree_too_runs_every_time(cash_magics, cl
     assert _as_cash(cash_magics, probe) == _plain(cells, probe)
 
 
-def test_an_array_holding_the_anchors_memory_is_found():
-    from cash.notebook.anchors import array_memory_held_apart
+#: Objects that keep the memory of the array they are handed in a form a
+#: pickle round trip copies or that cash cannot read: each with the code
+#: that makes it from ``A`` and an expression reading the memory back.
+KEEPS_MEMORY = {
+    "torch": ("torch", "import torch\nkeep = torch.from_numpy", "float(model.kept_.abs().max())"),
+    "ckdtree": ("scipy", "from scipy.spatial import cKDTree as keep", "float(np.abs(model.kept_.data).max())"),
+    "buffer_to_bytes": (
+        None,
+        "class Buf:\n"
+        "    def __init__(self, a):\n"
+        "        self.mv = memoryview(a)\n"
+        "        self.shape = a.shape\n"
+        "    def __reduce__(self):\n"
+        "        return (load_buf, (bytes(self.mv), self.shape))\n"
+        "def load_buf(b, shape):\n"
+        "    return Buf(np.frombuffer(bytearray(b)).reshape(shape))\n"
+        "keep = Buf",
+        "float(np.asarray(model.kept_.mv).max())",
+    ),
+}
+HOLDER = (
+    "class M:\n"
+    "    def fit(self, A):\n"
+    "        time.sleep(0.2)\n"
+    "        self.X_ = A\n"
+    "        self.kept_ = keep(A)\n"
+    "        return self"
+)
 
+
+@pytest.mark.parametrize(
+    ("kind", "bound"),
+    [
+        pytest.param(
+            kind,
+            bound,
+            marks=pytest.mark.xfail(
+                strict=True,
+                reason="no anchor: X is stored with the model as an object they share, and the bytes the "
+                "class hands pickling come back as a copy; served after a restart",
+            )
+            if (kind, bound) == ("buffer_to_bytes", "reshape")
+            else (),
+        )
+        for kind in sorted(KEEPS_MEMORY)
+        for bound in ("slice", "reshape")
+    ],
+)
+def test_a_model_keeping_the_memory_where_cash_cannot_see_runs_every_time(cash_magics, clean_backend, kind, bound):
+    """The model keeps the array it is fitted on, a view (a slice of ``X``,
+    or ``X`` itself made by a reshape), and its memory again in an object a
+    pickle round trip copies or cash cannot read (a tensor over it, a
+    ``cKDTree``, a class whose reduction hands pickling the bytes of a
+    ``memoryview``): a restore would not give that part back on ``X``. The
+    fit runs every time, and a write to ``X`` reaches the model as in
+    plain Python, after a restart too."""
+    module, make, read = KEEPS_MEMORY[kind]
+    if module:
+        pytest.importorskip(module)
+    if bound == "slice":
+        data, fit, name = (
+            ["X = np.arange(1.0, 25.0).reshape(6, 4)", "X_train = X[:4]"],
+            "model = M().fit(X_train)",
+            "X_train",
+        )
+    else:
+        data, fit, name = ["X = np.arange(1.0, 25.0).reshape(6, 4)"], "model = M().fit(X)", "X"
+    cells = ["import time\nimport numpy as np", make, HOLDER, *data, fit]
+    probe = f"X[:] = 0.0\nseen = [model.X_ is {name}, {read}]"
+    for restart in (False, True):
+        if restart:
+            _restart(cash_magics)
+            cash_magics.shell.user_ns.pop("keep", None)
+        for _ in range(2):
+            assert _run(cash_magics, cells) == CacheStatus.COMPUTED
+            assert _as_cash(cash_magics, probe) == _plain(cells, probe)
+
+
+class _Breaks:
+    def __reduce_ex__(self, protocol):
+        raise RuntimeError("cannot say")
+
+
+def test_an_array_holding_the_anchors_memory_is_found():
+    """The anchor itself, a copy and plain values pass; another view of its
+    memory, its base, a ``memoryview`` of it, and an object whose reduction
+    raises are each refused with the anchor's name (fail closed)."""
     X = np.arange(12.0).reshape(3, 4)
     X_train = X[:2]
     assert array_memory_held_apart({"m": [X_train]}, {"X_train": X_train}) is None
     assert array_memory_held_apart({"m": [X_train, X_train[:, :2].copy()]}, {"X_train": X_train}) is None
     assert array_memory_held_apart({"m": [X_train, X_train[:, :2]]}, {"X_train": X_train}) == "X_train"
     assert array_memory_held_apart({"m": [X_train, X]}, {"X_train": X_train}) == "X_train"
+    assert array_memory_held_apart({"m": [X_train, memoryview(X_train)]}, {"X_train": X_train}) == "X_train"
+    assert array_memory_held_apart({"m": [X_train, {"k": (1, "a", None)}]}, {"X_train": X_train}) is None
+    assert array_memory_held_apart({"m": [X_train, _Breaks()]}, {"X_train": X_train}) == "X_train"
