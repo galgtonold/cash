@@ -43,7 +43,7 @@ class DataFrame:
 
 @pytest.fixture
 def pandas_tools(tmp_path, monkeypatch):
-    (tmp_path / "pandas_tools.py").write_text(SOURCE)
+    (tmp_path / "pandas_tools.py").write_text(SOURCE, encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
     import pandas_tools
 

@@ -140,7 +140,7 @@ class LazyFrame(_Probed):
 def test_a_class_in_a_module_named_like_a_librarys_is_not_sized_as_one(
     cash_magics, cash_instance, tmp_path, monkeypatch, module, name
 ):
-    (tmp_path / f"{module}.py").write_text(LOOKALIKE)
+    (tmp_path / f"{module}.py").write_text(LOOKALIKE, encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.delitem(sys.modules, module, raising=False)
     imported = importlib.import_module(module)

@@ -40,7 +40,7 @@ class Series(pd.Series):
 @pytest.fixture
 def pandas_frames(tmp_path, monkeypatch):
     pytest.importorskip("pandas")
-    (tmp_path / "pandas_frames.py").write_text(SOURCE)
+    (tmp_path / "pandas_frames.py").write_text(SOURCE, encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.delitem(sys.modules, "pandas_frames", raising=False)
     yield importlib.import_module("pandas_frames")
