@@ -184,3 +184,100 @@ def test_a_digest_not_taken_in_time_moves_the_estimators_on(cash_magics, tmp_pat
     assert after != before
     assert ns["scores"] == scores
     assert ns["out"] == out
+
+
+def _digests_out_of_time(m):
+    """Give the holder digests no time, and have each change check run out
+    of its budget (a big forest on a busy machine)."""
+    m.setattr(processor, "HOLDER_DIGEST_BUDGET_S", 0.0)
+    m.setattr(processor, "HOLDER_DIGEST_FLOOR_S", 0.0)
+    m.setattr(processor, "HOLDER_DIGEST_FACTOR", 0.0)
+    m.setattr(processor.value_hash, "budgeted_hash", lambda *args, **kwargs: None)
+
+
+@pytest.mark.usefixtures("store_everything")
+def test_a_repair_after_a_fit_digested_out_of_time_reads_what_a_run_gives(cash_magics, tmp_path, monkeypatch):
+    """The first Run All gave the ensemble's fit no time to digest the
+    estimators it holds, so the fit moved them on. Running the scoring
+    cell again rebuilds them as a run from the top has them there (the
+    loop fitting them is in the cell below the one binding them), and the
+    cell reading ``a`` below the fit then rebuilds the rest. The repair
+    of the scoring cell gave the snapshot of the cell binding ``a`` the
+    fitted ``a`` the loop leaves, and the next repair, re-running ``a =
+    Tree(...)`` and ``ests = [a, b]``, was refused (UpstreamRepairGap) as
+    reading another ``a`` than a run from the top gives it there."""
+    with monkeypatch.context() as m:
+        _digests_out_of_time(m)
+        log, cells = _start(cash_magics, tmp_path, ENSEMBLE)
+    ns = cash_magics.shell.user_ns
+    assert _fits(log) == 4
+    scores, out, depth = ns["scores"], ns["out"], ns["depth"]
+
+    run_cash_cell(cash_magics, cells[SCORES], cells=cells)
+    run_cash_cell(cash_magics, cells[-2], cells=cells)
+    run_cash_cell(cash_magics, cells[-1], cells=cells)
+
+    assert (ns["scores"], ns["out"], ns["depth"]) == (scores, out, depth)
+    assert _fits(log) == 0
+    assert ns["vote"].estimators[0][1] is ns["a"]
+
+
+def _share_check_out_of_time(m):
+    """Give the share check no time: the statement is not stored, and the
+    holders of its outputs are not known."""
+    m.setattr(processor, "SHARE_CHECK_FLOOR_S", 0.0)
+    m.setattr(processor, "SHARE_CHECK_FACTOR", 0.0)
+    m.setattr(processor, "SHARE_FALLBACK_FLOOR_S", 0.0)
+
+
+@pytest.mark.usefixtures("store_everything")
+def test_a_repair_whose_fit_moves_what_it_holds_reads_what_a_run_gives(cash_magics, tmp_path, monkeypatch):
+    """The first Run All gave the ensemble's fit no time for its share
+    check: not stored, and nothing known to hold its estimators. Run again
+    with no time for the digests, the fit is stored with them and moves
+    them on. The repair that ran it (for the cell reading ``a``) gave the
+    snapshot of the cell binding ``a`` the lineage the fit left, and the
+    repair of the scoring cell after it was refused (UpstreamRepairGap)."""
+    with monkeypatch.context() as m:
+        _share_check_out_of_time(m)
+        log, cells = _start(cash_magics, tmp_path, ENSEMBLE)
+    ns = cash_magics.shell.user_ns
+    assert _fits(log) == 4
+    scores, out, depth = ns["scores"], ns["out"], ns["depth"]
+
+    with monkeypatch.context() as m:
+        _digests_out_of_time(m)
+        for i in (-3, -1, SCORES, -1):
+            run_cash_cell(cash_magics, cells[i], cells=cells)
+
+    assert (ns["scores"], ns["out"], ns["depth"]) == (scores, out, depth)
+    assert ns["vote"].estimators[0][1] is ns["a"]
+
+
+@pytest.mark.usefixtures("store_everything")
+def test_a_fit_its_share_check_left_unstored_moves_nothing_it_left_alone(cash_magics, tmp_path, monkeypatch):
+    """With no time for its share check, the ensemble's fit is not stored,
+    and ``vote`` is linked with what the fit read (``X``, ``y``), which it
+    may hold. Run again, the fit refits, as plain Python does; the digests
+    taken around it show ``X`` and ``y`` left as they were, so they keep
+    their lineages, as they do when the check finds in time that nothing
+    holds them. Moved on, the cell reading ``a`` below rebuilt everything
+    built on ``X`` and fitted the estimators again."""
+    monkeypatch.setattr(processor, "SHARE_CHECK_FLOOR_S", 0.0)
+    monkeypatch.setattr(processor, "SHARE_CHECK_FACTOR", 0.0)
+    monkeypatch.setattr(processor, "SHARE_FALLBACK_FLOOR_S", 0.0)
+    log, cells = _start(cash_magics, tmp_path, ENSEMBLE)
+    ns = cash_magics.shell.user_ns
+    lineage = cash_magics.tracking_state.variable_lineage
+    assert _fits(log) == 4
+    before = (lineage["X"], lineage["y"])
+
+    run_cash_cell(cash_magics, cells[-3], cells=cells)
+    assert _fits(log) == 2  # plain Python: the ensemble's two clones
+    assert (lineage["X"], lineage["y"]) == before
+
+    run_cash_cell(cash_magics, cells[-1], cells=cells)
+    run_cash_cell(cash_magics, cells[SCORES], cells=cells)
+    run_cash_cell(cash_magics, cells[-1], cells=cells)
+    assert _fits(log) == 0
+    assert ns["vote"].estimators[0][1] is ns["a"]

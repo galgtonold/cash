@@ -19,7 +19,7 @@ import logging
 import os
 import sys
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from cash._user_attrs import attribute_or
@@ -572,14 +572,15 @@ class NotebookSimulator:
 
     # --- After the repair ran ---
 
-    def resync_after_replay(self, records_before: LineageWatch) -> None:
+    def resync_after_replay(self, records_before: LineageWatch, written_in: Mapping[str, int] | None = None) -> None:
         """Bring the simulation's snapshots in line with what the replay recorded.
 
         After upstream statements run or are restored, ``variable_lineage``
         holds the authoritative lineage of each. A snapshot may hold a
         simulated one that differs (a control structure simulated as one
         unit), and without the sync the next check sees a mismatch and
-        repairs again.
+        repairs again. *written_in* is the last cell whose re-run statement
+        wrote each name's lineage: no snapshot above it takes that lineage.
         """
         rerecorded = self._rerecorded_since(records_before)
         if rerecorded:
@@ -587,7 +588,7 @@ class NotebookSimulator:
             # did not see, and the snapshots below move with what it
             # recorded; the memos would not.
             self.virtual_lineage.forget_memos()
-        self._sync_simulation_cache_lineages(rerecorded)
+        self._sync_simulation_cache_lineages(rerecorded, written_in)
         # The snapshots of the cells replayed here may not know the files
         # behind what the replay restored (see record_replayed_file_deps).
         self.record_replayed_file_deps(rerecorded)
@@ -772,7 +773,9 @@ class NotebookSimulator:
             logger.debug("[UPSTREAM] cell run plan failed", exc_info=True)
             return None
 
-    def _sync_simulation_cache_lineages(self, rerecorded: set[str]) -> None:
+    def _sync_simulation_cache_lineages(
+        self, rerecorded: set[str], written_in: Mapping[str, int] | None = None
+    ) -> None:
         """Sync simulation cache virtual lineages with actual runtime lineages.
 
         Only the *rerecorded* variables -- the ones this upstream pass just
@@ -812,10 +815,21 @@ class NotebookSimulator:
         is ``df['SMA'] = ...`` (from cell 5), it won't be found in cells
         0..2's trace segments, so cell 2's cache entry is NOT synced for
         ``df``.
+
+        Nor is a snapshot above the last cell whose re-run statement wrote
+        the variable's lineage (*written_in*). A change through another name
+        leaves ``executed_cell_codes`` where it was: ``for e in ests:
+        e.fit(X, y)`` fits ``a`` and leaves ``a = Tree()`` its producing
+        code, and so does ``vote.fit(X, y)`` moving the ``a`` it holds. The
+        snapshot of ``a = Tree()``'s cell took the fitted ``a``, the trace
+        of ``ests = [a, b]`` below it then read that ``a``, and the next
+        repair, re-running ``a = Tree()`` and ``ests = [a, b]``, was refused
+        as reading another ``a`` than a run from the top gives it there.
         """
         if not len(self.cache) or not rerecorded:
             return  # nothing to sync, so nothing moves either
 
+        written_in = written_in or {}
         updated = False
         # For each cache entry at index idx, collect ALL statement codes that
         # appear in the trace segments of cells 0..idx.  We only sync a
@@ -848,6 +862,8 @@ class NotebookSimulator:
             # by walking every name of every snapshot (quadratic in a long
             # notebook, whose snapshots each hold every name above).
             for var_name in [name for name in rerecorded if name in cached_vl]:
+                if written_in.get(var_name, -1) > idx:
+                    continue
                 if not self._should_sync_cache_var(var_name, cumulative_stmt_codes, cached_vl, idx):
                     continue
                 # Safe to sync: the runtime lineage was produced by code within
