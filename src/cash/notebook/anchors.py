@@ -33,6 +33,8 @@ when its content is the one stored.
 
 from __future__ import annotations
 
+import abc
+import copyreg
 import io
 import pickle
 import sys
@@ -45,6 +47,7 @@ from cash import kept_state, value_hash
 from cash._user_attrs import attribute_or
 from cash.content_hashers import hash_numpy
 from cash.notebook.borrowed_memory import MemoryHome, data_arrays, memory_home, rebuild_view
+from cash.notebook.shared_objects import check_walk_budget
 
 __all__ = [
     "ARRAY_CONTENT",
@@ -53,6 +56,7 @@ __all__ = [
     "AnchorUnrebuilt",
     "anchor_digests",
     "array_digest",
+    "array_memory_held_apart",
     "link_anchors",
     "memory_homes",
     "resolve_anchors",
@@ -162,6 +166,17 @@ def with_anchor_refs(value: Any, anchors: Mapping[str, Any], homes: Iterable[str
     each numpy view it holds that sits in the data of an anchor *homes*
     names: the statement's inputs, whose lineage its key holds. One view
     held in two places is one `MemoryHome`, so it comes back as one."""
+
+    def load(pid: Any) -> Any:
+        return pid if type(pid) is MemoryHome else AnchorRef(pid)
+
+    return _round_trip(value, _namer(anchors, homes), load, naming=True)
+
+
+def _namer(anchors: Mapping[str, Any], homes: Iterable[str]) -> Callable[[Any], Any]:
+    """What `with_anchor_refs` puts in the place of an object: the name of
+    the anchor it is, the `MemoryHome` of a view in a home's data, or None
+    for an object copied as it is."""
     by_id = {id(obj): name for name, obj in anchors.items()}
     homes = set(homes)
     data = {name: obj for name, obj in anchors.items() if name in homes and data_arrays(obj)}
@@ -176,10 +191,290 @@ def with_anchor_refs(value: Any, anchors: Mapping[str, Any], homes: Iterable[str
             return placed[id(obj)]
         return name
 
-    def load(pid: Any) -> Any:
-        return pid if type(pid) is MemoryHome else AnchorRef(pid)
+    return name_of
 
-    return _round_trip(value, name_of, load, naming=True)
+
+#: Values that hold no memory of another object's and come back equal:
+#: nothing in them to look into.
+_PLAIN = (type(None), bool, int, float, complex, str, bytes, range, slice)
+#: Containers pickling saves item by item, each item as it is.
+_CONTAINERS = (list, tuple, dict, set, frozenset)
+#: Built-in bases besides ``object`` whose subclasses pickle by default
+#: (``object.__reduce_ex__``): the items, the attributes and the slots,
+#: each as it is.
+_DEFAULT_BASES = (object, list, dict)
+#: What pickling calls or looks up on an object, or that changes what it
+#: finds there, when its class defines it: refused wherever it is defined
+#: but on ``object``, ``list`` or ``dict`` (the exception aside,
+#: `_sklearn_pickling`), whether or not the built-in base has it.
+_PICKLING = frozenset(
+    {
+        "__reduce__",
+        "__reduce_ex__",
+        "__getstate__",
+        "__setstate__",
+        "__getnewargs__",
+        "__getnewargs_ex__",
+        "__getattr__",
+        "__getattribute__",
+        "__setattr__",
+        "__class__",
+        "__new__",
+    }
+)
+#: Names a class may define although its built-in base (``object``,
+#: ``list`` or ``dict``) has them: what a class statement or ``dataclass``
+#: puts in the class dict (CPython 3.10 to 3.14), and methods pickling
+#: never calls. ``__init__``: default pickling rebuilds through
+#: ``cls.__new__`` (``copyreg.__newobj__``), never ``__init__``.
+#: ``__init_subclass__``: runs when a class is made, not an object.
+#: ``__repr__``, ``__dir__``: never called by a pickler or an unpickler.
+#: ``__eq__`` and ``__hash__``: called only on a dict's keys and a set's
+#: items, as they are put in again; an object reached so is refused
+#: (`_memory_apart`).
+_CLASS_DICT = frozenset(
+    {
+        "__init__",
+        "__module__",
+        "__qualname__",
+        "__doc__",
+        "__dict__",
+        "__weakref__",
+        "__slots__",
+        "__annotations__",
+        "__annotate__",
+        "__annotate_func__",
+        "__annotations_cache__",
+        "__firstlineno__",
+        "__static_attributes__",
+        "__classcell__",
+        "__orig_bases__",
+        "__parameters__",
+        "__type_params__",
+        "__init_subclass__",
+        "__repr__",
+        "__dir__",
+        "__eq__",
+        "__hash__",
+    }
+)
+#: Metaclasses whose classes pickling treats as ``type``'s: neither
+#: defines how an attribute of the class is found nor how it is called.
+_METACLASSES = (type, abc.ABCMeta)
+#: The versions whose pickling code the exceptions were read in.
+_SKLEARN_READ = "1.9.1"
+_NUMPY_READ = "2.5.4"
+_HEAP_TYPE = 1 << 9  # Py_TPFLAGS_HEAPTYPE: a class made by a class statement
+
+
+def array_memory_held_apart(value: Any, anchors: Mapping[str, Any], homes: Iterable[str] = ()) -> str | None:
+    """The name of an anchor that is a numpy array which a restore of
+    *value* might not give back everywhere *value* holds its memory; None
+    when every object *value* reaches pickles in a way cash knows keeps
+    each part it shares the very object it was, so a restore rebuilds
+    *value* around the anchors exactly.
+
+    Exact by construction, and fail closed. Only these are passed:
+
+    - the anchors themselves and the views a restore builds on their data
+      again (`with_anchor_refs`);
+    - numpy arrays (``ndarray`` itself, and ``numpy.ma.MaskedArray``,
+      `_masked_array`) whose memory does not overlap an anchor's
+      (``numpy.may_share_memory``; one that does would come back as a
+      copy), with the items of an array of objects walked;
+    - numpy scalars and dtypes, plain values, classes and functions;
+    - the built-in containers (exact types), item by item;
+    - objects of a class written in Python, over ``object``, ``list`` or
+      ``dict`` only, that pickle and unpickle by default
+      (`_pickles_by_default`): no class of theirs overrides anything its
+      built-in base has, but what a class statement puts there and methods
+      pickling never calls, nor defines any pickling of its own, and
+      nothing in their ``__dict__`` or ``copyreg.dispatch_table`` changes
+      it. Default pickling saves the attributes, the slots and the items
+      each as the object it is, and rebuilds them so through the built-in
+      methods; they are walked the same way. The one exception is
+      scikit-learn's ``BaseEstimator``, whose pickling keeps the
+      attributes as they are (`_sklearn_pickling`).
+
+    Anything else -- any pickling of its own, a class written in C (a
+    ``torch.Tensor``, a ``cKDTree``, a ``functools.partial``), an error on
+    the way, the share check's budget running out (`check_walk_budget`)
+    -- names the first array anchor."""
+    np = sys.modules.get("numpy")
+    if np is None:
+        return None
+    arrays = {name: obj for name, obj in anchors.items() if type(obj) is np.ndarray}
+    if not arrays:
+        return None
+    try:
+        return _memory_apart(value, arrays, _namer(anchors, homes), np)
+    except Exception:  # noqa: BLE001 - what cannot be looked into refuses
+        return next(iter(arrays))
+
+
+def _memory_apart(value: Any, arrays: Mapping[str, Any], name_of: Callable[[Any], Any], np: Any) -> str | None:
+    """`array_memory_held_apart` for *value*."""
+    refused = next(iter(arrays))
+    exempt = _sklearn_pickling()
+    masked = _masked_array()
+    #: Every part met, kept alive while ids of them are compared.
+    kept: list[Any] = []
+    seen: set[int] = set()
+    #: Each part with whether pickling puts it in again as a dict's key or
+    #: a set's item, which hashes and compares it.
+    stack: list[tuple[Any, bool]] = [(value, False)]
+    while stack:
+        check_walk_budget()
+        obj, keyed = stack.pop()
+        if id(obj) in seen:
+            if keyed:
+                seen.discard(id(obj))  # met again as a key: looked at again
+            else:
+                continue
+        seen.add(id(obj))
+        kept.append(obj)
+        cls = type(obj)
+        if name_of(obj) is not None or cls in _PLAIN:
+            continue
+        if cls is np.ndarray or cls is bytearray or (masked is not None and cls is masked):
+            if cls is np.ndarray:
+                parts = [obj]
+            elif cls is bytearray:
+                parts = [np.frombuffer(obj, dtype=np.uint8)]
+            else:
+                # What `_masked_array` reads it pickles: its data, its mask
+                # and ``_fill_value``, read as they are (``fill_value`` would
+                # set one on it).
+                parts = [obj.data, np.ma.getmaskarray(obj)]
+                stack.append((obj.__dict__.get("_fill_value"), False))
+            for data in parts:
+                for name, array in arrays.items():
+                    if np.may_share_memory(data, array):
+                        return name
+            if cls is not bytearray and obj.dtype.hasobject:
+                stack.extend((item, False) for item in np.asarray(obj).ravel(order="K"))
+            continue
+        if isinstance(obj, np.dtype) or isinstance(obj, np.generic) and not obj.dtype.hasobject:
+            continue
+        if cls in (type, types.FunctionType, types.BuiltinFunctionType) or isinstance(obj, type):
+            continue  # pickled by name
+        if cls in _CONTAINERS:
+            stack.extend(_parts(obj))
+            continue
+        if not _pickles_by_default(cls, exempt, keyed):
+            return refused
+        attrs = attribute_or(obj, "__dict__", None)
+        if attrs is not None:
+            if type(attrs) is not dict or _PICKLING.intersection(attrs):
+                return refused
+            stack.extend((part, False) for part in attrs.values())
+        for slot in _slot_names(cls):
+            stack.append((attribute_or(obj, slot, None), False))
+        if isinstance(obj, (list, dict)):
+            stack.extend(_parts(obj))
+    return None
+
+
+def _parts(obj: Any) -> list[tuple[Any, bool]]:
+    """`_items` of *obj*, each with whether it is a dict's key or a set's
+    item."""
+    if isinstance(obj, dict):
+        return [part for key, item in obj.items() for part in ((key, True), (item, False))]
+    keyed = isinstance(obj, (set, frozenset))
+    return [(item, keyed) for item in obj]
+
+
+def _slot_names(cls: type) -> list[str]:
+    """The slots the classes of *cls* declare, as default pickling saves
+    them (``copyreg._slotnames``, without ``__dict__`` and ``__weakref__``)."""
+    names: list[str] = []
+    for klass in cls.__mro__:
+        slots = klass.__dict__.get("__slots__", ())
+        for slot in (slots,) if isinstance(slots, str) else slots:
+            if slot in ("__dict__", "__weakref__"):
+                continue
+            if slot.startswith("__") and not slot.endswith("__"):
+                slot = f"_{klass.__name__.lstrip('_')}{slot}"
+            names.append(slot)
+    return names
+
+
+def _pickles_by_default(cls: type, exempt: Mapping[str, Any], keyed: bool) -> bool:
+    """Whether an object of class *cls* pickles as ``object.__reduce_ex__``
+    does by default, and an unpickler rebuilds it so: ``cls.__new__`` of
+    ``object``, ``list`` or ``dict``, then its ``__dict__`` set item by
+    item, its slots through their own descriptors, and a list's items or a
+    dict's through the built-in ``extend``/``append`` and ``__setitem__``.
+
+    So every class of *cls* but those three is written in Python, made by
+    ``type`` or ``abc.ABCMeta``, and defines no name its built-in base has
+    (no override of anything pickling may call) but those of `_CLASS_DICT`,
+    nothing of `_PICKLING` (but the methods *exempt* names, on the class
+    that defines them), and no ``__slotnames__`` other than its slots;
+    ``__eq__`` and ``__hash__`` not when *keyed*. And *cls* has no
+    ``copyreg.dispatch_table`` entry."""
+    if not cls.__flags__ & _HEAP_TYPE or cls in copyreg.dispatch_table:
+        return False
+    for klass in cls.__mro__:
+        if klass in _DEFAULT_BASES:
+            continue
+        if not klass.__flags__ & _HEAP_TYPE or type(klass) not in _METACLASSES:
+            return False  # over a class written in C, or made by another metaclass
+        base = next(b for b in klass.__mro__ if b in _DEFAULT_BASES)
+        for name, defined in klass.__dict__.items():
+            if exempt.get(name) is defined:
+                continue
+            if name in _PICKLING or (name in ("__eq__", "__hash__") and keyed):
+                return False
+            if name not in _CLASS_DICT and any(name in b.__dict__ for b in base.__mro__):
+                return False
+        if "__slotnames__" in klass.__dict__ and list(klass.__dict__["__slotnames__"]) != _slot_names(klass):
+            return False
+    for slot in _slot_names(cls):
+        # Set through ``setattr``: it must reach the slot's own descriptor.
+        found = next((klass.__dict__[slot] for klass in cls.__mro__ if slot in klass.__dict__), None)
+        if type(found) is not types.MemberDescriptorType:
+            return False
+    return True
+
+
+def _masked_array() -> type | None:
+    """``numpy.ma.MaskedArray`` when ``numpy.ma`` is loaded, and numpy is
+    the version read (`_NUMPY_READ`; any other: None): an array whose
+    pickling cash knows (``GridSearchCV.cv_results_`` holds them).
+
+    In numpy 2.5.4, ``MaskedArray.__reduce__`` hands pickling
+    ``_mareconstruct`` with the class, ``_baseclass`` and a dtype code, and
+    for state ``__getstate__``: ``ndarray``'s own state of the data (its
+    bytes, or for an array of objects the objects as they are) plus the
+    mask's bytes and the fill value. ``__setstate__`` sets the new array's
+    data and mask from them. So it comes back as a copy of its data, mask
+    and fill value, holding the objects of an array of objects as they
+    are: walked as an ``ndarray`` is, its mask and fill value with it."""
+    if attribute_or(sys.modules.get("numpy"), "__version__", None) != _NUMPY_READ:
+        return None
+    return attribute_or(sys.modules.get("numpy.ma"), "MaskedArray", None)
+
+
+def _sklearn_pickling() -> dict[str, Any]:
+    """``BaseEstimator.__getstate__`` and ``__setstate__`` when scikit-learn
+    is loaded, and is the version read (`_SKLEARN_READ`; any other: none):
+    pickling an estimator by default but for them is exact.
+
+    In scikit-learn 1.9.1, ``__getstate__`` raises for an estimator with
+    ``__slots__``, takes ``object.__getstate__()`` (or a copy of
+    ``__dict__``), and for a class whose module is ``sklearn.*`` returns
+    that dict with one key added, ``_sklearn_version``; ``__setstate__``
+    pops that key (warning when the version differs) and updates
+    ``__dict__`` with the rest (``super().__setstate__``, which ``object``
+    lacks). The attributes are saved and rebuilt as the objects they are,
+    as by default."""
+    if attribute_or(sys.modules.get("sklearn"), "__version__", None) != _SKLEARN_READ:
+        return {}
+    base = attribute_or(sys.modules.get("sklearn.base"), "BaseEstimator")
+    if base is None:
+        return {}
+    return {name: base.__dict__[name] for name in ("__getstate__", "__setstate__") if name in base.__dict__}
 
 
 def memory_homes(digests: Mapping[str, str] | None) -> set[str]:
