@@ -29,6 +29,7 @@ from ..exceptions import CashCacheIneffectiveWarning, CashImpureFunctionError, C
 from ..handed_digests import Stored
 from ..handed_digests import claim as claim_handed_digests
 from ..mutation_fingerprint import mutation_fingerprint
+from ..tracking import process_registries
 from ..tracking.env_reads import environment_digests, environment_unchanged, note_reads
 from ..tracking.env_reads import recording as recording_env_reads
 from ..tracking.file_tracker import FileAccessTracker
@@ -962,6 +963,9 @@ class CallRunner:
         # coalesces, which is what the docs promise.
         self._async_inflight: dict[str, Any] = {}
         self._async_inflight_lock = threading.Lock()
+        #: ``function name -> the registries`` a call of it changed
+        #: (`_refuse_registries`).
+        self._registry_writers: dict[str, str] = {}
 
     def _run_uncached(self, spec: CachedFunction, call: Call, why: MissReason) -> Any:
         """Run a call that has no key, log it as a miss, and hand back its result."""
@@ -1733,6 +1737,9 @@ class CallRunner:
         run.arg_carriers_pre = capture_argument_carrier_states(self._named_args(func_name, args, kwargs))
         run.arg_carriers_moved = []
         run.args_before = self.arguments_before(spec, call, args, kwargs)
+        # And the registries the process keeps outside any variable: a hit
+        # would not set ``np.seterr`` or a logger's level again.
+        run.registries = process_registries.snapshot()
         with run.tracker, run.observer:
             threads_at_start = THREADS_IN_CALLS[0]
             # What a call that picks code by name ran, for its trace. Begun
@@ -1851,6 +1858,8 @@ class CallRunner:
             inputs_moved=self._inputs_moved_check(spec, call),
             cost=execution_time,
         )
+        if refusal is None:
+            refusal = self._refuse_registries(spec, run)
         if refusal is None and args_left and shared:
             # A hit writes the arguments back and hands the result back as a
             # copy, which no longer shares their memory as the call's did.
@@ -1958,6 +1967,34 @@ class CallRunner:
                 reports.append(report)
             names.extend(self._registry.graph.get_dependencies(name))
         return code_trace.build(unit, code_trace.static_codes(functions, reports), strict=call.needs_trace)
+
+    def _refuse_registries(self, spec: CachedFunction, run: BodyRun) -> str | None:
+        """Why a call that set a registry the process keeps is not stored:
+        ``np.seterr(...)``, ``logging.getLogger("lib").setLevel(10)``,
+        ``atexit.register(f)`` (`process_registries`). A hit would not set
+        it again, and a new process would find it unset. Every later call
+        of the function too, also one that finds it set already: it still
+        sets it. ``assume_safe=True`` waives it."""
+        func_name = spec.name
+        if self._registry.purity_mode(func_name) == "silent":
+            return None
+        found = process_registries.changed(run.registries)
+        if found:
+            self._registry_writers[func_name] = "; ".join(found)
+        what = self._registry_writers.get(func_name)
+        if what is None:
+            return None
+        self._notices.warn_once(
+            CashImpurityWarning,
+            func_name,
+            "process_registry",
+            f"@cash.cache on {func_name}: the call changed {what}, which no variable holds; a cache hit would "
+            "not change it again (in a new process it would never be set), so calls run uncached.",
+            code="IMPURE-OBSERVED-EFFECTS",
+            fix="make the setting outside the cached function; @cash.cache(assume_safe=True) caches the call "
+            "anyway if the setting does not matter.",
+        )
+        return f"it changed {what}, which no variable holds and a hit would not change again"
 
     def _refuse_untraced(self, spec: CachedFunction, why: str) -> str:
         """Say once why a call that picks code by name is not stored; the
