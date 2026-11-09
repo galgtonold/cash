@@ -115,6 +115,14 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
       each is the same; so is a call the call cache keeps. A statement or a
       kept call that changed one runs again the next time, as a hit could
       not change it again.
+      <!-- claim: cash/kept_state.py:logger_state @37d45541, cash/kept_state.py:_reduce_by_reference_for_key @3e124d7b -->
+      A standard library logger's state is what its output follows: its
+      name, level, parent, `propagate`, `disabled`, handlers (each
+      standard library one with its level, formatter, filters and stream or
+      file) and filters, and
+      `logging.disable`'s setting. The levels it finds enabled as it logs
+      are left out, so a statement that only logged changed nothing: run
+      again, it is served.
     - **Its age**, when a `ttl` applies. A statement that calls a
       `@cash.cache` function with a shorter `ttl` takes that shorter one.
     - **An in-place change** to a variable it reads

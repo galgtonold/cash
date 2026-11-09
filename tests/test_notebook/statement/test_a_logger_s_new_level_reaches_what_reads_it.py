@@ -297,3 +297,90 @@ def test_a_kept_call_past_the_budget_is_never_served(cash_magics, cash_instance,
     for cell in cells[2:]:
         run_cash_cell(cash_magics, cell, cells=cells)
     assert cash_magics.shell.user_ns["c"] == 40
+
+
+def test_the_logger_s_attributes_are_all_described():
+    """A standard library logger is keyed by the attributes its output
+    follows (`kept_state.LOGGER_STATE`), its levels found enabled left out.
+    A Python that adds one fails here, rather than key loggers without it."""
+    from cash import kept_state
+
+    described = set(kept_state.LOGGER_STATE) | set(kept_state.LOGGER_DERIVED)
+    for logger in (logging.Logger(f"{NAME}.described"), logging.RootLogger(logging.WARNING)):
+        assert set(vars(logger)) == described, sorted(set(vars(logger)) ^ described)
+    assert "disable" in dir(logging.Logger.manager)
+
+
+WORK_SETUP = f"import logging\nlog = logging.getLogger('{NAME}.work')\nlog.setLevel(logging.INFO)"
+
+
+@pytest.mark.parametrize(
+    "work",
+    [
+        "log.info('start')\nx = sum(range(10_000))",
+        "def work(n):\n    log.info('working %s', n)\n    return sum(range(n))\nx = work(10_000)",
+    ],
+    ids=["the-cell-logs", "a-function-it-calls-logs"],
+)
+def test_work_that_logs_is_served_on_the_next_run_all(cash_magics, cash_instance, work):
+    """Logging fills the logger's levels found enabled, and changes nothing
+    else: run all again, the work is served."""
+    cash_instance.config.min_execution_time_to_cache_seconds = 0.0
+    cash_instance.config.call_cost_floor_seconds = 0.0
+    cells = [WORK_SETUP, work]
+    try:
+        for _ in range(2):
+            for cell in cells:
+                run_cash_cell(cash_magics, cell, cells=cells)
+        statuses = [str(s["status"]) for s in cash_magics._last_cell_metrics["statements"]]
+    finally:
+        logging.getLogger(f"{NAME}.work").setLevel(logging.NOTSET)
+    # A ``def`` runs every time; what logs, and the work, are served.
+    served = statuses[1:] if work.startswith("def ") else statuses
+    assert served and all(status == "RESTORED" for status in served), statuses
+
+
+def test_a_logger_s_digest_follows_what_its_output_does():
+    """What changes a logger's output changes its digest; logging, which
+    only notes levels found enabled, does not. A subclass defined elsewhere
+    is keyed by all its attributes."""
+    from cash import kept_state
+
+    logger = logging.getLogger(f"{NAME}.digest")
+    handler = logging.StreamHandler()
+    try:
+        before = kept_state.state_digest(logger)
+        logger.info("a")
+        logger.isEnabledFor(logging.DEBUG)
+        assert kept_state.state_digest(logger) == before
+        changes = [
+            lambda: logger.setLevel(logging.ERROR),
+            lambda: logger.addHandler(handler),
+            lambda: handler.setLevel(logging.CRITICAL),
+            lambda: handler.setFormatter(logging.Formatter("%(message)s")),
+            lambda: setattr(logger, "propagate", False),
+            lambda: logging.disable(logging.INFO),
+        ]
+        for change in changes:
+            change()
+            after = kept_state.state_digest(logger)
+            assert after != before
+            before = after
+    finally:
+        logging.disable(logging.NOTSET)
+        logger.handlers.clear()
+        logger.setLevel(logging.NOTSET)
+        logger.propagate = True
+
+    class Mine(logging.Logger):
+        pass
+
+    logging.setLoggerClass(Mine)
+    try:
+        mine = logging.getLogger(f"{NAME}.mine")
+    finally:
+        logging.setLoggerClass(logging.Logger)
+    mine.extra = 1
+    held = kept_state.state_digest(mine)
+    mine.extra = 2
+    assert kept_state.state_digest(mine) != held

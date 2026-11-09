@@ -23,6 +23,7 @@ import functools
 import hashlib
 import io
 import itertools
+import logging
 import operator
 import pickle
 import sys
@@ -2362,6 +2363,8 @@ def _reduce_by_reference_for_key(obj: Any, reducer: Any) -> Any:
     if not _FOLDING.get():
         return reduced
     attrs = left_out_attrs(obj, None, own_only=True)
+    if type(obj) in _STDLIB_LOGGERS:
+        attrs = logger_state(obj, attrs)
     if not attrs:
         return reduced
     if isinstance(reduced, str):
@@ -2578,6 +2581,74 @@ def find_by_recipe(recipe: bytes) -> Any:
     it would load. Raises what loading raises."""
     rebuild, args = pickle.loads(recipe)
     return rebuild(*args)
+
+
+#: The standard library's own logger classes, by identity: a subclass
+#: defined elsewhere is keyed by all its attributes.
+_STDLIB_LOGGERS = (logging.Logger, logging.RootLogger)
+
+#: What a standard library logger's output follows: its own attributes
+#: below, and its manager's ``disable`` (`logger_state`). ``_cache``, the
+#: levels found enabled, is left out: ``isEnabledFor`` fills it from these
+#: and every ``setLevel`` or ``logging.disable`` clears it, so a
+#: ``log.info(...)`` changes no state. A Python adding an attribute fails
+#: ``test_the_logger_s_attributes_are_all_described``.
+LOGGER_STATE = ("name", "level", "parent", "propagate", "handlers", "disabled", "filters")
+LOGGER_DERIVED = ("_cache",)
+
+
+def logger_state(logger: logging.Logger, attrs: dict) -> dict:
+    """The state of *logger*, a standard library one, from *attrs*, its
+    attributes as a key holds them: those in `LOGGER_STATE`, and its
+    manager's ``disable``. A standard library handler is keyed by the
+    level, formatter, filters and stream or file it holds
+    (`_handler_state`)."""
+    state = {name: attrs[name] for name in LOGGER_STATE if name in attrs}
+    if "handlers" in state:
+        state["handlers"] = [_handler_state(handler) for handler in logger.handlers]
+    state["manager.disable"] = logger.manager.disable
+    return state
+
+
+def _stdlib_logging(obj: Any) -> bool:
+    """Is *obj* of a class the standard library's ``logging`` package
+    defines, itself, not a subclass of one?"""
+    t = type(obj)
+    module = sys.modules.get(t.__module__) if t.__module__ in ("logging", "logging.handlers") else None
+    return module is not None and vars(module).get(t.__qualname__) is t
+
+
+def _handler_state(handler: Any) -> Any:
+    """What a standard library handler's output follows: its attributes,
+    its formatter's (`_formatter_state`), and the stream it writes to by
+    its type and name, not its lock or the stream's content. Any other
+    handler by its type, as one holding a lock is when keyed as a value."""
+    if not _stdlib_logging(handler):
+        return type(handler)
+    state: dict[str, Any] = {"__class__": type(handler)}
+    for name, value in vars(handler).items():
+        if name in ("lock", "_builtin_open"):
+            continue
+        if name == "stream":
+            value = (type(value), value.name if type(value) in _NAMED_STREAMS else None)
+        elif name == "formatter":
+            value = _formatter_state(value)
+        state[name] = value
+    return state
+
+
+#: Streams whose ``name`` is read in C: the file a handler writes to.
+_NAMED_STREAMS = (io.TextIOWrapper, io.BufferedWriter, io.FileIO)
+
+
+def _formatter_state(formatter: Any) -> Any:
+    """A standard library formatter by its format, date format and style;
+    any other as it is."""
+    if formatter is None or not _stdlib_logging(formatter):
+        return formatter
+    style = vars(formatter).get("_style")
+    defaults = vars(style).get("_defaults") if _stdlib_logging(style) else style
+    return (type(formatter), vars(formatter).get("_fmt"), vars(formatter).get("datefmt"), type(style), defaults)
 
 
 def _by_name_reduce(obj: Any, name: str, state: Any) -> tuple:

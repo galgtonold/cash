@@ -56,11 +56,6 @@ def step(n):
 def test_defining_another_function_does_not_invalidate_a_function_that_logs():
     c = Cash()
     cached = c.cache(step)
-    # A logger is keyed with its state, which holds the levels it found
-    # enabled: the first ``log.warning`` fills that in, and a key taken
-    # before it is not one taken after. Asked once here, the calls find it
-    # filled.
-    log.isEnabledFor(logging.WARNING)
     cached(1)
     NAMESPACE["later"] = lambda: 2  # a new cell defines a function
     try:

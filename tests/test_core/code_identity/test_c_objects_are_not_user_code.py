@@ -64,10 +64,6 @@ def queue_handler():
 def test_a_logger_with_a_queue_handler_read_by_a_cached_function_does_not_warn(tmp_path, queue_handler):
     c = Cash(backend=FileBackend(cache_dir=str(tmp_path)))
     step = c.cache(_step)
-    # A logger is keyed with its state, which holds the levels it found
-    # enabled: the first ``log.info`` fills that in, and a key taken before
-    # it is not one taken after. Asked once here, the calls find it filled.
-    log.isEnabledFor(logging.INFO)
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
