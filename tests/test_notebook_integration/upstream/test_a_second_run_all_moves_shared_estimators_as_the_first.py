@@ -10,6 +10,13 @@ Run All the estimators came out with other lineages than the first gave
 them, and the score cells below re-ran the cells above, the training loop
 with them, printing its lines again. In E8 (homl ch07) 12 to 40 statements
 above small cells, 40 s for a cell plain runs in 0.4 s.
+
+The training loop may itself be stored (it changes the items of ``ests``
+in place, `test_a_loop_changing_the_items_of_a_list_runs_as_one_unit`),
+when it took long enough to be worth it: the second Run All then serves
+it, printing its lines as the first did, and fits nothing; else it runs
+as plain Run All runs it. Either way nothing fits after it: a repair of
+the cells above would.
 """
 
 import pytest
@@ -61,14 +68,24 @@ def test_a_second_run_all_reruns_nothing_above(nb_runner):
     nb_runner.start_kernel()
     nb_runner.run_all()
     first = nb_runner.get_output(len(CELLS))
+    loop = next(i for i, cell in enumerate(CELLS, 1) if cell.startswith("ests = "))
+    trained = nb_runner.get_output(loop)
+    assert "Training the LogisticRegression" in trained, trained
+    assert _calls(nb_runner) == ["fit"] * 2, _calls(nb_runner)
 
-    nb_runner.run_all()
+    for cell in range(1, len(CELLS) + 1):
+        nb_runner.run_cell(cell)
+        if cell == loop:
+            after_loop = _calls(nb_runner)
 
     out = nb_runner.get_output(len(CELLS))
     assert "score" in first and first.strip() == out.strip(), (first, out)
     assert "Training" not in out, out
-    # The loop cell itself runs on each pass, as plain Run All runs it.
-    assert _calls(nb_runner) == ["fit"] * 4, _calls(nb_runner)
+    # The loop served (no fit) or run (two), with the lines it printed.
+    assert after_loop in (["fit"] * 2, ["fit"] * 4), after_loop
+    assert nb_runner.get_output(loop).strip() == trained.strip()
+    # Nothing below it repaired the cells above.
+    assert _calls(nb_runner) == after_loop, _calls(nb_runner)
 
 
 def test_an_edit_above_still_refits_the_estimators(nb_runner):
