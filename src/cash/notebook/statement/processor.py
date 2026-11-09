@@ -165,6 +165,7 @@ from ...analysis.namespace_effects import (
     statement_starting_workers,
 )
 from ...analytics import AnalyticsManager
+from ...tracking import process_registries
 from ...tracking.env_reads import environment_digests
 from ...tracking.env_reads import recording as recording_env_reads
 from ...tracking.file_dep_snapshot import file_state_epoch, probe_answers, young_digests_kept
@@ -260,6 +261,7 @@ from .unseen_writes import (
     COULD_RUN_REASON,
     COULD_RUN_TOO_BIG_REASON,
     LEFT_FINALIZER_REASON,
+    PROCESS_REGISTRY_REASON,
     SET_LATER,
     SET_LATER_REASON,
     UNREADABLE,
@@ -858,6 +860,9 @@ class StatementProcessor:
         #: Statements already warned NOTEBOOK-MEMO-UNREAD or NOTEBOOK-MEMO-SHARED about.
         self._memo_unread_warned: set[str] = set()
         self._unseen_warned: set[str] = set()
+        #: The statements and registries a run changed once
+        #: (`_refuse_process_registries`), warned about the next time.
+        self._registries_changed: set[str] = set()
         #: ``key -> (the entry's timestamp, {output: digest of its stored
         #: value})`` a rerun under that key took (`_changed_from_refused_entry`)
         #: and did not store, refused after it ran (`_refuse_unseen_writes`):
@@ -1869,6 +1874,42 @@ class StatementProcessor:
         run.value_varies = True
         run.metrics["uncacheable_reasons"].append(run.unless_it_draws)
 
+    def _refuse_process_registries(
+        self, run: StatementRun, execution: StatementExecution, before: process_registries.Snapshot
+    ) -> None:
+        """Refuse *run* when it changed a registry the process keeps outside
+        any variable (`process_registries`): ``atexit.register(flush)``,
+        ``signal.signal(...)``, ``logging.getLogger("lib").setLevel(10)``.
+        A served entry would not change it again: after a restart the
+        handler was never installed. Said the second time the statement
+        changes one, once for each statement and registry: a library's
+        setup made once a process on first use (tqdm's monitor thread and
+        its ``atexit`` callback, on the first bar) changes it only the first
+        time, and the next run stores the statement."""
+        if run.skip_cache or not execution.result.success:
+            return
+        if attribute_or(run.annotation, "assume_safe", False):
+            return
+        found = process_registries.changed(before)
+        if not found:
+            return
+        what = PROCESS_REGISTRY_REASON.format(registries="; ".join(found))
+        run.skip_cache = True
+        run.metrics["uncacheable_reasons"].append(what)
+        said = f"{what}\n{run.code}"
+        if said not in self._registries_changed:
+            self._registries_changed.add(said)
+            return
+        if said in self._unseen_warned:
+            return
+        self._unseen_warned.add(said)
+        fix = (
+            "nothing, if the statement should run every time (a setup cell); put '# @cash:assume-safe' "
+            "on the statement if the change does not matter."
+        )
+        log_diagnostic(logger, "NOTEBOOK-UNSEEN-WRITES", what, fix)
+        warn_diagnostic(CashWarning, "NOTEBOOK-UNSEEN-WRITES", what, fix)
+
     def _refuse_unseen_writes(
         self,
         run: StatementRun,
@@ -2816,6 +2857,7 @@ class StatementProcessor:
         memos_before = helper_memos.watched(self.shell.user_ns) if watch_memos else None
         memos_cleared: helper_memos.Clears | None = None
         finalizers_before = finalizers_made()
+        registries_before = process_registries.snapshot()
         try:
             with (
                 self.watching_reads(run.code),
@@ -2898,6 +2940,7 @@ class StatementProcessor:
             if left is not None:
                 run.skip_cache = True
                 run.metrics["uncacheable_reasons"].append(LEFT_FINALIZER_REASON.format(fn=left))
+        self._refuse_process_registries(run, execution, registries_before)
         if (
             figures_before is not None
             and not run.skip_cache

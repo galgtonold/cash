@@ -49,6 +49,7 @@ __all__ = [
     "COULD_RUN_REASON",
     "COULD_RUN_TOO_BIG_REASON",
     "LEFT_FINALIZER_REASON",
+    "PROCESS_REGISTRY_REASON",
     "finalizer_left",
     "finalizers_made",
     "library_made",
@@ -109,6 +110,13 @@ COLLECTED_ONLY_REASON = (
 LEFT_FINALIZER_REASON = (
     "this statement leaves a weakref.finalize ({fn}) waiting on an object; restored from the cache, it would "
     "not be registered, so the statement runs every time"
+)
+
+#: Why a statement that changed a registry the process keeps outside any
+#: variable is not stored (`cash.tracking.process_registries`).
+PROCESS_REGISTRY_REASON = (
+    "this statement changes {registries}, which no variable holds; a stored result would not change it again "
+    "(after a restart, it would never be set), so the statement runs every time"
 )
 
 #: ``CASH_UNSEEN_LOG=<path>``: each function found, one JSON line, to count them.

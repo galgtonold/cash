@@ -47,7 +47,6 @@ is in its trace (and an unrelated thread's work only adds checks).
 
 from __future__ import annotations
 
-import atexit
 import builtins
 import dis
 import hashlib
@@ -77,6 +76,7 @@ from ..analysis.purity_report import (
     PurityIssue,
     is_name_lookup,
 )
+from ..tracking.process_registries import register_atexit
 from ..tracking.tracker_context import untracked
 
 __all__ = [
@@ -599,7 +599,7 @@ def _recorder() -> Any:
             r = _recorder_class()()
             if r.install():
                 # Before the interpreter tears modules down under the callbacks.
-                atexit.register(r.uninstall)
+                register_atexit(r.uninstall)
             _RECORDER = r
     return _RECORDER if _RECORDER.tool is not None else None
 

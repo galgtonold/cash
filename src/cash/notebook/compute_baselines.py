@@ -25,7 +25,6 @@ number, never a wrong one.
 
 from __future__ import annotations
 
-import atexit
 import contextlib
 import hashlib
 import heapq
@@ -33,6 +32,7 @@ import time
 
 from cash.backends.cache_dir import COMPUTE_BASELINES_FILENAME
 
+from ..tracking.process_registries import register_atexit
 from .versioned_json_store import StoreRegistry, VersionedJsonStore
 
 _STORE_FILENAME = COMPUTE_BASELINES_FILENAME
@@ -154,7 +154,7 @@ def _flush_at_exit(store: ComputeBaselineStore) -> None:
     # keeping, and every few seconds otherwise, so this catches the cheap
     # measurements since -- and a kernel killed outright runs no hook at all.
     with contextlib.suppress(Exception):
-        atexit.register(store.flush)
+        register_atexit(store.flush)
 
 
 _STORES: StoreRegistry[ComputeBaselineStore] = StoreRegistry(ComputeBaselineStore, _flush_at_exit)

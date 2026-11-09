@@ -93,6 +93,7 @@ from cash.notebook.pyplot_state import pyplot_state
 from cash.notebook.read_handles import reaches_read_handle
 from cash.notebook.write_observer import WrittenPaths, kept_writes, observe_writes
 from cash.sizing import estimate_object_size
+from cash.tracking import process_registries
 from cash.tracking.env_reads import environment_digests, note_reads
 from cash.tracking.env_reads import recording as recording_env_reads
 from cash.tracking.file_dep_snapshot import probe_answers
@@ -1132,6 +1133,7 @@ class CallUnit:
             propagate_to_parent=True,
         )
         unloaded = unloaded_body_imports(call.key)
+        registries_before = process_registries.snapshot()
         self._running += 1
         shadow = _shadow.SHADOW
         unit = shadow.begin("call") if shadow is not None else None
@@ -1156,6 +1158,9 @@ class CallUnit:
             or (watched_before is not None and _watched_state(call.fn, watched, self._fingerprints) != watched_before)
             or self._changed_a_default(call, defaults, defaults_before)
             or self._wrote_files(call, written)
+            # A registry of the process's no entry puts back: ``atexit``,
+            # a signal's handler, a library's logger (`process_registries`).
+            or process_registries.changed(registries_before)
         ):
             self._entries.refuse(call.key)
         # Not stored when it made, picked or drew on a pyplot figure, which a
