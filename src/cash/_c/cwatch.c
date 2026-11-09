@@ -1754,7 +1754,6 @@ static Sight *sight_place(uintptr_t a, int forced) {
     return free_way ? free_way : pick;
 }
 
-/* is the slot's skip still about `o`, not an object freed at its address? */
 /* the callback of the weak references made here (`set_weak_callback`):
    cash's own (`cash._weak.is_cash_ref`), so that the check for a variable
    finding a value by a weak reference does not take a watched value's for
@@ -1766,6 +1765,7 @@ static PyObject *py_set_weak_callback(PyObject *self, PyObject *cb) {
     Py_RETURN_NONE;
 }
 
+/* is the slot's skip still about `o`, not an object freed at its address? */
 static int sight_is(Sight *g, PyObject *o) {
     if (g->addr != (uintptr_t)o) return 0;
     if (g->wref) return weak_target(g->wref) == o;

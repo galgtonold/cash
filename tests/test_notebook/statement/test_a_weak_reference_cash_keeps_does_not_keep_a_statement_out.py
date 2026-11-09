@@ -229,6 +229,23 @@ _TYPE_CHECKS = {"isinstance", "issubclass", "instance_of"}
 #: cash's subclasses of a reference type: ``_PinRef`` refers to cash's own
 #: marker object only.
 _SUBCLASSES = {"_PinRef"}
+#: Attributes of a maker that make no reference: ``weakref.ref.__call__(r)``
+#: reads what an existing reference finds (``__new__`` would make one).
+_READ_ATTRIBUTES = {"__call__", "__callback__", "_registry", "_index_iter", "__name__", "__qualname__"}
+#: Calls that read any attribute off a module.
+_DYNAMIC = {"getattr", "attribute_or", "vars"}
+
+
+def _type_list(value: ast.expr) -> list[ast.expr]:
+    """The items of a constant's tuple or set of types (``KINDS =
+    (weakref.ref, weakref.ProxyType)``, ``frozenset({weakref.ref})``)."""
+    if (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Name)
+        and value.func.id in {"frozenset", "set", "tuple"}
+    ):
+        value = value.args[0] if len(value.args) == 1 else value
+    return list(value.elts) if isinstance(value, ast.Tuple | ast.Set) else []
 
 
 class _Uses(ast.NodeVisitor):
@@ -257,6 +274,10 @@ class _Uses(ast.NodeVisitor):
     def is_maker(self, node: ast.AST) -> bool:
         if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
             return node.value.id in self.modules and node.attr in _MAKERS
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in _DYNAMIC:
+            # ``getattr(weakref, "ref")``: any name, read off the module.
+            first = node.args[0] if node.args else None
+            return isinstance(first, ast.Name) and first.id in self.modules
         return isinstance(node, ast.Name) and node.id in self.names
 
     def scan(self, tree: ast.Module) -> list[int]:
@@ -271,12 +292,14 @@ class _Uses(ast.NodeVisitor):
                 allowed.update(map(id, ast.walk(node.returns)))
             elif isinstance(node, ast.Subscript):
                 allowed.update(map(id, ast.walk(node.slice)))
-            elif isinstance(node, ast.Attribute):
+            elif isinstance(node, ast.Attribute) and node.attr in _READ_ATTRIBUTES:
                 allowed.add(id(node.value))
             elif isinstance(node, ast.Compare):
                 allowed.update(id(part) for part in (node.left, *node.comparators))
-            elif isinstance(node, ast.Tuple | ast.Set):
-                allowed.update(id(part) for part in node.elts)
+            if isinstance(node, ast.Assign | ast.AnnAssign) and node.value is not None:
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                if all(isinstance(t, ast.Name) and t.id.isupper() for t in targets):
+                    allowed.update(id(part) for part in _type_list(node.value))
             elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in _TYPE_CHECKS:
                 allowed.update(map(id, ast.walk(node.args[1])) if len(node.args) > 1 else ())
             elif isinstance(node, ast.ClassDef) and node.name in _SUBCLASSES:
@@ -308,6 +331,13 @@ def test_the_scan_finds_every_way_to_make_a_reference():
         "import _weakref\n_weakref.ref(x)",
         "import weakref\nweakref.WeakKeyDictionary()",
         "import weakref\nclass Mine(weakref.ref): pass",
+        "import weakref\nmakers = (weakref.ref, list)",
+        "import weakref\nfor make in (weakref.ref, weakref.proxy):\n    make(x)",
+        "import weakref\nf((weakref.ref, x))",
+        "import weakref\nweakref.ref.__new__(weakref.ref, x)",
+        "import weakref\ngetattr(weakref, 'ref')(x)",
+        "import weakref\ngetattr(weakref, name)",
+        "import weakref\nvars(weakref)['ref'](x)",
     ]
     for source in made:
         assert _made_outside_weak(source), source
@@ -320,6 +350,10 @@ def test_the_scan_finds_every_way_to_make_a_reference():
         "import weakref\ntype(c) is weakref.finalize",
         "import weakref\nKINDS = (weakref.ref, weakref.ProxyType)",
         "import weakref\nweakref.getweakrefs(x)",
+        "import weakref\nKINDS = frozenset({weakref.ref, weakref.ProxyType})",
+        "import weakref\nisinstance(x, (weakref.ref, list))",
+        # Reads what an existing reference finds; makes none.
+        "import weakref\nweakref.ref.__call__(r)",
     ]
     for source in none:
         assert not _made_outside_weak(source), source
