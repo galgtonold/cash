@@ -27,6 +27,21 @@ from tests._cell_driver import run_cash_cell
 
 np = pytest.importorskip("numpy")
 
+#: The library versions whose pickling code cash read for the two
+#: exceptions it makes (scikit-learn's ``BaseEstimator``, numpy's
+#: ``MaskedArray``); with any other installed, an output holding one of them
+#: with an anchored slice runs every time.
+SKLEARN_READ = "1.9.1"
+NUMPY_READ = "2.5.4"
+
+
+def _read_versions(*, masked: bool = False) -> bool:
+    """Whether the installed scikit-learn (and numpy, for an output holding
+    a masked array) is the version whose pickling cash read."""
+    sklearn = pytest.importorskip("sklearn")
+    return sklearn.__version__ == SKLEARN_READ and (not masked or np.__version__ == NUMPY_READ)
+
+
 KEEPER = (
     "import time\n"
     "import numpy as np\n"
@@ -263,8 +278,9 @@ def test_a_model_keeping_the_slice_in_a_tree_too_runs_every_time(cash_magics, cl
     is the slice; a restore would copy the tree's apart from the slice, and
     a write to ``X`` would not reach it. Such a fit runs every time, with
     no warning: nothing went wrong in the store. Fitted by brute force,
-    with no tree, it is served (the control)."""
-    pytest.importorskip("sklearn")
+    with no tree, it is served (the control), where scikit-learn is the
+    version whose pickling cash read; with another, it runs every time."""
+    served = _read_versions()
     fit = f"model = (time.sleep(0.2), KNeighborsClassifier(algorithm={algorithm!r}).fit(X_train, y))[1]"
     cells = [
         "import time\nimport numpy as np\nfrom sklearn.neighbors import KNeighborsClassifier",
@@ -273,7 +289,7 @@ def test_a_model_keeping_the_slice_in_a_tree_too_runs_every_time(cash_magics, cl
         fit,
     ]
     probe = "X[:] = 0.0\nseen = [model._fit_X is X_train, float(model.kneighbors(np.zeros((1, 4)))[0].max())]"
-    expected = CacheStatus.COMPUTED if algorithm == "kd_tree" else CacheStatus.RESTORED
+    expected = CacheStatus.RESTORED if algorithm == "brute" and served else CacheStatus.COMPUTED
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         _run(cash_magics, cells)
@@ -554,10 +570,14 @@ def test_a_value_handing_the_slice_to_pickling_as_it_is_is_served(cash_magics, c
     subclass, or in an estimator inside a ``Pipeline``'s steps or a
     ``GridSearchCV``, each handing it to pickling as it is: after a
     restart it is served, bound to the live slice, and a write to ``X``
-    reaches it as in plain Python."""
+    reaches it as in plain Python. An estimator is served only with the
+    scikit-learn (and, for ``GridSearchCV``'s masked arrays, numpy) whose
+    pickling cash read; with another it runs, as plain Python does."""
     module, make, fit, read = SERVED[kind]
+    served = True
     if module:
         pytest.importorskip(module)
+        served = _read_versions(masked=kind == "grid_search")
     cells = [
         "import time\nimport numpy as np",
         make,
@@ -569,7 +589,7 @@ def test_a_value_handing_the_slice_to_pickling_as_it_is_is_served(cash_magics, c
     _run(cash_magics, cells)
     _restart(cash_magics)
 
-    assert _run(cash_magics, cells) == CacheStatus.RESTORED
+    assert _run(cash_magics, cells) == (CacheStatus.RESTORED if served else CacheStatus.COMPUTED)
     assert _as_cash(cash_magics, probe) == _plain(cells, probe)
 
 
@@ -636,11 +656,10 @@ def test_the_estimator_exception_holds_for_the_version_read_only(monkeypatch):
     from sklearn.neighbors import KNeighborsClassifier
 
     X_train = np.arange(12.0).reshape(3, 4)[:2]
-    if sklearn.__version__ != "1.9.1":
-        pytest.skip("the exception is for scikit-learn 1.9.1")
     knn = KNeighborsClassifier(n_neighbors=1, algorithm="brute").fit(X_train, [0, 1])
-    assert array_memory_held_apart({"m": knn}, {"X_train": X_train}) is None
-    monkeypatch.setattr(sklearn, "__version__", "1.9.2")
+    if sklearn.__version__ == SKLEARN_READ:
+        assert array_memory_held_apart({"m": knn}, {"X_train": X_train}) is None
+        monkeypatch.setattr(sklearn, "__version__", "0.0.0")
     assert array_memory_held_apart({"m": knn}, {"X_train": X_train}) == "X_train"
 
 
