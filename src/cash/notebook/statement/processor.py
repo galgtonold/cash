@@ -5093,7 +5093,7 @@ class StatementProcessor:
         if not holders:
             return set()
         for name in run.holders_unchanged & set(holders):
-            keep_held_lineage(holders[name], cache_key)
+            keep_held_lineage(name, holders[name], cache_key)
         for name, before in holders.items():
             # One this run saw change moves on, whatever an earlier run of
             # the statement saw (a kept alias). One it has no digest of moves
@@ -5103,7 +5103,7 @@ class StatementProcessor:
                 self.tracking_state,
                 name,
                 self.shell.user_ns.get(name),
-                held_lineage(before, cache_key, resolve=name not in run.holders_changed),
+                held_lineage(name, before, cache_key, resolve=name not in run.holders_changed),
                 compute_hash=self.compute_hash,
             )
         return set(holders)

@@ -163,7 +163,7 @@ class StatementRestorer:
                         tracking_state,
                         var_name,
                         value,
-                        held_lineage(before, metadata.key or "") if var_name in moved else before,
+                        held_lineage(var_name, before, metadata.key or "") if var_name in moved else before,
                         compute_hash=self.compute_hash,
                     )
                     continue

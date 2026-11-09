@@ -354,7 +354,7 @@ class CacheRestorer:
                 self.shell.user_ns[var] = val
                 lineage = holders[var]
                 if metadata.get("holders_moved"):
-                    lineage = held_lineage(lineage, metadata.get("key") or "")
+                    lineage = held_lineage(var, lineage, metadata.get("key") or "")
                 apply_held_var(self.tracking_state, var, val, lineage)
                 continue
             if var in self.shell.user_ns and var not in lineage_confirmed:

@@ -52,10 +52,10 @@ def test_with_no_digest_ever_taken_the_partner_moves_on():
 
 
 def test_a_holder_moves_as_the_digest_that_kept_it_says():
-    keep_held_lineage("P", "key")
+    keep_held_lineage("preprocessing", "P", "key")
 
-    assert held_lineage("P", "key") == "P"
-    assert held_lineage("P", "key", resolve=False) != "P"
+    assert held_lineage("preprocessing", "P", "key") == "P"
+    assert held_lineage("preprocessing", "P", "key", resolve=False) != "P"
 
 
 def test_a_name_kept_keeps_no_other_name_of_the_same_lineage():

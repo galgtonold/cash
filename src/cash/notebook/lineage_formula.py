@@ -353,10 +353,11 @@ def use_lineage_alias_store(store: Any) -> None:
             _LINEAGE_ALIASES.setdefault(lineage, earlier)
 
 
-def held_lineage(before: str, cache_key: str, resolve: bool = True) -> str:
-    """The lineage of a variable stored with a statement's outputs because it
-    holds one of their objects too (``StatementCacheMetadata.holders``), from
-    its lineage *before* the statement and the statement's *cache_key*.
+def held_lineage(name: str, before: str, cache_key: str, resolve: bool = True) -> str:
+    """The lineage of *name*, a variable stored with a statement's outputs
+    because it holds one of their objects too
+    (``StatementCacheMetadata.holders``), from its lineage *before* the
+    statement and the statement's *cache_key*.
 
     The statement may change what the variable reaches (``b = a`` before
     ``a['x'] = ...``), so it moves on, as a derivation alias of a mutated base
@@ -369,22 +370,40 @@ def held_lineage(before: str, cache_key: str, resolve: bool = True) -> str:
     statement, keyed alike, did not.
     """
     held = _held_hash(before, cache_key)
-    return resolve_lineage_alias(held) if resolve else held
+    if not resolve:
+        return held
+    kept_as = _kept_held(name, held)
+    earlier = resolve_lineage_alias(kept_as)
+    return earlier if earlier != kept_as else held
 
 
-def keep_held_lineage(before: str, cache_key: str) -> None:
-    """Note that the statement with *cache_key* left a variable it holds with
-    lineage *before* as it was, so `held_lineage` keeps *before*, in the
-    runtime, the simulation and, through the alias store, the next session.
+def keep_held_lineage(name: str, before: str, cache_key: str) -> None:
+    """Note that the statement with *cache_key* left *name*, a variable it
+    holds with lineage *before*, as it was, so `held_lineage` keeps *before*
+    for it, in the runtime, the simulation and, through the alias store, the
+    next session.
     ``pre.fit_transform(X)`` fits clones of the pipelines a ColumnTransformer
     holds; each fit moved those pipelines on all the same, so a session that
     fitted twice keyed everything built on them apart from a Run All after a
-    restart, which fitted once, and 400 s of model fits ran again."""
-    record_lineage_alias(_held_hash(before, cache_key), before)
+    restart, which fitted once, and 400 s of model fits ran again.
+
+    The alias is *name*'s own (`_kept_held`): two holders can have one
+    lineage (``c`` and ``o``, bound by one loop). Keyed by the lineage, the
+    statement that left ``c`` as it was and changed ``o`` kept ``o`` too in
+    the simulation and the restore after a restart, where the run had moved
+    it on, and a reader of ``o`` was served what it gave before the change."""
+    record_lineage_alias(_kept_held(name, _held_hash(before, cache_key)), before)
 
 
 def _held_hash(before: str, cache_key: str) -> str:
     return hashlib.sha256(f"held:{before}:{cache_key}".encode("utf-8")).hexdigest()
+
+
+def _kept_held(name: str, held: str) -> str:
+    """What `keep_held_lineage` keys the alias of *name*, kept where it would
+    have moved on to *held*, by: the moved lineage itself stays the same for
+    every name, the alias is this one's alone."""
+    return hashlib.sha256(f"kept-held:{name}:{held}".encode("utf-8")).hexdigest()
 
 
 def no_cache_value_digest(value: Any) -> str:
