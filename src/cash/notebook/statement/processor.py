@@ -165,6 +165,7 @@ from ...analysis.namespace_effects import (
     statement_starting_workers,
 )
 from ...analytics import AnalyticsManager
+from ...tracking import process_registries
 from ...tracking.env_reads import environment_digests
 from ...tracking.env_reads import recording as recording_env_reads
 from ...tracking.file_dep_snapshot import file_state_epoch, probe_answers, young_digests_kept
@@ -251,6 +252,7 @@ from ..shared_objects import (
 from ..value_cutoff import LineageAliasStore, ValueLineageLog, use_value_lineage_log
 from ..write_observer import child_works, children_left_running, keeps_a_write, kept_writes, observe_writes
 from . import hidden_generators, in_place
+from .collect_first import CollectFirstStore
 from .lineage import note_own_writes
 from .observed_draws import ObservedDrawStore
 from .thread_reach import ThreadReach
@@ -258,13 +260,17 @@ from .unseen_writes import (
     COLLECTED_ONLY_REASON,
     COULD_RUN_REASON,
     COULD_RUN_TOO_BIG_REASON,
+    LEFT_FINALIZER_REASON,
+    PROCESS_REGISTRY_REASON,
     SET_LATER,
     SET_LATER_REASON,
     UNREADABLE,
     UNREADABLE_REASON,
     UNSEEN_WRITES_REASON,
     called_methods,
+    finalizer_left,
     finalizer_writer,
+    finalizers_made,
     live_writers,
     unreadable_changers,
     unseen_writers,
@@ -854,6 +860,9 @@ class StatementProcessor:
         #: Statements already warned NOTEBOOK-MEMO-UNREAD or NOTEBOOK-MEMO-SHARED about.
         self._memo_unread_warned: set[str] = set()
         self._unseen_warned: set[str] = set()
+        #: ``statement -> why``: the statements a run changed a registry of
+        #: the process's in, not stored again (`_refuse_process_registries`).
+        self._registry_writers: dict[str, str] = {}
         #: ``key -> (the entry's timestamp, {output: digest of its stored
         #: value})`` a rerun under that key took (`_changed_from_refused_entry`)
         #: and did not store, refused after it ran (`_refuse_unseen_writes`):
@@ -951,6 +960,8 @@ class StatementProcessor:
         self._as_written_prints: dict[str, tuple[int, str, str]] = {}
         self._key_parts: KeyParts | None = None
         self._randomness.use_draw_store(ObservedDrawStore(_guard_dir) if _guard_dir else None)
+        #: `TrackingState.collect_first`, kept across kernels.
+        self._collect_first_store = CollectFirstStore(_guard_dir) if _guard_dir else None
         self._evicted = EvictedRecomputes()
 
         # Statement-level file-dep tracker. Stateless w.r.t. tracking state —
@@ -1475,9 +1486,13 @@ class StatementProcessor:
         finalizers at a moment no code chooses, too: these only come sooner."""
         collect_first = self.tracking_state.collect_first
         place = _collect_place(run)
-        if place not in collect_first:
+        kept = self._collect_first_store
+        if place in collect_first:
+            del collect_first[place]
+        elif kept is None or place not in kept:
             return
-        del collect_first[place]
+        if kept is not None:
+            kept.discard(place)
         with untracked():
             gc.collect()
         run.collected_first = True
@@ -1859,6 +1874,49 @@ class StatementProcessor:
         run.value_varies = True
         run.metrics["uncacheable_reasons"].append(run.unless_it_draws)
 
+    def _refuse_process_registries(
+        self, run: StatementRun, execution: StatementExecution, before: process_registries.Snapshot
+    ) -> None:
+        """Refuse *run* when it changed a registry the process keeps outside
+        any variable (`process_registries`): ``atexit.register(flush)``,
+        ``signal.signal(...)``, ``logging.getLogger("lib").setLevel(10)``.
+        A served entry would not change it again: after a restart the
+        handler was never installed.
+
+        Nor, after that, a run that finds it already as the statement sets
+        it (``setLevel(10)`` on a level that is 10): it still writes it,
+        which a served entry would not, and a new process finds it unset.
+        Said the second time the statement changes one, once for each
+        statement and registry: a library's setup made once a process on
+        first use (tqdm's monitor thread and its ``atexit`` callback, on
+        the first bar) changes it only the first time."""
+        if not execution.result.success or attribute_or(run.annotation, "assume_safe", False):
+            return
+        found = process_registries.changed(before)
+        if not found:
+            what = self._registry_writers.get(run.code)
+            if what is not None and not run.skip_cache:
+                run.skip_cache = True
+                run.metrics["uncacheable_reasons"].append(what)
+            return
+        what = PROCESS_REGISTRY_REASON.format(registries="; ".join(found))
+        again = run.code in self._registry_writers
+        self._registry_writers[run.code] = what
+        if run.skip_cache:
+            return
+        run.skip_cache = True
+        run.metrics["uncacheable_reasons"].append(what)
+        said = f"{what}\n{run.code}"
+        if not again or said in self._unseen_warned:
+            return
+        self._unseen_warned.add(said)
+        fix = (
+            "nothing, if the statement should run every time (a setup cell); put '# @cash:assume-safe' "
+            "on the statement if the change does not matter."
+        )
+        log_diagnostic(logger, "NOTEBOOK-UNSEEN-WRITES", what, fix)
+        warn_diagnostic(CashWarning, "NOTEBOOK-UNSEEN-WRITES", what, fix)
+
     def _refuse_unseen_writes(
         self,
         run: StatementRun,
@@ -1912,6 +1970,8 @@ class StatementProcessor:
                     collect_first[_collect_place(run)] = None
                     while len(collect_first) > _UNSEEN_REFUSED_KEPT:
                         del collect_first[next(iter(collect_first))]
+                    if self._collect_first_store is not None:
+                        self._collect_first_store.add(_collect_place(run))
                     run.skip_cache = True
                     run.metrics["uncacheable_reasons"].append(COLLECTED_ONLY_REASON.format(fn=found[0][0]))
                     return
@@ -2803,6 +2863,8 @@ class StatementProcessor:
         watch_memos = not run.skip_cache or self._keeps_plot_displays(run)
         memos_before = helper_memos.watched(self.shell.user_ns) if watch_memos else None
         memos_cleared: helper_memos.Clears | None = None
+        finalizers_before = finalizers_made()
+        registries_before = process_registries.snapshot()
         try:
             with (
                 self.watching_reads(run.code),
@@ -2880,6 +2942,12 @@ class StatementProcessor:
         self._refuse_if_it_drew(run, execution)
         self._refuse_entropy_seed(run, execution)
         self._refuse_unseen_writes(run, execution, memos_before, memos_cleared)
+        if not run.skip_cache and execution.result.success:
+            left = finalizer_left(finalizers_before)
+            if left is not None:
+                run.skip_cache = True
+                run.metrics["uncacheable_reasons"].append(LEFT_FINALIZER_REASON.format(fn=left))
+        self._refuse_process_registries(run, execution, registries_before)
         if (
             figures_before is not None
             and not run.skip_cache
@@ -2957,6 +3025,9 @@ class StatementProcessor:
             run.sparse_ordered = sparse_order.were_put_in_order(unordered, self.shell.user_ns) or None
         if unloaded:
             run.body_imported = imported_since(unloaded)
+        registering = process_registries.registering_imports(registries_before)
+        if registering:
+            run.body_imported = list(dict.fromkeys([*(run.body_imported or ()), *registering]))
         if held:
             run.rebound_modules = rebound_modules(held)
             del held

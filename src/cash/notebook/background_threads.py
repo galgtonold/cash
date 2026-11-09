@@ -86,7 +86,7 @@ def _label(fn: object) -> str:
 class BackgroundThreads:
     """The threads alive as a cell starts, and the cells already warned of."""
 
-    _before: weakref.WeakSet[threading.Thread] = field(default_factory=weakref.WeakSet)
+    _before: weakref.WeakSet[threading.Thread] = field(default_factory=_weak.WeakSet)
     _warned: set[str] = field(default_factory=set)
 
     def cell_starts(self) -> None:

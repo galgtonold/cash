@@ -30,9 +30,9 @@ from __future__ import annotations
 
 import logging
 import threading
-import weakref
 from typing import Any
 
+from .. import _weak
 from ..content_hashers import column_memory_key, known_column_pieces, pandas_value_route
 
 logger = logging.getLogger(__name__)
@@ -187,7 +187,7 @@ class BlockReuse:
                     ref = _KEPT.get(key)
                     if ref is not None and ref() is not None:
                         continue
-                    ref = weakref.ref(values, lambda _ref, key=key, at=id(values): _drop(key, at, _ref))
+                    ref = _weak.ref(values, lambda _ref, key=key, at=id(values): _drop(key, at, _ref))
                     _KEPT[key] = ref
                     _KEPT_IDS[id(values)] = ref
         except Exception:  # only a saving: nothing kept
@@ -266,7 +266,7 @@ def _remember_copy(source: Any, stored: Any) -> None:
                 del _COPIED_FROM[at]
 
     try:
-        entry = (weakref.ref(source, forget), weakref.ref(stored, forget))
+        entry = (_weak.ref(source, forget), _weak.ref(stored, forget))
     except TypeError:  # values that take no weak reference: not remembered
         return
     made.append(entry)

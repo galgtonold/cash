@@ -29,13 +29,16 @@ import platform
 import sys
 from types import ModuleType
 
+from . import _weak
+from ._user_attrs import attribute_or
+
 __all__ = ["AVAILABLE", "EXPECTED_API", "REASON", "cwatch", "kernels", "status_line"]
 
 logger = logging.getLogger(__name__)
 
 #: The ``API_VERSION`` this cash's Python code was written against. A module
 #: with another number is a leftover from another build and is not used.
-EXPECTED_API = 4
+EXPECTED_API = 5
 
 MODULE = "cash._cwatch"
 
@@ -66,6 +69,10 @@ def _load() -> tuple[ModuleType | None, str | None]:
         return None, f"the C extension has API {api}, this cash needs {EXPECTED_API}; reinstall cash-lib"
     if getattr(module, "USABLE", True) is False:
         return None, str(getattr(module, "UNUSABLE_REASON", "") or "the C extension is not usable here")
+    # Its weak references to watched values, known as cash's.
+    set_weak_callback = attribute_or(module, "set_weak_callback", None)
+    if set_weak_callback is not None:
+        set_weak_callback(_weak.GONE)
     return module, None
 
 

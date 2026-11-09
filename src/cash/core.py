@@ -7,7 +7,6 @@ per-call events through `Cash.drain_decorator_calls`.
 
 from __future__ import annotations
 
-import atexit
 import datetime
 import inspect
 import logging
@@ -79,6 +78,7 @@ from .exceptions import (
 from .graph import DependencyGraph
 from .reconfigure import apply_overrides
 from .tracking.file_tracker import install_read_watch
+from .tracking.process_registries import register_atexit
 from .tracking.reader_patches import file_registry
 
 if TYPE_CHECKING:
@@ -324,7 +324,7 @@ class Cash:
         self._init_key_path()
         self._init_call_path()
 
-        atexit.register(self._exit_work.run)
+        register_atexit(self._exit_work.run)
 
         # register_magic=None (default) auto-detects: only register when an
         # active IPython session exists.  True forces registration; False skips.
@@ -353,7 +353,7 @@ class Cash:
         # since ``configure(summary=True)`` may turn it on later. Through a
         # weakref, so the hook does not keep the instance alive; registered
         # before the exit work, so it runs after it.
-        atexit.register(_summary_at_exit, _weak.ref(self))
+        register_atexit(_summary_at_exit, _weak.ref(self))
         # The keys earlier runs stored, recorded beside the cache.
         self._stored_keys = StoredKeyRecord(self._backend_slot.local_dir)
         self._notices = Notices(

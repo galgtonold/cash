@@ -21,7 +21,6 @@ cell to end), or a process that ends by ``os._exit``, loses only that.
 
 from __future__ import annotations
 
-import atexit
 import logging
 import os
 import threading
@@ -30,6 +29,7 @@ import weakref
 
 from .. import _weak
 from . import io_watch
+from .process_registries import register_atexit
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +109,7 @@ def _flush_before_start(_args: tuple) -> None:
     flush_all()
 
 
-atexit.register(flush_all)
+register_atexit(flush_all)
 # Through io_watch's one hook: under the C extension's (``caudit.c``) it is
 # called for these events only. An audit hook of its own was called by
 # Python for every audited event in the process, an ``id()`` included

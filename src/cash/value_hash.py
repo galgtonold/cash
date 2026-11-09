@@ -123,7 +123,7 @@ def note_size(obj: Any, nbytes: int) -> None:
         return
     key = id(obj)
     try:
-        ref = weakref.ref(obj, lambda _ref, key=key: _SIZES.pop(key, None))
+        ref = _weak.ref(obj, lambda _ref, key=key: _SIZES.pop(key, None))
     except TypeError:
         return
     _SIZES[key] = (ref, nbytes)
@@ -176,7 +176,7 @@ def costly_after(obj: Any) -> float | None:
 def _remember_costly(obj: Any, seconds: float) -> None:
     key = id(obj)
     try:
-        ref = weakref.ref(obj, lambda _ref, key=key: _COSTLY.pop(key, None))
+        ref = _weak.ref(obj, lambda _ref, key=key: _COSTLY.pop(key, None))
     except TypeError:
         return  # no weak reference (a list, a dict): asked again next time
     _COSTLY[key] = (ref, seconds)

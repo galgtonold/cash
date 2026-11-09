@@ -16,7 +16,6 @@ import sys
 import threading
 import time
 import types
-import weakref
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
@@ -24,7 +23,7 @@ from cash._referents import get_referents
 from cash._user_attrs import instance_of, own_dict
 from cash.exceptions import CacheBackendError
 
-from .. import _native, _plain_data, cost_model, held_reads, kept_state, stored_pickle
+from .. import _native, _plain_data, _weak, cost_model, held_reads, kept_state, stored_pickle
 from .._lazy_module import LazyModule
 from ..cost_model import GENERIC_FAMILY
 from ..sizing import memory_footprint, pickled_size_estimate
@@ -3299,7 +3298,7 @@ def _remember_own_polars(frame: Any) -> None:
     holds data cash owns: its copies (hits) may share it."""
     key = id(frame)
     try:
-        ref = weakref.ref(frame, lambda _ref, key=key: _OWN_POLARS.pop(key, None))
+        ref = _weak.ref(frame, lambda _ref, key=key: _OWN_POLARS.pop(key, None))
     except TypeError:
         return
     with _OWN_POLARS_LOCK:

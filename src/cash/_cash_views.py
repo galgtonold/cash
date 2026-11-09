@@ -18,8 +18,9 @@ sees one reference too many, and reads the table, as it did before.
 from __future__ import annotations
 
 import threading
-import weakref
 from typing import Any
+
+from . import _weak
 
 __all__ = ["held", "note"]
 
@@ -34,7 +35,7 @@ def note(view: memoryview) -> None:
     key = id(view.obj)
     with _LOCK:
         _HELD[key] = _HELD.get(key, 0) + 1
-    weakref.finalize(view, _release, key)
+    _weak.finalize(view, _release, key)
 
 
 def _release(key: int) -> None:

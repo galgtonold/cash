@@ -26,6 +26,7 @@ import os
 import sys
 import types
 
+from .._user_attrs import attribute_or
 from ..install_paths import in_own_package, top_package
 from ..tracking.function_tracker import is_local_module
 from ..value_types import BUILTIN_NAMES
@@ -151,7 +152,9 @@ def unloaded_import(module_name: str, prefix: tuple[str, ...], root_module: str 
             sub = f"{module_name}.{prefix[0]}"
             return sub if _origin(sub) is not None and is_user_code(sub, root_module) else None
         return module_name if is_user_code(module_name, root_module) else None
-    if not prefix or hasattr(module, prefix[0]):
+    # Its own ``__dict__``: ``hasattr`` runs a package's ``__getattr__``
+    # (PEP 562), which imports the very submodule asked about.
+    if not prefix or prefix[0] in (attribute_or(module, "__dict__", None) or ()):
         return None
     sub = f"{module_name}.{prefix[0]}"
     if sub in sys.modules or _origin(sub) is None:

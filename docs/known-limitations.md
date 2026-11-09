@@ -498,6 +498,19 @@ reuse an answer. And when a cell above the reader sets the same module value
 (`mylib.K = 3`), that cell's value is the one the reader gets, as in a
 top-to-bottom run: the setting runs again over the outside value.
 
+### A process setting two statements write
+
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._refuse_process_registries @e3f710f2 -->
+A statement that changes a setting the process keeps outside any variable
+(`logging.getLogger("lib").setLevel(10)`, `atexit.register(save)`,
+`np.seterr(...)`) runs every time: cash compares those settings before and
+after it. But a statement that writes a setting another statement already
+made finds nothing changed, and is stored. With both in the notebook a run
+from the top makes the setting either way; delete the first statement (or,
+after a restart, run only from the second) and the second is served from the
+cache, so the setting is never made. **Fix:** make each setting in one
+statement, or put `# @cash:no-cache` on the second.
+
 ### Re-running a cell above an in-place change
 
 <!-- test:skip reason="illustrative: needs an isolated re-run of a cell above the mutation" -->

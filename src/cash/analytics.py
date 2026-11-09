@@ -17,10 +17,10 @@ import logging
 import sqlite3
 import time
 import uuid
-import weakref
 from pathlib import Path
 from typing import Any
 
+from . import _weak
 from ._location import per_user_cache_root
 from .backends.cache_dir import ANALYTICS_DB_FILENAME, is_cash_file
 from .tracking.read_classification import register_cache_dir
@@ -107,7 +107,7 @@ class AnalyticsManager:
         # clean interpreter exit, at exit. A hard kill loses at most one
         # buffer of telemetry, never a cached result. The finalizer holds the
         # path and the buffer, not the manager, so it never keeps it alive.
-        self._finalizer = weakref.finalize(self, _write_events, self.db_path, self._event_buffer)
+        self._finalizer = _weak.finalize(self, _write_events, self.db_path, self._event_buffer)
 
     def _init_db(self) -> None:
         """Create the schema, self-healing an unreadable or runaway db.

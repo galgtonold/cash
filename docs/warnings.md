@@ -900,7 +900,11 @@ skips the change on a hit. See [Silencing one code](#silencing-one-code).
 
 **What happened.** cash watched the first (missing) call and saw it reach
 outside its return value: a `file write`, a `subprocess`, or an `argument
-mutation` (an object you passed in changed). A connection to a server is a read
+mutation` (an object you passed in changed). Or it changed a setting the
+process keeps outside any variable (`np.seterr(...)`,
+`logging.getLogger("lib").setLevel(10)`, `sys.setrecursionlimit(n)`,
+`atexit.register(f)`): that call, and every later call of the function, is
+not stored, since a hit would not make the setting. A connection to a server is a read
 the key cannot see, reported as [KEY-NETWORK-READ](#key-network-read).
 Each effect names the path or address and the line of your code that led to it; the one-line form shows how many there are and the first, and `f.cache_info()["warnings"]` lists them all.
 
@@ -2663,6 +2667,27 @@ with `ns = globals()`, or `f('x', -3)` with `f =
 functools.partial(setattr, points[7])` made in a cell above. Cash cannot
 tell which variable changes before the statement runs, so it takes every
 variable as changed: what reads any of them after it runs again.
+
+<!-- claim: cash/tracking/process_registries.py:snapshot @bdd98c66, cash/notebook/statement/processor.py:StatementProcessor._refuse_process_registries @e3f710f2, cash/tracking/process_registries.py:registering_imports @f4d937d7, cash/decorator/runtime.py:CallRunner._refuse_registries @a3042403 -->
+It names, too, a statement that registers something with the process, in
+its own text or in a function or library it calls: `atexit.register(flush)`,
+`signal.signal(...)`, `sys.excepthook = hook`, `sys.setprofile(...)`,
+`sys.addaudithook(...)`, `warnings.simplefilter(...)`,
+`logging.getLogger("lib").addHandler(h)`, `copyreg.pickle(...)`,
+`codecs.register(...)`, `sys.path.append(...)`, `os.environ[...] = ...`,
+`os.chdir(...)`, `plt.style.use(...)`, `np.seterr(...)` or a change to
+`decimal`'s context. No variable holds what it changed: a statement served
+from the cache would not register it again, and after a restart it would
+never be registered. A call cash keeps across statements is not kept for
+the same reason. Once a statement has changed one, it is not stored on a
+later run either, also when that run finds it already as the statement
+sets it (`setLevel(10)` on a level that is 10): it still sets it, which a
+served statement would not. It is said the second time a statement changes
+it: a library that sets itself up once a process on first use (tqdm's
+monitor, made with the first bar) changes it only the first time. A module
+a library imports on the way that registers something (`pkg.sub` reached
+through the package's `__getattr__`) is imported again when the statement
+is served.
 
 **Why it matters.** Served from the cache, the statement would not run the
 function, so the change would not happen. Cash runs the statement every

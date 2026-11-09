@@ -25,6 +25,7 @@ import warnings
 import pytest
 
 from cash._gc_context import collecting
+from cash.notebook.statement.collect_first import CollectFirstStore
 from tests._cell_driver import run_cash_cell
 
 LOG: list[str] = []
@@ -85,6 +86,33 @@ def test_garbage_left_before_a_statement_keeps_it_out_once(cash_magics, mock_she
     assert third[0][0] == "RESTORED", third
     assert mock_shell.user_ns["y"] == [0, 1, 2]
     assert not [w for w in caught if getattr(w.message, "code", None) == "NOTEBOOK-UNSEEN-WRITES"]
+
+
+@pytest.mark.usefixtures("store_everything", "collected_by_hand")
+def test_the_first_run_after_a_restart_collects_first_too(cash_magics, tmp_path):
+    """Restart and run all: each statement runs once a kernel. Known in the
+    kernel alone, the flag was gone before the run it was for, and the
+    statement was refused in every kernel."""
+    processor = cash_magics._statement_processor
+    # As over a cache folder (the in-memory backend has none).
+    processor._collect_first_store = CollectFirstStore(str(tmp_path))
+    cells = [SETUP, STATEMENT]
+    run_cash_cell(cash_magics, SETUP, cells=cells)
+    Litter()
+    run_cash_cell(cash_magics, STATEMENT, cells=cells)
+    assert cash_magics.tracking_state.collect_first, "the run was not refused for the garbage"
+    # A restart: nothing of the session, the flag as the disk keeps it.
+    cash_magics.tracking_state.reset_session_state()
+    processor._collect_first_store = CollectFirstStore(str(tmp_path))
+    run_cash_cell(cash_magics, SETUP, cells=cells)
+    seen = []
+    for _ in range(2):
+        Litter()
+        run_cash_cell(cash_magics, STATEMENT, cells=cells)
+        seen.append(_statuses(cash_magics))
+    gc.collect()
+    assert seen[0][0][0] == "COMPUTED", seen
+    assert seen[1][0][0] == "RESTORED", "the first run after the restart was refused again"
 
 
 def test_only_a_collection_reads_as_collecting():

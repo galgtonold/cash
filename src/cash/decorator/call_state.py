@@ -156,6 +156,7 @@ class BodyRun:
         "env_reads",
         "args_before",
         "args_reads",
+        "registries",
     )
 
 

@@ -6,11 +6,10 @@ from __future__ import annotations
 import hashlib
 import os
 import sys
-import weakref
 from collections.abc import Sized
 from typing import TYPE_CHECKING, Any
 
-from .. import kept_state
+from .. import _weak, kept_state
 from .._memo import FROZEN_RESULTS, LruMemo
 from ..content_hashers import builtin_hash
 from ..diagnostics import warn_diagnostic
@@ -160,10 +159,10 @@ class FrozenResults:
             return
         key = id(obj)
         try:
-            wref = weakref.ref(obj, lambda _r, k=key, m=self._carried: m.pop(k, None))
+            wref = _weak.ref(obj, lambda _r, k=key, m=self._carried: m.pop(k, None))
             uses = self._uses.get(key)
             if uses is None or uses[0]() is not obj:
-                use_ref = weakref.ref(obj, lambda _r, k=key, m=self._uses: m.pop(k, None))
+                use_ref = _weak.ref(obj, lambda _r, k=key, m=self._uses: m.pop(k, None))
                 self._uses[key] = [use_ref, 0, digest, frozen_shape(obj)]
         except TypeError:
             return
@@ -189,7 +188,7 @@ class FrozenResults:
         """
         arr.flags.writeable = False
         self.arrays[id(arr)] = [
-            weakref.ref(arr, lambda _r, k=id(arr), m=self.arrays: m.pop(k, None)),
+            _weak.ref(arr, lambda _r, k=id(arr), m=self.arrays: m.pop(k, None)),
             producer,
             None,
         ]
@@ -313,7 +312,7 @@ class FrozenResults:
         entry = self._uses.get(key)
         if entry is None or entry[0]() is not obj:
             try:
-                wref = weakref.ref(obj, lambda _r, k=key, m=self._uses: m.pop(k, None))
+                wref = _weak.ref(obj, lambda _r, k=key, m=self._uses: m.pop(k, None))
             except TypeError:
                 return True
             entry = [wref, 0, None, frozen_shape(obj)]

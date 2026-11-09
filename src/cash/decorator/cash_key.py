@@ -21,7 +21,6 @@ import os
 import pickle
 import queue
 import threading
-import weakref
 from collections.abc import Callable
 from typing import Any
 
@@ -206,7 +205,7 @@ class KeyCheck:
             if known is not None and known() is value:
                 return
             try:
-                ref = weakref.ref(value, lambda _r, key=id(value): self._queued.pop(key, None))
+                ref = _weak.ref(value, lambda _r, key=id(value): self._queued.pop(key, None))
             except TypeError:
                 return  # no weak references: it cannot be checked without keeping it alive
             self._queued[id(value)] = ref

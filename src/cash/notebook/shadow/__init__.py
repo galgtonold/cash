@@ -29,7 +29,6 @@ lost monitoring tool id) gives no verdict and is counted as unusable.
 
 from __future__ import annotations
 
-import atexit
 import collections
 import contextlib
 import contextvars
@@ -46,6 +45,8 @@ from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from cash._user_attrs import attribute_or, instance_of
+
+from ...tracking.process_registries import register_atexit, unregister_atexit
 
 __all__ = ["SHADOW", "Shadow", "disable", "enable", "requested", "status"]
 
@@ -1221,7 +1222,7 @@ def enable() -> Shadow | None:
         return None
     SHADOW = shadow
     if shadow.diagnose:
-        atexit.register(shadow.report_at_exit)
+        register_atexit(shadow.report_at_exit)
     return shadow
 
 
@@ -1232,7 +1233,7 @@ def disable() -> None:
     if shadow is not None:
         shadow.recorder.notebook_ns = None
         if shadow.diagnose:
-            atexit.unregister(shadow.report_at_exit)
+            unregister_atexit(shadow.report_at_exit)
         for fh in (shadow._log, shadow._trace_file):
             if fh is not None:
                 fh.close()

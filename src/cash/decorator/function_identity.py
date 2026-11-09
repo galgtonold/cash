@@ -16,6 +16,7 @@ import weakref
 from collections.abc import Callable
 from typing import Any
 
+from .. import _weak
 from .._memo import CODE_OBJECTS, LruMemo
 from .._paths import MAIN_MODULE_NAMES, is_pseudo_filename, resolve_main_module
 from ..canonical_form import stable_key_repr
@@ -406,6 +407,6 @@ class OwnSourcePins:
                 unverified.discard(key)
 
         try:
-            return weakref.ref(owner, _drop)
+            return _weak.ref(owner, _drop)
         except TypeError:
             return lambda: owner
