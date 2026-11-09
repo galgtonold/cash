@@ -46,6 +46,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 from ..tracking import io_watch
+from ..tracking.process_registries import IMPORT_STEP_CODE
 
 logger = logging.getLogger(__name__)
 
@@ -236,13 +237,19 @@ def _by_an_import(step: str) -> bool:
     anything else in between, a module body the import runs calling
     ``get_code`` on another file, or the value's own
     ``SourceFileLoader(...).get_code(...)`` while an outer import runs,
-    breaks the chain, and the write is the value's."""
+    breaks the chain, and the write is the value's. Cash's own step in
+    ``importlib``'s place (`IMPORT_STEP_CODE`) does not."""
     frame = sys._getframe(1)
     while frame is not None and frame.f_code.co_filename.startswith(_CASH_DIR):
         frame = frame.f_back  # the check's own frames, and the hook calling it
     needed = {step, "_cache_bytecode", "get_code"}
     while frame is not None:
         code = frame.f_code
+        if code is IMPORT_STEP_CODE:
+            # cash's own ``_load_unlocked``, in ``importlib``'s place once
+            # a statement has watched the process's registries.
+            frame = frame.f_back
+            continue
         if code.co_filename not in _IMPORTLIB_FILES:
             return False
         needed.discard(code.co_name)

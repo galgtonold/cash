@@ -284,6 +284,37 @@ def test_a_module_imported_in_a_rebuild_is_imported(tmp_path, monkeypatch):
     assert sys.dont_write_bytecode is False
 
 
+class _ImportsLazilyToo:
+    def __getstate__(self):
+        return {}
+
+    def __setstate__(self, state):
+        import lazily_imported_too  # noqa: F401 - imported on first rebuild
+
+        self.imported = True
+
+
+def test_a_module_imported_in_a_rebuild_is_imported_once_imports_are_watched(tmp_path, monkeypatch):
+    """A statement's snapshot of the process's registries puts cash's own
+    step in ``importlib``'s place for the rest of the process. Its frame
+    in the import counted as the value's code: the ``.pyc`` write was
+    refused, and every store after the first statement refused."""
+    import sys
+
+    from cash.tracking import process_registries
+
+    process_registries.changed(process_registries.snapshot())
+    (tmp_path / "lazily_imported_too.py").write_text("X = 1\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.delitem(sys.modules, "lazily_imported_too", raising=False)
+    monkeypatch.setattr(sys, "dont_write_bytecode", False)
+    backend = InMemoryBackend()
+    backend.set("k", {"v": _ImportsLazilyToo()}, metadata={"copy_required": True})
+    assert backend.get("k") is not None
+    assert "lazily_imported_too" in sys.modules
+    assert (tmp_path / "__pycache__").is_dir()
+
+
 class _UsesScratch:
     def __getstate__(self):
         return {}

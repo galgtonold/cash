@@ -44,6 +44,7 @@ from .._user_attrs import attribute_or, has_attribute
 
 __all__ = [
     "IMPORT_FINALIZERS",
+    "IMPORT_STEP_CODE",
     "changed",
     "finalizers_made",
     "register_atexit",
@@ -431,6 +432,12 @@ def _load_unlocked(spec: Any) -> Any:
         if registered and isinstance(name, str) and name in sys.modules:
             for each in watching:
                 each.imported.append(name)
+
+
+#: The code of `_load_unlocked`, which `snapshot` puts in ``importlib``'s
+#: place for the rest of the process: a frame of it is a step of the
+#: import, as ``importlib``'s own are (`cash.backends.no_file_writes`).
+IMPORT_STEP_CODE = _load_unlocked.__code__
 
 
 #: The ``weakref.finalize`` numbers (``info.index``) the imports made while
