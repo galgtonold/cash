@@ -635,7 +635,7 @@ a name bound through the namespace, `eval`, `exec` of a computed string and
 
 ### An object found by a lookup cash does not see
 
-<!-- claim: cash/tracking/lookups_seen.py:_note_object @8e9bfd0b, cash/tracking/lookups_seen.py:_note_globals @68b1cf88, cash/tracking/lookups_seen.py:_note_value @cda5c7cf, cash/tracking/lookups_seen.py:_on_call @3f4ed601, cash/tracking/lookups_seen.py:_on_start @182191e3, cash/tracking/lookups_seen.py:_on_return @837b016e, cash/tracking/lookups_seen.py:arm @621f5c02 -->
+<!-- claim: cash/tracking/lookups_seen.py:_note_object @8e9bfd0b, cash/tracking/lookups_seen.py:collecting @9163f1c2, cash/tracking/lookups_seen.py:_may_note @d506a15c, cash/tracking/lookups_seen.py:_note_globals @68b1cf88, cash/tracking/lookups_seen.py:_note_value @4fff0807, cash/tracking/lookups_seen.py:_on_call @a5e765f6, cash/tracking/lookups_seen.py:_on_start @182191e3, cash/tracking/lookups_seen.py:_on_return @69918c95, cash/tracking/lookups_seen.py:arm @621f5c02 -->
 A logger pickles by its name, so a statement can find it without any
 variable holding it: `seen = logging.getLogger("app").level`. On Python 3.12
 and newer, cash checks such an object when a call written in Python returns
@@ -648,21 +648,23 @@ before after another cell changes it:
 - by a call written in C: `getattr(logging, "root")`, `vars(logging)["root"]`,
   `operator.attrgetter("root")(logging)`;
 - by a function of yours that returns what such a call found;
-- in a dict, list or tuple, when its class was not yet seen pickled by its
-  name in the session;
-- by a call made where an earlier call of the same statement, at the same
-  place, called another function (`for get in getters: get("app")`): cash
-  watches each place a call is made for the first function called there. A
-  function of your notebook, and a library's function seen returning such
-  an object before (`logging.getLogger`), are watched wherever they are
-  called; any other is not.
+- by a call made where the same statement, at the same place, called a
+  function written in C first (`for get in (str, logging.getLogger)`), or
+  called one function twice before (`for get in (fake, fake,
+  logging.getLogger)`): cash stops watching a place once it calls a C
+  function or a function it called already, so a loop pays for one or two
+  checks, and watches it again only when a new function is called
+  elsewhere. A function of your notebook, and a library's function seen
+  returning such an object before (`logging.getLogger`), are watched
+  wherever they are called.
 
 A statement that reads, through a module, a container of more than 100,000
 items runs every time, uncached, and
 [NOTEBOOK-ITEMS-UNREAD](warnings.md#notebook-items-unread) says so; so does
 one whose checking of such objects takes longer than its analysis budget
-([NOTEBOOK-ANALYSIS-BUDGET](warnings.md#notebook-analysis-budget)). Before Python 3.12, or when other tools hold the
-monitoring tool ids cash asks for (5 and 2), none of these lookups is
+([NOTEBOOK-ANALYSIS-BUDGET](warnings.md#notebook-analysis-budget)), and so
+does a call cash keeps that starts after that. Before Python 3.12, or when
+other tools hold the monitoring tool ids cash asks for (5 and 2), none of these lookups is
 checked, and [NOTEBOOK-LOOKUPS-UNSEEN](warnings.md#notebook-lookups-unseen)
 says so once, at the first statement that calls something or reads an
 attribute.

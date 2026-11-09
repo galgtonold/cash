@@ -228,3 +228,72 @@ def test_noting_past_the_budget_is_never_served(cash_magics, cash_instance, monk
             run_cash_cell(cash_magics, cell, cells=cells)
     assert cash_magics.shell.user_ns["seen"] == 30
     assert "NOTEBOOK-ANALYSIS-BUDGET" in _codes(caught)
+
+
+#: A logger a library made, before any statement ran: found by the
+#: statements below only through the library.
+LIB_NAME = f"{NAME}.made_by_a_library"
+logging.getLogger(LIB_NAME)
+
+
+@pytest.fixture
+def fresh_kernel(monkeypatch):
+    """What a kernel that just started knows: no class seen pickled by its
+    name, no library function seen returning one."""
+    from cash import _weak, kept_state
+    from cash.tracking import lookups_seen
+
+    monkeypatch.setattr(kept_state, "_KINDS_BY_REFERENCE", set())
+    monkeypatch.setattr(lookups_seen, "_RETURNERS", _weak.WeakSet())
+    yield
+    logging.getLogger(LIB_NAME).setLevel(logging.NOTSET)
+
+
+FRESH_SETUP = "import logging, random\nclass Fake:\n    level = -1\ndef fake(n):\n    return Fake"
+
+
+@pytest.mark.usefixtures("fresh_kernel")
+@pytest.mark.parametrize(
+    "reader",
+    [
+        f"lv = [f({LIB_NAME!r}).level for f in (fake, logging.getLogger)][1]",
+        f"lv = 0\nfor make in (fake, logging.getLogger):\n    lv = make({LIB_NAME!r}).level",
+        f"lv = logging.Logger.manager.loggerDict[{LIB_NAME!r}].level",
+        f"lv = [random.choice(s) for s in ([1], list(map(logging.getLogger, [{LIB_NAME!r}])))][1].level",
+    ],
+    ids=[
+        "a-site-calling-another-first",
+        "a-loop-calling-another-first",
+        "the-registry",
+        "a-return-giving-another-first",
+    ],
+)
+def test_a_logger_a_fresh_kernel_finds_is_checked(cash_magics, cash_instance, reader):
+    """In a kernel that saw no logger pickled yet, a statement finds one a
+    library made: through a call made where another was called first, an
+    item of the registry, or a return that gave another value first."""
+    cash_instance.config.min_execution_time_to_cache_seconds = 0.0
+    cash_instance.config.call_cost_floor_seconds = 0.0
+    cells = [FRESH_SETUP, reader, f"# elsewhere\nlogging.getLogger({LIB_NAME!r}).setLevel(40)", f"# again\n{reader}"]
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    assert cash_magics.shell.user_ns["lv"] == 40
+
+
+def test_a_kept_call_past_the_budget_is_never_served(cash_magics, cash_instance, monkeypatch):
+    """The budget ran out before the kept calls of the statement started:
+    what they find is unseen, so none is served once the level changed."""
+    from cash.notebook.statement.processor import StatementProcessor
+
+    cash_instance.config.min_execution_time_to_cache_seconds = 0.0
+    cash_instance.config.call_cost_floor_seconds = 0.0
+    setup = f"import logging\nlogging.getLogger({NAME!r}).setLevel(20)\ndef level_of(n):\n    return logging.getLogger(n).level"
+    first = f"a = level_of('{NAME}.other')\nb = level_of({NAME!r})\nab = (level_of('{NAME}.other'), level_of({NAME!r}))"
+    cells = [setup, first, f"logging.getLogger({NAME!r}).setLevel(40)", f"c = level_of({NAME!r}) + 0"]
+    run_cash_cell(cash_magics, setup, cells=cells)
+    with monkeypatch.context() as patched:
+        patched.setattr(StatementProcessor, "_noting_budget", staticmethod(lambda run: 0.0), raising=False)
+        run_cash_cell(cash_magics, first, cells=cells)
+    for cell in cells[2:]:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    assert cash_magics.shell.user_ns["c"] == 40

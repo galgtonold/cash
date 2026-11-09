@@ -95,7 +95,7 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
     - **A file it or an input read** ([files](#files), below).
     - **An environment variable it reads** by name, in its own text or in a
       function or method of yours it calls, defined in a cell or a module.
-    <!-- claim: cash/tracking/reference_states.py:changed @1949e458, cash/notebook/statement/processor.py:StatementProcessor._note_reference_states @24a22d30, cash/tracking/reference_states.py:for_call @fafe1936, cash/tracking/lookups_seen.py:_on_call @3f4ed601, cash/tracking/lookups_seen.py:_note_reads @025b3e9f, cash/tracking/lookups_seen.py:_note_globals @68b1cf88, cash/tracking/lookups_seen.py:_warn_unseen_once @51c2c97b -->
+    <!-- claim: cash/tracking/reference_states.py:changed @1949e458, cash/notebook/statement/processor.py:StatementProcessor._note_reference_states @24a22d30, cash/tracking/reference_states.py:for_call @fafe1936, cash/tracking/lookups_seen.py:_on_call @a5e765f6, cash/tracking/lookups_seen.py:_note_reads @025b3e9f, cash/tracking/lookups_seen.py:_note_globals @68b1cf88, cash/tracking/lookups_seen.py:_warn_unseen_once @51c2c97b -->
     - **An object that pickles by reference** (by its name, as a logger
       pickles as `getLogger(name)`) held by a value it reads, or by a global
       a function it calls reads, or by a value it reads was made from. Its

@@ -2481,12 +2481,6 @@ def note_kind_by_reference(kind: type, reduced: Any) -> None:
         _KINDS_BY_REFERENCE.add(kind)
 
 
-def kinds_by_reference() -> set[type]:
-    """The classes `seen_by_reference` takes for such, to read only: an
-    empty set when none was seen yet."""
-    return _KINDS_BY_REFERENCE
-
-
 def seen_by_reference(kind: type) -> bool:
     """Was an instance of *kind* seen pickled by reference to a lookup by a
     name? A set lookup: no code of the object's runs."""

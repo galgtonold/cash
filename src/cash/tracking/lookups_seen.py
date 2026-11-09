@@ -82,12 +82,13 @@ class _Watch:
         #: their digests already (`reference_states.states`).
         self.user_ns: Mapping[str, Any] | None = None
         #: The functions a call of armed code was seen to call (`_on_call`).
-        self.callables: set[types.FunctionType] = set()
+        self.called: set[types.FunctionType] = set()
         #: The globals, and the attributes, armed code binds or deletes
         #: (`_note_rebinds`).
         self.rebound: set[str] = set()
         self.rebound_attrs: set[str] = set()
-        #: The code with a call site switched off since `rebound` last grew.
+        #: The code with a call site switched off since sites were last
+        #: switched back on (`_switch_on`).
         self.switched_off: set[types.CodeType] = set()
         #: The notebook's functions not armed yet, by their code: armed when
         #: first started (`_on_start`), with the globals they read.
@@ -425,11 +426,10 @@ def _note_globals(code: types.CodeType, namespace: Mapping[str, Any], notebooks:
 def _note_value(value: Any, read: str) -> None:
     """Note *value*, which the statement reads as *read*, when it stands by
     reference, or what a dict, list or tuple *value* holds that does, one
-    level down. An item is taken for one only by its class, one an instance
-    of which was seen pickled by reference (`kept_state.seen_by_reference`)
-    and not the user's: no other item is reduced, and no code of the user's
-    runs. One of more than `ITEM_TYPES_AT` items is not looked through: the
-    statement is never served (`_too_big`)."""
+    level down. An item is reduced only when its class, read in C, may
+    pickle by reference and is not the user's (`_may_note`): no code of the
+    user's runs. One of more than `ITEM_TYPES_AT` items is not looked
+    through: the statement is never served (`_too_big`)."""
     kind = type(value)
     if kind is dict:
         items = value.values()
@@ -440,11 +440,7 @@ def _note_value(value: Any, read: str) -> None:
             _note_object(value)
         return
     watch = _ACTIVE
-    if watch is None:
-        return
-    seen = kept_state.kinds_by_reference()
-    if not seen:
-        # No class was seen pickled by a name yet: no item is taken for one.
+    if watch is None or not items:
         return
     from ..analysis.handed_callables import ITEM_TYPES_AT
 
@@ -452,7 +448,7 @@ def _note_value(value: Any, read: str) -> None:
         _too_big(watch, read)
         return
     # Which classes the items are, read in C: nothing of theirs runs.
-    met = [kind for kind in seen.intersection(map(type, items)) if not _is_users_class(kind)]
+    met = [kind for kind in set(map(type, items)) if _may_note(kind)]
     if not met:
         return
     noted = watch.noted
@@ -476,9 +472,17 @@ def _may_note(kind: type) -> bool:
     code."""
     if kind in _PLAIN:
         return False
-    if kept_state.seen_by_reference(kind):
-        return True
-    return kept_state.may_stand_by_reference(kind) and not _is_users_class(kind)
+    try:
+        may = _MAY_NOTE[kind]
+    except KeyError:
+        may = _MAY_NOTE[kind] = kept_state.may_stand_by_reference(kind) and not _is_users_class(kind)
+    except TypeError:  # a class whose metaclass makes it unhashable
+        may = False
+    return may or kept_state.seen_by_reference(kind)
+
+
+#: ``class -> whether one of it may stand by reference, not the user's``.
+_MAY_NOTE: weakref.WeakKeyDictionary[type, bool] = _weak.WeakKeyDictionary()
 
 
 def _is_users_class(kind: type) -> bool:
@@ -588,27 +592,37 @@ def _disarm(watch: _Watch) -> None:
 def _on_call(code: types.CodeType, offset: int, callable_: Any, arg0: Any) -> Any:
     """A call made by code armed (`arm`): the returns of a library's
     callee are seen, and the calls and reads of a function of the user's,
-    as the statement's own. Once per callable in a statement; a call site
-    that can only call the one it called is then switched off
-    (`_site_done`)."""
+    as the statement's own. A site is switched off once it calls a C
+    function, which returns nothing seen, or a function seen already in
+    the statement, so a loop pays for one or two events. A function seen
+    first switches every site switched off back on (`_switch_on`): a site
+    that called others may call it next (``for f in (fake,
+    logging.getLogger)``)."""
+    kind = type(callable_)
+    if kind is _METHOD:
+        callable_ = callable_.__func__
+        kind = type(callable_)
     watch = _ACTIVE
-    if watch is None or _THREAD.busy:
+    if watch is None:
         return None
-    # A function hashes by its identity: no code of the user's runs.
-    fn = callable_.__func__ if type(callable_) is types.MethodType else callable_
-    if type(fn) is types.FunctionType and fn not in watch.callables:
-        watch.callables.add(fn)
-        try:
-            _arm_callee(watch, fn)
-        except Exception:  # noqa: BLE001 - whatever arming it raises: never served
-            _unreadable()
-            return None
-    # Switched off once its callable is seen to, so a loop pays for one
-    # event: switched back on when its code's events are set again, by the
-    # next statement's arming or by `_note_rebinds`. A function of the
-    # notebook's it calls next is armed as it starts (`_on_start`).
-    watch.switched_off.add(code)
-    return sys.monitoring.DISABLE
+    if kind is not _FUNCTION or callable_ in watch.called:
+        watch.switched_off.add(code)
+        return sys.monitoring.DISABLE
+    if _THREAD.busy:
+        return None
+    watch.called.add(callable_)
+    with _LOCK:
+        if _ACTIVE is watch:
+            _switch_on(watch)
+    try:
+        _arm_callee(watch, callable_)
+    except Exception:  # noqa: BLE001 - whatever arming it raises: never served
+        _unreadable()
+    return None
+
+
+_FUNCTION = types.FunctionType
+_METHOD = types.MethodType
 
 
 def _note_rebinds(watch: _Watch, code: types.CodeType) -> None:
@@ -620,7 +634,12 @@ def _note_rebinds(watch: _Watch, code: types.CodeType) -> None:
         return
     watch.rebound |= names
     watch.rebound_attrs |= attrs
-    # Setting a code's events again switches its sites back on.
+    _switch_on(watch)
+
+
+def _switch_on(watch: _Watch) -> None:
+    """Switch the call sites switched off back on: setting a code's events
+    again does."""
     switched_off, watch.switched_off = watch.switched_off, set()
     for done in switched_off:
         events = watch.armed.get(done, 0)
@@ -702,14 +721,16 @@ def _is_users(code: types.CodeType) -> bool:
     return found
 
 
-def _on_return(code: types.CodeType, offset: int, retval: Any) -> Any:
+def _on_return(code: types.CodeType, offset: int, retval: Any, _type: type = type, _plain: frozenset = _PLAIN) -> Any:
     """A callee armed returned *retval*: noted when it stands by reference.
-    A return that gave anything else is switched off, so a loop calling it
-    pays for one event; switched back on as a call site is (`_on_call`)."""
-    if _ACTIVE is None or _THREAD.busy:
+    No return is switched off, as the next value it returns may be one
+    (``random.choice``); a value of a class that cannot stand by reference
+    costs a set or dict lookup."""
+    kind = _type(retval)
+    if kind in _plain or _ACTIVE is None:
         return None
-    if not _may_note(type(retval)):
-        return sys.monitoring.DISABLE
+    if not _may_note(kind) or _THREAD.busy:
+        return None
     _THREAD.busy = True
     try:
         noted = _note_object(retval)
@@ -718,9 +739,8 @@ def _on_return(code: types.CodeType, offset: int, retval: Any) -> Any:
         return None
     finally:
         _THREAD.busy = False
-    if not noted:
-        return sys.monitoring.DISABLE
-    _RETURNERS.add(code)
+    if noted:
+        _RETURNERS.add(code)
     return None
 
 
@@ -812,6 +832,9 @@ def collecting() -> Iterator[dict[str, str]]:
     if watch is None:
         yield found
         return
+    if watch.past_budget:
+        # Nothing is noted past the budget: what the call finds is unseen.
+        found[UNSEEN] = UNSEEN
     watch.collectors.append(found)
     try:
         yield found
