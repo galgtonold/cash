@@ -143,11 +143,11 @@ def stable_key_repr(
     * Every dict, list, tuple, set and frozenset becomes a tuple tagged with its
       type (`_typed`), so containers of different types never key alike.
     * The items of a set are sorted by their pickled bytes: a set of strings
-      iterates in an order PYTHONHASHSEED picks. Where the set iterates in
-      another order than one built from those items in sorted order would
+      iterates in an order PYTHONHASHSEED picks. The order its items that
+      hash alike in every process (numbers, and tuples of them) iterate in
+      is kept beside them where it is not that sorted order
       (`set_walk_order`: items that collided, went in another order or
-      were deleted), that order is kept beside them, since ``list(s)`` and
-      ``s.pop()`` read it. A dict keeps its insertion order, which code reads:
+      were deleted), since ``list(s)`` and ``s.pop()`` read it. A dict keeps its insertion order, which code reads:
       ``pd.DataFrame(d)`` orders its columns by it, ``json.dumps`` and
       ``csv.DictWriter`` write in it. Sorted, ``{"name": ..., "score": ...}``
       and its reordering shared an entry and the second call got the first

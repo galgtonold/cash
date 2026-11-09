@@ -72,6 +72,27 @@ def test_a_set_of_strings_still_keys_alike_in_two_orders(cash_instance):
 
 def test_the_order_is_what_the_set_iterates():
     assert kept_state.set_walk_order([1, 9], (1, 9)) is None
-    assert kept_state.set_walk_order(list({9, 1}), (1, 9)) == (1, 0)
+    assert kept_state.set_walk_order(list({9, 1}), (1, 9)) == (1).to_bytes(4, "little") + (0).to_bytes(4, "little")
     assert kept_state.set_walk_order(["b", "a"], ("a", "b")) is None, "strings key order-free"
     assert kept_state.set_walk_order([9.0, float("nan")], (9.0, float("nan"))) is None
+
+
+def test_the_numbers_in_a_set_with_strings_key_by_their_order(cash_instance):
+    """One string made the whole set order-free: ``{"zz"}`` with 1 and 9
+    added in two orders shared an entry, and ``[x for x in s if x != "zz"]``
+    was served the other set's order. The numbers' order among themselves
+    is the same in every process, so it is keyed; the strings' is not."""
+
+    @cash_instance.cache
+    def numbers(s):
+        return [x for x in s if not isinstance(x, str)]
+
+    first, second = {"zz"}, {"zz"}
+    first.add(1)
+    first.add(9)
+    second.add(9)
+    second.add(1)
+    assert first == second
+    assert numbers(first) == [x for x in first if not isinstance(x, str)]
+    assert numbers(second) == [x for x in second if not isinstance(x, str)]
+    assert numbers(first) != numbers(second), "the two sets order their numbers apart"

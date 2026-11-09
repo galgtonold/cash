@@ -1044,6 +1044,21 @@ default argument or base class does. **Fix:** move the binding above this cell.
   multiprocessing do the same). Results are equal; only code that depends on
   that order sees a difference, such as the key order of a dict built by
   looping over the set. Use `sorted(s)` where the order matters.
+- **Equal sets of strings that iterate in different orders share an
+  entry.** Strings hash differently in every Python process, so cash keys
+  a set of strings by its items alone, never by its order; only the
+  numbers in a set are keyed by the order they iterate in. Two equal sets
+  of strings built in different orders (items that collide in the set's
+  table sit in the order they went in) can share one cached answer for
+  `list(s)` or `next(iter(s))`. Use `sorted(s)` where the order matters.
+- **Where `s.pop()` resumes is not keyed.** A set remembers where its last
+  `pop()` took an item from, and the next `pop()` searches on from there:
+  after `a = {0, 1, 2}; a.pop(); a.add(0)`, `a` equals `{0, 1, 2}` and
+  iterates as it does, but `a.pop()` returns `1` where a fresh set's
+  returns `0`. Cash keys a set by its items and the order it iterates in,
+  not by that hidden position, so a cached call doing `x.pop()` on a copy
+  of such a set can return the other one's item. Use `min(s)` or
+  `sorted(s)[0]` to pick an item.
 - **A call given a set of strings runs again after a restart.** Inside a
   cell, cash keys a call of your function on its arguments as they are
   stored, and a set or frozenset of strings is stored in an order that

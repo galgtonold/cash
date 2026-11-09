@@ -14,6 +14,7 @@ does. It is used wherever cash pickles a value it keys or stores.
 
 from __future__ import annotations
 
+import array
 import contextlib
 import copy
 import copyreg
@@ -54,7 +55,6 @@ __all__ = [
     "restore_with_dict",
     "restores_alike_apart",
     "same_definition",
-    "hashed_alike_everywhere",
     "set_walk_order",
     "sorted_set_ids",
     "stopped_at_defined_again",
@@ -784,11 +784,13 @@ def sorted_set_ids(protocol: int, extra: dict | None) -> Callable[[Any], Any]:
     return persistent_id
 
 
-def set_walk_order(walked: list, ordered: tuple | list) -> tuple[int, ...] | None:
-    """None when *walked* (a set's items in the order it iterates) is the
-    order a set built from *ordered* (the same objects sorted) one item at a
-    time iterates in, here, or when the set's items do not hash alike in
-    every process; else each walked item's place in *ordered*.
+def set_walk_order(walked: list, ordered: tuple | list) -> bytes | None:
+    """The order a set iterates its items that hash alike in every process
+    in (`_hashed_alike`): each one's place in *ordered* (the set's items,
+    the same objects, sorted), in the order the set iterates them, as
+    little-endian uint32 bytes. None when fewer than two of its items hash
+    so, or when those iterate in sorted order. *walked* is the set's items
+    as it iterates them.
 
     Equal sets can iterate in other orders: two items that collide in the
     table sit in the order they went in (``{1, 9}`` and ``{9, 1}``), and
@@ -796,43 +798,47 @@ def set_walk_order(walked: list, ordered: tuple | list) -> tuple[int, ...] | Non
     ``s.pop()`` and ``next(iter(s))`` read that order, so a key that left it
     out served ``first = s.pop()`` the item another set's order put first.
 
-    Only for a set of numbers (`hashed_alike_everywhere`): their hashes, and
-    so the order a set of them iterates in after the same history, are the
-    same in every process, and the key with the order in it is too. A set
-    of strings iterates in an order ``PYTHONHASHSEED`` picks per process; it
-    keys order-free, as before, so it keys alike across processes. A set
-    built the plain way keys as before."""
-    if not hashed_alike_everywhere(walked) or all(map(operator.is_, set(ordered), walked)):
+    Only numbers' order: their hashes, and so the order they iterate in
+    after the same history, are the same in every process, and the key with
+    their order in it is too. Strings iterate in an order ``PYTHONHASHSEED``
+    picks per process, so a set of strings keys order-free, as before, and
+    in a set of both only the numbers' order among themselves is kept. A
+    set iterating its numbers in sorted order keys as before. With the C
+    extension, at C speed (``cwalk.c``)."""
+    kernel = getattr(_native.kernels, "set_walk_order", None)
+    if kernel is not None:
+        return kernel(walked if type(walked) is list else list(walked), ordered, _NONE_ALIKE)
+    alike = [item for item in walked if _hashed_alike(item)]
+    if len(alike) < 2:
         return None
     place = {id(item): at for at, item in enumerate(ordered)}
-    return tuple(place[id(item)] for item in walked)
+    order = array.array("I", [place[id(item)] for item in alike])
+    if all(map(operator.lt, order, itertools.islice(order, 1, None))):
+        return None
+    if sys.byteorder != "little":
+        order.byteswap()
+    return order.tobytes()
 
 
-#: Types whose hash is the same in every process. ``None``'s is only from
-#: Python 3.12 on (before, its address).
-_HASHED_ALIKE = frozenset({int, bool} | ({type(None)} if sys.version_info >= (3, 12) else set()))
+#: Whether ``None`` hashes the same in every process: from Python 3.12 on
+#: (before, its hash is its address).
+_NONE_ALIKE = sys.version_info >= (3, 12)
 
 
-def hashed_alike_everywhere(items: Any) -> bool:
-    """Does every one of *items* hash the same in every process? Ints,
-    bools, ``None`` (3.12+), floats and complex numbers other than NaN
-    (whose hash is its address), and tuples and frozensets of those."""
-    kinds = set(map(type, items))
-    if kinds <= _HASHED_ALIKE:
+def _hashed_alike(item: Any) -> bool:
+    """Does *item* hash the same in every process? An int or bool, a float
+    or complex number other than NaN (whose hash is its address), ``None``
+    (3.12+), or a tuple or frozenset of those."""
+    kind = type(item)
+    if kind is int or kind is bool:
         return True
-    for item in items:
-        kind = type(item)
-        if kind in _HASHED_ALIKE:
-            continue
-        if kind is float or kind is complex:
-            if item != item:
-                return False
-        elif kind is tuple or kind is frozenset:
-            if not hashed_alike_everywhere(item):
-                return False
-        else:
-            return False
-    return True
+    if item is None:
+        return _NONE_ALIKE
+    if kind is float or kind is complex:
+        return item == item
+    if kind is tuple or kind is frozenset:
+        return all(map(_hashed_alike, item))
+    return False
 
 
 def _sets_first(persistent_id: Any, sets: Callable[[Any], Any]) -> Callable[[Any], Any]:
