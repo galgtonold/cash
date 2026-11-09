@@ -13,6 +13,7 @@ import warnings
 import pytest
 
 from cash.backends.persistence_policy import PersistencePolicy
+from cash.notebook.cache_status import CacheStatus
 from tests._cell_driver import run_cash_cell
 
 
@@ -73,12 +74,19 @@ def test_the_warning_names_only_the_variable_it_could_not_rebuild_around(cash_ma
     assert "'results'" in found["STORE-REF-UNSUPPORTED"] and "'other'" not in found["STORE-REF-UNSUPPORTED"]
 
 
-def test_a_value_whose_own_pickling_raises_next_to_a_held_variable_is_store_failed(cash_magics, monkeypatch):
-    """Its own ``__reduce__`` raised, as it would with nothing held: not a
-    form cash cannot keep as a reference."""
+def test_a_value_with_pickling_of_its_own_next_to_a_held_variable_runs_quietly(cash_magics, monkeypatch):
+    """A part with a ``__reduce__`` of its own beside an object another
+    variable holds: cash cannot see whether a restore keeps that object one
+    object, so the statement runs every time, quietly, with no store tried
+    (its ``__reduce__``, which raises here, never runs)."""
     monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
     bad = "class Bad:\n    def __reduce__(self):\n        raise ValueError('Bad refuses pickling')\n"
     cells = [bad, "results = [1]", "h = {'r': results, 'b': Bad()}"]
     found = _store_warnings(cash_magics, cells)
-    assert list(found) == ["STORE-FAILED"], found
-    assert "Bad refuses pickling" in found["STORE-FAILED"]
+    assert found == {}
+    statements = cash_magics.cash_status("dict")["last_cell"]["statements"]
+    assert [m.get("status") for m in statements] == [CacheStatus.COMPUTED]
+    run_cash_cell(cash_magics, cells[-1], cells=cells)
+    statements = cash_magics.cash_status("dict")["last_cell"]["statements"]
+    assert [m.get("status") for m in statements] == [CacheStatus.COMPUTED]
+    assert cash_magics.shell.user_ns["h"]["r"] is cash_magics.shell.user_ns["results"]

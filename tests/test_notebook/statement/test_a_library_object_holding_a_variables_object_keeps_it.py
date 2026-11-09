@@ -7,7 +7,10 @@ closed object, saw nothing else holding it, and stored it alone: a hit bound
 a copy whose parameters were not ``model``'s, ``optimizer.step()`` trained
 the copy, and ``model`` never trained (E11, E12). The objects inside a
 library object are now read down, and a variable holding one of them is
-stored with it (`shared_objects._inside_library_objects`).
+stored with it (`shared_objects._inside_library_objects`), unless the
+group holds an object with pickling of its own cash has not read, beside
+the objects it shares (a torch module and its optimizer): then the
+statement runs every time (`anchors.shared_parts_held_apart`).
 """
 
 from __future__ import annotations
@@ -37,7 +40,11 @@ def _run_twice(magics, cells: list[str]) -> str | None:
     return status
 
 
-def test_a_restored_optimizer_trains_the_model(cash_magics):
+def test_an_optimizer_beside_the_model_it_holds_trains_the_model(cash_magics):
+    """The optimizer holds the model's parameters, and both pickle with
+    code of their own, which cash has not read: it cannot see that a
+    restore keeps the parameters one object, so the statement runs every
+    time, and the optimizer trains the model as in plain Python."""
     torch = pytest.importorskip("torch")
     cells = [
         "import time\nimport torch\nimport torch.nn as nn\ntorch.manual_seed(0)\n"
@@ -51,7 +58,7 @@ def test_a_restored_optimizer_trains_the_model(cash_magics):
         "final = loss.item()",
     ]
 
-    assert _run_twice(cash_magics, cells) == CacheStatus.RESTORED
+    assert _run_twice(cash_magics, cells) == CacheStatus.COMPUTED
     ns = cash_magics.shell.user_ns
     assert ns["optimizer"].param_groups[0]["params"][0] is ns["model"].weight
     assert round(ns["final"], 4) == 0.1076, "the model trained, as in plain Python"

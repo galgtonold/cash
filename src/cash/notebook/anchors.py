@@ -325,55 +325,75 @@ def array_memory_held_apart(value: Any, anchors: Mapping[str, Any], homes: Itera
 def _memory_apart(value: Any, arrays: Mapping[str, Any], name_of: Callable[[Any], Any], np: Any) -> str | None:
     """`array_memory_held_apart` for *value*."""
     refused = next(iter(arrays))
-    exempt = _sklearn_pickling()
-    masked = _masked_array()
+    read = _read_pickling()
     #: Every part met, kept alive while ids of them are compared.
     kept: list[Any] = []
     seen: set[int] = set()
     #: Each part with whether pickling puts it in again as a dict's key or
-    #: a set's item, which hashes and compares it.
-    stack: list[tuple[Any, bool]] = [(value, False)]
+    #: a set's item, which hashes and compares it, and whether it comes
+    #: back as a copy or not at all (`_open`).
+    stack: list[tuple[Any, bool, bool]] = [(value, False, False)]
     while stack:
         check_walk_budget()
-        obj, keyed = stack.pop()
+        obj, keyed, copied = stack.pop()
         if id(obj) in seen:
-            if keyed:
-                seen.discard(id(obj))  # met again as a key: looked at again
+            if keyed or copied:
+                seen.discard(id(obj))  # met again as a key or a copy: looked at again
             else:
                 continue
         seen.add(id(obj))
         kept.append(obj)
         if name_of(obj) is not None:
+            if copied:
+                return refused  # an anchor a restore would not bind there
             continue
-        opened = _open(obj, keyed, np, masked, exempt)
+        opened = _open(obj, keyed, np, read)
         if opened is None:
             return refused
-        parts, memory = opened
+        parts, memory, lost = opened
         for data in memory:
             for name, array in arrays.items():
                 if np.may_share_memory(data, array):
                     return name
-        stack.extend(parts)
+        stack.extend((part, part_keyed, copied) for part, part_keyed in parts)
+        stack.extend((part, False, True) for part in lost)
     return None
 
 
 #: What `_open` hands back for an object with nothing in it to look into.
-_NOTHING: tuple[list[tuple[Any, bool]], list[Any]] = ([], [])
+_NOTHING: tuple[list[tuple[Any, bool]], list[Any], list[Any]] = ([], [], [])
 
 
-def _open(
-    obj: Any, keyed: bool, np: Any, masked: type | None, exempt: Mapping[str, Any]
-) -> tuple[list[tuple[Any, bool]], list[Any]] | None:
-    """``(parts, memory)`` of *obj* when pickling it by default, or by the
-    pickling cash read (`_masked_array`, `_sklearn_pickling`), saves each
-    part as the object it is and an unpickler rebuilds it so: the parts,
-    each with whether it is put in again as a dict's key or a set's item
-    (*keyed*), and the arrays over the memory its data is (an ndarray's own,
-    a masked array's data and mask, a bytearray's bytes). None for anything
-    else: any pickling of its own, a class written in C."""
+@dataclass(frozen=True)
+class _Read:
+    """The pickling cash read, of the versions installed now: the methods
+    `_pickles_by_default` lets a class define (`_sklearn_pickling`), and
+    the classes `_open` knows (`_masked_array`, `_sklearn_tree`,
+    `_sklearn_bunch`); None for one not loaded or of another version."""
+
+    methods: Mapping[str, tuple[Any, ...]]
+    masked: type | None
+    tree: type | None
+    bunch: type | None
+
+
+def _read_pickling() -> _Read:
+    return _Read(_sklearn_pickling(), _masked_array(), _sklearn_tree(), _sklearn_bunch())
+
+
+def _open(obj: Any, keyed: bool, np: Any, read: _Read) -> tuple[list[tuple[Any, bool]], list[Any], list[Any]] | None:
+    """``(parts, memory, lost)`` of *obj* when pickling it by default, or by
+    the pickling cash read (`_Read`), saves each part as the object it is
+    and an unpickler rebuilds it so: the parts, each with whether it is put
+    in again as a dict's key or a set's item (*keyed*), the arrays over the
+    memory its data is (an ndarray's own, a masked array's data and mask, a
+    bytearray's bytes, a scikit-learn tree's nodes and values), and what it
+    holds that comes back as a copy or not at all (*lost*). None for
+    anything else: any pickling of its own, a class written in C."""
     cls = type(obj)
     if cls in _PLAIN:
         return _NOTHING
+    masked = read.masked
     if np is not None and (cls is np.ndarray or (masked is not None and cls is masked)):
         if cls is np.ndarray:
             memory = [obj]
@@ -386,16 +406,27 @@ def _open(
             parts = [(obj.__dict__.get("_fill_value"), False)]
         if obj.dtype.hasobject:
             parts.extend((item, False) for item in np.asarray(obj).ravel(order="K"))
-        return parts, memory
+        return parts, memory, []
     if cls is bytearray:
-        return ([], [np.frombuffer(obj, dtype=np.uint8)]) if np is not None else _NOTHING
+        return ([], [np.frombuffer(obj, dtype=np.uint8)], []) if np is not None else _NOTHING
     if np is not None and (isinstance(obj, np.dtype) or isinstance(obj, np.generic) and not obj.dtype.hasobject):
         return _NOTHING
+    if cls is types.BuiltinFunctionType and not _by_name(obj):
+        return [(obj.__self__, False)], [], []  # ``getattr(its object, its name)``
     if cls in (type, types.FunctionType, types.BuiltinFunctionType) or isinstance(obj, type):
         return _NOTHING  # pickled by name
     if cls in _CONTAINERS:
-        return _parts(obj), []
-    if not _pickles_by_default(cls, exempt, keyed):
+        return _parts(obj), [], []
+    if cls is read.tree:
+        # `_sklearn_tree`: its state is its own memory, copied back.
+        state = obj.__getstate__()
+        return [], [state["nodes"], state["values"]], []
+    if cls is read.bunch:
+        # `_sklearn_bunch`: its items as they are, its ``__dict__`` lost.
+        if any(type(key) is str and key in _BUNCH_LOOKED_UP for key in obj):
+            return None
+        return _parts(obj), [], list(vars(obj).values())
+    if not _pickles_by_default(cls, read.methods, keyed):
         return None
     parts = []
     attrs = attribute_or(obj, "__dict__", None)
@@ -406,7 +437,7 @@ def _open(
     parts.extend((attribute_or(obj, slot, None), False) for slot in _slot_names(cls))
     if isinstance(obj, (list, dict)):
         parts.extend(_parts(obj))
-    return parts, []
+    return parts, [], []
 
 
 def shared_parts_held_apart(
@@ -414,16 +445,20 @@ def shared_parts_held_apart(
     anchors: Mapping[str, Any],
     homes: Iterable[str] = (),
     placed: Iterable[Any] = (),
+    holders: Iterable[Any] = (),
 ) -> bool:
-    """Whether a restore of *values* (the objects an entry stores in one
-    pickle, each where one variable or the echo holds it) might not give
-    back an object they share as one object everywhere it was held.
+    """Whether a restore of *values* and *holders* (the objects an entry
+    stores in one pickle, each where one variable or the echo holds it)
+    might not give back an object they share as one object everywhere it
+    was held.
 
     An object is shared when it is held in two places or more: in two
     places of *values*, an anchor (the variable holds it, `share_group`),
     a view a restore builds on an anchor's data again (`with_anchor_refs`),
-    or an object of *values* a live holder is given again (*placed*, the
-    targets of its `HolderPatch`). Default pickling saves each part as the
+    an object of *values* a live holder is given again (*placed*, the
+    targets of its `HolderPatch`), or the value of a variable stored whole
+    because it holds an object of the outputs (*holders*: the share check
+    found it holding one, which an object cash cannot look into may hide). Default pickling saves each part as the
     object it is and rebuilds it so (`_open`), so it keeps a shared object
     one object; anything else may hold it, or its memory, where cash cannot
     see, and copy it apart (a ``__reduce__`` that deep-copies, a tensor
@@ -439,16 +474,17 @@ def shared_parts_held_apart(
     pickle's memo in every place: one alone, beside objects that pickle by
     default, comes back as one object."""
     try:
-        return _held_apart(list(values), anchors, homes, list(placed))
+        return _held_apart(list(values), anchors, homes, list(placed), list(holders))
     except Exception:  # noqa: BLE001 - what cannot be looked into refuses
         return True
 
 
-def _held_apart(values: list[Any], anchors: Mapping[str, Any], homes: Iterable[str], placed: list[Any]) -> bool:
+def _held_apart(
+    values: list[Any], anchors: Mapping[str, Any], homes: Iterable[str], placed: list[Any], holders: list[Any]
+) -> bool:
     """`shared_parts_held_apart`."""
     np = sys.modules.get("numpy")
-    exempt = _sklearn_pickling()
-    masked = _masked_array()
+    read = _read_pickling()
     name_of = _namer(anchors, homes)
     #: Every object met, by id, kept alive while ids are compared.
     met: dict[int, Any] = {}
@@ -462,18 +498,23 @@ def _held_apart(values: list[Any], anchors: Mapping[str, Any], homes: Iterable[s
     opaque: set[int] = set()
     #: The objects looked into as a dict's key or a set's item.
     keyed_open: set[int] = set()
+    #: The objects met where a restore puts a copy of them, or nothing
+    #: (`_open`'s *lost*, and all below it).
+    copies: set[int] = set()
     memory: dict[int, list[Any]] = {}
-    stack: list[tuple[Any, bool]] = [(value, False) for value in values]
+    stack: list[tuple[Any, bool, bool]] = [(value, False, False) for value in [*values, *holders]]
     while stack:
         check_walk_budget()
-        obj, keyed = stack.pop()
+        obj, keyed, copied = stack.pop()
         key = id(obj)
         places[key] = places.get(key, 0) + 1
+        if copied:
+            copies.add(key)
         if key in met:
             if keyed and key not in keyed_open and key not in held | plain | opaque:
                 # Met again as a key: looked at again as one.
                 keyed_open.add(key)
-                if _open(obj, True, np, masked, exempt) is None:
+                if _open(obj, True, np, read) is None:
                     opaque.add(key)
             continue
         met[key] = obj
@@ -483,16 +524,17 @@ def _held_apart(values: list[Any], anchors: Mapping[str, Any], homes: Iterable[s
         if _no_identity(obj, np):
             plain.add(key)
             continue
-        opened = _open(obj, keyed, np, masked, exempt)
+        opened = _open(obj, keyed, np, read)
         if keyed:
             keyed_open.add(key)
         if opened is None:
             opaque.add(key)
             continue
-        parts, data = opened
+        parts, data, lost = opened
         if data:
             memory[key] = data
-        stack.extend(parts)
+        stack.extend((part, part_keyed, copied) for part, part_keyed in parts)
+        stack.extend((part, False, True) for part in lost)
     for obj in placed:
         if _no_identity(obj, np):
             continue
@@ -500,7 +542,8 @@ def _held_apart(values: list[Any], anchors: Mapping[str, Any], homes: Iterable[s
             return True  # held in a part cash did not look into
         places[id(obj)] += 1
     shared = held | {key for key, count in places.items() if count > 1 and key not in plain}
-    if any(shared - {key} for key in opaque):
+    shared |= {id(holder) for holder in holders if id(holder) not in plain}
+    if shared & copies or any(shared - {key} for key in opaque):
         return True
     if np is None:
         return False
@@ -541,11 +584,21 @@ def _byte_bounds(np: Any) -> Callable[[Any], tuple[int, int]]:
     return found
 
 
+def _by_name(function: Any) -> bool:
+    """Whether a built-in function pickles by its name: one of a module,
+    not a method bound to an object (``results.append``), which pickles as
+    ``getattr`` of that object."""
+    owner = getattr(function, "__self__", None)
+    return owner is None or isinstance(owner, types.ModuleType)
+
+
 def _no_identity(obj: Any, np: Any) -> bool:
     """Whether *obj* has no identity a restore must keep: a plain value, a
     numpy scalar or dtype, a class or a function (pickled by name)."""
     cls = type(obj)
-    if cls in _PLAIN or cls in (type, types.FunctionType, types.BuiltinFunctionType) or isinstance(obj, type):
+    if cls is types.BuiltinFunctionType:
+        return _by_name(obj)
+    if cls in _PLAIN or cls in (type, types.FunctionType) or isinstance(obj, type):
         return True
     return np is not None and (isinstance(obj, np.dtype) or isinstance(obj, np.generic) and not obj.dtype.hasobject)
 
@@ -577,7 +630,7 @@ def _slot_names(cls: type) -> list[str]:
     return names
 
 
-def _pickles_by_default(cls: type, exempt: Mapping[str, Any], keyed: bool) -> bool:
+def _pickles_by_default(cls: type, exempt: Mapping[str, tuple[Any, ...]], keyed: bool) -> bool:
     """Whether an object of class *cls* pickles as ``object.__reduce_ex__``
     does by default, and an unpickler rebuilds it so: ``cls.__new__`` of
     ``object``, ``list`` or ``dict``, then its ``__dict__`` set item by
@@ -600,7 +653,7 @@ def _pickles_by_default(cls: type, exempt: Mapping[str, Any], keyed: bool) -> bo
             return False  # over a class written in C, or made by another metaclass
         base = next(b for b in klass.__mro__ if b in _DEFAULT_BASES)
         for name, defined in klass.__dict__.items():
-            if exempt.get(name) is defined:
+            if any(defined is allowed for allowed in exempt.get(name, ())):
                 continue
             if name in _PICKLING or (name in ("__eq__", "__hash__") and keyed):
                 return False
@@ -634,7 +687,7 @@ def _masked_array() -> type | None:
     return attribute_or(sys.modules.get("numpy.ma"), "MaskedArray", None)
 
 
-def _sklearn_pickling() -> dict[str, Any]:
+def _sklearn_pickling() -> dict[str, tuple[Any, ...]]:
     """``BaseEstimator.__getstate__`` and ``__setstate__`` when scikit-learn
     is loaded, and is the version read (`_SKLEARN_READ`; any other: none):
     pickling an estimator by default but for them is exact.
@@ -652,7 +705,57 @@ def _sklearn_pickling() -> dict[str, Any]:
     base = attribute_or(sys.modules.get("sklearn.base"), "BaseEstimator")
     if base is None:
         return {}
-    return {name: base.__dict__[name] for name in ("__getstate__", "__setstate__") if name in base.__dict__}
+    return {name: (base.__dict__[name],) for name in ("__getstate__", "__setstate__") if name in base.__dict__}
+
+
+def _sklearn_tree() -> type | None:
+    """``sklearn.tree._tree.Tree`` when it is loaded and scikit-learn is
+    the version read (`_SKLEARN_READ`; any other: None): the ``tree_`` of a
+    fitted decision tree, and of each tree of a forest, a class written in
+    Cython whose pickling cash read.
+
+    In scikit-learn 1.9.1 (``sklearn/tree/_tree.pyx``) it holds no Python
+    object, only C numbers and three buffers it allocates itself (its
+    classes per output, its nodes, its values). ``__reduce__`` hands
+    pickling ``Tree`` with its feature and output counts and a copy of the
+    class counts, and for state ``__getstate__``: its depth, its node count
+    and two arrays over its own node and value buffers
+    (``_get_node_ndarray``, ``_get_value_ndarray``, ``node_count`` rows,
+    the rows any array a caller gets from it can view). ``__setstate__``
+    allocates new buffers and copies those arrays into them. So it comes
+    back as a copy of its own memory, holding nothing else: walked as an
+    array over the memory of the two arrays its ``__getstate__`` hands
+    over."""
+    if attribute_or(sys.modules.get("sklearn"), "__version__", None) != _SKLEARN_READ:
+        return None
+    return attribute_or(sys.modules.get("sklearn.tree._tree"), "Tree", None)
+
+
+#: The names a ``Bunch`` is asked for, on pickling, that its own
+#: ``__getattr__`` answers from its items when it holds them.
+_BUNCH_LOOKED_UP = frozenset({"__getnewargs_ex__", "__getnewargs__"})
+
+
+def _sklearn_bunch() -> type | None:
+    """``sklearn.utils._bunch.Bunch`` when it is loaded and scikit-learn is
+    the version read (`_SKLEARN_READ`; any other: None): a ``dict``
+    subclass a fitted ensemble keeps its estimators in
+    (``VotingClassifier.named_estimators_``).
+
+    In scikit-learn 1.9.1 it defines ``__init__``, ``__getitem__`` (a
+    warning for a deprecated key, then ``dict``'s), ``__setattr__`` and
+    ``__getattr__`` (an attribute is an item), ``__dir__`` and a
+    ``__setstate__`` that does nothing, and pickles by ``object``'s
+    reduce: ``dict.__new__``, its ``__dict__`` for state, and its items,
+    which an unpickler puts back through ``dict.__setitem__``, which it
+    does not override. So its items come back as the objects they are, and
+    its ``__dict__`` not at all. Pickling asks the object for
+    ``__getnewargs_ex__`` and ``__getnewargs__``, which ``__getattr__``
+    answers from an item of that name (`_BUNCH_LOOKED_UP`): one holding
+    such an item is refused."""
+    if attribute_or(sys.modules.get("sklearn"), "__version__", None) != _SKLEARN_READ:
+        return None
+    return attribute_or(sys.modules.get("sklearn.utils._bunch"), "Bunch", None)
 
 
 def memory_homes(digests: Mapping[str, str] | None) -> set[str]:

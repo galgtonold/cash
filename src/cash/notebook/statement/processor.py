@@ -5594,10 +5594,11 @@ class StatementProcessor:
         outputs = {name: captured_vars[name] for name in run.outputs if name in captured_vars}
         values = list(outputs.values())
         placed: list[Any] = []
+        whole: list[Any] = []
         for name in holders:
             value = captured_vars[name]
             if type(value) is not HolderPatch:
-                values.append(value)
+                whole.append(value)
                 continue
             try:
                 placed += patch_targets(value, outputs)
@@ -5605,7 +5606,7 @@ class StatementProcessor:
                 return reason
         values += echo[:1]
         homes = [name for name in anchors if name in run.inputs]
-        return reason if shared_parts_held_apart(values, anchors, homes, placed) else None
+        return reason if shared_parts_held_apart(values, anchors, homes, placed, whole) else None
 
     def _writes_through_user_code(self, run: StatementRun) -> bool:
         """Whether the upstream replay takes *run* for a file writer through

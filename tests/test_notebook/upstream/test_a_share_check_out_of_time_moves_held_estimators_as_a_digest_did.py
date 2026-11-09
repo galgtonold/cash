@@ -24,7 +24,11 @@ import pytest
 from cash.notebook.statement import processor
 from tests._cell_driver import run_cash_cell
 
-pytest.importorskip("sklearn")
+sklearn = pytest.importorskip("sklearn")
+
+#: The scikit-learn whose pickling of a fitted tree cash read: with another,
+#: the ensemble's fit, stored with the trees it holds, runs every time.
+SKLEARN_READ = "1.9.1"
 
 DEFINE = """import os
 import numpy as np
@@ -77,14 +81,19 @@ def _no_digest(monkeypatch):
 def _forget_the_fit(cash_instance) -> None:
     """Drop the ensemble fit's entry, and only it: the fit runs again on the
     next Run All, as a statement too quick to store does."""
-    gone = [
+    gone = _fit_entries(cash_instance)
+    assert gone
+    for key in gone:
+        cash_instance.backend.delete(key)
+
+
+def _fit_entries(cash_instance) -> list:
+    """The keys of the ensemble fit's entries."""
+    return [
         meta["key"]
         for meta in list(cash_instance.backend.list_entries() or ())
         if str(meta.get("code", "")).strip() == "vote.fit(X, y)"
     ]
-    assert gone
-    for key in gone:
-        cash_instance.backend.delete(key)
 
 
 def _fits(log) -> int:
@@ -111,6 +120,12 @@ def test_a_run_all_with_no_digest_keeps_the_lineages_the_first_kept(cash_magics,
     kept = {name: lineage[name] for name in ("a", "b", "again")}
     depth = cash_magics.shell.user_ns["depth"]
 
+    if sklearn.__version__ != SKLEARN_READ:
+        assert not _fit_entries(cash_instance)
+        _run_all(cash_magics, tmp_path)
+        assert cash_magics.shell.user_ns["depth"] == depth
+        assert cash_magics.shell.user_ns["vote"].estimators[0][1] is cash_magics.shell.user_ns["a"]
+        return
     _forget_the_fit(cash_instance)
     _no_digest(monkeypatch)
     _run_all(cash_magics, tmp_path)

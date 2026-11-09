@@ -162,6 +162,16 @@ def test_an_object_a_holder_is_given_again_counts_as_shared():
     assert shared_parts_held_apart([_Box(_Opaque(cfg))], {}, placed=[cfg])
 
 
+def test_a_variable_stored_whole_is_shared_though_no_reference_to_it_shows():
+    """The share check found the variable holding an object of the outputs:
+    an object cash cannot look into may be what holds it, and refuses."""
+    from cash.notebook.anchors import shared_parts_held_apart
+
+    cfg = {"lr": [0.1]}
+    assert not shared_parts_held_apart([_Box(cfg)], {}, holders=[cfg])
+    assert shared_parts_held_apart([_Box(_Opaque(cfg))], {}, holders=[cfg])
+
+
 def test_an_array_over_the_memory_of_a_shared_one_is_refused():
     """A restore copies an array's data: another array over the memory of
     a shared one comes back apart from it, and refuses."""
@@ -172,3 +182,46 @@ def test_an_array_over_the_memory_of_a_shared_one_is_refused():
     assert not shared_parts_held_apart([_Box(X), X], {})
     assert not shared_parts_held_apart([_Box(X, X[:1].copy()), X], {})
     assert shared_parts_held_apart([_Box(X, X[:1]), X], {})
+
+
+def test_a_method_bound_to_an_object_is_looked_into_through_it():
+    """``results.append`` pickles as ``getattr(results, 'append')``: what
+    its object holds is walked; a function of a module is pickled by name."""
+    from cash.notebook.anchors import shared_parts_held_apart
+
+    cfg = {"lr": [0.1]}
+    snap = _Snap(cfg)
+    assert not shared_parts_held_apart([_Box(cfg, len), cfg], {})
+    assert shared_parts_held_apart([_Box(cfg, [snap].append), cfg], {})
+
+
+SKLEARN_READ = "1.9.1"
+
+
+def test_fitted_trees_and_a_bunch_pass_on_the_version_read_only(monkeypatch):
+    """A fitted tree's ``tree_`` and an ensemble's ``Bunch`` pickle as cash
+    read them in that scikit-learn: the trees an ensemble holds stay the
+    variables' trees. In any other, the ``tree_`` is one cash cannot look
+    into, and refuses beside the shared trees."""
+    sklearn = pytest.importorskip("sklearn")
+    np = pytest.importorskip("numpy")
+    from sklearn.ensemble import VotingClassifier
+    from sklearn.tree import DecisionTreeClassifier
+
+    from cash.notebook.anchors import shared_parts_held_apart
+
+    X = np.arange(40.0).reshape(20, 2)
+    y = np.arange(20) % 2
+    a = DecisionTreeClassifier(max_depth=2).fit(X, y)
+    b = DecisionTreeClassifier(max_depth=3).fit(X, y)
+    vote = VotingClassifier([("a", a), ("b", b)]).fit(X, y)
+    if sklearn.__version__ == SKLEARN_READ:
+        assert not shared_parts_held_apart([vote], {}, holders=[a, b])
+        # A view of a tree's memory, held elsewhere too, comes back apart.
+        value = a.tree_.value
+        assert shared_parts_held_apart([[a, value], value], {})
+        # What a Bunch keeps in its __dict__ does not come back at all.
+        lost = vote.named_estimators_.__dict__["_deprecated_key_to_warnings"]
+        assert shared_parts_held_apart([vote], {}, holders=[lost])
+        monkeypatch.setattr(sklearn, "__version__", "0.0.0")
+    assert shared_parts_held_apart([vote], {}, holders=[a, b])
