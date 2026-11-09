@@ -14,6 +14,7 @@ import weakref
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from .. import _weak
 from .._memo import CODE_OBJECTS, LruMemo
 from ..analysis.helper_code import is_mock
 from ..exceptions import CashImpurityWarning
@@ -426,7 +427,7 @@ def _registrations() -> dict[int, tuple[Any, list[str]]]:
                 for c in _abc_registered(k):
                     entry = index.get(id(c))
                     if entry is None:
-                        entry = index[id(c)] = (weakref.ref(c), [])
+                        entry = index[id(c)] = (_weak.ref(c), [])
                     entry[1].append(_class_name(k))
         _REGISTRATIONS[:] = [token, index]
     return index

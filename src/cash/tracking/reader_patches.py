@@ -36,7 +36,6 @@ import stat
 import sys
 import threading
 import types
-import weakref
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -49,6 +48,8 @@ from cash.remote_source import remember_read_options
 from cash.tracking import io_watch
 from cash.tracking.read_credit import frame_kind, note_untracked_read
 from cash.tracking.tracker_context import active_tracker
+
+from .. import _weak
 
 __all__ = ["FileDependencyRegistry", "PostImportHook", "file_registry", "install_patches", "remove_patches"]
 
@@ -1200,7 +1201,7 @@ def _unwrapping_set(result: Any, tracker: Any) -> Callable[..., Any]:
     cached.
     """
     original_set = type(result)._set
-    owner = weakref.ref(result)
+    owner = _weak.ref(result)
 
     def _set(i: Any, obj: Any) -> Any:
         if isinstance(obj, tuple) and len(obj) == 2 and isinstance(obj[1], _WorkerReads):

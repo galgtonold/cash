@@ -32,7 +32,7 @@ import weakref
 from collections.abc import Callable, Iterator
 from typing import Any
 
-from . import _native
+from . import _native, _weak
 from ._own_work import own_work
 from ._user_attrs import instance_of
 from .live_state import is_live_stream, live_reduce
@@ -196,6 +196,7 @@ def _dumps_also_keyed(
     sink: Any = None,
     reducer_override: Any = None,
     after: Any = None,
+    watch: list | None = None,
 ) -> tuple[bytes, bool]:
     """``dumps(value, protocol, ...)``, the bytes a store keeps, and whether
     they are also the *keyed* bytes of the same call: True when no object
@@ -214,8 +215,9 @@ def _dumps_also_keyed(
     is taken over its keyed bytes, which refuse it too.
     *reducer_override* is the pickler's hook of that name. *after* is
     called with the pickler once it has pickled *value*, its memo still
-    whole; not for a value pickled flat."""
-    differs: list[bool] = []
+    whole; not for a value pickled flat. *watch*, a list, is appended to
+    as each such object is met (a *sink* may stop the pickle there)."""
+    differs: list[bool] = [] if watch is None else watch
     table = _KeepDict(protocol, extra, watch=differs)
     if FLAT_FIRST and not _surely_shallow(value):
         walk = _Walk(getattr(sink, "walked", None), reducer_override)
@@ -556,7 +558,7 @@ def _library_type(t: type) -> bool:
 #: Their types hold other objects as the user's do: walked by `flatten`.
 _WALKED_MODULES = frozenset({"builtins", "collections", "copyreg", "__main__"})
 
-_LIBRARY_TYPES: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_LIBRARY_TYPES: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()
 
 
 def _dumps(
@@ -865,7 +867,7 @@ def _identityless(t: type) -> bool:
     return found
 
 
-_IDENTITYLESS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_IDENTITYLESS: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()
 
 
 def _surely_shallow(value: Any) -> bool:
@@ -1685,7 +1687,7 @@ def cached_properties(t: type) -> tuple[str, ...]:
     return found
 
 
-_CACHED_PROPERTIES: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_CACHED_PROPERTIES: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()
 
 #: What a view may hold beside its links to the object it views: settings,
 #: not data (``DegreeView``'s ``_weight``).
@@ -1847,7 +1849,7 @@ _CONTAINER_BASES = (dict, list, tuple, set, frozenset)
 _PICKLE_HOOKS = ("__reduce__", "__reduce_ex__", "__getstate__", "__setstate__", "__getnewargs__", "__getnewargs_ex__")
 
 #: By class, held weakly: a class made per call is not kept alive by it.
-_PLAIN_SUBCLASS: weakref.WeakKeyDictionary[type, bool] = weakref.WeakKeyDictionary()
+_PLAIN_SUBCLASS: weakref.WeakKeyDictionary[type, bool] = _weak.WeakKeyDictionary()
 
 
 def _plain_container_subclass(t: type) -> bool:
@@ -1999,7 +2001,7 @@ def _decide_drops_dict(t: type) -> bool:
 
 _PYTHON_METHODS = (types.FunctionType, classmethod, staticmethod)
 
-_DROPS_DICT: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_DROPS_DICT: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()
 
 
 def _reducer_with_dict(protocol: int, unshared: bool = False) -> Any:
@@ -2047,7 +2049,7 @@ def _reduce_with_dict(obj: Any, protocol: int, unshared: bool = False) -> Any:
 #: How many times a pickle of cash's has run a reducer of the user's.
 _USER_STATE_RUNS = [0]
 #: The `_USER_STATE_RUNS` of the last run of each class's reducer.
-_USER_STATE_TYPES: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_USER_STATE_TYPES: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()
 #: The `_USER_STATE_RUNS` of the last run of one for a class not in it.
 _USER_STATE_UNNAMED = [0]
 
@@ -2193,7 +2195,7 @@ def users_function(function: Any) -> bool:
 
 _NEWARGS_METHODS = ("__getnewargs__", "__getnewargs_ex__")
 
-_RUNS_USERS_STATE: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_RUNS_USERS_STATE: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()
 
 
 def chooses_its_state(t: type) -> bool:
@@ -2229,7 +2231,7 @@ def _decide_chooses_state(t: type) -> bool:
 
 _STATE_METHODS = ("__getstate__", "__reduce__", "__reduce_ex__")
 
-_CHOOSES_STATE: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_CHOOSES_STATE: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()
 
 
 def _is_users_class(t: type) -> bool:

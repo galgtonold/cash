@@ -17,6 +17,27 @@ import pytest
 from cash.notebook import helper_memos
 
 
+@pytest.fixture(autouse=True)
+def _other_tests_modules_are_not_the_users(monkeypatch):
+    """The memos found are those of the user's modules, which is every
+    module of the test suite imported in this process: another test's
+    module-level ``functools.lru_cache`` was found here too, in a full run
+    and not alone. Those imported before this test are left out."""
+    real = helper_memos._modules_of_user
+    before = {name for name in sys.modules if name.startswith("tests.") and name != __name__}
+
+    kept: list = [None, ()]
+
+    def mine():
+        found = real()
+        if kept[0] is not found:  # the same tuple while no module came: `_modules_reached` asks by identity
+            kept[:] = [found, tuple(m for m in found if m.__name__ not in before)]
+        return kept[1]
+
+    monkeypatch.setattr(helper_memos, "_modules_of_user", mine)
+    monkeypatch.setattr(helper_memos, "_modules_reached", (-1, None, []))
+
+
 def _record(ns, code):
     before = helper_memos.watched(ns)
     exec(code, ns)

@@ -40,7 +40,7 @@ from contextlib import contextmanager
 from time import perf_counter
 from typing import Any
 
-from . import _native, kept_state
+from . import _native, _weak, kept_state
 from .bulk_digest import TAG, fold_buffer
 
 __all__ = [
@@ -66,6 +66,11 @@ __all__ = [
 
 class _SetMet(Exception):
     """A digest's first pickle met a set (`_Sink.stop_at_sets`)."""
+
+
+class _NotKeyed(Exception):
+    """A digest's store pickle met an object a key pickles otherwise
+    (`_Sink.stop_unless_keyed`)."""
 
 
 class HashBudgetExceeded(Exception):
@@ -189,6 +194,7 @@ class _Sink:
         "sha",
         "size",
         "stop_at_sets",
+        "stop_unless_keyed",
     )
 
     def __init__(self, deadline: float | None, keep: bool, digest: bool, limit: int | None = None) -> None:
@@ -205,6 +211,11 @@ class _Sink:
         #: Raise `_SetMet` as soon as the scan finds a set: the pickle is
         #: made again with its sets sorted, and the rest of this one is waste.
         self.stop_at_sets = False
+        #: Raise `_NotKeyed` once this list is not empty: what a store
+        #: pickle notes of an object a key pickles otherwise
+        #: (`kept_state.dumps_also_keyed`'s *watch*), when the bytes are
+        #: kept only if they are also the keyed ones.
+        self.stop_unless_keyed: list | None = None
 
     def write(self, data: Any) -> int:
         n = len(data)
@@ -233,7 +244,10 @@ class _Sink:
 
     def check(self) -> None:
         """Raise `HashBudgetExceeded` past the deadline, unless a later
-        one is given (`run_on`), or past the byte limit."""
+        one is given (`run_on`), or past the byte limit; `_NotKeyed` as
+        `stop_unless_keyed` says."""
+        if self.stop_unless_keyed:
+            raise _NotKeyed
         if self._deadline is not None and perf_counter() > self._deadline:
             self._deadline = run_on(self._deadline, self.size + self.apart)
         if self._limit is not None and self.size + self.apart > self._limit:
@@ -261,6 +275,7 @@ def pickle_value(
     kept_buffers: Any = None,
     after: Any = None,
     limit: int | None = None,
+    only_if_keyed: bool = False,
 ) -> Part:
     """*value*'s store pickle (`kept_state.dumps_also_keyed`, protocol 5,
     the reducers a store pickles with, buffers of ``OUT_OF_BAND_MIN_BYTES``
@@ -276,6 +291,8 @@ def pickle_value(
     already, kept as they are. *after* is called with the pickler once
     it has pickled *value* (`kept_state.dumps_also_keyed`). *limit*: raise
     `HashBudgetExceeded` once the pickle holds more than that many bytes.
+    *only_if_keyed*: raise `_NotKeyed` as soon as the store bytes turn out
+    not to be the keyed ones (with *digest*).
     A store's pickle alone (no *digest*) under a *deadline* or a *limit* is
     written to a sink that checks them, and is then not pickled flat: a
     value too deep for the pickler raises RecursionError.
@@ -286,7 +303,7 @@ def pickle_value(
 
     Raises what pickling *value* raises.
     """
-    args = (keep, digest, deadline, as_keyed, kept_buffers, after, limit)
+    args = (keep, digest, deadline, as_keyed, kept_buffers, after, limit, only_if_keyed)
     try:
         return _pickle_value(value, *args, reducer_override, None)
     except pickle.PicklingError as exc:
@@ -304,12 +321,16 @@ def _pickle_value(
     kept_buffers: Any,
     after: Any,
     limit: int | None,
+    only_if_keyed: bool,
     reducer_override: Any,
     keyed_override: Any,
 ) -> Part:
     """`pickle_value`, with *reducer_override* as the pickler's hook, and
     *keyed_override* as that of the keyed pickle it may take."""
     sink = _Sink(deadline, keep, digest, limit)
+    watch = None
+    if only_if_keyed and digest:
+        watch = sink.stop_unless_keyed = []
     # A digest's pickle is hashed as it is written; a store's alone is
     # written whole, and may be pickled flat, unless it is checked as it
     # goes (`dumps_also_keyed`).
@@ -358,6 +379,7 @@ def _pickle_value(
         sink=sink if sunk else None,
         reducer_override=reducer_override,
         after=checked if digest else after,
+        watch=watch,
     )
     found = None
     if digest:
@@ -545,7 +567,16 @@ def sized_object_digest(value: Any, deadline: float | None = None) -> tuple[str,
             proven.append(_proven_apart(pickler, others))
 
     try:
-        part = pickle_value(value, keep=True, deadline=deadline, after=after)
+        # Kept only when also the keyed bytes: stopped where they turn out
+        # not to be (a fitted forest's padded trees), and the keyed pickle,
+        # which the digest is taken over then, is made alone.
+        part = pickle_value(value, keep=True, deadline=deadline, after=after, only_if_keyed=True)
+    except _NotKeyed:
+        try:
+            return _keyed_digest(value, deadline)
+        except HashBudgetExceeded:
+            _defer(value)
+            raise
     except HashBudgetExceeded:
         _defer(value)
         raise
@@ -640,7 +671,7 @@ def _keeps(value: Any) -> bool:
 
 def _weakly_held(value: Any) -> bool:
     try:
-        weakref.ref(value)
+        _weak.ref(value)
     except TypeError:
         return False
     return True

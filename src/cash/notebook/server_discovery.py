@@ -812,13 +812,36 @@ def in_colab() -> bool:
 # would risk never noticing a backup that appears later in the session.
 
 
-def _stat_sig(path: str | Path) -> tuple[int, int] | None:
-    """``(mtime_ns, size)`` for *path*, or ``None`` if it cannot be stat'd."""
+def _stat_sig(path: str | Path) -> tuple[int, ...] | None:
+    """`_file_signature` of *path*, or ``None`` if it cannot be stat'd."""
     try:
-        st = os.stat(path)
-        return (st.st_mtime_ns, st.st_size)
+        return _file_signature(os.stat(path))
     except OSError:
         return None
+
+
+def _file_signature(st: os.stat_result) -> tuple[int, ...]:
+    """What a write to the file moves: which file it is (a save that
+    replaces it by a rename), its size, its mtime and its ctime (which a
+    tool putting the mtime back, ``cp -p`` or ``os.utime``, still moves)."""
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+
+
+#: Nanoseconds in one second: the tick of a filesystem that stamps whole seconds.
+_SECOND_NS = 1_000_000_000
+
+
+def _settled(st: os.stat_result) -> bool:
+    """Whether a read of the file as *st* describes it can stand for every
+    later read that finds the same `_file_signature`: no write after it can
+    leave the stamps as they are. On a filesystem stamping whole seconds a
+    second write in the same second does, so a read taken in the second of
+    the file's last change is not reused; a finer stamp moves with each
+    write (`_wait_for_notebook_save` has seen it hold still first)."""
+    changed = max(st.st_mtime_ns, st.st_ctime_ns)
+    if changed % _SECOND_NS:
+        return True
+    return _time.time_ns() >= changed + _SECOND_NS
 
 
 def _in_vscode() -> bool:
@@ -858,12 +881,13 @@ class NotebookCellReaders:
         # reads twice) into a single parse per file state, and means the
         # save-settle wait runs at most once per change instead of once per
         # read.
-        self._file_cells: dict[str, tuple[int, int, tuple[NotebookCell, ...]]] = {}
+        #: ``path -> (signature, cells)``, for a read `_settled` says stands.
+        self._file_cells: dict[str, tuple[tuple[int, ...], tuple[NotebookCell, ...]]] = {}
         # The last Colab answer: (monotonic time, cells or None for a failure).
         self._colab_cells: tuple[float, tuple[NotebookCell, ...] | None] | None = None
         # VS Code backup cells, keyed by notebook path; value is (backup path,
         # backup signature, file signature, cells). See the comment above.
-        self._vscode_cells: dict[str, tuple[Path, tuple[int, int], tuple[int, int], tuple[NotebookCell, ...]]] = {}
+        self._vscode_cells: dict[str, tuple[Path, tuple[int, ...], tuple[int, ...], tuple[NotebookCell, ...]]] = {}
         #: What the last read returned (`last_read`).
         self.last: CellRead | None = None
 
@@ -1021,10 +1045,12 @@ class NotebookCellReaders:
     def saved_file(self, notebook_path: str | None) -> tuple[NotebookCell, ...]:
         """Code cells of the saved ``.ipynb``; empty when there is none.
 
-        Memoized by the file's ``(mtime_ns, size)`` signature: repeated reads
-        of an unchanged file return the cached parse without re-opening it,
-        while any edit (which bumps mtime/size) forces a fresh read — so a
-        quick edit-then-run never serves stale cell sources from the file.
+        Memoized by the file's signature (`_file_signature`): repeated reads
+        of an unchanged file return the cached parse without re-opening it or
+        waiting for a save to settle, while any write forces a fresh read --
+        so a quick edit-then-run never serves stale cell sources from the
+        file. A read a later write could leave the signature of is not kept
+        (`_settled`).
         """
         if not notebook_path:
             # Do NOT use glob fallback - picking the most recently modified .ipynb
@@ -1035,16 +1061,11 @@ class NotebookCellReaders:
         if not os.path.exists(notebook_path):
             return ()
 
-        try:
-            st = os.stat(notebook_path)
-            signature = (st.st_mtime_ns, st.st_size)
-        except OSError:
-            signature = None
-
+        signature = _stat_sig(notebook_path)
         if signature is not None:
             cached = self._file_cells.get(notebook_path)
-            if cached is not None and (cached[0], cached[1]) == signature:
-                return cached[2]
+            if cached is not None and cached[0] == signature:
+                return cached[1]
 
         try:
             # Reached only on a new/changed file state: let an in-flight save settle
@@ -1064,9 +1085,13 @@ class NotebookCellReaders:
         # so subsequent reads of the now-settled file hit the cache.
         try:
             st2 = os.stat(notebook_path)
-            self._file_cells[notebook_path] = (st2.st_mtime_ns, st2.st_size, cells)
         except OSError:
             logger.debug("Cannot stat notebook file to cache cells: %s", notebook_path)
+            return cells
+        if _settled(st2):
+            self._file_cells[notebook_path] = (_file_signature(st2), cells)
+        else:
+            self._file_cells.pop(notebook_path, None)
 
         return cells
 

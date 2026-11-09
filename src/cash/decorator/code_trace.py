@@ -60,6 +60,8 @@ import weakref
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
+from .. import _weak
+from .._gc_context import collecting
 from .._own_work import inside as own_work_inside
 from .._own_work import left_out as own_work_left_out
 from .._own_work import rearm_with as own_work_rearm_with
@@ -238,12 +240,12 @@ def _recorder_class() -> type:
             # code of its own, and a long session kept every one of them.
             # Code that is gone cannot run again, so nothing it would have
             # recorded is lost; code still alive stays.
-            self.user_codes: weakref.WeakKeyDictionary[types.CodeType, int] = weakref.WeakKeyDictionary()
+            self.user_codes: weakref.WeakKeyDictionary[types.CodeType, int] = _weak.WeakKeyDictionary()
             self.rearm: set[types.CodeType] = set()
             #: The user's code that looks names up by a string in its own
             #: globals (`string_lookups`): what it calls is recorded for a
             #: notebook unit, the callable a string found among it.
-            self.by_string: weakref.WeakSet[types.CodeType] = weakref.WeakSet()
+            self.by_string: weakref.WeakSet[types.CodeType] = _weak.WeakSet()
             free = [tool for tool in self.tool_ids if mon.get_tool(tool) is None]
             if len(free) < 2:
                 held = {t: mon.get_tool(t) for t in self.tool_ids}
@@ -319,7 +321,12 @@ def _recorder_class() -> type:
                 # whether a unit read or changed pyplot's current figure
                 # (`Unit.pyplot_ran`).
                 return self._arm_pyplot(code)
-            if filename and not is_pseudo_filename(filename) and code.co_qualname not in _POOL_QUALNAMES:
+            if (
+                filename
+                and not is_pseudo_filename(filename)
+                and code.co_qualname not in _POOL_QUALNAMES
+                and code is not rec.FINALIZE_CALL
+            ):
                 # A library's file or cash's own, judged by its file as
                 # `is_user_code_file` does, before reading the frame: a fresh
                 # process sees thousands of them once each (an import of
@@ -338,7 +345,12 @@ def _recorder_class() -> type:
             if kind is None or kind[0] is not g:
                 kind = self._classify(g)
             pool = (kind[2], code.co_qualname) in rec.POOL_STARTS
-            if kind[1] is None and not pool and not self._unregistered_user_code(kind[2], code):
+            if (
+                kind[1] is None
+                and not pool
+                and code is not rec.FINALIZE_CALL
+                and not self._unregistered_user_code(kind[2], code)
+            ):
                 return DISABLE
             mon = sys.monitoring
             events = mon.events.PY_START | mon.events.PY_RESUME
@@ -424,7 +436,9 @@ def _recorder_class() -> type:
             return unit
 
         def _on_start(self, code: types.CodeType, offset: int) -> Any:
-            self.rearm.add(code)
+            inside_collection = collecting()
+            if not inside_collection:
+                self.rearm.add(code)
             if self.active or self.stack:
                 frame = sys._getframe(rec.WATCHED_FRAME)
                 g = frame.f_globals
@@ -432,7 +446,9 @@ def _recorder_class() -> type:
                 if kind is None or kind[0] is not g:
                     kind = self._classify(g)
                 self._seen_start(code, frame, g, kind)
-            return DISABLE
+            # Code a garbage collection runs (a ``__del__``) is left armed: a
+            # run of it by the unit's own code is told apart (`Unit.collected`).
+            return None if inside_collection else DISABLE
 
         def _seen_start(self, code: types.CodeType, frame: Any, g: dict, kind: tuple) -> None:
             if own_work_inside():
@@ -454,6 +470,9 @@ def _recorder_class() -> type:
                 if (kind[2], code.co_qualname) in rec.POOL_STARTS:
                     for unit in units:
                         unit.markers.add("process_pool")
+                if code is rec.FINALIZE_CALL:
+                    rec.note_finalizer(units, frame)
+                    return
                 if stack and not self.active:
                     return
                 if not self._unregistered_user_code(kind[2], code):
@@ -477,7 +496,9 @@ def _recorder_class() -> type:
                         cells = start_cells(frame, code)
                 finally:
                     self._in_callback = False
+            inside_collection = collecting()
             for unit in units:
+                rec.note_collected(unit, code, inside_collection)
                 unit.codes.setdefault(code, (g, module))
                 if cells is not None:
                     unit.cells.setdefault(code, cells)

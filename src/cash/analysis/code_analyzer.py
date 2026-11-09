@@ -22,6 +22,7 @@ from collections import ChainMap
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from .. import _weak
 from .._memo import NOTEBOOK_STATEMENTS
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
 from .._user_attrs import instance_of
@@ -1463,7 +1464,7 @@ def _parsed_cell(code: str) -> ast.Module:
 #: `_flow`'s answers, by the tree and then by the writer aliases, held
 #: weakly: a tree parsed for one statement is let go with it.
 _FLOWS: weakref.WeakKeyDictionary[ast.AST, dict[frozenset, tuple[frozenset[str], frozenset[str]]]] = (
-    weakref.WeakKeyDictionary()
+    _weak.WeakKeyDictionary()
 )
 
 

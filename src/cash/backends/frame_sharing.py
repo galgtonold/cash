@@ -67,6 +67,8 @@ import threading
 import weakref
 from typing import Any
 
+from .. import _weak
+from .._user_attrs import from_family
 from . import heap_blocks
 
 logger = logging.getLogger(__name__)
@@ -119,7 +121,7 @@ class _PinRef(weakref.ref):
 
     def __init__(self, roots: list[Any]) -> None:
         super().__init__(_PIN_TARGET)
-        self.roots = [weakref.ref(root) for root in roots]
+        self.roots = [_weak.ref(root) for root in roots]
         self.blocks: list[Any] = []
         self.writes = 0
         self.left = False
@@ -127,7 +129,7 @@ class _PinRef(weakref.ref):
     def know(self, block: Any) -> None:
         """Remember *block*, one of the group's, to find the group by."""
         self.blocks = [ref for ref in self.blocks if ref() is not None]
-        self.blocks.append(weakref.ref(block))
+        self.blocks.append(_weak.ref(block))
 
 
 #: ``id(root) -> {id(pin): weak reference to pin}`` for the groups whose
@@ -258,7 +260,7 @@ def _for_storing(value: Any, done: dict[int, Any], depth: int) -> Any:
             parts = [_for_storing(item, done, depth + 1) for item in value]
             changed = any(new is not old for new, old in zip(parts, value, strict=True))
             result = kind(parts) if changed else value
-    elif getattr(value, "_mgr", None) is not None and kind.__module__.startswith("pandas"):
+    elif from_family(kind, "pandas") and getattr(value, "_mgr", None) is not None:
         result = _detached(value)
     else:
         return value
@@ -838,7 +840,7 @@ def frozen_already(frame: Any) -> bool:
             parts = _label_parts(getattr(axis, "_data", None)) if not _is_range(axis) else []
             if parts is None or not all(not array.flags.writeable and is_frozen(array) for _name, array in parts):
                 return False
-        return type(frame).__module__.startswith("pandas") and freezable(frame, cells_known=True)
+        return from_family(type(frame), "pandas") and freezable(frame, cells_known=True)
     except Exception:  # noqa: BLE001 - unknown internals: not frozen
         return False
 
@@ -903,7 +905,7 @@ def _freeze_in_place(frame: Any) -> None:
             refs.referenced_blocks.append(pin)
             for root in pin.roots:
                 # By id: pins are weak references to one target, so all compare equal.
-                _PINS_BY_ROOT.setdefault(id(root()), {})[id(pin)] = weakref.ref(pin)
+                _PINS_BY_ROOT.setdefault(id(root()), {})[id(pin)] = _weak.ref(pin)
         for other in group:
             pin.know(other)
     for name in ("index",) if frame.ndim == 1 else ("index", "columns"):
@@ -919,7 +921,7 @@ def _freeze_in_place(frame: Any) -> None:
 
 #: The blocks of the tables `share_checked` made: the RAM tier's own block
 #: objects over data a caller may still hold.
-_CHECKED_BLOCKS: weakref.WeakSet = weakref.WeakSet()
+_CHECKED_BLOCKS: weakref.WeakSet = _weak.WeakSet()
 
 #: The smallest table `share_checked` keeps uncopied: its numbers and dates
 #: in bytes. A smaller one is copied, which costs about what its digest does.

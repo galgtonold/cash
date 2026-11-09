@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import pytest
 
+from cash.notebook import call_effects
+from cash.notebook.statement import processor
 from cash.value_hash import compute_hash
 from tests._cell_driver import run_cash_cell
 
@@ -27,10 +29,16 @@ class Graphish:
     """An object of a class of its own holding dicts, as a networkx graph
     does (no array: a result with arrays its statement only binds is not
     digested by its call, `CallEntries._too_big_to_digest`), counted each
-    time it is pickled."""
+    time it is pickled.
+
+    Its nodes are named, not numbered: without the C extension a digest
+    looks for sets by the bytes a set is pickled as (`stored_pickle._Sink`),
+    and node 38033 (``0x9491``) is pickled as those bytes. Its digest is
+    then taken over a second pickle with sets sorted, by design, in the
+    call's own store, where this test counts what the statement adds."""
 
     def __init__(self) -> None:
-        self.adj = {i: {i + 1: {"weight": 1.0}} for i in range(100_000)}
+        self.adj = {f"n{i}": {f"n{i + 1}": {"weight": 1.0}} for i in range(100_000)}
         self.tags = {"a": 1}
 
     def __reduce_ex__(self, protocol):
@@ -53,7 +61,15 @@ def touch(g):
 
 
 @pytest.fixture
-def magics(cash_magics):
+def magics(cash_magics, monkeypatch):
+    # The statement takes the call's digest only while no other thread could
+    # change the value in between (`trace_recorder.other_thread_alive`, asked
+    # as the call stores and as the statement ends). A thread an earlier test
+    # left running can start one while this test runs, which the suite's
+    # host threads do not cover: then the statement rightly read the value
+    # again. What this test pins is the case with no other thread.
+    for module in (call_effects, processor):
+        monkeypatch.setattr(module, "other_thread_alive", lambda _ns: False)
     run_cash_cell(cash_magics, SETUP)
     PICKLED.clear()
     return cash_magics

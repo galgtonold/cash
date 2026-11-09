@@ -33,6 +33,8 @@ from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
 from cash._paths import replace_with_retry
 from cash.backends.cache_dir import recreate_cache_dir
 
+from .. import _weak
+
 if TYPE_CHECKING:
     from cash.backends import CacheBackend
 
@@ -139,7 +141,7 @@ class StoreRegistry(Generic[S]):
         self._make = make
         self._on_create = on_create
         self._stores: dict[str | None, S] = {}
-        self._by_backend: weakref.WeakKeyDictionary[Any, S] = weakref.WeakKeyDictionary()
+        self._by_backend: weakref.WeakKeyDictionary[Any, S] = _weak.WeakKeyDictionary()
 
     def get(self, cache_dir: str | None) -> S:
         """The shared store for *cache_dir*."""

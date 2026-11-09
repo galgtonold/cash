@@ -16,10 +16,10 @@ import importlib.util
 import operator
 import sys
 import types
-import weakref
 from collections.abc import Callable
 from typing import Any
 
+from .. import _weak
 from ..loaded_code import code_objects_of
 from .ast_util import walk_tree
 from .purity_report import PurityReport
@@ -161,7 +161,7 @@ def resolve_callee_chain(namespace: dict[str, Any], chain: tuple[str, ...]) -> A
 def held_ref(obj: Any) -> Callable[[], Any]:
     """A weak reference where the object allows one, a strong one otherwise."""
     try:
-        return weakref.ref(obj)
+        return _weak.ref(obj)
     except TypeError:
         return lambda: obj
 

@@ -25,6 +25,7 @@ import weakref
 from collections.abc import Callable
 from typing import Any
 
+from .. import _weak
 from .._type_memo import TypeMemo, type_key
 from ..backends.cache_dir import CASH_KEYS_FILENAME, create_temp_file
 from ..canonical_form import canonical_bytes, object_state
@@ -184,7 +185,7 @@ class KeyCheck:
         # A child forked while the thread held the lock, or had checks
         # queued, would inherit a held lock and a queue nothing drains.
         if hasattr(os, "register_at_fork"):
-            me = weakref.ref(self)
+            me = _weak.ref(self)
             os.register_at_fork(after_in_child=lambda: (c := me()) is not None and c._after_fork())
 
     def _after_fork(self) -> None:

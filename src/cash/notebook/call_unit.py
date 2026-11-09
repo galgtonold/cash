@@ -479,10 +479,19 @@ def _ran_unseen_writes(call: Any, unit: Any) -> bool:
             # The callee and the functions it names are the call's analysis's.
             reached = {attribute_or(fn, "__qualname__", None) for fn in functions_reached_in(namespace, call.fn)}
             return any(fn not in reached for fn, _targets in writers_without_a_trace(source, namespace))
+        if attribute_or(unit, "finalizers", None):
+            # A ``weakref.finalize`` whose callback no trace sees ran in it
+            # (`trace_recorder.note_finalizer`).
+            return True
         if not codes:
             return False
         own = attribute_or(call.fn, "__code__", None)
-        return bool(unseen_writers(codes, [own] if own is not None else [], call.mutated_globals, namespace))
+        # A callback a collection ran (`Unit.collected`) is read wherever it
+        # was made: it ran on its own, not as part of the text making it.
+        collected = attribute_or(unit, "collected", frozenset())
+        return bool(
+            unseen_writers(codes, [own] if own is not None else [], call.mutated_globals, namespace, "", collected)
+        )
     except Exception:  # noqa: BLE001 - not read is not stored
         return True
 

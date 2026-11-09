@@ -1038,7 +1038,7 @@ class StatementLineage:
         for name in holders:
             before = virtual_lineage.get(name, recorded.get(name))
             if before is not None:
-                virtual_lineage[name] = held_lineage(before, cache_key)
+                virtual_lineage[name] = held_lineage(name, before, cache_key)
                 moved.add(name)
                 if virtual_lineage[name] == before:
                     kept.add(name)

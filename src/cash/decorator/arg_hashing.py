@@ -19,10 +19,11 @@ import weakref
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from .. import _cash_views, _plain_data, kept_state, value_watch
+from .. import _cash_views, _plain_data, _weak, kept_state, value_watch
 from .._clock import perf_counter as _perf_counter
 from .._memo import ARGUMENTS, FRAMES, LruMemo
 from .._type_memo import TypeMemo, type_key
+from .._user_attrs import from_family
 from ..backends.frame_sharing import is_pin
 from ..canonical_form import (
     NOT_HOOKED,
@@ -335,7 +336,7 @@ def is_cow_pandas(value: Any) -> bool:
     """
     global _COW_PANDAS
     t = type(value)
-    if t.__name__ not in ("DataFrame", "Series") or not (t.__module__ or "").startswith("pandas"):
+    if t.__name__ not in ("DataFrame", "Series") or not from_family(t, "pandas"):
         return False
     if _COW_PANDAS is None:
         try:
@@ -739,7 +740,7 @@ class _Records:
 
     def __init__(self, values: Any) -> None:
         self.key = id(values)
-        self.array = weakref.ref(values)
+        self.array = _weak.ref(values)
 
 
 def _immutable_records(values: Any, lists: list, kept: _KeptLists | None = None) -> bool:
@@ -1362,7 +1363,7 @@ def _handed_out_as_kept(handle: Any) -> bool:
 
 def _is_categorical(handle: Any) -> bool:
     t = type(handle)
-    return t.__name__ == "Categorical" and (t.__module__ or "").startswith("pandas")
+    return t.__name__ == "Categorical" and from_family(t, "pandas")
 
 
 def _held_string_array(handle: Any) -> bool:
@@ -1370,7 +1371,7 @@ def _held_string_array(handle: Any) -> bool:
     column's or an index's ``.values`` hands out that very array, writable
     (``s.values[0] = "x"`` writes into the frame), not a read-only view."""
     t = type(handle)
-    return t.__name__ == "StringArray" and (t.__module__ or "").startswith("pandas")
+    return t.__name__ == "StringArray" and from_family(t, "pandas")
 
 
 def _note_exposed(handle: Any) -> None:
@@ -1504,7 +1505,7 @@ class _CostliestArg:
                 producer = self._frozen.containers[id(value)][1]
             old_pandas = (
                 type(value).__name__ in ("DataFrame", "Series")
-                and (type(value).__module__ or "").startswith("pandas")
+                and from_family(type(value), "pandas")
                 and not is_cow_pandas(value)
             )
             self.costliest = (label, seconds, type(value).__name__, producer, old_pandas)
@@ -2097,7 +2098,7 @@ class ArgHasher:
         full-hashing).
         """
         try:
-            wref = weakref.ref(arg)
+            wref = _weak.ref(arg)
         except TypeError:
             return
         self._memo[id(arg)] = (wref, lineage, content_hash)

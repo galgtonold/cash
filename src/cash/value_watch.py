@@ -41,7 +41,7 @@ from collections.abc import Callable
 from time import perf_counter
 from typing import Any
 
-from . import _native, kept_state
+from . import _native, _weak, kept_state
 from ._native import REASON
 from ._native import cwatch as _cw
 
@@ -57,6 +57,7 @@ __all__ = [
     "digest",
     "enabled",
     "forget",
+    "namespaces",
     "gen",
     "peek",
     "reset",
@@ -283,7 +284,7 @@ def add_namespace(shell: Any) -> None:
     name in it can be watched even when nothing else can prove its identity
     (`_anchors`). The last few shells are remembered."""
     try:
-        ref = weakref.ref(shell)
+        ref = _weak.ref(shell)
     except TypeError:
         return
     _SHELLS[:] = [ref, *(other for other in _SHELLS if other() is not None and other() is not shell)][:4]
@@ -292,6 +293,11 @@ def add_namespace(shell: Any) -> None:
 def shells() -> list:
     """The shells cash runs a notebook in (`add_namespace`) still alive."""
     return [shell for shell in (ref() for ref in _SHELLS) if shell is not None]
+
+
+def namespaces() -> tuple:
+    """The namespaces the notebook binds its variables in (`_anchors`)."""
+    return _anchors()
 
 
 def _anchors() -> tuple:

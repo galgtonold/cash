@@ -38,7 +38,7 @@ from typing import Any, NamedTuple
 
 from cash._user_attrs import attribute_or, builtin_items, instance_of, own_dict
 
-from .. import _native
+from .. import _native, _weak
 from .._memo import CODE_OBJECTS, LruMemo
 from .._type_memo import per_mro, per_type
 from ..install_paths import is_user_code_module
@@ -162,7 +162,7 @@ def _held(found: tuple[tuple[Any, ...], tuple[Any, ...], bool]) -> Any:
     classes, or *found* itself when one cannot be weakly referenced."""
     functions, classes, complete = found
     try:
-        return (tuple(map(weakref.ref, functions)), tuple(map(weakref.ref, classes)), complete, _WEAK)
+        return (tuple(map(_weak.ref, functions)), tuple(map(_weak.ref, classes)), complete, _WEAK)
     except TypeError:
         return found
 
@@ -649,7 +649,7 @@ def _users_module(module: Any) -> bool:
 
 
 #: Class -> whether a module of the user's defined it (`_of_a_users_module`).
-_USERS_CLASS: weakref.WeakKeyDictionary[type, bool] = weakref.WeakKeyDictionary()
+_USERS_CLASS: weakref.WeakKeyDictionary[type, bool] = _weak.WeakKeyDictionary()
 
 
 def _of_a_users_module_function(fn: types.FunctionType) -> bool:

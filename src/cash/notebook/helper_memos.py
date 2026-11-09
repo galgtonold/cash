@@ -50,6 +50,8 @@ from cash.analysis.ast_util import walk_tree
 from cash.install_paths import is_user_code_file, is_user_module
 from cash.value_hash import compute_hash
 
+from .. import _weak as cash_weak
+
 __all__ = [
     "FILLED",
     "MAX_KEYED",
@@ -66,6 +68,9 @@ __all__ = [
     "none_moved",
     "put_back",
     "reads_counters",
+    "hidden_counters",
+    "hidden_moved",
+    "hidden_scan",
     "unfilled",
     "used",
     "watched",
@@ -99,17 +104,24 @@ _user_modules: tuple[Any, tuple[Any, ...]] = (None, ())
 #: [(path, memo)])``: an owner's names are read again when one of those was
 #: bound, rebound or dropped (``importlib.reload``, ``C.f = cache(g)``).
 _owner_memos: weakref.WeakKeyDictionary[Any, tuple[tuple[int, ...], list[tuple[list[str], Any]]]] = (
-    weakref.WeakKeyDictionary()
+    cash_weak.WeakKeyDictionary()
 )
 #: ``memo -> (the keys and answers it held, their digests)``: digested again
 #: when one of them is not the very object it was, or is one that can be
 #: changed in place (`_fixed`).
-_digests: weakref.WeakKeyDictionary[Any, tuple[list[Any], list[str] | None]] = weakref.WeakKeyDictionary()
+_digests: weakref.WeakKeyDictionary[Any, tuple[list[Any], list[str] | None]] = cash_weak.WeakKeyDictionary()
 #: ``memo -> {id(answer): (answer, digest)}`` for the answers that can be
 #: changed in place, as the last statement that called the memo left them:
 #: what tells a statement that changed one in place (``f(1).append(5)``)
-#: from one that only read it.
-_answers_seen: weakref.WeakKeyDictionary[Any, dict[int, tuple[Any, str | bytes]]] = weakref.WeakKeyDictionary()
+#: from one that only read it. An answer nothing can change in place
+#: (`_fixed`) is there with `_FIXED` for its digest: told so once, not
+#: walked again before every statement (a ``subsegments(N)`` memo's tuple
+#: of 100,000 pairs).
+_answers_seen: weakref.WeakKeyDictionary[Any, dict[int, tuple[Any, Any]]] = cash_weak.WeakKeyDictionary()
+
+#: The digest `_answers_seen` gives an answer `_fixed` holds: it equals no
+#: digest, and the answer, the very object kept with it, stays fixed.
+_FIXED = object()
 
 #: The types whose values nothing can change in place.
 _FIXED_TYPES = (int, float, complex, str, bytes, bool, type(None), range)
@@ -118,7 +130,12 @@ _FIXED_TYPES = (int, float, complex, str, bytes, bool, type(None), range)
 def _is_user_memo(value: Any) -> bool:
     if _LRU_WRAPPER is None or type(value) is not _LRU_WRAPPER:
         return False
-    code = attribute_or(attribute_or(value, "__wrapped__", None), "__code__", None)
+    wrapped = attribute_or(value, "__wrapped__", None)
+    if type(wrapped) is not types.FunctionType:
+        # A compiled library's function (Cython's) carries a code object
+        # whose file name is its source's relative path, as a cell's is not.
+        return False
+    code = attribute_or(wrapped, "__code__", None)
     return code is not None and is_user_code_file(code.co_filename)
 
 
@@ -301,7 +318,7 @@ def _where(ns: Mapping[str, Any], *, fresh: bool = False) -> list[tuple[list[str
 
 def _weak(obj: Any) -> Any:
     try:
-        return weakref.ref(obj)
+        return cash_weak.ref(obj)
     except TypeError:
         return obj  # takes none (a ``staticmethod``): kept as it is
 
@@ -534,7 +551,8 @@ def _item_digests(memo: Any) -> list[str] | None:
         known is not None
         and len(known[0]) == len(flat)
         and all(a is b for a, b in zip(known[0], flat))
-        and all(_fixed(k, key=True) and _fixed(v) for k, v in items)
+        and all(_fixed(k, key=True) for k, _ in items)
+        and _answers_fixed(memo, items)
     ):
         return known[1]
     try:
@@ -736,9 +754,10 @@ def _changed_in_place(
     memo held before a run that added others)."""
     if seen is None:
         seen = _answers_seen.get(memo, {})
-    now: dict[int, tuple[Any, str | bytes]] = {}
+    now: dict[int, tuple[Any, Any]] = {}
     for _, answer in items:
-        if _fixed(answer):
+        if _fixed_as_seen(answer, seen):
+            now[id(answer)] = (answer, _FIXED)
             continue
         try:
             now[id(answer)] = (answer, _answer_digest(answer))
@@ -746,7 +765,7 @@ def _changed_in_place(
             continue
     verdict: bool | None = False
     for _, answer in items if judged is None else judged:
-        if _fixed(answer):
+        if _fixed_as_seen(answer, now):
             continue
         current = now.get(id(answer))
         if current is None and judged is not None:
@@ -761,6 +780,22 @@ def _changed_in_place(
             verdict = True
     _answers_seen[memo] = now
     return verdict
+
+
+def _fixed_as_seen(answer: Any, seen: Mapping[int, tuple[Any, Any]]) -> bool:
+    """`_fixed` of *answer*, from *seen* (`_answers_seen`) where it holds the
+    very object as fixed: a value nothing can change in place stays so."""
+    known = seen.get(id(answer))
+    if known is not None and known[0] is answer:
+        return known[1] is _FIXED
+    return _fixed(answer)
+
+
+def _answers_fixed(memo: Any, items: list[tuple[Any, Any]]) -> bool:
+    """Whether nothing can change any answer of *items*, pairs *memo*
+    holds, in place (`_fixed_as_seen`)."""
+    seen = _answers_seen.get(memo, {})
+    return all(_fixed_as_seen(answer, seen) for _, answer in items)
 
 
 def _held(memo: Any) -> tuple[frozenset[tuple[int, int]], list[tuple[Any, Any]], Any] | None:
@@ -788,14 +823,15 @@ def _seen_now(memo: Any, items: list[tuple[Any, Any]]) -> dict[int, tuple[Any, s
     stored ("It filled the helper memo ...")."""
     seen = _answers_seen.get(memo)
     missing = [
-        answer
-        for _, answer in items
-        if not _fixed(answer) and ((known := (seen or {}).get(id(answer))) is None or known[0] is not answer)
+        answer for _, answer in items if (known := (seen or {}).get(id(answer))) is None or known[0] is not answer
     ]
     if not missing:
         return seen
     taken = dict(seen or {})
     for answer in missing:
+        if _fixed(answer):
+            taken[id(answer)] = (answer, _FIXED)
+            continue
         try:
             taken[id(answer)] = (answer, _answer_digest(answer))
         except Exception:  # noqa: BLE001 - an answer with no digest: left unseen
@@ -922,7 +958,7 @@ def used(
                 # is called again where the memo lacks a key (`_refill`),
                 # and served where the memo holds it already.
                 calls = _calls_of(memo, items)
-                if calls is not None and all(_fixed(answer) for _, answer in items) and _pure(memo):
+                if calls is not None and _answers_fixed(memo, items) and _pure(memo):
                     out.append({"where": where, "items": _item_digests(memo), "pure": True, "calls": calls})
                     continue
             if not _unbounded(memo):
@@ -971,7 +1007,7 @@ def used(
             why = f"It changed an answer the helper memo {label} holds in place"
         elif info.misses != misses:
             calls = _calls_of(memo, items)
-            if calls is not None and all(_fixed(answer) for _, answer in items) and _pure(memo):
+            if calls is not None and _answers_fixed(memo, items) and _pure(memo):
                 out.append({"where": where, "items": _item_digests(memo), "pure": True, "calls": calls})
                 continue
             why = f"It filled the helper memo {label}: served, the memo would stay as it was"
@@ -988,7 +1024,7 @@ def used(
                 # the memo holds, as the share check refuses an output
                 # holding one the memo held when it ran. A call cash
                 # caches is not walked so, and keeps to fixed answers.
-                fixed = all(_fixed(answer) for _, answer in items)
+                fixed = _answers_fixed(memo, items)
                 strict = not fixed and changes is not None and calls is not None and _calls_only_pure(memo)
                 pure = calls is not None and ((fixed and _pure(memo)) or strict)
                 record = {"where": where, "items": digests, "pure": pure, "calls": calls if pure else None}
@@ -1183,7 +1219,8 @@ def _digests_of(memo: Any, items: list[tuple[Any, Any]]) -> list[str]:
         and known[1] is not None
         and len(known[0]) == len(flat)
         and all(a is b for a, b in zip(known[0], flat))
-        and all(_fixed(k, key=True) and _fixed(v) for k, v in items)
+        and all(_fixed(k, key=True) for k, _ in items)
+        and _answers_fixed(memo, items)
     ):
         return known[1]
     return sorted({_pair_digest(key, answer) for key, answer in items})
@@ -1540,6 +1577,83 @@ def unfilled(records: list[dict] | None, ns: Mapping[str, Any], *, refill: bool 
     return None
 
 
+#: The memos of the user's that `_where` does not find (one in a closure, a
+#: dict, a list, an object's attribute, a ``functools.partial``), met by a
+#: look through every object (`hidden_moved`): ``id -> memo``.
+_hidden: weakref.WeakValueDictionary[int, Any] = cash_weak.WeakValueDictionary()
+
+
+def hidden_counters() -> dict[int, tuple[int, int, int]]:
+    """``id -> (hits, misses, size)`` of each memo of the user's met where
+    `_where` does not look, before a run: what `hidden_moved` compares."""
+    out: dict[int, tuple[int, int, int]] = {}
+    for key, memo in list(_hidden.items()):
+        try:
+            info = memo.cache_info()
+        except Exception:  # noqa: BLE001 - a wrapper whose counters raise: seen as moved
+            continue
+        out[key] = (info.hits, info.misses, info.currsize)
+    return out
+
+
+def hidden_scan(ns: Mapping[str, Any]) -> dict[int, tuple[int, int, int]]:
+    """`hidden_counters` after a look through every object, as a run
+    begins: every memo of the user's that `_where` does not find is known
+    then, with its counters, so `hidden_moved` with ``fresh=True`` takes a
+    memo it meets for the first time for one the run built."""
+    for _name, _obj in _hidden_memos(ns):
+        _hidden[id(_obj)] = _obj
+    return hidden_counters()
+
+
+def _hidden_memos(ns: Mapping[str, Any]) -> list[tuple[str, Any]]:
+    """``(name, memo)`` of each memo of the user's that `_where` does not find."""
+    if _LRU_WRAPPER is None:
+        return []
+    import gc
+
+    located = {id(memo) for _, memo in _where(ns)}
+    out = []
+    for obj in gc.get_objects():
+        if type(obj) is not _LRU_WRAPPER or id(obj) in located or not _is_user_memo(obj):
+            continue
+        out.append((attribute_or(attribute_or(obj, "__wrapped__", None), "__qualname__", None) or "?", obj))
+    return out
+
+
+def hidden_moved(
+    before: Mapping[int, tuple[int, int, int]], ns: Mapping[str, Any], *, fresh: bool = False
+) -> str | None:
+    """The name of a memo of the user's that `_where` does not find and
+    that a run called: its counters moved since *before*
+    (`hidden_counters`). None when there is none. What a run left in such
+    a memo is in no record, so an entry of the run would leave it as it
+    was.
+
+    Every object is looked through (``gc.get_objects``): a memo can be held
+    anywhere, and a walk of values misses some. A memo not known before
+    the run has no counters to compare with. When *before* came from
+    `hidden_scan` (*fresh*), the run built it: it is named when it was
+    called, and not when it never was. Otherwise it may have been built
+    and filled before the run, and emptied by it (``cache_clear()``), which
+    leaves the counters of a memo never called: it is named. Either way it
+    is known for the next run."""
+    found: str | None = None
+    for name, obj in _hidden_memos(ns):
+        key = id(obj)
+        known = _hidden.get(key) is obj and key in before
+        _hidden[key] = obj
+        try:
+            info = obj.cache_info()
+        except Exception:  # noqa: BLE001 - counters that cannot be read: taken as moved
+            found = found or name
+            continue
+        now = (info.hits, info.misses, info.currsize)
+        if now != (before[key] if known else (0, 0, 0)) or (not known and not fresh):
+            found = found or name
+    return found
+
+
 def _refill_read(record: dict, memo: Any, refill: bool) -> list[str] | None:
     """For a change record of a helper that provably computes from its
     arguments alone (``"pure"``, asked again now): call it for each answer
@@ -1622,7 +1736,7 @@ def _held_as_computed(record: dict, memo: Any, keys: set[str]) -> bool:
 
 #: ``memo -> (the keys it held, their digests)``: digested again when one
 #: is not the very object it was (keys are hashable, and so do not change).
-_key_digest_memo: weakref.WeakKeyDictionary[Any, tuple[list[Any], set[str]]] = weakref.WeakKeyDictionary()
+_key_digest_memo: weakref.WeakKeyDictionary[Any, tuple[list[Any], set[str]]] = cash_weak.WeakKeyDictionary()
 
 
 def _key_digests(memo: Any) -> set[str] | None:
@@ -1909,8 +2023,8 @@ _INFO_NAMES = ("cache_info",)
 
 #: ``names -> code -> whether it or a function it calls names one of them``.
 _clearing_code: dict[tuple[str, ...], weakref.WeakKeyDictionary[Any, bool]] = {
-    _COUNTER_NAMES: weakref.WeakKeyDictionary(),
-    _INFO_NAMES: weakref.WeakKeyDictionary(),
+    _COUNTER_NAMES: cash_weak.WeakKeyDictionary(),
+    _INFO_NAMES: cash_weak.WeakKeyDictionary(),
 }
 
 

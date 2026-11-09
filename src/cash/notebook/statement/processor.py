@@ -184,6 +184,7 @@ from ...tracking.randomness import (
     rng_virtual_var,
 )
 from ...tracking.trace_recorder import other_thread_alive
+from ...tracking.tracker_context import untracked
 from .. import helper_memos
 from ..anchors import MEMORY_HOME, anchor_digests, memory_homes
 from ..borrowed_memory import borrowed_memory_names, lazy_frame_sources
@@ -256,6 +257,7 @@ from .lineage import note_own_writes
 from .observed_draws import ObservedDrawStore
 from .thread_reach import ThreadReach
 from .unseen_writes import (
+    COLLECTED_ONLY_REASON,
     COULD_RUN_REASON,
     COULD_RUN_TOO_BIG_REASON,
     SET_LATER,
@@ -264,6 +266,7 @@ from .unseen_writes import (
     UNREADABLE_REASON,
     UNSEEN_WRITES_REASON,
     called_methods,
+    finalizer_writer,
     live_writers,
     unreadable_changers,
     unseen_writers,
@@ -798,6 +801,12 @@ def _is_while(tree: ast.Module | None) -> bool:
     """Whether *tree* is a single ``while`` loop."""
     body = attribute_or(tree, "body", None) or []
     return len(body) == 1 and isinstance(body[0], ast.While)
+
+
+def _collect_place(run: StatementRun) -> str:
+    """*run*'s statement in `TrackingState.collect_first`: its text and
+    place, known before its key is (`StatementProcessor._collect_first`)."""
+    return f"{statement_source_hash(run.code)}:{run.occurrence_index}"
 
 
 class StatementProcessor:
@@ -1460,6 +1469,21 @@ class StatementProcessor:
                 self._remember_rng_positions(run)
                 self._move_what_reducers_wrote(run)
 
+    def _collect_first(self, run: StatementRun) -> None:
+        """Collect the garbage before *run* when its statement's last run was
+        refused only for code a collection ran in it (`collect_first`): what
+        earlier work left is freed now, before its key reads its inputs, so
+        a finalizer that runs inside it is its own. Plain Python runs those
+        finalizers at a moment no code chooses, too: these only come sooner."""
+        collect_first = self.tracking_state.collect_first
+        place = _collect_place(run)
+        if place not in collect_first:
+            return
+        del collect_first[place]
+        with untracked():
+            gc.collect()
+        run.collected_first = True
+
     @staticmethod
     def _begin_recording(shadow: Any, run: StatementRun) -> Any:
         """Start recording which code *run*'s statement runs (shadow mode)."""
@@ -1562,6 +1586,8 @@ class StatementProcessor:
         ``None`` when it must run, with *run* filled in for :meth:`_executing`
         and :meth:`_finish`.
         """
+        # Before the key reads the inputs: a finalizer it runs may change one.
+        self._collect_first(run)
         self._begin(run)
         run.analysis_budget = AnalysisBudget(analysis_budget_seconds(self._expected_run_time(run.code)))
         effects, analysis_time, hash_time = self._within_budget(run, lambda: self._analyze(run))
@@ -1873,7 +1899,24 @@ class StatementProcessor:
                 found = [("?", (UNREADABLE,))]
         else:
             statement = [code for code, (g, _m) in unit.codes.items() if code.co_qualname == "<module>" and g is ns]
-            found = unseen_writers(unit.codes, statement, run.outputs, ns, run.code)
+            collected = unit.collected
+            by_code = unseen_writers(unit.codes, statement, run.outputs, ns, run.code, collected)
+            found = by_code + [finalizer_writer(name) for name, _inside in unit.finalizers]
+            if found and not run.collected_first:
+                # Only what a garbage collection ran in it, which may be
+                # garbage earlier work left: its next run collects first
+                # (`_collect_first`), and is refused for what then runs.
+                own = {code: where for code, where in unit.codes.items() if code not in collected}
+                mine = unseen_writers(own, statement, run.outputs, ns) if collected and by_code else by_code
+                mine = mine + [finalizer_writer(name) for name, inside in unit.finalizers if not inside]
+                if not mine:
+                    collect_first = self.tracking_state.collect_first
+                    collect_first[_collect_place(run)] = None
+                    while len(collect_first) > _UNSEEN_REFUSED_KEPT:
+                        del collect_first[next(iter(collect_first))]
+                    run.skip_cache = True
+                    run.metrics["uncacheable_reasons"].append(COLLECTED_ONLY_REASON.format(fn=found[0][0]))
+                    return
         refused = self.tracking_state.unseen_refused
         place = f"{run.source_hash}:{run.occurrence_index}"
         if not found:
@@ -3248,6 +3291,12 @@ class StatementProcessor:
                 reason = input_change_reason(self.tracking_state, run.inputs, run.outputs)
             if reason is None:
                 reason = random_state_change_reason(self.tracking_state, run.code)
+            if reason is None:
+                # This very key ran before and left no entry on disk: that is
+                # why, whatever a version stored since by another cell of the
+                # same text was built from (``voting_clf.fit(X_train,
+                # y_train)`` in c10, kept in memory only, and in c47 on MNIST).
+                reason = self._unstored.reason(run.cache_key)
             if reason is None and (run.pass_slot is None or has_marker(run.code)):
                 # A statement of a pass carries the pass in its text, and so
                 # in its versions' slot; a loop run as one unit in a pass does not.
@@ -3730,9 +3779,12 @@ class StatementProcessor:
                     settled=run.settled_digests,
                     file_stats=attribute_or(execution.file_tracker, "checked_stats", None),
                 )
-            # Let go of the values they hold: the checks below count references.
+            # Let go of the values they hold: the checks below count references,
+            # and weak references: the window takes none from here, and keeps
+            # what it read by the names the notebook binds, to the outputs'
+            # lineage below (`value_hash.no_weak_reads`).
             run.settled_digests = {}
-            reads.close()
+            value_hash.no_weak_reads()
             # The share check, the closure check and the RAM tier each look into
             # the outputs; JSON-like ones are walked once for all of them.
             with _plain_data.one_look(captured_vars):
@@ -5112,7 +5164,7 @@ class StatementProcessor:
         if not holders:
             return set()
         for name in run.holders_unchanged & set(holders):
-            keep_held_lineage(holders[name], cache_key)
+            keep_held_lineage(name, holders[name], cache_key)
         for name, before in holders.items():
             # One this run saw change moves on, whatever an earlier run of
             # the statement saw (a kept alias). One it has no digest of moves
@@ -5122,7 +5174,7 @@ class StatementProcessor:
                 self.tracking_state,
                 name,
                 self.shell.user_ns.get(name),
-                held_lineage(before, cache_key, resolve=name not in run.holders_changed),
+                held_lineage(name, before, cache_key, resolve=name not in run.holders_changed),
                 compute_hash=self.compute_hash,
             )
         return set(holders)

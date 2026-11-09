@@ -18,6 +18,7 @@ import os
 import weakref
 from typing import TYPE_CHECKING, Any
 
+from .. import _weak
 from ..config.schema import TIER_TYPES, TierConfig
 from ..exceptions import DependencyNotFoundError
 from ._base import CacheBackend
@@ -55,7 +56,7 @@ TierSpec = tuple[str, tuple[tuple[str, Any], ...]]
 #: Every backend `build_backend_from_config` made. Only these may be rebuilt
 #: when the config changes: one the caller passed in (``Cash(backend=...)``)
 #: is theirs, and the config does not describe it.
-_FROM_CONFIG: weakref.WeakSet[CacheBackend] = weakref.WeakSet()
+_FROM_CONFIG: weakref.WeakSet[CacheBackend] = _weak.WeakSet()
 
 
 def build_backend_from_config(config: CashConfig) -> CacheBackend:

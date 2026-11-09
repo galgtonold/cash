@@ -63,7 +63,7 @@ import types
 import weakref
 from typing import TYPE_CHECKING, Any
 
-from .. import _native
+from .. import _native, _weak
 from .._clock import perf_counter as _perf_counter
 from ..analysis.helper_code import own_code_is_user
 from ..source_reading import own_source
@@ -110,11 +110,11 @@ def bump() -> None:
 
 #: A function's state -> the memos whose key reads it (callers that reached
 #: it as a cached callee): its miss drops their remembered hits too.
-_DEPENDENTS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_DEPENDENTS: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()
 
 
 #: A cached function's wrapper -> its state, for the scan of a caller.
-_STATE_OF: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_STATE_OF: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()
 
 
 def own_state(wrapper: Any, state: list | None) -> None:
@@ -155,7 +155,7 @@ def epochs(spec: CachedFunction, args: tuple, kwargs: dict) -> tuple | None:
 
 
 #: Every memo with fast hits not yet handed to the net-loss accounting.
-_MEMOS: weakref.WeakSet[HitMemo] = weakref.WeakSet()
+_MEMOS: weakref.WeakSet[HitMemo] = _weak.WeakSet()
 
 
 def flush_all() -> None:
@@ -615,7 +615,7 @@ class _Family:
             for k in (k for ks in below for k in ks):
                 if k.__flags__ & _HEAPTYPE and _cw.world_watch_type(k) is None:
                     raise Ineligible("a class without a version tag")
-            self.below = tuple(tuple(map(weakref.ref, ks)) for ks in below)
+            self.below = tuple(tuple(map(_weak.ref, ks)) for ks in below)
 
     def _registrations(self) -> tuple:
         from .class_data import abc_registries, registered_with
@@ -884,7 +884,7 @@ class HitMemo:
             state[S_GUARD] = family.guard if family is not None else None
             for callee in callees:
                 if callee is not state:
-                    _DEPENDENTS.setdefault(callee, weakref.WeakSet()).add(self)
+                    _DEPENDENTS.setdefault(callee, _weak.WeakSet()).add(self)
             # What changed between the key build and the watch is not
             # proven: this call is not remembered, the next one is.
             state[S_CELLS], state[S_TYPES] = cells, tags
@@ -961,7 +961,7 @@ class HitMemo:
             state[S_GUARD] = joined.guard
         for callee in callees:
             if callee is not state:
-                _DEPENDENTS.setdefault(callee, weakref.WeakSet()).add(self)
+                _DEPENDENTS.setdefault(callee, _weak.WeakSet()).add(self)
         state[S_CELLS] = state[S_CELLS] + cells
         state[S_TYPES] = state[S_TYPES] + tags
         self.traces[key] = world_now

@@ -155,6 +155,11 @@ def test_a_spent_budget_is_reported_incomplete():
 
 def test_an_incomplete_search_warns_once(cash_magics, no_budget, monkeypatch):
     monkeypatch.setattr(shared_objects, "_REFERRER_DEPTH", 0)
+    # The warning names the cell running, by the shell's count, as a kernel
+    # always has one. ``MockShell`` has none: without this the location fell
+    # back to IPython's process-wide shell, which exists only when an earlier
+    # test in the same worker left one behind.
+    monkeypatch.setattr(cash_magics.shell, "execution_count", 1, raising=False)
     cells = ["raw = [1]", "data = raw"]
     cash_magics.cash_on("")
     cash_magics.badges.mode = "off"

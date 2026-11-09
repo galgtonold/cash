@@ -13,6 +13,7 @@ import weakref
 from collections.abc import Callable, Collection
 from typing import TYPE_CHECKING, Any
 
+from .. import _weak
 from ..analysis.code_analyzer import CodeAnalyzer
 from ..analysis.helper_bindings import bindings_changed, resolve_binding
 from ..analysis.purity_analyzer import get_analyzer
@@ -182,12 +183,12 @@ class FunctionRegistry:
         #: capture (``make(ha)`` and ``make(hb)`` reading ``cap.helper``), and
         #: the analyzer reports each closure on its own; filed under the name
         #: alone, the first report keyed both.
-        self._closure_reports: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+        self._closure_reports: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()
         #: Functions whose purity findings have been *surfaced*, on their
         #: first call.
         self.analyzed: set[str] = set()
         #: Closures whose own findings have been surfaced (see `needs_surfacing`).
-        self._surfaced_closures: weakref.WeakSet = weakref.WeakSet()
+        self._surfaced_closures: weakref.WeakSet = _weak.WeakSet()
         #: Functions whose graph edges and purity report are populated
         #: (separate from `analyzed`: a dependency can be populated to
         #: complete a parent's state hash long before it is called directly

@@ -26,12 +26,13 @@ it was and the computation runs on it.
 from __future__ import annotations
 
 import sys
-import weakref
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
 from cash._user_attrs import attribute_or
 from cash.value_types import IMMUTABLE_LEAF_TYPES
+
+from . import _weak as cash_weak
 
 __all__ = [
     "WRITTEN_BACK",
@@ -217,7 +218,7 @@ def _weak(obj: Any) -> Callable[[], Any]:
     """A weak reference to *obj*, or, for an object that takes none, a
     callable that returns it."""
     try:
-        return weakref.ref(obj)
+        return cash_weak.ref(obj)
     except TypeError:
         return lambda: obj
 

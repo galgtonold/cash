@@ -53,6 +53,8 @@ from cash.sizing import pandas_nbytes
 from cash.source_reading import own_source, wrapper_layers
 from cash.value_hash import compute_hash
 
+from .. import _weak
+
 if TYPE_CHECKING:
     from cash.notebook.call_interception import CallSite
 
@@ -998,7 +1000,7 @@ _STEPS_AT = 300_000
 
 #: ``type -> whether it is a class of the user's`` (its module is user code).
 #: Weak: a class a call made is not kept alive, nor the memo on it.
-_USERS_TYPES: weakref.WeakKeyDictionary[type, bool] = weakref.WeakKeyDictionary()
+_USERS_TYPES: weakref.WeakKeyDictionary[type, bool] = _weak.WeakKeyDictionary()
 
 #: Read through ``type``'s own descriptors: a metaclass's
 #: ``__getattribute__`` is not asked.
@@ -1207,7 +1209,7 @@ def _memo_member(value: Any) -> tuple[Any, Any, bool] | None:
 #: ``class -> (the ids of its members, the names of those holding a memo)``.
 #: Names, not the memos: a memo's function holds its globals, the class in
 #: them, and a weak key its own value refers to never goes.
-_CLASS_MEMOS: weakref.WeakKeyDictionary[type, tuple[tuple[int, ...], tuple[str, ...]]] = weakref.WeakKeyDictionary()
+_CLASS_MEMOS: weakref.WeakKeyDictionary[type, tuple[tuple[int, ...], tuple[str, ...]]] = _weak.WeakKeyDictionary()
 
 
 def _named_class_memo_changed(

@@ -398,3 +398,6 @@ def clear_caches() -> None:
     _USER_PATH.clear()
     _INSTALLED_TOPS.clear()
     _ENTRY_DIRS.clear()
+    from ._user_attrs import forget_user_classes
+
+    forget_user_classes()
