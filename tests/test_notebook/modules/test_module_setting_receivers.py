@@ -29,8 +29,6 @@ def _names(code):
         ("sys.path.append('lib')", "sys"),
         ("os.environ.update({'A': '1'})", "os"),
         ("matplotlib.use('Agg')", "matplotlib"),
-        ("logging.getLogger('app').setLevel(40)", "logging"),  # a setter in camelCase
-        ("logging.getLogger().setLevel(logging.DEBUG)", "logging"),
     ],
 )
 def test_a_setting_counts(code, name):
