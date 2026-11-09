@@ -374,3 +374,35 @@ def test_an_atexit_callback_taken_back_is_not_a_change():
         assert process_registries.changed(before) == ["atexit's callbacks (atexit.register)"]
     finally:
         atexit.unregister(cleanup)
+
+
+@pytest.mark.usefixtures("store_everything")
+def test_a_library_s_callable_the_user_registers_is_registered_after_a_restart(cash_magics, mock_shell, tmp_path):
+    """``atexit.register(df.to_csv, path)``, ``atexit.register(print, 'bye')``:
+    a library's function, registered by the user's code, is the user's
+    registration (the CSV is written at exit); only the registrations a
+    library makes itself are left out."""
+    import atexit
+
+    pd = pytest.importorskip("pandas")
+    out = tmp_path / "out.csv"
+    statements = [f"atexit.register(df.to_csv, {str(out)!r})", "h = atexit.register(print, 'bye')"]
+    cells = ["import atexit, pandas as pd\ndf = pd.DataFrame({'a': [1, 2]})", *statements]
+    try:
+        for _ in range(2):
+            for cell in cells:
+                run_cash_cell(cash_magics, cell, cells=cells)
+        cash_magics.tracking_state.reset_session_state()
+        cash_magics._upstream_checker.simulator.cache.reset()
+        before = atexit._ncallbacks()
+        statuses = []
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+            if cell in statements:
+                statuses.append(str(cash_magics._last_cell_metrics["statements"][0]["status"]))
+        assert atexit._ncallbacks() - before == len(statements), statuses
+    finally:
+        atexit.unregister(print)
+        df = mock_shell.user_ns.get("df")
+        if isinstance(df, pd.DataFrame):
+            atexit.unregister(df.to_csv)

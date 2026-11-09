@@ -84,9 +84,11 @@ _counting = False
 #: a clean-up for each run and unregisters it when done).
 _ATEXIT_REGISTERED: dict[Any, int] = {}
 _ATEXIT_TAKEN_BACK = [0]
-#: And those whose callback is a library's: its clean-up of what it made
-#: for itself (``joblib.Parallel``'s temporary folder, tqdm's monitor
-#: thread), which a hit, making none of it, does not need.
+#: And those a library's code registered itself: its clean-up of what it
+#: made for itself (``joblib.Parallel``'s temporary folder, tqdm's monitor
+#: thread), which a hit, making none of it, does not need. Judged by who
+#: calls ``register``, not by the callback: ``atexit.register(df.to_csv,
+#: path)`` in a cell is the user's, and writes the file at exit.
 _ATEXIT_LIBRARY = [0]
 
 
@@ -94,17 +96,13 @@ def _atexit_callbacks() -> int:
     return atexit._ncallbacks() - _OWN_ATEXIT[0] - _ATEXIT_TAKEN_BACK[0] - _ATEXIT_LIBRARY[0]
 
 
-def _libraries(func: Any) -> bool:
-    """Whether *func* (a function, a bound method, a ``functools.partial``)
-    is a library's code, not the user's."""
+def _library_called(frame: Any) -> bool:
+    """Whether *frame*, the caller of ``atexit.register``, runs a library's
+    code, not the user's (a cell, a module of theirs)."""
     from ..install_paths import is_user_code_module
 
-    for _ in range(4):
-        inner = attribute_or(func, "__func__", None) or attribute_or(func, "func", None)
-        if inner is None:
-            break
-        func = inner
-    module = sys.modules.get(attribute_or(func, "__module__", None) or "")
+    name = attribute_or(frame, "f_globals", {}).get("__name__")
+    module = sys.modules.get(name) if isinstance(name, str) else None
     return module is not None and not is_user_code_module(module)
 
 
@@ -115,7 +113,7 @@ def _count_atexit() -> None:
         before = atexit._ncallbacks()
         result = register(func, *args, **kwargs)
         made = atexit._ncallbacks() - before
-        if _libraries(func):
+        if _library_called(sys._getframe(1)):
             _ATEXIT_LIBRARY[0] += made
             return result
         try:
