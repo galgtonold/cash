@@ -1529,10 +1529,64 @@ static PyObject *py_set_ops_scan(PyObject *self, PyObject *const *args, Py_ssize
     return PyBool_FromLong(s.found);
 }
 
+/* set_walk_order(walked, sorted): None when *walked* (a set's items in the
+ * order it iterates) is the order a set built from *sorted* one item at a
+ * time iterates in, here; else the tuple of each walked item's place in
+ * *sorted*. Equal sets iterate in other orders after other histories
+ * (collisions, deletions, a copied table), and ``list(s)`` or ``s.pop()``
+ * reads that order (kept_state.set_walk_order). Items are unique and
+ * hashable (a set's own); *sorted* holds the same objects. */
+static PyObject *set_walk_order(PyObject *walked, PyObject *sorted) {
+    Py_ssize_t n = PyList_GET_SIZE(walked);
+    PyObject *built = PySet_New(sorted);
+    if (!built) return NULL;
+    PyObject *it = PyObject_GetIter(built);
+    if (!it) {
+        Py_DECREF(built);
+        return NULL;
+    }
+    int same = 1;
+    for (Py_ssize_t i = 0; i < n; i++) {
+        PyObject *next = PyIter_Next(it);
+        if (!next) break;
+        same = next == PyList_GET_ITEM(walked, i);
+        Py_DECREF(next);
+        if (!same) break;
+    }
+    Py_DECREF(it);
+    Py_DECREF(built);
+    if (PyErr_Occurred()) return NULL;
+    if (same) Py_RETURN_NONE;
+    PyObject *place = PyDict_New();
+    PyObject *order = place ? PyTuple_New(n) : NULL;
+    for (Py_ssize_t i = 0; order && i < n; i++) {
+        PyObject *at = PyLong_FromSsize_t(i);
+        if (!at || PyDict_SetItem(place, PyTuple_GET_ITEM(sorted, i), at) < 0) {
+            Py_XDECREF(at);
+            Py_CLEAR(order);
+            break;
+        }
+        Py_DECREF(at);
+    }
+    for (Py_ssize_t i = 0; order && i < n; i++) {
+        PyObject *at = PyDict_GetItemWithError(place, PyList_GET_ITEM(walked, i)); /* borrowed */
+        if (!at) {
+            if (!PyErr_Occurred()) PyErr_SetString(PyExc_KeyError, "set_walk_order: an item not in sorted");
+            Py_CLEAR(order);
+            break;
+        }
+        PyTuple_SET_ITEM(order, i, Py_NewRef(at));
+    }
+    Py_XDECREF(place);
+    return order;
+}
+
 /* sorted_set_id(forms, made, spec, obj): kept_state.sorted_set_ids's
  * persistent_id, answer for answer: None for anything but an exact set or
  * frozenset of two or more items; else the form a key writes in its place,
- * (spec[0], spec[1] for a set or spec[2] for a frozenset, its items sorted),
+ * (spec[0], spec[1] for a set or spec[2] for a frozenset, its items sorted,
+ * and, for ints, the order it iterates in where that is not the plain one:
+ * set_walk_order),
  * kept in *made* ({id: (set, form)}) and given again for the same set. A set
  * of strings alone, ints alone or bytes alone is sorted here; any other is
  * left to *forms*, which keeps its own in *made*. A key pickle asks it of
@@ -1574,10 +1628,20 @@ static PyObject *py_sorted_set_id(PyObject *self, PyObject *const *args, Py_ssiz
         Py_DECREF(key);
         return PyObject_CallOneArg(args[0], obj);
     }
-    PyObject *sorted = PyList_Sort(items) < 0 ? NULL : PyList_AsTuple(items);
+    /* Only ints hash alike in every process; a set of strings or bytes keys
+     * order-free (kept_state.set_walk_order), and its walk is not kept. */
+    int numbers = kind == &PyLong_Type;
+    PyObject *walked = numbers ? PyList_GetSlice(items, 0, PyList_GET_SIZE(items)) : NULL;
+    PyObject *sorted = (numbers && walked == NULL) || PyList_Sort(items) < 0 ? NULL : PyList_AsTuple(items);
     Py_DECREF(items);
-    PyObject *form = sorted ? PyTuple_Pack(3, PyTuple_GET_ITEM(spec, 0), PyTuple_GET_ITEM(spec, frozen ? 2 : 1), sorted)
-                            : NULL;
+    PyObject *order = !sorted ? NULL : numbers ? set_walk_order(walked, sorted) : Py_NewRef(Py_None);
+    Py_XDECREF(walked);
+    PyObject *form = NULL;
+    if (order == Py_None)
+        form = PyTuple_Pack(3, PyTuple_GET_ITEM(spec, 0), PyTuple_GET_ITEM(spec, frozen ? 2 : 1), sorted);
+    else if (order)
+        form = PyTuple_Pack(4, PyTuple_GET_ITEM(spec, 0), PyTuple_GET_ITEM(spec, frozen ? 2 : 1), sorted, order);
+    Py_XDECREF(order);
     Py_XDECREF(sorted);
     PyObject *entry = form ? PyTuple_Pack(2, obj, form) : NULL;
     int err = entry ? PyDict_SetItem(made, key, entry) : -1;

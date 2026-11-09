@@ -54,6 +54,8 @@ __all__ = [
     "restore_with_dict",
     "restores_alike_apart",
     "same_definition",
+    "hashed_alike_everywhere",
+    "set_walk_order",
     "sorted_set_ids",
     "stopped_at_defined_again",
     "store_memo",
@@ -731,7 +733,9 @@ SET_MARK = "__cash_set__"
 def sorted_set_ids(protocol: int, extra: dict | None) -> Callable[[Any], Any]:
     """A key pickle's ``persistent_id`` that writes each set and frozenset
     of two or more items as ``(SET_MARK, its type's name, its items
-    sorted)``, and lets the pickle write anything else as it would: None.
+    sorted)`` -- and the order it iterates in where that is not the plain
+    one (`set_walk_order`) -- and lets the pickle write anything else as it
+    would: None.
 
     Pickle writes a set's items in the order the set iterates in, its hash
     table's slot order. That order is not the set's content: it depends on
@@ -762,7 +766,10 @@ def sorted_set_ids(protocol: int, extra: dict | None) -> Callable[[Any], Any]:
         found = made.get(key)
         if found is not None:
             return found[1]
-        written = (SET_MARK, _SET_NAMES[type(obj)], tuple(_sorted_items(obj, protocol, extra)))
+        walked = list(obj)
+        items = tuple(_sorted_items(walked, protocol, extra))
+        order = set_walk_order(walked, items)
+        written = (SET_MARK, _SET_NAMES[type(obj)], items) + (() if order is None else (order,))
         made[key] = (obj, written)
         return written
 
@@ -775,6 +782,57 @@ def sorted_set_ids(protocol: int, extra: dict | None) -> Callable[[Any], Any]:
         return forms(obj) if t is set or t is frozenset else None
 
     return persistent_id
+
+
+def set_walk_order(walked: list, ordered: tuple | list) -> tuple[int, ...] | None:
+    """None when *walked* (a set's items in the order it iterates) is the
+    order a set built from *ordered* (the same objects sorted) one item at a
+    time iterates in, here, or when the set's items do not hash alike in
+    every process; else each walked item's place in *ordered*.
+
+    Equal sets can iterate in other orders: two items that collide in the
+    table sit in the order they went in (``{1, 9}`` and ``{9, 1}``), and
+    deletions or a copied larger table move items too. ``list(s)``,
+    ``s.pop()`` and ``next(iter(s))`` read that order, so a key that left it
+    out served ``first = s.pop()`` the item another set's order put first.
+
+    Only for a set of numbers (`hashed_alike_everywhere`): their hashes, and
+    so the order a set of them iterates in after the same history, are the
+    same in every process, and the key with the order in it is too. A set
+    of strings iterates in an order ``PYTHONHASHSEED`` picks per process; it
+    keys order-free, as before, so it keys alike across processes. A set
+    built the plain way keys as before."""
+    if not hashed_alike_everywhere(walked) or all(map(operator.is_, set(ordered), walked)):
+        return None
+    place = {id(item): at for at, item in enumerate(ordered)}
+    return tuple(place[id(item)] for item in walked)
+
+
+#: Types whose hash is the same in every process. ``None``'s is only from
+#: Python 3.12 on (before, its address).
+_HASHED_ALIKE = frozenset({int, bool} | ({type(None)} if sys.version_info >= (3, 12) else set()))
+
+
+def hashed_alike_everywhere(items: Any) -> bool:
+    """Does every one of *items* hash the same in every process? Ints,
+    bools, ``None`` (3.12+), floats and complex numbers other than NaN
+    (whose hash is its address), and tuples and frozensets of those."""
+    kinds = set(map(type, items))
+    if kinds <= _HASHED_ALIKE:
+        return True
+    for item in items:
+        kind = type(item)
+        if kind in _HASHED_ALIKE:
+            continue
+        if kind is float or kind is complex:
+            if item != item:
+                return False
+        elif kind is tuple or kind is frozenset:
+            if not hashed_alike_everywhere(item):
+                return False
+        else:
+            return False
+    return True
 
 
 def _sets_first(persistent_id: Any, sets: Callable[[Any], Any]) -> Callable[[Any], Any]:

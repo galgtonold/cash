@@ -89,7 +89,10 @@ Each argument is fingerprinted by the first rule that applies:
    its code, the globals that code reads and the values its closure captured
    are keyed with the state, as code passed as an argument.
 7. The pickled value, in one canonical form: sets in sorted order, every
-   container tagged with its type.
+   container tagged with its type. A set of numbers (or tuples of them)
+   that iterates in another order than one built from its items in sorted
+   order would also keeps that order, since `list(s)` and `s.pop()` read
+   it; a set of strings keys alike in any order.
 
 <!-- claim: cash/kept_state.py:chooses_its_state @2d177a27, cash/kept_state.py:left_out_attrs @28c3abed -->
 A class of yours whose own `__getstate__`, `__reduce__` or `__reduce_ex__`,
