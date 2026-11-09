@@ -13,11 +13,14 @@ thread that never keyed raised.
 from __future__ import annotations
 
 import base64
+import collections
+import gc
 import logging
 import sys
 import threading
 import types
 import warnings
+import weakref
 
 import pytest
 
@@ -236,12 +239,17 @@ def test_a_module_s_list_is_looked_through_once_while_it_holds_the_same_objects(
     there; one put in its place is reduced in turn, and a logger there is
     noted again on every statement, as its state may have changed."""
     mod = types.ModuleType("cash_test_walked")
-    mod.ITEMS = [types.SimpleNamespace(i=i) for i in range(1_000)] + [logging.getLogger(NAME)]
+    mod.ITEMS = [collections.OrderedDict(i=i) for i in range(1_000)] + [logging.getLogger(NAME)]
     namespace = {"mod": mod}
     assert _walk(namespace, "n = len(mod.ITEMS)", monkeypatch) == 1_001
     assert _walk(namespace, "n = len(mod.ITEMS)", monkeypatch) == 1
-    mod.ITEMS[3] = types.SimpleNamespace(i=-1)
+    mod.ITEMS[3] = collections.OrderedDict(i=-1)
     assert _walk(namespace, "n = len(mod.ITEMS)", monkeypatch) == 2
+    # What it found holds none of them: dropped, each goes.
+    gone = weakref.ref(mod.ITEMS[0])
+    mod.ITEMS = None
+    gc.collect()
+    assert gone() is None
 
 
 def test_a_timestamp_is_never_reduced_to_look_for_a_name():

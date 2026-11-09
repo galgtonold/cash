@@ -25,16 +25,15 @@ import builtins
 import contextlib
 import dis
 import logging
-import operator
 import sys
 import threading
 import types
 import weakref
 from collections.abc import Iterable, Iterator, Mapping
+from time import thread_time
 from typing import Any
 
 from .. import _weak, kept_state
-from .._clock import _thread_time
 from .._paths import is_pseudo_filename
 from .._type_memo import mro_of
 from .._user_attrs import attribute_or, own_dict
@@ -453,56 +452,29 @@ def _note_value(value: Any, read: str) -> None:
     met = [kind for kind in set(map(type, items)) if _may_note(kind)]
     if not met:
         return
-    walked = _WALKED.get(read)
-    if (
-        walked is not None
-        and walked.whole
-        and walked.container is value
-        and len(walked.items) == len(items)
-        and all(map(operator.is_, walked.items, items))
-    ):
-        # The same objects as when it was last looked through, each held
-        # since: only those that stand by reference are noted again.
-        for item in walked.by_reference:
-            _note_item(watch, item)
-        return
-    plain_before = walked.plain if walked is not None else frozenset()
-    snapshot = tuple(items)
-    plain: set[int] = set()
-    by_reference: list[Any] = []
-    for item in snapshot:
-        if type(item) not in met:
+    plain = _PLAIN_ITEMS
+    for item in list(items):
+        if type(item) not in met or plain.get(id(item)) is item:
             continue
-        if id(item) in plain_before:
-            plain.add(id(item))
-        elif _note_item(watch, item):
-            by_reference.append(item)
-        else:
-            plain.add(id(item))
-    _WALKED[read] = _Walked(value, snapshot, frozenset(plain), by_reference, not watch.past_budget)
+        if not _note_item(watch, item):
+            try:
+                plain[id(item)] = item
+            except TypeError:  # one that takes no weak reference: reduced each time
+                pass
 
 
-class _Walked:
-    """A container a statement read through a module, as last looked
-    through (`_note_value`): the items then, held so that their ids stay
-    theirs; the ids of those found not to stand by reference; those found
-    to; and whether every item was looked at, within the budget."""
-
-    __slots__ = ("by_reference", "container", "items", "plain", "whole")
-
-    def __init__(
-        self, container: Any, items: tuple, plain: frozenset[int], by_reference: list[Any], whole: bool
-    ) -> None:
-        self.container = container
-        self.items = items
-        self.plain = plain
-        self.by_reference = by_reference
-        self.whole = whole
+#: ``id -> object`` of the objects a module's container held, found not to
+#: stand by reference (`_note_value`), held weakly: each is reduced once
+#: while it lives, not on every statement reading the container. One that
+#: dies leaves, so its id is never taken for another's.
+_PLAIN_ITEMS: weakref.WeakValueDictionary[int, Any] = _weak.WeakValueDictionary()
 
 
-#: ``read -> _Walked``: each object in a module's container is reduced once
-#: while it stays there, not on every statement reading it.
-_WALKED: dict[str, _Walked] = {}
+def forget() -> None:
+    """Forget what was found of the objects modules hold, as a fresh kernel
+    would (`TrackingState.reset_session_state`)."""
+    _PLAIN_ITEMS.clear()
+    kept_state.forget_streams()
 
 
 def _note_item(watch: _Watch, item: Any) -> bool:
@@ -827,11 +799,11 @@ def _note_object(obj: Any) -> bool:
         return _note_now(obj)
     if watch.past_budget:
         return True
-    started = _thread_time()
+    started = thread_time()
     try:
         return _note_now(obj)
     finally:
-        watch.noting += _thread_time() - started
+        watch.noting += thread_time() - started
         if watch.noting > watch.budget:
             watch.past_budget = True
             _unreadable()

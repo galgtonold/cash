@@ -635,7 +635,7 @@ a name bound through the namespace, `eval`, `exec` of a computed string and
 
 ### An object found by a lookup cash does not see
 
-<!-- claim: cash/tracking/lookups_seen.py:_note_object @8e9bfd0b, cash/tracking/lookups_seen.py:collecting @9163f1c2, cash/tracking/lookups_seen.py:_may_note @d506a15c, cash/tracking/lookups_seen.py:_note_globals @68b1cf88, cash/tracking/lookups_seen.py:_note_value @d4f944d0, cash/tracking/lookups_seen.py:_on_call @a5e765f6, cash/tracking/lookups_seen.py:_on_start @182191e3, cash/tracking/lookups_seen.py:_on_return @69918c95, cash/tracking/lookups_seen.py:arm @621f5c02 -->
+<!-- claim: cash/tracking/lookups_seen.py:_note_object @417935ea, cash/tracking/lookups_seen.py:collecting @9163f1c2, cash/tracking/lookups_seen.py:_may_note @d506a15c, cash/tracking/lookups_seen.py:_note_globals @68b1cf88, cash/tracking/lookups_seen.py:_note_value @6396f5f3, cash/tracking/lookups_seen.py:_on_call @a5e765f6, cash/tracking/lookups_seen.py:_on_start @182191e3, cash/tracking/lookups_seen.py:_on_return @69918c95, cash/tracking/lookups_seen.py:arm @621f5c02 -->
 A logger pickles by its name, so a statement can find it without any
 variable holding it: `seen = logging.getLogger("app").level`. On Python 3.12
 and newer, cash checks such an object when a call written in Python returns

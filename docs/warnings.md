@@ -1915,7 +1915,7 @@ statement calls a chain of more than 256 of your functions, each calling the
 next: cash stops following the chain, and takes each of your functions that
 changes what its closure holds as one the statement may call.
 
-<!-- claim: cash/tracking/lookups_seen.py:_note_object @8e9bfd0b, cash/tracking/lookups_seen.py:_warn_past_budget @5513f5a3, cash/notebook/statement/processor.py:StatementProcessor._noting_budget @50e66598 -->
+<!-- claim: cash/tracking/lookups_seen.py:_note_object @417935ea, cash/tracking/lookups_seen.py:_warn_past_budget @5513f5a3, cash/notebook/statement/processor.py:StatementProcessor._noting_budget @50e66598 -->
 It is shown, once per session, when checking the objects a statement finds
 by their names as it runs (loggers, each found by its name: see
 [what is checked](known-limitations.md#an-object-found-by-a-lookup-cash-does-not-see))
@@ -2297,7 +2297,7 @@ changes something outside its objects (`__add__` appending to a global
 list), so the operator may run it. The message names the container. It is
 shown once for each.
 
-<!-- claim: cash/tracking/lookups_seen.py:_note_value @d4f944d0, cash/tracking/lookups_seen.py:_warn_too_big @347ff5b1 -->
+<!-- claim: cash/tracking/lookups_seen.py:_note_value @6396f5f3, cash/tracking/lookups_seen.py:_warn_too_big @347ff5b1 -->
 It is shown too, once for each, when a statement, or a function of yours it
 calls, reads a dict, list or tuple through a module (`mod.ROWS`,
 `logging.Logger.manager.loggerDict`) that holds more than 100,000 items, too
