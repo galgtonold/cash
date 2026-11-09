@@ -4141,7 +4141,9 @@ class StatementProcessor:
             }
             run.anchor_links = anchor_links | set(anchors)
             run.anchor_holds = anchor_holds
-            reason = self._anchor_memory_apart(run, captured_vars, anchors, found or {})
+            # Within the share check's budget: past it, refused.
+            with walk_budget(budget):
+                reason = self._anchor_memory_apart(run, captured_vars, anchors, found or {})
             if reason is not None:
                 run.anchors, run.anchor_links, run.anchor_holds = {}, set(), {}
         if reason is None and found is not None:

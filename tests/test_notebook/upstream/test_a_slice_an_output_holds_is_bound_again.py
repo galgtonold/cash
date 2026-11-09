@@ -16,7 +16,13 @@ import warnings
 import pytest
 
 from cash.backends.file_backend import FileBackend
-from cash.notebook.anchors import array_digest, array_memory_held_apart, resolve_anchors, with_anchor_refs
+from cash.notebook.anchors import (
+    AnchorUnrebuilt,
+    array_digest,
+    array_memory_held_apart,
+    resolve_anchors,
+    with_anchor_refs,
+)
 from cash.notebook.cache_status import CacheStatus
 from tests._cell_driver import run_cash_cell
 
@@ -34,7 +40,26 @@ KEEPER = (
 )
 FIT = "model = Keeper().fit(X_train)"
 CELLS = [KEEPER, "X = np.arange(24.0).reshape(6, 4).copy()", "X_train = X[:4]", FIT]
-NAMES = ["time", "np", "Keeper", "X", "X_train", "model", "model2", "train", "path", "M", "keep", "Buf", "load_buf"]
+NAMES = [
+    "time",
+    "np",
+    "Keeper",
+    "X",
+    "X_train",
+    "model",
+    "model2",
+    "train",
+    "path",
+    "M",
+    "keep",
+    "Buf",
+    "load_buf",
+    "Holder",
+    "from_text",
+    "from_list",
+    "copyreg",
+    "base64",
+]
 #: Run after the cells, in plain Python and under cash: a write each way
 #: through the slice, and what each side then sees.
 PROBE = (
@@ -282,6 +307,46 @@ KEEPS_MEMORY = {
         "float(np.asarray(model.kept_.mv).max())",
     ),
 }
+#: Holders whose pickling or rebuild copies the array they hold: each a
+#: class ``Holder`` keeping it as ``a``.
+_HELD = "[model.kept_.a is model.X_, float(np.abs(np.asarray(model.kept_.a)).max())]"
+_HOLDER_CLASS = "class Holder:\n    def __init__(self, a):\n        self.a = a\n"
+KEEPS_MEMORY.update(
+    {
+        "reduce_to_list": (
+            None,
+            _HOLDER_CLASS + "    def __reduce__(self):\n        return (from_list, (self.a.tolist(),))\n"
+            "def from_list(values):\n    return Holder(np.array(values))\nkeep = Holder",
+            _HELD,
+        ),
+        "getstate_to_list": (
+            None,
+            _HOLDER_CLASS + "    def __getstate__(self):\n        return {'a': self.a.tolist()}\n"
+            "    def __setstate__(self, state):\n        self.a = np.array(state['a'])\nkeep = Holder",
+            _HELD,
+        ),
+        "copyreg_copy": (
+            None,
+            "import copyreg\n"
+            + _HOLDER_CLASS
+            + "copyreg.pickle(Holder, lambda h: (Holder, (h.a.copy(),)))\nkeep = Holder",
+            _HELD,
+        ),
+        "reduce_to_text": (
+            None,
+            "import base64\n" + _HOLDER_CLASS + "    def __reduce__(self):\n"
+            "        return (from_text, (base64.b64encode(self.a.tobytes()).decode(), self.a.shape))\n"
+            "def from_text(text, shape):\n"
+            "    return Holder(np.frombuffer(base64.b64decode(text)).reshape(shape).copy())\nkeep = Holder",
+            _HELD,
+        ),
+        "setstate_copy": (
+            None,
+            _HOLDER_CLASS + "    def __setstate__(self, state):\n        self.a = np.array(state['a'])\nkeep = Holder",
+            _HELD,
+        ),
+    }
+)
 HOLDER = (
     "class M:\n"
     "    def fit(self, A):\n"
@@ -300,10 +365,10 @@ HOLDER = (
             bound,
             marks=pytest.mark.xfail(
                 strict=True,
-                reason="no anchor: X is stored with the model as an object they share, and the bytes the "
-                "class hands pickling come back as a copy; served after a restart",
+                reason="no anchor: X is stored with the model as an object they share, and the class's "
+                "pickling or rebuild copies it; served after a restart",
             )
-            if (kind, bound) == ("buffer_to_bytes", "reshape")
+            if bound == "reshape" and kind not in ("torch", "ckdtree")
             else (),
         )
         for kind in sorted(KEEPS_MEMORY)
@@ -315,7 +380,8 @@ def test_a_model_keeping_the_memory_where_cash_cannot_see_runs_every_time(cash_m
     or ``X`` itself made by a reshape), and its memory again in an object a
     pickle round trip copies or cash cannot read (a tensor over it, a
     ``cKDTree``, a class whose reduction hands pickling the bytes of a
-    ``memoryview``): a restore would not give that part back on ``X``. The
+    ``memoryview``, a list, text or a copy of it, or whose ``__setstate__``
+    copies it): a restore would not give that part back on ``X``. The
     fit runs every time, and a write to ``X`` reaches the model as in
     plain Python, after a restart too."""
     module, make, read = KEEPS_MEMORY[kind]
@@ -334,10 +400,75 @@ def test_a_model_keeping_the_memory_where_cash_cannot_see_runs_every_time(cash_m
     for restart in (False, True):
         if restart:
             _restart(cash_magics)
-            cash_magics.shell.user_ns.pop("keep", None)
         for _ in range(2):
             assert _run(cash_magics, cells) == CacheStatus.COMPUTED
             assert _as_cash(cash_magics, probe) == _plain(cells, probe)
+
+
+SERVED = {
+    "slots_and_subclasses": (
+        None,
+        "class Holder:\n"
+        "    __slots__ = ('a',)\n"
+        "    def __init__(self, a):\n"
+        "        self.a = a\n"
+        "class L(list):\n"
+        "    pass\n"
+        "class D(dict):\n"
+        "    pass\n"
+        "def fitted(A):\n"
+        "    time.sleep(0.2)\n"
+        "    d = D(x=A)\n"
+        "    d.extra = A\n"
+        "    return [Holder(A), L([A]), d]",
+        "model = fitted(X_train)",
+        "[model[0].a is X_train, model[1][0] is X_train, model[2]['x'] is X_train, model[2].extra is X_train,"
+        " float(model[0].a.max())]",
+    ),
+    "pipeline": (
+        "sklearn",
+        "from sklearn.neighbors import KNeighborsClassifier\nfrom sklearn.pipeline import Pipeline\n"
+        "def fitted(A):\n"
+        "    time.sleep(0.2)\n"
+        "    return Pipeline([('knn', KNeighborsClassifier(algorithm='brute'))]).fit(A, y)",
+        "model = fitted(X_train)",
+        "[model[-1]._fit_X is X_train, float(model[-1].kneighbors(np.zeros((1, 4)))[0].max())]",
+    ),
+    "grid_search": (
+        "sklearn",
+        "from sklearn.neighbors import KNeighborsClassifier\nfrom sklearn.model_selection import GridSearchCV\n"
+        "def fitted(A):\n"
+        "    time.sleep(0.2)\n"
+        "    return GridSearchCV(KNeighborsClassifier(algorithm='brute'), {'n_neighbors': [1, 2]}, cv=2).fit(A, y)",
+        "model = fitted(X_train)",
+        "[model.best_estimator_._fit_X is X_train, float(model.best_estimator_.kneighbors(np.zeros((1, 4)))[0].max())]",
+    ),
+}
+
+
+@pytest.mark.parametrize("kind", sorted(SERVED))
+def test_a_value_handing_the_slice_to_pickling_as_it_is_is_served(cash_magics, clean_backend, kind):
+    """A value that holds the slice in slots, in a ``list`` or ``dict``
+    subclass, or in an estimator inside a ``Pipeline``'s steps or a
+    ``GridSearchCV``, each handing it to pickling as it is: after a
+    restart it is served, bound to the live slice, and a write to ``X``
+    reaches it as in plain Python."""
+    module, make, fit, read = SERVED[kind]
+    if module:
+        pytest.importorskip(module)
+    cells = [
+        "import time\nimport numpy as np",
+        make,
+        "X = np.arange(1.0, 33.0).reshape(8, 4).copy()\ny = np.array([0, 1] * 3)",
+        "X_train = X[:6]",
+        fit,
+    ]
+    probe = f"X[:] = 0.0\nseen = {read}"
+    _run(cash_magics, cells)
+    _restart(cash_magics)
+
+    assert _run(cash_magics, cells) == CacheStatus.RESTORED
+    assert _as_cash(cash_magics, probe) == _plain(cells, probe)
 
 
 class _Breaks:
@@ -358,3 +489,60 @@ def test_an_array_holding_the_anchors_memory_is_found():
     assert array_memory_held_apart({"m": [X_train, memoryview(X_train)]}, {"X_train": X_train}) == "X_train"
     assert array_memory_held_apart({"m": [X_train, {"k": (1, "a", None)}]}, {"X_train": X_train}) is None
     assert array_memory_held_apart({"m": [X_train, _Breaks()]}, {"X_train": X_train}) == "X_train"
+
+
+class _Fit:
+    def __init__(self, a):
+        self.X_ = a
+        self.y_ = np.zeros(2)
+
+    def __getstate__(self):
+        return dict(self.__dict__)
+
+
+class _Steps:
+    """Holds a fitted object of the anchor inside a list of tuples (as a
+    ``Pipeline`` does), and hands pickling a copy of its attributes that
+    holds the same list."""
+
+    def __init__(self, a):
+        self.steps = [("a", _Fit(a))]
+
+    def __getstate__(self):
+        return dict(self.__dict__)
+
+
+class _AsList:
+    def __init__(self, a):
+        self.a = a
+
+    def __reduce__(self):
+        return (_AsList, (self.a.tolist(),))
+
+
+class _CopiesBack:
+    def __init__(self, a):
+        self.a = a
+
+    def __setstate__(self, state):
+        self.a = list(state["a"]) if isinstance(state["a"], list) else [state["a"]]
+
+
+def test_an_object_must_hand_pickling_what_it_holds_of_an_anchor():
+    """An object whose reduction hands pickling the anchor it holds, as it
+    is, through the containers it holds, passes; one that hands a list of
+    its values in its place is refused."""
+    X_train = np.arange(12.0).reshape(3, 4)[:2]
+    assert array_memory_held_apart({"m": _Steps(X_train)}, {"X_train": X_train}) is None
+    assert array_memory_held_apart({"m": _AsList(X_train)}, {"X_train": X_train}) == "X_train"
+
+
+def test_a_copy_not_holding_the_reference_where_the_value_held_the_anchor_is_refused():
+    """The copy an entry stores must hold the very reference pickling
+    loaded where the value held the anchor: a ``__setstate__`` putting
+    something else there (here a list around it) raises `AnchorUnrebuilt`."""
+    X_train = np.arange(12.0).reshape(3, 4)[:2]
+    copy = with_anchor_refs({"m": _Steps(X_train)}, {"X_train": X_train})
+    assert copy["m"].steps[0][1].X_.name == "X_train"
+    with pytest.raises(AnchorUnrebuilt):
+        with_anchor_refs({"m": _CopiesBack(X_train)}, {"X_train": X_train})
