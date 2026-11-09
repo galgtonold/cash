@@ -21,6 +21,7 @@ import time
 from typing import Any, NamedTuple
 
 from .. import kept_state
+from .._user_attrs import from_family
 
 __all__ = ["SampledCost", "sampled_cost"]
 
@@ -76,8 +77,7 @@ def _cost(value: Any, depth: int) -> SampledCost | None:
 
 def _frame_cost(value: Any) -> SampledCost | None:
     """A pandas frame's or series' object columns, by a sample of rows."""
-    module = type(value).__module__ or ""
-    if not module.startswith("pandas") or not hasattr(value, "dtypes") and not hasattr(value, "dtype"):
+    if not from_family(type(value), "pandas") or not hasattr(value, "dtypes") and not hasattr(value, "dtype"):
         return None
     try:
         rows = len(value)

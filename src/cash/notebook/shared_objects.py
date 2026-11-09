@@ -59,7 +59,7 @@ from cash._clock import CpuLimit
 from cash._plain_data import held_items_facts
 from cash._referents import get_referents
 from cash._type_memo import MroMemo, TypeMemo, type_key
-from cash._user_attrs import attribute_or, builtin_items, has_attribute, instance_of, own_dict, own_lookup
+from cash._user_attrs import attribute_or, builtin_items, from_family, has_attribute, instance_of, own_dict, own_lookup
 from cash.analysis.ast_util import walk_tree
 from cash.live_state import is_live_stream
 from cash.tracking.function_tracker import is_local_module
@@ -1448,7 +1448,7 @@ def _object_items(obj: Any, np: Any) -> list[Any] | None:
     arrays are not tracked."""
     if instance_of(obj, np.ndarray):
         return list(obj.flat) if obj.dtype.hasobject else None
-    if not (_type_module(type(obj)) or "").startswith("pandas"):
+    if not from_family(type(obj), "pandas"):
         return None
     mgr = attribute_or(obj, "_mgr", None)
     arrays = attribute_or(mgr, "arrays", None) if mgr is not None else None
@@ -1456,9 +1456,6 @@ def _object_items(obj: Any, np: Any) -> list[Any] | None:
         return None
     attrs = children_of(obj) or []
     return [*attrs, *(array for array in arrays if isinstance(array, np.ndarray) and array.dtype.hasobject)]
-
-
-_type_module = type.__dict__["__module__"].__get__
 
 
 def _held_below(obj: Any) -> list[Any]:

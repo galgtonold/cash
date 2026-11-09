@@ -16,14 +16,14 @@ import sys
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from cash._user_attrs import has_attribute
+from cash._user_attrs import from_family, has_attribute
 
 __all__ = ["put_in_order", "unordered_sparse", "were_put_in_order"]
 
 
 def _unordered(value: Any) -> bool:
     """Is *value* a scipy sparse matrix or array not in canonical form?"""
-    if "scipy.sparse" not in sys.modules or not type(value).__module__.startswith("scipy.sparse"):
+    if "scipy.sparse" not in sys.modules or not from_family(type(value), "scipy.sparse"):
         return False
     try:
         return has_attribute(value, "sum_duplicates") and not value.has_canonical_format

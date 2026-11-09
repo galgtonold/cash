@@ -355,10 +355,12 @@ class _Digester:
             h.update(b"jit")
             self.feed(jitted)
             return
-        nbytes = getattr(v, "nbytes", None)
+        from .._user_attrs import metadata_attribute
+
+        nbytes = metadata_attribute(v, "nbytes", None)
         if isinstance(nbytes, int) and nbytes > VALUE_CAP:
             raise _Opaque
-        shape = getattr(v, "shape", None)
+        shape = metadata_attribute(v, "shape", None)
         if isinstance(shape, tuple) and all(isinstance(n, int) for n in shape):
             size = 8
             for n in shape:

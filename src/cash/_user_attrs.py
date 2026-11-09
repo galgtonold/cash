@@ -8,7 +8,7 @@ import sys
 import types
 from typing import Any
 
-from ._type_memo import TypeMemo, mro_mark, mro_of, same_mro, type_key
+from ._type_memo import TypeMemo, mro_mark, mro_of, per_type, same_mro, type_key
 
 
 def attribute_or(obj: Any, name: str, default: Any = None) -> Any:
@@ -37,6 +37,81 @@ def attribute_or(obj: Any, name: str, default: Any = None) -> Any:
     if name == "__code__" and type(found) is not types.CodeType:
         return default
     return found
+
+
+def metadata_attribute(obj: Any, name: str, default: Any = None) -> Any:
+    """`attribute_or` for a fact cash only reads about *obj* (its
+    ``nbytes``, its ``shape``), never running the user's code for it.
+
+    Looked up in the class dicts first, as Python does, without asking the
+    object: a property or other descriptor a class of the user's defines
+    (``@property def nbytes``) is not run, and a name no class holds is
+    read from the instance's own ``__dict__``, never passed to a
+    ``__getattr__`` of the user's. Plain Python runs neither unless the
+    user's code asks. A library's descriptor (numpy's ``nbytes``) is read
+    as before.
+    """
+    kind = type(obj)
+    fallback = None
+    for klass in _MRO(kind):
+        held = _CLASS_DICT(klass)
+        found = held.get(name, _ABSENT)
+        if found is not _ABSENT:
+            if _users_class(klass) and _descriptor(found):
+                return default
+            return attribute_or(obj, name, default)
+        if fallback is None and "__getattr__" in held:
+            fallback = klass
+    if fallback is not None and _users_class(fallback):
+        held = own_dict(obj)
+        return held.get(name, default) if held is not None else default
+    return attribute_or(obj, name, default)
+
+
+def _descriptor(found: Any) -> bool:
+    """Does *found*, held by a class, compute its value (``__get__``)?"""
+    return any("__get__" in _CLASS_DICT(klass) for klass in _MRO(type(found)))
+
+
+def from_family(kind: type, family: str) -> bool:
+    """Is *kind* defined in the package *family* (``"pandas"``,
+    ``"scipy.sparse"``) or one of its modules? Read off the class itself,
+    never the user's code: a class of the user's named ``DataFrame`` or
+    ``csr_matrix`` had its ``memory_usage``, ``_mgr`` or ``data`` run by a
+    size check that went by the name alone."""
+    module = _MODULE(kind)
+    return type(module) is str and (module == family or module.startswith(family + "."))
+
+
+def user_defines(kind: type, name: str) -> bool:
+    """Is *name* on *kind* found in a class of the user's (the first in its
+    MRO whose own dict holds it)?"""
+    for klass in _MRO(kind):
+        if name in _CLASS_DICT(klass):
+            return _users_class(klass)
+    return False
+
+
+@per_type
+def _users_class(klass: type) -> bool:
+    """Is *klass* defined in a module of the user's? Per class: its module
+    is fixed when it is made."""
+    from .install_paths import is_user_code_module
+
+    module = sys.modules.get(_MODULE(klass))
+    return module is not None and is_user_code_module(module)
+
+
+def forget_user_classes() -> None:
+    """Forget which classes are the user's (`_users_class`): for
+    `install_paths.clear_caches`, when what counts as the user's changes."""
+    _users_class.memo.clear()
+
+
+_MRO = mro_of
+_CLASS_DICT = type.__dict__["__dict__"].__get__
+_MODULE = type.__dict__["__module__"].__get__
+_ABSENT = object()
 
 
 #: Per type, `own_lookup`'s answer, held weakly: a class made per call

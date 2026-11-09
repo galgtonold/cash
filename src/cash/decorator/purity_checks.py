@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 from .. import _plain_data, identity_refs, value_watch
 from .._clock import perf_counter as _perf_counter
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
+from .._user_attrs import from_family
 from ..analysis.bytecode import GLOBAL_WRITES, argvals
 from ..analysis.cacheability_decision import identity_coupled_reason
 from ..analysis.helper_bindings import resolve_binding
@@ -254,9 +255,9 @@ def _unwritable(value) -> bool:
     if isinstance(value, enum.Enum):
         return True
     kind = type(value)
-    if kind.__name__ in _PANDAS_SCALARS and (kind.__module__ or "").startswith("pandas"):
+    if kind.__name__ in _PANDAS_SCALARS and from_family(kind, "pandas"):
         return True  # a ``__dict__`` only for attributes set by hand
-    if any(k.__name__ == "ExtensionDtype" and (k.__module__ or "").startswith("pandas") for k in kind.__mro__):
+    if any(k.__name__ == "ExtensionDtype" and from_family(k, "pandas") for k in kind.__mro__):
         return True  # a dtype (``Int64Dtype()``, ``CategoricalDtype([...])``): immutable
     params = getattr(kind, "__dataclass_params__", None)
     if params is not None and getattr(params, "frozen", False):
@@ -402,9 +403,9 @@ def _buffers(value) -> list:
     column), an extension array's own ndarray included (``Int64``'s values
     and mask, a datetime's)."""
     kind = type(value)
-    if kind.__name__ == "ndarray" and kind.__module__ == "numpy":
+    if kind.__name__ == "ndarray" and from_family(kind, "numpy"):
         return [value]
-    if kind.__name__ not in ("Series", "DataFrame") or not (kind.__module__ or "").startswith("pandas"):
+    if kind.__name__ not in ("Series", "DataFrame") or not from_family(kind, "pandas"):
         return []
     if is_cow_pandas(value):
         return []
@@ -427,7 +428,7 @@ def _extension_values(value) -> list:
     frame without copy-on-write hold: a column taken from a frame holds the
     very object its frame's block does."""
     kind = type(value)
-    if kind.__name__ not in ("Series", "DataFrame") or not (kind.__module__ or "").startswith("pandas"):
+    if kind.__name__ not in ("Series", "DataFrame") or not from_family(kind, "pandas"):
         return []
     if is_cow_pandas(value):
         return []
@@ -444,7 +445,7 @@ def _block_arrays(value) -> list:
     ``.array`` of a numpy column one over the block's own writable ndarray.
     A write through either reaches the frame."""
     kind = type(value)
-    if kind.__name__ not in ("Series", "DataFrame") or not (kind.__module__ or "").startswith("pandas"):
+    if kind.__name__ not in ("Series", "DataFrame") or not from_family(kind, "pandas"):
         return []
     try:
         return [block.values for block in value._mgr.blocks]
@@ -489,9 +490,7 @@ def _exposes(frame, exposed: set[int], exposed_parts: list) -> bool:
 
 def _is_extension_array(value) -> bool:
     """A pandas ExtensionArray itself (``DF['c'].array``), not a column."""
-    return any(
-        k.__name__ == "ExtensionArray" and (k.__module__ or "").startswith("pandas") for k in type(value).__mro__
-    )
+    return any(k.__name__ == "ExtensionArray" and from_family(k, "pandas") for k in type(value).__mro__)
 
 
 def _held_arrays(result, depth: int | None = None) -> list:

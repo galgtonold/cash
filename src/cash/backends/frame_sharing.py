@@ -68,6 +68,7 @@ import weakref
 from typing import Any
 
 from .. import _weak
+from .._user_attrs import from_family
 from . import heap_blocks
 
 logger = logging.getLogger(__name__)
@@ -259,7 +260,7 @@ def _for_storing(value: Any, done: dict[int, Any], depth: int) -> Any:
             parts = [_for_storing(item, done, depth + 1) for item in value]
             changed = any(new is not old for new, old in zip(parts, value, strict=True))
             result = kind(parts) if changed else value
-    elif getattr(value, "_mgr", None) is not None and kind.__module__.startswith("pandas"):
+    elif from_family(kind, "pandas") and getattr(value, "_mgr", None) is not None:
         result = _detached(value)
     else:
         return value
@@ -839,7 +840,7 @@ def frozen_already(frame: Any) -> bool:
             parts = _label_parts(getattr(axis, "_data", None)) if not _is_range(axis) else []
             if parts is None or not all(not array.flags.writeable and is_frozen(array) for _name, array in parts):
                 return False
-        return type(frame).__module__.startswith("pandas") and freezable(frame, cells_known=True)
+        return from_family(type(frame), "pandas") and freezable(frame, cells_known=True)
     except Exception:  # noqa: BLE001 - unknown internals: not frozen
         return False
 
