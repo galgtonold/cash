@@ -27,12 +27,13 @@ _PERSIST = CacheAnnotation(persist=True)
 _IMPL = """
 import time
 
-def inner(x):
-    return x * 2
+class Doubler:
+    def apply(self, x):
+        return x * 2
 
 def slow_inner(x):
     time.sleep(0.25)
-    return inner(x)
+    return Doubler().apply(x)
 """
 
 
@@ -55,9 +56,11 @@ def trace_default(tmp_path, monkeypatch, request):
 
 
 def _rebind(mod):
-    """Give ``inner`` new code outside any statement (a callback, a thread,
-    a debugger): no statement says anything changed, so no key moves."""
-    sys.modules[mod].inner.__code__ = (lambda x: x * 10).__code__
+    """Give ``Doubler.apply`` new code outside any statement (a callback, a
+    thread, a debugger): no statement says anything changed, so no key
+    moves. A method, as a call's key digests the code of each function
+    held at a module's attribute, and would see ``mod.inner`` swapped."""
+    sys.modules[mod].Doubler.apply.__code__ = (lambda self, x: x * 10).__code__
 
 
 def _run(processor, code):
