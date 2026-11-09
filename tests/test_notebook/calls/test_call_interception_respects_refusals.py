@@ -28,6 +28,7 @@ import pytest
 import cash
 from cash.notebook.call_interception import CallSite
 from tests._call_cache import make_call_cache
+from tests._run_log import RunLog
 
 
 @pytest.fixture
@@ -76,9 +77,9 @@ def test_stateful_callee_is_not_recorded_as_intercepted(call_cache):
 
 def test_ordinary_callee_still_wrapped(call_cache):
     """Positive control: the refusal check must not disable caching generally."""
-    calls = []
-    # Not `calls.append` in the body: a hit replays that write to its closure.
-    note = calls.append
+    calls = RunLog()
+    # Noted from outside it, which a hit may skip (`tests._run_log`).
+    note = calls.note
 
     def compute(x):
         note(x)

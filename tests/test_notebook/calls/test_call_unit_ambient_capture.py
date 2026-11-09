@@ -42,6 +42,7 @@ from cash.notebook.call_interception import CallSite
 from cash.tracking.file_tracker import FileAccessTracker
 from cash.tracking.tracker_context import active_tracker
 from tests._call_cache import make_call_cache
+from tests._run_log import RunLog
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
 # ---------------------------------------------------------------------------
@@ -61,9 +62,9 @@ def test_call_hit_recomputes_when_its_own_file_dependency_goes_stale(call_unit_h
     """
     data_path = tmp_path / "data.csv"
     data_path.write_text("10", encoding="utf-8")
-    calls: list[int] = []
-    # Not `calls.append` in the body: a hit replays that write to its closure.
-    note = calls.append
+    calls = RunLog()
+    # Noted from outside it, which a hit may skip (`tests._run_log`).
+    note = calls.note
 
     def load(k):
         note(k)
@@ -226,9 +227,9 @@ def test_call_hit_propagates_remote_dependency_through_resolve(tmp_path, monkeyp
     )
 
     url = "s3://bucket/key.csv"
-    calls: list[str] = []
-    # Not `calls.append` in the body: a hit replays that write to its closure.
-    note = calls.append
+    calls = RunLog()
+    # Noted from outside it, which a hit may skip (`tests._run_log`).
+    note = calls.note
 
     def fetch(u):
         note(u)

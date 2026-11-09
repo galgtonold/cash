@@ -16,6 +16,7 @@ import pytest
 
 from cash.notebook.call_interception import CallSite
 from tests._call_cache import make_call_cache
+from tests._run_log import RunLog
 
 
 def _site(source="f(d)", names=("f", "d"), computed_arg_positions=()):
@@ -335,11 +336,11 @@ def test_a_callee_that_rebinds_its_closure_is_never_cached(call_unit_harness, ma
 def test_a_closure_that_only_reads_its_cells_is_still_cached(call_unit_harness):
     """The refusal is for a rebinding, not for a closure: ``make_adder(5)``'s
     ``adder`` reads ``n`` and is cached as before."""
-    calls = []
+    calls = RunLog()
 
     def make_adder(n):
-        # Not `calls.append` in the body: a hit replays that write to its closure.
-        note = calls.append
+        # Noted from outside it, which a hit may skip (`tests._run_log`).
+        note = calls.note
 
         def adder(x):
             note(x)

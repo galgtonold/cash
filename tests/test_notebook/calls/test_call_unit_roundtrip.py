@@ -10,9 +10,11 @@ that round-trip end to end, independent of ``CallCache``/AST rewriting.
 
 from __future__ import annotations
 
+import sys
 import time
 
 from cash.notebook.call_interception import CallSite
+from tests._run_log import RunLog
 
 
 def _site(source="slow(x)", names=("slow", "x")):
@@ -20,9 +22,9 @@ def _site(source="slow(x)", names=("slow", "x")):
 
 
 def test_second_call_with_same_lineage_is_a_hit(call_unit_harness):
-    calls = []
-    # Not `calls.append` in the body: a hit replays that write to its closure.
-    note = calls.append
+    calls = RunLog()
+    # Noted from outside it, which a hit may skip (`tests._run_log`).
+    note = calls.note
 
     def slow(v):
         note(v)
@@ -76,9 +78,9 @@ def test_a_computed_argument_is_hashed_into_the_key(call_unit_harness):
     hashed -- unlike the bare-Name tests above, two different values passed at
     the SAME call site must land in two different cache entries.
     """
-    calls = []
-    # Not `calls.append` in the body: a hit replays that write to its closure.
-    note = calls.append
+    calls = RunLog()
+    # Noted from outside it, which a hit may skip (`tests._run_log`).
+    note = calls.note
 
     def slow(v):
         note(v)
@@ -113,12 +115,14 @@ def test_unpacking_call_is_keyed_on_every_value_it_receives(call_unit_harness):
     keyword's name, when the call may be keyed on content: the second pair
     still computes its own value, and the first pair again is a hit.
     """
-    calls = []
-    # Not `calls.append` in the body: a hit replays that write to its closure.
-    note = calls.append
+    calls = RunLog()
+    # Noted from outside it, which a hit may skip (`tests._run_log`); by
+    # the event's name, a string, so ``compute`` holds plain data only and
+    # is keyed on what it receives.
+    event = calls.event
 
     def compute(*args, **kwargs):
-        note((args, kwargs))
+        sys.audit(event, (args, kwargs))
         time.sleep(0.05)
         return sum(args) + sum(kwargs.values())
 

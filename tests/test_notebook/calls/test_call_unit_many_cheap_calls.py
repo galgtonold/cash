@@ -24,6 +24,7 @@ import pytest
 from cash.notebook import call_unit as cu
 from cash.notebook.call_entries import CallEntries
 from cash.notebook.call_interception import CallSite
+from tests._run_log import RunLog
 
 SITE = CallSite(
     source="work(v + 0)",
@@ -96,9 +97,9 @@ def test_expensive_calls_are_never_run_plain_to_measure_them(call_unit_harness, 
     """Timing a plain sample of a slow call would repeat the slow work; a
     call over the cheap bar is not sampled at all."""
     monkeypatch.setattr(cu, "_GUARD_CHEAP_BELOW_S", 0.001)
-    ran: list[int] = []
-    # Not `ran.append` in the body: a hit replays that write to its closure.
-    note = ran.append
+    ran = RunLog()
+    # Noted from outside it, which a hit may skip (`tests._run_log`).
+    note = ran.note
 
     def work(v):
         note(v)
@@ -145,9 +146,9 @@ def test_one_stalled_sample_does_not_keep_the_site_cached(call_unit_harness, slo
     samples here are 30, 1.5, 1.5, 1.5 and 1.5 ms, a mean of 7.2 ms that a
     2 ms lookup is under three quarters of, and a median of 1.5 ms that it
     is not."""
-    ran: list[int] = []
-    # Not `ran.append` in the body: a hit replays that write to its closure.
-    note = ran.append
+    ran = RunLog()
+    # Noted from outside it, which a hit may skip (`tests._run_log`).
+    note = ran.note
 
     def work(v):
         note(v)
@@ -171,8 +172,8 @@ def test_a_stall_in_the_first_calls_does_not_decide(call_unit_harness, slow_look
     site is not judged until ``_GUARD_AFTER_CALLS``, where the samples keep
     it cached. Those samples are still looked up (see
     ``test_the_calls_of_the_re_check_are_still_looked_up_and_stored``)."""
-    ran: list[int] = []
-    note = ran.append
+    ran = RunLog()
+    note = ran.note
 
     def work(v):
         note(v)
@@ -193,8 +194,8 @@ def test_an_early_verdict_to_cache_is_judged_again_later(call_unit_harness, slow
     slow: the site stays cached, and is timed again on fresh samples at
     ``_GUARD_AFTER_CALLS`` -- calls still looked up -- after which it runs
     plain."""
-    ran: list[int] = []
-    note = ran.append
+    ran = RunLog()
+    note = ran.note
     first_samples = range(cu._GUARD_MIN_CALLS + 1, cu._GUARD_MIN_CALLS + cu._PLAIN_SAMPLES + 1)
 
     def work(v):

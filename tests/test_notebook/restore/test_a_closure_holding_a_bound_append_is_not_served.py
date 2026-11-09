@@ -6,6 +6,11 @@ it is bound to (``note = calls.append`` made inside a factory, or
 ``append``: after a restart, ``y = f(1)`` was served and ``calls`` stayed
 empty, where a run appends. The same method held by a global, a default or
 as a list in the closure was already seen.
+
+The call ``f(1)`` itself is kept too: it is fast, under the call cost floor,
+until a loaded machine makes it slow enough to be stored, and its hit after
+the restart skipped the append the same way. Every call is kept here, so
+that is not left to timing.
 """
 
 import pytest
@@ -32,7 +37,8 @@ def _restart(magics):
 
 
 @pytest.mark.parametrize("shape", SHAPES)
-def test_the_append_runs_after_a_restart(cash_magics, shape):
+def test_the_append_runs_after_a_restart(cash_magics, cash_instance, shape):
+    cash_instance.config.call_cost_floor_seconds = 0.0
     cells = ["import time, functools\ncalls = []\n" + SHAPES[shape], f"y = (f(1), {SLEEP})"]
     for _ in range(2):
         for cell in cells:
