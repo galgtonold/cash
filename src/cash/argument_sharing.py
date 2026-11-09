@@ -34,6 +34,7 @@ import weakref
 from collections.abc import Callable, Iterator
 from typing import Any
 
+from ._user_attrs import from_family
 from .value_types import IMMUTABLE_LEAF_TYPES
 
 __all__ = ["Unknown", "Targets", "memory_of", "reads_of", "read_values", "shared_in"]
@@ -123,7 +124,7 @@ class Targets:
         self._keep = [changed]
         if _ndarray(changed):
             self._add_array(changed)
-        elif type(changed).__module__.startswith("pandas"):
+        elif from_family(type(changed), "pandas"):
             mgr = getattr(changed, "_mgr", None)
             blocks = getattr(mgr, "blocks", None)
             if mgr is None or blocks is None:

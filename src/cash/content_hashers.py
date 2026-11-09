@@ -32,6 +32,7 @@ from typing import Any
 from . import _plain_data
 from ._memo import ARROW_VALUES, LruMemo
 from ._type_memo import per_type
+from ._user_attrs import from_family
 from .bulk_digest import DIRECT_MAX_BYTES, LEAF_BYTES, BulkHasher, fold_buffer, hashing_threads
 from .canonical_form import ContentHashing, canonical_bytes
 from .dated_records import dated_records_bytes
@@ -48,25 +49,24 @@ def builtin_hash_family(type_: type) -> str | None:
     Asked of a bare TYPE as well as of a value: ``register_hasher`` needs it
     to tell a user that the hasher they are registering would never run.
 
-    Matched on module PREFIX, so a user's own subclass defined in their own
-    module is deliberately not claimed -- registering a hasher for it has
-    always worked and still does.
+    Matched on the package the class is defined in (`from_family`), so a
+    user's own subclass defined in their own module is deliberately not
+    claimed -- registering a hasher for it has always worked and still
+    does -- and neither is a class of the user's named ``DataFrame`` in a
+    module of theirs named ``pandas_tools``, whose ``_mgr`` the pandas
+    hasher would read.
     """
-    type_name = getattr(type_, "__name__", "")
-    module = getattr(type_, "__module__", "") or ""
-    if module.startswith("pandas") and type_name in ("DataFrame", "Series"):
+    if not isinstance(type_, type):
+        return None
+    type_name = type_.__name__
+    if type_name in ("DataFrame", "Series") and from_family(type_, "pandas"):
         return "pandas"
-    if type_name == "ndarray" and module.startswith("numpy"):
+    if type_name == "ndarray" and from_family(type_, "numpy"):
         return "numpy"
-    if module.startswith("polars"):
-        return "polars"
-    if module.startswith("pyarrow"):
-        return "pyarrow"
-    if module.startswith("modin"):
-        return "modin"
-    if module.startswith("dask"):
-        return "dask"
-    if module.startswith("scipy.sparse") and hasattr(type_, "tocsr") and hasattr(type_, "format"):
+    for family in ("polars", "pyarrow", "modin", "dask"):
+        if from_family(type_, family):
+            return family
+    if from_family(type_, "scipy.sparse") and hasattr(type_, "tocsr") and hasattr(type_, "format"):
         return "scipy.sparse"
     return None
 

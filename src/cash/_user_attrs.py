@@ -73,6 +73,16 @@ def _descriptor(found: Any) -> bool:
     return any("__get__" in _CLASS_DICT(klass) for klass in _MRO(type(found)))
 
 
+def from_family(kind: type, family: str) -> bool:
+    """Is *kind* defined in the package *family* (``"pandas"``,
+    ``"scipy.sparse"``) or one of its modules? Read off the class itself,
+    never the user's code: a class of the user's named ``DataFrame`` or
+    ``csr_matrix`` had its ``memory_usage``, ``_mgr`` or ``data`` run by a
+    size check that went by the name alone."""
+    module = _MODULE(kind)
+    return type(module) is str and (module == family or module.startswith(family + "."))
+
+
 def user_defines(kind: type, name: str) -> bool:
     """Is *name* on *kind* found in a class of the user's (the first in its
     MRO whose own dict holds it)?"""
@@ -90,6 +100,12 @@ def _users_class(klass: type) -> bool:
 
     module = sys.modules.get(_MODULE(klass))
     return module is not None and is_user_code_module(module)
+
+
+def forget_user_classes() -> None:
+    """Forget which classes are the user's (`_users_class`): for
+    `install_paths.clear_caches`, when what counts as the user's changes."""
+    _users_class.memo.clear()
 
 
 _MRO = mro_of

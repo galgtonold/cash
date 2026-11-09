@@ -23,6 +23,7 @@ from .. import _cash_views, _plain_data, value_watch
 from .._clock import perf_counter as _perf_counter
 from .._memo import ARGUMENTS, FRAMES, LruMemo
 from .._type_memo import TypeMemo, type_key
+from .._user_attrs import from_family
 from ..backends.frame_sharing import is_pin
 from ..canonical_form import (
     NOT_HOOKED,
@@ -335,7 +336,7 @@ def is_cow_pandas(value: Any) -> bool:
     """
     global _COW_PANDAS
     t = type(value)
-    if t.__name__ not in ("DataFrame", "Series") or not (t.__module__ or "").startswith("pandas"):
+    if t.__name__ not in ("DataFrame", "Series") or not from_family(t, "pandas"):
         return False
     if _COW_PANDAS is None:
         try:

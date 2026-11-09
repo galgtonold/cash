@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 from .. import _plain_data, identity_refs, value_watch
 from .._clock import perf_counter as _perf_counter
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
+from .._user_attrs import from_family
 from ..analysis.bytecode import GLOBAL_WRITES, argvals
 from ..analysis.cacheability_decision import identity_coupled_reason
 from ..analysis.helper_bindings import resolve_binding
@@ -402,9 +403,9 @@ def _buffers(value) -> list:
     column), an extension array's own ndarray included (``Int64``'s values
     and mask, a datetime's)."""
     kind = type(value)
-    if kind.__name__ == "ndarray" and kind.__module__ == "numpy":
+    if kind.__name__ == "ndarray" and from_family(kind, "numpy"):
         return [value]
-    if kind.__name__ not in ("Series", "DataFrame") or not (kind.__module__ or "").startswith("pandas"):
+    if kind.__name__ not in ("Series", "DataFrame") or not from_family(kind, "pandas"):
         return []
     if is_cow_pandas(value):
         return []
@@ -427,7 +428,7 @@ def _extension_values(value) -> list:
     frame without copy-on-write hold: a column taken from a frame holds the
     very object its frame's block does."""
     kind = type(value)
-    if kind.__name__ not in ("Series", "DataFrame") or not (kind.__module__ or "").startswith("pandas"):
+    if kind.__name__ not in ("Series", "DataFrame") or not from_family(kind, "pandas"):
         return []
     if is_cow_pandas(value):
         return []
@@ -444,7 +445,7 @@ def _block_arrays(value) -> list:
     ``.array`` of a numpy column one over the block's own writable ndarray.
     A write through either reaches the frame."""
     kind = type(value)
-    if kind.__name__ not in ("Series", "DataFrame") or not (kind.__module__ or "").startswith("pandas"):
+    if kind.__name__ not in ("Series", "DataFrame") or not from_family(kind, "pandas"):
         return []
     try:
         return [block.values for block in value._mgr.blocks]

@@ -27,7 +27,7 @@ import weakref
 from typing import Any
 
 from . import _native, _plain_data
-from ._user_attrs import attribute_or, builtin_items, instance_of, metadata_attribute, own_dict
+from ._user_attrs import attribute_or, builtin_items, from_family, instance_of, metadata_attribute, own_dict
 from .live_state import is_live_stream
 from .value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, PLAIN_SEQS, library_scalar_types
 
@@ -164,6 +164,8 @@ def _arrays_bytes(obj: Any) -> int | None:
 
 def pandas_nbytes(obj: Any) -> int | None:
     """The size of a DataFrame or Series, index included; None for anything else."""
+    if not from_family(type(obj), "pandas"):
+        return None
     kind = type(obj).__name__
     try:
         if kind == "DataFrame":
@@ -292,12 +294,12 @@ def pickled_size_estimate(value: Any, _depth: int = 0, _seen: set[int] | None = 
             # Its Arrow buffers, which is what the store pickles
             # (`serialization._reduce_polars`); polars sums them natively.
             return int(value.estimated_size())
-        if kind == "DataFrame":
+        if kind == "DataFrame" and from_family(type(value), "pandas"):
             return sum(_array_estimate(arr, seen) for arr in value._mgr.arrays) + _index_estimate(value.index, seen)
-        if kind == "Series":
+        if kind == "Series" and from_family(type(value), "pandas"):
             # ``_values``: the ndarray itself for a numpy dtype, else the extension array.
             return _array_estimate(value._values, seen) + _index_estimate(value.index, seen)
-        if kind == "ndarray":
+        if kind == "ndarray" and from_family(type(value), "numpy"):
             return _array_estimate(value, seen)
     except Exception:  # noqa: BLE001 - an estimate is optional: none is 0
         return 0
@@ -405,7 +407,8 @@ def _instance_estimate(value: Any, seen: set[int]) -> int:
 _MAX_ESTIMATE_DEPTH = 4
 
 # scipy.sparse type names. Dispatched via type-name string to avoid an
-# import-time dependency on scipy.
+# import-time dependency on scipy, and only for a class scipy.sparse defines
+# (`from_family`).
 _SPARSE_CSR_CSC_TYPES = frozenset(
     {
         "csr_matrix",
@@ -476,7 +479,7 @@ def _data_size(obj: Any) -> int | None:
             if type(exc).__name__ != "PanicException":
                 raise
             return None
-    if type_name in ("DataFrame", "Series"):
+    if type_name in ("DataFrame", "Series") and from_family(kind, "pandas"):
         size = pandas_nbytes(obj)
         if size is not None:
             return size
@@ -485,9 +488,9 @@ def _data_size(obj: Any) -> int | None:
             return int(usage.sum() if type_name == "DataFrame" else usage)
         except (TypeError, AttributeError, ValueError):
             return None
-    if type_name in _SPARSE_CSR_CSC_TYPES:
+    if type_name in _SPARSE_CSR_CSC_TYPES and from_family(kind, "scipy.sparse"):
         return _est_sparse_csr_csc(obj)
-    if type_name in _SPARSE_COO_TYPES:
+    if type_name in _SPARSE_COO_TYPES and from_family(kind, "scipy.sparse"):
         return _est_sparse_coo(obj)
     # Through Python's generic lookup where the class has a lookup of its
     # own: a ``__getattribute__`` of the user's was run for every value a

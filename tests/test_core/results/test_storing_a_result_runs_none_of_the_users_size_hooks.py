@@ -48,3 +48,39 @@ def test_a_stored_result_is_weighed_without_its_hooks(request, kind, cache_name)
     second = build(3)
     assert isinstance(first[0], kind) and second[1] == [0, 1, 2]
     assert CALLS == [], f"cash ran the user's {CALLS} while storing the result"
+
+
+class DataFrame:
+    """Named like pandas' own: sized by name, its methods were run."""
+
+    def memory_usage(self, deep=False):
+        CALLS.append("memory_usage")
+        return 10
+
+    @property
+    def _mgr(self):
+        CALLS.append("_mgr")
+
+
+class csr_matrix:
+    """Named like scipy's own."""
+
+    @property
+    def data(self):
+        CALLS.append("data")
+        return b""
+
+
+@pytest.mark.parametrize("kind", [DataFrame, csr_matrix], ids=lambda k: k.__name__)
+@pytest.mark.parametrize("cache_name", ["cash_instance", "disk_cash"])
+def test_a_result_named_like_a_librarys_type_is_not_sized_as_one(request, kind, cache_name):
+    cache = request.getfixturevalue(cache_name)
+
+    @cache.cache
+    def build(n):
+        return [kind(), n]
+
+    CALLS.clear()
+    build(3)
+    build(3)
+    assert CALLS == [], f"cash ran the user's {CALLS} while storing the result"
