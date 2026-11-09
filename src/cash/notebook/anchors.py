@@ -128,20 +128,11 @@ class _RefPickler(pickle.Pickler):
         return name
 
 
-def _round_trip(
-    value: Any,
-    name_of: Callable[[Any], Any],
-    load: Callable[[Any], Any],
-    *,
-    naming: bool = False,
-    placed: Callable[[Mapping[int, tuple[int, Any]], Mapping[int, Any]], None] | None = None,
-) -> Any:
+def _round_trip(value: Any, name_of: Callable[[Any], Any], load: Callable[[Any], Any], *, naming: bool = False) -> Any:
     """A copy of *value*, each object *name_of* names replaced by *load* of
     that name: one pickle round trip, so what the parts share stays shared.
     *naming*: a rebuild that fails raises `AnchorUnrebuilt` for the name
-    loaded last; the pickling's own errors are the value's. *placed* is
-    called with the pickler's memo (``{id: (index, object)}``) and the
-    unpickler's (``{index: copy}``) once the copy is built."""
+    loaded last; the pickling's own errors are the value's."""
     stream = io.BytesIO()
     buffers: list[pickle.PickleBuffer] = []
     pickler = _RefPickler(stream, name_of, buffers)
@@ -163,12 +154,9 @@ def _round_trip(
     if not naming:
         return unpickler.load()
     try:
-        copy = unpickler.load()
+        return unpickler.load()
     except Exception as exc:
         raise AnchorUnrebuilt(loaded[-1] if loaded else None) from exc
-    if placed is not None:
-        placed(pickler.memo.copy(), unpickler.memo.copy())
-    return copy
 
 
 def with_anchor_refs(value: Any, anchors: Mapping[str, Any], homes: Iterable[str] = ()) -> Any:
@@ -176,88 +164,12 @@ def with_anchor_refs(value: Any, anchors: Mapping[str, Any], homes: Iterable[str
     the objects of *anchors* (``{name: object}``), and the `MemoryHome` of
     each numpy view it holds that sits in the data of an anchor *homes*
     names: the statement's inputs, whose lineage its key holds. One view
-    held in two places is one `MemoryHome`, so it comes back as one.
-
-    Raises `AnchorUnrebuilt` when the copy does not hold the very reference
-    pickling loaded in each place *value* held the anchor (an attribute, a
-    slot, an item): a class whose reduction or ``__setstate__`` copies what
-    it holds (``np.array(state['a'])``, ``copy.deepcopy(self.cfg)``) would
-    hold a copy after a restore where plain Python holds the variable's
-    object."""
-    by_id = {id(obj): name for name, obj in anchors.items()}
-    refs: dict[int, AnchorRef] = {}
+    held in two places is one `MemoryHome`, so it comes back as one."""
 
     def load(pid: Any) -> Any:
-        if type(pid) is MemoryHome:
-            return pid
-        ref = AnchorRef(pid)
-        refs[id(ref)] = ref
-        return ref
+        return pid if type(pid) is MemoryHome else AnchorRef(pid)
 
-    def placed(before: Mapping[int, tuple[int, Any]], after: Mapping[int, Any]) -> None:
-        for index, obj in before.values():
-            if type(obj) in _PLAIN or id(obj) in by_id:
-                continue
-            steps = _anchor_steps(obj, by_id)
-            if not steps:
-                continue
-            copy = after.get(index, _MISSING)
-            for step, name in steps:
-                got = _MISSING if copy is _MISSING else _at(copy, step, refs)
-                if id(got) not in refs or refs[id(got)].name != name:
-                    raise AnchorUnrebuilt(name) from ValueError(
-                        f"the rebuilt copy does not hold the reference to '{name}' where the value held its object"
-                    )
-
-    return _round_trip(value, _namer(anchors, homes), load, naming=True, placed=placed)
-
-
-_MISSING = object()
-#: A step into a set: whichever item is the reference.
-_IN = ("in", None)
-
-
-def _anchor_steps(obj: Any, by_id: Mapping[int, str]) -> list[tuple[tuple[str, Any], str]]:
-    """``(step, name)`` for each place *obj* holds an anchor's object
-    itself: an attribute, a slot, an item or key, as `_at` takes a step."""
-    steps: list[tuple[tuple[str, Any], str]] = []
-    attrs = attribute_or(obj, "__dict__", None)
-    if type(attrs) is dict:
-        steps.extend((("attr", key), by_id[id(part)]) for key, part in attrs.items() if id(part) in by_id)
-    for cls in type(obj).__mro__:
-        slots = cls.__dict__.get("__slots__", ())
-        for slot in (slots,) if isinstance(slots, str) else slots:
-            part = attribute_or(obj, slot, _MISSING)
-            if id(part) in by_id:
-                steps.append((("attr", slot), by_id[id(part)]))
-    if isinstance(obj, dict):
-        for key, part in obj.items():
-            if id(part) in by_id:
-                steps.append((("item", key), by_id[id(part)]))
-            if id(key) in by_id:
-                steps.append((_IN, by_id[id(key)]))
-    elif isinstance(obj, (list, tuple)):
-        steps.extend((("item", i), by_id[id(part)]) for i, part in enumerate(obj) if id(part) in by_id)
-    elif isinstance(obj, (set, frozenset)):
-        steps.extend((_IN, by_id[id(part)]) for part in obj if id(part) in by_id)
-    return steps
-
-
-def _at(copy: Any, step: tuple[str, Any], refs: Mapping[int, Any]) -> Any:
-    """What *copy* holds at *step* (`_anchor_steps`); `_MISSING` when
-    nothing."""
-    kind, key = step
-    if kind == "attr":
-        attrs = attribute_or(copy, "__dict__", None)
-        if type(attrs) is dict and key in attrs:
-            return attrs[key]
-        return attribute_or(copy, key, _MISSING)
-    if kind == "item":
-        try:
-            return copy[key]
-        except Exception:  # noqa: BLE001 - not there: not in place
-            return _MISSING
-    return next((part for part in copy if id(part) in refs), _MISSING)
+    return _round_trip(value, _namer(anchors, homes), load, naming=True)
 
 
 def _namer(anchors: Mapping[str, Any], homes: Iterable[str]) -> Callable[[Any], Any]:
@@ -283,41 +195,62 @@ def _namer(anchors: Mapping[str, Any], homes: Iterable[str]) -> Callable[[Any], 
 
 #: Values that hold no memory of another object's and come back equal:
 #: nothing in them to look into.
-_PLAIN = (type(None), bool, int, float, complex, str, range, slice)
+_PLAIN = (type(None), bool, int, float, complex, str, bytes, range, slice)
 #: Containers pickling saves item by item, each item as it is.
-_CONTAINERS = (list, tuple, set, frozenset, dict)
-#: Built-in bases a class written in Python may have and still be looked
-#: into through its reduction (`object.__reduce_ex__`).
-_PLAIN_BASES = frozenset({object, dict, list, tuple, set, frozenset, int, float, str, bytes})
+_CONTAINERS = (list, tuple, dict, set, frozenset)
+#: Built-in bases besides ``object`` whose subclasses pickle by default
+#: (``object.__reduce_ex__``): the items, the attributes and the slots,
+#: each as it is.
+_DEFAULT_BASES = (object, list, dict)
+#: What, defined anywhere but on ``object`` (or on ``list``/``dict`` for
+#: ``__getattribute__``), changes how pickling saves or rebuilds an object
+#: of the class, or what it finds on it.
+_PICKLING = frozenset(
+    {
+        "__reduce__",
+        "__reduce_ex__",
+        "__getstate__",
+        "__setstate__",
+        "__getnewargs__",
+        "__getnewargs_ex__",
+        "__getattr__",
+        "__getattribute__",
+        "__class__",
+    }
+)
 _HEAP_TYPE = 1 << 9  # Py_TPFLAGS_HEAPTYPE: a class made by a class statement
 
 
 def array_memory_held_apart(value: Any, anchors: Mapping[str, Any], homes: Iterable[str] = ()) -> str | None:
     """The name of an anchor that is a numpy array which a restore of
     *value* might not give back everywhere *value* holds its memory; None
-    when cash can see that every part of *value* comes back as it was.
+    when every object *value* reaches pickles in a way cash knows keeps
+    each part it shares the very object it was, so a restore rebuilds
+    *value* around the anchors exactly.
 
-    Fail closed: *value* is walked as the pickling `with_anchor_refs` does
-    reduces it (``copyreg.dispatch_table``, then ``__reduce_ex__``), and an
-    anchor is named when:
+    Exact by construction, and fail closed. Only these are passed:
 
-    - a part pickling meets is an array, or a buffer, over an anchor's
-      memory that is not the anchor itself nor a view a restore builds on
-      its data again (`with_anchor_refs`): it would come back as a copy;
-    - an object hands its reduction less than it holds: one of its own
-      parts (its attributes, its slots, its items, and what the built-in
-      containers among them hold) that is not among what the reduction
-      hands pickling, as the same object, and is not a plain value, a numpy
-      scalar or dtype, a class or function, or an array or buffer apart
-      from every anchor's memory (``__reduce__`` handing ``self.a.tolist()``
-      for ``self.a``, ``bytes(self.view)`` for a ``memoryview``);
-    - an object's class is written in C (a ``torch.Tensor`` over ``X``, a
-      ``cKDTree``) or derives from one outside the plain built-ins: its
-      state is not seen;
-    - anything raises on the way, the share check's budget
-      (`check_walk_budget`) running out included.
+    - the anchors themselves and the views a restore builds on their data
+      again (`with_anchor_refs`);
+    - numpy arrays (``ndarray`` itself, and ``numpy.ma.MaskedArray``,
+      `_masked_array`) whose memory does not overlap an anchor's
+      (``numpy.may_share_memory``; one that does would come back as a
+      copy), with the items of an array of objects walked;
+    - numpy scalars and dtypes, plain values, classes and functions;
+    - the built-in containers (exact types), item by item;
+    - objects of a class written in Python, over ``object``, ``list`` or
+      ``dict`` only, that pickle by default: nothing in their classes
+      (`_PICKLING`) or in ``copyreg.dispatch_table`` changes how they are
+      saved or rebuilt, and nothing in their ``__dict__`` either. Default
+      pickling saves the attributes, the slots and the items each as the
+      object it is, and rebuilds them so; they are walked the same way.
+      The one exception is scikit-learn's ``BaseEstimator``, whose
+      pickling keeps the attributes as they are (`_sklearn_pickling`).
 
-    The first array anchor is named when no part is."""
+    Anything else -- any pickling of its own, a class written in C (a
+    ``torch.Tensor``, a ``cKDTree``, a ``functools.partial``), an error on
+    the way, the share check's budget running out (`check_walk_budget`)
+    -- names the first array anchor."""
     np = sys.modules.get("numpy")
     if np is None:
         return None
@@ -333,22 +266,10 @@ def array_memory_held_apart(value: Any, anchors: Mapping[str, Any], homes: Itera
 def _memory_apart(value: Any, arrays: Mapping[str, Any], name_of: Callable[[Any], Any], np: Any) -> str | None:
     """`array_memory_held_apart` for *value*."""
     refused = next(iter(arrays))
-
-    def overlaps(obj: Any) -> str | None:
-        """The anchor whose memory the array or buffer *obj* may share."""
-        data = obj if isinstance(obj, np.ndarray) else np.frombuffer(obj, dtype=np.uint8)
-        return next((name for name, array in arrays.items() if np.may_share_memory(data, array)), None)
-
-    def inert(obj: Any) -> bool:
-        """*obj* holds no memory of an anchor's, and nothing else."""
-        if type(obj) in _PLAIN or isinstance(obj, (np.generic, np.dtype, type, types.FunctionType)):
-            return True
-        if type(obj) is np.ndarray and not obj.dtype.hasobject or type(obj) in (bytes, bytearray):
-            return overlaps(obj) is None
-        return False
-
+    exempt = _sklearn_pickling()
+    masked = _masked_array()
     #: Every part met, kept alive while ids of them are compared.
-    kept: list[Any] = [value]
+    kept: list[Any] = []
     seen: set[int] = set()
     stack: list[Any] = [value]
     while stack:
@@ -357,40 +278,40 @@ def _memory_apart(value: Any, arrays: Mapping[str, Any], name_of: Callable[[Any]
         if id(obj) in seen:
             continue
         seen.add(id(obj))
-        if name_of(obj) is not None or type(obj) in _PLAIN:
+        kept.append(obj)
+        cls = type(obj)
+        if name_of(obj) is not None or cls in _PLAIN:
             continue
-        if isinstance(obj, np.ndarray) or type(obj) in (bytes, bytearray):
-            name = overlaps(obj)
-            if name is not None:
-                return name
-            if isinstance(obj, np.ndarray) and obj.dtype.hasobject:
-                stack.extend(obj.ravel(order="K"))
+        if cls is np.ndarray or cls is bytearray or cls is masked:
+            parts = [obj] if cls is np.ndarray else [np.frombuffer(obj, dtype=np.uint8)] if cls is bytearray else []
+            if cls is masked:
+                parts = [obj.data, np.ma.getmaskarray(obj)]
+                stack.append(obj.fill_value)
+            for data in parts:
+                for name, array in arrays.items():
+                    if np.may_share_memory(data, array):
+                        return name
+            if cls is not bytearray and obj.dtype.hasobject:
+                stack.extend(np.asarray(obj).ravel(order="K"))
             continue
-        if isinstance(obj, (np.generic, np.dtype, type, types.FunctionType, types.BuiltinFunctionType)):
+        if isinstance(obj, np.dtype) or isinstance(obj, np.generic) and not obj.dtype.hasobject:
             continue
-        if type(obj) in _CONTAINERS:
+        if cls in (type, types.FunctionType, types.BuiltinFunctionType) or isinstance(obj, type):
+            continue  # pickled by name
+        if cls in _CONTAINERS:
             stack.extend(_items(obj))
             continue
-        cls = type(obj)
-        if not all(base.__flags__ & _HEAP_TYPE or base in _PLAIN_BASES for base in cls.__mro__):
-            return refused  # a class written in C, or over one: its state is not seen
-        reduce = copyreg.dispatch_table.get(cls)
-        reduced = reduce(obj) if reduce is not None else obj.__reduce_ex__(pickle.HIGHEST_PROTOCOL)
-        if isinstance(reduced, str):
-            continue  # pickled by name
-        handed = [part for part in reduced if part is not None]
-        for i, part in enumerate(handed):
-            if isinstance(part, types.GeneratorType) or type(part).__name__.endswith("iterator"):
-                handed[i] = list(part)
-        kept.append(handed)
-        given = _leaves(handed, kept)
-        for part in _leaves(_own(obj), kept).values():
-            if id(part) in given or type(part) in _CONTAINERS or inert(part):
-                continue
-            if isinstance(part, np.ndarray) or type(part) in (bytes, bytearray):
-                return overlaps(part) or refused
+        if not _pickles_by_default(cls, exempt):
             return refused
-        stack.extend(given.values())
+        attrs = attribute_or(obj, "__dict__", None)
+        if attrs is not None:
+            if type(attrs) is not dict or _PICKLING.intersection(attrs):
+                return refused
+            stack.extend(attrs.values())
+        for slot in _slot_names(cls):
+            stack.append(attribute_or(obj, slot, None))
+        if isinstance(obj, (list, dict)):
+            stack.extend(_items(obj))
     return None
 
 
@@ -402,37 +323,72 @@ def _items(obj: Any) -> list[Any]:
     return list(obj)
 
 
-def _own(obj: Any) -> list[Any]:
-    """What *obj* holds itself: its attributes, its slots, and its items
-    when its class derives from a built-in container."""
-    parts: list[Any] = []
-    attrs = attribute_or(obj, "__dict__", None)
-    if type(attrs) is dict:
-        parts.extend(_items(attrs))
-    for cls in type(obj).__mro__:
-        slots = cls.__dict__.get("__slots__", ())
+def _slot_names(cls: type) -> list[str]:
+    """The slots the classes of *cls* declare, as default pickling saves
+    them (``copyreg._slotnames``, without ``__dict__`` and ``__weakref__``)."""
+    names: list[str] = []
+    for klass in cls.__mro__:
+        slots = klass.__dict__.get("__slots__", ())
         for slot in (slots,) if isinstance(slots, str) else slots:
-            if slot not in ("__dict__", "__weakref__"):
-                parts.append(attribute_or(obj, slot, None))
-    if isinstance(obj, (dict, list, tuple, set, frozenset)):
-        parts.extend(_items(obj))
-    return parts
+            if slot in ("__dict__", "__weakref__"):
+                continue
+            if slot.startswith("__") and not slot.endswith("__"):
+                slot = f"_{klass.__name__.lstrip('_')}{slot}"
+            names.append(slot)
+    return names
 
 
-def _leaves(parts: list[Any], kept: list[Any]) -> dict[int, Any]:
-    """*parts* and what the built-in containers among them hold, at any
-    depth, by id; the containers themselves too."""
-    found: dict[int, Any] = {}
-    stack = list(parts)
-    while stack:
-        part = stack.pop()
-        if id(part) in found:
+def _pickles_by_default(cls: type, exempt: Mapping[str, Any]) -> bool:
+    """Whether an object of class *cls* pickles as ``object.__reduce_ex__``
+    does by default: a class written in Python over ``object``, ``list``
+    or ``dict``, with nothing of `_PICKLING` defined in its classes but on
+    those (and the methods *exempt* names on their own class), and no
+    ``copyreg.dispatch_table`` entry."""
+    if not cls.__flags__ & _HEAP_TYPE or cls in copyreg.dispatch_table:
+        return False
+    for klass in cls.__mro__:
+        if klass in _DEFAULT_BASES:
             continue
-        found[id(part)] = part
-        if type(part) in _CONTAINERS:
-            stack.extend(_items(part))
-    kept.append(found)
-    return found
+        if not klass.__flags__ & _HEAP_TYPE:
+            return False  # over a class written in C: its state is not seen
+        for name in _PICKLING.intersection(klass.__dict__):
+            if exempt.get(name) is not klass.__dict__[name]:
+                return False
+    return True
+
+
+def _masked_array() -> type | None:
+    """``numpy.ma.MaskedArray`` when ``numpy.ma`` is loaded: an array whose
+    pickling cash knows (``GridSearchCV.cv_results_`` holds them).
+
+    In numpy 2.5.4, ``MaskedArray.__reduce__`` hands pickling
+    ``_mareconstruct`` with the class, ``_baseclass`` and a dtype code, and
+    for state ``__getstate__``: ``ndarray``'s own state of the data (its
+    bytes, or for an array of objects the objects as they are) plus the
+    mask's bytes and the fill value. ``__setstate__`` sets the new array's
+    data and mask from them. So it comes back as a copy of its data, mask
+    and fill value, holding the objects of an array of objects as they
+    are: walked as an ``ndarray`` is, its mask and fill value with it."""
+    ma = sys.modules.get("numpy.ma")
+    return attribute_or(ma, "MaskedArray", None)
+
+
+def _sklearn_pickling() -> dict[str, Any]:
+    """``BaseEstimator.__getstate__`` and ``__setstate__`` when scikit-learn
+    is loaded: pickling an estimator by default but for them is exact.
+
+    In scikit-learn 1.9.1, ``__getstate__`` raises for an estimator with
+    ``__slots__``, takes ``object.__getstate__()`` (or a copy of
+    ``__dict__``), and for a class whose module is ``sklearn.*`` returns
+    that dict with one key added, ``_sklearn_version``; ``__setstate__``
+    pops that key (warning when the version differs) and updates
+    ``__dict__`` with the rest (``super().__setstate__``, which ``object``
+    lacks). The attributes are saved and rebuilt as the objects they are,
+    as by default."""
+    base = attribute_or(sys.modules.get("sklearn.base"), "BaseEstimator")
+    if base is None:
+        return {}
+    return {name: base.__dict__[name] for name in ("__getstate__", "__setstate__") if name in base.__dict__}
 
 
 def memory_homes(digests: Mapping[str, str] | None) -> set[str]:

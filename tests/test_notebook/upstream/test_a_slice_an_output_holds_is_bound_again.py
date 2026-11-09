@@ -17,7 +17,6 @@ import pytest
 
 from cash.backends.file_backend import FileBackend
 from cash.notebook.anchors import (
-    AnchorUnrebuilt,
     array_digest,
     array_memory_held_apart,
     resolve_anchors,
@@ -345,6 +344,67 @@ KEEPS_MEMORY.update(
             _HOLDER_CLASS + "    def __setstate__(self, state):\n        self.a = np.array(state['a'])\nkeep = Holder",
             _HELD,
         ),
+        "setstate_astype_on_arrays": (
+            None,
+            _HOLDER_CLASS + "    def __setstate__(self, state):\n"
+            "        a = state['a']\n"
+            "        if isinstance(a, np.ndarray):\n"
+            "            a = a.astype(np.float64)\n"
+            "        self.__dict__.update(state)\n"
+            "        self.a = a\nkeep = Holder",
+            _HELD,
+        ),
+        "setstate_copies_a_dict": (
+            None,
+            "class Holder:\n"
+            "    def __init__(self, a):\n"
+            "        self.d = {'x': a}\n"
+            "    def __setstate__(self, state):\n"
+            "        self.__dict__.update(state)\n"
+            "        self.d = {k: np.array(v) for k, v in state['d'].items()}\nkeep = Holder",
+            "[model.kept_.d['x'] is model.X_, float(np.abs(model.kept_.d['x']).max())]",
+        ),
+        "setstate_copies_a_list": (
+            None,
+            "class Holder:\n"
+            "    def __init__(self, a):\n"
+            "        self.a = [a]\n"
+            "    def __setstate__(self, state):\n"
+            "        self.__dict__.update(state)\n"
+            "        self.a = [np.array(x) for x in state['a']]\nkeep = Holder",
+            "[model.kept_.a[0] is model.X_, float(np.abs(model.kept_.a[0]).max())]",
+        ),
+        "reduce_hands_it_and_a_copy": (
+            None,
+            "class Holder:\n"
+            "    def __init__(self, a):\n"
+            "        self.a = a\n"
+            "        self.b = a\n"
+            "    def __reduce__(self):\n"
+            "        return (two, (self.a, self.a.tolist()))\n"
+            "def two(a, values):\n"
+            "    h = Holder.__new__(Holder)\n"
+            "    h.a, h.b = a, np.array(values)\n"
+            "    return h\nkeep = Holder",
+            "[model.kept_.b is model.X_, float(np.abs(model.kept_.b).max())]",
+        ),
+        "inner_object_copies": (
+            None,
+            "class Inner:\n"
+            "    def __init__(self, a):\n"
+            "        self.a = a\n"
+            "    def __reduce__(self):\n"
+            "        return (Inner, (self.a.copy(),))\n"
+            "class Holder:\n"
+            "    def __init__(self, a):\n"
+            "        self.inner = Inner(a)\nkeep = Holder",
+            "[model.kept_.inner.a is model.X_, float(np.abs(model.kept_.inner.a).max())]",
+        ),
+        "partial": (
+            None,
+            "import functools\ndef keep(a):\n    return functools.partial(np.sum, a)",
+            "[model.kept_.args[0] is model.X_, float(np.abs(model.kept_.args[0]).max())]",
+        ),
     }
 )
 HOLDER = (
@@ -368,7 +428,7 @@ HOLDER = (
                 reason="no anchor: X is stored with the model as an object they share, and the class's "
                 "pickling or rebuild copies it; served after a restart",
             )
-            if bound == "reshape" and kind not in ("torch", "ckdtree")
+            if bound == "reshape" and kind not in ("torch", "ckdtree", "reduce_hands_it_and_a_copy")
             else (),
         )
         for kind in sorted(KEEPS_MEMORY)
@@ -406,6 +466,18 @@ def test_a_model_keeping_the_memory_where_cash_cannot_see_runs_every_time(cash_m
 
 
 SERVED = {
+    "two_attributes": (
+        None,
+        "class Holder:\n"
+        "    def __init__(self, a):\n"
+        "        self.a = a\n"
+        "        self.b = a\n"
+        "def fitted(A):\n"
+        "    time.sleep(0.2)\n"
+        "    return Holder(A)",
+        "model = fitted(X_train)",
+        "[model.a is X_train, model.b is X_train, float(model.b.max())]",
+    ),
     "slots_and_subclasses": (
         None,
         "class Holder:\n"
@@ -496,53 +568,27 @@ class _Fit:
         self.X_ = a
         self.y_ = np.zeros(2)
 
-    def __getstate__(self):
-        return dict(self.__dict__)
-
 
 class _Steps:
-    """Holds a fitted object of the anchor inside a list of tuples (as a
-    ``Pipeline`` does), and hands pickling a copy of its attributes that
-    holds the same list."""
+    """Holds a fitted object of the anchor inside a list of tuples, as a
+    ``Pipeline`` does, all pickled by default."""
 
     def __init__(self, a):
         self.steps = [("a", _Fit(a))]
 
+
+class _KeepsState(_Fit):
     def __getstate__(self):
         return dict(self.__dict__)
 
 
-class _AsList:
-    def __init__(self, a):
-        self.a = a
-
-    def __reduce__(self):
-        return (_AsList, (self.a.tolist(),))
-
-
-class _CopiesBack:
-    def __init__(self, a):
-        self.a = a
-
-    def __setstate__(self, state):
-        self.a = list(state["a"]) if isinstance(state["a"], list) else [state["a"]]
-
-
-def test_an_object_must_hand_pickling_what_it_holds_of_an_anchor():
-    """An object whose reduction hands pickling the anchor it holds, as it
-    is, through the containers it holds, passes; one that hands a list of
-    its values in its place is refused."""
+def test_only_objects_pickled_by_default_pass():
+    """An object of a class written in Python pickled by default passes,
+    through the containers it holds; one whose class has any pickling of
+    its own is refused, even pickling that keeps what it holds as it is."""
     X_train = np.arange(12.0).reshape(3, 4)[:2]
     assert array_memory_held_apart({"m": _Steps(X_train)}, {"X_train": X_train}) is None
-    assert array_memory_held_apart({"m": _AsList(X_train)}, {"X_train": X_train}) == "X_train"
-
-
-def test_a_copy_not_holding_the_reference_where_the_value_held_the_anchor_is_refused():
-    """The copy an entry stores must hold the very reference pickling
-    loaded where the value held the anchor: a ``__setstate__`` putting
-    something else there (here a list around it) raises `AnchorUnrebuilt`."""
-    X_train = np.arange(12.0).reshape(3, 4)[:2]
-    copy = with_anchor_refs({"m": _Steps(X_train)}, {"X_train": X_train})
-    assert copy["m"].steps[0][1].X_.name == "X_train"
-    with pytest.raises(AnchorUnrebuilt):
-        with_anchor_refs({"m": _CopiesBack(X_train)}, {"X_train": X_train})
+    assert array_memory_held_apart({"m": [_KeepsState(X_train)]}, {"X_train": X_train}) == "X_train"
+    plain = _Fit(X_train)
+    plain.__dict__["__reduce_ex__"] = None
+    assert array_memory_held_apart({"m": plain}, {"X_train": X_train}) == "X_train"
