@@ -58,6 +58,7 @@ __all__ = [
     "borrowed_memory_names",
     "borrowers_in",
     "borrows_from",
+    "bytes_digest",
     "data_arrays",
     "holds_a_borrower",
     "lazy_frame_sources",
@@ -602,7 +603,8 @@ def _flat_bytes(array: Any) -> Any:
     return flat.view(sys.modules["numpy"].uint8)
 
 
-def _bytes_digest(array: Any) -> str:
+def bytes_digest(array: Any) -> str:
+    """The digest of the numpy array *array*'s bytes, in C order."""
     np = sys.modules["numpy"]
     return hashlib.blake2b(np.ascontiguousarray(array).view(np.uint8), digest_size=16).hexdigest()
 
@@ -635,7 +637,7 @@ def memory_home(array: Any, variables: Mapping[str, Any]) -> MemoryHome | None:
                     tuple(array.strides),
                     array.dtype.str,
                     not array.flags.writeable,
-                    _bytes_digest(array),
+                    bytes_digest(array),
                 )
     return None
 
@@ -656,7 +658,7 @@ def rebuild_view(home: MemoryHome, value: Any) -> Any:
         view = np.ndarray(home.shape, np.dtype(home.dtype), buffer=flat, offset=home.offset, strides=home.strides)
     except (TypeError, ValueError) as exc:
         raise KeyError(f"{home.name!r} keeps its data otherwise") from exc
-    if _bytes_digest(view) != home.digest:
+    if bytes_digest(view) != home.digest:
         raise KeyError(f"the data of {home.name!r} the entry's arrays sit in changed")
     if home.readonly:
         view.flags.writeable = False
