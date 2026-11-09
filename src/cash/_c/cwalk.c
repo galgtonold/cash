@@ -1609,6 +1609,11 @@ static int place_by_value(PyObject **walk, PyObject **order, Py_ssize_t n, unsig
                 else hi = mid;
             }
             /* -0.0 and 0.0 are one item: whichever is held is at lo */
+            if (lo >= (size_t)n || keys[lo] != v) {
+                PyMem_Free(keys);
+                PyErr_SetString(PyExc_ValueError, "set_walk_order: an item walked is not among the sorted items");
+                return -1;
+            }
             put_place(bytes, i, lo);
         }
         PyMem_Free(keys);
@@ -1632,6 +1637,11 @@ static int place_by_value(PyObject **walk, PyObject **order, Py_ssize_t n, unsig
             size_t mid = lo + (hi - lo) / 2;
             if (keys[mid] < v) lo = mid + 1;
             else hi = mid;
+        }
+        if (lo >= (size_t)n || keys[lo] != v) {
+            PyMem_Free(keys);
+            PyErr_SetString(PyExc_ValueError, "set_walk_order: an item walked is not among the sorted items");
+            return -1;
         }
         put_place(bytes, i, lo);
     }

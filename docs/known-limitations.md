@@ -1063,7 +1063,11 @@ default argument or base class does. **Fix:** move the binding above this cell.
   numbers in a set are keyed by the order they iterate in. Two equal sets
   of strings built in different orders (items that collide in the set's
   table sit in the order they went in) can share one cached answer for
-  `list(s)` or `next(iter(s))`. Use `sorted(s)` where the order matters.
+  `list(s)` or `next(iter(s))`. The same holds for where a string sits
+  among the numbers of a mixed set: `{'a', 1, 9}` iterating as
+  `[1, 'a', 9]` and as `[1, 9, 'a']` share an entry, since only the
+  numbers' order among themselves is keyed. Use `sorted(s)` where the
+  order matters.
 - **Where `s.pop()` resumes is not keyed.** A set remembers where its last
   `pop()` took an item from, and the next `pop()` searches on from there:
   after `a = {0, 1, 2}; a.pop(); a.add(0)`, `a` equals `{0, 1, 2}` and
