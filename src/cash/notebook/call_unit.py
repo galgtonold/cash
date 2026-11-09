@@ -84,6 +84,7 @@ from cash.notebook.call_key import (
     functions_reached_in,
     global_digests,
     holds_a_stream,
+    holds_a_writer,
 )
 from cash.notebook.call_refs import (
     DIGEST_FIELD,
@@ -941,9 +942,10 @@ class CallUnit:
 
         def _invoke(*args, **kwargs):
             __tracebackhide__ = True
-            if rebinds_its_closure(fn):
+            if rebinds_its_closure(fn) or holds_a_writer(fn):
                 # `counter()` bumps a `nonlocal`: a hit would skip the bump
-                # and hand the next call the same count.
+                # and hand the next call the same count. Nor would it run
+                # `note(x)` with `note = calls.append` in the closure.
                 return fn(*args, **kwargs)
             checked = _perf_counter()
             hands = _hands_a_state_changing_callable(fn, args, kwargs)

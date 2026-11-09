@@ -45,6 +45,7 @@ import pytest
 import cash
 from cash.notebook.call_interception import CallSite
 from tests._call_cache import make_call_cache
+from tests._run_log import RunLog
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
 matplotlib = pytest.importorskip("matplotlib")
@@ -112,9 +113,9 @@ def test_a_figure_returning_call_is_not_cached(call_cache):
 
 def test_ordinary_results_are_still_cached(call_cache):
     """Positive control: the guard must not disable caching in general."""
-    calls = []
-    # Not `calls.append` in the body: a hit replays that write to its closure.
-    note = calls.append
+    calls = RunLog()
+    # Noted from outside it, which a hit may skip (`tests._run_log`).
+    note = calls.note
 
     def compute(x):
         note(x)

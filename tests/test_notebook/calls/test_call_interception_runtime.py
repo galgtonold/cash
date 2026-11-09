@@ -25,6 +25,7 @@ import pytest
 import cash
 from cash.notebook.call_interception import CallSite
 from tests._call_cache import make_call_cache
+from tests._run_log import RunLog
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
 
@@ -49,9 +50,9 @@ def _site(source="compute(x)", names=("compute", "x"), computed_arg_positions=(0
 
 def test_undecorated_function_is_cached(call_cache):
     """The point of the feature: the body runs once across two identical calls."""
-    calls = []
-    # Not `calls.append` in the body: a hit replays that write to its closure.
-    note = calls.append
+    calls = RunLog()
+    # Noted from outside it, which a hit may skip (`tests._run_log`).
+    note = calls.note
 
     def compute(x):
         note(x)
@@ -66,9 +67,9 @@ def test_undecorated_function_is_cached(call_cache):
 
 
 def test_different_arguments_are_separate_entries(call_cache):
-    calls = []
-    # Not `calls.append` in the body: a hit replays that write to its closure.
-    note = calls.append
+    calls = RunLog()
+    # Noted from outside it, which a hit may skip (`tests._run_log`).
+    note = calls.note
 
     def compute(x):
         note(x)

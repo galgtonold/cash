@@ -68,6 +68,7 @@ __all__ = [
     "callee_watched_globals",
     "functions_reached_in",
     "changes_its_closure",
+    "holds_a_writer",
     "global_digests",
     "global_names_reached",
     "TooMuchToLookThrough",
@@ -563,6 +564,16 @@ def changes_its_closure(fn) -> bool:
     ):
         return True
     return holds_a_stream(fn)
+
+
+def holds_a_writer(fn) -> bool:
+    """Whether *fn*'s closure holds a builtin method that changes the
+    object it is bound to, or a partial of one (`_holds_a_writer`): a call
+    of it changes that object, and nothing its trace records says so."""
+    if type(fn) is not _types.FunctionType:
+        return False
+    cells = closure_cells(fn)
+    return bool(cells) and _holds_a_writer(cells)
 
 
 def _holds_a_writer(cells: Mapping[str, _types.CellType]) -> bool:

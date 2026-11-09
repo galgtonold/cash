@@ -16,6 +16,7 @@ import pytest
 from cash.notebook.call_interception import CallSite
 from cash.purity import pure
 from tests._cell_driver import run_cash_cell
+from tests._run_log import RunLog
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
 matplotlib = pytest.importorskip("matplotlib")
@@ -90,8 +91,8 @@ def test_a_statement_calling_it_reads_the_new_drawing(cash_magics):
 
 
 def test_a_call_unit_does_not_store_it(call_unit_harness):
-    calls = []
-    note = calls.append
+    calls = RunLog()
+    note = calls.note
 
     def lines_now():
         note(1)

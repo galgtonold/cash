@@ -15,6 +15,7 @@ import pytest
 
 import cash.notebook.call_unit as cu
 from cash.notebook.call_interception import CallSite
+from tests._run_log import RunLog
 
 
 class FakeClock:
@@ -41,8 +42,8 @@ def _unit(call_unit_harness, calls, clock, monkeypatch, compute_s):
     """A call site whose every run of ``work`` costs *compute_s*: spent
     around the body, which must not touch the clock itself (a call that
     changes an object it reaches is never stored)."""
-    # Not `calls.append` in the body: a hit replays that write to its closure.
-    note = calls.append
+    # Noted from outside it, which a hit may skip (`tests._run_log`).
+    note = calls.note
 
     def work(k):
         note(k)
@@ -77,7 +78,7 @@ def _entries(unit):
 
 
 def test_a_hit_slower_than_its_compute_is_dropped(call_unit_harness, clock, monkeypatch):
-    calls: list[int] = []
+    calls = RunLog()
     unit, wrapped = _unit(call_unit_harness, calls, clock, monkeypatch, compute_s=0.02)
     assert wrapped(2) == 4 and calls == [2]
     assert len(_entries(unit)) == 1, "the compute was not stored"
@@ -90,7 +91,7 @@ def test_a_hit_slower_than_its_compute_is_dropped(call_unit_harness, clock, monk
 
 
 def test_a_hit_that_pays_is_kept(call_unit_harness, clock, monkeypatch):
-    calls: list[int] = []
+    calls = RunLog()
     unit, wrapped = _unit(call_unit_harness, calls, clock, monkeypatch, compute_s=0.3)
     assert wrapped(2) == 4
     _slow_lookups(unit, clock, monkeypatch, 0.02)  # a hit that costs far less than 0.3 s

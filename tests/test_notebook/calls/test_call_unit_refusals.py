@@ -3,6 +3,7 @@
 import time
 
 from cash.notebook.call_interception import CallSite
+from tests._run_log import RunLog
 
 
 def _site(source="f(d)", names=("f", "d")):
@@ -43,9 +44,9 @@ def test_a_scalar_that_happens_to_be_an_argument_is_still_cached(call_unit_harne
     refused it on every run, so the first iteration of a sweep always re-ran
     (found by the session-replay tests). Nothing can rely on an int's identity.
     """
-    calls = []
-    # Not `calls.append` in the body: a hit replays that write to its closure.
-    note = calls.append
+    calls = RunLog()
+    # Noted from outside it, which a hit may skip (`tests._run_log`).
+    note = calls.note
 
     def score(c, a):
         note((c, a))

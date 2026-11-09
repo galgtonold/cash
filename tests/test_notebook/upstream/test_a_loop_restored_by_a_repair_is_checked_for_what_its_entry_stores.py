@@ -7,12 +7,19 @@ The runtime records both: the moved one as the loop's outcome, which the
 simulation takes, and the stored one, which a restore checks the entry for.
 Checked for the moved one, the entry never matched, and the repair replayed
 the loop with what it reads.
+
+Which statements are stored is pinned rather than left to the clock: the
+pop never, everything else always. A pop takes well under the store floor,
+but on a loaded machine its wall time cleared it, the pop was stored, and
+running it again was a hit on its own entry -- the same values as a Run
+All, by another path, with no repair of the loop to look at.
 """
 
 from __future__ import annotations
 
 import ast
 
+from cash.notebook.statement.store import StatementStore
 from cash.notebook.tracking_state import outcome_key
 from tests._cell_driver import run_cash_cell
 
@@ -40,7 +47,8 @@ def test_the_outcome_records_the_lineage_the_entry_stores(cash_magics, cash_inst
     assert entry["output_lineages"]["acc"] == stored["acc"]
 
 
-def test_running_the_pop_again_restores_the_loop_from_its_entry(cash_magics):
+def test_running_the_pop_again_restores_the_loop_from_its_entry(cash_magics, monkeypatch):
+    monkeypatch.setattr(StatementStore, "_too_cheap_to_store", lambda self, run, execution, seconds: run.code == POP)
     for cell in CELLS:
         run_cash_cell(cash_magics, cell, cells=CELLS)
 
