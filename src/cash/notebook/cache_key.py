@@ -1229,8 +1229,8 @@ def _recorded_reads_component(code: str, ctx: CacheKeyContext, statement: str, h
     left the next call keyed as the one that read ``one``, and served it.
     """
     record = ctx.reads
-    live = read_parts(code, ctx.user_ns)
-    held = live.code_at if held_code else ""
+    live = read_parts(code, ctx.user_ns, held_code)
+    held = live.code_at
     if record is None:
         return live.component() + held
     digest = hashlib.sha256(statement.encode("utf-8")).hexdigest()

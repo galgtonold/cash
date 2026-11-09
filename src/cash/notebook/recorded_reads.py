@@ -129,15 +129,17 @@ class ReadRecord:
         return sum(len(getattr(self, f.name)) for f in fields(self))
 
 
-def read_parts(code: str, user_ns: Mapping[str, Any] | None) -> ReadParts:
-    """What the environment reads and the module data in *code* hold now."""
+def read_parts(code: str, user_ns: Mapping[str, Any] | None, held_code: bool = False) -> ReadParts:
+    """What the environment reads and the module data in *code* hold now;
+    with *held_code*, a call's key, the routines at modules' attributes too
+    (``code_at``), which no other key reads and which may hold big objects."""
     if not code or not user_ns:
         return ReadParts()
     # One reach for both: a keyed call builds this for every call.
     reach = reached_user_code(code, user_ns)
     env = tuple(environment_digests(statement_environment_reads(code, user_ns, reach)))
     mod = tuple((label, _data_digest(label, value)) for label, value in reach.data)
-    return ReadParts(env, mod, held_code_component(reach))
+    return ReadParts(env, mod, held_code_component(reach) if held_code else "")
 
 
 def watch(parts: ReadParts, record: ReadRecord) -> None:

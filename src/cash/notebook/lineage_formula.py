@@ -1060,11 +1060,6 @@ def module_data_digest(label: str, value: Any) -> str:
         return UNHASHABLE + secrets.token_hex(16)
 
 
-#: How deep `held_code_at_digest` follows routines held by routines (a
-#: wrapper's closure holding the function it wraps, a method's function).
-_CODE_AT_DEPTH = 8
-
-
 def held_code_at_digest(value: Any) -> str:
     """Which routine *value*, found at a module's attribute, is: everything
     its answer turns on, digested the same in every process.
@@ -1075,13 +1070,13 @@ def held_code_at_digest(value: Any) -> str:
     ``Random(1)`` or ``Random(2)``). A bound method: its function and the
     content of the object it is bound to (``C(1).get``, ``{'a': 1}.get``,
     ``'aaa'.count``). Another routine (``math.sqrt``, ``np.sum``): its type
-    and qualified name.
+    and qualified name. Followed however deep (a chain of wrappers), each
+    routine once.
 
     `UNHASHABLE` when a part cannot be digested: the key then matches no
     entry (`compute_cache_key`)."""
     try:
-        parts: list[str] = []
-        _routine_parts(value, parts, 0, {})
+        parts = _routine_parts(value)
     except Exception:
         logger.debug("Could not digest the routine at a module attribute", exc_info=True)
         return UNHASHABLE + secrets.token_hex(16)
@@ -1090,55 +1085,76 @@ def held_code_at_digest(value: Any) -> str:
     return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
 
 
-def _routine_parts(value: Any, parts: list[str], depth: int, met: dict[int, int]) -> None:
-    """Add to *parts* what *value*'s answer turns on (`held_code_at_digest`).
-    A routine met before on the way (a recursive inner function its own
-    closure holds) is named by the order it was first met in."""
-    if id(value) in met:
-        parts.append(f"again:{met[id(value)]}")
-        return
-    if depth > _CODE_AT_DEPTH:
-        parts.append(UNHASHABLE)
-        return
-    met[id(value)] = len(met)
-    kind = type(value)
-    if kind is types.FunctionType:
-        parts.append("fn:" + held_code_digest(value))
-        parts.append("body:" + _body_digest(value.__code__))
-        held: list[Any] = [*(value.__defaults__ or ()), *sorted((value.__kwdefaults__ or {}).items())]
-        for cell in value.__closure__ or ():
-            try:
-                held.append(cell.cell_contents)
-            except ValueError:  # an empty cell
-                held.append(None)
-        for item in held:
-            _held_part(item, parts, depth, met)
-        return
-    owner = attribute_or(value, "__self__", None)
-    if kind is types.MethodType:
-        _routine_parts(value.__func__, parts, depth + 1, met)
-        _held_part(owner, parts, depth, met)
-        return
-    name = f"{attribute_or(value, '__module__', None)}.{attribute_or(value, '__qualname__', None)}"
-    parts.append(f"named:{kind.__module__}.{kind.__qualname__}:{name}")
-    if owner is not None and not instance_of(owner, types.ModuleType):
-        # A builtin bound to an object: ``{'a': 1}.get``, ``'aaa'.count``.
-        _held_part(owner, parts, depth, met)
+def _routine_parts(value: Any) -> list[str]:
+    """What *value*'s answer turns on (`held_code_at_digest`), in the order
+    a walk meets it. A routine met before (a recursive inner function its
+    own closure holds, a cycle through a bound object) is named by the order
+    it was first met in. A walk, not a recursion: a deep chain of wrappers
+    does not run into Python's recursion limit."""
+    parts: list[str] = []
+    met: dict[int, int] = {}
+    pending: list[Any] = [_Routine(value)]
+    while pending:
+        item = pending.pop()
+        if type(item) is not _Routine:
+            _held_part(item, parts)
+            continue
+        routine = item.value
+        if id(routine) in met:
+            parts.append(f"again:{met[id(routine)]}")
+            continue
+        met[id(routine)] = len(met)
+        held: list[Any] = []
+        kind = type(routine)
+        owner = attribute_or(routine, "__self__", None)
+        if kind is types.FunctionType:
+            parts.append("fn:" + held_code_digest(routine))
+            parts.append("body:" + _body_digest(routine.__code__))
+            held = [*(routine.__defaults__ or ()), *sorted((routine.__kwdefaults__ or {}).items())]
+            for cell in routine.__closure__ or ():
+                try:
+                    held.append(cell.cell_contents)
+                except ValueError:  # an empty cell
+                    held.append(None)
+        elif kind is types.MethodType:
+            held = [routine.__func__, owner]
+        else:
+            name = f"{attribute_or(routine, '__module__', None)}.{attribute_or(routine, '__qualname__', None)}"
+            parts.append(f"named:{kind.__module__}.{kind.__qualname__}:{name}")
+            if owner is not None and not instance_of(owner, types.ModuleType):
+                # A builtin bound to an object: ``{'a': 1}.get``, ``'aaa'.count``.
+                held = [owner]
+        # Popped in the order held: the last pushed is taken first.
+        pending.extend(_Routine(h) if _is_routine_held(h) else h for h in reversed(held))
+    return parts
 
 
-def _held_part(item: Any, parts: list[str], depth: int, met: dict[int, int]) -> None:
-    """A value a routine holds: a function or method by `_routine_parts`, a
-    class or module by its name, anything else by its content and the code
-    it holds, as `module_data_digest` keys module data; one hashed only by
-    which object it is, as none."""
+class _Routine:
+    """A routine `_routine_parts` has still to walk, told from data it holds."""
+
+    __slots__ = ("value",)
+
+    def __init__(self, value: Any) -> None:
+        self.value = value
+
+
+def _is_routine_held(item: Any) -> bool:
+    """A function, a method, or a builtin bound to an object: walked as a
+    routine, not hashed as data."""
+    return type(item) in (types.FunctionType, types.MethodType) or (
+        is_routine(item) and attribute_or(item, "__self__", None) is not None
+    )
+
+
+def _held_part(item: Any, parts: list[str]) -> None:
+    """A value a routine holds that is not a routine: a class or module by
+    its name, anything else by its content and the code it holds, as
+    `module_data_digest` keys module data; one hashed only by which object
+    it is, as none."""
     if item is None or instance_of(item, types.ModuleType):
         parts.append(f"held:{attribute_or(item, '__name__', None)}")
     elif instance_of(item, type):
         parts.append(f"class:{attribute_or(item, '__module__', None)}.{attribute_or(item, '__qualname__', None)}")
-    elif type(item) in (types.FunctionType, types.MethodType) or (
-        is_routine(item) and attribute_or(item, "__self__", None) is not None
-    ):
-        _routine_parts(item, parts, depth + 1, met)
     else:
         digest = compute_hash(item)
         if is_identity_fallback_hash(item, digest):
@@ -1146,8 +1162,7 @@ def _held_part(item: Any, parts: list[str], depth: int, met: dict[int, int]) -> 
             # and another in the next process.
             parts.append(UNHASHABLE)
             return
-        code = held_code_digest(item)
-        parts.append(f"data:{digest}:{code}")
+        parts.append(f"data:{digest}:{held_code_digest(item)}")
 
 
 def _body_digest(code: types.CodeType) -> str:

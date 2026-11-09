@@ -13,7 +13,8 @@ second was served the first's 1. However the attribute is set: ``setattr``,
 Nor by code and name alone: the routine swapped in may run the same code on
 other data -- a closure or default (``mk(1)``, a ``Random(1)``), the object
 a method is bound to (``C(1).get``, ``{'a': 1}.get``, ``'aaa'.count``) --
-or be another lambda on the same line. One that holds what cannot be hashed
+or be another lambda on the same line, or hold another at the end of a
+chain of wrappers of any depth. One that holds what cannot be hashed
 cannot be told from another: the call runs every time, and says so.
 """
 
@@ -46,6 +47,10 @@ PAIRS = {
     ),
     "recursive closures": (
         "def mk(v):\n    def get(n):\n        return v if n else get(1)\n    return get\none, two = mk(1), mk(2)"
+    ),
+    "deep wrappers": (
+        "def mk(v):\n    def get(n):\n        return v\n    for _ in range(12):\n"
+        "        get = (lambda f: lambda n: f(n))(get)\n    return get\none, two = mk(1), mk(2)"
     ),
     "defaults": "one = lambda n, v=1: v\ntwo = lambda n, v=2: v",
     "lambdas on one line": "one, two = (lambda n: 1), (lambda n: 2)",
@@ -162,7 +167,7 @@ def test_a_swap_between_statements_is_read_too(cash_magics, mock_shell, cell):
 
 
 @pytest.mark.usefixtures("store_everything")
-@pytest.mark.parametrize("pair", ["functions", "recursive closures", "bound methods", "dict get"])
+@pytest.mark.parametrize("pair", ["functions", "recursive closures", "deep wrappers", "bound methods", "dict get"])
 def test_a_routine_left_in_place_still_serves_the_second_call(cash_magics, mock_shell, tmp_path, pair):
     """The control: nothing swapped, the second call is served."""
     mock_shell.user_ns["__name__"] = "__main__"
