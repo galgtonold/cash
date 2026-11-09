@@ -22,7 +22,6 @@ import functools
 import logging
 import sys
 import types as _types
-import weakref
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -46,6 +45,8 @@ from cash.tracking.file_dep_snapshot import dep_path_for_this_process
 from cash.tracking.trace_recorder import other_thread_alive
 from cash.tracking.tracker_context import active_tracker
 from cash.value_hash import compute_hash, is_identity_fallback_hash
+
+from .. import _weak
 
 logger = logging.getLogger(__name__)
 
@@ -424,7 +425,7 @@ class ArgFingerprints:
             signature = polars_signature(value)
             if signature is None:
                 return digest
-            ref = weakref.ref(value, lambda _ref, key=key, memo=memo: memo.pop(key, None))
+            ref = _weak.ref(value, lambda _ref, key=key, memo=memo: memo.pop(key, None))
         except Exception:  # polars refused: hash it again next time
             logger.debug("call unit: could not remember a polars value", exc_info=True)
             return digest
@@ -460,7 +461,7 @@ class ArgFingerprints:
             signature = frame_signature(value)
             memo = self._memo
             key = id(value)
-            ref = weakref.ref(value, lambda _ref, key=key, memo=memo: memo.pop(key, None))
+            ref = _weak.ref(value, lambda _ref, key=key, memo=memo: memo.pop(key, None))
         except Exception:
             logger.debug("call unit: could not remember a frame", exc_info=True)
             return

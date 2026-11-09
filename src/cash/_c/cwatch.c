@@ -74,7 +74,7 @@
 
 #include "cwalk.h"
 
-#define CWATCH_API_VERSION 4
+#define CWATCH_API_VERSION 5
 #define CWATCH_VERSION "0.1.0"
 
 #if PY_VERSION_HEX < 0x030C0000
@@ -1755,6 +1755,17 @@ static Sight *sight_place(uintptr_t a, int forced) {
 }
 
 /* is the slot's skip still about `o`, not an object freed at its address? */
+/* the callback of the weak references made here (`set_weak_callback`):
+   cash's own (`cash._weak.is_cash_ref`), so that the check for a variable
+   finding a value by a weak reference does not take a watched value's for
+   the user's; NULL before it is set */
+static PyObject *weak_cb = NULL;
+
+static PyObject *py_set_weak_callback(PyObject *self, PyObject *cb) {
+    Py_XSETREF(weak_cb, Py_NewRef(cb));
+    Py_RETURN_NONE;
+}
+
 static int sight_is(Sight *g, PyObject *o) {
     if (g->addr != (uintptr_t)o) return 0;
     if (g->wref) return weak_target(g->wref) == o;
@@ -1769,7 +1780,7 @@ static void skip_for(PyObject *o, uint64_t ticks) {
         if (PyDict_Watch(dict_wid, o) < 0) { PyErr_Clear(); return; }
         g->watched = 1;
     } else {
-        g->wref = PyWeakref_NewRef(o, NULL);
+        g->wref = PyWeakref_NewRef(o, weak_cb);
         if (!g->wref) PyErr_Clear();   /* a list, a tuple, a set: its address alone */
     }
     g->addr = a; g->state = SG_SKIP; g->until = tick + ticks; g->type = Py_TYPE(o);
@@ -1983,7 +1994,7 @@ static PyObject *arm_value(PyObject *o, PyObject *anchors, PyObject **kept) {
     /* identity: what proves later that the object at this address is this one */
     PyObject *wref = NULL, *ans = NULL, *akey = NULL;
     if (t != &PyDict_Type) {
-        wref = PyWeakref_NewRef(o, NULL);
+        wref = PyWeakref_NewRef(o, weak_cb);
         if (!wref) {
             if (!PyErr_ExceptionMatches(PyExc_TypeError)) { busy = 0; return NULL; }
             PyErr_Clear();
@@ -3020,6 +3031,7 @@ static PyMethodDef methods[] = {
     {"keyed", (PyCFunction)(void (*)(void))py_keyed, METH_FASTCALL, ""},
     {"gen", py_gen, METH_O, "the arm generation of a clean tracked value, or None"},
     {"offers", py_offers, METH_O, ""},
+    {"set_weak_callback", py_set_weak_callback, METH_O, "the callback of the weak references made"},
     {NULL, NULL, 0, NULL}};
 
 static int find_set_dummy(void) {

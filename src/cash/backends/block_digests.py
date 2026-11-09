@@ -37,9 +37,10 @@ Anything else is read, as before.
 from __future__ import annotations
 
 import threading
-import weakref
 from collections import OrderedDict
 from typing import Any
+
+from .. import _weak
 
 __all__ = [
     "content_key_of",
@@ -134,7 +135,7 @@ def note_copy(copied: Any, keys: dict[tuple, tuple]) -> None:
             if array.nbytes < MIN_BYTES:
                 continue
             at = id(array)
-            ref = weakref.ref(array, lambda ref, at=at: _drop(_COPIES, at, ref))
+            ref = _weak.ref(array, lambda ref, at=at: _drop(_COPIES, at, ref))
             with _LOCK:
                 _COPIES[at] = (ref, key)
     except Exception:  # noqa: BLE001 - only a speedup: read as before
@@ -149,7 +150,7 @@ def note_own(array: Any, key: tuple) -> None:
         if array.nbytes < MIN_BYTES:
             return
         at = id(array)
-        ref = weakref.ref(array, lambda ref, at=at: _drop(_COPIES, at, ref))
+        ref = _weak.ref(array, lambda ref, at=at: _drop(_COPIES, at, ref))
     except Exception:  # noqa: BLE001 - only a speedup: read as before
         return
     with _LOCK:
@@ -173,7 +174,7 @@ def note_immutable(array: Any) -> None:
         if array.nbytes < MIN_BYTES or not _over_bytes(array):
             return
         at = id(array)
-        ref = weakref.ref(array, lambda ref, at=at: _drop(_IMMUTABLE, at, ref))
+        ref = _weak.ref(array, lambda ref, at=at: _drop(_IMMUTABLE, at, ref))
     except Exception:  # noqa: BLE001 - only a speedup: read as before
         return
     with _LOCK:
@@ -225,7 +226,7 @@ def note_arrow(owner: Any, chunks: list[Any]) -> None:
                 if not arrow_owned(buffer):
                     continue
                 if ref is None:
-                    ref = weakref.ref(owner, lambda ref, held=held: [_drop(_ARROW, at, ref) for at in held])
+                    ref = _weak.ref(owner, lambda ref, held=held: [_drop(_ARROW, at, ref) for at in held])
                 with _LOCK:
                     found = _ARROW.get(at)
                     if found is None or found[0]() is None:

@@ -14,7 +14,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import Any
 
-from .. import _cash_views, kept_state
+from .. import _cash_views, _weak, kept_state
 from . import block_digests, text_columns
 from .datetime_columns import reduce_datetime_objects
 from .no_file_writes import NoFileWrites, import_what_it_imported, no_file_writes
@@ -645,7 +645,6 @@ _KEPT_ITEMS_MAX_BYTES = 256 * 1024**2
 def _items_buffer(value: Any) -> bytes:
     """*value*'s strings, pickled: from `_KEPT_ITEMS` for a column the RAM
     tier keeps, which nothing writes while it lives."""
-    import weakref
 
     from .shared_blocks import is_kept
 
@@ -661,7 +660,7 @@ def _items_buffer(value: Any) -> bytes:
     memo.pickled += 1
     if kept and len(items) <= _KEPT_ITEMS_MAX_BYTES // 4:
         key = id(value)
-        ref = weakref.ref(value, lambda _ref, key=key: memo.drop(key, _ref))
+        ref = _weak.ref(value, lambda _ref, key=key: memo.drop(key, _ref))
         with memo.lock:
             old = memo.entries.pop(key, None)
             if old is not None:

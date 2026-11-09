@@ -18,7 +18,7 @@ from IPython.core.magic import Magics, line_magic, magics_class
 
 from cash._user_attrs import attribute_or, has_attribute
 
-from ... import _log, value_watch
+from ... import _log, _weak, value_watch
 from ..._clock import perf_counter as _perf_counter
 from ..._console import safe_text
 from ...backends import _writes
@@ -347,7 +347,7 @@ class CashMagics(Magics):
         # run in a cell binds whatever is installed at that moment.
         if self._io_release is None or not self._io_release.alive:
             io_watch.hold()
-            self._io_release = weakref.finalize(self, io_watch.release)
+            self._io_release = _weak.finalize(self, io_watch.release)
         self.global_ttl = ttl
         ttl_msg = f" (TTL: {ttl}s)" if ttl is not None else ""
         # ASCII, like the text badge: this line lands in the .ipynb and is read

@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 #: not in a bounded memo: evicting a loader's record while its memo still
 #: serves would leave the next consumer with no dependency at all, and the
 #: record goes when nothing can run the code any more.
-class _ReadsByCode(weakref.WeakKeyDictionary):
+class _ReadsByCode(_weak.WeakKeyDictionary):
     """A `weakref.WeakKeyDictionary` that counts the entries it lost
     (``gone``): until one goes, what a lookup found is still the entry."""
 

@@ -59,7 +59,7 @@ from typing import Any
 
 from cash import _native
 from cash._user_attrs import attribute_or, builtin_base, builtin_items, has_attribute, own_dict
-from cash._weak import is_cash_ref
+from cash._weak import callback_of, is_cash_ref
 from cash.closure_sharing import slot_readers
 from cash.install_paths import is_user_code_module
 from cash.value_types import IMMUTABLE_LEAF_TYPES
@@ -656,6 +656,19 @@ def _weakly_held(name: str, targets: list[Any], user_ns: dict[str, Any]) -> Iden
     budget on every statement over them."""
     from .output_refusals import is_history_name
 
+    finalized = _finalized(targets)
+    if finalized:
+        return IdentityHeld(
+            f"a weakref.finalize ({finalized}) is bound to '{name}' or an object in it; restored, '{name}' "
+            "would be another object, so the statement re-runs every time",
+            name,
+            "a weak reference",
+            what=(
+                f"A weakref.finalize ({finalized}) watches '{name}', or an object in it, whichever variable "
+                f"holds it, or none. Restored from the cache, '{name}' would be a copy: the finalizer would "
+                "go on watching the object that was there, so this statement runs every time instead."
+            ),
+        )
     wanted = {id(target) for target in targets}
     # A proxy finds its object as a reference does, but has no call to ask.
     wanted_refs = {id(ref) for target in targets for ref in weakref.getweakrefs(target)}
@@ -700,6 +713,35 @@ def _weakly_held(name: str, targets: list[Any], user_ns: dict[str, Any]) -> Iden
             ),
         )
     return None
+
+
+def _finalize_info(item: Any) -> Any:
+    """The registry entry of the ``weakref.finalize`` *item*, while alive:
+    its ``weakref``, ``func``, ``args`` and ``kwargs``."""
+    return weakref.finalize._registry.get(item)  # type: ignore[attr-defined]
+
+
+def _finalized(targets: list[Any]) -> str | None:
+    """The callback of a ``weakref.finalize`` of the user's (not cash's,
+    `cash._weak.is_cash_ref`) bound to one of *targets*, as text; None when
+    there is none. Found from the object: the finalizer is kept alive by
+    ``weakref.finalize``'s own registry, so no variable need hold it."""
+    for target in targets:
+        for ref in weakref.getweakrefs(target):
+            if not isinstance(ref, weakref.ReferenceType):
+                continue
+            callback = callback_of(ref)
+            if isinstance(callback, weakref.finalize) and not is_cash_ref(ref):
+                info = _finalize_info(callback)
+                if info is not None:
+                    return _callback_name(info.func)
+    return None
+
+
+def _callback_name(func: Any) -> str:
+    """*func* as a finalizer's refusal names it."""
+    name = attribute_or(func, "__qualname__", None)
+    return f"{name}()" if isinstance(name, str) else type(func).__name__
 
 
 def _weakly_found_by_others(targets: list[Any]) -> bool:
@@ -902,6 +944,13 @@ class _Walk:
         if issubclass(kind, _REFERENCES):
             if not self.quiet or self.keep_refs:
                 self.refs.append(item)
+            return
+        if issubclass(kind, weakref.finalize):
+            # Finds its object by the weak reference it keeps out of
+            # sight, in ``weakref.finalize._registry``: ``f.peek()``.
+            info = _finalize_info(item)
+            if info is not None and (not self.quiet or self.keep_refs):
+                self.refs.append(info.weakref)
             return
         if issubclass(kind, _BY_REFERENCE):
             # Restored as itself. Looking through the notebook (*quiet*),
@@ -1240,7 +1289,7 @@ class _Walk:
         if issubclass(kind, _BY_REFERENCE):
             return self.quiet and bool(_code_parts(item))
         return (
-            issubclass(kind, (*_REFERENCES, *_WEAK_CONTAINERS, types.SimpleNamespace))
+            issubclass(kind, (*_REFERENCES, *_WEAK_CONTAINERS, weakref.finalize, types.SimpleNamespace))
             or builtin_base(item) is not None
             or (_numpy_array(kind) and item.dtype.hasobject)
             or self._users(kind)

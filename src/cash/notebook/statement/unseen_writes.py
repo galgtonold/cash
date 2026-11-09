@@ -30,6 +30,7 @@ import json
 import os
 import sys
 import types
+import weakref
 from collections.abc import Callable, Collection, Iterable, Mapping
 from typing import Any
 
@@ -39,7 +40,7 @@ from ...analysis.ast_util import walk_tree
 from ...analysis.callee_effects import free_vars_mutated_in_function, scope_locals
 from ...analysis.mutations import MUTATING_METHODS
 from ...exceptions import SOURCE_RETRIEVAL_ERRORS
-from ...install_paths import is_user_code_file
+from ...install_paths import is_user_code_file, is_user_code_module
 from ...source_reading import getsource
 
 __all__ = [
@@ -47,6 +48,9 @@ __all__ = [
     "UNSEEN_WRITES_REASON",
     "COULD_RUN_REASON",
     "COULD_RUN_TOO_BIG_REASON",
+    "LEFT_FINALIZER_REASON",
+    "finalizer_left",
+    "finalizers_made",
     "library_made",
     "live_writers",
     "called_methods",
@@ -99,6 +103,12 @@ COLLECTED_ONLY_REASON = (
     "{fn}() ran in this statement inside a garbage collection, and garbage earlier work left behind cannot be "
     "told from the statement's own: its next run collects the garbage first, and is stored unless a "
     "finalizer still runs inside it"
+)
+
+#: Why a statement that leaves a ``weakref.finalize`` waiting is not stored.
+LEFT_FINALIZER_REASON = (
+    "this statement leaves a weakref.finalize ({fn}) waiting on an object; restored from the cache, it would "
+    "not be registered, so the statement runs every time"
 )
 
 #: ``CASH_UNSEEN_LOG=<path>``: each function found, one JSON line, to count them.
@@ -165,6 +175,52 @@ def finalizer_writer(callback: str) -> tuple[str, tuple[str, ...]]:
     a builtin bound to an object (``LOG.append``): no code of it is traced,
     and it changes that object (`trace_recorder.note_finalizer`)."""
     return (f"weakref.finalize's callback {callback}", ("the object it is bound to",))
+
+
+def finalizers_made() -> int | None:
+    """The number the next ``weakref.finalize`` takes (``info.index``),
+    read without taking it; None when it cannot be read."""
+    text = repr(weakref.finalize._index_iter)  # type: ignore[attr-defined]
+    if text.startswith("count(") and text.endswith(")"):
+        try:
+            return int(text[6:-1])
+        except ValueError:
+            return None
+    return None
+
+
+def finalizer_left(since: int | None, namespace: Mapping[str, Any]) -> str | None:
+    """The callback, as text, of a ``weakref.finalize`` of the user's made
+    since *since* (`finalizers_made`) and still waiting: ``weakref.finalize(m,
+    cb)`` registers it in ``weakref.finalize``'s own registry, which a
+    restored statement leaves as it was. The user's: not
+    `cash._weak.finalize`, and its callback or the class of its object is
+    the user's code, or its object is a variable of *namespace*. A library
+    keeps its own (torch's on its op libraries, made on first use): plain
+    Python would not make them again either. None when there is none."""
+    if since is None or finalizers_made() == since:
+        return None
+    values = None
+    for finalizer, info in list(weakref.finalize._registry.items()):  # type: ignore[attr-defined]
+        if info.index < since or type(finalizer) is _weak.finalize:
+            continue
+        obj = info.weakref()
+        if obj is None:
+            continue
+        if not (_users_code(info.func) or _users_code(type(obj))):
+            if values is None:
+                values = {id(value) for value in namespace.values()}
+            if id(obj) not in values:
+                continue
+        name = attribute_or(info.func, "__qualname__", None)
+        return name if isinstance(name, str) else type(info.func).__name__
+    return None
+
+
+def _users_code(item: Any) -> bool:
+    """Whether *item*, a function or a class, is of the user's code."""
+    module = sys.modules.get(attribute_or(item, "__module__", None) or "")
+    return module is not None and is_user_code_module(module)
 
 
 def _held_as(code: types.CodeType, spaces: Iterable[Mapping[str, Any]]) -> str:

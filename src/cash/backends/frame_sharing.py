@@ -305,7 +305,7 @@ def _fresh_view(values: Any) -> Any:
     # Credited only once it exists: in between, it counts as a reader.
     with _STORE_LOCK:
         _STORE_HELD[key] = _STORE_HELD.get(key, 0) + 1
-    weakref.finalize(view, _store_view_gone, key).atexit = False
+    _weak.finalize(view, _store_view_gone, key).atexit = False
     return fresh
 
 
@@ -428,7 +428,7 @@ def _remember_frozen(array: Any) -> None:
     key = id(array)
     with _FROZEN_LOCK:
         if key not in _FROZEN:
-            _FROZEN[key] = weakref.ref(array, lambda _ref, key=key: _forget_root(key))
+            _FROZEN[key] = _weak.ref(array, lambda _ref, key=key: _forget_root(key))
 
 
 def _forget_root(key: int) -> None:

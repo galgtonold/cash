@@ -646,14 +646,6 @@ def _weakly_held(value: Any) -> bool:
     return True
 
 
-def _gone(_ref: Any) -> None:
-    """The callback of the weak references this module keeps: none to run.
-    With it each is a reference of its own, which the check for a variable
-    finding an object by a weak reference knows as cash's
-    (`identity_holders._weakly_found_by_others`), where a plain
-    ``weakref.ref(value)`` is the one every caller shares."""
-
-
 def _defer(value: Any) -> None:
     """Note that *value*'s digest ran out of its budget, for a store that
     may make its pickle (`keeping`'s *past_budget*)."""
@@ -661,7 +653,7 @@ def _defer(value: Any) -> None:
     if state is None or state.past_bytes is None:
         return
     try:
-        state.pending[id(value)] = weakref.ref(value, _gone)
+        state.pending[id(value)] = _weak.ref(value)
     except TypeError:
         return  # no weak reference: not kept
 
@@ -754,7 +746,7 @@ def _remember(value: Any, part: Part, apart: frozenset[int]) -> None:
     if state is None:
         return
     try:
-        ref = weakref.ref(value, _gone)
+        ref = _weak.ref(value)
     except TypeError:
         return  # no weak reference (a list, a dict): not kept
     state.kept[id(value)] = (ref, part, apart)

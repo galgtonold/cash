@@ -15,7 +15,6 @@ import pickle
 import sys
 import threading
 import types
-import weakref
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -1384,7 +1383,7 @@ def _note_exposed(handle: Any) -> None:
             _EXPOSED[key] = (known[0], number)
             continue
         try:
-            _EXPOSED[key] = (weakref.ref(part, lambda _ref, key=key: _EXPOSED.pop(key, None)), number)
+            _EXPOSED[key] = (_weak.ref(part, lambda _ref, key=key: _EXPOSED.pop(key, None)), number)
         except TypeError:
             _EXPOSED[key] = (part, number)
 
@@ -1686,7 +1685,7 @@ class FrameDigests:
             signature = frame_signature(obj)
             entries = self._entries
             key = id(obj)
-            wref = weakref.ref(obj, lambda _ref, key=key, entries=entries: entries.pop(key, None))
+            wref = _weak.ref(obj, lambda _ref, key=key, entries=entries: entries.pop(key, None))
         except Exception:  # noqa: BLE001 - the memo is a speedup; hash every time
             return
         self._entries[key] = (wref, held, signature, content_hash, since, pieces or {}, kept)

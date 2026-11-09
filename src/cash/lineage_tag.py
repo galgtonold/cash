@@ -24,6 +24,8 @@ from typing import Any
 
 from cash._user_attrs import instance_of, is_routine, own_dict
 
+from . import _weak
+
 __all__ = ["clear_tags", "own_tag", "set_tags", "taggable", "tags_trusted", "tags_untrusted"]
 
 #: Every tag, held BESIDE the value rather than on it:
@@ -68,7 +70,7 @@ def set_tags(value: Any, **tags: Any) -> bool:
             entry[1].update(tags)
             return True
         try:
-            ref = weakref.ref(value, lambda r, k=key: _forget(k, r))
+            ref = _weak.ref(value, lambda r, k=key: _forget(k, r))
         except TypeError:
             return False
         _SIDE[key] = (ref, dict(tags))

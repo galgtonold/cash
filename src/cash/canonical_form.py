@@ -577,7 +577,7 @@ _SORTED_SETS: LruMemo[int, tuple[weakref.ref, Any]] = LruMemo(SORTED_SETS)
 def _remember_sorted(value: frozenset, form: Any) -> None:
     key = id(value)
     try:
-        wref = weakref.ref(value, lambda _ref, key=key, entries=_SORTED_SETS: entries.pop(key, None))
+        wref = _weak.ref(value, lambda _ref, key=key, entries=_SORTED_SETS: entries.pop(key, None))
     except TypeError:
         return
     _SORTED_SETS[key] = (wref, form)

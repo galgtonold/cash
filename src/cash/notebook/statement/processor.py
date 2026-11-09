@@ -258,13 +258,16 @@ from .unseen_writes import (
     COLLECTED_ONLY_REASON,
     COULD_RUN_REASON,
     COULD_RUN_TOO_BIG_REASON,
+    LEFT_FINALIZER_REASON,
     SET_LATER,
     SET_LATER_REASON,
     UNREADABLE,
     UNREADABLE_REASON,
     UNSEEN_WRITES_REASON,
     called_methods,
+    finalizer_left,
     finalizer_writer,
+    finalizers_made,
     live_writers,
     unreadable_changers,
     unseen_writers,
@@ -2803,6 +2806,7 @@ class StatementProcessor:
         watch_memos = not run.skip_cache or self._keeps_plot_displays(run)
         memos_before = helper_memos.watched(self.shell.user_ns) if watch_memos else None
         memos_cleared: helper_memos.Clears | None = None
+        finalizers_before = finalizers_made()
         try:
             with (
                 self.watching_reads(run.code),
@@ -2880,6 +2884,11 @@ class StatementProcessor:
         self._refuse_if_it_drew(run, execution)
         self._refuse_entropy_seed(run, execution)
         self._refuse_unseen_writes(run, execution, memos_before, memos_cleared)
+        if not run.skip_cache and execution.result.success:
+            left = finalizer_left(finalizers_before, self.shell.user_ns)
+            if left is not None:
+                run.skip_cache = True
+                run.metrics["uncacheable_reasons"].append(LEFT_FINALIZER_REASON.format(fn=left))
         if (
             figures_before is not None
             and not run.skip_cache

@@ -29,6 +29,8 @@ import weakref
 from collections.abc import Callable
 from typing import Any, Generic, TypeVar
 
+from . import _weak
+
 V = TypeVar("V")
 
 
@@ -60,7 +62,7 @@ class TypeMemo(dict, Generic[V]):
                     memo.pop(key, None)
 
             try:
-                refs[key] = weakref.ref(cls, gone)
+                refs[key] = _weak.ref(cls, gone)
             except TypeError:
                 return value  # a class that cannot be weakly referenced is not remembered
         dict.__setitem__(self, key, value)

@@ -33,11 +33,11 @@ from __future__ import annotations
 import operator
 import sys
 import threading
-import weakref
 from collections import OrderedDict
 from itertools import compress, repeat
 from typing import Any
 
+from .. import _weak
 from . import block_digests
 
 __all__ = ["Encoded", "decode", "encode", "encode_column"]
@@ -336,6 +336,6 @@ def encode_column(column: Any, objects: Any, key: tuple | None) -> Encoded | Non
     if encoded is not None and slot is not None:
         ref = None
         if key is None:
-            ref = weakref.ref(column, lambda ref, slot=slot: _KEPT.drop(slot, ref))
+            ref = _weak.ref(column, lambda ref, slot=slot: _KEPT.drop(slot, ref))
         _KEPT.put(slot, ref, encoded)
     return encoded

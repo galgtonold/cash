@@ -29,7 +29,7 @@ import weakref
 from collections.abc import Callable
 from typing import Any
 
-from . import _plain_data
+from . import _plain_data, _weak
 from ._memo import ARROW_VALUES, LruMemo
 from ._type_memo import per_type
 from .bulk_digest import DIRECT_MAX_BYTES, LEAF_BYTES, BulkHasher, fold_buffer, hashing_threads
@@ -1633,7 +1633,7 @@ class ArrowDigests:
             if not arrow_data_owned(value):
                 return digest
             entries = self._entries
-            wref = weakref.ref(value, lambda _ref, key=key, entries=entries: entries.pop(key, None))
+            wref = _weak.ref(value, lambda _ref, key=key, entries=entries: entries.pop(key, None))
         except Exception:  # noqa: BLE001 - the memo is a speedup: read it next time
             return digest
         self._entries[key] = (wref, digest)
