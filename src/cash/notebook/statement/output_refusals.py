@@ -21,7 +21,7 @@ from .derivation_edges import is_uncacheable_alias
 from .identity_holders import identity_held_reason
 from .run import MEMO_ANSWERS_NAME
 
-__all__ = ["is_history_name", "live_shared_reason", "unrestorable_output_reason"]
+__all__ = ["copied_apart_reason", "is_history_name", "live_shared_reason", "unrestorable_output_reason"]
 
 #: IPython's own names for its input and output history.
 _HISTORY_NAMES = re.compile(r"_+|_i+|_\d+|_i\d+|_[iod]h|In|Out")
@@ -281,6 +281,14 @@ def shared_output_reason(
         if shared and gave_up is not None:
             gave_up.append(partial)
     return _shared_reason(shared, captured_vars, found_holders)
+
+
+def copied_apart_reason(shared: Iterable[str]) -> str:
+    """The refusal for the outputs *shared*, which share an object with other
+    variables, when a restore might copy that object apart in one of the
+    places it is held (`anchors.shared_parts_held_apart`): the share
+    check's own."""
+    return _shared_reason(set(shared), {}, set(shared))
 
 
 def _shared_reason(

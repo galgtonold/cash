@@ -112,7 +112,12 @@ from cash.notebook.statement.lineage import StatementLineageBuilder, clear_rebou
 from cash.notebook.statement.miss_guard import GUARD_SKIP_REASON, MissGuard
 from cash.notebook.statement.mutation_routing import MutationRouting
 from cash.notebook.statement.mutations import MutationClassifier
-from cash.notebook.statement.output_refusals import is_history_name, live_shared_reason, unrestorable_output_reason
+from cash.notebook.statement.output_refusals import (
+    copied_apart_reason,
+    is_history_name,
+    live_shared_reason,
+    unrestorable_output_reason,
+)
 from cash.notebook.statement.randomness import StatementRandomness
 from cash.notebook.statement.rebuild_cost import RebuildCostLedger
 from cash.notebook.statement.records import StatementRecords
@@ -186,7 +191,14 @@ from ...tracking.randomness import (
 from ...tracking.trace_recorder import other_thread_alive
 from ...tracking.tracker_context import untracked
 from .. import helper_memos
-from ..anchors import MEMORY_HOME, anchor_digests, array_digest, array_memory_held_apart, memory_homes
+from ..anchors import (
+    MEMORY_HOME,
+    anchor_digests,
+    array_digest,
+    array_memory_held_apart,
+    memory_homes,
+    shared_parts_held_apart,
+)
 from ..borrowed_memory import borrowed_memory_names, lazy_frame_sources
 from ..callee_reach import (
     CWD,
@@ -197,7 +209,7 @@ from ..callee_reach import (
     module_state_writes,
     rebound_modules,
 )
-from ..holder_patches import holder_patches
+from ..holder_patches import HolderPatch, holder_patches, patch_targets
 from ..lineage_formula import (
     forward_helpers,
     held_lineage,
@@ -4120,7 +4132,7 @@ class StatementProcessor:
                 if reason is None and holders:
                     found = dict(holders)
                     run.share_owners = frozenset(owners & run.outputs)
-                    reason = self._take_holders(run, captured_vars, holders)
+                    reason = self._take_holders(run, captured_vars, holders, anchors, echo)
                 if reason is None and anchors:
                     user_ns = self.shell.user_ns
                     anchor_holds = {
@@ -4144,6 +4156,9 @@ class StatementProcessor:
             # Within the share check's budget: past it, refused.
             with walk_budget(budget):
                 reason = self._anchor_memory_apart(run, captured_vars, anchors, found or {})
+                if reason is None and not found:
+                    # With holders, `_take_holders` asked it.
+                    reason = self._shared_parts_apart(run, captured_vars, anchors, echo)
             if reason is not None:
                 run.anchors, run.anchor_links, run.anchor_holds = {}, set(), {}
         if reason is None and found is not None:
@@ -5499,10 +5514,18 @@ class StatementProcessor:
                 changed.add(name)
         return unchanged, changed
 
-    def _take_holders(self, run: StatementRun, captured_vars: dict[str, Any], holders: dict[str, Any]) -> str | None:
+    def _take_holders(
+        self,
+        run: StatementRun,
+        captured_vars: dict[str, Any],
+        holders: dict[str, Any],
+        anchors: Mapping[str, Any],
+        echo: tuple[Any, ...] = (),
+    ) -> str | None:
         """Store *holders*, the variables holding an output's object too, with
         *run*'s outputs (`share_group`); why not, when one has no lineage to
-        check a later hit against.
+        check a later hit against, or when a restore might copy an object
+        they share apart (`_shared_parts_apart`).
 
         Not for a loop or branch body (``holders`` is None there): the
         simulation treats the structure as one statement, as it does for
@@ -5517,6 +5540,21 @@ class StatementProcessor:
                 f"{names} also holds an object of this statement's outputs and has no lineage to check "
                 f"a restore against, so the statement re-runs every time"
             )
+        # By where they hold the outputs' objects, when every place can be
+        # set again (`holder_patches`): stored whole, `data` brought along
+        # every other frame it holds into each entry. Not after a loop: the
+        # objects its target took on earlier passes are not outputs, so a
+        # patch would put back the last one and lose what the loop did to the
+        # rest (``for r in rows: normalize(r)``).
+        patches = None
+        if not _is_loop(run.tree):
+            patches = holder_patches(
+                holders, {name: captured_vars[name] for name in run.outputs if name in captured_vars}
+            )
+        stored = patches if patches is not None else holders
+        reason = self._shared_parts_apart(run, {**captured_vars, **stored}, anchors, echo, list(stored))
+        if reason is not None:
+            return reason
         run.holders = {name: lineage[name] for name in holders}
         # Only an output that shares an object with them can move them: the
         # list a loop appends to beside a target taken from ``data`` holds
@@ -5533,19 +5571,41 @@ class StatementProcessor:
         )
         if run.moves_holders:
             run.holders_unchanged = self._unchanged_holders(run, holders)
-        # By where they hold the outputs' objects, when every place can be
-        # set again (`holder_patches`): stored whole, `data` brought along
-        # every other frame it holds into each entry. Not after a loop: the
-        # objects its target took on earlier passes are not outputs, so a
-        # patch would put back the last one and lose what the loop did to the
-        # rest (``for r in rows: normalize(r)``).
-        patches = None
-        if not _is_loop(run.tree):
-            patches = holder_patches(
-                holders, {name: captured_vars[name] for name in run.outputs if name in captured_vars}
-            )
-        captured_vars.update(patches if patches is not None else holders)
+        captured_vars.update(stored)
         return None
+
+    def _shared_parts_apart(
+        self,
+        run: StatementRun,
+        captured_vars: Mapping[str, Any],
+        anchors: Mapping[str, Any],
+        echo: tuple[Any, ...] = (),
+        holders: Iterable[str] = (),
+    ) -> str | None:
+        """The refusal when a restore of what *run*'s entry stores (its
+        outputs, the variables *holders* names as *captured_vars* has them,
+        a `HolderPatch` or the whole value, and the echo) might not give back
+        an object they share with other variables as one object
+        (`shared_parts_held_apart`): ``model = M().fit(cfg)`` keeping ``cfg``
+        and a ``Snap(cfg)`` whose ``__reduce__`` deep-copies it restored a
+        model whose snapshot no longer was ``cfg``. Within the share check's
+        budget, which the caller holds."""
+        reason = copied_apart_reason(run.share_owners or run.outputs)
+        outputs = {name: captured_vars[name] for name in run.outputs if name in captured_vars}
+        values = list(outputs.values())
+        placed: list[Any] = []
+        for name in holders:
+            value = captured_vars[name]
+            if type(value) is not HolderPatch:
+                values.append(value)
+                continue
+            try:
+                placed += patch_targets(value, outputs)
+            except Exception:  # noqa: BLE001 - a place that cannot be found again refuses
+                return reason
+        values += echo[:1]
+        homes = [name for name in anchors if name in run.inputs]
+        return reason if shared_parts_held_apart(values, anchors, homes, placed) else None
 
     def _writes_through_user_code(self, run: StatementRun) -> bool:
         """Whether the upstream replay takes *run* for a file writer through

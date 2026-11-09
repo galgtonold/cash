@@ -35,7 +35,7 @@ from .shared_objects import (
     library_value_types,
 )
 
-__all__ = ["HolderPatch", "apply_patch", "holder_patches"]
+__all__ = ["HolderPatch", "apply_patch", "holder_patches", "patch_targets"]
 
 #: One step from a container to what it holds: ``("key", k)`` for a dict
 #: value, ``("item", i)`` for a list or tuple item, ``("attr", name)`` for an
@@ -215,6 +215,18 @@ def _get(obj: Any, step: Step) -> Any:
     # ``__getattribute__``, which is the user's code.
     attrs = attributes_of(obj)
     return attrs[label] if attrs is not None and label in attrs else getattr(obj, label)
+
+
+def patch_targets(patch: HolderPatch, outputs: Mapping[str, Any]) -> list[Any]:
+    """The objects of *outputs* that *patch* gives its holder again, one for
+    each place: what a hit puts into the live holder."""
+    targets = []
+    for _path, output, out_path in patch.places:
+        target = outputs[output]
+        for step in out_path:
+            target = _get(target, step)
+        targets.append(target)
+    return targets
 
 
 def apply_patch(

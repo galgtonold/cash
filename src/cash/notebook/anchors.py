@@ -29,6 +29,13 @@ anchor too. A view's session hash is its lineage, not its content, so it is
 recorded with the digest of its content (`array_digest`), and a hit binds
 the live view, which sits on the live ``X`` as the one the run held did,
 when its content is the one stored.
+
+Whatever an entry stores beside objects it shares with other variables (its
+anchors, or the holders stored with the outputs as one graph) keeps them one
+object only through parts pickled by default: ``model = M().fit(cfg)``
+keeping ``cfg`` and a ``Snap(cfg)`` whose ``__reduce__`` deep-copies it would
+restore a snapshot of a copy. `shared_parts_held_apart` refuses any part cash
+cannot look into beside a shared object.
 """
 
 from __future__ import annotations
@@ -60,6 +67,7 @@ __all__ = [
     "link_anchors",
     "memory_homes",
     "resolve_anchors",
+    "shared_parts_held_apart",
     "with_anchor_refs",
 ]
 
@@ -197,6 +205,8 @@ def _namer(anchors: Mapping[str, Any], homes: Iterable[str]) -> Callable[[Any], 
 #: Values that hold no memory of another object's and come back equal:
 #: nothing in them to look into.
 _PLAIN = (type(None), bool, int, float, complex, str, bytes, range, slice)
+#: `_PLAIN` as a set: a container's plain items are not looked at.
+_PLAIN_TYPES = frozenset(_PLAIN)
 #: Containers pickling saves item by item, each item as it is.
 _CONTAINERS = (list, tuple, dict, set, frozenset)
 #: Built-in bases besides ``object`` whose subclasses pickle by default
@@ -333,55 +343,223 @@ def _memory_apart(value: Any, arrays: Mapping[str, Any], name_of: Callable[[Any]
                 continue
         seen.add(id(obj))
         kept.append(obj)
-        cls = type(obj)
-        if name_of(obj) is not None or cls in _PLAIN:
+        if name_of(obj) is not None:
             continue
-        if cls is np.ndarray or cls is bytearray or (masked is not None and cls is masked):
-            if cls is np.ndarray:
-                parts = [obj]
-            elif cls is bytearray:
-                parts = [np.frombuffer(obj, dtype=np.uint8)]
-            else:
-                # What `_masked_array` reads it pickles: its data, its mask
-                # and ``_fill_value``, read as they are (``fill_value`` would
-                # set one on it).
-                parts = [obj.data, np.ma.getmaskarray(obj)]
-                stack.append((obj.__dict__.get("_fill_value"), False))
-            for data in parts:
-                for name, array in arrays.items():
-                    if np.may_share_memory(data, array):
-                        return name
-            if cls is not bytearray and obj.dtype.hasobject:
-                stack.extend((item, False) for item in np.asarray(obj).ravel(order="K"))
-            continue
-        if isinstance(obj, np.dtype) or isinstance(obj, np.generic) and not obj.dtype.hasobject:
-            continue
-        if cls in (type, types.FunctionType, types.BuiltinFunctionType) or isinstance(obj, type):
-            continue  # pickled by name
-        if cls in _CONTAINERS:
-            stack.extend(_parts(obj))
-            continue
-        if not _pickles_by_default(cls, exempt, keyed):
+        opened = _open(obj, keyed, np, masked, exempt)
+        if opened is None:
             return refused
-        attrs = attribute_or(obj, "__dict__", None)
-        if attrs is not None:
-            if type(attrs) is not dict or _PICKLING.intersection(attrs):
-                return refused
-            stack.extend((part, False) for part in attrs.values())
-        for slot in _slot_names(cls):
-            stack.append((attribute_or(obj, slot, None), False))
-        if isinstance(obj, (list, dict)):
-            stack.extend(_parts(obj))
+        parts, memory = opened
+        for data in memory:
+            for name, array in arrays.items():
+                if np.may_share_memory(data, array):
+                    return name
+        stack.extend(parts)
     return None
 
 
+#: What `_open` hands back for an object with nothing in it to look into.
+_NOTHING: tuple[list[tuple[Any, bool]], list[Any]] = ([], [])
+
+
+def _open(
+    obj: Any, keyed: bool, np: Any, masked: type | None, exempt: Mapping[str, Any]
+) -> tuple[list[tuple[Any, bool]], list[Any]] | None:
+    """``(parts, memory)`` of *obj* when pickling it by default, or by the
+    pickling cash read (`_masked_array`, `_sklearn_pickling`), saves each
+    part as the object it is and an unpickler rebuilds it so: the parts,
+    each with whether it is put in again as a dict's key or a set's item
+    (*keyed*), and the arrays over the memory its data is (an ndarray's own,
+    a masked array's data and mask, a bytearray's bytes). None for anything
+    else: any pickling of its own, a class written in C."""
+    cls = type(obj)
+    if cls in _PLAIN:
+        return _NOTHING
+    if np is not None and (cls is np.ndarray or (masked is not None and cls is masked)):
+        if cls is np.ndarray:
+            memory = [obj]
+            parts = []
+        else:
+            # What `_masked_array` reads it pickles: its data, its mask and
+            # ``_fill_value``, read as they are (``fill_value`` would set
+            # one on it).
+            memory = [obj.data, np.ma.getmaskarray(obj)]
+            parts = [(obj.__dict__.get("_fill_value"), False)]
+        if obj.dtype.hasobject:
+            parts.extend((item, False) for item in np.asarray(obj).ravel(order="K"))
+        return parts, memory
+    if cls is bytearray:
+        return ([], [np.frombuffer(obj, dtype=np.uint8)]) if np is not None else _NOTHING
+    if np is not None and (isinstance(obj, np.dtype) or isinstance(obj, np.generic) and not obj.dtype.hasobject):
+        return _NOTHING
+    if cls in (type, types.FunctionType, types.BuiltinFunctionType) or isinstance(obj, type):
+        return _NOTHING  # pickled by name
+    if cls in _CONTAINERS:
+        return _parts(obj), []
+    if not _pickles_by_default(cls, exempt, keyed):
+        return None
+    parts = []
+    attrs = attribute_or(obj, "__dict__", None)
+    if attrs is not None:
+        if type(attrs) is not dict or _PICKLING.intersection(attrs):
+            return None
+        parts.extend((part, False) for part in attrs.values())
+    parts.extend((attribute_or(obj, slot, None), False) for slot in _slot_names(cls))
+    if isinstance(obj, (list, dict)):
+        parts.extend(_parts(obj))
+    return parts, []
+
+
+def shared_parts_held_apart(
+    values: Iterable[Any],
+    anchors: Mapping[str, Any],
+    homes: Iterable[str] = (),
+    placed: Iterable[Any] = (),
+) -> bool:
+    """Whether a restore of *values* (the objects an entry stores in one
+    pickle, each where one variable or the echo holds it) might not give
+    back an object they share as one object everywhere it was held.
+
+    An object is shared when it is held in two places or more: in two
+    places of *values*, an anchor (the variable holds it, `share_group`),
+    a view a restore builds on an anchor's data again (`with_anchor_refs`),
+    or an object of *values* a live holder is given again (*placed*, the
+    targets of its `HolderPatch`). Default pickling saves each part as the
+    object it is and rebuilds it so (`_open`), so it keeps a shared object
+    one object; anything else may hold it, or its memory, where cash cannot
+    see, and copy it apart (a ``__reduce__`` that deep-copies, a tensor
+    over an array's memory).
+
+    Exact by construction, and fail closed: True when an object cash cannot
+    look into (`_open`: any pickling of its own, a class written in C) is
+    met beside a shared object other than itself, when an array met
+    overlaps the memory of a shared one (``numpy.may_share_memory``), when
+    a *placed* object is not met as one looked into, on an error, or when
+    the share check's budget runs out (`check_walk_budget`). A shared
+    object cash cannot look into is saved once and found again in the
+    pickle's memo in every place: one alone, beside objects that pickle by
+    default, comes back as one object."""
+    try:
+        return _held_apart(list(values), anchors, homes, list(placed))
+    except Exception:  # noqa: BLE001 - what cannot be looked into refuses
+        return True
+
+
+def _held_apart(values: list[Any], anchors: Mapping[str, Any], homes: Iterable[str], placed: list[Any]) -> bool:
+    """`shared_parts_held_apart`."""
+    np = sys.modules.get("numpy")
+    exempt = _sklearn_pickling()
+    masked = _masked_array()
+    name_of = _namer(anchors, homes)
+    #: Every object met, by id, kept alive while ids are compared.
+    met: dict[int, Any] = {}
+    #: How many places of the stored values hold each object.
+    places: dict[int, int] = {}
+    #: The anchors and the views built on their data again: shared always.
+    held: set[int] = set()
+    #: Objects with no identity a restore must keep (`_no_identity`).
+    plain: set[int] = set()
+    #: Objects cash cannot look into (`_open`).
+    opaque: set[int] = set()
+    #: The objects looked into as a dict's key or a set's item.
+    keyed_open: set[int] = set()
+    memory: dict[int, list[Any]] = {}
+    stack: list[tuple[Any, bool]] = [(value, False) for value in values]
+    while stack:
+        check_walk_budget()
+        obj, keyed = stack.pop()
+        key = id(obj)
+        places[key] = places.get(key, 0) + 1
+        if key in met:
+            if keyed and key not in keyed_open and key not in held | plain | opaque:
+                # Met again as a key: looked at again as one.
+                keyed_open.add(key)
+                if _open(obj, True, np, masked, exempt) is None:
+                    opaque.add(key)
+            continue
+        met[key] = obj
+        if name_of(obj) is not None:
+            held.add(key)
+            continue
+        if _no_identity(obj, np):
+            plain.add(key)
+            continue
+        opened = _open(obj, keyed, np, masked, exempt)
+        if keyed:
+            keyed_open.add(key)
+        if opened is None:
+            opaque.add(key)
+            continue
+        parts, data = opened
+        if data:
+            memory[key] = data
+        stack.extend(parts)
+    for obj in placed:
+        if _no_identity(obj, np):
+            continue
+        if id(obj) not in met:
+            return True  # held in a part cash did not look into
+        places[id(obj)] += 1
+    shared = held | {key for key, count in places.items() if count > 1 and key not in plain}
+    if any(shared - {key} for key in opaque):
+        return True
+    if np is None:
+        return False
+    spans = [(key, key in shared, data) for key, parts in memory.items() for data in parts]
+    spans += [(id(obj), True, obj) for obj in anchors.values() if type(obj) is np.ndarray]
+    return _overlap(spans, np)
+
+
+def _overlap(spans: list[tuple[int, bool, Any]], np: Any) -> bool:
+    """Whether two arrays of *spans* ``(owner, shared, array)`` of different
+    owners, one of them shared, may share memory: whether their memory
+    bounds overlap, as ``numpy.may_share_memory`` asks, swept in the order
+    they start instead of pair by pair."""
+    bounds = []
+    for owner, shared, array in spans:
+        if array.size:
+            low, high = _byte_bounds(np)(array)
+            bounds.append((low, high, owner, shared))
+    bounds.sort(key=lambda span: span[0])
+    #: The spans started and not yet ended, by where they end.
+    active: list[tuple[int, int, bool]] = []
+    for low, high, owner, shared in bounds:
+        check_walk_budget()
+        active = [span for span in active if span[0] > low]
+        if any(other != owner and (shared or other_shared) for _end, other, other_shared in active):
+            return True
+        active.append((high, owner, shared))
+    return False
+
+
+def _byte_bounds(np: Any) -> Callable[[Any], tuple[int, int]]:
+    """``numpy.lib.array_utils.byte_bounds`` (``numpy.byte_bounds`` before
+    numpy 2): the first byte of an array's memory and the one past its last."""
+    utils = attribute_or(attribute_or(np, "lib", None), "array_utils", None)
+    found = attribute_or(utils, "byte_bounds", None) or attribute_or(np, "byte_bounds", None)
+    if found is None:
+        raise RuntimeError("numpy has no byte_bounds")
+    return found
+
+
+def _no_identity(obj: Any, np: Any) -> bool:
+    """Whether *obj* has no identity a restore must keep: a plain value, a
+    numpy scalar or dtype, a class or a function (pickled by name)."""
+    cls = type(obj)
+    if cls in _PLAIN or cls in (type, types.FunctionType, types.BuiltinFunctionType) or isinstance(obj, type):
+        return True
+    return np is not None and (isinstance(obj, np.dtype) or isinstance(obj, np.generic) and not obj.dtype.hasobject)
+
+
 def _parts(obj: Any) -> list[tuple[Any, bool]]:
-    """`_items` of *obj*, each with whether it is a dict's key or a set's
-    item."""
+    """What *obj*, a built-in container or a subclass of ``list`` or
+    ``dict``, holds but its plain values (`_PLAIN`), each with whether it
+    is a dict's key or a set's item."""
     if isinstance(obj, dict):
-        return [part for key, item in obj.items() for part in ((key, True), (item, False))]
+        parts = [(key, True) for key in obj if type(key) not in _PLAIN_TYPES]
+        parts += [(item, False) for item in obj.values() if type(item) not in _PLAIN_TYPES]
+        return parts
     keyed = isinstance(obj, (set, frozenset))
-    return [(item, keyed) for item in obj]
+    return [(item, keyed) for item in obj if type(item) not in _PLAIN_TYPES]
 
 
 def _slot_names(cls: type) -> list[str]:

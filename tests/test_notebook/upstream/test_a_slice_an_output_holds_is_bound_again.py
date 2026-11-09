@@ -463,33 +463,18 @@ HOLDER = (
 )
 
 
-@pytest.mark.parametrize(
-    ("kind", "bound"),
-    [
-        pytest.param(
-            kind,
-            bound,
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason="no anchor: X is stored with the model as an object they share, and the class's "
-                "pickling or rebuild copies it; served after a restart",
-            )
-            if bound == "reshape" and kind not in ("torch", "ckdtree", "reduce_hands_it_and_a_copy")
-            else (),
-        )
-        for kind in sorted(KEEPS_MEMORY)
-        for bound in ("slice", "reshape")
-    ],
-)
+@pytest.mark.parametrize("bound", ["slice", "reshape"])
+@pytest.mark.parametrize("kind", sorted(KEEPS_MEMORY))
 def test_a_model_keeping_the_memory_where_cash_cannot_see_runs_every_time(cash_magics, clean_backend, kind, bound):
     """The model keeps the array it is fitted on, a view (a slice of ``X``,
     or ``X`` itself made by a reshape), and its memory again in an object a
     pickle round trip copies or cash cannot read (a tensor over it, a
     ``cKDTree``, a class whose reduction hands pickling the bytes of a
     ``memoryview``, a list, text or a copy of it, or whose ``__setstate__``
-    copies it): a restore would not give that part back on ``X``. The
-    fit runs every time, and a write to ``X`` reaches the model as in
-    plain Python, after a restart too."""
+    copies it): a restore would not give that part back on ``X``, whether
+    ``X`` is bound again as an anchor or stored with the model as an object
+    they share. The fit runs every time, and a write to ``X`` reaches the
+    model as in plain Python, after a restart too."""
     module, make, read = KEEPS_MEMORY[kind]
     if module:
         pytest.importorskip(module)
