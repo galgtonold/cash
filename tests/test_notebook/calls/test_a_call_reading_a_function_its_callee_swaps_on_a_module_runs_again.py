@@ -124,7 +124,7 @@ def test_the_second_call_reads_the_function_the_first_left(cash_magics, mock_she
 @pytest.mark.usefixtures("store_everything")
 def test_on_a_module_with_a_file_too(cash_magics, mock_shell, tmp_path, monkeypatch):
     mock_shell.user_ns["__name__"] = "__main__"
-    (tmp_path / "swapped_get_lib.py").write_text("def get(n):\n    return 0\n")
+    (tmp_path / "swapped_get_lib.py").write_text("def get(n):\n    return 0\n", encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.delitem(sys.modules, "swapped_get_lib", raising=False)
     setup = FUNCTIONS + "import swapped_get_lib\n"
@@ -197,7 +197,7 @@ def test_a_routine_left_in_place_still_serves_the_second_call(cash_magics, mock_
     _run(cash_magics, setup, cell)
 
     assert mock_shell.user_ns["lv"] == _plain(setup, cell.replace(repr(str(log)), repr(str(tmp_path / "plain.log"))))
-    assert log.read_text() == "x"
+    assert log.read_text(encoding="utf-8") == "x"
 
 
 @pytest.mark.usefixtures("store_everything")
@@ -223,7 +223,7 @@ def test_a_routine_holding_what_cannot_be_hashed_runs_every_time_and_says_so(cas
         _run(cash_magics, setup, cell)
 
     assert mock_shell.user_ns["lv"] == [1, 1]
-    assert log.read_text() == "xx"
+    assert log.read_text(encoding="utf-8") == "xx"
     assert any(issubclass(w.category, CashCacheIneffectiveWarning) and "m.get" in str(w.message) for w in caught), [
         str(w.message) for w in caught
     ]
