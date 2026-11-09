@@ -20,6 +20,7 @@ from collections.abc import Callable
 from typing import Any
 
 from .. import _weak
+from .._user_attrs import attribute_or
 from ..loaded_code import code_objects_of
 from .ast_util import walk_tree
 from .purity_report import PurityReport
@@ -105,13 +106,19 @@ def resolve_local_import(module_name: str, prefix: tuple[str, ...]) -> Any:
     Nothing is imported: importing runs the module's code, which the body
     may never get to (a ``__setstate__`` only a rebuild runs, a branch not
     taken), and that code may write files or change state the call would
-    not have. A user module the body has not imported yet is keyed by its
-    source (`unloaded_modules`)."""
+    not have. Nor through a package's ``__getattr__`` (PEP 562), which
+    imports the submodule it is asked for: ``from . import sub`` read
+    while keying imported ``pkg.sub`` before the statement ran, outside
+    what it was watched for. A user module the body has not imported yet
+    is keyed by its source (`unloaded_modules`)."""
     obj: Any = sys.modules.get(module_name)
     if obj is None:
         return None
     for attr in prefix:
-        obj = getattr(obj, attr, None)
+        if isinstance(obj, types.ModuleType):
+            obj = attribute_or(obj, "__dict__", {}).get(attr)
+        else:
+            obj = attribute_or(obj, attr, None)
         if obj is None:
             return None
     return obj

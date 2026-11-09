@@ -81,7 +81,7 @@ def test_run_all_again_leaves_the_finalizer_plain_python_does(kind, cash_magics,
 
 
 def _first_use_twice(cash_magics, tmp_path, monkeypatch, name: str, body: str) -> list:
-    (tmp_path / f"{name}.py").write_text(textwrap.dedent(body))
+    (tmp_path / f"{name}.py").write_text(textwrap.dedent(body), encoding="utf-8")
     monkeypatch.delitem(sys.modules, name, raising=False)
     setup = f"def first_use_{name}(n):\n    import {name}\n    return n + 1"
     cells = [setup, f"y = first_use_{name}(1)"]

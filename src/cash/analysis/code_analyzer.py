@@ -25,7 +25,7 @@ from typing import Any
 from .. import _weak
 from .._memo import NOTEBOOK_STATEMENTS
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
-from .._user_attrs import instance_of
+from .._user_attrs import attribute_or, instance_of
 from ..code_digest import unwrap_partials
 from ..effects import Action, classify_call
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
@@ -612,8 +612,11 @@ class _ForbiddenVisitor(ast.NodeVisitor):
         module = _loaded(node.module or "") if not node.level else None
         if module is None:
             return
+        # From its own ``__dict__``: a package's ``__getattr__`` (PEP 562)
+        # imports the submodule it is asked for, which reading must not.
+        names = attribute_or(module, "__dict__", None) or {}
         for alias in node.names:
-            obj = getattr(module, alias.name, None)
+            obj = names.get(alias.name)
             if obj is not None:
                 self.local_ns[alias.asname or alias.name] = obj
 

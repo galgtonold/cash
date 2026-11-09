@@ -42,23 +42,35 @@ from typing import Any
 
 from .._user_attrs import attribute_or, has_attribute
 
-__all__ = ["IMPORT_FINALIZERS", "changed", "finalizers_made", "register_atexit", "snapshot", "unregister_atexit"]
+__all__ = [
+    "IMPORT_FINALIZERS",
+    "changed",
+    "finalizers_made",
+    "register_atexit",
+    "registering_imports",
+    "snapshot",
+    "unregister_atexit",
+]
 
 #: ``atexit`` callbacks cash registered (`register_atexit`): not the user's.
 _OWN_ATEXIT = [0]
+#: ``atexit``'s own, before `_count_atexit` wraps them: cash's callbacks are
+#: counted here alone.
+_atexit_register = atexit.register
+_atexit_unregister = atexit.unregister
 
 
 def register_atexit(fn: Callable[..., object], *args: Any, **kwargs: Any) -> None:
     """``atexit.register``, counted as cash's own."""
     before = atexit._ncallbacks()
-    atexit.register(fn, *args, **kwargs)
+    _atexit_register(fn, *args, **kwargs)
     _OWN_ATEXIT[0] += atexit._ncallbacks() - before
 
 
 def unregister_atexit(fn: Callable[..., object]) -> None:
     """``atexit.unregister`` of a callback `register_atexit` registered."""
     before = atexit._ncallbacks()
-    atexit.unregister(fn)
+    _atexit_unregister(fn)
     _OWN_ATEXIT[0] -= before - atexit._ncallbacks()
 
 
@@ -66,6 +78,66 @@ def unregister_atexit(fn: Callable[..., object]) -> None:
 _CODECS = [0]
 _AUDIT_HOOKS = [0]
 _counting = False
+#: ``callback -> times registered`` through ``atexit.register`` since
+#: counting began, and how many of those ``atexit.unregister`` took back:
+#: ``atexit._ncallbacks()`` never goes down (``joblib.Parallel`` registers
+#: a clean-up for each run and unregisters it when done).
+_ATEXIT_REGISTERED: dict[Any, int] = {}
+_ATEXIT_TAKEN_BACK = [0]
+#: And those whose callback is a library's: its clean-up of what it made
+#: for itself (``joblib.Parallel``'s temporary folder, tqdm's monitor
+#: thread), which a hit, making none of it, does not need.
+_ATEXIT_LIBRARY = [0]
+
+
+def _atexit_callbacks() -> int:
+    return atexit._ncallbacks() - _OWN_ATEXIT[0] - _ATEXIT_TAKEN_BACK[0] - _ATEXIT_LIBRARY[0]
+
+
+def _libraries(func: Any) -> bool:
+    """Whether *func* (a function, a bound method, a ``functools.partial``)
+    is a library's code, not the user's."""
+    from ..install_paths import is_user_code_module
+
+    for _ in range(4):
+        inner = attribute_or(func, "__func__", None) or attribute_or(func, "func", None)
+        if inner is None:
+            break
+        func = inner
+    module = sys.modules.get(attribute_or(func, "__module__", None) or "")
+    return module is not None and not is_user_code_module(module)
+
+
+def _count_atexit() -> None:
+    register, unregister = _atexit_register, _atexit_unregister
+
+    def counted_register(func: Callable[..., object], *args: Any, **kwargs: Any) -> Callable[..., object]:
+        before = atexit._ncallbacks()
+        result = register(func, *args, **kwargs)
+        made = atexit._ncallbacks() - before
+        if _libraries(func):
+            _ATEXIT_LIBRARY[0] += made
+            return result
+        try:
+            _ATEXIT_REGISTERED[func] = _ATEXIT_REGISTERED.get(func, 0) + made
+        except TypeError:  # unhashable: never taken back as far as the count goes
+            pass
+        return result
+
+    def counted_unregister(func: Callable[..., object]) -> None:
+        unregister(func)
+        try:
+            _ATEXIT_TAKEN_BACK[0] += _ATEXIT_REGISTERED.pop(func, 0)
+        except TypeError:
+            pass
+
+    for wrapper, original in ((counted_register, register), (counted_unregister, unregister)):
+        wrapper.__module__ = "atexit"
+        wrapper.__name__ = wrapper.__qualname__ = original.__name__
+        wrapper.__doc__ = original.__doc__
+        wrapper.__wrapped__ = original  # type: ignore[attr-defined]
+    atexit.register = counted_register  # type: ignore[assignment]
+    atexit.unregister = counted_unregister  # type: ignore[assignment]
 
 
 def _count_calls() -> None:
@@ -85,6 +157,7 @@ def _count_calls() -> None:
     counted_register.__doc__ = register.__doc__
     counted_register.__wrapped__ = register  # type: ignore[attr-defined]
     codecs.register = counted_register
+    _count_atexit()
 
     def added(_args: tuple) -> None:
         _AUDIT_HOOKS[0] += 1
@@ -234,7 +307,7 @@ def _same_filters(old: tuple[Any, tuple[Any, ...]], new: tuple[Any, tuple[Any, .
 
 
 _REGISTRIES: tuple[tuple[str, Callable[[], Any], Callable[[Any, Any], bool] | None], ...] = (
-    ("atexit's callbacks (atexit.register)", lambda: atexit._ncallbacks() - _OWN_ATEXIT[0], None),
+    ("atexit's callbacks (atexit.register)", _atexit_callbacks, None),
     ("a signal's handler (signal.signal)", _signals, None),
     (
         "a hook or limit of the interpreter's (sys.excepthook, sys.displayhook, threading.excepthook, "
@@ -299,18 +372,21 @@ class Snapshot:
     """The registries as a statement or a call found them (`snapshot`),
     and those it changed outside an import so far."""
 
-    __slots__ = ("__weakref__", "before", "found")
+    __slots__ = ("__weakref__", "before", "found", "imported")
 
     def __init__(self) -> None:
         self.before = _read()
         self.found: set[str] = set()
+        #: The modules first imported meanwhile that registered something
+        #: (`registering_imports`).
+        self.imported: list[str] = []
 
 
 #: The snapshots still waiting for their `changed`; one dropped unasked
 #: (its statement interrupted) goes with it.
 _open: Any = None
-#: How deep the imports under way are, on any thread.
-_importing = [0]
+#: How deep the imports under way on this thread are (``depth``).
+_importing = threading.local()
 
 
 def _load_unlocked(spec: Any) -> Any:
@@ -321,18 +397,21 @@ def _load_unlocked(spec: Any) -> Any:
     callbacks, made on an optimizer's first step). On a registry the import
     changed, what the statement changed before is noted and what it finds
     after is where it starts from."""
-    if _importing[0] or not _open:
+    if not _open or attribute_or(_importing, "depth", 0):
         return _original_load(spec)
     watching = list(_open)
     pre = _read()
-    _importing[0] += 1
+    _importing.depth = 1
     first = finalizers_made()
     try:
         return _original_load(spec)
     finally:
-        _importing[0] -= 1
+        _importing.depth = 0
+        made = None
         if first is not None:
-            IMPORT_FINALIZERS.append((first, finalizers_made() or first))
+            made = finalizers_made() or first
+            IMPORT_FINALIZERS.append((first, made))
+        registered = made is not None and made != first
         # Only what the import itself changed, and only that registry
         # compared before it: in the middle of a statement, cash's own
         # scopes have swapped what they put back when they end (its
@@ -342,10 +421,18 @@ def _load_unlocked(spec: Any) -> Any:
         for index, (old, new) in enumerate(zip(pre, now, strict=True)):
             if _same_read(index, old, new):
                 continue
+            registered = True
             for each in watching:
-                if not _same_read(index, each.before[index], old):
+                start = each.before[index]
+                # Already where the import left it: another thread's import
+                # running meanwhile ended first and moved it on.
+                if not _same_read(index, start, old) and not _same_read(index, start, new):
                     each.found.add(_REGISTRIES[index][0])
                 each.before[index] = new
+        name = attribute_or(spec, "name", None)
+        if registered and isinstance(name, str) and name in sys.modules:
+            for each in watching:
+                each.imported.append(name)
 
 
 #: The ``weakref.finalize`` numbers (``info.index``) the imports made while
@@ -392,6 +479,16 @@ def snapshot() -> Snapshot:
     taken = Snapshot()
     _open.add(taken)
     return taken
+
+
+def registering_imports(before: Snapshot) -> list[str]:
+    """The modules first imported since *before* (`snapshot`) whose import
+    registered something (a logger's level, an ``atexit`` callback, a
+    finalizer): a served entry imports them as the run did
+    (`cash.notebook.cache_key.import_body_modules`), or after a restart
+    the registration was never made (``zzlazy.sub`` reached through a
+    package's ``__getattr__``)."""
+    return list(dict.fromkeys(before.imported))
 
 
 def changed(before: Snapshot) -> list[str]:

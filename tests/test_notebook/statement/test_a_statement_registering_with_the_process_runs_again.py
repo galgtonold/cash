@@ -230,8 +230,50 @@ def test_a_statement_registering_every_time_is_warned_about_the_second_time(cash
     assert "NOTEBOOK-UNSEEN-WRITES" in codes[1]
 
 
+#: A setting the next run makes again, where it already is: no change seen
+#: then, and stored, it was served after a restart without being made.
+SAME_AGAIN = {
+    "logger-level": (
+        "logging.getLogger('zz.again').setLevel(10)",
+        "logging.getLogger('zz.again').level == 10",
+        "logging.getLogger('zz.again').setLevel(0)",
+    ),
+    "disable": ("logging.disable(logging.INFO)", "logging.root.manager.disable == 20", "logging.disable(0)"),
+    "recursionlimit": (
+        "sys.setrecursionlimit(4321)",
+        "sys.getrecursionlimit() == 4321",
+        "sys.setrecursionlimit(OLD_LIMIT)",
+    ),
+}
+
+
 @pytest.mark.usefixtures("store_everything")
-def test_a_registration_made_only_the_first_time_is_then_stored(cash_magics):
+@pytest.mark.parametrize("kind", list(SAME_AGAIN))
+def test_a_setting_made_again_where_it_already_is_is_made_after_a_restart(kind, cash_magics, mock_shell):
+    statement, there, undo = SAME_AGAIN[kind]
+    cells = [SETUP, statement]
+    ns = mock_shell.user_ns
+    run_cash_cell(cash_magics, SETUP, cells=cells)
+    try:
+        for _ in range(3):
+            for cell in cells:
+                run_cash_cell(cash_magics, cell, cells=cells)
+        # A restart: the session forgotten, the setting as a new process finds it.
+        cash_magics.tracking_state.reset_session_state()
+        cash_magics._upstream_checker.simulator.cache.reset()
+        exec(undo, ns)
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+        statuses = [str(s["status"]) for s in cash_magics._last_cell_metrics["statements"]]
+        assert eval(there, ns), f"restored without making the setting: {statuses}"
+    finally:
+        exec(undo, ns)
+
+
+@pytest.mark.usefixtures("store_everything")
+def test_a_registration_made_only_the_first_time_still_runs_again(cash_magics):
+    """A library's setup made once a process on first use (tqdm's monitor):
+    a new process makes it again, so a served entry would skip it."""
     statement = "ONCE = ONCE if 'ONCE' in globals() else atexit.register(cb)\ntotal = sum(range(10))"
     cells = [SETUP, statement]
     run_cash_cell(cash_magics, SETUP, cells=cells)
@@ -243,7 +285,7 @@ def test_a_registration_made_only_the_first_time_is_then_stored(cash_magics):
 
         atexit.unregister(cash_magics.shell.user_ns["cb"])
     statuses = [str(s["status"]) for s in cash_magics._last_cell_metrics["statements"]]
-    assert statuses[-1] == "RESTORED", statuses
+    assert statuses[0] != "RESTORED", statuses
 
 
 def test_an_audit_hook_added_is_seen():
@@ -262,3 +304,73 @@ def test_an_audit_hook_added_is_seen():
     first, second = done.stdout.strip().splitlines()[-2:]
     assert first == "[]"
     assert "sys.addaudithook" in second
+
+
+def test_an_import_while_another_thread_imports_is_still_the_import_s(tmp_path):
+    """What a module sets on its first import is the module's, also when
+    another thread was in the middle of an import of its own as it began
+    and has ended since: the depth of imports is each thread's."""
+    import importlib
+    import logging
+    import threading
+
+    from cash.tracking import process_registries
+
+    (tmp_path / "zz_gate.py").write_text(
+        "import threading\nSTARTED = threading.Event()\nGO = threading.Event()\nDONE = threading.Event()\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "zz_slow_import.py").write_text(
+        "import zz_gate\nzz_gate.STARTED.set()\nzz_gate.GO.wait(30)\n", encoding="utf-8"
+    )
+    (tmp_path / "zz_sets_a_level.py").write_text(
+        "import logging, zz_gate\nzz_gate.GO.set()\nzz_gate.DONE.wait(30)\nlogging.getLogger('zz.thread').setLevel(10)\n",
+        encoding="utf-8",
+    )
+    sys.path.insert(0, str(tmp_path))
+    gate = importlib.import_module("zz_gate")
+
+    def other_imports():
+        importlib.import_module("zz_slow_import")
+        gate.DONE.set()
+
+    other = threading.Thread(target=other_imports)
+    try:
+        before = process_registries.snapshot()
+        other.start()
+        assert gate.STARTED.wait(30)
+        # Begun inside the other thread's import, ended after it.
+        importlib.import_module("zz_sets_a_level")
+        other.join(30)
+        assert process_registries.changed(before) == []
+    finally:
+        gate.GO.set()
+        gate.DONE.set()
+        other.join(30)
+        sys.path.remove(str(tmp_path))
+        for name in ("zz_gate", "zz_slow_import", "zz_sets_a_level"):
+            sys.modules.pop(name, None)
+        logging.getLogger("zz.thread").setLevel(0)
+
+
+def test_an_atexit_callback_taken_back_is_not_a_change():
+    """``joblib.Parallel`` registers a clean-up with ``atexit`` for each
+    run and unregisters it when the run is done: nothing is left, though
+    ``atexit``'s count of callbacks never goes down."""
+    import atexit
+
+    from cash.tracking import process_registries
+
+    def cleanup():
+        return None
+
+    before = process_registries.snapshot()
+    atexit.register(cleanup)
+    atexit.unregister(cleanup)
+    assert process_registries.changed(before) == []
+    before = process_registries.snapshot()
+    atexit.register(cleanup)
+    try:
+        assert process_registries.changed(before) == ["atexit's callbacks (atexit.register)"]
+    finally:
+        atexit.unregister(cleanup)

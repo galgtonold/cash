@@ -860,9 +860,9 @@ class StatementProcessor:
         #: Statements already warned NOTEBOOK-MEMO-UNREAD or NOTEBOOK-MEMO-SHARED about.
         self._memo_unread_warned: set[str] = set()
         self._unseen_warned: set[str] = set()
-        #: The statements and registries a run changed once
-        #: (`_refuse_process_registries`), warned about the next time.
-        self._registries_changed: set[str] = set()
+        #: ``statement -> why``: the statements a run changed a registry of
+        #: the process's in, not stored again (`_refuse_process_registries`).
+        self._registry_writers: dict[str, str] = {}
         #: ``key -> (the entry's timestamp, {output: digest of its stored
         #: value})`` a rerun under that key took (`_changed_from_refused_entry`)
         #: and did not store, refused after it ran (`_refuse_unseen_writes`):
@@ -1881,26 +1881,33 @@ class StatementProcessor:
         any variable (`process_registries`): ``atexit.register(flush)``,
         ``signal.signal(...)``, ``logging.getLogger("lib").setLevel(10)``.
         A served entry would not change it again: after a restart the
-        handler was never installed. Said the second time the statement
-        changes one, once for each statement and registry: a library's
-        setup made once a process on first use (tqdm's monitor thread and
-        its ``atexit`` callback, on the first bar) changes it only the first
-        time, and the next run stores the statement."""
-        if run.skip_cache or not execution.result.success:
-            return
-        if attribute_or(run.annotation, "assume_safe", False):
+        handler was never installed.
+
+        Nor, after that, a run that finds it already as the statement sets
+        it (``setLevel(10)`` on a level that is 10): it still writes it,
+        which a served entry would not, and a new process finds it unset.
+        Said the second time the statement changes one, once for each
+        statement and registry: a library's setup made once a process on
+        first use (tqdm's monitor thread and its ``atexit`` callback, on
+        the first bar) changes it only the first time."""
+        if not execution.result.success or attribute_or(run.annotation, "assume_safe", False):
             return
         found = process_registries.changed(before)
         if not found:
+            what = self._registry_writers.get(run.code)
+            if what is not None and not run.skip_cache:
+                run.skip_cache = True
+                run.metrics["uncacheable_reasons"].append(what)
             return
         what = PROCESS_REGISTRY_REASON.format(registries="; ".join(found))
+        again = run.code in self._registry_writers
+        self._registry_writers[run.code] = what
+        if run.skip_cache:
+            return
         run.skip_cache = True
         run.metrics["uncacheable_reasons"].append(what)
         said = f"{what}\n{run.code}"
-        if said not in self._registries_changed:
-            self._registries_changed.add(said)
-            return
-        if said in self._unseen_warned:
+        if not again or said in self._unseen_warned:
             return
         self._unseen_warned.add(said)
         fix = (
@@ -3018,6 +3025,9 @@ class StatementProcessor:
             run.sparse_ordered = sparse_order.were_put_in_order(unordered, self.shell.user_ns) or None
         if unloaded:
             run.body_imported = imported_since(unloaded)
+        registering = process_registries.registering_imports(registries_before)
+        if registering:
+            run.body_imported = list(dict.fromkeys([*(run.body_imported or ()), *registering]))
         if held:
             run.rebound_modules = rebound_modules(held)
             del held
