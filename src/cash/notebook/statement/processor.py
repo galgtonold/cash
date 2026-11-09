@@ -2668,25 +2668,30 @@ class StatementProcessor:
         if run.exec_code is not code:
             run.exec_source = None
 
-    def _note_reference_states(self, run: StatementRun, known: dict[str, str]) -> set[str]:
+    def _note_reference_states(
+        self, run: StatementRun, known: dict[str, str] | None
+    ) -> tuple[set[str], dict[str, str]]:
         """Before *run* executes: the state of each object pickled by
         reference (a logger) that its inputs, or the globals the functions it
         calls read, hold now, and those the entries that made its inputs
         recorded (`reference_states`). A lookup serves its entry only while
         each is as it was: a change through the name that finds it
         (``logging.getLogger('app').setLevel(10)``) moves no variable.
-        Returns the names read: the inputs and those globals."""
+        Returns the names read, the inputs and those globals, and the state
+        now of each object they hold. A digest *known* has is not taken
+        again."""
         user_ns = self.shell.user_ns
         names = set(run.inputs)
         try:
             names |= called_function_globals(run.inputs, user_ns, variable_lineage=self.tracking_state.variable_lineage)
         except Exception:
             logger.debug("%s could not read what %r calls", _LOG_PROCESSOR, run.code[:80], exc_info=True)
-        found = reference_states.states(names, self.tracking_state.current_session_hashes, known) or {}
+        held = reference_states.states(names, self.tracking_state.current_session_hashes, known) or {}
+        found = dict(held)
         for key, digest in self._freshness.inherited_reference_states(self.tracking_state, run.inputs).items():
             found.setdefault(key, digest)
         run.reference_states = found or None
-        return names
+        return names, held
 
     def _note_looked_up(self, run: StatementRun, looked_up: dict[str, str]) -> None:
         """*run* found the objects of *looked_up* (`lookups_seen`) by a
@@ -2789,11 +2794,14 @@ class StatementProcessor:
         figures_before = None if run.skip_cache else pyplot_state()
         lineage = self.tracking_state.variable_lineage
         run.entry_lineages = {name: lineage[name] for name in run.inputs if name in lineage}
-        # The objects pickled by reference known now, as they are: what the
-        # run changes of them is seen (`reference_states`), by the statement
-        # and by each call in it the call cache keeps.
-        references_before = reference_states.known_states()
-        read_names = self._note_reference_states(run, references_before)
+        # The objects pickled by reference it reads, as they are now: what
+        # the run changes of them is seen (`reference_states`), by the
+        # statement and by each call in it the call cache keeps. Those it
+        # finds by a lookup as it runs are seen as found (`lookups_seen`);
+        # where they cannot be, every one known in the process is read.
+        known = None if lookups_seen.available() else reference_states.known_states()
+        read_names, held_references = self._note_reference_states(run, known)
+        references_before = known if known is not None else held_references
         # The functions of the user's it may call, from a library's code too
         # (a callback): what they find by a lookup is seen (`lookups_seen`).
         user_ns = self.shell.user_ns

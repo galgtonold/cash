@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @49ee50f0 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @6cf2d9d1 -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -1882,6 +1882,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-IDENTITY-HELD](#notebook-identity-held) | notebook | a value finds another object by a weak reference or an id(), or the notebook points into what a loop changes, so the statement runs every time |
 | [NOTEBOOK-INPUT-UNBUILT](#notebook-input-unbuilt) | notebook | an input the cell's own cache entry was to rebuild was not, so the statement ran on the old value, unstored |
 | [NOTEBOOK-ITEMS-UNREAD](#notebook-items-unread) | notebook | an item of a container too big to look through is read by an index cash cannot tell, while a class of yours has a special method with effects, or an iterator may sit in it: the statement runs every time |
+| [NOTEBOOK-LOOKUPS-UNSEEN](#notebook-lookups-unseen) | notebook | what a statement finds by a lookup as it runs (a logger by its name) cannot be watched here, so it is not checked |
 | [NOTEBOOK-MAGIC-STALE](#notebook-magic-stale) | notebook | a name a shell command or magic bound is kept, though it would bind it differently now |
 | [NOTEBOOK-NO-LIVE-READER](#notebook-no-live-reader) | notebook | cells above are read from the saved file, so an unsaved edit there is not seen |
 | [NOTEBOOK-NOT-FOUND](#notebook-not-found) | notebook | the notebook's cells cannot be read; cells above the one you run are not re-checked |
@@ -2302,6 +2303,30 @@ of such classes, or iterators and streams, in a smaller container.
 
 **When it is safe to ignore.** When what the special methods change does
 not matter to any cell: put `# @cash:assume-safe` on the statement.
+
+### NOTEBOOK-LOOKUPS-UNSEEN {#notebook-lookups-unseen}
+
+<span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/tracking/lookups_seen.py:_warn_unseen_once @51c2c97b, cash/tracking/lookups_seen.py:_install @e8a3c20d -->
+**What happened.** cash cannot watch what a statement finds as it runs:
+`sys.monitoring` needs Python 3.12 or newer, or other tools hold the
+monitoring tool ids cash asks for (5 and 2).
+
+**Why it matters.** An object that pickles by its name, such as a logger,
+can be found without a variable holding it:
+`seen = logging.getLogger("app").level`. Such an object is not checked. After
+another cell changes it (`logging.getLogger("app").setLevel(10)`), the
+statement is served the value it read before.
+
+**What to do.** Bind the object to a variable in a cell of its own
+(`log = logging.getLogger("app")`) and read it through that variable: a
+variable's objects are checked on every Python. Or run on Python 3.12 or
+newer, without another tool holding both ids.
+
+**When it is safe to ignore.** When no statement reads a logger, or another
+object found by its name, that a later cell changes. It is shown once per
+session.
 
 ### NOTEBOOK-MAGIC-STALE {#notebook-magic-stale}
 

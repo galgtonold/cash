@@ -95,7 +95,7 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
     - **A file it or an input read** ([files](#files), below).
     - **An environment variable it reads** by name, in its own text or in a
       function or method of yours it calls, defined in a cell or a module.
-    <!-- claim: cash/tracking/reference_states.py:changed @1949e458, cash/notebook/statement/processor.py:StatementProcessor._note_reference_states @77b78563, cash/tracking/reference_states.py:for_call @fafe1936, cash/tracking/lookups_seen.py:_on_call @eeddcff6, cash/tracking/lookups_seen.py:_note_reads @025b3e9f -->
+    <!-- claim: cash/tracking/reference_states.py:changed @1949e458, cash/notebook/statement/processor.py:StatementProcessor._note_reference_states @24a22d30, cash/tracking/reference_states.py:for_call @fafe1936, cash/tracking/lookups_seen.py:_on_call @a48778da, cash/tracking/lookups_seen.py:_note_reads @025b3e9f, cash/tracking/lookups_seen.py:_note_globals @000220c4, cash/tracking/lookups_seen.py:_warn_unseen_once @51c2c97b -->
     - **An object that pickles by reference** (by its name, as a logger
       pickles as `getLogger(name)`) held by a value it reads, or by a global
       a function it calls reads, or by a value it reads was made from. Its
@@ -103,8 +103,14 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
       in a cell or in a function, changes it without naming a variable. On
       Python 3.12 or newer, so is one it finds as it runs: one a call made
       by its code, or by a function of yours, returns
-      (`logging.getLogger("app").level`), and one its code reads as a
-      module's attribute (`logging.root`). The entry keeps each such
+      (`logging.getLogger("app").level`), and one its code reads through a
+      module: an attribute of the module (`logging.root`), of a class or an
+      object it holds, or an item of a dict, list or tuple held there
+      (`logging.Logger.manager.loggerDict`). Where this cannot be watched,
+      [NOTEBOOK-LOOKUPS-UNSEEN](../warnings.md#notebook-lookups-unseen)
+      says so once
+      ([what is not seen](../known-limitations.md#an-object-found-by-a-lookup-cash-does-not-see)).
+      The entry keeps each such
       object's state as the statement found it, and is served only while
       each is the same; so is a call the call cache keeps. A statement or a
       kept call that changed one runs again the next time, as a hit could

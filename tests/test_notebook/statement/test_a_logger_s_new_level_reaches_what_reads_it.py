@@ -13,6 +13,7 @@ when its cell ran again, leaving the level as it was.
 from __future__ import annotations
 
 import logging
+import types
 
 import pytest
 
@@ -96,6 +97,15 @@ def test_a_statement_setting_the_level_runs_again(cash_magics, cash_instance, tm
 #: The logger as a module's attribute: read through the module, no call.
 LOGGER = logging.getLogger(NAME)
 
+
+class Holder:
+    """The logger as a class's attribute, and an object's."""
+
+    LOG = LOGGER
+
+
+HOLDER = types.SimpleNamespace(log=LOGGER)
+
 LOOKUP_SETUP = (
     "import logging\n"
     f"import {__name__} as here\n"
@@ -117,13 +127,29 @@ LOOKUP_SETUP = (
         "seen = level_now()",
         "seen = here.LOGGER.level",
         "seen = max(map(level_of_item, [0]))",
+        "seen = here.Holder.LOG.level",
+        "seen = here.HOLDER.log.level",
+        f"seen = logging.Logger.manager.loggerDict[{NAME!r}].level",
+        f"seen = logging.Logger.manager.loggerDict.get({NAME!r}).level",
+        f"seen = [lg.level for n, lg in logging.Logger.manager.loggerDict.items() if n == {NAME!r}][0]",
     ],
-    ids=["in-the-statement", "in-a-function", "a-module-attribute", "called-back-by-a-builtin"],
+    ids=[
+        "in-the-statement",
+        "in-a-function",
+        "a-module-attribute",
+        "called-back-by-a-builtin",
+        "a-class-attribute",
+        "an-object-s-attribute",
+        "the-registry-s-item",
+        "the-registry-s-get",
+        "the-registry-iterated",
+    ],
 )
 def test_a_reader_looking_the_logger_up_runs_again(cash_magics, cash_instance, reader):
     """No input holds the logger: the statement, or a function it calls
     (from a builtin's code too), finds it by its name as it runs, or reads
-    it as a module's attribute."""
+    it through a module: an attribute of it, of a class or an object it
+    holds, or an item of the registry of loggers, read by C."""
     cash_instance.config.min_execution_time_to_cache_seconds = 0.0
     cash_instance.config.call_cost_floor_seconds = 0.0
     cells = [

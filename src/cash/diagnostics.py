@@ -390,6 +390,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         "NOTEBOOK-ITEMS-UNREAD",  # a container too big to look through for objects
         # whose special methods may run, or for an iterator a read may draw
         # from: the statement runs every time
+        "NOTEBOOK-LOOKUPS-UNSEEN",  # what a statement finds by a lookup as
+        # it runs (a logger by its name) cannot be watched here; shown once
         "NOTEBOOK-MAGIC-STALE",  # a name a magic bound is kept as it is,
         # though what the magic read changed since it ran, or is gone
         "NOTEBOOK-NO-LIVE-READER",  # cells above are read from the saved

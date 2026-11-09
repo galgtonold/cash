@@ -2415,7 +2415,7 @@ def state_digest(obj: Any) -> str:
     open there may be telling *obj* what it leaves out, and answers it
     without its attributes, so the digest a statement took as it ran
     differed from the one taken after it for an object nothing changed."""
-    outer = _KEYING.now
+    outer = _keying()
     _KEYING.now = None
     try:
         with folding_by_reference(), one_keying():

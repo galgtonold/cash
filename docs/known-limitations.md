@@ -633,6 +633,33 @@ a name bound through the namespace, `eval`, `exec` of a computed string and
 `sys.modules` still run every time.
 **Fix:** call the function by its name, or pass it in as an argument.
 
+### An object found by a lookup cash does not see
+
+<!-- claim: cash/tracking/lookups_seen.py:_note_globals @000220c4, cash/tracking/lookups_seen.py:_on_return @a6d10e37, cash/tracking/lookups_seen.py:_site_done @92e96264, cash/tracking/lookups_seen.py:_warn_unseen_once @51c2c97b -->
+A logger pickles by its name, so a statement can find it without any
+variable holding it: `seen = logging.getLogger("app").level`. On Python 3.12
+and newer, cash checks such an object when a call written in Python returns
+it, or when the statement's code, or a function of yours it calls, reads it
+through a module (an attribute, of the module or of a class or object it
+holds, or an item of a dict, list or tuple held there). It does not see one
+found in other ways, and a statement reading it is served what it read
+before after another cell changes it:
+
+- by a call written in C: `getattr(logging, "root")`, `vars(logging)["root"]`,
+  `operator.attrgetter("root")(logging)`, `functools.partial(logging.getLogger, "app")()`;
+- by a function of yours that returns what such a call found;
+- in a dict, list or tuple of more than 10,000 items;
+- by a call made where the statement names a function by a global, or an
+  attribute of one, after something other than your code rebound that name
+  while the statement ran (`setattr(module, name, f)` in a library): cash
+  watches such a call site once per statement.
+
+Before Python 3.12, or when other tools hold the monitoring tool ids cash
+asks for (5 and 2), none of these lookups is checked, and
+[NOTEBOOK-LOOKUPS-UNSEEN](warnings.md#notebook-lookups-unseen) says so once.
+**Fix:** bind the object to a variable in a cell of its own
+(`log = logging.getLogger("app")`) and read it through that variable.
+
 ### A special method that changes state outside its object
 
 <!-- claim: cash/notebook/statement/unseen_writes.py:writers_without_a_trace @25806177, cash/notebook/statement/unseen_writes.py:own_writes @6e4e16cd -->
