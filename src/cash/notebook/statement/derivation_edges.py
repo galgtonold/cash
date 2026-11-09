@@ -850,7 +850,13 @@ def bump_derived_lineages(
         after it (`keep_held_lineage`): neither bumped nor bumped through,
         and the bump each would have taken recorded as an alias of the
         lineage it keeps (`record_lineage_alias`), which a walk without
-        *kept* -- the simulation's -- resolves to the same.
+        *kept* -- the simulation's -- resolves to the same. The alias is
+        the name's own (`_kept_bump`): the bump is made of the lineage and
+        the change alone, and two names can have one lineage (``c`` and
+        ``orders``, both bound by the loop that fills ``orders``). Keyed by
+        the bump, ``customers[0].rules.append(f)`` keeping ``c`` kept
+        ``orders`` too, though it holds ``customers[0]``, and
+        ``revenue(orders)`` was served the total from before ``f``.
         ``pre.fit_transform(X)`` fits clones of the pipeline ``pre`` holds;
         moved on by ``pre``'s lineage, the pipeline came out of a session
         that fitted twice with another lineage than a Run All after a
@@ -934,10 +940,13 @@ def bump_derived_lineages(
                 # check that ran out of time and left the entry unstored
                 # moved it on where a stored one kept it.
                 if old:
-                    record_lineage_alias(new_hash, old)
+                    record_lineage_alias(_kept_bump(target, new_hash), old)
                 continue
             if target not in moved_on:
-                new_hash = resolve_lineage_alias(new_hash)
+                kept_as = _kept_bump(target, new_hash)
+                earlier = resolve_lineage_alias(kept_as)
+                if earlier != kept_as:
+                    new_hash = earlier
             if new_hash == old:
                 continue
             record(target, new_hash)
@@ -955,6 +964,13 @@ def bump_derived_lineages(
             if target not in visited and target in derivation_edges:
                 frontier.append(target)
     return bumped
+
+
+def _kept_bump(name: str, bump: str) -> str:
+    """What `bump_derived_lineages` keys the alias of *name*, kept through
+    a change that bumps it to *bump*, by: *name*'s own, so another name
+    with the same lineage, bumped by the same change, does not take it."""
+    return hashlib.sha256(f"kept:{name}:{bump}".encode("utf-8")).hexdigest()
 
 
 def static_share_edges(

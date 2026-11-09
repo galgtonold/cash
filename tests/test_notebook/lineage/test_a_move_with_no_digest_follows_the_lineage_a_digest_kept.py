@@ -56,3 +56,33 @@ def test_a_holder_moves_as_the_digest_that_kept_it_says():
 
     assert held_lineage("P", "key") == "P"
     assert held_lineage("P", "key", resolve=False) != "P"
+
+
+def test_a_name_kept_keeps_no_other_name_of_the_same_lineage():
+    """``c`` and ``orders``, both bound by the loop that fills ``orders``,
+    have one lineage. ``customers[0].rules.append(f)`` leaves ``c``, the
+    last customer, as it was, and changes ``orders``, which holds
+    ``customers[0]``: keeping ``c`` must not keep ``orders`` -- in the run,
+    nor in the simulation, which takes no digest."""
+    edges = {"customers": {"c", "orders"}, "c": {"customers"}, "orders": {"customers"}}
+
+    def walk(**kwargs) -> dict[str, str]:
+        lineage = {"customers": "C", "c": "L", "orders": "L"}
+        bump_derived_lineages(
+            edges,
+            lineage,
+            {"customers"},
+            {"customers"},
+            record=lineage.__setitem__,
+            present=lambda name: True,
+            **kwargs,
+        )
+        return lineage
+
+    run = walk(kept={"c"})
+    assert run["c"] == "L"
+    assert run["orders"] != "L"
+
+    simulated = walk()
+    assert simulated["c"] == "L"
+    assert simulated["orders"] == run["orders"]
