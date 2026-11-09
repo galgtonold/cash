@@ -94,7 +94,7 @@ from cash.notebook.pyplot_state import pyplot_state
 from cash.notebook.read_handles import reaches_read_handle
 from cash.notebook.write_observer import WrittenPaths, kept_writes, observe_writes
 from cash.sizing import estimate_object_size
-from cash.tracking import reference_states
+from cash.tracking import lookups_seen, reference_states
 from cash.tracking.env_reads import environment_digests, note_reads
 from cash.tracking.env_reads import recording as recording_env_reads
 from cash.tracking.file_dep_snapshot import probe_answers
@@ -1034,6 +1034,7 @@ class CallUnit:
             if hit:
                 # What it read when it ran, for the statement around it.
                 note_reads(metadata.get("env_reads") or ())
+                lookups_seen.note(metadata.get("reference_states"))
                 return self._serve_hit(call, value, recorded_cost, metadata, hit_started)
             return self._run_miss(call)
 
@@ -1149,7 +1150,12 @@ class CallUnit:
         shadow = _shadow.SHADOW
         unit = shadow.begin("call") if shadow is not None else None
         try:
-            with call_tracker, observe_writes() as written, recording_env_reads() as env_reads:
+            with (
+                call_tracker,
+                observe_writes() as written,
+                recording_env_reads() as env_reads,
+                lookups_seen.collecting() as looked_up,
+            ):
                 # Only the call is timed: cash's own work around it, counted
                 # as the call's, pushed cheap calls over the floor on a busy
                 # machine (a ``functools.cache(g)`` stored and served filled).
@@ -1160,6 +1166,10 @@ class CallUnit:
             if unit is not None:
                 shadow.end(unit)
             self._running -= 1
+        if looked_up:
+            # What it found by a lookup as it ran, as found: its entry is
+            # served only while each is so (`lookups_seen`).
+            call = dataclasses.replace(call, reference_states={**looked_up, **(call.reference_states or {})})
         # Read while `result` is this frame's only reference of its own.
         result_held = refs_beyond([result]) > ONE_LOCAL
         stored = False
@@ -1213,6 +1223,7 @@ class CallUnit:
             # since the statement around it started: a hit would not change
             # it again, as loading it finds it as it is.
             and not reference_states.moved_in_statement()
+            and not (looked_up and reference_states.moved(looked_up))
         ):
             stored = self._store_result(
                 call,

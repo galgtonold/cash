@@ -43,6 +43,7 @@ import weakref
 from collections.abc import Iterator, Mapping
 from typing import Any
 
+from cash import kept_state
 from cash._referents import get_referents
 from cash._user_attrs import attribute_or, instance_of
 from cash.analysis.ast_util import walk_tree
@@ -436,6 +437,7 @@ def watching_clears(before: list[tuple[list[str], Any, int, int, int, Any]] | No
                 real(memo)
 
             cache_clear.__doc__ = real.__doc__
+            kept_state.mark_instrumentation(cache_clear)
             try:
                 memo.cache_clear = cache_clear
             except (AttributeError, TypeError):

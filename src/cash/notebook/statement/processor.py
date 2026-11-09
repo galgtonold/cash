@@ -166,7 +166,7 @@ from ...analysis.namespace_effects import (
     statement_starting_workers,
 )
 from ...analytics import AnalyticsManager
-from ...tracking import reference_states
+from ...tracking import lookups_seen, reference_states
 from ...tracking.env_reads import environment_digests
 from ...tracking.env_reads import recording as recording_env_reads
 from ...tracking.file_dep_snapshot import file_state_epoch, probe_answers, young_digests_kept
@@ -2668,13 +2668,14 @@ class StatementProcessor:
         if run.exec_code is not code:
             run.exec_source = None
 
-    def _note_reference_states(self, run: StatementRun, known: dict[str, str]) -> None:
+    def _note_reference_states(self, run: StatementRun, known: dict[str, str]) -> set[str]:
         """Before *run* executes: the state of each object pickled by
         reference (a logger) that its inputs, or the globals the functions it
         calls read, hold now, and those the entries that made its inputs
         recorded (`reference_states`). A lookup serves its entry only while
         each is as it was: a change through the name that finds it
-        (``logging.getLogger('app').setLevel(10)``) moves no variable."""
+        (``logging.getLogger('app').setLevel(10)``) moves no variable.
+        Returns the names read: the inputs and those globals."""
         user_ns = self.shell.user_ns
         names = set(run.inputs)
         try:
@@ -2685,6 +2686,23 @@ class StatementProcessor:
         for key, digest in self._freshness.inherited_reference_states(self.tracking_state, run.inputs).items():
             found.setdefault(key, digest)
         run.reference_states = found or None
+        return names
+
+    def _note_looked_up(self, run: StatementRun, looked_up: dict[str, str]) -> None:
+        """*run* found the objects of *looked_up* (`lookups_seen`) by a
+        lookup as it ran, each with the state it had then: its entry is
+        served only while each has it again, as for one an input holds. One
+        it changed is not stored, as a hit would not change it again."""
+        found = dict(run.reference_states or {})
+        for key, digest in looked_up.items():
+            found.setdefault(key, digest)
+        run.reference_states = found
+        if run.skip_cache:
+            return
+        changed = reference_states.moved(looked_up)
+        if changed:
+            run.skip_cache = True
+            run.metrics["uncacheable_reasons"].append(f"it changed {', '.join(changed)}, which is pickled by reference")
 
     @contextmanager
     def _executing(self, run: StatementRun) -> Generator[CodeRunner, None, None]:
@@ -2775,7 +2793,11 @@ class StatementProcessor:
         # run changes of them is seen (`reference_states`), by the statement
         # and by each call in it the call cache keeps.
         references_before = reference_states.known_states()
-        self._note_reference_states(run, references_before)
+        read_names = self._note_reference_states(run, references_before)
+        # The functions of the user's it may call, from a library's code too
+        # (a callback): what they find by a lookup is seen (`lookups_seen`).
+        user_ns = self.shell.user_ns
+        called = [user_ns[name] for name in read_names if type(user_ns.get(name)) is types.FunctionType]
         unordered = sparse_order.unordered_sparse(run.inputs, self.shell.user_ns)
         unloaded = unloaded_body_imports(run.cache_key)
         env_reads: set[str] = set()
@@ -2803,6 +2825,7 @@ class StatementProcessor:
                     FileAccessTracker(self.shell.user_ns, hash_on_read=not run.skip_cache) as file_tracker,
                     helper_memos.watching_clears(memos_before) as memos_cleared,
                     reference_states.running(references_before, run.reference_states),
+                    lookups_seen.watching(called, user_ns) as looked_up,
                 ):
                     user_ns = self.shell.user_ns
                     shadowed = user_ns.get(LOOP_ITERABLE_NAME, NO_LOOP_ITERABLE) if handed else None
@@ -2871,6 +2894,11 @@ class StatementProcessor:
         ):
             run.skip_cache = True
             run.metrics["uncacheable_reasons"].append(CHANGED_PYPLOT_REASON)
+        if looked_up:
+            # What its calls found by a lookup (``getLogger('app')``), as
+            # found: read as an input's objects are, and changed by it when
+            # not so now.
+            self._note_looked_up(run, looked_up)
         if references_before and not run.skip_cache:
             changed_references = reference_states.moved(references_before)
             if changed_references:

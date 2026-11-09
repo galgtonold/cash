@@ -508,6 +508,12 @@ def _met_again(digest: str) -> None:
 _KNOWN_BY_REFERENCE: dict[bytes | None, None] = {}
 
 
+def note_known_by_reference(recipe: bytes | None) -> None:
+    """Count *recipe* among `known_by_reference`: an object a statement
+    found by a lookup (`tracking.lookups_seen`)."""
+    _KNOWN_BY_REFERENCE[recipe] = None
+
+
 def known_by_reference() -> tuple[bytes | None, ...]:
     """The recipes of every object pickled by reference that a value hashed
     in this process held (`held_by_reference`)."""

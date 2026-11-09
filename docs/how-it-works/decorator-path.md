@@ -102,7 +102,7 @@ pickled, such as a lock, is keyed by its type; one that holds the object
 leaving it out is keyed by its content, as pickle stores the cycle. A
 library's class is keyed by what it pickles.
 
-<!-- claim: cash/kept_state.py:_own_attrs @47165357, cash/kept_state.py:_reduce_by_reference_for_key @a587f5e4, cash/kept_state.py:stands_by_reference @f8f477fc -->
+<!-- claim: cash/kept_state.py:_own_attrs @d8122464, cash/kept_state.py:_reduce_by_reference_for_key @a587f5e4, cash/kept_state.py:stands_by_reference @f8f477fc -->
 An object that pickles by reference, by its name or by a call that looks it
 up (a logger pickles as `getLogger(name)`), is keyed with the attributes it
 holds, as a pickle by value would hold them, in an argument and in a global

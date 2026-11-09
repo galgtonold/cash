@@ -91,3 +91,70 @@ def test_a_statement_setting_the_level_runs_again(cash_magics, cash_instance, tm
             run_cash_cell(cash_magics, cell, cells=cells)
     assert logging.getLogger(NAME).level == 10
     assert cash_magics.shell.user_ns["seen"] == 10
+
+
+#: The logger as a module's attribute: read through the module, no call.
+LOGGER = logging.getLogger(NAME)
+
+LOOKUP_SETUP = (
+    "import logging\n"
+    f"import {__name__} as here\n"
+    f"logging.getLogger({NAME!r}).setLevel(10)\n"
+    "def level_now():\n"
+    f"    return logging.getLogger({NAME!r}).level\n"
+    "def level_of_item(_):\n"
+    "    return level_now()\n"
+    "def set_level(n):\n"
+    f"    logging.getLogger({NAME!r}).setLevel(n)\n"
+    "    return n"
+)
+
+
+@pytest.mark.parametrize(
+    "reader",
+    [
+        f"seen = logging.getLogger({NAME!r}).level",
+        "seen = level_now()",
+        "seen = here.LOGGER.level",
+        "seen = max(map(level_of_item, [0]))",
+    ],
+    ids=["in-the-statement", "in-a-function", "a-module-attribute", "called-back-by-a-builtin"],
+)
+def test_a_reader_looking_the_logger_up_runs_again(cash_magics, cash_instance, reader):
+    """No input holds the logger: the statement, or a function it calls
+    (from a builtin's code too), finds it by its name as it runs, or reads
+    it as a module's attribute."""
+    cash_instance.config.min_execution_time_to_cache_seconds = 0.0
+    cash_instance.config.call_cost_floor_seconds = 0.0
+    cells = [
+        LOOKUP_SETUP,
+        reader,
+        "below = seen + 1",
+        f"# elsewhere\nlogging.getLogger({NAME!r}).setLevel(30)",
+        f"# again\n{reader}",
+        "# again\nbelow = seen + 1",
+    ]
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    assert cash_magics.shell.user_ns["seen"] == 30
+    assert cash_magics.shell.user_ns["below"] == 31
+
+
+@pytest.mark.parametrize(
+    "setter",
+    [f"logging.getLogger({NAME!r}).setLevel(10)", "set_level(10)", "done = set_level(10)"],
+    ids=["in-the-statement", "in-a-function", "in-a-kept-call"],
+)
+def test_a_cell_setting_the_level_the_logger_had_runs_again(cash_magics, cash_instance, setter):
+    """Run when the level was already 10, it changed nothing and was stored.
+    The level then set to 30 elsewhere, a hit would leave it there."""
+    cash_instance.config.min_execution_time_to_cache_seconds = 0.0
+    cash_instance.config.call_cost_floor_seconds = 0.0
+    cells = [LOOKUP_SETUP, setter, f"seen = logging.getLogger({NAME!r}).level"]
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    run_cash_cell(cash_magics, f"# elsewhere\nlogging.getLogger({NAME!r}).setLevel(30)", cells=cells)
+    for cell in cells[1:]:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    assert logging.getLogger(NAME).level == 10
+    assert cash_magics.shell.user_ns["seen"] == 10

@@ -2361,15 +2361,31 @@ def _own_attrs(obj: Any) -> dict:
     if not attrs:
         return attrs
     t = type(obj)
-    own = {}
+    own: dict = {}
     for name, value in attrs.items():
         if any(klass.__dict__.get(name, _NOT_HELD) is value for klass in t.__mro__):
+            continue
+        if type(value) is types.FunctionType and value.__dict__.get(_INSTRUMENTATION) is True:
+            # Cash's own, set on the object while a statement runs and
+            # taken off after (`mark_instrumentation`): not its state.
             continue
         own[name] = value
     return own
 
 
 _NOT_HELD = object()
+
+#: The attribute `mark_instrumentation` sets on a function of cash's own.
+_INSTRUMENTATION = "__cash_instrumentation__"
+
+
+def mark_instrumentation(fn: types.FunctionType) -> types.FunctionType:
+    """Mark *fn*, a function cash sets on a user's object while a statement
+    runs (a memo's ``cache_clear`` that records the call), as cash's own:
+    left out of the object's state (`_own_attrs`), which a run compares
+    before and after with it put back."""
+    fn.__dict__[_INSTRUMENTATION] = True
+    return fn
 
 
 #: Whether a key's pickle reduces an object pickled by reference with its
@@ -2393,9 +2409,19 @@ def folding_by_reference() -> Iterator[None]:
 def state_digest(obj: Any) -> str:
     """The digest of *obj*'s keyed pickle with the state of each object
     pickled by reference in it (`folding_by_reference`). Raises what
-    pickling raises."""
-    with folding_by_reference():
-        return hashlib.sha256(dumps(obj, keyed=True)).hexdigest()
+    pickling raises.
+
+    Taken in a keying of its own, whatever keying is open around it: one
+    open there may be telling *obj* what it leaves out, and answers it
+    without its attributes, so the digest a statement took as it ran
+    differed from the one taken after it for an object nothing changed."""
+    outer = _KEYING.now
+    _KEYING.now = None
+    try:
+        with folding_by_reference(), one_keying():
+            return hashlib.sha256(dumps(obj, keyed=True)).hexdigest()
+    finally:
+        _KEYING.now = outer
 
 
 class _Met(threading.local):
