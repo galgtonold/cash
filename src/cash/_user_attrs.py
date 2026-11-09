@@ -79,7 +79,7 @@ def from_family(kind: type, family: str) -> bool:
     never the user's code: a class of the user's named ``DataFrame`` or
     ``csr_matrix`` had its ``memory_usage``, ``_mgr`` or ``data`` run by a
     size check that went by the name alone."""
-    module = _MODULE(kind)
+    module = _module_of(kind)
     return type(module) is str and (module == family or module.startswith(family + "."))
 
 
@@ -98,8 +98,21 @@ def _users_class(klass: type) -> bool:
     is fixed when it is made."""
     from .install_paths import is_user_code_module
 
-    module = sys.modules.get(_MODULE(klass))
+    name = _module_of(klass)
+    if name is None:
+        # ``type('W', (), {})`` run in a dict with no ``__name__`` has no
+        # module at all: only the user's code makes one, so it is the user's.
+        return True
+    module = sys.modules.get(name) if type(name) is str else None
     return module is not None and is_user_code_module(module)
+
+
+def _module_of(klass: type) -> Any:
+    """*klass*'s ``__module__``, or None for a class made with none."""
+    try:
+        return _MODULE(klass)
+    except AttributeError:
+        return None
 
 
 def forget_user_classes() -> None:
