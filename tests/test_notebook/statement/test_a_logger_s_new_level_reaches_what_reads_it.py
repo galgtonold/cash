@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import types
+import warnings
 
 import pytest
 
@@ -184,3 +185,46 @@ def test_a_cell_setting_the_level_the_logger_had_runs_again(cash_magics, cash_in
         run_cash_cell(cash_magics, cell, cells=cells)
     assert logging.getLogger(NAME).level == 10
     assert cash_magics.shell.user_ns["seen"] == 10
+
+
+#: More items than cash looks through for an object found by its name
+#: (`handed_callables.ITEM_TYPES_AT`), the logger last.
+BIG = [0] * 100_000 + [LOGGER]
+#: Loggers each found by its own name.
+MANY = [logging.getLogger(f"{NAME}.{i}") for i in range(20)] + [LOGGER]
+
+
+def _codes(caught):
+    return [getattr(w.message, "code", None) for w in caught]
+
+
+def test_a_container_too_big_to_look_through_is_never_served(cash_magics, cash_instance):
+    """An item read by C from a container too big to look through: the
+    statement runs every time, and a warning says why, rather than be
+    served what it read before."""
+    cash_instance.config.min_execution_time_to_cache_seconds = 0.0
+    reader = "seen = here.BIG[-1].level"
+    cells = [LOOKUP_SETUP, reader, f"# elsewhere\nlogging.getLogger({NAME!r}).setLevel(30)", f"# again\n{reader}"]
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+    assert cash_magics.shell.user_ns["seen"] == 30
+    assert "NOTEBOOK-ITEMS-UNREAD" in _codes(caught)
+
+
+def test_noting_past_the_budget_is_never_served(cash_magics, cash_instance, monkeypatch):
+    """Checking the loggers a statement meets takes longer than its budget:
+    it runs every time, and a warning says why."""
+    from cash.notebook.statement.processor import StatementProcessor
+
+    cash_instance.config.min_execution_time_to_cache_seconds = 0.0
+    monkeypatch.setattr(StatementProcessor, "_noting_budget", staticmethod(lambda run: 0.0), raising=False)
+    reader = "seen = here.MANY[-1].level"
+    cells = [LOOKUP_SETUP, reader, f"# elsewhere\nlogging.getLogger({NAME!r}).setLevel(30)", f"# again\n{reader}"]
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+    assert cash_magics.shell.user_ns["seen"] == 30
+    assert "NOTEBOOK-ANALYSIS-BUDGET" in _codes(caught)

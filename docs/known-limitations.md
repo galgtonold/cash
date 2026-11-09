@@ -635,7 +635,7 @@ a name bound through the namespace, `eval`, `exec` of a computed string and
 
 ### An object found by a lookup cash does not see
 
-<!-- claim: cash/tracking/lookups_seen.py:_note_globals @000220c4, cash/tracking/lookups_seen.py:_note_value @4f20181f, cash/tracking/lookups_seen.py:_on_call @3f4ed601, cash/tracking/lookups_seen.py:_on_start @182191e3, cash/tracking/lookups_seen.py:_on_return @837b016e, cash/tracking/lookups_seen.py:arm @621f5c02 -->
+<!-- claim: cash/tracking/lookups_seen.py:_note_object @8e9bfd0b, cash/tracking/lookups_seen.py:_note_globals @68b1cf88, cash/tracking/lookups_seen.py:_note_value @cda5c7cf, cash/tracking/lookups_seen.py:_on_call @3f4ed601, cash/tracking/lookups_seen.py:_on_start @182191e3, cash/tracking/lookups_seen.py:_on_return @837b016e, cash/tracking/lookups_seen.py:arm @621f5c02 -->
 A logger pickles by its name, so a statement can find it without any
 variable holding it: `seen = logging.getLogger("app").level`. On Python 3.12
 and newer, cash checks such an object when a call written in Python returns
@@ -657,8 +657,11 @@ before after another cell changes it:
   an object before (`logging.getLogger`), are watched wherever they are
   called; any other is not.
 
-A statement whose reads meet more than 1,000 such objects in containers runs
-every time, uncached. Before Python 3.12, or when other tools hold the
+A statement that reads, through a module, a container of more than 100,000
+items runs every time, uncached, and
+[NOTEBOOK-ITEMS-UNREAD](warnings.md#notebook-items-unread) says so; so does
+one whose checking of such objects takes longer than its analysis budget
+([NOTEBOOK-ANALYSIS-BUDGET](warnings.md#notebook-analysis-budget)). Before Python 3.12, or when other tools hold the
 monitoring tool ids cash asks for (5 and 2), none of these lookups is
 checked, and [NOTEBOOK-LOOKUPS-UNSEEN](warnings.md#notebook-lookups-unseen)
 says so once, at the first statement that calls something or reads an

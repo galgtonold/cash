@@ -1766,6 +1766,13 @@ class StatementProcessor:
             reasons.append(ANALYSIS_BUDGET_REASON)
         run.process_before = (os.getcwd(), dict(os.environ))
 
+    @staticmethod
+    def _noting_budget(run: StatementRun) -> float:
+        """The CPU seconds noting what *run* finds by a lookup as it runs may
+        take (`lookups_seen.watching`): its analysis budget."""
+        budget = run.analysis_budget
+        return analysis_budget_seconds(None) if budget is None else budget.seconds
+
     def _budget_left(self, run: StatementRun) -> AnalysisBudget | None:
         """What is left of *run*'s analysis budget, for the analyses after it
         ran; None for a statement that has none."""
@@ -2876,7 +2883,7 @@ class StatementProcessor:
                     FileAccessTracker(self.shell.user_ns, hash_on_read=not run.skip_cache) as file_tracker,
                     helper_memos.watching_clears(memos_before) as memos_cleared,
                     reference_states.running(references_before, run.reference_states),
-                    lookups_seen.watching(called, user_ns) as looked_up,
+                    lookups_seen.watching(called, user_ns, self._noting_budget(run)) as looked_up,
                 ):
                     user_ns = self.shell.user_ns
                     shadowed = user_ns.get(LOOP_ITERABLE_NAME, NO_LOOP_ITERABLE) if handed else None

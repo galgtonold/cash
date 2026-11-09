@@ -1881,7 +1881,7 @@ Notebook-wide machinery rather than one statement. Every code here starts `NOTEB
 | [NOTEBOOK-FORWARD-READ](#notebook-forward-read) | notebook | the cell reads a name only a cell below binds, so it runs uncached |
 | [NOTEBOOK-IDENTITY-HELD](#notebook-identity-held) | notebook | a value finds another object by a weak reference or an id(), or the notebook points into what a loop changes, so the statement runs every time |
 | [NOTEBOOK-INPUT-UNBUILT](#notebook-input-unbuilt) | notebook | an input the cell's own cache entry was to rebuild was not, so the statement ran on the old value, unstored |
-| [NOTEBOOK-ITEMS-UNREAD](#notebook-items-unread) | notebook | an item of a container too big to look through is read by an index cash cannot tell, while a class of yours has a special method with effects, or an iterator may sit in it: the statement runs every time |
+| [NOTEBOOK-ITEMS-UNREAD](#notebook-items-unread) | notebook | an item of a container too big to look through is read by an index cash cannot tell, while a class of yours has a special method with effects, or an iterator, or an object found by its name, may sit in it: the statement runs every time |
 | [NOTEBOOK-LOOKUPS-UNSEEN](#notebook-lookups-unseen) | notebook | what a statement finds by a lookup as it runs (a logger by its name) cannot be watched here, so it is not checked |
 | [NOTEBOOK-MAGIC-STALE](#notebook-magic-stale) | notebook | a name a shell command or magic bound is kept, though it would bind it differently now |
 | [NOTEBOOK-NO-LIVE-READER](#notebook-no-live-reader) | notebook | cells above are read from the saved file, so an unsaved edit there is not seen |
@@ -1914,6 +1914,14 @@ for a quicker one, caching would not have mattered. It is shown too when a
 statement calls a chain of more than 256 of your functions, each calling the
 next: cash stops following the chain, and takes each of your functions that
 changes what its closure holds as one the statement may call.
+
+<!-- claim: cash/tracking/lookups_seen.py:_note_object @8e9bfd0b, cash/tracking/lookups_seen.py:_warn_past_budget @5513f5a3, cash/notebook/statement/processor.py:StatementProcessor._noting_budget @50e66598 -->
+It is shown, once per session, when checking the objects a statement finds
+by their names as it runs (loggers, each found by its name: see
+[what is checked](known-limitations.md#an-object-found-by-a-lookup-cash-does-not-see))
+took longer than that budget, counted over that checking alone. cash stops
+checking them, and the statement runs every time; what it binds is not
+keyed by its value then.
 
 **Why it matters.** The statement runs every time and is not stored. What it
 binds is keyed by its value, as a `# @cash:no-cache` statement's is: a cell
@@ -2288,6 +2296,13 @@ for objects of your classes. A class of yours has a special method that
 changes something outside its objects (`__add__` appending to a global
 list), so the operator may run it. The message names the container. It is
 shown once for each.
+
+<!-- claim: cash/tracking/lookups_seen.py:_note_value @cda5c7cf, cash/tracking/lookups_seen.py:_warn_too_big @347ff5b1 -->
+It is shown too, once for each, when a statement, or a function of yours it
+calls, reads a dict, list or tuple through a module (`mod.ROWS`,
+`logging.Logger.manager.loggerDict`) that holds more than 100,000 items, too
+many to look through for an object found by its name, such as a logger, that
+an item read by C may find. The statement runs every time.
 
 It is also shown, once per statement, when a statement reads an item of a
 container by an index or method cash cannot follow (`[f(h[k]) for k in

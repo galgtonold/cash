@@ -33,11 +33,13 @@ from collections.abc import Iterable, Iterator, Mapping
 from typing import Any
 
 from .. import _weak, kept_state
+from .._clock import _thread_time
 from .._paths import is_pseudo_filename
 from .._type_memo import mro_of
 from .._user_attrs import attribute_or, own_dict
+from ..analysis.analysis_budget import ANALYSIS_BUDGET_FLOOR_S
 from ..diagnostics import log_diagnostic, warn_diagnostic
-from ..exceptions import CashWarning
+from ..exceptions import CashCacheIneffectiveWarning, CashWarning
 from ..install_paths import is_cash_path, is_user_path
 from ..value_hash import HASH_ERRORS, note_known_by_reference, recipes_met
 
@@ -90,10 +92,16 @@ class _Watch:
         #: The notebook's functions not armed yet, by their code: armed when
         #: first started (`_on_start`), with the globals they read.
         self.starts: dict[types.CodeType, Mapping[str, Any]] = {}
-        #: How many more items of the containers a read meets are looked at,
-        #: and noted (`_note_value`).
-        self.items_left = _ITEMS_LOOKED_AT
-        self.notes_left = _ITEMS_NOTED
+        #: The ids of the items of containers noted (`_note_value`), each
+        #: reduced once.
+        self.noted: set[int] = set()
+        #: The reads of containers too big to look through (`_too_big`).
+        self.too_big: list[str] = []
+        #: The CPU seconds noting may take (`_note_object`), what it took,
+        #: and whether it ran past them.
+        self.budget = ANALYSIS_BUDGET_FLOOR_S
+        self.noting = 0.0
+        self.past_budget = False
 
 
 _ACTIVE: _Watch | None = None
@@ -182,16 +190,70 @@ def _ours() -> bool:
         return False
 
 
+#: The reads `_warn_too_big` told of, once each.
+_TOO_BIG_SAID: set[str] = set()
+
+
+def _warn_too_big(read: str) -> None:
+    """NOTEBOOK-ITEMS-UNREAD, once for each container read: the statement
+    ran uncached, as *read* holds more items than cash looks through for an
+    object found by its name."""
+    if read in _TOO_BIG_SAID:
+        return
+    _TOO_BIG_SAID.add(read)
+    from ..analysis.handed_callables import ITEM_TYPES_AT
+
+    what = (
+        f"this statement reads {read}, which holds more than {ITEM_TYPES_AT:,} items to look through for "
+        "objects found by their names (such as loggers): the statement runs every time rather than be "
+        "served from the cache"
+    )
+    fix = (
+        "read what the statement needs from it in a cell of its own, or bind it to a variable and read "
+        "that; then the statement is cached again."
+    )
+    log_diagnostic(_logger, "NOTEBOOK-ITEMS-UNREAD", what, fix)
+    warn_diagnostic(CashWarning, "NOTEBOOK-ITEMS-UNREAD", what, fix)
+
+
+_warned_past_budget = False
+
+
+def _warn_past_budget(watch: _Watch) -> None:
+    """NOTEBOOK-ANALYSIS-BUDGET, once per session for this cause: checking
+    the objects found by their names the statement met took longer than
+    its budget, so it is not served."""
+    global _warned_past_budget
+    if _warned_past_budget:
+        return
+    _warned_past_budget = True
+    what = (
+        f"this statement was not cached: checking the objects found by their names it met (such as "
+        f"loggers) took more than its {watch.budget:.1f}s budget (four times what it took the last time it "
+        "ran, at least half a second). It runs every time; this is said once."
+    )
+    fix = (
+        "bind the objects it reads to variables in a cell of their own and read them through those, or "
+        "wrap the work in a function decorated with @cash.cache."
+    )
+    log_diagnostic(_logger, "NOTEBOOK-ANALYSIS-BUDGET", what, fix)
+    warn_diagnostic(CashCacheIneffectiveWarning, "NOTEBOOK-ANALYSIS-BUDGET", what, fix)
+
+
 @contextlib.contextmanager
 def watching(
-    functions: Iterable[Any] = (), user_ns: Mapping[str, Any] | None = None
+    functions: Iterable[Any] = (),
+    user_ns: Mapping[str, Any] | None = None,
+    budget: float = ANALYSIS_BUDGET_FLOOR_S,
 ) -> Iterator[dict[str, str] | None]:
     """Within it, a statement runs whose code `arm` arms, and that may call
     the user's *functions* (from a library's code too, as a callback): yields
     the ``{recipe key: digest}`` of each object pickled by reference it
     found -- a call's result, a module's attribute or a global its code
     reads -- with its state when first found; None when nothing can be seen
-    here (`available`)."""
+    here (`available`). Noting them may take *budget* CPU seconds, the
+    statement's analysis budget: past it, it is never served
+    (NOTEBOOK-ANALYSIS-BUDGET)."""
     global _ACTIVE, _UNWATCHED
     if not _install():
         # Said once, by the first statement that may find one (`arm`).
@@ -203,6 +265,7 @@ def watching(
         return
     watch = _Watch()
     watch.user_ns = user_ns
+    watch.budget = budget
     with _LOCK:
         outer, _ACTIVE = _ACTIVE, watch
     try:
@@ -224,6 +287,10 @@ def watching(
                 # The id was freed as it ran: what it found since is unseen.
                 watch.collectors[0][UNSEEN] = UNSEEN
             _disarm(watch)
+    for read in watch.too_big:
+        _warn_too_big(read)
+    if watch.past_budget:
+        _warn_past_budget(watch)
 
 
 def arm(units: list[types.CodeType], namespace: Mapping[str, Any]) -> None:
@@ -341,7 +408,7 @@ def _note_globals(code: types.CodeType, namespace: Mapping[str, Any], notebooks:
         if value is _MISSING:
             value = vars(builtins).get(name, _MISSING)
         through_module = False
-        for attr in (None, *attrs):
+        for depth, attr in enumerate((None, *attrs)):
             if attr is not None:
                 if not through_module:
                     if not issubclass(type(value), types.ModuleType):
@@ -352,23 +419,17 @@ def _note_globals(code: types.CodeType, namespace: Mapping[str, Any], notebooks:
                 break
             if attr is None and notebooks:
                 continue
-            _note_value(value)
+            _note_value(value, ".".join((name, *attrs[:depth])))
 
 
-#: How many items of the containers a statement's reads meet are looked
-#: at (`_note_value`), in all: one past that is not looked through.
-_ITEMS_LOOKED_AT = 10_000
-#: How many of them are noted, in all: past that, the statement is never
-#: served (`_unreadable`).
-_ITEMS_NOTED = 1_000
-
-
-def _note_value(value: Any) -> None:
-    """Note *value* when it stands by reference, or what a dict, list or
-    tuple *value* holds that does, one level down. An item is taken for
-    one only by its class, one an instance of which was seen pickled by
-    reference (`kept_state.seen_by_reference`) and not the user's: no other
-    item is reduced, and no code of the user's runs."""
+def _note_value(value: Any, read: str) -> None:
+    """Note *value*, which the statement reads as *read*, when it stands by
+    reference, or what a dict, list or tuple *value* holds that does, one
+    level down. An item is taken for one only by its class, one an instance
+    of which was seen pickled by reference (`kept_state.seen_by_reference`)
+    and not the user's: no other item is reduced, and no code of the user's
+    runs. One of more than `ITEM_TYPES_AT` items is not looked through: the
+    statement is never served (`_too_big`)."""
     kind = type(value)
     if kind is dict:
         items = value.values()
@@ -381,27 +442,32 @@ def _note_value(value: Any) -> None:
     watch = _ACTIVE
     if watch is None:
         return
-    if len(items) > watch.items_left:
-        watch.items_left = 0
+    seen = kept_state.kinds_by_reference()
+    if not seen:
+        # No class was seen pickled by a name yet: no item is taken for one.
         return
-    watch.items_left -= len(items)
-    seen = kept_state.seen_by_reference
-    kinds: dict[type, bool] = {}
+    from ..analysis.handed_callables import ITEM_TYPES_AT
+
+    if len(items) > ITEM_TYPES_AT:
+        _too_big(watch, read)
+        return
+    # Which classes the items are, read in C: nothing of theirs runs.
+    met = [kind for kind in seen.intersection(map(type, items)) if not _is_users_class(kind)]
+    if not met:
+        return
+    noted = watch.noted
     for item in list(items):
-        kind = type(item)
-        if kind in _PLAIN:
-            continue
-        noted = kinds.get(kind)
-        if noted is None:
-            noted = kinds[kind] = seen(kind) and not _is_users_class(kind)
-        if noted:
-            if not watch.notes_left:
-                # More than are read in the time a statement may take: it
-                # is never served, rather than served on part of them.
-                _unreadable()
-                return
-            watch.notes_left -= 1
+        if type(item) in met and id(item) not in noted:
+            noted.add(id(item))
             _note_object(item)
+
+
+def _too_big(watch: _Watch, read: str) -> None:
+    """A container the statement reads, as *read*, holds more than
+    `ITEM_TYPES_AT` items: it is never served (`_unreadable`), rather than
+    served on what was not looked at, and `watching` says so once it ran."""
+    watch.too_big.append(read)
+    _unreadable()
 
 
 def _may_note(kind: type) -> bool:
@@ -676,7 +742,27 @@ def _unreadable() -> None:
 
 def _note_object(obj: Any) -> bool:
     """Note *obj*, with its state, in each collector open when it stands by
-    reference to a lookup; whether it does."""
+    reference to a lookup; whether it does. What noting takes, in this
+    thread's CPU time, is held to the statement's analysis budget
+    (`watching`): past it, the statement is never served and nothing more
+    is noted."""
+    watch = _ACTIVE
+    if watch is None:
+        return _note_now(obj)
+    if watch.past_budget:
+        return True
+    started = _thread_time()
+    try:
+        return _note_now(obj)
+    finally:
+        watch.noting += _thread_time() - started
+        if watch.noting > watch.budget:
+            watch.past_budget = True
+            _unreadable()
+
+
+def _note_now(obj: Any) -> bool:
+    """`_note_object`, untimed."""
     try:
         reduced = obj.__reduce_ex__(4)
     except Exception:  # noqa: BLE001 - one that cannot be reduced is pickled by value or not at all
