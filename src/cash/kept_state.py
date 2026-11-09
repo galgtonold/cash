@@ -2291,7 +2291,7 @@ def _decide_may_stand_by_reference(t: type) -> bool:
     return False
 
 
-_MAY_STAND_BY_REFERENCE: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_MAY_STAND_BY_REFERENCE: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()
 
 #: What a reduce rebuilds an object from its class and its state with: by
 #: value, never a lookup.
@@ -2456,23 +2456,63 @@ def _note_met(obj: Any, reduced: Any) -> None:
     found = _MET.found
     if found is not None and looks_up(reduced):
         found.append((reduced, obj))
+        note_kind_by_reference(type(obj), reduced)
+
+
+#: The classes an instance of which was seen pickled by reference to a
+#: lookup by a name (`note_kind_by_reference`).
+_KINDS_BY_REFERENCE: set[type] = set()
+
+
+def note_kind_by_reference(kind: type, reduced: Any) -> None:
+    """An instance of *kind* was seen pickled by reference to *reduced*.
+    When that finds it by a name (a logger's ``getLogger('app')``, not a
+    timestamp's ``_unpickle_timestamp(<numbers>)``, which makes it again
+    from what it holds), `seen_by_reference` takes one of them for such
+    without reducing it."""
+    if kind in _KINDS_BY_REFERENCE:
+        return
+    if type(reduced) is str or (
+        type(reduced) is tuple
+        and len(reduced) >= 2
+        and type(reduced[1]) is tuple
+        and any(type(arg) is str for arg in reduced[1])
+    ):
+        _KINDS_BY_REFERENCE.add(kind)
+
+
+def seen_by_reference(kind: type) -> bool:
+    """Was an instance of *kind* seen pickled by reference to a lookup by a
+    name? A set lookup: no code of the object's runs."""
+    return kind in _KINDS_BY_REFERENCE
 
 
 def looks_up(reduced: Any) -> bool:
     """May *reduced*, a reduce that stands by reference
     (`stands_by_reference`), find its object by a name: a string, or a call
-    given only names and numbers (``getLogger('app')``)? A call given bytes
-    or a container is given content (a tensor's storage pickles as
-    ``_load_from_bytes(data)``) and builds an object from it. Whether the
-    call finds this very object is asked of its recipe
+    given a name among names and numbers (``getLogger('app')``), or given
+    nothing (``getLogger()``)? A call given bytes or a container is given
+    content (a tensor's storage pickles as ``_load_from_bytes(data)``), and
+    one given numbers alone the value (a timestamp's
+    ``_unpickle_timestamp(<nanoseconds>, ...)``): each builds an object
+    from it. Whether the call finds this very object is asked of its recipe
     (`finds_itself`)."""
-    return isinstance(reduced, str) or _all_atoms(reduced[1])
+    if isinstance(reduced, str):
+        return True
+    args = reduced[1]
+    return _all_atoms(args) and (args == () or _names(args))
 
 
 def _all_atoms(value: Any) -> bool:
     if type(value) is tuple:
         return all(_all_atoms(item) for item in value)
     return value is None or type(value) in (str, int, float, bool)
+
+
+def _names(value: Any) -> bool:
+    if type(value) is tuple:
+        return any(_names(item) for item in value)
+    return type(value) is str
 
 
 def finds_itself(obj: Any, recipe: bytes) -> bool:

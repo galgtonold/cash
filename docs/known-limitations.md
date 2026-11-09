@@ -635,7 +635,7 @@ a name bound through the namespace, `eval`, `exec` of a computed string and
 
 ### An object found by a lookup cash does not see
 
-<!-- claim: cash/tracking/lookups_seen.py:_note_globals @000220c4, cash/tracking/lookups_seen.py:_on_return @a6d10e37, cash/tracking/lookups_seen.py:_site_done @92e96264, cash/tracking/lookups_seen.py:_warn_unseen_once @51c2c97b -->
+<!-- claim: cash/tracking/lookups_seen.py:_note_globals @000220c4, cash/tracking/lookups_seen.py:_note_value @4f20181f, cash/tracking/lookups_seen.py:_on_call @3f4ed601, cash/tracking/lookups_seen.py:_on_start @182191e3, cash/tracking/lookups_seen.py:_on_return @837b016e, cash/tracking/lookups_seen.py:arm @621f5c02 -->
 A logger pickles by its name, so a statement can find it without any
 variable holding it: `seen = logging.getLogger("app").level`. On Python 3.12
 and newer, cash checks such an object when a call written in Python returns
@@ -646,17 +646,23 @@ found in other ways, and a statement reading it is served what it read
 before after another cell changes it:
 
 - by a call written in C: `getattr(logging, "root")`, `vars(logging)["root"]`,
-  `operator.attrgetter("root")(logging)`, `functools.partial(logging.getLogger, "app")()`;
+  `operator.attrgetter("root")(logging)`;
 - by a function of yours that returns what such a call found;
-- in a dict, list or tuple of more than 10,000 items;
-- by a call made where the statement names a function by a global, or an
-  attribute of one, after something other than your code rebound that name
-  while the statement ran (`setattr(module, name, f)` in a library): cash
-  watches such a call site once per statement.
+- in a dict, list or tuple, when its class was not yet seen pickled by its
+  name in the session;
+- by a call made where an earlier call of the same statement, at the same
+  place, called another function (`for get in getters: get("app")`): cash
+  watches each place a call is made for the first function called there. A
+  function of your notebook, and a library's function seen returning such
+  an object before (`logging.getLogger`), are watched wherever they are
+  called; any other is not.
 
-Before Python 3.12, or when other tools hold the monitoring tool ids cash
-asks for (5 and 2), none of these lookups is checked, and
-[NOTEBOOK-LOOKUPS-UNSEEN](warnings.md#notebook-lookups-unseen) says so once.
+A statement whose reads meet more than 1,000 such objects in containers runs
+every time, uncached. Before Python 3.12, or when other tools hold the
+monitoring tool ids cash asks for (5 and 2), none of these lookups is
+checked, and [NOTEBOOK-LOOKUPS-UNSEEN](warnings.md#notebook-lookups-unseen)
+says so once, at the first statement that calls something or reads an
+attribute.
 **Fix:** bind the object to a variable in a cell of its own
 (`log = logging.getLogger("app")`) and read it through that variable.
 

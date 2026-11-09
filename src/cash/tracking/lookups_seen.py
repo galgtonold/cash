@@ -20,7 +20,6 @@ reaches the statement as a value, which a digest reads.
 
 from __future__ import annotations
 
-import ast
 import base64
 import builtins
 import contextlib
@@ -33,7 +32,7 @@ import weakref
 from collections.abc import Iterable, Iterator, Mapping
 from typing import Any
 
-from .. import kept_state
+from .. import _weak, kept_state
 from .._paths import is_pseudo_filename
 from .._type_memo import mro_of
 from .._user_attrs import attribute_or, own_dict
@@ -82,13 +81,19 @@ class _Watch:
         self.user_ns: Mapping[str, Any] | None = None
         #: The functions a call of armed code was seen to call (`_on_call`).
         self.callables: set[types.FunctionType] = set()
-        #: The globals, and the attributes, armed code binds or deletes: a
-        #: call site naming one may call another callable next time, and is
-        #: not switched off (`_site_done`).
+        #: The globals, and the attributes, armed code binds or deletes
+        #: (`_note_rebinds`).
         self.rebound: set[str] = set()
         self.rebound_attrs: set[str] = set()
         #: The code with a call site switched off since `rebound` last grew.
         self.switched_off: set[types.CodeType] = set()
+        #: The notebook's functions not armed yet, by their code: armed when
+        #: first started (`_on_start`), with the globals they read.
+        self.starts: dict[types.CodeType, Mapping[str, Any]] = {}
+        #: How many more items of the containers a read meets are looked at,
+        #: and noted (`_note_value`).
+        self.items_left = _ITEMS_LOOKED_AT
+        self.notes_left = _ITEMS_NOTED
 
 
 _ACTIVE: _Watch | None = None
@@ -99,6 +104,7 @@ UNSEEN = ""
 #: installed.
 _CALL = 0
 _RETURN = 0
+_START = 0
 _LOCK = threading.RLock()
 _TOOL: int | None = None
 _REASON = ""
@@ -109,27 +115,34 @@ def available() -> bool:
     return _install()
 
 
+_OLD_PYTHON = "sys.monitoring needs Python 3.12 or newer"
+
+
 def _install() -> bool:
-    global _TOOL, _REASON, _CALL, _RETURN
+    """Take a monitoring tool id, or check the one taken is still cash's.
+    Ids other tools hold are asked for again each time: one may be freed."""
+    global _TOOL, _REASON, _CALL, _RETURN, _START
     if _TOOL is not None:
         if _ours():
             return True
         # Freed by another tool (``sys.monitoring.free_tool_id``), and maybe
         # taken since: asked for again.
         _TOOL = None
-    if _REASON:
+    if _REASON == _OLD_PYTHON:
         return False
     mon = attribute_or(sys, "monitoring", None)
     if mon is None:
-        _REASON = "sys.monitoring needs Python 3.12 or newer"
+        _REASON = _OLD_PYTHON
         return False
     for tool in _TOOL_IDS:
         if mon.get_tool(tool) is None:
             mon.use_tool_id(tool, _TOOL_NAME)
             mon.register_callback(tool, mon.events.CALL, _on_call)
             mon.register_callback(tool, mon.events.PY_RETURN, _on_return)
+            mon.register_callback(tool, mon.events.PY_START, _on_start)
             _TOOL = tool
-            _CALL, _RETURN = mon.events.CALL, mon.events.PY_RETURN
+            _CALL, _RETURN, _START = mon.events.CALL, mon.events.PY_RETURN, mon.events.PY_START
+            _REASON = ""
             return True
     _REASON = f"the monitoring tool ids {' and '.join(map(str, _TOOL_IDS))} are taken by other tools"
     return False
@@ -179,10 +192,14 @@ def watching(
     found -- a call's result, a module's attribute or a global its code
     reads -- with its state when first found; None when nothing can be seen
     here (`available`)."""
-    global _ACTIVE
+    global _ACTIVE, _UNWATCHED
     if not _install():
-        _warn_unseen_once()
-        yield None
+        # Said once, by the first statement that may find one (`arm`).
+        _UNWATCHED += 1
+        try:
+            yield None
+        finally:
+            _UNWATCHED -= 1
         return
     watch = _Watch()
     watch.user_ns = user_ns
@@ -192,6 +209,13 @@ def watching(
         for fn in functions:
             if type(fn) is types.FunctionType and _is_users(fn.__code__):
                 _arm_users(watch, fn.__code__, fn.__globals__)
+        if user_ns is not None:
+            _arm_starts(watch, user_ns)
+        # A library's function seen returning one: what it returns is seen
+        # from wherever it is called, a call site switched off included.
+        with _LOCK:
+            for code in list(_RETURNERS):
+                _set(watch, code, _RETURN)
         yield watch.collectors[0]
     finally:
         with _LOCK:
@@ -202,24 +226,73 @@ def watching(
             _disarm(watch)
 
 
-def arm(units: list[types.CodeType], namespace: Mapping[str, Any], source: str | None = None, shift: int = 0) -> None:
+def arm(units: list[types.CodeType], namespace: Mapping[str, Any]) -> None:
     """Have the calls *units*, a statement's compiled code run in
     *namespace*, make seen, and those of the code nested in it (a
     comprehension, a lambda, a function it defines); and note what the
     globals and module attributes it reads hold now. Nothing when no
-    statement is watched. *source* is the text they were compiled from,
-    *shift* lines further down (`compiled_source.shifted`): what each call
-    in it calls is read from it (`_static_sites`)."""
+    statement is watched; where none can be, the first that calls or reads
+    an attribute says so (NOTEBOOK-LOOKUPS-UNSEEN)."""
     watch = _ACTIVE
     if watch is None:
+        if _UNWATCHED and not _warned_unseen and any(_may_look_up(code) for unit in units for code in _nested(unit)):
+            _warn_unseen_once()
         return
-    if source is not None:
-        lines = source.encode("utf-8").splitlines(keepends=True)
-        for unit in units:
-            for code in _nested(unit):
-                _SOURCES[code] = (lines, shift)
     for unit in units:
         _arm_users(watch, unit, namespace)
+
+
+#: Statements running unwatched, as nothing can be (`watching`).
+_UNWATCHED = 0
+
+#: What a statement does when it may find an object by a lookup: a call, or
+#: a read of an attribute.
+_LOOKS = frozenset({"CALL", "CALL_KW", "CALL_FUNCTION_EX", "CALL_FUNCTION", "CALL_METHOD", "LOAD_ATTR", "LOAD_METHOD"})
+
+
+def _may_look_up(code: types.CodeType) -> bool:
+    return any(ins.opname in _LOOKS for ins in dis.get_instructions(code))
+
+
+def _arm_starts(watch: _Watch, user_ns: Mapping[str, Any]) -> None:
+    """Have the notebook's functions, and the methods of its classes,
+    armed when first started (`_on_start`), from wherever they are called:
+    a call site switched off after calling one (`_site_done`) may call
+    another next."""
+    for value in list(user_ns.values()):
+        kind = type(value)
+        if kind is types.FunctionType:
+            _arm_start(watch, value)
+        elif kind is type and _is_users_class(value):
+            for held in list(_CLASS_DICT(value).values()):
+                fn = held.__func__ if type(held) in (staticmethod, classmethod) else held
+                if type(fn) is types.FunctionType:
+                    _arm_start(watch, fn)
+
+
+def _arm_start(watch: _Watch, fn: types.FunctionType) -> None:
+    code = fn.__code__
+    if code in watch.armed or not _is_users(code):
+        return
+    watch.starts[code] = fn.__globals__
+    with _LOCK:
+        if _ACTIVE is watch:
+            _set(watch, code, _START)
+
+
+def _on_start(code: types.CodeType, offset: int) -> Any:
+    """A function of the notebook's armed to start (`_arm_starts`) runs:
+    its own calls and reads are seen from now on, as a call to it from an
+    armed call site would have it."""
+    watch = _ACTIVE
+    if watch is not None and not _THREAD.busy:
+        namespace = watch.starts.pop(code, None)
+        if namespace is not None and not watch.armed.get(code, 0) & _CALL:
+            try:
+                _arm_users(watch, code, namespace)
+            except Exception:  # noqa: BLE001 - whatever arming it raises: never served
+                _unreadable()
+    return sys.monitoring.DISABLE
 
 
 def _arm_users(watch: _Watch, unit: types.CodeType, namespace: Mapping[str, Any]) -> None:
@@ -282,30 +355,70 @@ def _note_globals(code: types.CodeType, namespace: Mapping[str, Any], notebooks:
             _note_value(value)
 
 
-#: How many items of a container a chain meets are looked through
-#: (`_note_value`): a bigger one's are not noted.
+#: How many items of the containers a statement's reads meet are looked
+#: at (`_note_value`), in all: one past that is not looked through.
 _ITEMS_LOOKED_AT = 10_000
+#: How many of them are noted, in all: past that, the statement is never
+#: served (`_unreadable`).
+_ITEMS_NOTED = 1_000
 
 
 def _note_value(value: Any) -> None:
     """Note *value* when it stands by reference, or what a dict, list or
-    tuple *value* holds that does, one level down."""
+    tuple *value* holds that does, one level down. An item is taken for
+    one only by its class, one an instance of which was seen pickled by
+    reference (`kept_state.seen_by_reference`) and not the user's: no other
+    item is reduced, and no code of the user's runs."""
     kind = type(value)
     if kind is dict:
-        if len(value) > _ITEMS_LOOKED_AT:
-            return
-        items = list(value.values())
+        items = value.values()
     elif kind is list or kind is tuple:
-        if len(value) > _ITEMS_LOOKED_AT:
-            return
-        items = list(value)
+        items = value
     else:
-        if kind not in _PLAIN and kept_state.may_stand_by_reference(kind):
+        if _may_note(kind):
             _note_object(value)
         return
-    for item in items:
-        if type(item) not in _PLAIN and kept_state.may_stand_by_reference(type(item)):
+    watch = _ACTIVE
+    if watch is None:
+        return
+    if len(items) > watch.items_left:
+        watch.items_left = 0
+        return
+    watch.items_left -= len(items)
+    seen = kept_state.seen_by_reference
+    kinds: dict[type, bool] = {}
+    for item in list(items):
+        kind = type(item)
+        if kind in _PLAIN:
+            continue
+        noted = kinds.get(kind)
+        if noted is None:
+            noted = kinds[kind] = seen(kind) and not _is_users_class(kind)
+        if noted:
+            if not watch.notes_left:
+                # More than are read in the time a statement may take: it
+                # is never served, rather than served on part of them.
+                _unreadable()
+                return
+            watch.notes_left -= 1
             _note_object(item)
+
+
+def _may_note(kind: type) -> bool:
+    """May an object of *kind* found be reduced, to see whether it stands
+    by reference? Not one of a class of the user's: its reduce is their
+    code."""
+    if kind in _PLAIN:
+        return False
+    if kept_state.seen_by_reference(kind):
+        return True
+    return kept_state.may_stand_by_reference(kind) and not _is_users_class(kind)
+
+
+def _is_users_class(kind: type) -> bool:
+    from ..analysis.handed_callables import is_users_class
+
+    return is_users_class(kind)
 
 
 def _attribute(value: Any, attr: str) -> Any:
@@ -348,7 +461,7 @@ _MISSING = object()
 _CLASS_DICT = type.__dict__["__dict__"].__get__
 
 #: ``code -> ((global name, (attribute, ...)), ...)`` (`_global_reads`).
-_READS: weakref.WeakKeyDictionary[types.CodeType, tuple[tuple[str, tuple[str, ...]], ...]] = weakref.WeakKeyDictionary()
+_READS: weakref.WeakKeyDictionary[types.CodeType, tuple[tuple[str, tuple[str, ...]], ...]] = _weak.WeakKeyDictionary()
 
 
 def _global_reads(code: types.CodeType) -> tuple[tuple[str, tuple[str, ...]], ...]:
@@ -424,36 +537,18 @@ def _on_call(code: types.CodeType, offset: int, callable_: Any, arg0: Any) -> An
         except Exception:  # noqa: BLE001 - whatever arming it raises: never served
             _unreadable()
             return None
-    return _site_done(watch, code, offset)
-
-
-def _site_done(watch: _Watch, code: types.CodeType, offset: int) -> Any:
-    """Once the callable a call site at *offset* of *code* called is seen to:
-    ``sys.monitoring.DISABLE`` when the site names it by a global, or an
-    attribute of one (``add``, ``random.randint``, ``p.get``), that no code
-    the statement runs of the user's binds (`_note_rebinds`), so it calls
-    the same each time and a loop pays for one event. A site whose callee
-    is anything else (a local, an item, a call's result) may call another
-    each time, and stays."""
-    try:
-        site = _static_sites(code).get(offset)
-    except Exception:  # noqa: BLE001 - a site that cannot be read stays
-        return None
-    if site is None:
-        return None
-    root, attrs = site
-    if root in watch.rebound or not watch.rebound_attrs.isdisjoint(attrs):
-        return None
-    # Switched back on when its code's events are set again: by the next
-    # statement's arming, or by `_note_rebinds`.
+    # Switched off once its callable is seen to, so a loop pays for one
+    # event: switched back on when its code's events are set again, by the
+    # next statement's arming or by `_note_rebinds`. A function of the
+    # notebook's it calls next is armed as it starts (`_on_start`).
     watch.switched_off.add(code)
     return sys.monitoring.DISABLE
 
 
 def _note_rebinds(watch: _Watch, code: types.CodeType) -> None:
-    """Note the globals and attributes *code* binds or deletes: a call site
-    naming one is not switched off, and those switched off already are
-    switched back on."""
+    """Note the globals and attributes *code* binds or deletes: the call
+    sites switched off already are switched back on, as one may name what
+    it binds."""
     names, attrs = _rebinds(code)
     if names <= watch.rebound and attrs <= watch.rebound_attrs:
         return
@@ -474,7 +569,7 @@ _STORES_NAME = frozenset({"STORE_NAME", "STORE_GLOBAL", "DELETE_NAME", "DELETE_G
 _STORES_ATTR = frozenset({"STORE_ATTR", "DELETE_ATTR"})
 
 #: ``code -> (names it binds, attributes it binds)`` (`_rebinds`).
-_REBINDS: weakref.WeakKeyDictionary[types.CodeType, tuple[frozenset[str], frozenset[str]]] = weakref.WeakKeyDictionary()
+_REBINDS: weakref.WeakKeyDictionary[types.CodeType, tuple[frozenset[str], frozenset[str]]] = _weak.WeakKeyDictionary()
 
 
 def _rebinds(code: types.CodeType) -> tuple[frozenset[str], frozenset[str]]:
@@ -488,199 +583,6 @@ def _rebinds(code: types.CodeType) -> tuple[frozenset[str], frozenset[str]]:
                 attrs.add(ins.argval)
         found = _REBINDS[code] = (frozenset(names), frozenset(attrs))
     return found
-
-
-_CALLS = frozenset({"CALL", "CALL_KW", "CALL_FUNCTION_EX"})
-_ROOTS = frozenset({"LOAD_GLOBAL", "LOAD_NAME"})
-#: What may sit among a callee's own instructions without changing what it
-#: loads.
-_INERT = frozenset({"PUSH_NULL", "NOP", "CACHE", "EXTENDED_ARG"})
-
-#: ``code -> {call offset: (global, (attribute, ...))}`` (`_static_sites`).
-_SITES: weakref.WeakKeyDictionary[types.CodeType, dict[int, tuple[str, tuple[str, ...]]]] = weakref.WeakKeyDictionary()
-
-
-def _static_sites(code: types.CodeType) -> dict[int, tuple[str, tuple[str, ...]]]:
-    """The call sites of *code* whose callee is a global, or a chain of
-    attributes of one, each with the global and the attributes. Read from
-    the source positions of its instructions: a callee starts where its
-    call does and ends before it, and is made of loads of that name and
-    attributes and nothing else (``a[0].f()``, ``f(x)(y)`` and ``(a or
-    b)()`` are not)."""
-    found = _SITES.get(code)
-    if found is not None:
-        return found
-    found = {}
-    instructions = list(dis.get_instructions(code))
-    source = _SOURCES.get(code)
-    # A name the code holds as its own variable (a parameter, a loop's)
-    # may be another callable at each call.
-    own = {*code.co_varnames, *code.co_cellvars, *code.co_freevars}
-    for k, call in enumerate(instructions):
-        if call.opname in _CALLS:
-            site = _callee(instructions, k) if source is None else _callee_in_source(call, *source)
-            if site is not None and site[0] not in own:
-                found[call.offset] = site
-    _SITES[code] = found
-    return found
-
-
-#: ``code -> (the UTF-8 lines it was compiled from, how far down)`` (`arm`).
-_SOURCES: weakref.WeakKeyDictionary[types.CodeType, tuple[list[bytes], int]] = weakref.WeakKeyDictionary()
-
-#: The names the call cache routes a call through (`call_interception`):
-#: bound by cash for the statement, never by the user's code.
-_ROUTING = frozenset({"__cash_call__", "__cash_plain__", "__cash_count__"})
-
-
-def _callee_in_source(call: dis.Instruction, lines: list[bytes], shift: int) -> tuple[str, tuple[str, ...]] | None:
-    """`_static_sites` for *call*, read from the text it was compiled from:
-    the call parsed, its callee is a name or a chain of attributes of one,
-    as written or as the call cache routes it (``(f if f is
-    __cash_plain__[0] and __cash_count__[0]() else __cash_call__(f, 0))``,
-    ``__cash_call__(random.randint, 0)``, ``__cash_count__[0]``)."""
-    span = _span(call)
-    if span is None:
-        return None
-    (first, col), (last, end) = span
-    first, last = first - shift - 1, last - shift - 1
-    if not 0 <= first <= last < len(lines):
-        return None
-    if first == last:
-        text = lines[first][col:end]
-    else:
-        text = lines[first][col:] + b"".join(lines[first + 1 : last]) + lines[last][:end]
-    try:
-        node = ast.parse(b"(" + text + b")", mode="eval").body
-    except (SyntaxError, ValueError):
-        return None
-    if type(node) is not ast.Call:
-        return None
-    return _chain(_unrouted(node.func))
-
-
-def _unrouted(func: ast.expr) -> ast.expr:
-    """*func* as the user wrote it, when the call cache routes it."""
-    if (
-        type(func) is ast.IfExp
-        and type(func.body) is ast.Name
-        and type(func.orelse) is ast.Call
-        and _routes(func.orelse)
-        and type(func.orelse.args[0]) is ast.Name
-        and func.orelse.args[0].id == func.body.id
-        and type(func.test) is ast.BoolOp
-        and type(func.test.op) is ast.And
-        and len(func.test.values) == 2
-        and _is_plain_check(func.test.values[0], func.body.id)
-        and _is_slot(func.test.values[1], "__cash_count__", call=True)
-    ):
-        return func.body
-    if type(func) is ast.Call and _routes(func):
-        return func.args[0]
-    return func
-
-
-def _routes(node: ast.Call) -> bool:
-    """Is *node* ``__cash_call__(callee, <site>)``?"""
-    return (
-        type(node.func) is ast.Name
-        and node.func.id == "__cash_call__"
-        and len(node.args) == 2
-        and not node.keywords
-        and type(node.args[1]) is ast.Constant
-    )
-
-
-def _is_plain_check(node: ast.expr, name: str) -> bool:
-    """Is *node* ``name is __cash_plain__[<site>]``?"""
-    return (
-        type(node) is ast.Compare
-        and type(node.left) is ast.Name
-        and node.left.id == name
-        and len(node.ops) == 1
-        and type(node.ops[0]) is ast.Is
-        and _is_slot(node.comparators[0], "__cash_plain__")
-    )
-
-
-def _is_slot(node: ast.expr, name: str, call: bool = False) -> bool:
-    """Is *node* ``name[<site>]``, or ``name[<site>]()`` with *call*?"""
-    if call:
-        if type(node) is not ast.Call or node.args or node.keywords:
-            return False
-        node = node.func
-    return (
-        type(node) is ast.Subscript
-        and type(node.value) is ast.Name
-        and node.value.id == name
-        and type(node.slice) is ast.Constant
-    )
-
-
-def _chain(func: ast.expr) -> tuple[str, tuple[str, ...]] | None:
-    """The global and attributes of a callee written ``name.a.b``, or of
-    a routing slot (``__cash_count__[0]``); None for any other."""
-    attrs: list[str] = []
-    while type(func) is ast.Attribute:
-        attrs.append(func.attr)
-        func = func.value
-    if type(func) is ast.Subscript and not attrs:
-        name = func.value.id if type(func.value) is ast.Name else None
-        if name in _ROUTING and type(func.slice) is ast.Constant:
-            return name, ()
-        return None
-    if type(func) is not ast.Name:
-        return None
-    return func.id, tuple(reversed(attrs))
-
-
-def _span(ins: dis.Instruction) -> tuple[tuple[int, int], tuple[int, int]] | None:
-    pos = ins.positions
-    if pos is None or None in (pos.lineno, pos.col_offset, pos.end_lineno, pos.end_col_offset):
-        return None
-    return (pos.lineno, pos.col_offset), (pos.end_lineno, pos.end_col_offset)
-
-
-def _callee(instructions: list[dis.Instruction], k: int) -> tuple[str, tuple[str, ...]] | None:
-    """`_static_sites` for the call at *k*. The names of a call's keyword
-    arguments, loaded just before it at its callee's place, are no part of
-    the callee."""
-    call = _span(instructions[k])
-    if call is None:
-        return None
-    start = call[0]
-    first = None
-    for j in range(k - 1, -1, -1):
-        ins = instructions[j]
-        span = _span(ins)
-        if ins.opname in _ROOTS and span is not None and span[0] == start and span[1] < call[1]:
-            first = j
-            break
-    if first is None:
-        return None
-    end = None
-    for ins in instructions[first:k]:
-        span = _span(ins)
-        if span is not None and span[0] == start and span[1] < call[1] and (end is None or span[1] > end):
-            end = span[1]
-    root = instructions[first].argval
-    attrs: list[str] = []
-    for j in range(first + 1, k):
-        ins = instructions[j]
-        span = _span(ins)
-        if span is None:
-            if ins.opname not in _INERT:
-                return None
-            continue
-        if not (span[0] >= start and span[1] <= end):
-            continue  # an argument, or the call's own
-        if j == k - 1 and ins.opname == "LOAD_CONST" and instructions[k].opname == "CALL_KW":
-            continue
-        if ins.opname == "LOAD_ATTR" and span[0] == start:
-            attrs.append(ins.argval)
-        elif ins.opname not in _INERT:
-            return None
-    return root, tuple(attrs)
 
 
 def _arm_callee(watch: _Watch, fn: types.FunctionType) -> None:
@@ -735,19 +637,30 @@ def _is_users(code: types.CodeType) -> bool:
 
 
 def _on_return(code: types.CodeType, offset: int, retval: Any) -> Any:
-    """A callee armed returned *retval*: noted when it stands by reference."""
-    if _ACTIVE is None or _THREAD.busy or type(retval) in _PLAIN:
+    """A callee armed returned *retval*: noted when it stands by reference.
+    A return that gave anything else is switched off, so a loop calling it
+    pays for one event; switched back on as a call site is (`_on_call`)."""
+    if _ACTIVE is None or _THREAD.busy:
         return None
-    if not kept_state.may_stand_by_reference(type(retval)):
-        return None
+    if not _may_note(type(retval)):
+        return sys.monitoring.DISABLE
     _THREAD.busy = True
     try:
-        _note_object(retval)
+        noted = _note_object(retval)
     except Exception:  # noqa: BLE001 - whatever reading it raises: never served
         _unreadable()
+        return None
     finally:
         _THREAD.busy = False
+    if not noted:
+        return sys.monitoring.DISABLE
+    _RETURNERS.add(code)
     return None
+
+
+#: The code of a library's functions seen returning an object that stands
+#: by reference (``logging.getLogger``): armed for each statement.
+_RETURNERS: weakref.WeakSet[types.CodeType] = _weak.WeakSet()
 
 
 def _unreadable() -> None:
@@ -761,31 +674,35 @@ def _unreadable() -> None:
             found[UNSEEN] = UNSEEN
 
 
-def _note_object(obj: Any) -> None:
+def _note_object(obj: Any) -> bool:
+    """Note *obj*, with its state, in each collector open when it stands by
+    reference to a lookup; whether it does."""
     try:
         reduced = obj.__reduce_ex__(4)
     except Exception:  # noqa: BLE001 - one that cannot be reduced is pickled by value or not at all
-        return
+        return False
     if not kept_state.stands_by_reference(reduced) or not kept_state.looks_up(reduced):
-        return
+        return False
+    kept_state.note_kind_by_reference(type(obj), reduced)
     recipes = recipes_met([(reduced, obj)])
     if not recipes:
-        return
+        return True
     recipe = recipes[0]
     note_known_by_reference(recipe)
     key = "" if recipe is None else base64.b64encode(recipe).decode("ascii")
     watch = _ACTIVE
     if watch is None:
-        return
+        return True
     missing = [found for found in watch.collectors if key not in found]
     if not missing:
-        return
+        return True
     try:
         digest = kept_state.state_digest(obj) if key else ""
     except (*HASH_ERRORS, MemoryError):
         digest = ""
     for found in missing:
         found[key] = digest
+    return True
 
 
 def note(states: Mapping[str, str] | None) -> None:

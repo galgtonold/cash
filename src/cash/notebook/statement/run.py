@@ -527,8 +527,6 @@ class CodeRunner:
         self.namespace = namespace
         self.execution = StatementExecution()
         self._echo = False
-        #: How many lines down its units were moved (`shifted`).
-        self._shift = 0
 
     def _units(self, flags: int) -> list[types.CodeType]:
         flags |= _future_flags_of_the_cells()
@@ -543,7 +541,7 @@ class CodeRunner:
         # inside a function defined here shows its source.
         filename = register_cell_source(self.source)
         # At its line in the cell, as IPython compiles the whole cell.
-        lines = self._shift = line_offset()
+        lines = line_offset()
         if not (tree and tree.body and isinstance(tree.body[-1], ast.Expr)):
             return [shifted(compile(self.source, filename, "exec", flags=flags, dont_inherit=True), lines)]
         units = []
@@ -565,7 +563,7 @@ class CodeRunner:
         value = None
         units = self._units(0)
         # What its calls return is seen (`lookups_seen`).
-        lookups_seen.arm(units, self.namespace, self.source, self._shift)
+        lookups_seen.arm(units, self.namespace)
         for unit in units:
             value = eval(unit, self.namespace, self.namespace)
         _remember_future_imports(self.tree)
@@ -581,7 +579,7 @@ class CodeRunner:
         value = None
         units = self._units(ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
         # What its calls return is seen (`lookups_seen`).
-        lookups_seen.arm(units, self.namespace, self.source, self._shift)
+        lookups_seen.arm(units, self.namespace)
         for unit in units:
             value = eval(unit, self.namespace, self.namespace)
             if unit.co_flags & inspect.CO_COROUTINE:
