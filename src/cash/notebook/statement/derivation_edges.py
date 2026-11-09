@@ -301,7 +301,10 @@ def is_uncacheable_alias(
     entry stores where it sits (`memory_home`), and a restore builds it on
     the live variable's data again, so a write to the variable still
     reaches it. *homes* gets those views, by id, each with its variable's
-    name. The value itself
+    name. Nor does a view that is the very object of one of *inputs*
+    (``knn.fit(X_train, y)`` keeps ``X_train = X[:10000]`` itself): the
+    shared-object check holds that variable as an anchor, which a restore
+    binds again, or refuses. The value itself
     being a view (``X_train = X[:1000]``), a pandas ref-holder, a frame
     over a variable's memory, or a view whose base lives anywhere but in a
     variable's data, still refuses.
@@ -354,11 +357,20 @@ def _homed(value: Any, user_ns: dict, cash_held: Iterable[Any], inputs: Iterable
         for name in sorted(inputs)
         if name in user_ns and not name.startswith("_") and data_arrays(user_ns[name])
     }
+    # The inputs' own objects: a view an input is bound to, held as it is
+    # (``knn.fit(X_train, y)`` keeps ``X_train`` itself), is no refusal here.
+    # The shared-object check that follows finds that variable holding it,
+    # and holds it as an anchor, the live object a restore binds again, or
+    # refuses the statement: when the view has no content digest (objects,
+    # a memmap), the statement changed it, or something else holds it.
+    bound = {id(user_ns[name]) for name in inputs if name in user_ns and not name.startswith("_")}
     found: dict[int, str] = {}
     others: list[Any] = []
     for obj, family in borrowers_in([value]):
         if obj is value:
             return False  # the value is a view or a frame itself
+        if family == "numpy" and id(obj) in bound:
+            continue
         home = memory_home(obj, variables) if family == "numpy" else None
         if home is not None:
             found[id(obj)] = home.name

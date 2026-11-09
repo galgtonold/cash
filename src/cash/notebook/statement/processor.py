@@ -186,7 +186,7 @@ from ...tracking.randomness import (
 from ...tracking.trace_recorder import other_thread_alive
 from ...tracking.tracker_context import untracked
 from .. import helper_memos
-from ..anchors import MEMORY_HOME, anchor_digests, memory_homes
+from ..anchors import MEMORY_HOME, anchor_digests, array_digest, memory_homes
 from ..borrowed_memory import borrowed_memory_names, lazy_frame_sources
 from ..callee_reach import (
     CWD,
@@ -4135,7 +4135,10 @@ class StatementProcessor:
             captured_vars.pop(MEMO_ANSWERS_NAME, None)
         if reason is None and anchors:
             session = self.tracking_state.current_session_hashes
-            run.anchors = {name: MEMORY_HOME if name in memory else session[name] for name in anchors}
+            run.anchors = {
+                name: MEMORY_HOME if name in memory else self._view_anchor_digest(run, name) or session[name]
+                for name in anchors
+            }
             run.anchor_links = anchor_links | set(anchors)
             run.anchor_holds = anchor_holds
         if reason is None and found is not None:
@@ -5297,12 +5300,39 @@ class StatementProcessor:
             if name in run.outputs or name not in user_ns:
                 return False
             before = session.get(name)
-            if before is None or before == lineage.get(name):
+            if before is None:
                 return False
+            if before == lineage.get(name):
+                return self._view_anchor_digest(run, name) is not None
             digests = anchor_digests({name: user_ns[name]}, self.compute_hash)
             return digests is not None and digests[name] == before
 
         return anchorable
+
+    def _view_anchor_digest(self, run: StatementRun, name: str) -> str | None:
+        """The digest of *name*'s content when it can be an anchor checked by
+        it (`array_digest`): one of *run*'s inputs, a numpy view whose
+        lineage stands for its content (its session hash), which the key
+        holds. A variable holding an output's object that way is stored as
+        an anchor, never with the outputs: a copy of ``X_train = X[:10000]``
+        would not sit on ``X``, and a write to either would not reach the
+        other. None for any other variable."""
+        if name in run.view_anchor_digests:
+            return run.view_anchor_digests[name]
+        if name not in run.inputs:
+            return None
+        value = self.shell.user_ns.get(name)
+        if attribute_or(value, "base", None) is None:
+            return None
+        tracking = self.tracking_state
+        if tracking.current_session_hashes.get(name) != tracking.variable_lineage.get(name):
+            return None
+        # Taken once a store, and timed: a hit takes it again to check the
+        # anchor, which the store weighs with the restore (`_refusal`).
+        start = _perf_counter()
+        digest = run.view_anchor_digests[name] = array_digest(value)
+        run.view_anchor_seconds[name] = _perf_counter() - start
+        return digest
 
     def _holder_digests(self, run: StatementRun) -> dict[str, str]:
         """Before *run* executes: the in-place-edit digest of each variable

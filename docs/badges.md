@@ -230,7 +230,9 @@ the statement every time instead of storing it:
   frame built over an array without copying it. A copy would stop seeing
   changes to the original. These are usually quick to run again, so there
   is nothing to do. When one is slow, add `.copy()` to make it a value of
-  its own, which is cached.
+  its own, which is cached. A value that only keeps a slice bound to a
+  variable the statement reads (`knn.fit(X_train, y)` after
+  `X_train = X[:1000]`) is cached: a hit gives it that live slice again.
 - **Holds an object another variable or container also holds**: the result
   keeps an object that something else cash cannot follow also holds, such as
   a library's registry or a closure, or the statement is in a loop body. See

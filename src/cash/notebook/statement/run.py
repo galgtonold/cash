@@ -313,6 +313,12 @@ class StatementRun:
     #: the live object again, when its digest is still this one
     #: (``StatementCacheMetadata.anchors``, `share_group`).
     anchors: dict[str, str] = field(default_factory=dict)
+    #: The digest of each input that is a numpy view, by its bytes, asked
+    #: as an anchor (`array_digest`): taken once a store, None for one that
+    #: has none; *view_anchor_seconds*, what taking each took, which a hit
+    #: takes again to check it.
+    view_anchor_digests: dict[str, str | None] = field(default_factory=dict)
+    view_anchor_seconds: dict[str, float] = field(default_factory=dict)
     #: The ``anchors`` and the variables found holding an object of the
     #: outputs beside them: linked to the outputs as holders are.
     anchor_links: set[str] = field(default_factory=set)
@@ -400,6 +406,11 @@ class StatementRun:
     memo_used: bool = False
     #: It ran over a loop header cash evaluated before it (``loop_iterable``).
     handed_iterable: bool = False
+
+    def anchor_check_seconds(self) -> float:
+        """What checking the anchors' contents on a hit is expected to take:
+        what taking their digests took when the entry was stored."""
+        return sum(self.view_anchor_seconds.get(name, 0.0) for name in self.anchors)
 
 
 @dataclass
