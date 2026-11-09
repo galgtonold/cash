@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import dataclasses
 import functools
+import gc
 import io
 import itertools
 import logging
@@ -26,7 +27,7 @@ import weakref
 from typing import Any
 
 from . import _native, _plain_data
-from ._user_attrs import attribute_or, builtin_items, instance_of, own_dict
+from ._user_attrs import attribute_or, builtin_items, instance_of, metadata_attribute, own_dict
 from .live_state import is_live_stream
 from .value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, PLAIN_SEQS, library_scalar_types
 
@@ -424,6 +425,30 @@ def _est_sparse_coo(m: Any) -> int:
     return int(m.data.nbytes + m.row.nbytes + m.col.nbytes)
 
 
+def own_size(obj: Any) -> int:
+    """``sys.getsizeof(obj)``, without running a ``__sizeof__`` a class of
+    the user's defines: plain Python never asks for it, and one that counts
+    or prints left the kernel changed by cash's own sizing. Such an object
+    is sized as Python sizes any object of its layout."""
+    kind = type(obj)
+    if type(kind.__sizeof__) is not _C_METHOD and _users_sizeof(kind):
+        return object.__sizeof__(obj) + (_GC_HEADER if gc.is_tracked(obj) else 0)
+    return sys.getsizeof(obj)
+
+
+#: What ``sys.getsizeof`` adds to ``__sizeof__`` for an object the
+#: collector tracks.
+_GC_HEADER = sys.getsizeof([]) - [].__sizeof__()
+#: The type of a ``__sizeof__`` written in C (``object``'s, ``list``'s).
+_C_METHOD = type(object.__sizeof__)
+
+
+def _users_sizeof(kind: type) -> bool:
+    from ._user_attrs import user_defines
+
+    return user_defines(kind, "__sizeof__")
+
+
 def _data_size(obj: Any) -> int | None:
     """The bytes a frame, array or sparse matrix holds, or None for anything
     else -- a builtin, or an object that does not say.
@@ -467,7 +492,7 @@ def _data_size(obj: Any) -> int | None:
     # Through Python's generic lookup where the class has a lookup of its
     # own: a ``__getattribute__`` of the user's was run for every value a
     # store sized. Any failure means "does not say".
-    nbytes = attribute_or(obj, "nbytes", None)
+    nbytes = metadata_attribute(obj, "nbytes", None)
     if isinstance(nbytes, int) or type(nbytes).__name__.startswith(("int", "uint")):
         try:
             return int(nbytes)
@@ -489,7 +514,7 @@ def estimate_object_size(obj: Any, _depth: int = 0) -> int:
     ``seen`` set is required.
     """
     if _depth >= _MAX_ESTIMATE_DEPTH:
-        return sys.getsizeof(obj)
+        return own_size(obj)
     try:
         type_name = type(obj).__name__
         size = _data_size(obj)
@@ -500,11 +525,11 @@ def estimate_object_size(obj: Any, _depth: int = 0) -> int:
         # Its fields read as pickle reads them, from its ``__dict__`` and
         # slots, never through its own ``__getattribute__``.
         if not instance_of(obj, type) and dataclasses.is_dataclass(type(obj)):
-            base = sys.getsizeof(obj)
+            base = own_size(obj)
             held = _field_values(obj, [f.name for f in dataclasses.fields(type(obj))])
             return base + sum(estimate_object_size(value, _depth + 1) for value in held)
         if issubclass(type(obj), tuple) and attribute_or(type(obj), "_fields", None) is not None:  # namedtuple
-            base = sys.getsizeof(obj)
+            base = own_size(obj)
             return base + sum(estimate_object_size(value, _depth + 1) for value in tuple.__iter__(obj))
         if type_name in ("bytes", "bytearray"):
             return len(obj)
@@ -514,9 +539,9 @@ def estimate_object_size(obj: Any, _depth: int = 0) -> int:
             return _estimate_dict(obj, _depth) + _estimate_own_attrs(obj, _depth)
         if issubclass(type(obj), (set, frozenset)):
             return _estimate_set(obj, _depth) + _estimate_own_attrs(obj, _depth)
-        return sys.getsizeof(obj)
+        return own_size(obj)
     except Exception:  # noqa: BLE001 - an object's own lookups (``__class__`` raising) are not cash's error
-        return sys.getsizeof(obj)
+        return own_size(obj)
 
 
 def _estimate_own_attrs(obj: Any, _depth: int) -> int:
@@ -561,7 +586,7 @@ def _estimate_indexable(obj: Any, _depth: int) -> int:
     kind = list if issubclass(type(obj), list) else tuple
     n = kind.__len__(obj)
     item = functools.partial(kind.__getitem__, obj)
-    base = sys.getsizeof(obj)
+    base = own_size(obj)
     if n == 0:
         return base
     if n <= 2 or _depth >= 1:
@@ -579,7 +604,7 @@ def _estimate_dict(obj: dict, _depth: int) -> int:
     accept the weaker position-bias detection for dicts.
     """
     n = dict.__len__(obj)  # by dict's own methods, as `_estimate_indexable`
-    base = sys.getsizeof(obj)
+    base = own_size(obj)
     if n == 0:
         return base
     first_val = next(iter(dict.values(obj)))
@@ -596,7 +621,7 @@ def _estimate_set(obj: Any, _depth: int) -> int:
     """Estimate size of a set or frozenset (unordered; K=1 always)."""
     kind = set if issubclass(type(obj), set) else frozenset
     n = kind.__len__(obj)  # by the builtin type's own methods, as `_estimate_indexable`
-    base = sys.getsizeof(obj)
+    base = own_size(obj)
     if n == 0:
         return base
     sample = next(kind.__iter__(obj))
@@ -649,7 +674,7 @@ def _own_footprint(obj: Any, seen: set[int], stack: list) -> int:
         size = _data_size(obj)
         if size is not None:
             return size
-        size = sys.getsizeof(obj)
+        size = own_size(obj)
         if _held_as_a_name(obj):
             return size
         held: list = []
@@ -764,7 +789,8 @@ def slot_value(obj: Any, name: str, missing: Any = None) -> Any:
 
 def _field_values(obj: Any, names: list[str]) -> list:
     """The values of *obj*'s fields *names*, from its ``__dict__`` or slots;
-    one in neither (a property) is looked up as before."""
+    one in neither (a property) is looked up without running a getter of
+    the user's (which counts as holding nothing)."""
     attrs = own_dict(obj) or {}
     values = []
     for name in names:
@@ -772,7 +798,7 @@ def _field_values(obj: Any, names: list[str]) -> list:
             values.append(attrs[name])
             continue
         value = slot_value(obj, name, _UNSET)
-        values.append(getattr(obj, name) if value is _UNSET else value)
+        values.append(metadata_attribute(obj, name) if value is _UNSET else value)
     return values
 
 
@@ -794,17 +820,17 @@ def _attrs_footprint(obj: Any, seen: set[int], held: list) -> int:
     attrs = own_dict(obj)
     if attrs is not None and id(attrs) not in seen:
         seen.add(id(attrs))
-        size += sys.getsizeof(attrs)
+        size += own_size(attrs)
         for value in attrs.values():
             if type(value) in _FLAT_CELLS:
-                size += sys.getsizeof(value)
+                size += own_size(value)
             else:
                 held.append(value)
     for name in slot_names(type(obj)):
         value = slot_value(obj, name)
         if value is not None:
             if type(value) in _FLAT_CELLS:
-                size += sys.getsizeof(value)
+                size += own_size(value)
             else:
                 held.append(value)
     return size

@@ -258,7 +258,7 @@ def _for_storing(value: Any, done: dict[int, Any], depth: int) -> Any:
             parts = [_for_storing(item, done, depth + 1) for item in value]
             changed = any(new is not old for new, old in zip(parts, value, strict=True))
             result = kind(parts) if changed else value
-    elif getattr(value, "_mgr", None) is not None and kind.__module__.startswith("pandas"):
+    elif (kind.__module__ or "").startswith("pandas") and getattr(value, "_mgr", None) is not None:
         result = _detached(value)
     else:
         return value
