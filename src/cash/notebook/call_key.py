@@ -557,42 +557,299 @@ def changes_its_closure(fn) -> bool:
         return False
     cells = closure_cells(fn)
     if cells and (
-        rebinds_its_closure(fn)
-        or any(n in cells for n in _source_mutations(fn))
-        or _draws_on_its_closure(fn, cells)
-        or _holds_a_writer(cells)
+        rebinds_its_closure(fn) or any(n in cells for n in _source_mutations(fn)) or _draws_on_its_closure(fn, cells)
     ):
         return True
     return holds_a_stream(fn)
 
 
 def holds_a_writer(fn) -> bool:
-    """Whether *fn*'s closure holds a builtin method that changes the
-    object it is bound to, or a partial of one (`_holds_a_writer`): a call
-    of it changes that object, and nothing its trace records says so."""
+    """Whether *fn* holds, in its closure, its defaults or its attributes,
+    something that changes what it is bound to or handed when called
+    (`_a_writer`): ``note = calls.append``, ``functools.partial(setattr,
+    r, 'v')``. A call of it changes that object, and the trace records no
+    code that says so. Only what *fn* holds itself: deeper (a helper's
+    closure, a dict of hooks) is `holds_a_stream`'s walk, asked of a hit."""
     if type(fn) is not _types.FunctionType:
         return False
-    cells = closure_cells(fn)
-    return bool(cells) and _holds_a_writer(cells)
+    parts = held_by(fn)
+    return bool(parts) and any(map(_a_writer, parts))
 
 
-def _holds_a_writer(cells: Mapping[str, _types.CellType]) -> bool:
-    """Whether a cell holds a builtin method that changes the object it is
-    bound to, or a partial of one (``note = calls.append``,
-    ``functools.partial(list.append, calls)``): ``note(x)`` reads as a
-    plain call, and the trace records no Python code for ``append``, so a
-    hit skipped the append."""
-    for cell in cells.values():
-        try:
-            value = cell.cell_contents
-        except ValueError:  # an empty cell
-            continue
-        method = value.func if type(value) is functools.partial else value
-        if attribute_or(method, "__name__", None) in MUTATING_METHODS and any(
-            not _plain_value(owner) for owner in state_bound(value)
-        ):
+#: The types of the builtin callables `_builtin_writes` tells apart.
+_BUILTIN_CALLABLES = frozenset(
+    {
+        _types.BuiltinMethodType,
+        _types.MethodWrapperType,
+        _types.MethodDescriptorType,
+        _types.WrapperDescriptorType,
+        _types.ClassMethodDescriptorType,
+    }
+)
+#: Types whose objects never change: a method of one only reads.
+_UNCHANGING = frozenset({tuple, frozenset, range, slice})
+_METHODCALLER = operator.methodcaller
+
+
+def _a_writer(value) -> bool:
+    """Whether calling *value* may change an object it is bound to or
+    handed, with no code of the user's a trace would record:
+
+    - a builtin (`_builtin_writes`): ``calls.append``, ``setattr``;
+    - a library's Python method bound to an object, named as a method that
+      changes its object (``MUTATING_METHODS``: ``counter.update``,
+      ``series.update``); the user's own methods are left to the trace;
+    - a ``partial`` of one, one handed ``out=`` a mutable object
+      (``partial(np.add, a, 1, out=a)``), or one whose function is named
+      as such a method and is handed a mutable object, as a bound method;
+    - an ``operator.methodcaller`` of a method not on `_READER_NAMES`: what
+      it is called on is known only then;
+    - a numpy function that writes its first argument (``np.copyto``)."""
+    kind = type(value)
+    if kind in _BUILTIN_CALLABLES:
+        return _builtin_writes(value)
+    if kind is _types.MethodType:
+        return _library_method_writes(value)
+    if kind is _METHODCALLER:
+        return _methodcaller_writes(value)
+    if issubclass(kind, functools.partial):
+        return _partial_writes(value)
+    return id(value) in _numpy_parts().first_argument_writers
+
+
+def _builtin_writes(value) -> bool:
+    """Whether the builtin *value* may change what it is bound to or handed.
+
+    A function of a module (``setattr``, ``operator.setitem``,
+    ``heapq.heappush``) is one when it is on `_WRITING_FUNCTIONS`, the
+    exact list of those that change an argument. A method bound to an
+    object (``calls.append``, ``d.__setitem__``, ``arr.fill``) or an
+    unbound one (``list.append``) is one unless the object cannot change (a
+    number, a text, a tuple, a numpy scalar) or it is on the exact list of
+    methods that only read (`_read_only_methods`), checked against the
+    method the object's own class holds: what a library's method does is
+    not known, so it is taken as changing its object. A method bound to a
+    class is one when the class can be changed and the method is not on
+    that list."""
+    kind = type(value)
+    if kind is _types.BuiltinMethodType or kind is _types.MethodWrapperType:
+        owner = value.__self__
+        owner_kind = type(owner)
+        if owner is None or owner_kind is _ModuleType:
+            return value in _WRITING_FUNCTIONS
+        if owner_kind in _EXACT_ATOMS or owner_kind in _UNCHANGING:
+            return False
+        if issubclass(owner_kind, type) and _TYPE_FLAGS(owner) & _IMMUTABLE_TYPE:
+            return False  # a class that cannot be changed: ``dict.fromkeys``
+        numpy = _numpy_parts()
+        if numpy.scalar is not None and issubclass(owner_kind, numpy.scalar) and not issubclass(owner_kind, numpy.void):
+            return False  # a numpy scalar; a structured one views its array
+        if _stream_type(owner_kind) is _RNG:
+            # ``np.random.normal``, ``random.random``: a draw from the
+            # module's generator is replayed with its state; one of the
+            # function's own is a stream (`holds_a_stream`).
+            return _rng_of_its_own(owner)
+        name = value.__name__
+        method = _class_lookup(owner_kind, name)
+        if method is None or method not in numpy.read_only:
             return True
-    return False
+        if name == "__getitem__" and _class_lookup(owner_kind, "__missing__") is not None:
+            return True  # ``defaultdict``: a missing key is inserted
+        try:
+            return method.__get__(owner, owner_kind) != value
+        except Exception:  # noqa: BLE001 - not the method it is named after
+            return True
+    objclass = value.__objclass__
+    return objclass not in _EXACT_ATOMS and objclass not in _UNCHANGING and value not in _numpy_parts().read_only
+
+
+def _library_method_writes(method) -> bool:
+    """A library's Python method bound to an object it changes, told by its
+    name as for a statement's text (``counter.update``): the trace records
+    the user's code, not a library's."""
+    func = method.__func__
+    if type(func) is _types.FunctionType and _users_code(func.__code__):
+        return False
+    return attribute_or(func, "__name__", None) in MUTATING_METHODS and any(
+        not _plain_value(owner) for owner in state_bound(method)
+    )
+
+
+def _users_code(code: _types.CodeType) -> bool:
+    filename = code.co_filename
+    return is_pseudo_filename(filename) or is_user_path(filename)
+
+
+def _partial_writes(value) -> bool:
+    try:
+        func, keywords = value.func, value.keywords
+    except Exception:  # noqa: BLE001 - a partial subclass that cannot be read
+        return True
+    if _a_writer(func) or _hands_out_a_mutable(keywords):
+        return True
+    return attribute_or(func, "__name__", None) in MUTATING_METHODS and any(
+        not _plain_value(owner) for owner in state_bound(value)
+    )
+
+
+def _hands_out_a_mutable(keywords: Mapping[str, Any]) -> bool:
+    """``out=`` a mutable object: numpy's ufuncs and reductions write it."""
+    return "out" in keywords and not _plain_value(keywords["out"])
+
+
+def _methodcaller_writes(caller) -> bool:
+    """``operator.methodcaller('append', 1)``: the object is known only at
+    the call, so the method is judged by its name alone."""
+    try:
+        made_by, args = caller.__reduce__()[:2]
+        if type(made_by) is functools.partial:  # keywords given
+            name, keywords = made_by.args[0], made_by.keywords
+        else:
+            name, keywords = args[0], {}
+    except Exception:  # noqa: BLE001 - not read: taken as one that writes
+        return True
+    return name not in _READER_NAMES or _hands_out_a_mutable(keywords)
+
+
+def _named_class_members(kind: type) -> list:
+    """What a class of the user's its module names, and its user's bases,
+    hold, read without asking it."""
+    return [value for base in _CLASS_MRO(kind) if _users_type(base) for value in _CLASS_DICT(base).values()]
+
+
+def _class_lookup(kind: type, name: str) -> Any:
+    """What *kind* or a base holds under *name*, read without asking it."""
+    for base in _CLASS_MRO(kind):
+        found = _CLASS_DICT(base).get(name)
+        if found is not None:
+            return found
+    return None
+
+
+#: ``Py_TPFLAGS_IMMUTABLETYPE``: a class whose attributes cannot be set.
+_IMMUTABLE_TYPE = 1 << 8
+_TYPE_FLAGS = type.__dict__["__flags__"].__get__
+
+
+def _writing_functions() -> frozenset:
+    """The builtin functions of a module that change an argument:
+    ``setattr``, ``delattr``, ``next``, ``exec``, ``operator``'s item
+    setters and in-place operators, ``heapq``'s functions on a heap, and
+    ``bisect``'s inserts."""
+    import bisect
+    import heapq
+
+    found = [builtins.setattr, builtins.delattr, builtins.next, builtins.exec]
+    found += [operator.setitem, operator.delitem, operator.__setitem__, operator.__delitem__]
+    found += [vars(operator).get(spelled) for name in _IN_PLACE for spelled in (f"i{name}", f"__i{name}__")]
+    found += [vars(heapq).get(name) for name in _HEAP_FUNCTIONS]
+    found += [bisect.insort, bisect.insort_left, bisect.insort_right]
+    return frozenset(value for value in found if type(value) is _types.BuiltinFunctionType)
+
+
+_IN_PLACE = frozenset(
+    {"add", "and", "concat", "floordiv", "lshift", "matmul", "mod", "mul", "or", "pow", "rshift", "sub", "truediv", "xor"}
+)  # fmt: skip
+#: ``heapq``'s functions that change the heap they are handed, by the
+#: names each Python version has.
+_HEAP_FUNCTIONS = (
+    "heappush", "heappop", "heapify", "heapreplace", "heappushpop",
+    "heappush_max", "heappop_max", "heapify_max", "heapreplace_max", "heappushpop_max",
+    "_heapify_max", "_heappop_max", "_heapreplace_max",
+)  # fmt: skip
+
+#: Method names that only read on every class `_read_only_methods` lists.
+#: An ``operator.methodcaller`` of one is taken as reading.
+_READERS = frozenset(
+    {
+        "__contains__", "__copy__", "__dir__", "__eq__", "__format__", "__ge__", "__getitem__",
+        "__getstate__", "__gt__", "__hash__", "__iter__", "__le__", "__len__", "__lt__", "__ne__",
+        "__reduce__", "__reduce_ex__", "__repr__", "__reversed__", "__sizeof__", "__str__",
+        "__add__", "__radd__", "__mul__", "__rmul__", "__mod__", "__rmod__", "__or__", "__ror__",
+        "__and__", "__rand__", "__sub__", "__rsub__", "__xor__", "__rxor__",
+        "__truediv__", "__rtruediv__", "__floordiv__", "__rfloordiv__", "__pow__", "__rpow__",
+        "__matmul__", "__rmatmul__", "__neg__", "__pos__", "__abs__", "__invert__",
+        "__float__", "__int__", "__bool__", "__index__", "__complex__", "__array__",
+        "copy", "count", "index", "get", "keys", "values", "items",
+        "difference", "intersection", "union", "symmetric_difference", "isdisjoint", "issubset", "issuperset",
+        "decode", "endswith", "startswith", "find", "rfind", "rindex", "hex",
+        "match", "search", "fullmatch", "findall", "finditer", "split", "sub", "subn",
+        "mro", "__subclasses__", "__instancecheck__", "__subclasscheck__",
+        "tolist", "tobytes", "pack", "unpack", "unpack_from", "iter_unpack",
+        "astype", "searchsorted", "view", "reshape", "transpose", "flatten", "ravel", "nonzero",
+        "argsort", "item", "squeeze", "swapaxes",
+    }
+)  # fmt: skip
+#: A ``defaultdict`` inserts a missing key on ``__getitem__``.
+_READER_NAMES = _READERS - {"__getitem__"}
+
+
+def _read_only_methods() -> frozenset:
+    """The methods that only read the object, of the standard containers,
+    ``struct.Struct`` and ``array.array``: each the method object its class
+    holds, so a method of another class with the same name is not one of
+    them. ``ndarray``'s are added once numpy is imported (`_NumpyParts`);
+    none of those takes ``out=``."""
+    import array
+    import re
+    import struct
+
+    classes = (
+        object, type, list, dict, set, bytearray, collections.deque, collections.OrderedDict,
+        collections.defaultdict, re.Pattern, struct.Struct, array.array,
+    )  # fmt: skip
+    return frozenset(
+        method for kind in classes for name, method in vars(kind).items() if name in _READERS and method is not None
+    )
+
+
+_WRITING_FUNCTIONS = _writing_functions()
+
+
+class _NumpyParts:
+    """What `_a_writer` reads off numpy, once numpy is imported: the read-only
+    methods with ``ndarray``'s, the scalar types, and the functions that
+    write their first argument (``np.copyto``, ``np.put``, ``np.putmask``,
+    ``np.place``), by id."""
+
+    __slots__ = ("first_argument_writers", "read_only", "scalar", "void", "writer_kinds")
+
+    def __init__(self, np: Any = None) -> None:
+        self.scalar = self.void = None
+        self.first_argument_writers: dict[int, Any] = {}
+        #: Their types but a Python function's, which the walk reads anyway.
+        self.writer_kinds: frozenset[type] = frozenset()
+        self.read_only = _read_only_methods()
+        if np is None:
+            return
+        ndarray, scalar, void = (vars(np).get(name) for name in ("ndarray", "generic", "void"))
+        if isinstance(ndarray, type):
+            # Not ``__getitem__``: a slice is a view of the array, which a
+            # stored copy is not.
+            self.read_only = self.read_only | frozenset(
+                method
+                for name, method in vars(ndarray).items()
+                if name in _READERS and name != "__getitem__" and method is not None
+            )
+        if isinstance(scalar, type) and isinstance(void, type):
+            self.scalar, self.void = scalar, void
+        writers = (vars(np).get(name) for name in ("copyto", "put", "putmask", "place"))
+        self.first_argument_writers = {id(fn): fn for fn in writers if fn is not None}
+        self.writer_kinds = frozenset(map(type, self.first_argument_writers.values())) - {_types.FunctionType}
+
+
+_NO_NUMPY = _NumpyParts()
+_NUMPY: list[_NumpyParts] = []
+
+
+def _numpy_parts() -> _NumpyParts:
+    if _NUMPY:
+        return _NUMPY[0]
+    np = sys.modules.get("numpy")
+    if np is None or "copyto" not in vars(np):  # not imported, or still importing
+        return _NO_NUMPY
+    _NUMPY.append(_NumpyParts(np))
+    return _NUMPY[0]
 
 
 def holds_a_stream(fn) -> bool:
@@ -605,9 +862,12 @@ def holds_a_stream(fn) -> bool:
     ``x = h()`` gave the second number, not the first. Looked for in tuples,
     lists, sets and dicts (``st = {'it': iter(...)}``), in an object of the
     user's (``self.it``), and in another function's closure (a helper ``g``
-    that holds it). A builtin method that draws from what it is bound to,
-    held itself (``pl = dq.popleft``, ``def h(nxt=it.__next__)``), is taken
-    as one: what calling it changes, the text that calls it does not show.
+    that holds it). A builtin that may change what it is bound to or
+    handed (`_a_writer`), held anywhere the walk reaches (``pl =
+    dq.popleft``, ``note = calls.append`` in a helper's closure, ``hooks =
+    {'n': d.__setitem__}``, ``functools.partial(setattr, r, 'v')``), is
+    taken as one: what calling it changes, the text that calls it does not
+    show, and a hit skipped the change that a run after a restart makes.
 
     Told by type, read off the class (`_stream_type`): no ``__iter__`` of
     the user's runs. Read a level at a time, each level's objects in one
@@ -622,7 +882,7 @@ def holds_a_stream(fn) -> bool:
     parts = held_by(fn)
     if not parts or _EXACT_ATOMS.issuperset(map(type, parts)):
         return False
-    if any(_bound_to_an_object(part) for part in parts):
+    if any(map(_a_writer, parts)):
         return True
     from cash import value_watch
 
@@ -755,11 +1015,26 @@ class _StreamWalk:
                 if way is _HELD:  # a function, a method or a class: `held_by`
                     self.holders += len(new)
                     holders.extend(new)
+                    if any(map(_a_writer, new)):
+                        return _HOLDS  # ``counter.update``, ``np.copyto``
                     for item in new:
                         held = held_by(item)
                         if held:
                             next_children.extend(held)
+                        elif held is None and kind is not _types.FunctionType and _users_type(item):
+                            # A class of the user's its module names, which
+                            # `held_by` leaves to the live class: a writer
+                            # on it (``class H: hooks = {'n': calls.append}``)
+                            # changes its object all the same.
+                            next_children.extend(_named_class_members(item))
+                elif way is _BUILTIN:
+                    # ``calls.append``, ``setattr`` in a ``partial``: a call
+                    # changes what it is bound to or handed (`_a_writer`).
+                    if any(map(_a_writer, new)):
+                        return _HOLDS
                 elif way is _OBJECT:
+                    if issubclass(kind, functools.partial) and any(map(_partial_writes, new)):
+                        return _HOLDS  # ``partial(np.add, a, 1, out=a)``
                     # A user's object, a namespace, a ``partial``: what it
                     # holds (its ``__dict__``, its slots, its class), read
                     # without asking it.
@@ -861,16 +1136,19 @@ _BY_IDENTITY = frozenset((type, _types.FunctionType))
 _STREAM_HOLDERS_AT = 10_000
 #: How many objects other than numbers, text and dates `holds_a_stream` reads.
 _STREAM_ITEMS_AT = 2_000_000
-_RNG, _STREAM, _NOTHING, _OBJECT, _SEQUENCE, _DICT, _HELD = (object() for _ in range(7))
-_WALKED = frozenset((_OBJECT, _SEQUENCE, _DICT, _HELD))
+_RNG, _STREAM, _NOTHING, _OBJECT, _SEQUENCE, _DICT, _HELD, _BUILTIN = (object() for _ in range(8))
+_WALKED = frozenset((_OBJECT, _SEQUENCE, _DICT, _HELD, _BUILTIN))
 
 
 def _way_in(kind: type) -> Any:
     """How `holds_a_stream` reads an object of *kind*: ``_RNG`` or
     ``_STREAM`` (`_stream_type`), item by item (``_SEQUENCE``, ``_DICT``),
-    by what it holds (``_OBJECT``, ``_HELD``: `held_by`), or not at all."""
+    by what it holds (``_OBJECT``, ``_HELD``: `held_by`), as a builtin
+    that may write (``_BUILTIN``: `_a_writer`), or not at all."""
     if kind in _EXACT_ATOMS:
         return _NOTHING
+    if kind in _BUILTIN_CALLABLES or kind is _METHODCALLER or kind in _numpy_parts().writer_kinds:
+        return _BUILTIN
     # Asked once per kind per walk, not kept: a class given ``__next__``
     # later is a stream from then on.
     found = _stream_type(kind)
@@ -960,24 +1238,6 @@ def _draws_on_its_closure(fn, cells: Mapping[str, _types.CellType]) -> bool:
     if "?" in writes:
         return any(not callable(value) for value in held.values())
     return any(name in held for name in writes)
-
-
-def _bound_to_an_object(value) -> bool:
-    """A builtin method that draws from the object it is bound to (``pl =
-    dq.popleft``, ``nxt = it.__next__``): each call hands back the next
-    item, which the text that calls it does not show. One that only adds
-    (``note = calls.append``) is left to the rules for writes."""
-    kind = type(value)
-    if kind is not _types.BuiltinMethodType and kind is not _types.MethodWrapperType:
-        return False
-    owner = value.__self__
-    if owner is None or type(owner) is _types.ModuleType or issubclass(type(owner), type):
-        return False
-    return attribute_or(value, "__name__", None) in _DRAWING_METHODS and not _plain_value(owner)
-
-
-#: Builtin methods that take the next item out of what they are bound to.
-_DRAWING_METHODS = frozenset({"pop", "popleft", "popitem", "__next__", "send", "get_nowait"})
 
 
 def _plain_value(value) -> bool:
