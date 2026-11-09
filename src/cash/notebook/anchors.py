@@ -25,10 +25,10 @@ the bytes are checked, not the variable's whole content.
 
 A numpy view bound to one of the statement's inputs and held by the value as
 it is (``knn.fit(X_train, y)`` keeps ``X_train = X[:10000]`` itself) is an
-anchor too, though its content has no digest of its own (its lineage stands
-for it, as for any array): it is recorded with the digest of its bytes
-(`array_digest`), and a hit binds the live view, which sits on the live
-``X`` as the one the run held did, when its bytes are the ones stored.
+anchor too. A view's session hash is its lineage, not its content, so it is
+recorded with the digest of its content (`array_digest`), and a hit binds
+the live view, which sits on the live ``X`` as the one the run held did,
+when its content is the one stored.
 """
 
 from __future__ import annotations
@@ -43,10 +43,11 @@ from typing import Any
 
 from cash import kept_state, value_hash
 from cash._user_attrs import attribute_or
-from cash.notebook.borrowed_memory import MemoryHome, bytes_digest, data_arrays, memory_home, rebuild_view
+from cash.content_hashers import hash_numpy
+from cash.notebook.borrowed_memory import MemoryHome, data_arrays, memory_home, rebuild_view
 
 __all__ = [
-    "ARRAY_BYTES",
+    "ARRAY_CONTENT",
     "MEMORY_HOME",
     "AnchorRef",
     "AnchorUnrebuilt",
@@ -66,19 +67,22 @@ __all__ = [
 MEMORY_HOME = "memory-home"
 
 #: How the digest an entry records for a numpy array anchor checked by its
-#: bytes starts (`array_digest`). Any other cash reads it as a content
+#: content starts (`array_digest`). Any other cash reads it as a content
 #: digest that changed: a miss.
-ARRAY_BYTES = "array-bytes:"
+ARRAY_CONTENT = "array-content:"
 
 
 def array_digest(obj: Any) -> str | None:
-    """The digest of the numpy array *obj* as an anchor checked by its bytes:
-    its dtype, its shape and its bytes. None for anything else, and for an
-    array of objects, whose bytes are addresses."""
+    """The digest of the numpy array *obj* as an anchor checked by its
+    content: its dtype, its shape and its values (`hash_numpy`), whatever
+    its strides. None for anything else (a subclass such as a memmap
+    included), and for an array of objects, whose bytes are addresses of
+    objects that may change."""
     ndarray = attribute_or(sys.modules.get("numpy"), "ndarray")
     if ndarray is None or type(obj) is not ndarray or obj.dtype.hasobject:
         return None
-    return f"{ARRAY_BYTES}{obj.dtype.str}:{obj.shape}:{bytes_digest(obj)}"
+    digest = hash_numpy(obj)
+    return None if digest is None else ARRAY_CONTENT + digest
 
 
 @dataclass(frozen=True)
@@ -246,7 +250,7 @@ def resolve_anchors(
         if name not in user_ns:
             raise KeyError(f"anchor {name!r} is not bound")
         obj = user_ns[name]
-        if digest.startswith(ARRAY_BYTES):
+        if digest.startswith(ARRAY_CONTENT):
             if array_digest(obj) != digest:
                 raise KeyError(f"anchor {name!r} changed since the entry was stored")
         elif digest != MEMORY_HOME and _digest(obj, hash_fn) != digest:

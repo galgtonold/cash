@@ -817,6 +817,7 @@ class StatementStore:
         force_persist: bool = False,
         has_file_dependencies: bool = False,
         exempt: set[str] = frozenset(),
+        check_seconds: float = 0.0,
     ) -> tuple[bool, str | None, dict[str, Any] | None]:
         """Decide whether keeping a statement's output values is worthwhile.
 
@@ -824,6 +825,10 @@ class StatementStore:
         the policy's restore budget (`PersistencePolicy.refuses_value`), with
         the restore time predicted by `cost_model` for where the value is read
         back from: the first tier (`restore_kind`).
+
+        *check_seconds* is what a hit takes besides reading the values back:
+        checking the anchors the entry binds (`array_digest`), added to each
+        value's restore time.
 
         Never refused: under ``force_persist`` (``@cash:persist``), or when the
         statement reads files itself (reading is the expensive part then).
@@ -845,7 +850,7 @@ class StatementStore:
         skip_decision: tuple[str | None, dict[str, Any] | None] | None = None
         for var_name, var_value in captured_vars.items():
             skip, reason, prediction = self._check_var_restore_budget(
-                var_name, var_value, execution_time, backend_kind, policy
+                var_name, var_value, execution_time, backend_kind, policy, check_seconds
             )
             if prediction is not None:
                 if largest_prediction is None or prediction["size_bytes"] > largest_prediction["size_bytes"]:
@@ -869,9 +874,11 @@ class StatementStore:
         execution_time: float,
         backend_kind: str,
         policy: PersistencePolicy,
+        check_seconds: float = 0.0,
     ) -> tuple[bool, str | None, dict[str, Any] | None]:
         """Return (skip, reason, prediction) for a single variable based on the
-        predicted restore cost from the fitted cost model.
+        predicted restore cost from the fitted cost model, plus
+        *check_seconds* a hit takes besides.
 
         ``prediction`` is a dict with keys ``size_bytes``, ``restore_seconds``,
         ``type_name``, ``family``; or ``None`` if size estimation raises.
@@ -898,6 +905,7 @@ class StatementStore:
                     est_restore_time = measured
             elif round_trip is not None:
                 est_restore_time = max(est_restore_time, round_trip)
+            est_restore_time += check_seconds
             prediction: dict[str, Any] = {
                 "size_bytes": obj_size,
                 "restore_seconds": est_restore_time,
@@ -994,8 +1002,15 @@ class StatementStore:
             # output lineages, which a restart needs.
             return self._store_metadata_only(run, execution, None, {})
         by_reference = {name for name, value in payload["variables"].items() if instance_of(value, CallRef)}
+        # What a hit reads back: the anchors' objects are bound, not copied,
+        # so the values are weighed as stored, with references in their place.
         should_skip, skip_reason, prediction = self._refusal(
-            run, execution, captured_vars, miss_guarded, by_reference=by_reference
+            run,
+            execution,
+            captured_vars,
+            miss_guarded,
+            by_reference=by_reference,
+            weighed=payload["variables"] if run.anchors else None,
         )
         cost_fields = _cost_fields(prediction)
         if should_skip:
@@ -1215,6 +1230,7 @@ class StatementStore:
         captured_vars: dict[str, Any],
         miss_guarded: bool,
         by_reference: set[str] = frozenset(),
+        weighed: dict[str, Any] | None = None,
     ) -> tuple[bool, str | None, dict[str, Any] | None]:
         """Whether *run*'s value is kept as metadata only, and why.
 
@@ -1224,7 +1240,10 @@ class StatementStore:
         the ones before let the value through. The outputs named in
         *by_reference* are stored as references to call entries, which the
         restore-cost check leaves out: restoring one is restoring the call's
-        result, which running the statement again would do too.
+        result, which running the statement again would do too. *weighed*,
+        when given, are the values as the entry stores them (anchors by
+        reference), which the restore-cost check weighs instead, with the
+        anchors' check (`StatementRun.anchor_check_seconds`).
         """
         code, force_persist = run.code, run.force_persist
         # The restore-cost check is waived only for a statement that READS a
@@ -1244,13 +1263,15 @@ class StatementStore:
         )
         # The answers it put into helper memos are stored and read back with
         # the outputs, and weigh in as they do.
-        weighed = {**captured_vars, MEMO_ANSWERS_NAME: run.memo_changes} if run.memo_changes else captured_vars
+        values = captured_vars if weighed is None else weighed
+        values = {**values, MEMO_ANSWERS_NAME: run.memo_changes} if run.memo_changes else values
         should_skip, skip_reason, prediction = self.should_skip_large_object_caching(
-            weighed,
+            values,
             rebuild,
             force_persist,
             has_file_dependencies=reads_files,
             exempt=by_reference,
+            check_seconds=run.anchor_check_seconds(),
         )
 
         # Statements whose outputs include a __main__-defined function or

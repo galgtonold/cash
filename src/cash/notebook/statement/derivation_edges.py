@@ -358,9 +358,11 @@ def _homed(value: Any, user_ns: dict, cash_held: Iterable[Any], inputs: Iterable
         if name in user_ns and not name.startswith("_") and data_arrays(user_ns[name])
     }
     # The inputs' own objects: a view an input is bound to, held as it is
-    # (``knn.fit(X_train, y)`` keeps ``X_train`` itself), is that variable's
-    # object, which the shared-object check holds as an anchor, the live
-    # object a restore binds again.
+    # (``knn.fit(X_train, y)`` keeps ``X_train`` itself), is no refusal here.
+    # The shared-object check that follows finds that variable holding it,
+    # and holds it as an anchor, the live object a restore binds again, or
+    # refuses the statement: when the view has no content digest (objects,
+    # a memmap), the statement changed it, or something else holds it.
     bound = {id(user_ns[name]) for name in inputs if name in user_ns and not name.startswith("_")}
     found: dict[int, str] = {}
     others: list[Any] = []

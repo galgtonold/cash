@@ -5310,13 +5310,15 @@ class StatementProcessor:
         return anchorable
 
     def _view_anchor_digest(self, run: StatementRun, name: str) -> str | None:
-        """The digest of *name*'s bytes when it can be an anchor checked by
-        them (`array_digest`): one of *run*'s inputs, a numpy view whose
+        """The digest of *name*'s content when it can be an anchor checked by
+        it (`array_digest`): one of *run*'s inputs, a numpy view whose
         lineage stands for its content (its session hash), which the key
         holds. A variable holding an output's object that way is stored as
         an anchor, never with the outputs: a copy of ``X_train = X[:10000]``
         would not sit on ``X``, and a write to either would not reach the
         other. None for any other variable."""
+        if name in run.view_anchor_digests:
+            return run.view_anchor_digests[name]
         if name not in run.inputs:
             return None
         value = self.shell.user_ns.get(name)
@@ -5325,7 +5327,12 @@ class StatementProcessor:
         tracking = self.tracking_state
         if tracking.current_session_hashes.get(name) != tracking.variable_lineage.get(name):
             return None
-        return array_digest(value)
+        # Taken once a store, and timed: a hit takes it again to check the
+        # anchor, which the store weighs with the restore (`_refusal`).
+        start = _perf_counter()
+        digest = run.view_anchor_digests[name] = array_digest(value)
+        run.view_anchor_seconds[name] = _perf_counter() - start
+        return digest
 
     def _holder_digests(self, run: StatementRun) -> dict[str, str]:
         """Before *run* executes: the in-place-edit digest of each variable

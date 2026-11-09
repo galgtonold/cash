@@ -15,6 +15,7 @@ import sys
 
 import pytest
 
+from cash.notebook.cache_status import CacheStatus
 from cash.notebook.call_key import CallKeys
 from cash.notebook.statement import StatementProcessor
 from tests._cell_driver import run_cash_cell
@@ -351,3 +352,35 @@ def test_calls_that_clear_and_refill_a_memo_digest_its_answers_quickly(cash_magi
     assert cash_magics.shell.user_ns["total"] == 10_000
     # None today; one per answer after each call (10,000) before.
     assert digests.calls < 1000, digests.calls
+
+
+def test_a_slice_anchor_is_digested_once_a_store_and_once_a_hit(cash_magics):
+    """``model.fit(X_train)`` keeping the slice ``X_train`` stores it as an
+    anchor checked by its content (`array_digest`): one digest of it when
+    the entry is stored, one when a hit checks it."""
+    pytest.importorskip("numpy")
+    from cash.notebook import anchors
+
+    fit = f"model = Keeper().fit(X_train, {ABOVE_PERSISTENCE_FLOOR_S})"
+    cells = [
+        "import time\nimport numpy as np\n"
+        "class Keeper:\n"
+        "    def fit(self, X, wait):\n"
+        "        time.sleep(wait)\n"
+        "        self.X_ = X\n"
+        "        return self",
+        "X = np.arange(4000.0).reshape(100, 40).copy()",
+        "X_train = X[:80]",
+        fit,
+    ]
+    for cell in cells[:-1]:
+        run_cash_cell(cash_magics, cell, cells=cells)
+    with method_calls(anchors, "hash_numpy") as stored:
+        run_cash_cell(cash_magics, fit, cells=cells)
+    with method_calls(anchors, "hash_numpy") as hit:
+        run_cash_cell(cash_magics, fit, cells=cells)
+
+    statements = cash_magics.cash_status("dict")["last_cell"]["statements"]
+    assert [m.get("status") for m in statements] == [CacheStatus.RESTORED], statements
+    assert stored.calls == 1
+    assert hit.calls == 1

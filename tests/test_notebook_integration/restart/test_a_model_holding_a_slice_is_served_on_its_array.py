@@ -4,12 +4,11 @@ Python.
 
 ``X_train = X[:4]`` then ``model.fit(X_train)``, where the model keeps
 ``X_train`` (a k-nearest-neighbours model keeps the very array it was fitted
-on): the fit was refused as a live alias and ran on every Run All and after
-every restart. The entry now keeps ``X_train`` as a reference to the
-variable, checked by its bytes, and a hit binds the live ``X_train``, which
-the slice cell made again on the live ``X``. A write to ``X`` shows through
-the model, and a write through the model shows in ``X``, as in a restart
-and Run All in plain Python, and a reader of ``X`` below sees both.
+on). The entry keeps ``X_train`` as a reference to the variable, checked by
+its content, and a hit binds the live ``X_train``, which the slice cell made
+again on the live ``X``. A write to ``X`` shows through the model, and a
+write through the model shows in ``X``, as in a restart and Run All in
+plain Python, and a reader of ``X`` below sees both.
 """
 
 from __future__ import annotations
