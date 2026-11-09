@@ -45,6 +45,8 @@ def test_a_setting_counts(code, name):
         "x = pd.set_option('display.width', 80)",  # not a bare call
         "for k in ks:\n    pd.set_option(k, 1)",  # not top level
         "print(pd.get_option('display.width'))",
+        "cfg.setdefault('k', 1)",  # ``set`` then lowercase: not a setter
+        "rows.settle()",
     ],
 )
 def test_anything_else_does_not(code):

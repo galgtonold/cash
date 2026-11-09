@@ -44,6 +44,7 @@ from .lineage_formula import (
     is_module_like,
     module_read_lineage,
     read_module_source_hash,
+    unread_routine_in,
 )
 from .recorded_reads import ReadRecord, choose, read_parts, watch
 from .string_lookups import (
@@ -1209,7 +1210,7 @@ def _body_import_parts(modules: Iterable[str]) -> list[str]:
     return parts
 
 
-def _recorded_reads_component(code: str, ctx: CacheKeyContext, statement: str) -> str:
+def _recorded_reads_component(code: str, ctx: CacheKeyContext, statement: str, held_code: bool = False) -> str:
     """What the environment reads in *code* return and what the data of the
     user's modules it reads holds (``recorded_reads.read_parts``), for its key.
 
@@ -1221,20 +1222,26 @@ def _recorded_reads_component(code: str, ctx: CacheKeyContext, statement: str) -
     value a statement of the notebook changed is taken from the record. One
     changed outside the notebook's cells is read now
     (``recorded_reads.choose``).
+
+    With *held_code*, a call's key, also which function each module
+    attribute it reaches holds now (``ReadParts.code_at``): within one
+    statement the module keeps its lineage, so ``m.get = two`` in a callee
+    left the next call keyed as the one that read ``one``, and served it.
     """
     record = ctx.reads
-    live = read_parts(code, ctx.user_ns)
+    live = read_parts(code, ctx.user_ns, held_code)
+    held = live.code_at
     if record is None:
-        return live.component()
+        return live.component() + held
     digest = hashlib.sha256(statement.encode("utf-8")).hexdigest()
     if ctx.record_reads:
         record.seen[digest] = live
         watch(live, record)
-        return live.component()
+        return live.component() + held
     recorded = record.seen.get(digest)
     if recorded is None:
-        return live.component()
-    return choose(recorded, live, record.writes, ctx.in_notebook).component()
+        return live.component() + held
+    return choose(recorded, live, record.writes, ctx.in_notebook).component() + held
 
 
 def compute_cache_key(
@@ -1373,8 +1380,11 @@ def compute_cache_key(
     # What the environment reads in the statement return and the data of the
     # user's modules it reads hold: a new value is a new entry. Last, and only
     # when there is some, so every other key is unchanged.
-    reads = _recorded_reads_component(code, ctx, f"{namespace}:{combined_hash_str}")
+    reads = _recorded_reads_component(code, ctx, f"{namespace}:{combined_hash_str}", held_code=namespace == "call")
     combined_hash_str += reads
+    # A routine at a module's attribute the call reads that could not be
+    # digested: what the call runs is not in the key (`held_code_at_digest`).
+    unread_routine = namespace == "call" and unread_routine_in(reads)
     combined_hash = hashlib.sha256(combined_hash_str.encode("utf-8")).hexdigest()
     cache_key = f"{namespace}:{combined_hash}"
     if unmatched:
@@ -1413,7 +1423,7 @@ def compute_cache_key(
     body_imported = [part.split(":")[1] for part in callee_deps if part.startswith("bodyimport:")]
     if body_imported:
         remember_body_imports(cache_key, body_imported)
-    if unfollowed or (by_string and not followed) or unkeyed_modules:
+    if unmatched or unread_routine:
         result.matches_nothing = True
     return result
 

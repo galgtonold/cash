@@ -83,6 +83,12 @@ class Reach(NamedTuple):
     #: keyed on its value before the call, the statement would key anew on
     #: every run, as a notebook global a called function changes is not.
     data: tuple[tuple[str, Any], ...] = ()
+    #: ``(label, value)`` of each function, or other routine, found at a
+    #: module's attribute (``m.get``), sorted by label, whoever writes it.
+    #: Its code is followed (`functions`), not which one the attribute
+    #: holds: a call keyed within one statement, where the module's lineage
+    #: stays put, needs that (`held_code_component`).
+    code_at: tuple[tuple[str, Any], ...] = ()
 
 
 _EMPTY = Reach((), frozenset())
@@ -141,7 +147,7 @@ def reached_user_code(code: str, namespace: Mapping[str, Any] | None, *, close: 
     if close:
         found.close_modules()
     data = tuple(sorted(item for item in found.data.items() if item[0] not in found.written))
-    return Reach(tuple(found.functions), frozenset(found.modules), data)
+    return Reach(tuple(found.functions), frozenset(found.modules), data, tuple(sorted(found.code_at.items())))
 
 
 def class_data(classes: Iterable[type], namespace: Mapping[str, Any]) -> tuple[tuple[str, Any], ...]:
@@ -1585,10 +1591,14 @@ class _Found:
         self.data: dict[str, Any] = {}
         #: ``module.name`` of each global a reached module function changes.
         self.written: set[str] = set()
+        #: ``label -> routine`` found at a module's attribute (`Reach.code_at`).
+        self.code_at: dict[str, Any] = {}
 
     def value(self, value: Any, label: str | None = None) -> None:
         """Take in *value*, found at *label* (``module.name``) when it is a
         name of a local module."""
+        if label is not None and is_routine(value):
+            self.code_at.setdefault(label, value)
         if instance_of(value, types.ModuleType):
             if _is_local(value):
                 self.modules.add(value.__name__)
