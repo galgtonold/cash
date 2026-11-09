@@ -40,8 +40,9 @@ from ...analysis.ast_util import walk_tree
 from ...analysis.callee_effects import free_vars_mutated_in_function, scope_locals
 from ...analysis.mutations import MUTATING_METHODS
 from ...exceptions import SOURCE_RETRIEVAL_ERRORS
-from ...install_paths import is_user_code_file, is_user_code_module
+from ...install_paths import is_user_code_file
 from ...source_reading import getsource
+from ...tracking import process_registries
 
 __all__ = [
     "COLLECTED_ONLY_REASON",
@@ -188,47 +189,30 @@ def finalizer_writer(callback: str) -> tuple[str, tuple[str, ...]]:
 def finalizers_made() -> int | None:
     """The number the next ``weakref.finalize`` takes (``info.index``),
     read without taking it; None when it cannot be read."""
-    text = repr(weakref.finalize._index_iter)  # type: ignore[attr-defined]
-    if text.startswith("count(") and text.endswith(")"):
-        try:
-            return int(text[6:-1])
-        except ValueError:
-            return None
-    return None
+    return process_registries.finalizers_made()
 
 
-def finalizer_left(since: int | None, namespace: Mapping[str, Any]) -> str | None:
-    """The callback, as text, of a ``weakref.finalize`` of the user's made
-    since *since* (`finalizers_made`) and still waiting: ``weakref.finalize(m,
-    cb)`` registers it in ``weakref.finalize``'s own registry, which a
-    restored statement leaves as it was. The user's: not
-    `cash._weak.finalize`, and its callback or the class of its object is
-    the user's code, or its object is a variable of *namespace*. A library
-    keeps its own (torch's on its op libraries, made on first use): plain
-    Python would not make them again either. None when there is none."""
+def finalizer_left(since: int | None) -> str | None:
+    """The callback, as text, of a ``weakref.finalize`` made since *since*
+    (`finalizers_made`) and still waiting: ``weakref.finalize(m, cb)``
+    registers it in ``weakref.finalize``'s own registry, which a restored
+    statement leaves as it was, whoever's the object and the callback
+    (``h.d = tempfile.TemporaryDirectory()`` restored named a directory the
+    old one's finalizer deleted). Not cash's own (`cash._weak.finalize`),
+    nor one an import made (`process_registries.IMPORT_FINALIZERS`): a
+    module first imported in the statement makes it once a process,
+    whoever imports it. None when there is none."""
     if since is None or finalizers_made() == since:
         return None
-    values = None
+    windows = process_registries.IMPORT_FINALIZERS
     for finalizer, info in list(weakref.finalize._registry.items()):  # type: ignore[attr-defined]
         if info.index < since or type(finalizer) is _weak.finalize:
             continue
-        obj = info.weakref()
-        if obj is None:
+        if any(first <= info.index < last for first, last in windows):
             continue
-        if not (_users_code(info.func) or _users_code(type(obj))):
-            if values is None:
-                values = {id(value) for value in namespace.values()}
-            if id(obj) not in values:
-                continue
         name = attribute_or(info.func, "__qualname__", None)
         return name if isinstance(name, str) else type(info.func).__name__
     return None
-
-
-def _users_code(item: Any) -> bool:
-    """Whether *item*, a function or a class, is of the user's code."""
-    module = sys.modules.get(attribute_or(item, "__module__", None) or "")
-    return module is not None and is_user_code_module(module)
 
 
 def _held_as(code: types.CodeType, spaces: Iterable[Mapping[str, Any]]) -> str:

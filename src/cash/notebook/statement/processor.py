@@ -2936,7 +2936,7 @@ class StatementProcessor:
         self._refuse_entropy_seed(run, execution)
         self._refuse_unseen_writes(run, execution, memos_before, memos_cleared)
         if not run.skip_cache and execution.result.success:
-            left = finalizer_left(finalizers_before, self.shell.user_ns)
+            left = finalizer_left(finalizers_before)
             if left is not None:
                 run.skip_cache = True
                 run.metrics["uncacheable_reasons"].append(LEFT_FINALIZER_REASON.format(fn=left))
