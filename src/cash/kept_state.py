@@ -2265,9 +2265,10 @@ def may_stand_by_reference(t: type) -> bool:
     attributes of its own? Its class has a reduce of its own and its
     instances an ``__dict__`` or ``__slots__``. Remembered per type.
 
-    Most classes cannot: the ones that pickle their state, and the ones
-    whose instances hold no attributes (a numpy ufunc, a pandas Timestamp,
-    a bound method), are reduced as before, with no Python step per
+    Most classes cannot: the ones that pickle their state, the ones whose
+    instances hold no attributes (a numpy ufunc, a bound method), and the
+    compiled ones whose reduce rebuilds from numbers (`_REDUCES_BY_VALUE`:
+    a pandas Timestamp) are reduced as before, with no Python step per
     instance. A function and a class are pickled by name before a reducer
     is asked (their code and their attributes are read where they are
     used); a module never pickles."""
@@ -2287,8 +2288,21 @@ def _decide_may_stand_by_reference(t: type) -> bool:
     for klass in t.__mro__:
         own = klass.__dict__
         if "__reduce_ex__" in own or "__reduce__" in own:
-            return klass is not object
+            return klass is not object and (klass.__module__, klass.__qualname__) not in _REDUCES_BY_VALUE
     return False
+
+
+#: Compiled classes whose reduce rebuilds the object from numbers and
+#: objects it holds, never from a name: a pandas Timestamp pickles as
+#: ``_unpickle_timestamp(<nanoseconds>, None, <tzinfo or None>, <unit>)``, a
+#: Timedelta as ``_timedelta_unpickle(<nanoseconds>, <unit>)``. A subclass
+#: with a reduce of its own is decided by that.
+_REDUCES_BY_VALUE = frozenset(
+    {
+        ("pandas._libs.tslibs.timestamps", "_Timestamp"),
+        ("pandas", "Timedelta"),
+    }
+)
 
 
 _MAY_STAND_BY_REFERENCE: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()
@@ -2309,7 +2323,13 @@ def stands_by_reference(reduced: Any) -> bool:
     rebuild = reduced[0]
     if len(reduced) > 2 and reduced[2] is not None:
         return False
-    return not isinstance(rebuild, type) and not any(rebuild is by_value for by_value in _REBUILDS_BY_VALUE)
+    newobj, newobj_ex, reconstructor = _REBUILDS_BY_VALUE
+    return (
+        not isinstance(rebuild, type)
+        and rebuild is not newobj
+        and rebuild is not newobj_ex
+        and rebuild is not reconstructor
+    )
 
 
 def _reduce_by_reference_for_key(obj: Any, reducer: Any) -> Any:
@@ -2500,7 +2520,23 @@ def looks_up(reduced: Any) -> bool:
     if isinstance(reduced, str):
         return True
     args = reduced[1]
-    return _all_atoms(args) and (args == () or _names(args))
+    if type(args) is not tuple:
+        return False
+    named = not args
+    for arg in args:
+        kind = type(arg)
+        if kind is str:
+            named = True
+        elif kind is tuple:
+            # Nested: the general reading.
+            return _all_atoms(args) and _names(args)
+        elif arg is not None and kind not in _NUMBERS:
+            return False
+    return named
+
+
+#: The other atoms a lookup's call may be given (`looks_up`).
+_NUMBERS = frozenset({int, float, bool})
 
 
 def _all_atoms(value: Any) -> bool:

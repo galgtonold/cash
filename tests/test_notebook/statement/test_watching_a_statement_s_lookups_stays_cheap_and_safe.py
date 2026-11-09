@@ -216,6 +216,43 @@ def test_reading_a_module_s_list_runs_no_reduce_of_the_user_s():
     assert found == {}
 
 
+def _walk(namespace, source, monkeypatch):
+    """Run *source* in *namespace*, watched: how many objects it reduced to
+    see whether each stands by reference."""
+    reduced = []
+    note = lookups_seen._note_object
+    monkeypatch.setattr(lookups_seen, "_note_object", lambda obj: reduced.append(obj) or note(obj))
+    code = compile(source, "<cash-test-walk>", "exec")
+    with lookups_seen.watching((), {}):
+        lookups_seen.arm([code], namespace)
+        exec(code, namespace)
+    monkeypatch.undo()
+    return len(reduced)
+
+
+@needs_monitoring
+def test_a_module_s_list_is_looked_through_once_while_it_holds_the_same_objects(monkeypatch):
+    """Each object a module's list holds is reduced once while it stays
+    there; one put in its place is reduced in turn, and a logger there is
+    noted again on every statement, as its state may have changed."""
+    mod = types.ModuleType("cash_test_walked")
+    mod.ITEMS = [types.SimpleNamespace(i=i) for i in range(1_000)] + [logging.getLogger(NAME)]
+    namespace = {"mod": mod}
+    assert _walk(namespace, "n = len(mod.ITEMS)", monkeypatch) == 1_001
+    assert _walk(namespace, "n = len(mod.ITEMS)", monkeypatch) == 1
+    mod.ITEMS[3] = types.SimpleNamespace(i=-1)
+    assert _walk(namespace, "n = len(mod.ITEMS)", monkeypatch) == 2
+
+
+def test_a_timestamp_is_never_reduced_to_look_for_a_name():
+    """A pandas Timestamp's reduce rebuilds it from numbers, whatever it
+    holds: none in a module's list of them is reduced on a statement."""
+    pd = pytest.importorskip("pandas")
+    assert not kept_state.may_stand_by_reference(pd.Timestamp)
+    assert not kept_state.may_stand_by_reference(pd.Timedelta)
+    assert kept_state.may_stand_by_reference(logging.Logger)
+
+
 def test_a_timestamp_is_not_taken_for_a_lookup():
     """A timestamp pickles as ``_unpickle_timestamp(<numbers>)``, which
     builds it again: not a lookup by a name, so a list of them is not found

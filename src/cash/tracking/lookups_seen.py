@@ -25,6 +25,7 @@ import builtins
 import contextlib
 import dis
 import logging
+import operator
 import sys
 import threading
 import types
@@ -93,9 +94,10 @@ class _Watch:
         #: The notebook's functions not armed yet, by their code: armed when
         #: first started (`_on_start`), with the globals they read.
         self.starts: dict[types.CodeType, Mapping[str, Any]] = {}
-        #: The ids of the items of containers noted (`_note_value`), each
+        #: The ids of the items of containers noted (`_note_value`), and
+        #: whether each may stand by reference: each
         #: reduced once.
-        self.noted: set[int] = set()
+        self.noted: dict[int, bool] = {}
         #: The reads of containers too big to look through (`_too_big`).
         self.too_big: list[str] = []
         #: The CPU seconds noting may take (`_note_object`), what it took,
@@ -451,11 +453,65 @@ def _note_value(value: Any, read: str) -> None:
     met = [kind for kind in set(map(type, items)) if _may_note(kind)]
     if not met:
         return
-    noted = watch.noted
-    for item in list(items):
-        if type(item) in met and id(item) not in noted:
-            noted.add(id(item))
-            _note_object(item)
+    walked = _WALKED.get(read)
+    if (
+        walked is not None
+        and walked.whole
+        and walked.container is value
+        and len(walked.items) == len(items)
+        and all(map(operator.is_, walked.items, items))
+    ):
+        # The same objects as when it was last looked through, each held
+        # since: only those that stand by reference are noted again.
+        for item in walked.by_reference:
+            _note_item(watch, item)
+        return
+    plain_before = walked.plain if walked is not None else frozenset()
+    snapshot = tuple(items)
+    plain: set[int] = set()
+    by_reference: list[Any] = []
+    for item in snapshot:
+        if type(item) not in met:
+            continue
+        if id(item) in plain_before:
+            plain.add(id(item))
+        elif _note_item(watch, item):
+            by_reference.append(item)
+        else:
+            plain.add(id(item))
+    _WALKED[read] = _Walked(value, snapshot, frozenset(plain), by_reference, not watch.past_budget)
+
+
+class _Walked:
+    """A container a statement read through a module, as last looked
+    through (`_note_value`): the items then, held so that their ids stay
+    theirs; the ids of those found not to stand by reference; those found
+    to; and whether every item was looked at, within the budget."""
+
+    __slots__ = ("by_reference", "container", "items", "plain", "whole")
+
+    def __init__(
+        self, container: Any, items: tuple, plain: frozenset[int], by_reference: list[Any], whole: bool
+    ) -> None:
+        self.container = container
+        self.items = items
+        self.plain = plain
+        self.by_reference = by_reference
+        self.whole = whole
+
+
+#: ``read -> _Walked``: each object in a module's container is reduced once
+#: while it stays there, not on every statement reading it.
+_WALKED: dict[str, _Walked] = {}
+
+
+def _note_item(watch: _Watch, item: Any) -> bool:
+    """Note *item* of a container once per statement; whether it may stand
+    by reference (past the budget, unknown: it may)."""
+    found = watch.noted.get(id(item))
+    if found is None:
+        found = watch.noted[id(item)] = _note_object(item) or watch.past_budget
+    return found
 
 
 def _too_big(watch: _Watch, read: str) -> None:
