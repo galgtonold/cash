@@ -30,10 +30,10 @@ import os
 import sys
 import textwrap
 import types
-import weakref
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
+from .. import _weak
 from .._annotation_refs import annotation_referents
 from ..code_digest import callable_identity, compiled_identity, extension_file_digest
 from ..effects import EffectKind
@@ -363,7 +363,7 @@ class HelperWalk:
         if not codes:
             return
         try:
-            self._walked_code.append((weakref.ref(owner), codes))
+            self._walked_code.append((_weak.ref(owner), codes))
         except TypeError:  # not weak-referenceable
             pass
 
@@ -870,7 +870,7 @@ class HelperWalk:
             self._helper_paths[qualname] = home
         else:
             try:
-                self._helper_objects[qualname] = weakref.ref(func)
+                self._helper_objects[qualname] = _weak.ref(func)
             except TypeError:  # not weak-referenceable
                 pass
 
@@ -918,7 +918,7 @@ class HelperWalk:
             ):
                 continue
             try:
-                whole.append(weakref.ref(fn))
+                whole.append(_weak.ref(fn))
             except TypeError:
                 continue
         return tuple(whole)

@@ -15,11 +15,10 @@ import os
 import pickle
 import threading
 import time
-import weakref
 from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any, NamedTuple
 
-from .. import argument_sharing, rewrite_in_place
+from .. import _weak, argument_sharing, rewrite_in_place
 from .._active import EXPLAINING as _EXPLAINING
 from .._clock import perf_counter as _perf_counter
 from ..analysis.handed_callables import hands_a_state_changing_callable
@@ -1381,7 +1380,7 @@ class CallRunner:
         tiers = getattr(backend, "backends", None)
         persisted = any(tier != "RAM" for tier in storage) or not (isinstance(tiers, list) and len(tiers) > 1)
         try:
-            result = weakref.ref(value)
+            result = _weak.ref(value)
         except TypeError:  # a builtin value: its statement keeps its own copy
             return
         handed.stored = Stored(result, call.cache_key, backend, persisted)

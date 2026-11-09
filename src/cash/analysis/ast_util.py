@@ -27,6 +27,8 @@ from typing import Any, Literal
 
 from cash._user_attrs import instance_of, own_dict
 
+from .. import _weak
+
 __all__ = [
     "CallScope",
     "bytecode_global_refs",
@@ -77,7 +79,7 @@ _PLAIN_NODES = frozenset(
 )
 #: `plain_statement`'s answers, by the tree, held weakly: a tree parsed
 #: for one statement is let go with it.
-_PLAIN: weakref.WeakKeyDictionary[ast.AST, bool] = weakref.WeakKeyDictionary()
+_PLAIN: weakref.WeakKeyDictionary[ast.AST, bool] = _weak.WeakKeyDictionary()
 
 
 def plain_statement(tree: ast.AST | None) -> bool:
@@ -110,7 +112,7 @@ def plain_statement(tree: ast.AST | None) -> bool:
 #: `walk_tree`'s nodes below each node walked, by the node, held weakly.
 #: The node itself is left out of its entry, so the entry does not hold
 #: its own key and dies with the tree.
-_WALKS: weakref.WeakKeyDictionary[ast.AST, tuple[ast.AST, ...]] = weakref.WeakKeyDictionary()
+_WALKS: weakref.WeakKeyDictionary[ast.AST, tuple[ast.AST, ...]] = _weak.WeakKeyDictionary()
 
 
 def walk_tree(node: ast.AST) -> Iterator[ast.AST]:

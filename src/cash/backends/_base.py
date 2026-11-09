@@ -7,10 +7,11 @@ import logging
 import math
 import threading
 import time
-import weakref
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
 from typing import Any, TypedDict
+
+from .. import _weak
 
 logger = logging.getLogger(__name__)
 
@@ -539,7 +540,7 @@ class CacheBackend(ABC):
                 registry = self.__dict__.get("_inprocess_key_locks")
                 if registry is None:
                     self.__dict__["_inprocess_key_locks_meta"] = threading.Lock()
-                    registry = weakref.WeakValueDictionary()
+                    registry = _weak.WeakValueDictionary()
                     self.__dict__["_inprocess_key_locks"] = registry
         with self.__dict__["_inprocess_key_locks_meta"]:
             lk = registry.get(key)

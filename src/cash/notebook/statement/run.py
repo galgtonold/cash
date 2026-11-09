@@ -389,6 +389,9 @@ class StatementRun:
     unless_it_draws: str | None = None
     #: What shadow mode recorded of its run (``Shadow.begin``), or None.
     trace_unit: Any = None
+    #: A garbage collection ran just before it (`TrackingState.collect_first`):
+    #: a finalizer run inside it is its own work.
+    collected_first: bool = False
     #: It ran with a kept value standing in for part of it (``ExpressionMemo``).
     memo_used: bool = False
     #: It ran over a loop header cash evaluated before it (``loop_iterable``).

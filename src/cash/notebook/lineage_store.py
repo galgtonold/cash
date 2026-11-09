@@ -28,6 +28,8 @@ from typing import Any
 
 from cash.lineage_tag import clear_tags, own_tag, set_tags
 
+from .. import _weak
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -260,7 +262,7 @@ class LineageStore(Mapping[str, str]):
         #: A read-only live view of the store, for readers that want a mapping.
         self.view: Mapping[str, str] = MappingProxyType(self._lineage)
         #: The watches open now (`watch`); shared with `input_lineages`.
-        self._watches: weakref.WeakSet[LineageWatch] = weakref.WeakSet()
+        self._watches: weakref.WeakSet[LineageWatch] = _weak.WeakSet()
 
     def watch(self) -> LineageWatch:
         """Start noting what changes, here and in the maps of

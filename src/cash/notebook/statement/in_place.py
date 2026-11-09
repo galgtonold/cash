@@ -47,6 +47,7 @@ from cash.install_paths import is_user_code_module
 from cash.live_state import is_live_stream
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
+from ... import _weak
 from .identity_holders import IdentityHeld, library_parts
 
 __all__ = [
@@ -370,7 +371,7 @@ def _written_in_python(klass: type) -> bool:
     return type(path) is str and path.endswith(".py")
 
 
-_GC_READS: weakref.WeakKeyDictionary[type, bool] = weakref.WeakKeyDictionary()
+_GC_READS: weakref.WeakKeyDictionary[type, bool] = _weak.WeakKeyDictionary()
 
 
 def _read_in_bulk(held: list[Any], parts: set[int], texts: set[str]) -> list[Any] | str:

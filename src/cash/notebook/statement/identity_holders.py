@@ -59,6 +59,7 @@ from typing import Any
 
 from cash import _native
 from cash._user_attrs import attribute_or, builtin_base, builtin_items, has_attribute, own_dict
+from cash._weak import is_cash_ref
 from cash.closure_sharing import slot_readers
 from cash.install_paths import is_user_code_module
 from cash.value_types import IMMUTABLE_LEAF_TYPES
@@ -703,17 +704,10 @@ def _weakly_held(name: str, targets: list[Any], user_ns: dict[str, Any]) -> Iden
 
 def _weakly_found_by_others(targets: list[Any]) -> bool:
     """Whether any of *targets* has a weak reference to it that is not
-    cash's own: one whose callback is cash's code (cash's memos drop their
-    entry when the object goes) is not a variable's."""
-    for target in targets:
-        for ref in weakref.getweakrefs(target):
-            code = attribute_or(attribute_or(ref, "__callback__", None), "__code__", None)
-            if code is None or not code.co_filename.startswith(_CASH_DIR):
-                return True
-    return False
-
-
-_CASH_DIR = __file__.rsplit("notebook", 1)[0]
+    cash's own (`cash._weak.is_cash_ref`): cash's memos keep weak
+    references to the user's objects, and whether one is there at the
+    moment must not decide whether the statement is stored."""
+    return any(not is_cash_ref(ref) for target in targets for ref in weakref.getweakrefs(target))
 
 
 #: How deep `_weakly_held` looks into the other variables: ``box.h`` is two

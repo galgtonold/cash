@@ -25,14 +25,13 @@ import operator
 import pickle
 import random
 import sys
-import weakref
 from bisect import bisect_right
 from collections import deque
 from collections.abc import Mapping
 from itertools import accumulate, chain, compress, islice, repeat
 from typing import Any, NamedTuple
 
-from . import _native, kept_state
+from . import _native, _weak, kept_state
 from .value_types import IMMUTABLE_LEAF_TYPES, LEAF_TYPES, PLAIN_SEQS
 
 MAX_LEVELS = 16
@@ -635,7 +634,7 @@ def note_held_column_once(column: Any, row: int, extra: int, held_once: bool) ->
     if look is None:
         return
     try:
-        look[1][(id(column), _HELD_COLUMN, row, extra)] = (weakref.ref(column), held_once)
+        look[1][(id(column), _HELD_COLUMN, row, extra)] = (_weak.ref(column), held_once)
     except TypeError:  # no weak reference to it: asked again
         return
 
@@ -664,7 +663,7 @@ def note_on_column(key: Any, column: Any, note: Any) -> None:
     if look is None:
         return
     try:
-        look[1][(key, _COLUMN_NOTE)] = (weakref.ref(column), note)
+        look[1][(key, _COLUMN_NOTE)] = (_weak.ref(column), note)
     except TypeError:  # no weak reference to it: asked again
         return
 

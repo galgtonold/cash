@@ -63,6 +63,8 @@ from cash.install_paths import is_user_code_module
 from cash.kept_state import next_mark, set_reducer_veto, user_state_runs, user_state_types_since, users_function
 from cash.source_reading import getsourcelines
 
+from ... import _weak
+
 __all__ = ["Writer", "reach", "refused_since", "refuses", "runs_now", "unwatch", "watch", "writers", "writes_into"]
 
 #: The methods a pickle runs on an object, found on its class.
@@ -105,7 +107,7 @@ _NAMESPACE: list[Mapping[str, Any] | None] = [None]
 #: `refuses` by class, for the statement being processed.
 _REFUSES: dict[Any, bool] = {}
 #: The `runs_now` mark of the last pickle `refuses` stopped, by class.
-_REFUSED: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_REFUSED: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()
 
 
 def watch(user_ns: Mapping[str, Any]) -> None:
@@ -295,7 +297,7 @@ _ABSENT = object()
 #: `_writer` by class: ``(answer, cleared)``, the answer `_PURE` for a
 #: class whose reducers write nothing, *cleared* the globals `_atoms_only`
 #: found holding only numbers and strings as it was decided.
-_WRITERS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_WRITERS: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()
 _PURE = object()
 #: The globals `_atoms_only` cleared, as ``(namespace, name)``, for the
 #: decision being made (`_writer`); None when none is being kept.

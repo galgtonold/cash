@@ -19,7 +19,7 @@ import weakref
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from .. import _cash_views, _plain_data, value_watch
+from .. import _cash_views, _plain_data, _weak, value_watch
 from .._clock import perf_counter as _perf_counter
 from .._memo import ARGUMENTS, FRAMES, LruMemo
 from .._type_memo import TypeMemo, type_key
@@ -739,7 +739,7 @@ class _Records:
 
     def __init__(self, values: Any) -> None:
         self.key = id(values)
-        self.array = weakref.ref(values)
+        self.array = _weak.ref(values)
 
 
 def _immutable_records(values: Any, lists: list, kept: _KeptLists | None = None) -> bool:
@@ -2097,7 +2097,7 @@ class ArgHasher:
         full-hashing).
         """
         try:
-            wref = weakref.ref(arg)
+            wref = _weak.ref(arg)
         except TypeError:
             return
         self._memo[id(arg)] = (wref, lineage, content_hash)

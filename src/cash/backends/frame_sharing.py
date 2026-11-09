@@ -67,6 +67,7 @@ import threading
 import weakref
 from typing import Any
 
+from .. import _weak
 from . import heap_blocks
 
 logger = logging.getLogger(__name__)
@@ -119,7 +120,7 @@ class _PinRef(weakref.ref):
 
     def __init__(self, roots: list[Any]) -> None:
         super().__init__(_PIN_TARGET)
-        self.roots = [weakref.ref(root) for root in roots]
+        self.roots = [_weak.ref(root) for root in roots]
         self.blocks: list[Any] = []
         self.writes = 0
         self.left = False
@@ -127,7 +128,7 @@ class _PinRef(weakref.ref):
     def know(self, block: Any) -> None:
         """Remember *block*, one of the group's, to find the group by."""
         self.blocks = [ref for ref in self.blocks if ref() is not None]
-        self.blocks.append(weakref.ref(block))
+        self.blocks.append(_weak.ref(block))
 
 
 #: ``id(root) -> {id(pin): weak reference to pin}`` for the groups whose
@@ -903,7 +904,7 @@ def _freeze_in_place(frame: Any) -> None:
             refs.referenced_blocks.append(pin)
             for root in pin.roots:
                 # By id: pins are weak references to one target, so all compare equal.
-                _PINS_BY_ROOT.setdefault(id(root()), {})[id(pin)] = weakref.ref(pin)
+                _PINS_BY_ROOT.setdefault(id(root()), {})[id(pin)] = _weak.ref(pin)
         for other in group:
             pin.know(other)
     for name in ("index",) if frame.ndim == 1 else ("index", "columns"):
@@ -919,7 +920,7 @@ def _freeze_in_place(frame: Any) -> None:
 
 #: The blocks of the tables `share_checked` made: the RAM tier's own block
 #: objects over data a caller may still hold.
-_CHECKED_BLOCKS: weakref.WeakSet = weakref.WeakSet()
+_CHECKED_BLOCKS: weakref.WeakSet = _weak.WeakSet()
 
 #: The smallest table `share_checked` keeps uncopied: its numbers and dates
 #: in bytes. A smaller one is copied, which costs about what its digest does.

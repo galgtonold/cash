@@ -11,13 +11,13 @@ from __future__ import annotations
 import ast
 import logging
 import types
-import weakref
 from collections.abc import Callable
 from typing import Any
 
 from cash._user_attrs import attribute_or, has_attribute, instance_of
 from cash.control_markers import strip_markers
 
+from ... import _weak
 from ...analysis.ast_util import parse_cached
 from ...analysis.cacheability import analyze_statement
 from ...analysis.code_analyzer import CodeAnalyzer, statement_code
@@ -734,7 +734,7 @@ class StaleValueGuard:
                 self._started_from.pop((cell_idx, var_name), None)
                 continue
             try:
-                ref = weakref.ref(value)
+                ref = _weak.ref(value)
             except TypeError:
                 ref = None
             self._started_from[(cell_idx, var_name)] = (id(value), ref)
@@ -967,7 +967,7 @@ class StaleValueGuard:
 def _weakly_held(value: Any) -> bool:
     """Whether *value* takes a weak reference."""
     try:
-        weakref.ref(value)
+        _weak.ref(value)
     except TypeError:
         return False
     return True

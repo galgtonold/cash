@@ -45,13 +45,12 @@ import inspect
 import operator
 import sys
 import types
-import weakref
 from collections import OrderedDict, defaultdict
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from itertools import chain, compress, product, repeat
 from typing import Any, NamedTuple
 
-from .. import _plain_data
+from .. import _plain_data, _weak
 from .._inspect_cache import forget_static_lookups
 from .._memo import CODE_OBJECTS, LruMemo
 from .._paths import is_pseudo_filename
@@ -1518,7 +1517,7 @@ def _held_weakly(values: Iterable[Any]) -> tuple:
     refs = []
     for value in values:
         try:
-            refs.append(weakref.ref(value))
+            refs.append(_weak.ref(value))
         except TypeError:
             continue
     return tuple(refs)

@@ -21,6 +21,8 @@ from cash._paths import is_remote_url, normalize_path
 from cash.install_paths import is_user_path
 from cash.tracking.read_classification import is_cash_internal, is_pseudo_fs, regular_file_stat
 
+from .. import _weak
+
 if TYPE_CHECKING:
     from cash.tracking.file_tracker import FileAccessTracker
 
@@ -54,7 +56,7 @@ class _ReadsByCode(weakref.WeakKeyDictionary):
         self.gone = 0
         drop = self._remove
 
-        def remove(k: Any, drop: Any = drop, selfref: Any = weakref.ref(self)) -> None:
+        def remove(k: Any, drop: Any = drop, selfref: Any = _weak.ref(self)) -> None:
             self = selfref()
             if self is not None:
                 self.gone += 1
@@ -89,7 +91,7 @@ def _record_read(code: Any, abs_path: str, stat: Any) -> None:
             memo[code] = reads
         if len(_found_reads) >= _FOUND_READS_MAX:
             _found_reads.clear()
-        _found_reads[id(code)] = (memo.gone, weakref.ref(code), reads)
+        _found_reads[id(code)] = (memo.gone, _weak.ref(code), reads)
     reads[abs_path] = stat  # the LATEST read: a memo refilled is current again
 
 
@@ -204,7 +206,7 @@ _untracked_stats: LruMemo[str, tuple[float, Any]] = LruMemo(READ_PATHS)
 #: cash cost; a path is resolved once something asks what the code read
 #: (`credited_reads`), or before the code's next read inside a cached call
 #: is recorded, so the latest read of a file still wins.
-_unresolved_by_code: weakref.WeakKeyDictionary[Any, dict[str, Any]] = weakref.WeakKeyDictionary()
+_unresolved_by_code: weakref.WeakKeyDictionary[Any, dict[str, Any]] = _weak.WeakKeyDictionary()
 
 
 def _resolve(absolute: str) -> str:

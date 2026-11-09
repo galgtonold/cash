@@ -17,7 +17,7 @@ import weakref
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
 
-from . import _log
+from . import _log, _weak
 from ._console import encodable
 from .analytics import AnalyticsManager
 from .backends import CacheBackend
@@ -353,7 +353,7 @@ class Cash:
         # since ``configure(summary=True)`` may turn it on later. Through a
         # weakref, so the hook does not keep the instance alive; registered
         # before the exit work, so it runs after it.
-        atexit.register(_summary_at_exit, weakref.ref(self))
+        atexit.register(_summary_at_exit, _weak.ref(self))
         # The keys earlier runs stored, recorded beside the cache.
         self._stored_keys = StoredKeyRecord(self._backend_slot.local_dir)
         self._notices = Notices(

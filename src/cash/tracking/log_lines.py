@@ -28,6 +28,7 @@ import threading
 import time
 import weakref
 
+from .. import _weak
 from . import io_watch
 
 logger = logging.getLogger(__name__)
@@ -39,7 +40,7 @@ FLUSH_LINES = 256
 #: Seconds the oldest waiting line waits, at most, for the next to come.
 FLUSH_SECONDS = 0.5
 
-_LOGS: weakref.WeakSet[LogLines] = weakref.WeakSet()
+_LOGS: weakref.WeakSet[LogLines] = _weak.WeakSet()
 
 
 class LogLines:

@@ -22,6 +22,7 @@ from cash._location import announce_new_cache_dir
 from cash._paths import replace_with_retry
 from cash.exceptions import CacheBackendError
 
+from .. import _weak
 from ..config.schema import CashConfig
 from ..tracking.read_classification import register_cache_dir
 from ..tracking.tracker_context import untracked
@@ -87,7 +88,7 @@ _WRITERS_LOCK = threading.Lock()
 
 
 # Every FileBackend alive in the process, for `_reset_after_fork_in_child`.
-_LIVE_BACKENDS: weakref.WeakSet = weakref.WeakSet()
+_LIVE_BACKENDS: weakref.WeakSet = _weak.WeakSet()
 
 
 class _Flusher:
@@ -103,7 +104,7 @@ class _Flusher:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._due: weakref.WeakKeyDictionary[FileBackend, float] = weakref.WeakKeyDictionary()
+        self._due: weakref.WeakKeyDictionary[FileBackend, float] = _weak.WeakKeyDictionary()
         self._thread: threading.Thread | None = None
         self._wake = threading.Event()
 
@@ -139,7 +140,7 @@ class _Flusher:
         """No thread survives a fork; the parent's backends got no flusher
         in a child before either, so they are dropped."""
         self._lock = threading.Lock()
-        self._due = weakref.WeakKeyDictionary()
+        self._due = _weak.WeakKeyDictionary()
         self._thread = None
         self._wake = threading.Event()
 
@@ -259,7 +260,7 @@ def _register_writer(cache_dir: str, writes: PendingWrites) -> str:
             _watch_listings()
         bucket = _WRITERS_BY_DIR.get(scope)
         if bucket is None:
-            bucket = weakref.WeakSet()
+            bucket = _weak.WeakSet()
             _WRITERS_BY_DIR[scope] = bucket
         bucket.add(writes)
         # Drop scopes whose backends have all been collected.

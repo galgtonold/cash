@@ -24,7 +24,7 @@ from collections.abc import Callable, Iterator
 from time import perf_counter
 from typing import Any
 
-from . import value_watch
+from . import _weak, value_watch
 from ._user_attrs import instance_of
 from .content_hashers import builtin_hash, builtin_hash_family, is_native_panic
 from .sizing import pandas_nbytes
@@ -542,7 +542,7 @@ def _anchor(obj: Any) -> Callable[[], Any] | None:
     is not kept."""
     if _one_read.weak:
         try:
-            return weakref.ref(obj)
+            return _weak.ref(obj)
         except TypeError:
             pass
     for namespace in value_watch.namespaces():

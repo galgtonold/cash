@@ -32,7 +32,7 @@ from collections.abc import Callable, Generator
 from itertools import chain, repeat
 from typing import Any, NamedTuple
 
-from . import _plain_data, kept_state
+from . import _plain_data, _weak, kept_state
 from ._memo import SORTED_SETS, LruMemo
 from ._type_memo import TypeMemo, type_key
 from .sizing import SPARSE_PARTS, pandas_nbytes
@@ -846,7 +846,7 @@ def _decide_fields_class(t: type) -> bool:
     return (t.__basicsize__, t.__itemsize__) == _PLAIN_SIZE and bool(t.__dictoffset__)
 
 
-_FIELDS_CLASSES: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_FIELDS_CLASSES: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()
 
 
 def _found_by_name(t: type) -> bool:
@@ -1097,7 +1097,7 @@ def _decide_record_kind(t: type) -> str | None:
     return _OBJECT_RECORD if t.__dictoffset__ else None
 
 
-_RECORD_KINDS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_RECORD_KINDS: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()
 
 _STATE_OF = operator.attrgetter("__dict__")
 

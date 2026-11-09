@@ -617,6 +617,14 @@ class TrackingState:
     # W/R: StatementProcessor._refuse_unseen_writes.
     unseen_refused: dict[str, tuple[str, list[Any]]] = field(default_factory=dict)
 
+    # The statements, by text and place, whose last run was refused only for
+    # code a garbage collection ran in it (a ``__del__``, a weakref callback):
+    # garbage left over from earlier work, or the statement's own. Their next
+    # run starts with a collection, which frees what was left over, so a
+    # finalizer inside it is the statement's.
+    # W/R: StatementProcessor._refuse_unseen_writes, StatementProcessor.process.
+    collect_first: dict[str, None] = field(default_factory=dict)
+
     def __post_init__(self) -> None:
         if not isinstance(self.executed_input_lineages, InputLineages):
             self.executed_input_lineages = self.lineage.input_lineages(self.executed_input_lineages)

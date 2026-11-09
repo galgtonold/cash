@@ -24,12 +24,12 @@ from __future__ import annotations
 
 import sys
 import types
-import weakref
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
 from typing import Any, NamedTuple
 
+from .. import _weak
 from .._memo import CODE_OBJECTS, LruMemo
 from .._user_attrs import attribute_or
 from ..analysis.ast_util import parse_cached
@@ -281,7 +281,7 @@ def _reference(value: Any) -> Any:
     value that takes none (a list, a dict), a one-item tuple holding it --
     kept alive, its id cannot be reused by another object."""
     try:
-        return weakref.ref(value)
+        return _weak.ref(value)
     except TypeError:
         return (value,)
 

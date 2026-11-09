@@ -22,6 +22,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple
 
+from .. import _weak
 from .._memo import RECORDS, LruMemo
 from .._paths import replace_with_retry
 from ..backends._writes import PendingWrites
@@ -239,7 +240,7 @@ class _View:
 
 
 # Every live record, for `_reset_after_fork_in_child`.
-_LIVE_RECORDS: weakref.WeakSet = weakref.WeakSet()
+_LIVE_RECORDS: weakref.WeakSet = _weak.WeakSet()
 
 
 def _reset_after_fork_in_child() -> None:

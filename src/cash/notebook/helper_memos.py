@@ -49,6 +49,8 @@ from cash.analysis.ast_util import walk_tree
 from cash.install_paths import is_user_code_file, is_user_module
 from cash.value_hash import compute_hash
 
+from .. import _weak as cash_weak
+
 __all__ = [
     "FILLED",
     "MAX_KEYED",
@@ -101,12 +103,12 @@ _user_modules: tuple[Any, tuple[Any, ...]] = (None, ())
 #: [(path, memo)])``: an owner's names are read again when one of those was
 #: bound, rebound or dropped (``importlib.reload``, ``C.f = cache(g)``).
 _owner_memos: weakref.WeakKeyDictionary[Any, tuple[tuple[int, ...], list[tuple[list[str], Any]]]] = (
-    weakref.WeakKeyDictionary()
+    cash_weak.WeakKeyDictionary()
 )
 #: ``memo -> (the keys and answers it held, their digests)``: digested again
 #: when one of them is not the very object it was, or is one that can be
 #: changed in place (`_fixed`).
-_digests: weakref.WeakKeyDictionary[Any, tuple[list[Any], list[str] | None]] = weakref.WeakKeyDictionary()
+_digests: weakref.WeakKeyDictionary[Any, tuple[list[Any], list[str] | None]] = cash_weak.WeakKeyDictionary()
 #: ``memo -> {id(answer): (answer, digest)}`` for the answers that can be
 #: changed in place, as the last statement that called the memo left them:
 #: what tells a statement that changed one in place (``f(1).append(5)``)
@@ -114,7 +116,7 @@ _digests: weakref.WeakKeyDictionary[Any, tuple[list[Any], list[str] | None]] = w
 #: (`_fixed`) is there with `_FIXED` for its digest: told so once, not
 #: walked again before every statement (a ``subsegments(N)`` memo's tuple
 #: of 100,000 pairs).
-_answers_seen: weakref.WeakKeyDictionary[Any, dict[int, tuple[Any, Any]]] = weakref.WeakKeyDictionary()
+_answers_seen: weakref.WeakKeyDictionary[Any, dict[int, tuple[Any, Any]]] = cash_weak.WeakKeyDictionary()
 
 #: The digest `_answers_seen` gives an answer `_fixed` holds: it equals no
 #: digest, and the answer, the very object kept with it, stays fixed.
@@ -315,7 +317,7 @@ def _where(ns: Mapping[str, Any], *, fresh: bool = False) -> list[tuple[list[str
 
 def _weak(obj: Any) -> Any:
     try:
-        return weakref.ref(obj)
+        return cash_weak.ref(obj)
     except TypeError:
         return obj  # takes none (a ``staticmethod``): kept as it is
 
@@ -1576,7 +1578,7 @@ def unfilled(records: list[dict] | None, ns: Mapping[str, Any], *, refill: bool 
 #: The memos of the user's that `_where` does not find (one in a closure, a
 #: dict, a list, an object's attribute, a ``functools.partial``), met by a
 #: look through every object (`hidden_moved`): ``id -> memo``.
-_hidden: weakref.WeakValueDictionary[int, Any] = weakref.WeakValueDictionary()
+_hidden: weakref.WeakValueDictionary[int, Any] = cash_weak.WeakValueDictionary()
 
 
 def hidden_counters() -> dict[int, tuple[int, int, int]]:
@@ -1732,7 +1734,7 @@ def _held_as_computed(record: dict, memo: Any, keys: set[str]) -> bool:
 
 #: ``memo -> (the keys it held, their digests)``: digested again when one
 #: is not the very object it was (keys are hashable, and so do not change).
-_key_digest_memo: weakref.WeakKeyDictionary[Any, tuple[list[Any], set[str]]] = weakref.WeakKeyDictionary()
+_key_digest_memo: weakref.WeakKeyDictionary[Any, tuple[list[Any], set[str]]] = cash_weak.WeakKeyDictionary()
 
 
 def _key_digests(memo: Any) -> set[str] | None:
@@ -2019,8 +2021,8 @@ _INFO_NAMES = ("cache_info",)
 
 #: ``names -> code -> whether it or a function it calls names one of them``.
 _clearing_code: dict[tuple[str, ...], weakref.WeakKeyDictionary[Any, bool]] = {
-    _COUNTER_NAMES: weakref.WeakKeyDictionary(),
-    _INFO_NAMES: weakref.WeakKeyDictionary(),
+    _COUNTER_NAMES: cash_weak.WeakKeyDictionary(),
+    _INFO_NAMES: cash_weak.WeakKeyDictionary(),
 }
 
 
