@@ -1110,7 +1110,11 @@ def _routine_parts(value: Any) -> list[str]:
         if kind is types.FunctionType:
             parts.append("fn:" + held_code_digest(routine))
             parts.append("body:" + _body_digest(routine.__code__))
-            held = [*(routine.__defaults__ or ()), *sorted((routine.__kwdefaults__ or {}).items())]
+            # Keyword-only defaults by value, in name order (the names are
+            # in the code): a ``(name, value)`` pair is no routine, so a
+            # function held there was hashed as data, and could not be.
+            keyword = routine.__kwdefaults__ or {}
+            held = [*(routine.__defaults__ or ()), *(keyword[name] for name in sorted(keyword))]
             for cell in routine.__closure__ or ():
                 try:
                     held.append(cell.cell_contents)

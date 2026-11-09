@@ -53,6 +53,9 @@ PAIRS = {
         "        get = (lambda f: lambda n: f(n))(get)\n    return get\none, two = mk(1), mk(2)"
     ),
     "defaults": "one = lambda n, v=1: v\ntwo = lambda n, v=2: v",
+    "keyword-only defaults holding functions": (
+        "def mk(v):\n    def get(n, *, f=lambda: v):\n        return f()\n    return get\none, two = mk(1), mk(2)"
+    ),
     "lambdas on one line": "one, two = (lambda n: 1), (lambda n: 2)",
     "random defaults": (
         "import random\none, two = (lambda n, r=random.Random(1): r.random()), (lambda n, r=random.Random(2): r.random())"
@@ -167,7 +170,17 @@ def test_a_swap_between_statements_is_read_too(cash_magics, mock_shell, cell):
 
 
 @pytest.mark.usefixtures("store_everything")
-@pytest.mark.parametrize("pair", ["functions", "recursive closures", "deep wrappers", "bound methods", "dict get"])
+@pytest.mark.parametrize(
+    "pair",
+    [
+        "functions",
+        "recursive closures",
+        "deep wrappers",
+        "keyword-only defaults holding functions",
+        "bound methods",
+        "dict get",
+    ],
+)
 def test_a_routine_left_in_place_still_serves_the_second_call(cash_magics, mock_shell, tmp_path, pair):
     """The control: nothing swapped, the second call is served."""
     mock_shell.user_ns["__name__"] = "__main__"
