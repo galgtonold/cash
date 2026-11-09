@@ -11,6 +11,8 @@ memmap's, and one the statement writes into.
 
 from __future__ import annotations
 
+import warnings
+
 import pytest
 
 from cash.backends.file_backend import FileBackend
@@ -229,3 +231,43 @@ class TestResolve:
         assert array_digest(np.array([object()])) is None
         assert array_digest(mm[:2]) is None
         assert array_digest([1.0]) is None
+
+
+@pytest.mark.parametrize("algorithm", ["kd_tree", "brute"])
+def test_a_model_keeping_the_slice_in_a_tree_too_runs_every_time(cash_magics, clean_backend, algorithm):
+    """A k-d tree keeps the data it was fitted on beside ``_fit_X``, which
+    is the slice; a restore would copy the tree's apart from the slice, and
+    a write to ``X`` would not reach it. Such a fit runs every time, with
+    no warning: nothing went wrong in the store. Fitted by brute force,
+    with no tree, it is served (the control)."""
+    pytest.importorskip("sklearn")
+    fit = f"model = (time.sleep(0.2), KNeighborsClassifier(algorithm={algorithm!r}).fit(X_train, y))[1]"
+    cells = [
+        "import time\nimport numpy as np\nfrom sklearn.neighbors import KNeighborsClassifier",
+        "X = np.random.default_rng(0).random((300, 4))\ny = (X[:, 0] > 0.5).astype(int)",
+        "X_train = X[:200]\ny = y[:200]",
+        fit,
+    ]
+    probe = "X[:] = 0.0\nseen = [model._fit_X is X_train, float(model.kneighbors(np.zeros((1, 4)))[0].max())]"
+    expected = CacheStatus.COMPUTED if algorithm == "kd_tree" else CacheStatus.RESTORED
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _run(cash_magics, cells)
+    assert not [str(w.message) for w in caught if "STORE" in str(w.message)]
+    _restart(cash_magics)
+    cash_magics.shell.user_ns.pop("KNeighborsClassifier", None)
+
+    status = _run(cash_magics, cells)
+    assert status == expected, cash_magics.cash_status("dict")["last_cell"]["statements"]
+    assert _as_cash(cash_magics, probe) == _plain(cells, probe)
+
+
+def test_an_array_holding_the_anchors_memory_is_found():
+    from cash.notebook.anchors import array_memory_held_apart
+
+    X = np.arange(12.0).reshape(3, 4)
+    X_train = X[:2]
+    assert array_memory_held_apart({"m": [X_train]}, {"X_train": X_train}) is None
+    assert array_memory_held_apart({"m": [X_train, X_train[:, :2].copy()]}, {"X_train": X_train}) is None
+    assert array_memory_held_apart({"m": [X_train, X_train[:, :2]]}, {"X_train": X_train}) == "X_train"
+    assert array_memory_held_apart({"m": [X_train, X]}, {"X_train": X_train}) == "X_train"

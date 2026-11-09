@@ -82,8 +82,9 @@ CASES = {
     ),
 }
 
-#: The fitted estimator holds the caller's own array (``knn._fit_X is X``): a
-#: restored copy would not see ``X`` change, so the fit re-runs every time.
+#: The fitted estimator holds the caller's own array (``knn._fit_X is X``), and
+#: its k-d tree keeps the same memory, which a restore would copy apart from
+#: ``X``: the tree would not see ``X`` change, so the fit re-runs every time.
 REFUSED = {"neighbors_hold_the_data"}
 
 

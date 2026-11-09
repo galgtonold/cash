@@ -53,6 +53,7 @@ __all__ = [
     "AnchorUnrebuilt",
     "anchor_digests",
     "array_digest",
+    "array_memory_held_apart",
     "link_anchors",
     "memory_homes",
     "resolve_anchors",
@@ -162,6 +163,17 @@ def with_anchor_refs(value: Any, anchors: Mapping[str, Any], homes: Iterable[str
     each numpy view it holds that sits in the data of an anchor *homes*
     names: the statement's inputs, whose lineage its key holds. One view
     held in two places is one `MemoryHome`, so it comes back as one."""
+
+    def load(pid: Any) -> Any:
+        return pid if type(pid) is MemoryHome else AnchorRef(pid)
+
+    return _round_trip(value, _namer(anchors, homes), load, naming=True)
+
+
+def _namer(anchors: Mapping[str, Any], homes: Iterable[str]) -> Callable[[Any], Any]:
+    """What `with_anchor_refs` puts in the place of an object: the name of
+    the anchor it is, the `MemoryHome` of a view in a home's data, or None
+    for an object copied as it is."""
     by_id = {id(obj): name for name, obj in anchors.items()}
     homes = set(homes)
     data = {name: obj for name, obj in anchors.items() if name in homes and data_arrays(obj)}
@@ -176,10 +188,50 @@ def with_anchor_refs(value: Any, anchors: Mapping[str, Any], homes: Iterable[str
             return placed[id(obj)]
         return name
 
+    return name_of
+
+
+def array_memory_held_apart(value: Any, anchors: Mapping[str, Any], homes: Iterable[str] = ()) -> str | None:
+    """The name of an anchor that is a numpy array which a restore of
+    *value* would not give back as the live array everywhere *value* holds
+    its memory; None when there is none. Asked as the store does it
+    (`with_anchor_refs`): one pickle round trip, a reference in each
+    anchor's place.
+
+    One that *value* holds in another array too, which the round trip
+    copies, counts: the copy would not share memory with the live anchor,
+    as the array stored did. So does one around which a part of *value*
+    cannot be rebuilt (`AnchorUnrebuilt`). Asked of the arrays the pickling
+    meets, so an array a library's own object hands its pickling (a k-d
+    tree in a ``KNeighborsClassifier`` keeps the data it was fitted on,
+    beside the ``_fit_X`` the anchor stands for) counts too. By the bounds
+    of their memory (``numpy.may_share_memory``): two arrays interleaved in
+    one block count as sharing it, which refuses, never serves wrongly."""
+    np = sys.modules.get("numpy")
+    if np is None:
+        return None
+    arrays = {name: obj for name, obj in anchors.items() if type(obj) is np.ndarray}
+    if not arrays:
+        return None
+    name_of = _namer(anchors, homes)
+    found: list[str] = []
+
+    def spot(obj: Any) -> Any:
+        name = name_of(obj)
+        if name is None and isinstance(obj, np.ndarray):
+            found.extend(other for other, array in arrays.items() if np.may_share_memory(obj, array))
+        return name
+
     def load(pid: Any) -> Any:
         return pid if type(pid) is MemoryHome else AnchorRef(pid)
 
-    return _round_trip(value, name_of, load, naming=True)
+    try:
+        _round_trip(value, spot, load, naming=True)
+    except AnchorUnrebuilt as exc:
+        found.append(exc.name or next(iter(arrays)))
+    except Exception:  # noqa: BLE001 - the store's own pickling reports what does not pickle
+        pass  # what was met before it stopped counts all the same
+    return found[0] if found else None
 
 
 def memory_homes(digests: Mapping[str, str] | None) -> set[str]:

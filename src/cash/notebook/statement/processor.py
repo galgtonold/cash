@@ -186,7 +186,7 @@ from ...tracking.randomness import (
 from ...tracking.trace_recorder import other_thread_alive
 from ...tracking.tracker_context import untracked
 from .. import helper_memos
-from ..anchors import MEMORY_HOME, anchor_digests, array_digest, memory_homes
+from ..anchors import MEMORY_HOME, anchor_digests, array_digest, array_memory_held_apart, memory_homes
 from ..borrowed_memory import borrowed_memory_names, lazy_frame_sources
 from ..callee_reach import (
     CWD,
@@ -4141,6 +4141,9 @@ class StatementProcessor:
             }
             run.anchor_links = anchor_links | set(anchors)
             run.anchor_holds = anchor_holds
+            reason = self._anchor_memory_apart(run, captured_vars, anchors, found or {})
+            if reason is not None:
+                run.anchors, run.anchor_links, run.anchor_holds = {}, set(), {}
         if reason is None and found is not None:
             return found
         # Gave up on a holder that is not a variable: the variables it found
@@ -5308,6 +5311,28 @@ class StatementProcessor:
             return digests is not None and digests[name] == before
 
         return anchorable
+
+    def _anchor_memory_apart(
+        self, run: StatementRun, captured_vars: dict[str, Any], anchors: Mapping[str, Any], holders: Mapping[str, Any]
+    ) -> str | None:
+        """The refusal when a restore of *run*'s outputs would not give back
+        an array anchor (`_view_anchor_digest`) everywhere they hold its
+        memory (`array_memory_held_apart`): a k-d tree in a
+        ``KNeighborsClassifier`` keeps the data it was fitted on, beside
+        ``_fit_X``, which is the anchor. Asked once per refusal streak, as
+        the share check is (`_refused_again`)."""
+        arrays = {name: obj for name, obj in anchors.items() if run.view_anchor_digests.get(name)}
+        if not arrays:
+            return None
+        values = {name: captured_vars[name] for name in run.outputs if name in captured_vars}
+        values.update(holders)
+        name = array_memory_held_apart(values, anchors, homes=[name for name in anchors if name in run.inputs])
+        if name is None:
+            return None
+        return (
+            f"Live-alias object: an output holds the memory of '{name}' in a part a restore would copy "
+            "or could not rebuild around it; re-derived from live base, not cached."
+        )
 
     def _view_anchor_digest(self, run: StatementRun, name: str) -> str | None:
         """The digest of *name*'s content when it can be an anchor checked by
