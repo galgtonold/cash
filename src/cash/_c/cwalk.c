@@ -16,6 +16,7 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include <limits.h>
+#include <math.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -1529,12 +1530,213 @@ static PyObject *py_set_ops_scan(PyObject *self, PyObject *const *args, Py_ssize
     return PyBool_FromLong(s.found);
 }
 
+/* Does *o* hash the same in every process (kept_state._hashed_alike)? An
+ * int or bool, a float or complex number other than NaN, None when
+ * *none_alike* (Python 3.12+), or a tuple or frozenset of those. -1 on error. */
+/* None hashes alike in every process from Python 3.12 on (before, its address). */
+#define NONE_HASHED_ALIKE (PY_VERSION_HEX >= 0x030C0000)
+
+static int hashed_alike(PyObject *o, int none_alike) {
+    PyTypeObject *t = Py_TYPE(o);
+    if (t == &PyLong_Type || t == &PyBool_Type) return 1;
+    if (o == Py_None) return none_alike;
+    if (t == &PyFloat_Type) return !isnan(PyFloat_AS_DOUBLE(o));
+    if (t == &PyComplex_Type) {
+        Py_complex c = PyComplex_AsCComplex(o);
+        return !isnan(c.real) && !isnan(c.imag);
+    }
+    if (t != &PyTuple_Type && t != &PyFrozenSet_Type) return 0;
+    if (Py_EnterRecursiveCall(" while keying a set's order")) return -1;
+    int alike = 1;
+    if (t == &PyTuple_Type) {
+        for (Py_ssize_t i = 0; alike == 1 && i < PyTuple_GET_SIZE(o); i++) alike = hashed_alike(PyTuple_GET_ITEM(o, i), none_alike);
+    } else {
+        PyObject *it = PyObject_GetIter(o), *item;
+        if (!it) alike = -1;
+        while (alike == 1 && it && (item = PyIter_Next(it))) {
+            alike = hashed_alike(item, none_alike);
+            Py_DECREF(item);
+        }
+        Py_XDECREF(it);
+        if (alike == 1 && PyErr_Occurred()) alike = -1;
+    }
+    Py_LeaveRecursiveCall();
+    return alike;
+}
+
+typedef struct {
+    PyObject *item;
+    uint32_t at;
+} placed_t;
+
+static int by_address(const void *a, const void *b) {
+    uintptr_t x = (uintptr_t)((const placed_t *)a)->item, y = (uintptr_t)((const placed_t *)b)->item;
+    return x < y ? -1 : x > y;
+}
+
+static void put_place(unsigned char *bytes, Py_ssize_t i, size_t at) {
+    bytes[4 * i] = (unsigned char)(at & 0xff);
+    bytes[4 * i + 1] = (unsigned char)((at >> 8) & 0xff);
+    bytes[4 * i + 2] = (unsigned char)((at >> 16) & 0xff);
+    bytes[4 * i + 3] = (unsigned char)((at >> 24) & 0xff);
+}
+
+/* Each of *walk*'s *n* items' place in *order* (sorted, the same objects),
+ * found by its value in an array of the sorted values: for a set of floats
+ * alone, or of ints alone that fit 64 bits, *order* ascending by value. 1
+ * when done, 0 when not (the caller places them by address), -1 on error. */
+static int place_by_value(PyObject **walk, PyObject **order, Py_ssize_t n, unsigned char *bytes) {
+    PyTypeObject *kind = Py_TYPE(order[0]);
+    if (kind != &PyFloat_Type && kind != &PyLong_Type) return 0;
+    for (Py_ssize_t i = 0; i < n; i++)
+        if (!Py_IS_TYPE(order[i], kind)) return 0;
+    if (kind == &PyFloat_Type) {
+        double *keys = PyMem_Malloc((size_t)n * sizeof(double));
+        if (!keys) return (PyErr_NoMemory(), -1);
+        for (Py_ssize_t i = 0; i < n; i++) {
+            keys[i] = PyFloat_AS_DOUBLE(order[i]);
+            if (i && !(keys[i - 1] < keys[i])) { /* not in value order (canonical_form's) */
+                PyMem_Free(keys);
+                return 0;
+            }
+        }
+        for (Py_ssize_t i = 0; i < n; i++) {
+            double v = PyFloat_AS_DOUBLE(walk[i]);
+            size_t lo = 0, hi = (size_t)n;
+            while (lo < hi) {
+                size_t mid = lo + (hi - lo) / 2;
+                if (keys[mid] < v) lo = mid + 1;
+                else hi = mid;
+            }
+            /* -0.0 and 0.0 are one item: whichever is held is at lo */
+            put_place(bytes, i, lo);
+        }
+        PyMem_Free(keys);
+        return 1;
+    }
+    long long *keys = PyMem_Malloc((size_t)n * sizeof(long long));
+    if (!keys) return (PyErr_NoMemory(), -1);
+    for (Py_ssize_t i = 0; i < n; i++) {
+        int overflow = 0;
+        keys[i] = PyLong_AsLongLongAndOverflow(order[i], &overflow);
+        if (overflow || (keys[i] == -1 && PyErr_Occurred()) || (i && !(keys[i - 1] < keys[i]))) {
+            PyErr_Clear();
+            PyMem_Free(keys);
+            return 0;
+        }
+    }
+    for (Py_ssize_t i = 0; i < n; i++) {
+        long long v = PyLong_AsLongLong(walk[i]);
+        size_t lo = 0, hi = (size_t)n;
+        while (lo < hi) {
+            size_t mid = lo + (hi - lo) / 2;
+            if (keys[mid] < v) lo = mid + 1;
+            else hi = mid;
+        }
+        put_place(bytes, i, lo);
+    }
+    PyMem_Free(keys);
+    return 1;
+}
+
+/* Each of the *k* items *alike*'s place in *order* (*n* objects), found by
+ * address in one sorted table. 1 when done, -1 on error. */
+static int place_by_address(PyObject **alike, Py_ssize_t k, PyObject **order, Py_ssize_t n, unsigned char *bytes) {
+    placed_t *table = PyMem_Malloc((size_t)n * sizeof(placed_t));
+    if (!table) return (PyErr_NoMemory(), -1);
+    for (Py_ssize_t i = 0; i < n; i++) {
+        table[i].item = order[i];
+        table[i].at = (uint32_t)i;
+    }
+    qsort(table, (size_t)n, sizeof(placed_t), by_address);
+    int done = 1;
+    for (Py_ssize_t i = 0; i < k; i++) {
+        placed_t key = {alike[i], 0};
+        placed_t *found = bsearch(&key, table, (size_t)n, sizeof(placed_t), by_address);
+        if (!found) {
+            PyErr_SetString(PyExc_ValueError, "set_walk_order: an item not in sorted");
+            done = -1;
+            break;
+        }
+        put_place(bytes, i, found->at);
+    }
+    PyMem_Free(table);
+    return done;
+}
+
+/* set_walk_order(walked, sorted, none_alike): kept_state.set_walk_order,
+ * answer for answer. *walked* is a set's items in the order it iterates,
+ * *sorted* the same objects sorted. None when fewer than two of them hash
+ * alike in every process (hashed_alike), or when those iterate in sorted
+ * order; else bytes: each such item's place in *sorted*, in the order the set
+ * iterates them, as little-endian uint32. Found by value in the sorted
+ * values for floats or 64-bit ints alone, else by address in one sorted
+ * table, never a dict: a 100,000-item set took 0.1 s in Python. */
+static PyObject *set_walk_order(PyObject *walked, PyObject *sorted, int none_alike) {
+    Py_ssize_t n = PySequence_Fast_GET_SIZE(walked);
+    if (n != PySequence_Fast_GET_SIZE(sorted) || n > (Py_ssize_t)UINT32_MAX) {
+        PyErr_SetString(PyExc_ValueError, "set_walk_order: walked and sorted differ in length");
+        return NULL;
+    }
+    PyObject **walk = PySequence_Fast_ITEMS(walked), **order = PySequence_Fast_ITEMS(sorted);
+    PyObject **alike = PyMem_Malloc((size_t)(n ? n : 1) * sizeof(PyObject *));
+    if (!alike) return PyErr_NoMemory();
+    Py_ssize_t k = 0;
+    for (Py_ssize_t i = 0; i < n; i++) {
+        int is = hashed_alike(walk[i], none_alike);
+        if (is < 0) {
+            PyMem_Free(alike);
+            return NULL;
+        }
+        if (is) alike[k++] = walk[i];
+    }
+    if (k < 2) {
+        PyMem_Free(alike);
+        Py_RETURN_NONE;
+    }
+    PyObject *out = PyBytes_FromStringAndSize(NULL, k * 4);
+    if (!out) {
+        PyMem_Free(alike);
+        return NULL;
+    }
+    unsigned char *bytes = (unsigned char *)PyBytes_AS_STRING(out);
+    int found = k == n ? place_by_value(alike, order, n, bytes) : 0;
+    if (found == 0) found = place_by_address(alike, k, order, n, bytes);
+    PyMem_Free(alike);
+    if (found < 0) {
+        Py_DECREF(out);
+        return NULL;
+    }
+    /* in sorted order: the plain one, keyed as before */
+    uint32_t last = 0;
+    for (Py_ssize_t i = 0; i < k; i++) {
+        uint32_t at = (uint32_t)bytes[4 * i] | (uint32_t)bytes[4 * i + 1] << 8 | (uint32_t)bytes[4 * i + 2] << 16 |
+                      (uint32_t)bytes[4 * i + 3] << 24;
+        if (i && at <= last) return out;
+        last = at;
+    }
+    Py_DECREF(out);
+    Py_RETURN_NONE;
+}
+
+static PyObject *py_set_walk_order(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs != 3 || !PyList_CheckExact(args[0]) || !(PyList_CheckExact(args[1]) || PyTuple_CheckExact(args[1]))) {
+        PyErr_SetString(PyExc_TypeError, "set_walk_order(list, list | tuple, none_alike)");
+        return NULL;
+    }
+    int none_alike = PyObject_IsTrue(args[2]);
+    if (none_alike < 0) return NULL;
+    return set_walk_order(args[0], args[1], none_alike);
+}
+
 /* sorted_set_id(forms, made, spec, obj): kept_state.sorted_set_ids's
  * persistent_id, answer for answer: None for anything but an exact set or
  * frozenset of two or more items; else the form a key writes in its place,
- * (spec[0], spec[1] for a set or spec[2] for a frozenset, its items sorted),
+ * (spec[0], spec[1] for a set or spec[2] for a frozenset, its items sorted,
+ * and, for numbers, the order it iterates in where that is not the plain
+ * one: set_walk_order),
  * kept in *made* ({id: (set, form)}) and given again for the same set. A set
- * of strings alone, ints alone or bytes alone is sorted here; any other is
+ * of strings alone, ints alone, bytes alone or floats alone (no NaN) is sorted here; any other is
  * left to *forms*, which keeps its own in *made*. A key pickle asks it of
  * every object it writes, and a memo of 245,760 small frozensets took a
  * Python call apiece. */
@@ -1567,17 +1769,30 @@ static PyObject *py_sorted_set_id(PyObject *self, PyObject *const *args, Py_ssiz
         return NULL;
     }
     PyTypeObject *kind = Py_TYPE(PyList_GET_ITEM(items, 0));
-    int plain = kind == &PyUnicode_Type || kind == &PyLong_Type || kind == &PyBytes_Type;
+    int plain = kind == &PyUnicode_Type || kind == &PyLong_Type || kind == &PyBytes_Type || kind == &PyFloat_Type;
     for (Py_ssize_t i = 1; plain && i < PyList_GET_SIZE(items); i++) plain = Py_IS_TYPE(PyList_GET_ITEM(items, i), kind);
+    /* floats sort as themselves only with no NaN among them (kept_state._sorted_items) */
+    for (Py_ssize_t i = 0; plain && kind == &PyFloat_Type && i < PyList_GET_SIZE(items); i++)
+        plain = !isnan(PyFloat_AS_DOUBLE(PyList_GET_ITEM(items, i)));
     if (!plain) {
         Py_DECREF(items);
         Py_DECREF(key);
         return PyObject_CallOneArg(args[0], obj);
     }
-    PyObject *sorted = PyList_Sort(items) < 0 ? NULL : PyList_AsTuple(items);
+    /* Only numbers hash alike in every process; a set of strings or bytes
+     * keys order-free (kept_state.set_walk_order), and its walk is not kept. */
+    int numbers = kind == &PyLong_Type || kind == &PyFloat_Type;
+    PyObject *walked = numbers ? PyList_GetSlice(items, 0, PyList_GET_SIZE(items)) : NULL;
+    PyObject *sorted = (numbers && walked == NULL) || PyList_Sort(items) < 0 ? NULL : PyList_AsTuple(items);
     Py_DECREF(items);
-    PyObject *form = sorted ? PyTuple_Pack(3, PyTuple_GET_ITEM(spec, 0), PyTuple_GET_ITEM(spec, frozen ? 2 : 1), sorted)
-                            : NULL;
+    PyObject *order = !sorted ? NULL : numbers ? set_walk_order(walked, sorted, NONE_HASHED_ALIKE) : Py_NewRef(Py_None);
+    Py_XDECREF(walked);
+    PyObject *form = NULL;
+    if (order == Py_None)
+        form = PyTuple_Pack(3, PyTuple_GET_ITEM(spec, 0), PyTuple_GET_ITEM(spec, frozen ? 2 : 1), sorted);
+    else if (order)
+        form = PyTuple_Pack(4, PyTuple_GET_ITEM(spec, 0), PyTuple_GET_ITEM(spec, frozen ? 2 : 1), sorted, order);
+    Py_XDECREF(order);
     Py_XDECREF(sorted);
     PyObject *entry = form ? PyTuple_Pack(2, obj, form) : NULL;
     int err = entry ? PyDict_SetItem(made, key, entry) : -1;
@@ -2131,6 +2346,8 @@ static PyMethodDef cwalk_methods[] = {
     {"set_scan_state", (PyCFunction)py_set_scan_state, METH_NOARGS, "set_scan_state() -> bytearray"},
     {"set_ops_scan", (PyCFunction)(void (*)(void))py_set_ops_scan, METH_FASTCALL,
      "set_ops_scan(state, data) -> bool"},
+    {"set_walk_order", (PyCFunction)(void (*)(void))py_set_walk_order, METH_FASTCALL,
+     "set_walk_order(walked, sorted, none_alike) -> None | bytes"},
     {"sorted_set_id", (PyCFunction)(void (*)(void))py_sorted_set_id, METH_FASTCALL,
      "sorted_set_id(forms, made, spec, obj) -> None | form"},
     {"dated_records", (PyCFunction)(void (*)(void))py_dated_records, METH_FASTCALL,

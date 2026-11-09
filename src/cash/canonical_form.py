@@ -143,8 +143,11 @@ def stable_key_repr(
     * Every dict, list, tuple, set and frozenset becomes a tuple tagged with its
       type (`_typed`), so containers of different types never key alike.
     * The items of a set are sorted by their pickled bytes: a set of strings
-      iterates in an order PYTHONHASHSEED picks, and nothing can read a
-      set's order back. A dict keeps its insertion order, which code reads:
+      iterates in an order PYTHONHASHSEED picks. The order its items that
+      hash alike in every process (numbers, and tuples of them) iterate in
+      is kept beside them where it is not that sorted order
+      (`set_walk_order`: items that collided, went in another order or
+      were deleted), since ``list(s)`` and ``s.pop()`` read it. A dict keeps its insertion order, which code reads:
       ``pd.DataFrame(d)`` orders its columns by it, ``json.dumps`` and
       ``csv.DictWriter`` write in it. Sorted, ``{"name": ..., "score": ...}``
       and its reordering shared an entry and the second call got the first
@@ -583,6 +586,11 @@ def _remember_sorted(value: frozenset, form: Any) -> None:
     _SORTED_SETS[key] = (wref, form)
 
 
+def _by_content_of_form(pair: tuple) -> bytes:
+    """A set item's sort key: the content of its form (`_object_steps`)."""
+    return _plain_data.content_dumps(pair[0])
+
+
 def _object_steps(value: Any, walk: _Walk) -> Generator[Any, Any, Any]:
     """The form of a container or object: a generator `_walk` drives, which
     yields each part to walk and is sent its form. *value* is on
@@ -598,14 +606,17 @@ def _object_steps(value: Any, walk: _Walk) -> Generator[Any, Any, Any]:
                 entry = _SORTED_SETS.get(id(value))
                 if entry is not None and entry[0]() is value:
                     return entry[1]
-            for v in value:
+            walked = list(value)
+            for v in walked:
                 if type(v) in prims:
-                    items.append(v)
+                    items.append((v, v))
                 else:
                     remembered = False
-                    items.append((yield v))
-            items.sort(key=_plain_data.content_dumps)
-            form = yield from _typed(value, tuple(items), walk)
+                    items.append(((yield v), v))
+            items.sort(key=_by_content_of_form)
+            order = kept_state.set_walk_order(walked, [v for _, v in items])
+            sorted_forms = tuple(f for f, _ in items)
+            form = yield from _typed(value, sorted_forms if order is None else (sorted_forms, order), walk)
             if remembered:
                 _remember_sorted(value, form)
             return form

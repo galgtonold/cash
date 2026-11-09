@@ -14,6 +14,7 @@ does. It is used wherever cash pickles a value it keys or stores.
 
 from __future__ import annotations
 
+import array
 import contextlib
 import copy
 import copyreg
@@ -54,6 +55,7 @@ __all__ = [
     "restore_with_dict",
     "restores_alike_apart",
     "same_definition",
+    "set_walk_order",
     "sorted_set_ids",
     "stopped_at_defined_again",
     "store_memo",
@@ -731,7 +733,9 @@ SET_MARK = "__cash_set__"
 def sorted_set_ids(protocol: int, extra: dict | None) -> Callable[[Any], Any]:
     """A key pickle's ``persistent_id`` that writes each set and frozenset
     of two or more items as ``(SET_MARK, its type's name, its items
-    sorted)``, and lets the pickle write anything else as it would: None.
+    sorted)`` -- and the order it iterates in where that is not the plain
+    one (`set_walk_order`) -- and lets the pickle write anything else as it
+    would: None.
 
     Pickle writes a set's items in the order the set iterates in, its hash
     table's slot order. That order is not the set's content: it depends on
@@ -762,7 +766,10 @@ def sorted_set_ids(protocol: int, extra: dict | None) -> Callable[[Any], Any]:
         found = made.get(key)
         if found is not None:
             return found[1]
-        written = (SET_MARK, _SET_NAMES[type(obj)], tuple(_sorted_items(obj, protocol, extra)))
+        walked = list(obj)
+        items = tuple(_sorted_items(walked, protocol, extra))
+        order = set_walk_order(walked, items)
+        written = (SET_MARK, _SET_NAMES[type(obj)], items) + (() if order is None else (order,))
         made[key] = (obj, written)
         return written
 
@@ -775,6 +782,63 @@ def sorted_set_ids(protocol: int, extra: dict | None) -> Callable[[Any], Any]:
         return forms(obj) if t is set or t is frozenset else None
 
     return persistent_id
+
+
+def set_walk_order(walked: list, ordered: tuple | list) -> bytes | None:
+    """The order a set iterates its items that hash alike in every process
+    in (`_hashed_alike`): each one's place in *ordered* (the set's items,
+    the same objects, sorted), in the order the set iterates them, as
+    little-endian uint32 bytes. None when fewer than two of its items hash
+    so, or when those iterate in sorted order. *walked* is the set's items
+    as it iterates them.
+
+    Equal sets can iterate in other orders: two items that collide in the
+    table sit in the order they went in (``{1, 9}`` and ``{9, 1}``), and
+    deletions or a copied larger table move items too. ``list(s)``,
+    ``s.pop()`` and ``next(iter(s))`` read that order, so a key that left it
+    out served ``first = s.pop()`` the item another set's order put first.
+
+    Only numbers' order: their hashes, and so the order they iterate in
+    after the same history, are the same in every process, and the key with
+    their order in it is too. Strings iterate in an order ``PYTHONHASHSEED``
+    picks per process, so a set of strings keys order-free, as before, and
+    in a set of both only the numbers' order among themselves is kept. A
+    set iterating its numbers in sorted order keys as before. With the C
+    extension, at C speed (``cwalk.c``)."""
+    kernel = getattr(_native.kernels, "set_walk_order", None)
+    if kernel is not None:
+        return kernel(walked if type(walked) is list else list(walked), ordered, _NONE_ALIKE)
+    alike = [item for item in walked if _hashed_alike(item)]
+    if len(alike) < 2:
+        return None
+    place = {id(item): at for at, item in enumerate(ordered)}
+    order = array.array("I", [place[id(item)] for item in alike])
+    if all(map(operator.lt, order, itertools.islice(order, 1, None))):
+        return None
+    if sys.byteorder != "little":
+        order.byteswap()
+    return order.tobytes()
+
+
+#: Whether ``None`` hashes the same in every process: from Python 3.12 on
+#: (before, its hash is its address).
+_NONE_ALIKE = sys.version_info >= (3, 12)
+
+
+def _hashed_alike(item: Any) -> bool:
+    """Does *item* hash the same in every process? An int or bool, a float
+    or complex number other than NaN (whose hash is its address), ``None``
+    (3.12+), or a tuple or frozenset of those."""
+    kind = type(item)
+    if kind is int or kind is bool:
+        return True
+    if item is None:
+        return _NONE_ALIKE
+    if kind is float or kind is complex:
+        return item == item
+    if kind is tuple or kind is frozenset:
+        return all(map(_hashed_alike, item))
+    return False
 
 
 def _sets_first(persistent_id: Any, sets: Callable[[Any], Any]) -> Callable[[Any], Any]:
