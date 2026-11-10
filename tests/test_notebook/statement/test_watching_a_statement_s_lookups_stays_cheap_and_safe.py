@@ -65,6 +65,7 @@ LOOPS = {
     "a-builtin-s-method": "out = []\nfor i in range(10_000):\n    out.append(str(i).split(','))",
     "a-generator-expression-made-per-call": "t = 0\nfor i in range(10_000):\n    t += length([i, i + 1, i * 2])",
     "a-nested-function-made-per-call": "t = 0\nfor i in range(10_000):\n    t = step(t, (i, i + 1))",
+    "a-key-callback-making-a-generator-per-call": "best = min(range(40_000), key=score)",
 }
 
 
@@ -74,15 +75,18 @@ def test_a_loop_pays_for_one_event_per_call_site(cash_magics, loop):
     """A call site is switched off once its callable is seen to: the loop's
     ten thousand calls make a handful of events, whatever names the callee.
     A generator expression or a nested function made again on each call,
-    closing over numbers, is the one seen first: no call switches the sites
-    back on."""
+    closing over numbers or lists of them, is the one seen first: no call
+    switches the sites back on. Nor does one made by a key function that
+    ``min`` calls from C, forty thousand times (the E16 notebook's
+    ``min(tours, key=tour_length)``)."""
     run_cash_cell(
         cash_magics,
         "def add(a, b):\n    return a + b\n"
         "class P:\n    def get(self):\n        return 1\n"
         "ps = [P() for _ in range(10_000)]\n"
         "def length(xs):\n    return sum(add(xs[i], -xs[i - 1]) for i in range(len(xs)))\n"
-        "def step(t, pair):\n    def inner():\n        return add(t, pair[0])\n    return inner()",
+        "def step(t, pair):\n    def inner():\n        return add(t, pair[0])\n    return inner()\n"
+        "def score(i):\n    rows = [[i, 1], [2, (3, 4.0)]]\n    return sum(add(x, rows[0][0]) for x in rows[1][:1])",
     )
     events = []
     on_call = lookups_seen._on_call
@@ -98,6 +102,41 @@ def test_a_loop_pays_for_one_event_per_call_site(cash_magics, loop):
     finally:
         sys.monitoring.register_callback(lookups_seen._TOOL, sys.monitoring.events.CALL, on_call)
     assert len(events) < 20
+
+
+@needs_monitoring
+def test_a_generator_made_on_each_turn_of_a_loop_is_seen_once_per_call(cash_magics):
+    """``mst``'s loop (the E16 notebook) makes a generator expression on
+    each turn, closing over a dict too big to read through: each is the
+    one made on the turn before, holding the same dict, and switches no
+    site back on. A lambda closing over the dict, new on each call, switches
+    them on as each call starts: three calls of 2,000 turns make a few
+    dozen events, not one for each site on each turn."""
+    run_cash_cell(
+        cash_magics,
+        "def first(items):\n    return next(iter(items))\n"
+        "def pick(n):\n"
+        "    seen = {i: [i] for i in range(n)}\n"
+        "    out = [(lambda: len(seen))()]\n"
+        "    for k in range(n):\n"
+        "        out.append(first(seen[j][0] for j in (k,)))\n"
+        "    return out",
+    )
+    events = []
+    on_call = lookups_seen._on_call
+
+    def counted(*args):
+        events.append(args[1])
+        return on_call(*args)
+
+    assert lookups_seen.available()
+    sys.monitoring.register_callback(lookups_seen._TOOL, sys.monitoring.events.CALL, counted)
+    try:
+        run_cash_cell(cash_magics, "picked = [len(pick(2_000 + i)) for i in range(3)]")
+    finally:
+        sys.monitoring.register_callback(lookups_seen._TOOL, sys.monitoring.events.CALL, on_call)
+    assert cash_magics.shell.user_ns["picked"] == [2_001, 2_002, 2_003]
+    assert len(events) < 100
 
 
 SWAP = (
@@ -131,10 +170,42 @@ def test_a_call_site_whose_callee_a_function_rebinds_is_watched_again():
 
 
 @needs_monitoring
-def test_a_function_made_again_holding_another_callable_is_watched():
+@pytest.mark.parametrize(
+    "reader",
+    [
+        f"levels = [g({NAME!r}).level for g in (fake, fake, logging.getLogger)]",
+        f"levels = []\nfor g in (fake, fake, logging.getLogger):\n    levels.append(g({NAME!r}).level)",
+        f"levels = [(lambda: box[0][0]({NAME!r}))().level for box in ([[fake]], [[fake]], [[getattr(logging, 'get' + 'Logger')]])]",
+        f"levels = [(lambda: get({NAME!r}))().level for get in (fake, fake, logging.getLogger)]",
+    ],
+    ids=["a-comprehension", "a-loop", "a-lambda-holding-a-nested-list", "a-lambda"],
+)
+def test_a_call_site_switched_off_still_sees_a_library_function_it_calls_next(reader, monkeypatch):
+    """The site calling ``g`` is switched off once it called the fake
+    twice: ``logging.getLogger``, which the statement reads, is called
+    there next, and the logger it returns is found, though the process
+    never saw it return one before. A lambda holding it in a list of
+    lists, found by no name the statement reads, is not taken for one
+    holding data: it is a new function, and is watched."""
+    monkeypatch.setattr(lookups_seen, "_RETURNERS", weakref.WeakSet())
+    namespace: dict = {}
+    exec(SWAP, namespace)
+    code = compile(reader, "<cash-test-switched-off>", "exec")
+    with lookups_seen.watching([], namespace) as found:
+        lookups_seen.arm([code], namespace)
+        exec(code, namespace)
+    assert namespace["levels"][:2] == [-1, -1]
+    recipes = [key for key in found if key]
+    assert len(recipes) == 1
+    assert NAME.encode() in base64.b64decode(recipes[0])
+
+
+@needs_monitoring
+def test_a_function_made_again_holding_another_callable_is_watched(monkeypatch):
     """A lambda made on each turn of the loop closes over the function it
     calls: the third, holding ``logging.getLogger`` where the first two held
     a fake, is a new function, and the logger it returns is found."""
+    monkeypatch.setattr(lookups_seen, "_RETURNERS", weakref.WeakSet())
     namespace: dict = {}
     exec(SWAP, namespace)
     reader = f"levels = [(lambda: get({NAME!r}))().level for get in (fake, fake, logging.getLogger)]"

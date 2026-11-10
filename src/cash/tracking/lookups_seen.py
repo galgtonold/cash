@@ -87,8 +87,9 @@ class _Watch:
         self.user_ns: Mapping[str, Any] | None = None
         #: The functions a call of armed code was seen to call (`_on_call`).
         self.called: set[types.FunctionType] = set()
-        #: The first function seen called for each code (`_called_already`).
-        self.first_called: dict[types.CodeType, types.FunctionType] = {}
+        #: What the last functions seen called for each code held, as they
+        #: were called, newest last (`_called_already`).
+        self.made: dict[types.CodeType, list[tuple[Any, ...]]] = {}
         #: The globals, and the attributes, armed code binds or deletes
         #: (`_note_rebinds`).
         self.rebound: set[str] = set()
@@ -425,9 +426,37 @@ def _note_globals(code: types.CodeType, namespace: Mapping[str, Any], notebooks:
                 value = _attribute(value, attr)
             if value is _MISSING:
                 break
+            _arm_returns_of(value)
             if attr is None and notebooks:
                 continue
             _note_value(value, ".".join((name, *attrs[:depth])))
+
+
+def _arm_returns_of(value: Any) -> None:
+    """Have what a library's function *value* returns seen, or each one a
+    tuple, list or dict *value* holds: a call site switched off after
+    calling another (``for g in (fake, fake, logging.getLogger)``), or C
+    (``sorted(names, key=lib.find)``), may call it, and no CALL event
+    names it then (`_on_call`)."""
+    watch = _ACTIVE
+    if watch is None:
+        return
+    kind = type(value)
+    if kind is _FUNCTION or kind is _METHOD:
+        items: Iterable[Any] = (value,)
+    elif kind is tuple or kind is list or kind is dict:
+        from ..analysis.handed_callables import ITEM_TYPES_AT
+
+        items = value.values() if kind is dict else value
+        if len(items) > ITEM_TYPES_AT or not {_FUNCTION, _METHOD} & set(map(type, items)):
+            return
+    else:
+        return
+    for item in list(items):
+        if type(item) is _METHOD:
+            item = item.__func__
+        if type(item) is _FUNCTION and not _is_users(item.__code__):
+            _arm_callee(watch, item)
 
 
 def _note_value(value: Any, read: str) -> None:
@@ -632,9 +661,9 @@ def _on_call(code: types.CodeType, offset: int, callable_: Any, arg0: Any) -> An
     first switches every site switched off back on (`_switch_on`): a site
     that called others may call it next (``for f in (fake,
     logging.getLogger)``). A generator expression made again on each call
-    of the function around it is the one seen first (`_called_already`):
-    switching every site back on for each made a loop calling that
-    function run several times slower."""
+    of the function around it, or on each turn of a loop, is one seen
+    already (`_called_already`): switching every site back on for each
+    made a loop calling that function run several times slower."""
     kind = type(callable_)
     if kind is _METHOD:
         callable_ = callable_.__func__
@@ -648,7 +677,7 @@ def _on_call(code: types.CodeType, offset: int, callable_: Any, arg0: Any) -> An
     if _THREAD.busy:
         return None
     watch.called.add(callable_)
-    watch.first_called.setdefault(callable_.__code__, callable_)
+    _keep_made(watch, callable_)
     with _LOCK:
         if _ACTIVE is watch:
             _switch_on(watch)
@@ -667,57 +696,118 @@ def _called_already(watch: _Watch, fn: types.FunctionType) -> bool:
     """Is *fn* a copy of a function seen called already in the statement,
     as a generator expression, a lambda or a nested ``def`` is made again
     on each call of the code around it? It is when it runs the same code
-    in the same globals, with the same defaults, holds no attribute of its
-    own (a ``__wrapped__``), and each variable it closes over holds what
-    the first one's held or plain data (`_data`): whatever it can call
-    through them, the first one could, or is written in C."""
-    first = watch.first_called.get(fn.__code__)
-    if first is None:
+    in the same globals, holds no attribute of its own (a ``__wrapped__``),
+    and each variable it closes over, and each default, holds plain data
+    (`_data`) or what one of the last seen held when it was called
+    (`_keep_made`): whatever it can call through them, that one could, or
+    is written in C. Each is compared with what the one seen held then,
+    not now: a variable both close over may have been bound to another
+    function since. ``mst``'s ``first(... for ... if (A in tree) ^ (B in
+    tree))`` in its loop closes over a dict of lists, the same on each
+    turn: it is seen once for each call of ``mst``, not on each turn."""
+    made = watch.made.get(fn.__code__)
+    if not made or fn.__dict__:
         return False
-    if (
-        fn.__globals__ is not first.__globals__
-        or fn.__defaults__ is not first.__defaults__
-        or fn.__kwdefaults__ is not first.__kwdefaults__
-        or fn.__dict__
-    ):
+    held = _held(fn)
+    if held is None:
         return False
-    cells, first_cells = fn.__closure__, first.__closure__
-    if cells is None or first_cells is None:
-        return cells is first_cells
-    for cell, first_cell in zip(cells, first_cells):
+    for seen in reversed(made):
+        if _holds_as(held, seen):
+            if any(now is not then for now, then in zip(held, seen)):
+                # Kept, as the data it holds may grow past `_DATA_ITEMS`.
+                _keep(made, held)
+            return True
+    return False
+
+
+def _held(fn: types.FunctionType) -> tuple[Any, ...] | None:
+    """What *fn* holds that a call of it may call through: its globals,
+    defaults and the contents of the variables it closes over, as they are
+    now. None when one is empty: never taken for another's."""
+    cells = fn.__closure__
+    contents: tuple[Any, ...] = ()
+    if cells:
         try:
-            held = cell.cell_contents
+            contents = tuple(cell.cell_contents for cell in cells)
         except ValueError:  # an empty cell
-            return False
-        if not _data(held):
-            try:
-                if held is not first_cell.cell_contents:
-                    return False
-            except ValueError:
-                return False
-    return True
+            return None
+    kwdefaults = fn.__kwdefaults__
+    return (
+        fn.__globals__,
+        *(fn.__defaults__ or ()),
+        *(() if kwdefaults is None else (*kwdefaults, *kwdefaults.values())),
+        len(contents),
+        *contents,
+    )
+
+
+def _holds_as(held: tuple[Any, ...], seen: tuple[Any, ...]) -> bool:
+    """Does *held* hold what *seen* did, or plain data where it did not?
+    The globals, first, are the same dict."""
+    if len(held) != len(seen) or held[0] is not seen[0]:
+        return False
+    return all(now is then or _data(now) for now, then in zip(held, seen))
+
+
+#: How many functions made from one code `_called_already` compares with.
+_MADE_KEPT = 8
+
+
+def _keep_made(watch: _Watch, fn: types.FunctionType) -> None:
+    """Keep what *fn*, seen called first, holds (`_held`)."""
+    held = _held(fn)
+    if held is not None:
+        _keep(watch.made.setdefault(fn.__code__, []), held)
+
+
+def _keep(made: list[tuple[Any, ...]], held: tuple[Any, ...]) -> None:
+    made.append(held)
+    if len(made) > _MADE_KEPT:
+        del made[0]
 
 
 #: The data `_data` takes: nothing in it can be called but C.
 _SCALARS = frozenset({type(None), bool, int, float, complex, str, bytes})
+_CONTAINERS = frozenset({list, tuple, set, frozenset, dict})
+#: How many items `_data` reads through in the containers a container
+#: holds, and how deep: past them, a value is not taken for data, and a
+#: function holding it is compared by what it holds (`_called_already`).
+_DATA_ITEMS = 1024
+_DATA_DEPTH = 3
 
 
 def _data(value: Any) -> bool:
     """Is *value* a number, a string, or a list, tuple, set or dict of
-    them: nothing a call can reach through it runs Python code? Read in C:
-    nothing of the user's runs."""
+    them, or of such containers (``{city: [city, ...]}``), at most
+    `_DATA_DEPTH` deep and `_DATA_ITEMS` items in those held: nothing a
+    call can reach through it runs Python code? Read in C, by exact
+    class: nothing of the user's runs."""
+    if type(value) in _SCALARS:
+        return True
+    try:
+        return _data_within(value, [_DATA_ITEMS], _DATA_DEPTH)
+    except RuntimeError:  # changed in size by another thread as read
+        return False
+
+
+def _data_within(value: Any, left: list[int], depth: int) -> bool:
     kind = type(value)
     if kind in _SCALARS:
         return True
+    if kind not in _CONTAINERS:
+        return False
     if kind is dict:
-        return _all_scalars(value.keys()) and _all_scalars(value.values())
-    if kind in (list, tuple, set, frozenset):
-        return _all_scalars(value)
-    return False
+        return _items_data(value.keys(), left, depth) and _items_data(value.values(), left, depth)
+    return _items_data(value, left, depth)
 
 
-def _all_scalars(items: Iterable[Any]) -> bool:
-    return set(map(type, items)) <= _SCALARS
+def _items_data(items: Any, left: list[int], depth: int) -> bool:
+    if set(map(type, items)) <= _SCALARS:
+        return True
+    left[0] -= len(items)
+    if depth <= 1 or left[0] < 0:
+        return False
+    return all(_data_within(item, left, depth - 1) for item in items if type(item) not in _SCALARS)
 
 
 def _note_rebinds(watch: _Watch, code: types.CodeType) -> None:
