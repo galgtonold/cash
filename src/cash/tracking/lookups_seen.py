@@ -87,6 +87,8 @@ class _Watch:
         self.user_ns: Mapping[str, Any] | None = None
         #: The functions a call of armed code was seen to call (`_on_call`).
         self.called: set[types.FunctionType] = set()
+        #: The first function seen called for each code (`_called_already`).
+        self.first_called: dict[types.CodeType, types.FunctionType] = {}
         #: The globals, and the attributes, armed code binds or deletes
         #: (`_note_rebinds`).
         self.rebound: set[str] = set()
@@ -629,7 +631,10 @@ def _on_call(code: types.CodeType, offset: int, callable_: Any, arg0: Any) -> An
     the statement, so a loop pays for one or two events. A function seen
     first switches every site switched off back on (`_switch_on`): a site
     that called others may call it next (``for f in (fake,
-    logging.getLogger)``)."""
+    logging.getLogger)``). A generator expression made again on each call
+    of the function around it is the one seen first (`_called_already`):
+    switching every site back on for each made a loop calling that
+    function run several times slower."""
     kind = type(callable_)
     if kind is _METHOD:
         callable_ = callable_.__func__
@@ -637,12 +642,13 @@ def _on_call(code: types.CodeType, offset: int, callable_: Any, arg0: Any) -> An
     watch = _ACTIVE
     if watch is None:
         return None
-    if kind is not _FUNCTION or callable_ in watch.called:
+    if kind is not _FUNCTION or callable_ in watch.called or _called_already(watch, callable_):
         watch.switched_off.add(code)
         return sys.monitoring.DISABLE
     if _THREAD.busy:
         return None
     watch.called.add(callable_)
+    watch.first_called.setdefault(callable_.__code__, callable_)
     with _LOCK:
         if _ACTIVE is watch:
             _switch_on(watch)
@@ -655,6 +661,63 @@ def _on_call(code: types.CodeType, offset: int, callable_: Any, arg0: Any) -> An
 
 _FUNCTION = types.FunctionType
 _METHOD = types.MethodType
+
+
+def _called_already(watch: _Watch, fn: types.FunctionType) -> bool:
+    """Is *fn* a copy of a function seen called already in the statement,
+    as a generator expression, a lambda or a nested ``def`` is made again
+    on each call of the code around it? It is when it runs the same code
+    in the same globals, with the same defaults, holds no attribute of its
+    own (a ``__wrapped__``), and each variable it closes over holds what
+    the first one's held or plain data (`_data`): whatever it can call
+    through them, the first one could, or is written in C."""
+    first = watch.first_called.get(fn.__code__)
+    if first is None:
+        return False
+    if (
+        fn.__globals__ is not first.__globals__
+        or fn.__defaults__ is not first.__defaults__
+        or fn.__kwdefaults__ is not first.__kwdefaults__
+        or fn.__dict__
+    ):
+        return False
+    cells, first_cells = fn.__closure__, first.__closure__
+    if cells is None or first_cells is None:
+        return cells is first_cells
+    for cell, first_cell in zip(cells, first_cells):
+        try:
+            held = cell.cell_contents
+        except ValueError:  # an empty cell
+            return False
+        if not _data(held):
+            try:
+                if held is not first_cell.cell_contents:
+                    return False
+            except ValueError:
+                return False
+    return True
+
+
+#: The data `_data` takes: nothing in it can be called but C.
+_SCALARS = frozenset({type(None), bool, int, float, complex, str, bytes})
+
+
+def _data(value: Any) -> bool:
+    """Is *value* a number, a string, or a list, tuple, set or dict of
+    them: nothing a call can reach through it runs Python code? Read in C:
+    nothing of the user's runs."""
+    kind = type(value)
+    if kind in _SCALARS:
+        return True
+    if kind is dict:
+        return _all_scalars(value.keys()) and _all_scalars(value.values())
+    if kind in (list, tuple, set, frozenset):
+        return _all_scalars(value)
+    return False
+
+
+def _all_scalars(items: Iterable[Any]) -> bool:
+    return set(map(type, items)) <= _SCALARS
 
 
 def _note_rebinds(watch: _Watch, code: types.CodeType) -> None:

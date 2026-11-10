@@ -63,6 +63,8 @@ LOOPS = {
     "a-loop-variable-s-method": "t = 0\nfor p in ps:\n    t += p.get()",
     "a-name-bound-in-the-loop": "t = 0\nfor i in range(10_000):\n    f = add\n    t = f(t, i)",
     "a-builtin-s-method": "out = []\nfor i in range(10_000):\n    out.append(str(i).split(','))",
+    "a-generator-expression-made-per-call": "t = 0\nfor i in range(10_000):\n    t += length([i, i + 1, i * 2])",
+    "a-nested-function-made-per-call": "t = 0\nfor i in range(10_000):\n    t = step(t, (i, i + 1))",
 }
 
 
@@ -70,12 +72,17 @@ LOOPS = {
 @pytest.mark.parametrize("loop", list(LOOPS))
 def test_a_loop_pays_for_one_event_per_call_site(cash_magics, loop):
     """A call site is switched off once its callable is seen to: the loop's
-    ten thousand calls make a handful of events, whatever names the callee."""
+    ten thousand calls make a handful of events, whatever names the callee.
+    A generator expression or a nested function made again on each call,
+    closing over numbers, is the one seen first: no call switches the sites
+    back on."""
     run_cash_cell(
         cash_magics,
         "def add(a, b):\n    return a + b\n"
         "class P:\n    def get(self):\n        return 1\n"
-        "ps = [P() for _ in range(10_000)]",
+        "ps = [P() for _ in range(10_000)]\n"
+        "def length(xs):\n    return sum(add(xs[i], -xs[i - 1]) for i in range(len(xs)))\n"
+        "def step(t, pair):\n    def inner():\n        return add(t, pair[0])\n    return inner()",
     )
     events = []
     on_call = lookups_seen._on_call
@@ -118,6 +125,24 @@ def test_a_call_site_whose_callee_a_function_rebinds_is_watched_again():
         lookups_seen.arm([code], namespace)
         exec(code, namespace)
     assert namespace["levels"][0] == -1
+    recipes = [key for key in found if key]
+    assert len(recipes) == 1
+    assert NAME.encode() in base64.b64decode(recipes[0])
+
+
+@needs_monitoring
+def test_a_function_made_again_holding_another_callable_is_watched():
+    """A lambda made on each turn of the loop closes over the function it
+    calls: the third, holding ``logging.getLogger`` where the first two held
+    a fake, is a new function, and the logger it returns is found."""
+    namespace: dict = {}
+    exec(SWAP, namespace)
+    reader = f"levels = [(lambda: get({NAME!r}))().level for get in (fake, fake, logging.getLogger)]"
+    code = compile(reader, "<cash-test-made-again>", "exec")
+    with lookups_seen.watching([], namespace) as found:
+        lookups_seen.arm([code], namespace)
+        exec(code, namespace)
+    assert namespace["levels"][:2] == [-1, -1]
     recipes = [key for key in found if key]
     assert len(recipes) == 1
     assert NAME.encode() in base64.b64decode(recipes[0])
