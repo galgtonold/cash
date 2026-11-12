@@ -238,16 +238,20 @@ def identity_kept(
         if type(live) in IMMUTABLE_LEAF_TYPES:
             # A number or a string is a new object in plain Python too.
             continue
-        if (
-            rewrite_in_place.mismatch(live, restored[name]) is None
-            and holder_refusal(name, restored[name], restored) is None
-        ):
+        try:
+            fits = (
+                rewrite_in_place.mismatch(live, restored[name]) is None
+                and holder_refusal(name, restored[name], restored) is None
+            )
+            why = None if fits else _copy_refusal(live, namespace, name)
+        except Exception:  # noqa: BLE001 - an object whose own lookups raise: it runs
+            return into, f"'{name}' could not be checked for what points at it, and a copy would not be that object"
+        if fits:
             # Not when another value of the entry holds the stored copy
             # (``frames = [d1]`` stored with ``d1['z'] = ...``): restored, it
             # would hold the copy beside the live object.
             into.add(name)
             continue
-        why = _copy_refusal(live, namespace, name)
         if why is not None:
             kind = type(live).__name__
             return into, f"{why}; a {kind} is not written into, and a copy would not be that object"
