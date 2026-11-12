@@ -825,6 +825,7 @@ class ForLoopHandler:
         # `if` branch changes may have changed there: nothing is left out.
         also = moved | in_loop.close_watch(loop_code, ran=True)
         prior_lineages = None
+        rebound_only: set[str] = set()
         if run_rest:
             # Every name the body binds moves with the loop, and from where
             # the loop found it: the same loop over the same input then
@@ -833,7 +834,16 @@ class ForLoopHandler:
             # a lineage that differed between kernels, and after a restart
             # every fit below it ran again.
             rebound = _rebound_names(node)
-            also |= {name for name in rebound if name in user_ns}
+            # Bound again by the body, not seen changed in place: it moves
+            # on, but nothing it shares an object with does.
+            # ``acc += [x]`` changes a list in place: not a rebinding.
+            augmented = {
+                sub.target.id
+                for sub in walk_tree(node)
+                if isinstance(sub, ast.AugAssign) and isinstance(sub.target, ast.Name)
+            }
+            rebound_only = {name for name in rebound if name in user_ns} - also - augmented
+            also |= rebound_only
             # A name the body binds is what the loop made of it, whatever it
             # was before; one it changes in place goes on from the lineage it
             # had before the loop, not from the one the passes left.
@@ -851,6 +861,7 @@ class ForLoopHandler:
             also=also,
             prior_lineages=prior_lineages,
             bound=rebound if run_rest else frozenset(),
+            rebound_only=rebound_only,
             link_shares=_helpers.current_loop_pass(self.dispatcher) is None,
             cost=sum(m.get("execution_time", 0.0) for m in all_metrics),
             # The iterations' metrics too: each keeps its loop variables

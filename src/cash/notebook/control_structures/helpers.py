@@ -287,6 +287,7 @@ def update_lineage_after_execution(
     bound: frozenset[str] | set[str] = frozenset(),
     entry: tuple[str, frozenset[str]] | None = None,
     nothing_ran: bool = False,
+    rebound_only: frozenset[str] | set[str] = frozenset(),
 ) -> None:
     """
     Update lineage for variables that may have been mutated inside the
@@ -330,13 +331,19 @@ def update_lineage_after_execution(
     *nothing_ran*: no code of the structure's ran after its last statement
     or structure ended, so a share check that one made stands for this one
     (``StatementProcessor.record_structure_share_edges``).
+
+    *rebound_only* names what *also* holds only because the structure binds
+    it, with nothing seen changing it in place: it moves on, as what the
+    loop made of it, but changes nothing another variable holds
+    (`update_mutated_variable_lineages`).
     """
     body_nodes = get_body_nodes(node)
     if not body_nodes:
         return
 
     user_ns = shell.user_ns
-    mutated_vars = (structure_mutations(shell, statement_processor, node) - set(unchanged)) | set(also)
+    changed_by_text = structure_mutations(shell, statement_processor, node)
+    mutated_vars = (changed_by_text - set(unchanged)) | set(also)
     # An ``if`` or ``try`` ran statement by statement: what its statements
     # (and the loops in it) were seen changing through a call the text
     # cannot decide (``if use_heap: heapq.heappush(h, k)``).
@@ -386,6 +393,10 @@ def update_lineage_after_execution(
             prior_lineages=prior_lineages,
             bound=bound,
             entry=entry,
+            # A name the structure only bound again changes nothing through
+            # it: the simulation moves what it binds without moving what it
+            # shares an object with (``ControlSimulation._bump_mutated``).
+            through=mutated_vars - (set(rebound_only) - changed_by_text),
         )
 
 
@@ -726,6 +737,7 @@ def update_mutated_variable_lineages(
     prior_lineages: dict[str, str] | None = None,
     bound: frozenset[str] | set[str] = frozenset(),
     entry: tuple[str, frozenset[str]] | None = None,
+    through: set[str] | None = None,
 ) -> None:
     """Give every variable the control structure mutated a new lineage.
 
@@ -818,7 +830,7 @@ def update_mutated_variable_lineages(
             logger.debug("[CONTROL] Failed to update lineage for '%s': %s", var_name, e)
     if moved and statement_processor.tracking_state.derivation_edges:
         statement_processor.lineage_builder.replay_derivation_bumps(
-            statement_processor.tracking_state, moved, set(mutated_vars)
+            statement_processor.tracking_state, moved, set(mutated_vars if through is None else through)
         )
 
 
