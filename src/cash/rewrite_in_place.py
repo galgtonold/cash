@@ -26,7 +26,7 @@ it was and the computation runs on it.
 from __future__ import annotations
 
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any, NamedTuple
 
 from cash._user_attrs import attribute_or
@@ -194,6 +194,18 @@ def release_frame(obj: Any) -> None:
     hashing = sys.modules.get("cash.decorator.arg_hashing")
     if hashing is not None:
         hashing.FRAME_DIGESTS.forget(obj)
+
+
+def forget_moved_lists(values: Iterable[Any]) -> None:
+    """Drop the frame memo's entry of each frame among *values* whose
+    block of lists was replaced since it was hashed
+    (`FrameDigests.forget_moved_lists`)."""
+    hashing = sys.modules.get("cash.decorator.arg_hashing")
+    if hashing is None:
+        return
+    for value in values:
+        if _pandas_kind(value) == "frame":
+            hashing.FRAME_DIGESTS.forget_moved_lists(value)
 
 
 def _held_by_cash(obj: Any) -> bool:

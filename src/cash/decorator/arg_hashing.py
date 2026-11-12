@@ -698,26 +698,35 @@ class _KeptLists:
     frame's object blocks hold (`frame_borrows_its_data`), to tell at a
     lookup that none of them changed (`_lists_unchanged`).
 
-    By key (``id`` of a list, `_Records.key` of a block): the list or the
-    block itself. For the lists, together and in one order: their lengths,
-    every item they held, flat, and the pandas dates and missing values
-    among those (`_stateful_of`). Kept flat so that a check is a few passes
-    at C speed, not a Python call per list: per-list copies made storing a
-    frame of 300,000 one-item lists cost seconds, and checking them as much
-    again."""
+    By key (``id`` of a list, `_Records.key` of a block): None for a list,
+    the block itself (by a weak reference) for a block. For the lists,
+    together and in one order: their ids, their lengths, every item they
+    held, flat, and the pandas dates and missing values among those
+    (`_stateful_of`). Kept flat so that a check is a few passes at C speed,
+    not a Python call per list: per-list copies made storing a frame of
+    300,000 one-item lists cost seconds, and checking them as much again.
 
-    __slots__ = ("by_key", "flat", "lengths", "lists", "records", "stateful")
+    The lists themselves are not held, as a block of records is not: a
+    reference of cash's to each would read, to the notebook's checks that
+    count references, as another variable holding every list of the frame
+    (each statement on a frame with a column of lists gave up finding
+    which, and re-ran). The entry's shallow copy holds the arrays that
+    hold them; and a list met later under a kept id is taken only when it
+    holds the very items kept, which is all its digest reads."""
+
+    __slots__ = ("by_key", "flat", "ids", "lengths", "records", "stateful")
 
     def __init__(self, noted: list) -> None:
         records = [items for items in noted if type(items) is _Records] if _Records in set(map(type, noted)) else []
         plain = [items for items in noted if type(items) is list] if records else noted
-        by_key: dict[int, Any] = dict(zip(map(id, plain), plain))
-        self.lists = list(by_key.values())
+        lists = list(dict(zip(map(id, plain), plain)).values())
+        self.ids = list(map(id, lists))
+        by_key: dict[int, Any] = dict.fromkeys(self.ids)
         by_key.update((items.key, items) for items in records)
         self.by_key = by_key
         self.records = list({items.key: items for items in records}.values())
-        self.lengths = list(map(len, self.lists))
-        self.flat = tuple(itertools.chain.from_iterable(self.lists))
+        self.lengths = list(map(len, lists))
+        self.flat = tuple(itertools.chain.from_iterable(lists))
         self.stateful = _stateful_of(self.flat) if self.flat else []
 
     def __bool__(self) -> bool:
@@ -1557,6 +1566,31 @@ class FrameDigests:
         self._columns.clear()
         self._changed = None
 
+    def forget_moved_lists(self, obj: Any) -> None:
+        """Drop *obj*'s entry when its shallow copy holds a block of lists
+        that *obj* no longer holds: one written or reordered in place since
+        it was hashed (``df.sort_values(..., inplace=True)``). The new block
+        holds the same lists, and the copy's old one holds each of them once
+        more: a reference of cash's that reads, to a count of who holds a
+        list (the notebook's share check), as another holder of every list
+        of the frame. Such a column's memory is gone from *obj*, so none of
+        its digest is reused anyway; the other columns are read again at
+        the next hash."""
+        changed = self._changed
+        entries = [self._entries.peek(id(obj))]
+        if changed is not None and changed[0] == id(obj):
+            entries.append(changed[1])
+        for entry in entries:
+            if entry is None or entry[0]() is not obj or not entry[6] or not entry[6].ids:
+                continue
+            try:
+                moved = not _object_blocks(entry[1]) <= _object_blocks(obj)
+            except Exception:  # noqa: BLE001 - a pandas internals change: the memo is only a speedup
+                moved = True
+            if moved:
+                self.forget(obj)
+                return
+
     def forget(self, obj: Any) -> None:
         """Drop *obj*'s entry, and with it the shallow copy that holds its
         blocks: while it is held, pandas copies a block before writing it,
@@ -1706,6 +1740,20 @@ class FrameDigests:
                 columns[column] = (key, *alive)[:_COLUMN_OWNERS]
 
 
+def _object_blocks(frame: Any) -> set[int]:
+    """The ids of the arrays that own the memory of *frame*'s object blocks."""
+    import numpy as np
+
+    owners = set()
+    for block in frame._mgr.blocks:
+        values = block.values
+        if type(values) is np.ndarray and values.dtype == object:
+            while type(values.base) is np.ndarray:
+                values = values.base
+            owners.add(id(values))
+    return owners
+
+
 def _memory_kept(frame: Any, entry: tuple) -> bool:
     """Whether the memory *entry*'s columns were read from is unchanged,
     though *frame*, its owner, has changed since (``df["n"] = 2``): the
@@ -1747,11 +1795,11 @@ def _lists_unchanged(lists: list, kept: _KeptLists, gained: bool = False) -> boo
 
     Each check is a pass at C speed over all the lists together
     (`_KeptLists`)."""
-    # By id: an object alive has an id no other live object has, and
-    # *kept* holds each of its lists, so a list found under a kept id is
-    # that very list.
+    # By id. *kept* does not hold its lists: a list found under a kept id
+    # is taken for it only when it holds the very items kept, below.
     plain = not kept.records and _Records not in set(map(type, lists))
-    found = set(map(id, lists)) if plain else {id(items) if type(items) is list else items.key for items in lists}
+    now = dict(zip(map(id, lists), lists)) if plain else {id(items): items for items in lists if type(items) is list}
+    found = now.keys() if plain else now.keys() | {items.key for items in lists if type(items) is _Records}
     if (not found >= kept.by_key.keys()) if gained else found != kept.by_key.keys():
         return False
     if not plain:
@@ -1762,9 +1810,10 @@ def _lists_unchanged(lists: list, kept: _KeptLists, gained: bool = False) -> boo
             if items is None or known.array() is not items.array():
                 return False
     # Each list as long as it was, holding the same objects.
-    if list(map(len, kept.lists)) != kept.lengths:
+    held = list(map(now.__getitem__, kept.ids))
+    if list(map(len, held)) != kept.lengths:
         return False
-    if not all(map(operator.is_, itertools.chain.from_iterable(kept.lists), kept.flat)):
+    if not all(map(operator.is_, itertools.chain.from_iterable(held), kept.flat)):
         return False
     # An attribute set on a date one holds since (``t.tag = 2``).
     return not any(map(_OWN_STATE, kept.stateful))

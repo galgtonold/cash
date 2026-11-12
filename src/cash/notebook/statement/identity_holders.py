@@ -1091,7 +1091,7 @@ class _Walk:
         finally:
             found, self.numbers = self.numbers, numbers
             numbers |= found
-        if done and witness is not None and len(_SHAPE_READS) < _MAX_SHAPE_READS:
+        if done and not self.cut and witness is not None and len(_SHAPE_READS) < _MAX_SHAPE_READS:
             _SHAPE_READS[witness] = (frozenset(found), budget - self.budget, len(self._unseen) > unseen)
         return done
 
@@ -1149,6 +1149,13 @@ class _Walk:
             if read is not NotImplemented:
                 nodes, texts, ints, leaf_kinds, lists = read
                 if lists > self.budget:
+                    if len(set(map(id, nodes)) - self.seen) > self.budget:
+                        # Walked a list at a time, each would count against
+                        # the budget, and the walk would stop past it: told
+                        # here, at C speed (a frame's column of 300,000
+                        # lists took 0.3 s a statement to reach the cut).
+                        self.cut = True
+                        return True
                     return False
                 self.budget -= lists
                 self._unseen.append(nodes)
