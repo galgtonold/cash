@@ -151,3 +151,23 @@ def test_a_parent_step_after_a_linked_folder_goes_where_the_open_goes(tmp_path, 
     finally:
         file_dep_snapshot.end_file_state_epoch()
     assert os.path.normcase(resolved) == os.path.normcase(os.path.realpath(path))
+
+
+def test_a_relative_read_resolves_once_for_both_of_its_spellings(tmp_path, monkeypatch):
+    """On Windows a read by ``os.path.join`` is spelled with backslashes and
+    its record with slashes (`normalize_path`): the lineage and the snapshot
+    resolved the record again, an ``lstat`` per file each. ``|`` stands in
+    for the backslash here."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(file_dep_snapshot, "normalize_path", lambda p: p.replace("|", "/"))
+    lstats: list[str] = []
+    monkeypatch.setattr(file_dep_snapshot, "own_lstat", lambda p: lstats.append(p) or os.lstat(p))
+    resolved = str(tmp_path / "sub" / "a.csv")
+    file_dep_snapshot.begin_file_state_epoch()
+    try:
+        realpath_this_run(str(tmp_path))  # the run's memo is in use
+        file_dep_snapshot._remember_realpath((os.getcwd(), "sub|a.csv"), resolved)
+        assert file_dep_snapshot.realpath_of_read_this_run("sub/a.csv") == (resolved, None)
+    finally:
+        file_dep_snapshot.end_file_state_epoch()
+    assert lstats == []
