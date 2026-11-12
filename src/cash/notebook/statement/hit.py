@@ -109,6 +109,8 @@ class CacheHitServer:
             user_ns = self._restorer.shell.user_ns
             for name in metadata.bound_copies:
                 if name in user_ns and not in_place.bound_as_a_copy(user_ns[name], user_ns):
+                    # Its next loop is routed afresh (`in_place.routed_as_a_copy`).
+                    in_place.forget_routed(user_ns[name])
                     return self._refused(f"something points at {name} now")
         if metadata is not None and metadata.anchors:
             # The variables' objects the entry holds by reference: the live

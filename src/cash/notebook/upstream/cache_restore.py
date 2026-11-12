@@ -478,6 +478,7 @@ class CacheRestorer:
         user_ns = self.shell.user_ns
         for name in metadata.get("bound_copies") or ():
             if name in user_ns and not in_place.bound_as_a_copy(user_ns[name], user_ns):
+                in_place.forget_routed(user_ns[name])
                 return f"something points at {name} now"
         holders = set(metadata.get("holders") or ())
         names = {

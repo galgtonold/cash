@@ -669,9 +669,16 @@ def _weakly_held(name: str, targets: list[Any], user_ns: dict[str, Any]) -> Iden
                 "go on watching the object that was there, so this statement runs every time instead."
             ),
         )
+    # Every live weak reference to an object is in its own list
+    # (``weakref.getweakrefs``): one only cash made there means no variable
+    # of the notebook can hold one, and the other variables are not walked
+    # (a list of 200,000 lists of words cost each statement 0.4 s).
+    users = [ref for target in targets for ref in weakref.getweakrefs(target) if not is_cash_ref(ref)]
+    if not users:
+        return None
     wanted = {id(target) for target in targets}
     # A proxy finds its object as a reference does, but has no call to ask.
-    wanted_refs = {id(ref) for target in targets for ref in weakref.getweakrefs(target)}
+    wanted_refs = {id(ref) for ref in users}
     seen: set[int] = set()
     user_kinds: dict[type, bool] = {}
     cut: list[str] = []
@@ -698,7 +705,7 @@ def _weakly_held(name: str, targets: list[Any], user_ns: dict[str, Any]) -> Iden
                     "statement runs every time instead."
                 ),
             )
-    if cut and _weakly_found_by_others(targets):
+    if cut:
         listed = ", ".join(f"'{var}'" for var in sorted(cut))
         return IdentityHeld(
             f"cash did not look all the way into {listed} for a weak reference to '{name}'; restored, "
