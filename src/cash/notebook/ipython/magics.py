@@ -833,6 +833,7 @@ class CashMagics(Magics):
             # An interrupt or a ``sys.exit()`` too: IPython's own run_cell ends
             # the cell on them with an error reply. Raised past it, ipykernel
             # never replies (an interrupt hangs the cell) or exits (SystemExit).
+            self._record_failed_cell()
             return self._synthesize_run_cell_raise(e, args, kwargs)
 
         if isinstance(result, RunInstead):
@@ -914,6 +915,7 @@ class CashMagics(Magics):
                     cell_id=self.resolve_cell_id(),
                 )
         except (Exception, KeyboardInterrupt, SystemExit) as e:  # noqa: BLE001 - see _execute_cell_inner
+            self._record_failed_cell()
             return await self._synthesize_run_cell_raise_async(e, args, kwargs)
 
         if isinstance(result, RunInstead):
@@ -1296,6 +1298,29 @@ class CashMagics(Magics):
             yield _CELL_RESULT
         finally:
             user_ns.pop(_CELL_RESULT, None)
+
+    def _record_failed_cell(self) -> None:
+        """Count a cell whose statements raised, as `_finalize_cell_body`
+        counts one that ran to its end: the statements before the error
+        ran, the upstream ones that rebuilt what it reads among them, and
+        their time is spent all the same. Left out, a cell that raised
+        after re-running an upstream fit showed none of it in
+        ``%cash_status`` or ``%cash_stats``, and ``%cash_status`` still
+        showed the cell before. Never raises: the cell's own error is what
+        the user sees."""
+        try:
+            failed = self._cell_executor.take_failed_cell()
+            if failed is None:
+                return
+            all_metrics, hook_start = failed
+            # Not kept past the cell, as `_showing_result` drops them on success.
+            for m in all_metrics:
+                m.pop(ECHO_FIELD, None)
+            hook_total = _perf_counter() - hook_start
+            self._update_last_cell_metrics(all_metrics, hook_total)
+            self.session.record_cell(all_metrics, hook_total)
+        except Exception:  # statistics must never replace the cell's error
+            logger.debug("Recording the metrics of a cell that raised failed", exc_info=True)
 
     def _update_last_cell_metrics(self, all_metrics: list[ProcessResult], hook_total: float) -> None:
         """Compute and store ``_last_cell_metrics`` for ``%cash_status``.

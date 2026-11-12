@@ -81,9 +81,11 @@ _CODECS = [0]
 _AUDIT_HOOKS = [0]
 _counting = False
 #: ``callback -> times registered`` through ``atexit.register`` since
-#: counting began, and how many of those ``atexit.unregister`` took back:
-#: ``atexit._ncallbacks()`` never goes down (``joblib.Parallel`` registers
-#: a clean-up for each run and unregisters it when done).
+#: counting began, and how many of those ``atexit.unregister`` took back
+#: while ``atexit._ncallbacks()`` stayed as it was: up to Python 3.13 it
+#: never goes down, from 3.14 an unregister takes the entries out of it
+#: (``joblib.Parallel`` registers a clean-up for each run and unregisters
+#: it when done).
 _ATEXIT_REGISTERED: dict[Any, int] = {}
 _ATEXIT_TAKEN_BACK = [0]
 #: And those a library's code registered itself: its clean-up of what it
@@ -125,11 +127,24 @@ def _count_atexit() -> None:
         return result
 
     def counted_unregister(func: Callable[..., object]) -> None:
+        before = atexit._ncallbacks()
         unregister(func)
+        removed = before - atexit._ncallbacks()
         try:
-            _ATEXIT_TAKEN_BACK[0] += _ATEXIT_REGISTERED.pop(func, 0)
+            registered = _ATEXIT_REGISTERED.pop(func, 0)
         except TypeError:
-            pass
+            registered = 0
+        # What the count dropped by (3.14 on) is taken back already; the
+        # rest of the user's registrations of *func* is taken back here.
+        users = min(registered, removed)
+        _ATEXIT_TAKEN_BACK[0] += registered - users
+        # The rest of the drop: callbacks a library registered itself, which
+        # it takes back as its run ends (joblib's temporary-folder clean-up,
+        # unregistered once the folder is deleted). Only when the library
+        # takes them back: the user's unregister of a library's callback
+        # changes what runs at exit.
+        if removed > users and _library_called(sys._getframe(1)):
+            _ATEXIT_LIBRARY[0] -= removed - users
 
     for wrapper, original in ((counted_register, register), (counted_unregister, unregister)):
         wrapper.__module__ = "atexit"
