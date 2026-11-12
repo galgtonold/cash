@@ -249,7 +249,7 @@ class CacheRestorer:
                     logger.debug("[UPSTREAM] Restore failed: %s", why)
                     return set(), _perf_counter() - start_time, 0.0
                 if into:
-                    metadata = {**metadata, "restored_into": sorted({*(metadata.get("restored_into") or ()), *into})}
+                    metadata = {**metadata, "kept_into": sorted(into)}
 
                 # 4. Success! Restore into shell.
                 # Cache stores variables under 'variables' key (see StatementStore._payload)
@@ -329,11 +329,16 @@ class CacheRestorer:
         # at a hit (`StatementRestorer.restore_from_cache`): checked for every
         # name before any is written.
         live_outputs: dict[str, Any] = {}
-        for var in metadata.get("restored_into") or ():
+        kept = set(metadata.get("kept_into") or ())
+        for var in [*(metadata.get("restored_into") or ()), *sorted(kept)]:
             if var not in variables_to_restore or var not in self.shell.user_ns:
                 continue
             live = self.shell.user_ns[var]
             stored = variables_to_restore[var]
+            if var in kept:
+                # Checked a moment ago (`in_place.identity_kept`).
+                live_outputs[var] = live
+                continue
             why = in_place.refusal(live, self.shell.user_ns) if type(live) is type(stored) else "another kind"
             if why is None and in_place.written_into(live):
                 why = rewrite_in_place.mismatch(live, stored)

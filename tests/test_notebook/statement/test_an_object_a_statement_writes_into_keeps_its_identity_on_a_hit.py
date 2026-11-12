@@ -8,10 +8,10 @@ gave None where plain Python gives ``'a'``. Nothing checked at the hit,
 because nothing held the array by identity when the entry was stored.
 
 A hit now writes the stored state into the live object when it can (an
-array, a frame or Series, a list, dict or set of plain values), so the
-statement stays served; any other object is bound to the copy only while
-the notebook holds neither it nor an object it holds by identity, and the
-statement runs otherwise.
+array, a frame or Series, a list, dict or set of plain values, a frame
+it added or dropped columns of), so the statement stays served; any other
+object is bound to the copy only while the notebook holds neither it nor
+an object it holds by identity, and the statement runs otherwise.
 """
 
 from __future__ import annotations
@@ -33,6 +33,7 @@ MAKE = (
     "d = {'a': 1}\n"
     "lst = [1, 2]\n"
     "df = pd.DataFrame({'a': [1.0, 2.0, 3.0]})\n"
+    "df['c'] = 0.0\n"
     "o = Box()\n"
     "o.child = [1]\n"
 )
@@ -51,6 +52,12 @@ CASES = [
     ("d['k'] = 7", "reg = {id(d): 'a'}", "r = reg.get(id(d)) == 'a' and d['k'] == 7", True),
     ("lst[0] = 7", "ids = [id(lst)]", "r = ids[0] == id(lst) and lst[0] == 7", True),
     ("df.loc[1, 'a'] = 9.0", "reg = {id(df): 'a'}", "r = reg.get(id(df)) == 'a' and df.loc[1, 'a'] == 9.0", True),
+    (
+        "df['b'] = df.a * 2",
+        "reg = {id(df): 'a'}",
+        "r = reg.get(id(df)) == 'a' and list(df.columns) == ['a', 'c', 'b'] and df.b[2] == 6.0",
+        True,
+    ),
     ("o.x = 5", "reg = {id(o): 'a'}", "r = reg.get(id(o)) == 'a' and o.x == 5", False),
     ("o.x = 5", "reg = {id(o.child): 'a'}", "r = reg.get(id(o.child)) == 'a' and o.x == 5", False),
 ]

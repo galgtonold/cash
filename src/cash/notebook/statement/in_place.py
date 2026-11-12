@@ -226,7 +226,8 @@ def identity_kept(
     its place is another object. So the state is written into the live
     object whenever `rewrite_in_place.mismatch` allows it (an array, a
     frame or a Series, a list, dict or set of plain values, unchanged in
-    shape) and no other value the entry restores holds it
+    shape), or a frame the statement only added columns to or dropped
+    columns from (`_columns_fit`), and no other value the entry restores holds it
     (`holder_refusal`). Any other object is bound to the copy only while the notebook
     holds neither it nor an object it holds by identity (`_copy_refusal`);
     else the statement runs."""
@@ -240,9 +241,8 @@ def identity_kept(
             continue
         try:
             fits = (
-                rewrite_in_place.mismatch(live, restored[name]) is None
-                and holder_refusal(name, restored[name], restored) is None
-            )
+                rewrite_in_place.mismatch(live, restored[name]) is None or _columns_fit(live, restored[name])
+            ) and holder_refusal(name, restored[name], restored) is None
             why = None if fits else _copy_refusal(live, namespace, name)
         except Exception:  # noqa: BLE001 - an object whose own lookups raise: it runs
             return into, f"'{name}' could not be checked for what points at it, and a copy would not be that object"
@@ -256,6 +256,62 @@ def identity_kept(
             kind = type(live).__name__
             return into, f"{why}; a {kind} is not written into, and a copy would not be that object"
     return into, None
+
+
+def _columns_fit(live: Any, stored: Any) -> bool:
+    """Whether the frame *stored* can be written into the frame *live* by
+    dropping the columns it lacks, writing the ones both have and adding
+    its others at the end (`_rewrite_columns`): ``df['f'] = ...`` or
+    ``del df['c']``, which `rewrite_in_place.mismatch` refuses as a change
+    of shape. Same index, attrs and flags, unique column labels, columns
+    a write in place takes (`rewrite_in_place.refusal`), and the columns
+    both have in the same order, ahead of the added ones. A frame of these
+    is never walked for what holds it by identity, which next to a big
+    heap cost every hit seconds."""
+    pd = sys.modules.get("pandas")
+    if pd is None or type(live) is not pd.DataFrame or type(stored) is not pd.DataFrame:
+        return False
+    try:
+        if rewrite_in_place.refusal(live) is not None or rewrite_in_place.refusal(stored) is not None:
+            return False
+        before, after = live.columns, stored.columns
+        if not (before.is_unique and after.is_unique) or type(before) is not type(after):
+            return False
+        if list(before.names) != list(after.names):
+            return False
+        index = live.index
+        if type(index) is not type(stored.index) or not index.equals(stored.index):
+            return False
+        if list(index.names) != list(stored.index.names) or index.dtype != stored.index.dtype:
+            return False
+        if live.flags.allows_duplicate_labels != stored.flags.allows_duplicate_labels:
+            return False
+        if not _same_attrs(live.attrs, stored.attrs):
+            return False
+        kept = [label for label in before if label in after]
+        return list(after[: len(kept)]) == kept
+    except Exception:  # noqa: BLE001 - not comparable: not written into this way
+        return False
+
+
+def _same_attrs(a: Any, b: Any) -> bool:
+    try:
+        return bool(dict(a) == dict(b))
+    except Exception:  # noqa: BLE001 - an attrs value without a plain ==
+        return False
+
+
+def _rewrite_columns(live: Any, stored: Any) -> None:
+    """Give the frame *live* the columns of *stored* (`_columns_fit`)."""
+    for label in [label for label in live.columns if label not in stored.columns]:
+        del live[label]
+    width = live.shape[1]
+    for position, label in enumerate(stored.columns):
+        values = stored.iloc[:, position].array.copy()
+        if position < width:
+            live.isetitem(position, values)
+        else:
+            live[label] = values
 
 
 def _copy_refusal(obj: Any, namespace: Mapping[str, Any], name: str) -> str | None:
@@ -793,13 +849,28 @@ def ready(restored: Mapping[str, Any], names: Iterable[str], user_ns: Mapping[st
     return all(name in restored and type(user_ns.get(name)) is type(restored[name]) for name in names)
 
 
+def _columns_changed(live: Any, restored: Any) -> bool:
+    """Whether *restored* is a frame whose columns are not those of the
+    frame *live* (`_columns_fit`)."""
+    pd = sys.modules.get("pandas")
+    return (
+        pd is not None
+        and type(live) is pd.DataFrame
+        and type(restored) is pd.DataFrame
+        and list(live.columns) != list(restored.columns)
+    )
+
+
 def restore_into(live: Any, restored: Any) -> None:
     """Give *live* the state of *restored*, an object of its kind (`ready`)."""
     kind = type(live)
     if kind is list:
         live[:] = restored
     elif rewrite_in_place.rewritable_kind(live):
-        rewrite_in_place.rewrite(live, restored)
+        if _columns_changed(live, restored):
+            _rewrite_columns(live, restored)
+        else:
+            rewrite_in_place.rewrite(live, restored)
     elif kind is dict or kind is set:
         live.clear()
         live.update(restored)
