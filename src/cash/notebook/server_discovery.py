@@ -875,11 +875,11 @@ def in_colab() -> bool:
 # signature alone would freeze the first read of an unsaved edit forever --
 # the file's own signature does not change again until the user actually
 # saves, even though the backup keeps changing underneath it as they keep
-# typing. Second, a "no backup found" result is never cached (see the miss
-# path below): unlike a missing file, which os.path.exists rules out in one
-# cheap stat, "no backup" can only be established by the directory scan
-# itself, so there is no cheap signature to invalidate on and caching it
-# would risk never noticing a backup that appears later in the session.
+# typing. Second, a "no backup found" result is not cached here (see the
+# miss path below): "no backup" rests on every folder of the backup tree,
+# not on one file's signature. `find_backup` keeps its own answer against
+# the stat of each path its scan looked at, so asking again costs those
+# stats rather than the scan, and a backup that appears later is found.
 
 
 def _stat_sig(path: str | Path) -> tuple[int, ...] | None:

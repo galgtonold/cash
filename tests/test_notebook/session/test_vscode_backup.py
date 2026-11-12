@@ -298,7 +298,7 @@ def test_find_backup_survives_an_unreadable_root(tmp_path, monkeypatch):
 
 
 def test_find_backup_survives_generator_raising_permission_error(tmp_path, monkeypatch):
-    """A glob generator that raises PermissionError mid-iteration must not propagate.
+    """A listing that raises PermissionError mid-iteration must not propagate.
 
     This tests that the iteration happens inside the try/except, not outside it.
     """
@@ -309,23 +309,33 @@ def test_find_backup_survives_generator_raising_permission_error(tmp_path, monke
 
     # Mock backup_roots to return a root that exists
     root = tmp_path / "Backups"
-    root.mkdir()
+    (root / "ws" / "file").mkdir(parents=True)
     monkeypatch.setattr(vb, "backup_roots", lambda: [root])
 
-    # Mock glob to return a generator that raises PermissionError mid-iteration
-    def failing_glob(pattern):
-        """Yield one item then raise PermissionError to simulate access denied."""
-        raise PermissionError("Permission denied")
-        yield  # pragma: no cover
+    real_scandir = vb.os.scandir
 
-    original_glob = Path.glob
+    class _Failing:
+        """Yield one entry then raise PermissionError to simulate access denied."""
 
-    def patched_glob(self, pattern):
-        if self == root:
-            return failing_glob(pattern)
-        return original_glob(self, pattern)
+        def __init__(self, path):
+            self._inner = real_scandir(path)
 
-    monkeypatch.setattr(Path, "glob", patched_glob)
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self._inner.close()
+
+        def __iter__(self):
+            yield next(iter(self._inner))
+            raise PermissionError("Permission denied")
+
+    def patched_scandir(path):
+        if str(path) == str(root):
+            return _Failing(path)
+        return real_scandir(path)
+
+    monkeypatch.setattr(vb.os, "scandir", patched_scandir)
     assert find_backup(str(nb)) is None
 
 
