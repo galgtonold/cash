@@ -551,7 +551,7 @@ class StatementStore:
             return None
         # What this key recorded as it ran before is not what it read now.
         self.tracking_state.records_as_run.pop(run.cache_key, None)
-        if self.inputs_moved(run, execution):
+        if self.inputs_moved(run, execution, reuse_checked=True):
             run.metrics["skipped_reason"] = "a file it read changed while it ran"
             return None
 
@@ -655,7 +655,13 @@ class StatementStore:
             self.tracking_state.records_as_run[run.cache_key] = as_run
         return as_run
 
-    def inputs_moved(self, run: StatementRun, execution: StatementExecution, reuse_end_stats: bool = False) -> bool:
+    def inputs_moved(
+        self,
+        run: StatementRun,
+        execution: StatementExecution,
+        reuse_end_stats: bool = False,
+        reuse_checked: bool = False,
+    ) -> bool:
         """Did a file the statement read change after it read it, or a
         folder it listed gain or lose an entry from outside?
 
@@ -667,13 +673,14 @@ class StatementStore:
         (``STORE-INPUT-CHANGED``). Asked when the statement has run and again
         before its entry is written; the first ask may take the stats its
         deferred digests were taken under as it ended (*reuse_end_stats*),
-        the second stats every file again.
+        the second the stats the first found as read (*reuse_checked*,
+        `FileAccessTracker.inputs_changed_since_read`).
         """
         tracker = execution.file_tracker
         if tracker is None or not (tracker.read_stats or tracker.listed_stats):
             return False
         try:
-            moved = tracker.inputs_changed_since_read(reuse_end_stats=reuse_end_stats)
+            moved = tracker.inputs_changed_since_read(reuse_end_stats=reuse_end_stats, reuse_checked=reuse_checked)
         except Exception:
             # Not cached: a check that could not finish never says the files
             # held still.

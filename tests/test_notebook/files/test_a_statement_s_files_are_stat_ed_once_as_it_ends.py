@@ -1,18 +1,20 @@
-"""A statement's end stats each settled file it read once for its first two
-looks, and the last look before its entry is written stats it again.
+"""A statement's end stats each settled file it read once, for every look
+up to its entry being written.
 
 After a statement ran, each file it read was stat'ed four times: for its
 deferred digest, for the check that no input moved, for its file lineage,
 and for that check again before the entry is written. ~15 us a stat on
 Windows: ~0.3 s a run for a cell reading 5,000 files. The first check takes
 the stat the deferred digest was taken under, and the lineage the stats
-that check took (`FileAccessTracker.end_stats`, ``checked_stats``); the
-check before the store stats every file again.
+that check took (`FileAccessTracker.end_stats`, ``checked_stats``), and
+so does the check before the store: the entry records the stats the value
+was found built from, so a write landing after them leaves a stat it does
+not hold. A loop over 50,000 files paid that last stat for each.
 
 What must hold: the lineage component is the one fresh stats give, for a
 mix of relative, absolute and linked reads; a file a thread of the cell
-rewrites while these are taken is caught by the last check, and read again
-on the next run.
+rewrites while these are taken is read again on the next run, and one
+rewritten before the first check is caught by it.
 """
 
 from __future__ import annotations
@@ -100,10 +102,8 @@ def test_the_lineage_from_shared_stats_is_the_one_fresh_stats_give(
     assert shared, "control: the lineage was given the check's stats"
     assert component == file_deps.compute_file_hash_component(accessed, remote, probes)
     assert component == file_deps.compute_file_hash_component(accessed, remote, probes, stats={})
-    # The first check took the end stats; only the check before the store
-    # stat'ed each file again.
-    read = {p for p in accessed if os.path.isabs(p)}
-    assert sorted(stats_taken) == sorted(read), stats_taken
+    # Both checks took the end stats: no file was stat'ed again.
+    assert stats_taken == [], stats_taken
 
 
 def test_a_lookup_by_shared_stats_finds_the_entry(cash_magics, stores_everything, files):
@@ -131,8 +131,9 @@ threading.Thread(target=_rewrite, args=(go, done), daemon=True).start()
 def test_a_file_a_thread_rewrites_as_the_statement_ends_is_read_again(cash_magics, stores_everything, files, when):
     """The cell leaves a thread running that rewrites a file it read, once
     cash has taken that file's end stat: in time for the first check to
-    have used that stat, or after it, before the lineage. The check before
-    the store stats it again and refuses."""
+    have used that stat, or after it, before the lineage. Before the first
+    check, the check refuses; after it, the entry holds the stat from before
+    the write, which the next run does not find."""
     _, cell = files
     go, done = threading.Event(), threading.Event()
     cash_magics.shell.user_ns.update(go=go, done=done)
@@ -146,10 +147,10 @@ def test_a_file_a_thread_rewrites_as_the_statement_ends_is_read_again(cash_magic
     if when == "before-the-first-check":
         real = FileAccessTracker.inputs_changed_since_read
 
-        def first_check(self, reuse_end_stats=False):
+        def first_check(self, reuse_end_stats=False, **kwargs):
             if reuse_end_stats:
                 let_it_write()
-            return real(self, reuse_end_stats)
+            return real(self, reuse_end_stats, **kwargs)
 
         patches.setattr(FileAccessTracker, "inputs_changed_since_read", first_check)
     else:
@@ -168,9 +169,10 @@ def test_a_file_a_thread_rewrites_as_the_statement_ends_is_read_again(cash_magic
         patches.undo()
     assert go.is_set() and done.is_set(), "control: the thread wrote as the statement ended"
     assert cash_magics.shell.user_ns["text"].startswith("relative absolute")
-    assert any(getattr(w.message, "code", None) == "STORE-INPUT-CHANGED" for w in caught), [
-        str(w.message) for w in caught
-    ]
+    if when == "before-the-first-check":
+        assert any(getattr(w.message, "code", None) == "STORE-INPUT-CHANGED" for w in caught), [
+            str(w.message) for w in caught
+        ]
     run_cash_cell(cash_magics, cell)
     assert cash_magics.shell.user_ns["text"].startswith("NEW TEXT absolute"), (
         "the value read from the old file was served"
@@ -182,13 +184,13 @@ def test_a_rewrite_that_puts_the_mtime_back_is_caught_too(cash_magics, stores_ev
     work, cell = files
     real = FileAccessTracker.inputs_changed_since_read
 
-    def first_check(self, reuse_end_stats=False):
+    def first_check(self, reuse_end_stats=False, **kwargs):
         if reuse_end_stats:
             path = work / "rel.txt"
             before = os.stat(path)
             path.write_text("NEW TEXT ", encoding="utf-8")
             os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
-        return real(self, reuse_end_stats)
+        return real(self, reuse_end_stats, **kwargs)
 
     with pytest.MonkeyPatch.context() as patches:
         patches.setattr(FileAccessTracker, "inputs_changed_since_read", first_check)
