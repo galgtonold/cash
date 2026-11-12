@@ -8,9 +8,11 @@ bare method call, and the accumulator-loop shapes.
 from __future__ import annotations
 
 import ast
+import weakref
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
+from .. import _weak
 from .._user_attrs import from_family
 from .ast_util import plain_statement, walk_tree
 from .file_effects import SideEffectVisitor
@@ -1541,16 +1543,28 @@ class TopLevelCalls:
     setting_arguments: Mapping[str, frozenset[str]] = field(default_factory=dict)
 
 
+#: `top_level_calls`'s answers, by the tree, held weakly. A statement's
+#: analyses asked it about ten times, and each pass of a loop body statement
+#: shares one tree (`parse_cached`). The trees asked about are read, never
+#: changed: cash's rewrites work on a copy (`copy_tree`).
+_TOP_LEVEL_CALLS: weakref.WeakKeyDictionary[ast.AST, TopLevelCalls] = _weak.WeakKeyDictionary()
+
+
 def top_level_calls(tree: ast.Module | None) -> TopLevelCalls:
     """The calls *tree*'s top-level statements make (see :class:`TopLevelCalls`).
     A plain statement makes none, and changes nothing in place by its text
     (`plain_statement`)."""
     if tree is None or plain_statement(tree):
         return TopLevelCalls()
+    try:
+        return _TOP_LEVEL_CALLS[tree]
+    except KeyError:
+        pass
     collector = _TopLevelCallCollector()
     for node in tree.body:
         collector.statement(node)
-    return collector.result()
+    answer = _TOP_LEVEL_CALLS[tree] = collector.result()
+    return answer
 
 
 def _walk_with_locals(node: ast.AST, local: frozenset[str] = frozenset()):

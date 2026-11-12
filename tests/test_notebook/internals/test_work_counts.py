@@ -384,3 +384,40 @@ def test_a_slice_anchor_is_digested_once_a_store_and_once_a_hit(cash_magics):
     assert [m.get("status") for m in statements] == [CacheStatus.RESTORED], statements
     assert stored.calls == 1
     assert hit.calls == 1
+
+
+def test_a_statement_collects_the_calls_it_makes_once(cash_magics):
+    """Each question about what a statement's top-level calls do
+    (`mutations.top_level_calls`) walked it again: about ten walks of
+    ``rows.append(v)`` for each pass of a loop body, which counted for a
+    tenth of a pass's bookkeeping."""
+    from cash.analysis import mutations
+
+    run_cash_cell(cash_magics, "rows = []\nv = 1")
+    with method_calls(mutations._TopLevelCallCollector, "statement") as collected:
+        run_cash_cell(cash_magics, "rows.append(v)")
+    # 1 now; 11 before.
+    assert collected.calls <= 2, collected.calls
+
+
+def test_a_loop_unit_calling_a_library_reads_its_bytecode_once(cash_magics):
+    """A loop run as one unit asks whether each function it calls reads a
+    name the loop binds, through every function that one reaches
+    (`call_key.global_names_reached`): for ``pd.concat`` some thousands of
+    pandas functions. Their names were memoised 1024 at a time, so each
+    loop read all of their bytecode again."""
+    from cash.notebook import call_key
+
+    pytest.importorskip("pandas")
+    run_cash_cell(cash_magics, "import re\nimport pandas as pd")
+    loop = (
+        "frame = pd.DataFrame()\nfor i in range(60):\n    row = {{'a': i + {k}}}\n"
+        "    frame = pd.concat([frame, pd.DataFrame([row])], ignore_index=True)\n"
+        "    found = re.findall('a', 'abc')"
+    )
+    run_cash_cell(cash_magics, loop.format(k=0))
+    with method_calls(call_key, "argvals") as scanned:
+        run_cash_cell(cash_magics, loop.format(k=1))
+    assert cash_magics.shell.user_ns["frame"]["a"].tolist() == [i + 1 for i in range(60)]
+    # Under 50 now; some 1800 before.
+    assert scanned.calls <= 200, scanned.calls

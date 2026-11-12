@@ -19,6 +19,7 @@ import traceback
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from cash._clock import perf_counter
 from cash._user_attrs import attribute_or
 from cash.notebook.cache_status import ExecutionResult
 from cash.notebook.compiled_source import is_cash_filename, line_offset, register_cell_source, shifted
@@ -431,6 +432,16 @@ class StatementExecution:
     store_cost: float = 0.0
     #: Cash's own seconds inside the run.
     tax: float = 0.0
+    #: Those of them keying, looking up and storing the calls it routed
+    #: (``StatementPrice.routing``).
+    routing: float = 0.0
+    #: Cash's seconds setting up its watch on the run after the clock
+    #: started (`lookups_seen.arm`, the digests offered to a decorated call):
+    #: left out of ``wall_time``, as the setup before the clock is. Counted,
+    #: each statement of a loop body read as 0.3 ms of work around a few
+    #: microseconds of its own, and a loop of cheap passes never measured
+    #: cheap (`single_unit_policy.passes_were_cheap`).
+    watch_setup: float = 0.0
     accessed_files: set[str] = field(default_factory=set)
     accessed_remote: set[str] = field(default_factory=set)
     #: The paths it checked for without reading them, with their answers
@@ -574,7 +585,7 @@ class CodeRunner:
         value = None
         units = self._units(0)
         # What its calls return is seen (`lookups_seen`).
-        lookups_seen.arm(units, self.namespace)
+        self._arm(units)
         for unit in units:
             value = eval(unit, self.namespace, self.namespace)
         _remember_future_imports(self.tree)
@@ -590,13 +601,20 @@ class CodeRunner:
         value = None
         units = self._units(ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
         # What its calls return is seen (`lookups_seen`).
-        lookups_seen.arm(units, self.namespace)
+        self._arm(units)
         for unit in units:
             value = eval(unit, self.namespace, self.namespace)
             if unit.co_flags & inspect.CO_COROUTINE:
                 value = await value
         _remember_future_imports(self.tree)
         self._show(value)
+
+    def _arm(self, units: list[types.CodeType]) -> None:
+        started = perf_counter()
+        try:
+            lookups_seen.arm(units, self.namespace)
+        finally:
+            self.execution.watch_setup += perf_counter() - started
 
     def _show(self, value: Any) -> None:
         if not self._echo:
