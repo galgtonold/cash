@@ -152,6 +152,8 @@ class ReexecutionPlanner:
         stmts_to_run_indices, restored_statements_info, total_restore_time = self.classifier.backward_scan_pass(
             sim, result
         )
+        # What the backward scan just put into the kernel, as new objects.
+        restored = frozenset(name for info in restored_statements_info for name in info.get("restored_vars") or ())
 
         stmts_to_run_indices = self._schedule_consumable_producer_touches(
             stmts_to_run_indices,
@@ -164,12 +166,14 @@ class ReexecutionPlanner:
             simulation_trace,
             virtual_lineage,
             loop_vars=sim.vars_mutated_by_loops | sim.vars_derived_from_loops | sim.loop_target_vars,
+            restored=restored,
         )
 
         stmts_to_run_indices = self._schedule_conditional_producer_inits(
             stmts_to_run_indices,
             simulation_trace,
             broken_vars,
+            restored=restored,
         )
 
         stmts_to_run_indices = self._complete_inputs_produced_before(
@@ -226,6 +230,7 @@ class ReexecutionPlanner:
                 simulation_trace,
                 virtual_lineage,
                 loop_vars=sim.vars_mutated_by_loops | sim.vars_derived_from_loops | sim.loop_target_vars,
+                restored=restored,
             )
             stmts_to_run_indices = self._complete_inputs_produced_before(
                 stmts_to_run_indices,
@@ -775,6 +780,7 @@ class ReexecutionPlanner:
         simulation_trace: list,
         virtual_lineage: dict[str, str],
         loop_vars: set[str] | frozenset[str] = frozenset(),
+        restored: frozenset[str] = frozenset(),
     ) -> list[int]:
         """Re-schedule all producers of a shadowed variable consumed at a stale version.
 
@@ -834,6 +840,10 @@ class ReexecutionPlanner:
                         if p in scheduled:
                             continue
                         produced = (simulation_trace[p].produced_lineages or {}).get(v)
+                        if produced == consumed != final and self._kernel_holds(
+                            simulation_trace, scheduled, p, v, restored
+                        ):
+                            continue
                         if produced in wanted:
                             scheduled.add(p)
                             changed = True
@@ -848,6 +858,35 @@ class ReexecutionPlanner:
                                     str(final)[:8],
                                 )
         return sorted(scheduled)
+
+    def _kernel_holds(
+        self, simulation_trace: list, scheduled: set[int], p: int, v: str, restored: frozenset[str]
+    ) -> bool:
+        """Whether re-running statement *p* would leave *v* as it is: the
+        kernel holds *v* as *p* makes it, no statement the plan re-runs
+        before *p* changes it first, and nothing *p* reads is remade.
+
+        The backward scan restores a statement's entry into the kernel, or
+        the name never moved. Re-running *p* then makes what is already
+        there, and brings in every statement above it that builds its
+        inputs: ``data = df_final`` re-ran ``df_final = df.drop(...)``,
+        whose entry the scan had just restored, and the ten statements
+        building ``df`` above it, before the cell ran. What the plan re-runs
+        after *p* runs on *v* either way.
+
+        A name *p* reads that the scan restored (*restored*) or the plan
+        re-runs before it is a new object, and *v* may hold the old one:
+        ``named = [('a', a), ('b', b)]`` restored ahead of ``a`` and ``b``
+        keeps estimators the voting fit no longer sees. Re-run, its restore
+        takes the new ones.
+        """
+        produced = (simulation_trace[p].produced_lineages or {}).get(v)
+        if produced is None or self.tracking_state.variable_lineage.get(v) != produced:
+            return False
+        reads = set(simulation_trace[p].inputs or ())
+        if reads & restored:
+            return False
+        return not any(j < p and ({v} | reads) & set(simulation_trace[j].outputs or ()) for j in scheduled)
 
     @staticmethod
     def _schedule_unshadowed_producer(
@@ -885,6 +924,7 @@ class ReexecutionPlanner:
         stmts_to_run_indices: list[int],
         simulation_trace: list,
         broken_vars: set[str],
+        restored: frozenset[str] = frozenset(),
     ) -> list[int]:
         """Schedule the unconditional initializer behind a conditional rebind.
 
@@ -941,6 +981,8 @@ class ReexecutionPlanner:
                 # Find the NEAREST earlier guaranteed init of v.
                 for p in range(i - 1, -1, -1):
                     if v in simulation_trace[p].outputs and v in _top_level(p):
+                        if self._kernel_holds(simulation_trace, scheduled | additions, p, v, restored):
+                            break
                         additions.add(p)
                         logger.debug(
                             "[UPSTREAM] Conditional-init: scheduling unconditional "
