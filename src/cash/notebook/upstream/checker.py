@@ -930,6 +930,47 @@ class UpstreamChecker:
                 state.current_session_hashes[name] = sessions[name]
             trace_event("kept_live_binding", name=name, bound_in=at, repaired_in=repaired_at)
 
+    def _place_repair_bindings(
+        self,
+        rebuilt: set[str],
+        cells_before: dict[str, int | None],
+        bound_by_before: dict[str, str],
+        notebook_cells: list[str],
+        current_cell_idx: int,
+    ) -> None:
+        """Record, for each name the repair bound, the cell of the statement
+        that bound it (``bound_in_cell``), where the repair left None.
+
+        The repair runs with no cell running (``running_cell`` is placed
+        only after it), so `note_bound_in_cell` records None for what it
+        binds. A repair started from a cell below re-runs ``prepared =
+        pipe.fit_transform(data)`` of a later section; with None recorded,
+        an edit of a cell above that section, whose own repair re-runs the
+        fit above and binds ``prepared`` on the way, could not tell the
+        later section bound it and never put the live value back
+        (`_keep_live_bindings`): the older value from above stood. The
+        repair stands in for that cell's run, so the name is where a run of
+        the cell would have recorded it.
+
+        Only by the statement recorded as binding it (``bound_by``), placed
+        among the cells up to the running one, as `_repair_cells` places the
+        repair's statements: the repair runs what stands above. Of two such
+        cells holding the text, the later one, whose statement the repair
+        runs last. A name an earlier repair left None keeps it: the cells
+        may have moved since."""
+        state = self.tracking_state
+        cells = statement_cells(tuple(notebook_cells[: current_cell_idx + 1]))
+        for name, at in list(state.bound_in_cell.items()):
+            code = state.bound_by.get(name)
+            if at is not None or not code:
+                continue
+            if name not in rebuilt and cells_before.get(name, 0) is None and bound_by_before.get(name) == code:
+                continue
+            placed = cells.get(strip_markers(code).strip())
+            if placed is not None:
+                state.bound_in_cell[name] = placed
+                trace_event("placed_repair_binding", name=name, bound_in=placed)
+
     def _untouched_by_cell(self, cell_code: str, required_inputs: set[str]) -> set[str]:
         """The live names the cell provably neither reads nor binds: not
         among *required_inputs* (its reads and what the functions it calls
@@ -1173,6 +1214,7 @@ class UpstreamChecker:
                 cell_code,
                 required_inputs,
             )
+            self._place_repair_bindings(rebuilt, cells_before, bound_by_before, notebook_cells, current_cell_idx)
             self.rng.label_rerun_metrics(executed_metrics, rng_rerun)
             total_execution_time = self.replay.sum_execution_times(executed_metrics)
             self._warn_rebuilt_changed_below(

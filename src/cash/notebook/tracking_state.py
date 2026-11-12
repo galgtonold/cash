@@ -60,14 +60,19 @@ class TrackingState:
     executed_cell_codes: dict[str, str] = field(default_factory=dict)
 
     # Variable -> the notebook position (0-based) of the cell whose own run
-    # last bound it, by its text (``running_cell`` then; `note_bound_in_cell`);
-    # None when the upstream repair of another cell did. A change in place
-    # (``BIG.append(...)``, ``voting_clf.fit(...)``) leaves it. Tells a name a
-    # cell below bound anew from one the cells above made, which the
-    # statement's text alone cannot when two cells hold the same text.
-    # W: StatementLineageBuilder, both restorers.
-    # R: MismatchClassifier (``_rebuild_what_shares_a_rebuilt_object``),
-    #    UpstreamChecker (``_keep_live_bindings``).
+    # last bound it, by its text (``running_cell`` then; `note_bound_in_cell`).
+    # An upstream repair runs before ``running_cell`` is placed, so it
+    # records None; the checker then gives each name the repair bound the
+    # cell of the statement that bound it (``_place_repair_bindings``).
+    # None stays where no cell up to the running one holds that statement.
+    # A change in place (``BIG.append(...)``, ``voting_clf.fit(...)``)
+    # leaves it. Tells a name a cell below bound anew from one the cells
+    # above made, which the statement's text alone cannot when two cells
+    # hold the same text.
+    # W: StatementLineageBuilder, both restorers, UpstreamChecker.
+    # R: MismatchClassifier (``_made_below``, ``_bound_at``),
+    #    UpstreamChecker (``_keep_live_bindings``,
+    #    ``_warn_rebuilt_changed_below``).
     bound_in_cell: dict[str, int | None] = field(default_factory=dict)
     # Variable -> the statement whose run recorded ``bound_in_cell``, to
     # check the cell there still holds it (cells inserted, moved, deleted).
