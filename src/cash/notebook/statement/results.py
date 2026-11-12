@@ -87,6 +87,8 @@ class ProcessResult(ProcessResultRequired, total=False):
     # What the statement cost to run, and what cash spent around it.
     compute_cost: float
     cash_tax: float
+    # The part of that keying, looking up and storing the calls it routed.
+    routing_time: float
     # Rich display outputs captured on a miss or replayed on a hit.
     rich_outputs: list[Any]
     # The value the cell's last expression echoed, for IPython's ``_``/``Out``.

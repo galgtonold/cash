@@ -1526,8 +1526,12 @@ class StatementProcessor:
         quotes intact), not through the call cache."""
         if runner.source != (run.exec_source if run.exec_source is not None else run.code):
             return
-        run.offered_as = register_cell_source(runner.source)
-        self._mutations.digests.offer_to_decorator(run.offered_as, run.tree, self.shell.user_ns)
+        started = _perf_counter()
+        try:
+            run.offered_as = register_cell_source(runner.source)
+            self._mutations.digests.offer_to_decorator(run.offered_as, run.tree, self.shell.user_ns)
+        finally:
+            runner.execution.watch_setup += _perf_counter() - started
 
     async def process_statement_async(
         self,
@@ -2963,7 +2967,7 @@ class StatementProcessor:
                         yield runner
                     finally:
                         env_scope.__exit__(None, None, None)
-                        wall_time = max(0.0, _perf_counter() - start_time - run.record_time)
+                        wall_time = max(0.0, _perf_counter() - start_time - run.record_time - execution.watch_setup)
                         if memo is not None:
                             # Bound only while it ran; what the value cost
                             # to compute is what the statement is worth.
@@ -3122,7 +3126,8 @@ class StatementProcessor:
         with self._after_it_ran(run):
             self._forget_file_answers_if_it_wrote(code, execution)
         execution.wall_time = wall_time
-        execution.cost, execution.store_cost, execution.tax = self._calls.price(execution.wall_time, marks)
+        price = self._calls.price(execution.wall_time, marks)
+        execution.cost, execution.store_cost, execution.tax, execution.routing = price
         execution.cached_call_reads = self._calls.files_read_in_cached_calls(marks)
         self._refuse_if_a_call_changed_a_default(run, marks)
 
@@ -3308,6 +3313,7 @@ class StatementProcessor:
         display_execution_output(captured, run.silent, run.stream_output, metrics)
         metrics["execution_time"] = execution.wall_time
         metrics["compute_cost"] = execution.cost
+        metrics["routing_time"] = execution.routing
         metrics["cash_tax"] = execution.tax
 
         result = execution.result

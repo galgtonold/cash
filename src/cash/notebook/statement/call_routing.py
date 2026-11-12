@@ -50,6 +50,9 @@ class StatementPrice(NamedTuple):
     store_cost: float
     #: Cash's own seconds inside it.
     tax: float
+    #: Those of them keying, looking up and storing the calls it routed:
+    #: the part of the tax that is not about what the statement read.
+    routing: float = 0.0
 
 
 class CashMarks(NamedTuple):
@@ -110,7 +113,7 @@ def statement_price(wall_time: float, spent: CashMarks) -> StatementPrice:
     computed = min(spent.computed, wall_time)
     cost = computed + max(0.0, wall_time - computed - tax) + spent.saved
     store_cost = max(0.0, cost - spent.cached_compute) + spent.cached_restore
-    return StatementPrice(cost, store_cost, tax)
+    return StatementPrice(cost, store_cost, tax, spent.overhead)
 
 
 def _plain_call_assignment(code: str) -> tuple[str, dict[str, int] | None] | None:

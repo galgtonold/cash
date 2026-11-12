@@ -1966,7 +1966,13 @@ def _is_plain_data(value, budget: list[int]) -> bool:
     return False
 
 
-@functools.lru_cache(maxsize=1024)
+#: `_code_names`'s answers, by the code object, held weakly: a code object
+#: never changes. Not a bounded memo: a loop calling ``pd.concat`` walks
+#: some thousands of pandas functions (`global_names_reached`), and a
+#: 1024-entry memo read them all from their bytecode again for each loop.
+_CODE_NAMES: weakref.WeakKeyDictionary[_types.CodeType, frozenset[str]] = _weak.WeakKeyDictionary()
+
+
 def _code_names(code: _types.CodeType) -> frozenset[str]:
     """Global names *code* and the functions nested in it load.
 
@@ -1974,11 +1980,16 @@ def _code_names(code: _types.CodeType) -> frozenset[str]:
     ``os.open`` would read as the global ``open`` -- cash's file-tracking
     wrapper in a notebook.
     """
+    try:
+        return _CODE_NAMES[code]
+    except KeyError:
+        pass
     names = set(argvals(code, NAME_LOADS))
     for const in code.co_consts:
         if isinstance(const, _types.CodeType):
             names |= _code_names(const)
-    return frozenset(names)
+    answer = _CODE_NAMES[code] = frozenset(names)
+    return answer
 
 
 def _plain_or_code(value, seen: set[int], budget: list[int]) -> bool:

@@ -25,6 +25,7 @@ __all__ = [
     "has_marker",
     "strip_markers",
     "iteration_digest",
+    "neutral_markers",
 ]
 
 ITERATION_PREFIX = "# __iteration_context__:"
@@ -61,3 +62,22 @@ def iteration_digest(code: str) -> str | None:
     carries no iteration marker."""
     found = _ITERATION_DIGEST.search(code)
     return found.group(1) if found else None
+
+
+_LEADING_MARKERS = re.compile(r"\A(?:[ \t]*(?:# __iteration_context__:|# control_context:)[^\n]*\n)+")
+
+
+def neutral_markers(code: str) -> str:
+    """*code* with the digests of the marker lines it starts with left out.
+
+    The text parses to the same tree, position for position: a marker is a
+    comment line, and each keeps its line. So the passes of one loop body
+    statement share one parse (`parse_cached`) and what is kept about it.
+    Only the leading markers, which `mark_iteration` and `mark_control`
+    write: a marker-like line further down may be inside a string."""
+    found = _LEADING_MARKERS.match(code)
+    if found is None:
+        return code
+    lines = found.group(0).split("\n")[:-1]
+    neutral = "".join(line.split(":", 1)[0] + ":\n" for line in lines)
+    return neutral + code[found.end() :]

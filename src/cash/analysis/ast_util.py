@@ -26,6 +26,7 @@ from collections.abc import Iterator, Mapping
 from typing import Any, Literal
 
 from cash._user_attrs import instance_of, own_dict
+from cash.control_markers import neutral_markers
 
 from .. import _weak
 
@@ -150,12 +151,18 @@ def _is_plain(tree: ast.Module) -> bool:
     return True
 
 
-@functools.lru_cache(maxsize=1024)
 def parse_cached(code: str) -> ast.Module | None:
     """``ast.parse(code)``, memoised; None when *code* does not parse.
 
-    The tree is shared between callers: read it, never change it.
+    The tree is shared between callers: read it, never change it. Each pass
+    of a loop body statement shares one (`neutral_markers`): only the
+    comment naming the pass differs.
     """
+    return _parse_text(neutral_markers(code))
+
+
+@functools.lru_cache(maxsize=1024)
+def _parse_text(code: str) -> ast.Module | None:
     try:
         return ast.parse(code)
     except (SyntaxError, ValueError):  # ValueError: a null byte in the source

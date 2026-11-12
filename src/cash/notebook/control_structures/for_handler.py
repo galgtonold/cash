@@ -120,19 +120,26 @@ def _stamp_body_index(m: dict, body_idx: int) -> None:
 def _work(metrics: Sequence) -> float:
     """What *metrics*' statements cost to compute: a restored one at the time
     it saved (`ForLoopHandler._refresh_cost`), one that ran with the calls
-    it served from the cache counted at what they cost (``compute_cost``).
+    it served from the cache counted at what they cost (``compute_cost``),
+    and without cash's time keying and storing the calls it routed
+    (``routing_time``).
 
     Counted at its run time alone, `bt[s] = fu.backtest(...)` whose 0.25 s
     call was served read as 2 ms of work: on a slow machine the passes then
     measured cheap and the rest of the loop ran as one unit, which ran the
-    call again."""
+    call again. Counted with the routing, ``action = re.findall(p, s)[0]``
+    read as 2 ms of work around a few microseconds of the call's: a loop
+    of such passes never measured cheap, and ran every pass one by one.
+    The time recording the files a statement read stays in: a loop of
+    small ``pd.read_csv`` reads keeps each read its own entry."""
     work = 0.0
     for m in metrics:
         if not isinstance(m, dict):
             continue
         status = m.get("status")
         if status == CacheStatus.COMPUTED:
-            work += max(m.get("execution_time", 0.0), m.get("compute_cost", 0.0))
+            ran = max(0.0, m.get("execution_time", 0.0) - m.get("routing_time", 0.0))
+            work += max(ran, m.get("compute_cost", 0.0))
         elif status == CacheStatus.RESTORED:
             work += m.get("saved_time", 0.0)
     return work
