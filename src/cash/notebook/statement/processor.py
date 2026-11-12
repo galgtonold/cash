@@ -234,6 +234,7 @@ from ..shared_objects import (
     children_of,
     forget_heap_unreadable,
     heap_unreadable,
+    held_only_by_names,
     history_names,
     holds_part_of,
     is_value,
@@ -4644,7 +4645,25 @@ class StatementProcessor:
                 and not foreign(other)
                 and not is_value(user_ns[other], value_types)
             }
-            return [*links, (outputs, read)] if read else links
+            if not read:
+                return links
+            # Unless an output is shown to share no object with anything but
+            # the names bound to it (`held_only_by_names`): the counts a loop
+            # fills (``trans_count[i, j] += 1``) hold no part of the sessions
+            # it read, and linked to them, each run of the loop moved the
+            # sessions on and the cell below rebuilt them.
+            alone = {}
+            for name in names:
+                bound = held_only_by_names(name, user_ns, [captured_vars, *cash_held])
+                if bound is not None:
+                    alone[name] = bound
+            if not alone:
+                return [*links, (outputs, read)]
+            kept = [(frozenset(owners) - set(alone), holders) for owners, holders in links]
+            kept = [(owners, holders) for owners, holders in kept if owners and holders]
+            kept += [([name], set(bound) - {name}) for name, bound in alone.items() if set(bound) - {name}]
+            rest = [name for name in outputs if name not in alone]
+            return [*kept, (rest, read)] if rest else kept
 
         budget = share_check_budget(cost)
 
