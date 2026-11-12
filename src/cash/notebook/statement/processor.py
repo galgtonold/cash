@@ -3865,6 +3865,11 @@ class StatementProcessor:
             # lineage below (`value_hash.no_weak_reads`).
             run.settled_digests = {}
             value_hash.no_weak_reads()
+            # Nor the frame memo's copy of a block of lists a frame replaced
+            # (``df.sort_values(..., inplace=True)``): it holds every list a
+            # second time, and the share check took that for a variable it
+            # could not find, a second and more a statement, and re-ran it.
+            rewrite_in_place.forget_moved_lists(captured_vars[name] for name in run.outputs if name in captured_vars)
             # The share check, the closure check and the RAM tier each look into
             # the outputs; JSON-like ones are walked once for all of them.
             with _plain_data.one_look(captured_vars):
