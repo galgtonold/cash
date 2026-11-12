@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+import cash.notebook.file_stamps as file_stamps
 import cash.notebook.vscode_backup as vb
 
 #: Longer than any timestamp tick of a filesystem with sub-second stamps
@@ -32,13 +33,14 @@ def _backup(folder: Path, notebook: Path, name: str) -> Path:
 
 @pytest.fixture
 def tree(tmp_path, monkeypatch):
-    """A backup tree whose stamps count as settled at once, and a counter
-    of the folder listings a scan makes in it."""
+    """A backup tree whose stamps count as settled a tick after a change
+    (whole-second stamps too), and a counter of the folder listings a scan
+    makes in it."""
     root = tmp_path / "Backups"
     (root / "ws1").mkdir(parents=True)
     _backup(root / "ws2" / "file", tmp_path / "other.ipynb", "aaa")
     monkeypatch.setattr(vb, "backup_roots", lambda: [root])
-    monkeypatch.setattr(vb, "SETTLED_SECONDS", 0.0)
+    monkeypatch.setattr(file_stamps, "COARSE_TICK_NS", 0)
     listings = []
     real_scandir = vb.os.scandir
 
@@ -106,10 +108,23 @@ def test_a_backup_going_away_is_noticed(tree):
 def test_an_answer_from_folders_changed_just_now_is_not_kept(tree, monkeypatch):
     """The control: a change inside a timestamp tick of the last can leave
     a folder's stamps as they were, so an answer from folders that changed
-    within ``SETTLED_SECONDS`` is scanned for again."""
+    within a tick is scanned for again."""
     root, nb, listings = tree
-    monkeypatch.setattr(vb, "SETTLED_SECONDS", 60.0)
+    monkeypatch.setattr(file_stamps, "STAMP_TICK_NS", 60 * 10**9)
+    monkeypatch.setattr(file_stamps, "COARSE_TICK_NS", 60 * 10**9)
     assert vb.find_backup(str(nb)) is None
     listings.clear()
     assert vb.find_backup(str(nb)) is None
     assert listings, "an answer resting on stamps that may not move was kept"
+
+
+def test_an_answer_is_kept_a_tick_after_its_folders_changed(tree):
+    """Kept once a timestamp tick has passed, not seconds later: an editor
+    that saves before each run changes a backup folder each time."""
+    root, nb, listings = tree
+    _backup(root / "ws2" / "file", root.parent / "x.ipynb", "fff")
+    time.sleep(_PAST_A_TICK_S)
+    assert vb.find_backup(str(nb)) is None
+    listings.clear()
+    assert vb.find_backup(str(nb)) is None
+    assert listings == []

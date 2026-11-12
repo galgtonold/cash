@@ -33,7 +33,7 @@ import time as _time
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from ..source_reading import SETTLED_SECONDS
+from . import file_stamps
 
 # One backup file is one dirty editor; a workspace with many has many. Scanning
 # is bounded by how many files the user has left unsaved, which is small.
@@ -173,6 +173,39 @@ _answers: dict[
 ] = {}
 
 
+#: Where each backup the last scan read says its notebook is (its header
+#: URI as a local path, ``None`` for one that names none), by the backup's
+#: path, with its `_signature` when read: a later scan opens only a backup
+#: that is new or has moved since. Kept only for a backup whose stamps a
+#: write would have moved by the time that scan began (`file_stamps`).
+_headers: dict[str, tuple[tuple[int, ...], str | None]] = {}
+
+
+def _header_path(
+    path: str,
+    sig: tuple[int, ...] | None,
+    began: int,
+    seen: dict[str, tuple[tuple[int, ...], str | None]],
+) -> str | None:
+    """The local path the header of the backup at *path* names, or ``None``.
+
+    *sig* is the backup's `_signature`, stat'ed after *began*. The answer
+    read before stands while *sig* is the one it was read at. One read now
+    goes into *seen* when a write after *began* would move *sig*, so that
+    an unchanged *sig* later stands for this header."""
+    kept = _headers.get(path)
+    if sig is not None and kept is not None and kept[0] == sig:
+        seen[path] = kept
+        return kept[1]
+    uri = _read_uri(Path(path))
+    if uri is None:
+        return None  # unreadable or no header yet: asked again next scan
+    local = _uri_to_path(uri)
+    if sig is not None and file_stamps.a_write_now_moves_the_stamps(max(sig[3], sig[4]), began):
+        seen[path] = (sig, local)
+    return local
+
+
 def _signature(path: str) -> tuple[int, ...] | None:
     """What a change to *path* moves: which file it is, its size and its
     stamps. A folder's stamps move when an entry is added, removed or
@@ -198,10 +231,12 @@ def find_backup(notebook_path: str) -> Path | None:
     each root, ``file`` folder and candidate the scan looked at (a missing
     one included), so a backup that appears, goes or
     changes makes the next call scan again. A cell run asks two or three
-    times, and the scan opens every candidate. It is kept only when every
-    one of those stamps had been left alone for ``SETTLED_SECONDS`` when
-    the scan began: a change inside a timestamp tick of the last one can
-    leave the stamps as they were.
+    times. It is kept only when every one of those stamps was a timestamp
+    tick old when the scan began (`file_stamps`): a change inside the tick
+    of the last one can leave the stamps as they were. A scan opens only
+    the backups that are new or moved since the last (`_header_path`): an
+    editor that saves before each run changes the backup folder each time,
+    and opening every other workspace's backups again cost most of a scan.
     """
     roots = backup_roots()
     try:
@@ -213,6 +248,7 @@ def find_backup(notebook_path: str) -> Path | None:
         return kept[1]
 
     began = _time.time_ns()
+    seen: dict[str, tuple[tuple[int, ...], str | None]] = {}
     looked: list[tuple[str, tuple[int, ...] | None]] = []
     complete = True
     matches: list[Path] = []
@@ -233,17 +269,15 @@ def find_backup(notebook_path: str) -> Path | None:
                     continue
                 try:
                     with os.scandir(folder) as entries:
-                        candidates = [Path(entry.path) for entry in entries]
+                        candidates = [entry.path for entry in entries]
                 except (FileNotFoundError, NotADirectoryError):
                     continue
                 for candidate in candidates:
-                    looked.append((str(candidate), _signature(str(candidate))))
-                    uri = _read_uri(candidate)
-                    if uri is None:
-                        continue
-                    local = _uri_to_path(uri)
+                    sig = _signature(candidate)
+                    looked.append((candidate, sig))
+                    local = _header_path(candidate, sig, began, seen)
                     if local and _same_file(local, notebook_path):
-                        matches.append(candidate)
+                        matches.append(Path(candidate))
         except OSError:
             complete = False  # an answer from part of the backups is not one to keep
             continue
@@ -255,11 +289,14 @@ def find_backup(notebook_path: str) -> Path | None:
     else:
         found = max(matches, key=_backup_mtime)
 
-    settled_ns = int(SETTLED_SECONDS * 1e9)
+    _headers.clear()
+    _headers.update(seen)
     if (
         key is not None
         and complete
-        and all(sig is None or began - max(sig[3], sig[4]) > settled_ns for _, sig in looked)
+        and all(
+            sig is None or file_stamps.a_write_now_moves_the_stamps(max(sig[3], sig[4]), began) for _, sig in looked
+        )
     ):
         _answers[key] = (tuple(looked), found)
     elif key is not None:

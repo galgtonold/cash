@@ -31,6 +31,7 @@ from cash._user_attrs import has_attribute
 from ..diagnostics import log_diagnostic, warn_diagnostic
 from ..exceptions import CashWarning
 from . import live_cells
+from .file_stamps import COARSE_STAMP_NS, COARSE_TICK_NS, STAMP_TICK_NS, a_write_now_moves_the_stamps, changed_ns
 from .live_cells import latest_cells
 from .vscode_backup import find_backup
 from .vscode_backup import live_cells as vscode_live_cells
@@ -617,32 +618,18 @@ _SAVE_FRESH_WINDOW_S: float = 1.0  # a file this recently changed may be mid-wri
 _SAVE_POLL_INTERVAL_S: float = 0.05  # how long a file must hold still to count as quiet
 _SAVE_MAX_WAIT_S: float = 1.0  # hard cap so we never block a run for long
 
-#: The coarsest tick a filesystem with fine timestamps moves them in: the
-#: 15.6 ms of the Windows clock (Linux: at most 10 ms; APFS: 1 ns). A write
-#: at least this long after the last one gets other stamps.
-_STAMP_TICK_NS = 16_000_000
-#: A change stamp on a whole multiple of this comes from a filesystem whose
-#: tick is unknown here (whole seconds on HFS+ and ext3, two on FAT); a fine
-#: stamp lands on one by chance once in a hundred thousand writes or less.
-_COARSE_STAMP_NS = 10_000_000
-#: How old such a coarse stamp must be before a write is sure to move it.
-_COARSE_TICK_NS = 2_000_000_000
-
-
-def _changed_ns(st: os.stat_result) -> int:
-    """When the file last changed, as its stamps tell it."""
-    return max(st.st_mtime_ns, st.st_ctime_ns)
+# The stamp tick rule (`file_stamps`), shared with the VS Code backup scan.
+_STAMP_TICK_NS = STAMP_TICK_NS
+_COARSE_STAMP_NS = COARSE_STAMP_NS
+_COARSE_TICK_NS = COARSE_TICK_NS
+_changed_ns = changed_ns
 
 
 def _a_write_now_moves_the_stamps(st: os.stat_result, now_ns: int) -> bool:
     """Whether every write from *now_ns* on gives the file stamps other than
-    *st*'s. A filesystem stamps a write with a clock that moves in ticks, so
-    a write inside the tick of the last one can leave mtime and ctime as
-    they were; once a whole tick has passed, it cannot. Ask with *now_ns*
-    taken before *st*, so a write between the two is a write after it."""
-    changed = _changed_ns(st)
-    tick = _STAMP_TICK_NS if changed % _COARSE_STAMP_NS else _COARSE_TICK_NS
-    return now_ns - changed >= tick
+    *st*'s (`a_write_now_moves_the_stamps`). Ask with *now_ns* taken before
+    *st*, so a write between the two is a write after it."""
+    return a_write_now_moves_the_stamps(_changed_ns(st), now_ns)
 
 
 def _read_bytes(path: str) -> bytes:
