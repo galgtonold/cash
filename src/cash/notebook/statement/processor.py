@@ -110,7 +110,7 @@ from cash.notebook.statement.input_change import (
 from cash.notebook.statement.last_runs import KeyParts, LastRuns
 from cash.notebook.statement.lineage import StatementLineageBuilder, clear_rebound_edges
 from cash.notebook.statement.miss_guard import GUARD_SKIP_REASON, MissGuard
-from cash.notebook.statement.mutation_routing import MutationRouting
+from cash.notebook.statement.mutation_routing import MutationRouting, rebound_only
 from cash.notebook.statement.mutations import MutationClassifier
 from cash.notebook.statement.output_refusals import is_history_name, live_shared_reason, unrestorable_output_reason
 from cash.notebook.statement.randomness import StatementRandomness
@@ -5523,9 +5523,15 @@ class StatementProcessor:
         # nothing of ``data``. Nor does a loop target's object say anything:
         # it is whichever element the last pass took, the same one again
         # when the loop runs again over the same ``data``, which read as
-        # ``data`` changed in place on every run of the loop.
+        # ``data`` changed in place on every run of the loop. Nor does that
+        # of a name the loop binds anew on each pass and changes in no way
+        # (``actions = session['actions']``): bound to the last session's
+        # list again, it read as ``sessions`` changed by a loop that only
+        # counts what it holds.
         sharing = run.outputs if run.share_owners is None else run.share_owners
-        targets = _loop_targets(run.tree)
+        targets = _loop_targets(run.tree) | rebound_only(
+            run.tree, self.shell.user_ns, self.tracking_state.variable_lineage
+        )
         run.moves_holders = any(
             id(captured_vars[name]) == run.bound_before.get(name)
             for name in sharing
