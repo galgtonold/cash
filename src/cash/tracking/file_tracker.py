@@ -35,6 +35,9 @@ from cash.tracking.file_dep_snapshot import (
 )
 from cash.tracking.pending_digest import MOVED, DeferredDigest, PendingDigest
 from cash.tracking.read_classification import (
+    RESUMABLE as _RESUMABLE,
+)
+from cash.tracking.read_classification import (
     SCRATCH_MEMMAP,
     folder_stat,
     import_folders,
@@ -57,7 +60,8 @@ __all__ = ["FileAccessTracker", "install_read_watch", "tracking_seconds"]
 
 logger = logging.getLogger(__name__)
 
-#: How many frames above a read `FileAccessTracker._reader_of` looks for the anchor.
+#: How many frames above the frame it shares with the last read a read's
+#: frames may be for `FileAccessTracker._reader_of` to answer.
 _READER_FRAMES = 64
 
 #: How many readers `FileAccessTracker._last_readers` keeps.
@@ -199,6 +203,11 @@ class FileAccessTracker:
         # per reader (`_READERS_KEPT`): the next read from the same folder
         # by the same frames is answered from it. Replaced as a whole.
         self._last_readers: tuple[tuple, ...] = ()
+        # The frames of the last read's stack, from the bottom up, and the
+        # depth of each by its id: what `_reader_of` finds the next read
+        # sharing with it. Replaced as a whole.
+        self._last_chain: tuple[list, dict[int, tuple[int, int]]] = ([], {})
+        self._reads_seen = 0
         # Folder -> its real path, for reads outside a cell run, which has
         # its own memo (`realpath_of_read_this_run`); dropped when the block
         # ends, so a link re-pointed between two calls is resolved anew.
@@ -324,6 +333,8 @@ class FileAccessTracker:
         self._folders = {}
         self.incidental_anchor = [None]
         self._last_readers = ()
+        self._last_chain = ([], {})
+        self._reads_seen = 0
         if self._native_windows:
             # Before the parent stack pops: the reads pass up like any other.
             native_reads.close_window(self._native_windows.pop(), self)
@@ -665,46 +676,75 @@ class FileAccessTracker:
 
     def _reader_of(self, abs_path: str) -> tuple | None:
         """What `incidental_read` and `credit_read_to_stack` make of a read of
-        *abs_path* depends on its folder and the frames above the read, up
-        to an anchor frame `incidental_read` keeps: this read's folder, the
-        code of each of those frames, and the anchor frame itself. A frame's
-        callers do not change while it runs, so a read with the same answer
-        here, ``sys.path`` unchanged, is classified and credited as the last
-        one was. The walk stops at the first anchor frame it meets: one that
-        is on the stack is running. None when that cannot be told: no anchor
-        yet, or none reached, a frame of a package metadata or resource API
-        (whose verdict asks whether the file itself exists), or a folder that
-        is an import folder on ``sys.path`` (a module file there is a package
-        of its own).
+        *abs_path* depends on its folder and on every frame above and below
+        the read. A frame's callers do not change while it runs, so a read
+        from below a frame the last read was also below -- the same frame,
+        still running -- has the same frames below it, and those were looked
+        at then: this read's folder, the code of each frame above that one,
+        and the frame itself, the same as a recent read's, ``sys.path``
+        unchanged, is classified and credited as that read was. None when
+        that cannot be told: a frame of a package metadata or resource API
+        on the stack (whose verdict asks whether the file itself exists),
+        more than `_READER_FRAMES` frames above the shared one, or a folder
+        that is an import folder on ``sys.path`` (a module file there is a
+        package of its own).
 
-        Any anchor kept, not only the newest: a loop body reading by ``open``
-        and through cash's wrapper of a reader leaves the wrapper's frame
-        newest, gone by the next ``open``, and the loop's reads were walked
-        and credited in full, each of them.
+        Shared with the last read, not anchored on a frame of cash's: a loop
+        over a folder's files by ``open`` in a notebook cell found the anchor
+        `incidental_read` kept to be IPython's ``open``, or a wrapper of a
+        reader, gone by the next read, and walked and credited every read in
+        full. A generator's frame is never the shared one: it may be resumed
+        from somewhere else.
         """
-        own = self._own_package
-        ends = {id(mark[0]): mark for mark in list(self.incidental_anchor) if mark is not None and mark[1] == own}
-        if not ends:
-            return None
-        codes = []
+        # The last read's frames from the bottom of the stack up, and the
+        # depth of each by its id with the read it was first seen at (and
+        # stale ids of frames gone since, which the identity check turns away).
+        bottom, seen = self._last_chain
+        n = self._reads_seen = self._reads_seen + 1
+        settled = n - 2
+        above = []
         frame = sys._getframe(2)
         while True:
-            if frame is None or len(codes) == _READER_FRAMES:
-                return None
-            mark = ends.get(id(frame))
-            if mark is not None and mark[0] is frame:
+            if frame is None:
+                end, depth = None, -1
+                break
+            entry = seen.get(id(frame))
+            if (
+                entry is not None
+                and entry[1] <= settled
+                and entry[0] < len(bottom)
+                and bottom[entry[0]] is frame
+                and not frame.f_code.co_flags & _RESUMABLE
+            ):
+                end, depth = frame, entry[0]
                 break
             if module_kind(frame)[0]:
+                self._last_chain = ([], {})
                 return None
-            codes.append(frame.f_code)
+            above.append(frame)
             frame = frame.f_back
-        if any(step[0] == "resource" for step in mark[3]):
+        chain = bottom[: depth + 1]
+        chain.extend(reversed(above))
+        if len(seen) <= 4 * len(chain) + 256:
+            kept, start = seen.copy(), depth + 1
+        else:  # mostly stale: start over
+            kept, start = {}, 0
+        for d in range(start, len(chain)):
+            f = chain[d]
+            entry = seen.get(id(f))
+            # A frame the last read had at this depth is the same running
+            # frame: it keeps when it was first seen.
+            first = entry[1] if entry is not None and entry[0] == d and d < len(bottom) and bottom[d] is f else n
+            kept[id(f)] = (d, first)
+        self._last_chain = (chain, kept)
+        if end is None or len(above) > _READER_FRAMES:
+            # No frame running since two reads ago: the next reads share some.
             return None
-        end = frame
+        codes = tuple(f.f_code for f in above)
         folder = abs_path[: abs_path.rfind("/") + 1]
         if not folder or normcase_path(folder) in import_folders():
             return None
-        return (folder, tuple(codes), end, mark)
+        return (folder, codes, end, None)
 
     @staticmethod
     def _unresolved_spelling(path, abs_path: str) -> str | None:

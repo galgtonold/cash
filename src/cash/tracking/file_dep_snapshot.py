@@ -214,6 +214,13 @@ def _remember_realpath(key: tuple[str, str], resolved: str) -> None:
         # component of its path, three times a file.
         _REALPATH_MEMO.clear()
     _REALPATH_MEMO[key] = resolved
+    # The read's own spelling, ``os.path.join``'s backslashes on Windows, and
+    # the one its record keeps (`normalize_path`) name the same file: the
+    # record of a relative read is resolved again by the lineage and the
+    # snapshot, and was resolved in full there, an ``lstat`` per file each.
+    spelled = normalize_path(key[1])
+    if spelled != key[1]:
+        _REALPATH_MEMO[(key[0], spelled)] = resolved
     # A resolved path resolves to itself, and callers hand it back in
     # both spellings: the tracker records ``normalize_path`` of it, and
     # the lineage component resolves that record again.

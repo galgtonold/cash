@@ -103,7 +103,7 @@ def own_sys_path(monkeypatch):
 def test_a_package_installed_mid_loop_is_a_library_from_then_on(tmp_path, monkeypatch, own_sys_path):
     def steps():
         target = tmp_path / f"target{len(list(tmp_path.iterdir()))}"
-        before = _files(target / "fakepkg", ["a.txt", "b.txt", "c.txt"])
+        before = _files(target / "fakepkg", ["a.txt", "b.txt", "c.txt", "c2.txt"])
         after = _files(target / "fakepkg", ["d.txt", "e.txt", "f.txt"])
 
         def install():
@@ -118,9 +118,10 @@ def test_a_package_installed_mid_loop_is_a_library_from_then_on(tmp_path, monkey
     steps.where = tmp_path
     (fast, _), (full, _), again = _both_ways(monkeypatch, steps)
     before, after = steps.files
-    # c.txt took b.txt's answer (a.txt had no anchor yet); e.txt and f.txt
-    # took d.txt's, a library's file credited to no one.
-    assert [os.path.basename(p) for p in again] == ["c.txt"]
+    # c2.txt took c.txt's answer (the frames below a read count as settled
+    # once they have run since two reads before); e.txt and f.txt took d.txt's,
+    # a library's file credited to no one.
+    assert [os.path.basename(p) for p in again] == ["c2.txt"]
     assert _resolved(before) <= full.accessed_files
     assert not _resolved(after) & full.accessed_files
     assert {p for p in fast.accessed_files if "target0" in p} == {
@@ -138,9 +139,9 @@ def test_two_readers_taking_turns_are_each_credited_their_own_files(tmp_path, mo
     steps.where = tmp_path
 
     (fast, fast_code), (full, full_code), again = _both_ways(monkeypatch, steps)
-    # Both readers are kept: every read but the first two (the very first
-    # had no anchor yet) and the first by ``second``.
-    assert len(again) == 5
+    # Both readers are kept: every read but the first three (the frames
+    # below them were not settled yet) and the first by ``second``.
+    assert len(again) == 4
     assert fast.accessed_files == full.accessed_files == _resolved(files)
     for statement in (fast_code, full_code):
         assert _credited(statement, "first", files) == {f for i, f in enumerate(files) if i % 4 < 2}
@@ -231,8 +232,35 @@ def test_a_loop_reading_by_open_and_through_a_wrapper_takes_both_answers(tmp_pat
     steps.where = tmp_path
     (fast, fast_code), (full, full_code), again = _both_ways(monkeypatch, steps)
     # All but the first read of each kind took an earlier answer, and the
-    # second ``open`` (the first had no anchor yet).
-    assert len(again) == 2 * len(files) - 3
+    # second ``open`` and wrapper read (the frames below were not settled).
+    assert len(again) == 2 * len(files) - 4
     assert fast.accessed_files == full.accessed_files == _resolved(files)
     for statement in (fast_code, full_code):
         assert _credited(statement, "first", files) == set(files)
+
+
+def test_a_loop_whose_reads_each_pass_a_frame_of_cash_s_takes_the_last_answer(tmp_path, monkeypatch):
+    """Each read goes through a frame of cash's own that a frame of another
+    module's then calls ``open`` from (the shape a notebook's ``open`` had
+    on the PC): the frame the library check anchored on was that one, gone
+    by the next read, and every read of the loop was walked in full."""
+    files = _files(tmp_path / "through", [f"t{i}.txt" for i in range(8)])
+    helper = _code(
+        "plainhelper",
+        "def read(path):\n    with open(path, encoding='utf-8') as fh:\n        return fh.read()\n",
+    )["read"]
+    through = _code(
+        "cash.tracking.fake_open_wrapper",
+        "def read_through(path):\n    return helper(path)\n",
+        helper=helper,
+    )["read_through"]
+
+    def steps():
+        return [lambda p=p: through(p) for p in files]
+
+    steps.where = tmp_path
+    (fast, _), (full, _), again = _both_ways(monkeypatch, steps)
+    # All but the first three: the frames below a read are taken as
+    # settled once they have run since two reads before.
+    assert len(again) == len(files) - 3
+    assert fast.accessed_files == full.accessed_files == _resolved(files)

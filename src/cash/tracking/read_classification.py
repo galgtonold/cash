@@ -350,7 +350,7 @@ _module_kinds: LruMemo[str, tuple[bool, bool, bool, str]] = LruMemo(SOURCE_FILES
 
 #: ``co_flags`` of a frame that can be suspended and resumed from elsewhere:
 #: while it is suspended its callers are not fixed.
-_RESUMABLE = 0x20 | 0x80 | 0x200  # CO_GENERATOR | CO_COROUTINE | CO_ASYNC_GENERATOR
+RESUMABLE = 0x20 | 0x80 | 0x200  # CO_GENERATOR | CO_COROUTINE | CO_ASYNC_GENERATOR
 
 
 #: How many anchors (`incidental_read`) a tracker keeps: one per cash frame
@@ -391,7 +391,7 @@ def incidental_read(path: str, own_package: str | None = None, anchor: list | No
             for mark in anchor:
                 if mark is not None and mark[0] is frame and mark[1] == own_package and mark[2] == installed:
                     return _replay(mark[3], path_nc, state)
-            if not frame.f_code.co_flags & _RESUMABLE:
+            if not frame.f_code.co_flags & RESUMABLE:
                 steps = _steps_below(frame, own_package, installed)
                 mark = (frame, own_package, installed, steps)
                 # Newest first, beside the ones before: a loop whose body
