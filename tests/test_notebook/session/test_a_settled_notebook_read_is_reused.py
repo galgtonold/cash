@@ -32,18 +32,18 @@ def _write(path: Path, code: str) -> None:
 
 def _counting(monkeypatch) -> dict[str, int]:
     seen = {"sleep": 0, "load": 0}
-    real_sleep, real_load = sd._time.sleep, sd.json.load
+    real_sleep, real_load = sd._time.sleep, sd.json.loads
 
     def sleep(seconds):
         seen["sleep"] += 1
         real_sleep(seconds)
 
-    def load(fh):
+    def load(text):
         seen["load"] += 1
-        return real_load(fh)
+        return real_load(text)
 
     monkeypatch.setattr(sd._time, "sleep", sleep)
-    monkeypatch.setattr(sd.json, "load", load)
+    monkeypatch.setattr(sd.json, "loads", load)
     return seen
 
 
@@ -89,7 +89,6 @@ def test_a_read_inside_the_tick_of_the_last_write_is_not_reused(tmp_path, monkey
 
     real_stat = os.stat
     monkeypatch.setattr(sd.os, "stat", lambda p, *a, **k: Stat() if Path(p) == nb else real_stat(p, *a, **k))
-    monkeypatch.setattr(sd, "_wait_for_notebook_save", lambda path: None)
     readers = sd.NotebookCellReaders()
     assert [c.code for c in readers.saved_file(str(nb))] == ["x = 1"]
     _write(nb, "x = 2")  # same size, same (faked) stamps

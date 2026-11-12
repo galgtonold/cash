@@ -2,7 +2,7 @@
 
 The upstream checker reads the notebook file many times per cell run (once in
 the magic, twice in the checker). Re-parsing the same unchanged file on every
-read is wasteful, and each read paid a ``_wait_for_notebook_save`` sleep — so a
+read is wasteful, and each read paid a save-settle sleep — so a
 single ``run_all`` could spend >1s just re-reading the same file.
 
 These tests pin the contract:
@@ -45,15 +45,15 @@ def _clear_cache():
 
 @pytest.fixture
 def _count_parses(monkeypatch):
-    """Count json.load calls inside server_discovery without affecting other json use."""
+    """Count json.loads calls inside server_discovery without affecting other json use."""
     counter = {"n": 0}
-    real_load = _json.load
+    real_loads = _json.loads
 
     class _Shim:
         @staticmethod
-        def load(f):
+        def loads(text):
             counter["n"] += 1
-            return real_load(f)
+            return real_loads(text)
 
     monkeypatch.setattr(sd, "json", _Shim)
     return counter

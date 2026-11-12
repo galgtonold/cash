@@ -33,6 +33,8 @@ import time as _time
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
+from ..source_reading import SETTLED_SECONDS
+
 # One backup file is one dirty editor; a workspace with many has many. Scanning
 # is bounded by how many files the user has left unsaved, which is small.
 _SCHEME_DIR = "file"
@@ -163,6 +165,25 @@ def _backup_mtime(path: Path) -> float:
         return -1.0
 
 
+#: `find_backup`'s answers, by what they depend on besides the disk: the
+#: roots, the notebook's absolute path, and the directory that path is
+#: relative to. Each holds the stat of every path its scan looked at.
+_answers: dict[
+    tuple[tuple[str, ...], str, str], tuple[tuple[tuple[str, tuple[int, ...] | None], ...], Path | None]
+] = {}
+
+
+def _signature(path: str) -> tuple[int, ...] | None:
+    """What a change to *path* moves: which file it is, its size and its
+    stamps. A folder's stamps move when an entry is added, removed or
+    renamed in it. ``None`` when there is nothing there."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+
+
 def find_backup(notebook_path: str) -> Path | None:
     """The backup for *notebook_path*, or ``None`` if there isn't one.
 
@@ -172,28 +193,78 @@ def find_backup(notebook_path: str) -> Path | None:
     right now"; picking by directory/glob order instead (the previous
     behaviour) meant an arbitrary one of them did, and could just as easily
     be the window the user is NOT looking at.
+
+    The answer is kept while nothing it rests on has moved: the stat of
+    each root, ``file`` folder and candidate the scan looked at (a missing
+    one included), so a backup that appears, goes or
+    changes makes the next call scan again. A cell run asks two or three
+    times, and the scan opens every candidate. It is kept only when every
+    one of those stamps had been left alone for ``SETTLED_SECONDS`` when
+    the scan began: a change inside a timestamp tick of the last one can
+    leave the stamps as they were.
     """
+    roots = backup_roots()
+    try:
+        key = (tuple(str(r) for r in roots), os.path.abspath(notebook_path), os.getcwd())
+    except (OSError, ValueError):
+        key = None
+    kept = _answers.get(key) if key is not None else None
+    if kept is not None and all(_signature(path) == sig for path, sig in kept[0]):
+        return kept[1]
+
+    began = _time.time_ns()
+    looked: list[tuple[str, tuple[int, ...] | None]] = []
+    complete = True
     matches: list[Path] = []
-    for root in backup_roots():
+    for root in roots:
+        looked.append((str(root), _signature(str(root))))
         try:
             if not root.is_dir():
                 continue
-            candidates = root.glob(f"*/{_SCHEME_DIR}/*")
-            for candidate in candidates:
-                uri = _read_uri(candidate)
-                if uri is None:
+            with os.scandir(root) as entries:
+                spaces = [entry.path for entry in entries if entry.is_dir()]
+            for space in spaces:
+                # Only the ``file`` folder: a workspace folder changing
+                # otherwise changes nothing here, and one that goes takes
+                # its ``file`` folder with it.
+                folder = os.path.join(space, _SCHEME_DIR)
+                looked.append((folder, _signature(folder)))
+                if looked[-1][1] is None:
                     continue
-                local = _uri_to_path(uri)
-                if local and _same_file(local, notebook_path):
-                    matches.append(candidate)
+                try:
+                    with os.scandir(folder) as entries:
+                        candidates = [Path(entry.path) for entry in entries]
+                except (FileNotFoundError, NotADirectoryError):
+                    continue
+                for candidate in candidates:
+                    looked.append((str(candidate), _signature(str(candidate))))
+                    uri = _read_uri(candidate)
+                    if uri is None:
+                        continue
+                    local = _uri_to_path(uri)
+                    if local and _same_file(local, notebook_path):
+                        matches.append(candidate)
         except OSError:
+            complete = False  # an answer from part of the backups is not one to keep
             continue
 
     if not matches:
-        return None
-    if len(matches) == 1:
-        return matches[0]
-    return max(matches, key=_backup_mtime)
+        found = None
+    elif len(matches) == 1:
+        found = matches[0]
+    else:
+        found = max(matches, key=_backup_mtime)
+
+    settled_ns = int(SETTLED_SECONDS * 1e9)
+    if (
+        key is not None
+        and complete
+        and all(sig is None or began - max(sig[3], sig[4]) > settled_ns for _, sig in looked)
+    ):
+        _answers[key] = (tuple(looked), found)
+    elif key is not None:
+        _answers.pop(key, None)
+    return found
 
 
 # The header's mtime is epoch milliseconds; os.stat gives float seconds. Compare

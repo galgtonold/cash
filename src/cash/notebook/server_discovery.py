@@ -612,50 +612,120 @@ def get_notebook_path() -> str | None:
     return _cache_not_found()
 
 
-# Tunables for the save-settle wait (see _wait_for_notebook_save).
-_SAVE_FRESH_WINDOW_S: float = 1.0  # only wait when the file changed this recently
-_SAVE_POLL_INTERVAL_S: float = 0.05  # re-stat cadence while a write is in flight
+# Tunables for reading the saved notebook (see _read_saved_notebook).
+_SAVE_FRESH_WINDOW_S: float = 1.0  # a file this recently changed may be mid-write
+_SAVE_POLL_INTERVAL_S: float = 0.05  # how long a file must hold still to count as quiet
 _SAVE_MAX_WAIT_S: float = 1.0  # hard cap so we never block a run for long
 
+#: The coarsest tick a filesystem with fine timestamps moves them in: the
+#: 15.6 ms of the Windows clock (Linux: at most 10 ms; APFS: 1 ns). A write
+#: at least this long after the last one gets other stamps.
+_STAMP_TICK_NS = 16_000_000
+#: A change stamp on a whole multiple of this comes from a filesystem whose
+#: tick is unknown here (whole seconds on HFS+ and ext3, two on FAT); a fine
+#: stamp lands on one by chance once in a hundred thousand writes or less.
+_COARSE_STAMP_NS = 10_000_000
+#: How old such a coarse stamp must be before a write is sure to move it.
+_COARSE_TICK_NS = 2_000_000_000
 
-def _wait_for_notebook_save(notebook_path: str) -> None:
-    """Block briefly while an in-flight notebook save settles, then return.
 
-    The editor executes from its in-memory model and may write the ``.ipynb`` to
-    disk slightly *after* the run begins; on a cloud-synced drive or slow I/O the
-    write can still be in progress when we read.  Reading mid-write yields stale
-    (pre-edit) cell sources, which silently breaks upstream change detection — the
-    bug this guards against.
+def _changed_ns(st: os.stat_result) -> int:
+    """When the file last changed, as its stamps tell it."""
+    return max(st.st_mtime_ns, st.st_ctime_ns)
 
-    There is no guaranteed save-before-execute to wait on (VS Code's Jupyter
-    extension has no "autosave on run"; classic Jupyter autosaves on a long
-    timer), so a fixed blind sleep is the wrong tool: when nothing is being
-    written it only adds latency, and when the write is slow a fixed sleep may be
-    too short and still read stale.  Instead, *only* when the file looks freshly
-    touched, poll until its ``(mtime, size)`` stops changing — i.e. the writer is
-    done — bounded by ``_SAVE_MAX_WAIT_S``.  A long-settled file returns at once.
+
+def _a_write_now_moves_the_stamps(st: os.stat_result, now_ns: int) -> bool:
+    """Whether every write from *now_ns* on gives the file stamps other than
+    *st*'s. A filesystem stamps a write with a clock that moves in ticks, so
+    a write inside the tick of the last one can leave mtime and ctime as
+    they were; once a whole tick has passed, it cannot. Ask with *now_ns*
+    taken before *st*, so a write between the two is a write after it."""
+    changed = _changed_ns(st)
+    tick = _STAMP_TICK_NS if changed % _COARSE_STAMP_NS else _COARSE_TICK_NS
+    return now_ns - changed >= tick
+
+
+def _read_bytes(path: str) -> bytes:
+    with open(path, "rb") as f:
+        return f.read()
+
+
+def _read_saved_notebook(notebook_path: str) -> tuple[dict, os.stat_result]:
+    """The saved notebook's JSON, from a read no write overlapped, and the
+    file's stat as that read found it.
+
+    The editor writes the ``.ipynb`` while the kernel runs; it may still be
+    writing when cash reads (a slow disk, a cloud-synced folder). A read
+    that overlaps a write returns a truncated file, a mix of two versions,
+    or the version being replaced: stale cell sources that silently break
+    upstream change detection.
+
+    So a read counts only when nothing can have written during it: the
+    file's signature (`_file_signature`: which file, its size and stamps)
+    is the same just before and just after the read, and its stamps were
+    old enough when the read began that any write would have moved them
+    (`_a_write_now_moves_the_stamps`). A file changed within that tick is
+    first left a tick, or, where the tick is unknown, watched until it
+    holds still for ``_SAVE_POLL_INTERVAL_S``. A read that does not parse
+    is retried while the file is fresh, as the writer may be part way
+    through; a stable file that still does not parse is broken. A
+    signature that moved during the read means a write landed: read again.
+    A file that settled long ago costs two stats and the read, no wait.
+    A save that has not begun by the end of the read is not one any read
+    can see; the live readers before this one carry unsaved edits.
+
+    Raises ``OSError`` (``TimeoutError`` when the file never held still
+    within ``_SAVE_MAX_WAIT_S``) or ``ValueError`` when no read counts.
     """
-    try:
-        st = os.stat(notebook_path)
-    except OSError:
-        logger.debug("Cannot stat notebook file for freshness check: %s", notebook_path)
-        return
-
-    if _time.time() - st.st_mtime >= _SAVE_FRESH_WINDOW_S:
-        return  # settled long ago — nothing in flight to wait for
-
     deadline = _time.monotonic() + _SAVE_MAX_WAIT_S
-    last = (st.st_mtime_ns, st.st_size)
-    while _time.monotonic() < deadline:
-        _time.sleep(_SAVE_POLL_INTERVAL_S)
+    quiet: tuple[int, ...] | None = None  # a signature seen unchanged across a poll
+    unparsed: tuple[int, ...] | None = None  # a stable read of it did not parse
+    failed_once = False
+
+    def pause(seconds: float) -> None:
+        if _time.monotonic() + seconds > deadline:
+            raise TimeoutError(f"{notebook_path} kept changing for {_SAVE_MAX_WAIT_S}s")
+        _time.sleep(seconds)
+
+    while True:
+        now_ns = _time.time_ns()
         try:
-            st = os.stat(notebook_path)
+            before = os.stat(notebook_path)
+            signature = _file_signature(before)
+            if signature != quiet and not _a_write_now_moves_the_stamps(before, now_ns):
+                changed = _changed_ns(before)
+                age_ns = now_ns - changed
+                if changed % _COARSE_STAMP_NS and 0 <= age_ns < _STAMP_TICK_NS:
+                    pause((_STAMP_TICK_NS - age_ns) / 1e9)  # past the tick, then look again
+                else:
+                    pause(_SAVE_POLL_INTERVAL_S)
+                    quiet = signature  # unchanged when looked at again: the writer is done
+                continue
+            data = _read_bytes(notebook_path)
+            after = os.stat(notebook_path)
+        except TimeoutError:
+            raise
         except OSError:
-            return
-        current = (st.st_mtime_ns, st.st_size)
-        if current == last:
-            return  # writer is done — file is stable
-        last = current
+            # A save that replaces the file can leave it missing or locked
+            # for a moment; one that stays so is the caller's to report.
+            if failed_once:
+                raise
+            failed_once = True
+            pause(_SAVE_POLL_INTERVAL_S)
+            continue
+        if _file_signature(after) != signature:
+            quiet = None  # a write landed during the read
+            if _time.monotonic() > deadline:
+                raise TimeoutError(f"{notebook_path} kept changing for {_SAVE_MAX_WAIT_S}s")
+            continue
+        try:
+            return json.loads(data.decode("utf-8")), after
+        except ValueError:
+            fresh = now_ns - _changed_ns(before) < _SAVE_FRESH_WINDOW_S * 1e9
+            if not fresh or signature == unparsed:
+                raise
+            unparsed = signature  # perhaps cut off mid-write: once more when it holds still
+            pause(_SAVE_POLL_INTERVAL_S)
 
 
 @dataclass(frozen=True)
@@ -805,11 +875,11 @@ def in_colab() -> bool:
 # signature alone would freeze the first read of an unsaved edit forever --
 # the file's own signature does not change again until the user actually
 # saves, even though the backup keeps changing underneath it as they keep
-# typing. Second, a "no backup found" result is never cached (see the miss
-# path below): unlike a missing file, which os.path.exists rules out in one
-# cheap stat, "no backup" can only be established by the directory scan
-# itself, so there is no cheap signature to invalidate on and caching it
-# would risk never noticing a backup that appears later in the session.
+# typing. Second, a "no backup found" result is not cached here (see the
+# miss path below): "no backup" rests on every folder of the backup tree,
+# not on one file's signature. `find_backup` keeps its own answer against
+# the stat of each path its scan looked at, so asking again costs those
+# stats rather than the scan, and a backup that appears later is found.
 
 
 def _stat_sig(path: str | Path) -> tuple[int, ...] | None:
@@ -827,21 +897,18 @@ def _file_signature(st: os.stat_result) -> tuple[int, ...]:
     return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
 
 
-#: Nanoseconds in one second: the tick of a filesystem that stamps whole seconds.
-_SECOND_NS = 1_000_000_000
-
-
 def _settled(st: os.stat_result) -> bool:
     """Whether a read of the file as *st* describes it can stand for every
     later read that finds the same `_file_signature`: no write after it can
-    leave the stamps as they are. On a filesystem stamping whole seconds a
-    second write in the same second does, so a read taken in the second of
-    the file's last change is not reused; a finer stamp moves with each
-    write (`_wait_for_notebook_save` has seen it hold still first)."""
-    changed = max(st.st_mtime_ns, st.st_ctime_ns)
-    if changed % _SECOND_NS:
+    leave the stamps as they are. On a filesystem with coarse stamps (whole
+    seconds, two on FAT) a second write in the same tick does, so a read
+    taken within a tick of the file's last change is not reused; a fine
+    stamp moves with each write (`_read_saved_notebook` read it only once
+    a tick had passed, or the file had held still for longer)."""
+    changed = _changed_ns(st)
+    if changed % _COARSE_STAMP_NS:
         return True
-    return _time.time_ns() >= changed + _SECOND_NS
+    return _time.time_ns() >= changed + _COARSE_TICK_NS
 
 
 def _in_vscode() -> bool:
@@ -878,9 +945,9 @@ class NotebookCellReaders:
         # the cache can never serve content for a different file state -- any
         # save bumps the signature, forcing a fresh read. This collapses the
         # many reads per cell run (the magic reads once; the upstream checker
-        # reads twice) into a single parse per file state, and means the
-        # save-settle wait runs at most once per change instead of once per
-        # read.
+        # reads twice) into a single parse per file state, and means a
+        # freshly saved file is read and checked at most once per change
+        # instead of once per read.
         #: ``path -> (signature, cells)``, for a read `_settled` says stands.
         self._file_cells: dict[str, tuple[tuple[int, ...], tuple[NotebookCell, ...]]] = {}
         # The last Colab answer: (monotonic time, cells or None for a failure).
@@ -1068,26 +1135,16 @@ class NotebookCellReaders:
                 return cached[1]
 
         try:
-            # Reached only on a new/changed file state: let an in-flight save settle
-            # before reading so we never parse a half-written (stale) notebook.
-            _wait_for_notebook_save(notebook_path)
-
-            with open(notebook_path, encoding="utf-8") as f:
-                nb = json.load(f)
-
+            # Reached only on a new/changed file state: a read no write
+            # overlapped, so never a half-written (stale) notebook.
+            nb, st2 = _read_saved_notebook(notebook_path)
             cells = _code_cells(nb.get("cells", []))
         except (OSError, ValueError, AttributeError, TypeError) as e:
-            # Unreadable, not JSON, not UTF-8, or not a notebook's shape.
+            # Unreadable, kept changing, not JSON, not UTF-8, or not a notebook's shape.
             logger.error("Error reading notebook file: %s", e)
             return ()
 
-        # Key by the POST-wait file state — the wait may have let a newer save land —
-        # so subsequent reads of the now-settled file hit the cache.
-        try:
-            st2 = os.stat(notebook_path)
-        except OSError:
-            logger.debug("Cannot stat notebook file to cache cells: %s", notebook_path)
-            return cells
+        # Key by the file state the read saw, so later reads of it hit the cache.
         if _settled(st2):
             self._file_cells[notebook_path] = (_file_signature(st2), cells)
         else:
