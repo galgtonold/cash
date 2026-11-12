@@ -60,6 +60,9 @@ logger = logging.getLogger(__name__)
 #: How many frames above a read `FileAccessTracker._reader_of` looks for the anchor.
 _READER_FRAMES = 64
 
+#: How many readers `FileAccessTracker._last_readers` keeps.
+_READERS_KEPT = 4
+
 
 def install_read_watch() -> None:
     """Watch reads from now on, not only inside cached calls.
@@ -187,13 +190,15 @@ class FileAccessTracker:
         # same frame stops there. Dropped when the block ends, so the frame
         # is not kept alive past it.
         self.credit_anchor: tuple[Any, tuple[Any, ...]] | None = None
-        # The same for `incidental_read`'s walk: what it found below the last
-        # anchor frame. One slot, replaced as a whole, so pool threads share it.
+        # The same for `incidental_read`'s walk: what it found below each of
+        # the last anchor frames, newest first. Replaced as a whole, so pool
+        # threads share it.
         self.incidental_anchor: list = [None]
-        # (`_reader_of` the last read, ``sys.path`` then, why it was not the
-        # user's or None, the codes it was credited to): the next read from
-        # the same folder by the same frames is answered from it.
-        self._last_reader: tuple | None = None
+        # (`_reader_of` a recent read, ``sys.path`` then, why it was not the
+        # user's or None, the codes it was credited to), newest first, one
+        # per reader (`_READERS_KEPT`): the next read from the same folder
+        # by the same frames is answered from it. Replaced as a whole.
+        self._last_readers: tuple[tuple, ...] = ()
         # Folder -> its real path, for reads outside a cell run, which has
         # its own memo (`realpath_of_read_this_run`); dropped when the block
         # ends, so a link re-pointed between two calls is resolved anew.
@@ -318,7 +323,7 @@ class FileAccessTracker:
         self.credit_anchor = None
         self._folders = {}
         self.incidental_anchor = [None]
-        self._last_reader = None
+        self._last_readers = ()
         if self._native_windows:
             # Before the parent stack pops: the reads pass up like any other.
             native_reads.close_window(self._native_windows.pop(), self)
@@ -402,15 +407,24 @@ class FileAccessTracker:
                 pass
         return self.accessed_files | kept if kept else self.accessed_files
 
-    def inputs_changed_since_read(self, reuse_end_stats: bool = False) -> list[str]:
+    def inputs_changed_since_read(self, reuse_end_stats: bool = False, reuse_checked: bool = False) -> list[str]:
         """Regular files whose stat moved between their first read and now,
         and folders listed whose stat moved since the listing.
 
         With *reuse_end_stats*, a file whose deferred digest was taken as the
         block ended is compared by the stat that digest was taken under
         (`end_stats`), not a stat of its own: for the first of a statement's
-        two checks, with only cash's code run since. The last check before
-        an entry is written always stats again.
+        two checks, with only cash's code run since.
+
+        With *reuse_checked*, a file the previous check found as read is
+        taken by the stat that check took (`checked_stats`), not a stat of
+        its own: for the last check before an entry is written. The entry
+        then records that stat, the one the value was found built from, so
+        a write landing after it -- by a pickling hook of the user's, or
+        another process -- leaves a stat the entry does not hold, and the
+        entry is never fresh for the new content. Not while work the block
+        started may still be running, or outlived it: that work may still
+        be reading what the value is built from.
 
         A folder the block changed an entry of itself (`touched_dirs`) is
         left out: a function that lists a folder and writes its output into
@@ -427,11 +441,16 @@ class FileAccessTracker:
         taken, self.snapshot_stats = self.snapshot_stats, None
         if taken is None:
             taken = {}
+        earlier = self.checked_stats
+        if not reuse_checked or self._work_running or self.work_outlived_block:
+            earlier = {}
         checked: dict[str, os.stat_result] = {}
         self.checked_stats = checked
         ended, self.end_stats = self.end_stats, {}
         if not reuse_end_stats:
             ended = {}
+        if earlier:
+            ended = {**ended, **earlier} if ended else earlier
         # Over copies: a pool thread the block started can still be reading
         # after it ended, adding to these while they are walked.
         for path, before in list(self.read_stats.items()):
@@ -602,17 +621,17 @@ class FileAccessTracker:
             self._add_created_read(abs_path, self._unresolved_spelling(path, abs_path))
             return found
         reader = self._reader_of(abs_path)
-        last = self._last_reader
-        if reader is not None and last is not None and _same_reader(last[0], reader) and last[1] == sys.path:
-            # A read from the same folder, by the same code, as the last one
+        last = self._recent_reader(reader) if reader is not None else None
+        if last is not None:
+            # A read from the same folder, by the same code, as a recent one
             # (a loop over a folder's files): classified and credited as it was.
             why, credited = last[2], last[3]
         else:
             why, credited = incidental_read(abs_path, self._own_package, self.incidental_anchor), None
         if why is not None:
             logger.debug("[TRACKER] Ignoring %s read %r", why, abs_path)
-            if reader is not None:
-                self._last_reader = (reader, list(sys.path), why, ())
+            if reader is not None and last is None:
+                self._note_reader((reader, list(sys.path), why, ()))
             return found
         self.add_tracked(abs_path, lstat=read_lstat)
         if abs_path not in self.read_stats and os.path.isabs(abs_path):
@@ -623,42 +642,65 @@ class FileAccessTracker:
             else:
                 credited = credit_read_to_stack(abs_path, self)
                 if reader is not None:
-                    self._last_reader = (reader, list(sys.path), None, credited)
+                    self._note_reader((reader, list(sys.path), None, credited))
         except Exception:  # attribution is an aid; the read counts regardless
-            self._last_reader = None
+            self._last_readers = ()
             logger.debug("[TRACKER] Could not credit %r to the stack", abs_path, exc_info=True)
         twin = self._unresolved_spelling(path, abs_path)
         if twin is not None:
             self.add_tracked(twin)
         return found
 
+    def _recent_reader(self, reader: tuple) -> tuple | None:
+        """The entry of `_last_readers` for *reader*, under ``sys.path`` as
+        it is now, or None."""
+        for last in self._last_readers:
+            if _same_reader(last[0], reader) and last[1] == sys.path:
+                return last
+        return None
+
+    def _note_reader(self, entry: tuple) -> None:
+        """Keep *entry* (see `_last_readers`) first, beside the others."""
+        self._last_readers = (entry, *self._last_readers[: _READERS_KEPT - 1])
+
     def _reader_of(self, abs_path: str) -> tuple | None:
         """What `incidental_read` and `credit_read_to_stack` make of a read of
         *abs_path* depends on its folder and the frames above the read, up
-        to the anchor frame `incidental_read` keeps: this read's folder, the
+        to an anchor frame `incidental_read` keeps: this read's folder, the
         code of each of those frames, and the anchor frame itself. A frame's
         callers do not change while it runs, so a read with the same answer
         here, ``sys.path`` unchanged, is classified and credited as the last
-        one was. None when that cannot be told: no anchor yet, or one not
-        reached, a frame of a package metadata or resource API (whose verdict
-        asks whether the file itself exists), or a folder that is an import
-        folder on ``sys.path`` (a module file there is a package of its own).
+        one was. The walk stops at the first anchor frame it meets: one that
+        is on the stack is running. None when that cannot be told: no anchor
+        yet, or none reached, a frame of a package metadata or resource API
+        (whose verdict asks whether the file itself exists), or a folder that
+        is an import folder on ``sys.path`` (a module file there is a package
+        of its own).
+
+        Any anchor kept, not only the newest: a loop body reading by ``open``
+        and through cash's wrapper of a reader leaves the wrapper's frame
+        newest, gone by the next ``open``, and the loop's reads were walked
+        and credited in full, each of them.
         """
-        mark = self.incidental_anchor[0]
-        if mark is None or mark[1] != self._own_package:
-            return None
-        end = mark[0]
-        if any(step[0] == "resource" for step in mark[3]):
+        own = self._own_package
+        ends = {id(mark[0]): mark for mark in list(self.incidental_anchor) if mark is not None and mark[1] == own}
+        if not ends:
             return None
         codes = []
         frame = sys._getframe(2)
-        while frame is not end:
+        while True:
             if frame is None or len(codes) == _READER_FRAMES:
                 return None
+            mark = ends.get(id(frame))
+            if mark is not None and mark[0] is frame:
+                break
             if module_kind(frame)[0]:
                 return None
             codes.append(frame.f_code)
             frame = frame.f_back
+        if any(step[0] == "resource" for step in mark[3]):
+            return None
+        end = frame
         folder = abs_path[: abs_path.rfind("/") + 1]
         if not folder or normcase_path(folder) in import_folders():
             return None
