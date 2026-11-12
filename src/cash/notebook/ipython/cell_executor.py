@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import dis
 import sys
 import types
 import uuid
@@ -77,7 +78,7 @@ from ...tracking.randomness import get_drawing_rng_modules, rng_lineage_fingerpr
 from .._protocols import ShellProtocol
 from ..background_threads import BackgroundThreads
 from ..cache_status import CacheStatus
-from ..compiled_source import statement_place
+from ..compiled_source import is_cash_filename, statement_place
 from ..control_structures import contains_top_level_await, is_control_structure
 from ..plot_outputs import PLOT_FACTS
 from ..statement import ProcessResult
@@ -189,10 +190,16 @@ def _changed_by_a_failed_step(
     node: ast.stmt,
     namespace: dict[str, Any] | None = None,
     resolve_source: Callable[[str], str | None] | None = None,
+    evaluated: ast.stmt | None = None,
 ) -> set[str]:
     """The names statement *node* may have changed before it raised: what it
     changes in place (``lst.append(x)``), and for a loop or branch also what
     its body binds, since part of it ran.
+
+    *evaluated* is given for an assignment that raised before its first
+    write (``df['r'] = df['typo'] * 2``, `_evaluated_before_its_writes`):
+    what it evaluated by then, the only part of it that can have changed
+    anything. Its targets are as they were.
 
     With *namespace* and *resolve_source*, also what the functions it calls
     change: an argument a helper fills (``proc.fill(tot, data)``), a global a
@@ -201,6 +208,8 @@ def _changed_by_a_failed_step(
     name the statement hands to a call, or calls a method on, may have
     changed.
     """
+    if evaluated is not None:
+        return _changed_by_a_failed_step(evaluated, namespace, resolve_source)
     try:
         changed = set(analyze_statement(ast.unparse(node), node).all_mutated_vars)
     except Exception:  # noqa: BLE001 - an analysis of arbitrary code: assume nothing changed in place
@@ -210,6 +219,87 @@ def _changed_by_a_failed_step(
     if namespace is not None and resolve_source is not None:
         changed |= _changed_by_its_callees(node, namespace, resolve_source)
     return changed
+
+
+#: Instructions that write into an object a statement holds: an item or
+#: attribute store or delete, and an augmented assignment's in-place operator
+#: (``INPLACE_*`` up to 3.10, ``BINARY_OP`` with ``+=`` and the like after).
+_WRITES = frozenset({"STORE_SUBSCR", "STORE_ATTR", "STORE_SLICE", "DELETE_SUBSCR", "DELETE_ATTR", "DELETE_SLICE"})
+
+
+def _evaluated_before_its_writes(node: ast.stmt, raised: BaseException) -> ast.stmt | None:
+    """For an assignment *node* that raised *raised* before it wrote anything,
+    the expressions it evaluated, as one statement; otherwise None.
+
+    Where it stopped is read off the traceback: the frame of the statement's
+    own code (compiled under a cash filename, a module's code) and the
+    instruction that raised. Its targets are written only after every
+    expression in it was evaluated, so when no write instruction comes before
+    that one, its targets are as they were. None whenever that cannot be
+    shown: not a plain assignment, no such frame, or a write at or before it.
+    """
+    if not isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)) or node.value is None:
+        return None
+    tb = raised.__traceback__
+    while tb is not None:
+        code = tb.tb_frame.f_code
+        if is_cash_filename(code.co_filename) and code.co_name == "<module>":
+            break
+        tb = tb.tb_next
+    if tb is None:
+        return None
+    try:
+        for ins in dis.get_instructions(code):
+            if ins.offset > tb.tb_lasti:
+                break
+            if (
+                ins.opname in _WRITES
+                or ins.opname.startswith("INPLACE_")
+                or (ins.opname == "BINARY_OP" and ins.argrepr.endswith("="))
+            ):
+                return None
+    except Exception:  # noqa: BLE001 - unreadable code: as if it wrote
+        return None
+    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+    parts: list[ast.expr] = [node.value]
+    for target in targets:
+        parts.extend(_evaluated_in_target(target, loaded=isinstance(node, ast.AugAssign)))
+    expr = ast.fix_missing_locations(ast.Expr(value=ast.Tuple(elts=parts, ctx=ast.Load())))
+    try:
+        # Parsed again from its text, so every analysis reads it as written.
+        return ast.parse(ast.unparse(expr)).body[0]
+    except SyntaxError:
+        return None
+
+
+def _evaluated_in_target(target: ast.expr, *, loaded: bool) -> list[ast.expr]:
+    """The expressions an assignment evaluates in *target* before it writes
+    it: the object and index of an item, the object of an attribute, and
+    with *loaded* (an augmented assignment) the target's own value."""
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return [part for elt in target.elts for part in _evaluated_in_target(elt, loaded=loaded)]
+    if isinstance(target, ast.Starred):
+        return _evaluated_in_target(target.value, loaded=loaded)
+    if isinstance(target, ast.Subscript):
+        parts = [target.value, *_index_parts(target.slice)]
+    elif isinstance(target, ast.Attribute):
+        parts = [target.value]
+    else:
+        parts = []
+    if loaded:
+        load = ast.parse(ast.unparse(target), mode="eval").body
+        parts.append(load)
+    return parts
+
+
+def _index_parts(index: ast.expr) -> list[ast.expr]:
+    """The expressions an index evaluates: a slice's bounds and step, each
+    part of a tuple index."""
+    if isinstance(index, ast.Slice):
+        return [part for part in (index.lower, index.upper, index.step) if part is not None]
+    if isinstance(index, ast.Tuple):
+        return [part for elt in index.elts for part in _index_parts(elt)]
+    return [index]
 
 
 def _changed_by_its_callees(
@@ -379,6 +469,10 @@ class _CellRun:
     ttl: int | None = None
     #: The cell as IPython's transform writes it, when it holds IPython syntax.
     ipython: IPythonCell | None = None
+    #: For a statement that raised before writing to its targets, what it
+    #: evaluated (`_evaluated_before_its_writes`), read off the traceback
+    #: before the error display replaces it.
+    evaluated_when_raised: ast.stmt | None = None
 
 
 @dataclass(frozen=True)
@@ -1320,11 +1414,15 @@ class CellExecutor:
                     # matches the run that made it: a re-run must rebuild it, and
                     # a cell below keeps it as the failed run left it.
                     left = _changed_by_a_failed_step(
-                        node, self.shell.user_ns, self._statement_processor.resolve_live_function_source
+                        node,
+                        self.shell.user_ns,
+                        self._statement_processor.resolve_live_function_source,
+                        evaluated=cell.evaluated_when_raised,
                     )
                     for name in left:
                         self.tracking_state.lineage.discard(name)
                     self.tracking_state.failed_cell_names[digest] = frozenset(left)
+                    self._note_what_the_cell_left(tree.body[:i], left)
                     # The plan skipped or restored statements by the version the
                     # whole cell ends with; a name a statement at or after this one
                     # writes holds a version a plain run never reached here.
@@ -1357,6 +1455,21 @@ class CellExecutor:
                 row.pop(PLOT_FACTS, None)
 
         return (all_metrics, buffered_result_outputs, badge_render_time)
+
+    def _note_what_the_cell_left(self, ran: list[ast.stmt], left: set[str]) -> None:
+        """Tell the upstream check what the cell that just raised may have
+        changed in place: what the statements before the failed one (*ran*)
+        change, and *left*, what the failed one may have changed before it
+        raised. Every other value it starts from is as the cells above left
+        it, and its next run takes it as it is."""
+        checker = self._upstream_checker
+        if checker is None:
+            return
+        changed = set(left)
+        resolve = self._statement_processor.resolve_live_function_source
+        for node in ran:
+            changed |= _stored_names(node) | _changed_by_a_failed_step(node, self.shell.user_ns, resolve)
+        checker.note_cell_raised(changed)
 
     def _drop_what_a_failed_run_left(self, names: set[str], failed: int) -> None:
         """Forget the lineage of *names*, which the cell left in a state no
@@ -1421,6 +1534,10 @@ class CellExecutor:
                 # An interrupt and a ``sys.exit()`` end the cell as an error
                 # does in IPython: shown, and the cell's reply says error.
                 # What it printed before the interrupt comes first, as in plain.
+                try:
+                    cell.evaluated_when_raised = _evaluated_before_its_writes(node, e)
+                except Exception:  # noqa: BLE001 - unread: as if it wrote, never in place of the cell's error
+                    cell.evaluated_when_raised = None
                 show_unshown_output(e)
                 self._finalize_error_badge(e, cell, node)
                 raise
