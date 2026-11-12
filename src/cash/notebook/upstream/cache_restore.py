@@ -480,16 +480,16 @@ class CacheRestorer:
         goes into the live object (`in_place.identity_kept`).
 
         A copy bound where something points at the live object (a weak
-        reference, an ``id()`` key: ``bound_copies``) or where another
+        reference, an ``id()`` key: ``bound_copies``), unless the stored
+        state can be written into it (`in_place.copies_kept`), or where another
         variable or container holds the object the statement changes in
         place or stores with its outputs (``keep = actions`` before a loop
         filling ``actions`` is restored) would not be that object: the
         statement runs instead."""
         user_ns = self.shell.user_ns
-        for name in metadata.get("bound_copies") or ():
-            if name in user_ns and not in_place.bound_as_a_copy(user_ns[name], user_ns):
-                in_place.forget_routed(user_ns[name])
-                return f"something points at {name} now", set()
+        kept, why = in_place.copies_kept(metadata.get("bound_copies") or (), variables_to_restore, user_ns)
+        if why is not None:
+            return why, set()
         holders = set(metadata.get("holders") or ())
         names = {
             name
@@ -503,15 +503,16 @@ class CacheRestorer:
             )
         except (SyntaxError, ValueError, TypeError):
             return "cash could not read what it changes in place", set()
-        into: set[str] = set()
+        into: set[str] = set(kept)
         if not is_one_structure(tree):
             # As at a hit: what it wrote into keeps its object.
             written = in_place.written_names(tree, mutated)
             written -= {*(metadata.get("restored_into") or ()), *(metadata.get("bound_copies") or ()), *holders}
             if written:
-                into, why = in_place.identity_kept(written, variables_to_restore, user_ns)
+                found, why = in_place.identity_kept(written, variables_to_restore, user_ns)
                 if why is not None:
                     return why, set()
+                into |= found
         keep = (holders | mutated) & names
         if not keep:
             return None, into

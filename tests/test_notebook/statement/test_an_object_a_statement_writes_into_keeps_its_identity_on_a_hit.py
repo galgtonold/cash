@@ -108,3 +108,34 @@ def test_a_copy_is_still_bound_when_nothing_holds_the_object_by_identity(cash_ma
             run_cash_cell(cash_magics, cell, cells=cells)
     assert _statuses(cash_magics).get("o.x = 5") == CacheStatus.RESTORED
     assert cash_magics.shell.user_ns["o"].x == 5
+
+
+def test_a_loop_whose_rest_ran_as_one_unit_keeps_its_array_on_a_hit(cash_magics, cash_instance, monkeypatch):
+    """The loop case above, its rest run as one unit, as a busy machine
+    runs it once its first passes measured cheap: the unit bound ``arr`` to
+    the stored copy, and with ``reg = {id(arr): 'a'}`` taken since, every hit
+    refused it and the loop ran each time. The stored state is written into
+    the live array instead, so it is served and keeps its object."""
+    from cash.notebook.control_structures import single_unit_policy
+
+    monkeypatch.setattr(single_unit_policy, "passes_were_cheap", lambda shares: len(shares) >= 5)
+    monkeypatch.setattr(single_unit_policy, "rest_worth_one_unit", lambda overheads, rest: rest > 0 and bool(overheads))
+    cash_instance.config.min_execution_time_to_cache_seconds = 0.0
+    cash_instance.config.call_cost_floor_seconds = 0.0
+    ns = cash_magics.shell.user_ns
+    body = "for i in range(10):\n    arr[i] = i + 1"
+    cells = [MAKE, body]
+    for cell in cells:
+        run_cash_cell(cash_magics, cell, cells=cells)
+
+    cells = [MAKE, "reg = {id(arr): 'a'}", body, "r = reg.get(id(arr)) == 'a' and arr[9] == 10"]
+    for _ in range(2):
+        for cell in cells:
+            if cell == body:
+                held = weakref.ref(ns["arr"])
+            run_cash_cell(cash_magics, cell, cells=cells)
+            if cell == body:
+                statuses = set(_statuses(cash_magics).values())
+                assert held() is ns["arr"]
+        assert bool(ns["r"]) is True
+    assert statuses == {CacheStatus.RESTORED}, statuses
