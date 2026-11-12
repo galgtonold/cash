@@ -130,6 +130,10 @@ class InLoopChanges:
         key = loop_watch_hash(code)
         verdict = self._verdict(key)
         if verdict is not None:
+            # A name it holds that is no longer a candidate (recorded before
+            # the loop's analysis watched what the name is bound to instead,
+            # `_bound_first`) says nothing about the loop.
+            verdict &= candidates
             # Learned again on new inputs: what the loop hands straight to
             # library code, not what it hands a helper (`rewatch_exempt`).
             candidates -= rewatch_exempt(ast.Module(body=[node], type_ignores=[]), user_ns, resolve_source)
