@@ -61,10 +61,10 @@ def test_a_frame_a_hit_refused_is_walked_for(cash_magics, mock_shell, monkeypatc
     assert len(walks) == 1
 
 
-def test_a_frame_held_by_its_id_is_written_into_after_one_refused_hit(cash_magics, mock_shell):
+def test_a_frame_held_by_its_id_is_written_into_on_its_first_hit(cash_magics, mock_shell):
     """Routed with no walk, the first entry binds the frame to its copy; the
-    hit refuses it, and the run after stores the frame to be written into,
-    which the next hit does, keeping the frame the ``id()`` finds."""
+    hit finds the frame held by its ``id()`` and writes the stored state into
+    the live frame, keeping the frame the ``id()`` finds."""
     make = MAKE + "\nheld = {id(df): 'df'}"
     cells = [make, LOOP]
     statuses = []
@@ -73,7 +73,7 @@ def test_a_frame_held_by_its_id_is_written_into_after_one_refused_hit(cash_magic
         run_cash_cell(cash_magics, LOOP, cells=cells)
         statuses.append(str(cash_magics._last_cell_metrics["statements"][-1]["status"]))
 
-    assert statuses == ["COMPUTED", "COMPUTED", "RESTORED"]
+    assert statuses == ["COMPUTED", "RESTORED", "RESTORED"]
     df = mock_shell.user_ns["df"]
     assert mock_shell.user_ns["held"].get(id(df)) == "df"
     assert float(df["b"].sum()) == 2 * sum(range(3000))
