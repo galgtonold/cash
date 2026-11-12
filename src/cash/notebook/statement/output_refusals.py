@@ -16,7 +16,15 @@ from cash._user_attrs import attribute_or
 
 from ...analysis.cacheability_decision import identity_coupled_reason
 from ..consumables import is_consumable_unrestorable
-from ..shared_objects import GaveUp, attrs_copied_apart, output_history, refers_back, share_group, shared_names
+from ..shared_objects import (
+    GaveUp,
+    attrs_copied_apart,
+    check_walk_budget,
+    output_history,
+    refers_back,
+    share_group,
+    shared_names,
+)
 from .derivation_edges import is_uncacheable_alias
 from .identity_holders import identity_held_reason
 from .run import MEMO_ANSWERS_NAME
@@ -187,6 +195,12 @@ def _value_refusal(
             reason = refusal(out, value) if value is not None else None
             if reason is not None:
                 return reason
+        # Within the share check's budget (`walk_budget`), spent already:
+        # the check gives up here, not after the identity walk too. A frame
+        # of 87,000 sessions shared with the list they came from spent it
+        # on the alias check, then read every record again for ids, 0.4 to
+        # 1.1 s, to give up at the share check's first step (student_8).
+        check_walk_budget()
     return None
 
 

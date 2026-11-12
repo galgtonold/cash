@@ -2067,7 +2067,11 @@ def referring_names(
         stop.add(id(following))
         for obj in referrers:
             key = id(obj)
-            if key in seen or key in stop or instance_of(obj, (types.FrameType, types.ModuleType)):
+            if (
+                key in seen
+                or key in stop
+                or (type(obj) not in _NO_FRAME and instance_of(obj, (types.FrameType, types.ModuleType)))
+            ):
                 continue
             seen.add(key)
             names.update(by_id.get(key, ()))
@@ -2076,6 +2080,12 @@ def referring_names(
         del referrers, args
         frontier[:] = following
     return names, not frontier
+
+
+#: Builtin containers, no frame or module whatever they hold: told by their
+#: exact type, where `instance_of` cost a call per referrer (87,000 session
+#: tuples of student_8's, a tenth of a second a climb).
+_NO_FRAME = frozenset((tuple, list, dict, set, frozenset))
 
 
 @dataclasses.dataclass
