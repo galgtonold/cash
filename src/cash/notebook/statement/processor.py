@@ -1714,6 +1714,8 @@ class StatementProcessor:
             hit_result = self._serve_hit(run, cached_data, metadata, unseeded_fits)
             if hit_result is not None:
                 return hit_result
+            if run.bound_copies:
+                self._mutation_routing.reroute_refused(run)
 
         self._not_rebuilt(run)
         if not run.mut_record and not is_control_body(run.code):
