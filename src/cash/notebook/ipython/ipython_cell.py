@@ -20,9 +20,9 @@ import ast
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from ...analysis.code_analyzer import CodeAnalyzer, calls_ipython
+from ...analysis.code_analyzer import CodeAnalyzer, calls_ipython, parse_cell_source
 
-__all__ = ["CellMagic", "IPythonCell", "ipython_cell"]
+__all__ = ["CellMagic", "IPythonCell", "ipython_cell", "runs_no_user_code"]
 
 #: The cell magics whose body cash runs from inside the magic.
 _WRAPPING_MAGICS = frozenset({"time", "prun"})
@@ -107,6 +107,88 @@ def ipython_cell(raw_cell: str, transform: Callable[[str], str]) -> IPythonCell 
     if magic is None and all(_is_magic_line(node) for node in tree.body):
         return None
     return IPythonCell(transformed, tree, magic)
+
+
+#: Line magics that run none of the user's Python and bind or change no name
+#: in the namespace: packages, the working directory, the environment and
+#: listings. ``%run``, ``%time``, ``%store -r``, ``%reset``, ``%load_ext``
+#: run code or change names; ``%whos`` and ``%pinfo`` call a value's own
+#: ``repr`` or attributes. They stay off this list.
+_INERT_LINE_MAGICS = frozenset(
+    {
+        "pip",
+        "conda",
+        "mamba",
+        "micromamba",
+        "uv",
+        "pwd",
+        "cd",
+        "env",
+        "ls",
+        "ll",
+        "who",
+        "who_ls",
+        "lsmagic",
+        "magic",
+        "history",
+        "hist",
+    }
+)
+
+
+def runs_no_user_code(raw_cell: str, transform: Callable[[str], str]) -> bool:
+    """Whether IPython, running *raw_cell*, provably runs none of the user's
+    Python and binds no name, for a cell the upstream check cannot read.
+
+    That is a cell whose text, after IPython's own input transform
+    (*transform*: magics, automagic, shell escapes), does not parse: IPython
+    shows the SyntaxError before it runs a statement. Or a cell that is a
+    single line magic written without its ``%`` (automagic: ``pip install
+    x``) from :data:`_INERT_LINE_MAGICS`, which IPython runs just as it runs
+    the same line with its ``%``.
+
+    A cell the upstream check reads (``%cd x`` with its ``%`` included) is
+    not this function's: False, as for anything else not proved here.
+    """
+    if parse_cell_source(raw_cell) is not None:
+        return False
+    try:
+        transformed = transform(raw_cell)
+    except SyntaxError:
+        return True  # IPython shows it and runs nothing
+    except Exception:  # noqa: BLE001 - not proved; the caller takes its usual path
+        return False
+    try:
+        tree = CodeAnalyzer.parse_cell(transformed)
+    except SyntaxError:
+        return True
+    except Exception:  # noqa: BLE001 - a null byte: not proved
+        return False
+    return bool(tree.body) and all(_is_inert_magic(node) for node in tree.body)
+
+
+def _is_inert_magic(node: ast.stmt) -> bool:
+    """Whether *node* is ``get_ipython().run_line_magic('<name>', '<line>')``
+    on its own, *name* one of :data:`_INERT_LINE_MAGICS` and *line* naming no
+    Python to expand."""
+    if not isinstance(node, ast.Expr):
+        return False
+    call = node.value
+    if not (
+        isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and call.func.attr == "run_line_magic"
+        and isinstance(call.func.value, ast.Call)
+        and isinstance(call.func.value.func, ast.Name)
+        and call.func.value.func.id == "get_ipython"
+        and len(call.args) == 2
+        and all(isinstance(arg, ast.Constant) and isinstance(arg.value, str) for arg in call.args)
+    ):
+        return False
+    name, line = (arg.value for arg in call.args)  # type: ignore[attr-defined]
+    # IPython expands ``{expr}`` and ``$name`` in the line before the magic
+    # sees it (``var_expand``), evaluating the user's Python.
+    return name in _INERT_LINE_MAGICS and "{" not in line and "$" not in line
 
 
 def _rehooks_cash(line: str) -> bool:

@@ -87,7 +87,7 @@ from ..tracking_state import TrackingState
 from ._types import PipelineCompleted, PipelineSyntaxError, RunInstead
 from .autoreload_hook import in_place_reload, run_autoreload_now
 from .cell_count import running_cell_count
-from .ipython_cell import CellMagic, IPythonCell, ipython_cell
+from .ipython_cell import CellMagic, IPythonCell, ipython_cell, runs_no_user_code
 from .notifications import (
     function_change_rows,
     module_load_failed_row,
@@ -650,6 +650,19 @@ class CellExecutor:
         # 3. Module change detection (must precede upstream check)
         pre_upstream_metrics = self._detect_module_changes(raw_cell)
         self._raise_failed_reload(raw_cell, badge_display_id, pre_upstream_metrics, hook_start, timing_breakdown)
+
+        # A cell IPython will only refuse (a SyntaxError) or run as a magic
+        # that touches no Python (automagic ``pip install x``) needs nothing
+        # from above. Through the upstream check it failed to parse and ran
+        # as written (`RunInstead`), which fingerprints every tracked value
+        # before and after: 60 s and more a cell with a big list of frames,
+        # for an error plain Python shows in 10 ms. It goes the way of a cell
+        # whose own parse fails below, as the same line with its ``%`` does.
+        # The transform is looked up only for a cell the upstream check
+        # cannot read: most cells never need it.
+        if runs_no_user_code(raw_cell, lambda cell: self.shell.transform_cell(cell)):
+            self._badges.close(badge_display_id)
+            return PipelineSyntaxError()
 
         # 4. Upstream resolution
         upstream_result = self._upstream.resolve(

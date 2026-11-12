@@ -83,6 +83,9 @@ class TestVSCodeDuplicates:
     def test_syntax_error_handling(self, mock_analyze):
         """Test that SyntaxError in user code is delegated to original run_cell."""
         mock_analyze.side_effect = SyntaxError("invalid syntax")
+        # IPython's transform leaves plain Python as it is: the cell does not
+        # parse after it either, so cash hands it to IPython untouched.
+        self.shell.transform_cell = lambda cell: cell
 
         cell_content = "if True \n print('missing colon')"
 
