@@ -1635,6 +1635,72 @@ def owners_sharing(
     return widened
 
 
+def held_only_by_names(name: str, user_ns: Mapping[str, Any], known: Iterable[Any] = ()) -> frozenset[str] | None:
+    """The variables bound to *name*'s value, when they are the only
+    things that share an object with it; None when that cannot be shown.
+
+    Shown for a value that holds no object of its own anything could hold
+    (`_holds_no_object`: a list, tuple, set or dict of plain values, or a
+    numpy array of numbers that owns its memory), and that nothing refers
+    to but *user_ns* and the containers in *known* (cash's own): its
+    referrers are read (`gc.get_referrers`) and their references to it
+    must add up to its reference count, so a holder the collector does not
+    track (a numpy array of objects) leaves one over and answers None.
+    Such a value shares an object only with the names bound to it: a
+    change through it reaches nothing else, and nothing else reaches it.
+    """
+    value = user_ns.get(name)
+    if value is None or not _holds_no_object(value):
+        return None
+    known_ids = {id(user_ns), *map(id, known)}
+    # No closure over *value* below: a cell holding it would be one more
+    # referrer.
+    counted = 0
+    referrers = gc.get_referrers(value)
+    try:
+        for referrer in referrers:
+            if id(referrer) not in known_ids:
+                return None
+            counted += list(map(id, gc.get_referents(referrer))).count(id(value))
+    finally:
+        del referrers
+    if sys.getrefcount(value) - counted != _OWN_LOOK_REFS:
+        return None
+    key = id(value)
+    return frozenset(other for other, bound in list(user_ns.items()) if id(bound) == key)
+
+
+def _holds_no_object(value: Any) -> bool:
+    """Whether *value* holds no object another value could hold too: a
+    list, tuple, set, frozenset or dict whose items (and keys) are plain
+    values (`_values_in_tuples`), or a numpy array of a non-object dtype
+    that owns its memory."""
+    kind = type(value)
+    exact = exact_value_types()
+    if kind is dict:
+        return _values_in_tuples(list(value), exact) and _values_in_tuples(list(value.values()), exact)
+    if kind in (list, tuple, set, frozenset):
+        return _values_in_tuples(list(value), exact)
+    np = sys.modules.get("numpy")
+    if np is not None and kind is np.ndarray:
+        return not value.dtype.hasobject and value.base is None and bool(value.flags.owndata)
+    return False
+
+
+def _calibrate_own_look() -> int:
+    """What `held_only_by_names` leaves over for a value nothing else holds:
+    its own local and the argument of ``sys.getrefcount``."""
+    probe = {"p": [1]}
+    value = probe["p"]
+    counted = list(map(id, gc.get_referents(probe))).count(id(value))
+    return sys.getrefcount(value) - counted
+
+
+#: Calibrated, not assumed: the interpreter decides how many references a
+#: local and a call's argument take.
+_OWN_LOOK_REFS = _calibrate_own_look()
+
+
 def _reached_ids(value: Any, value_types: tuple[type, ...]) -> set[int]:
     """The ids `_identities` finds below *value*, and below a weak reference,
     a view of an object array or a pandas object, what it holds

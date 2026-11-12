@@ -35,6 +35,7 @@ from ...value_types import BUILTIN_NAMES
 from ..cache_key import statement_source_hash
 from ..call_key import changes_its_closure
 from ..callee_reach import CWD, ENVIRON, module_state_names, module_state_writes, process_state_writes, state_holders
+from ..loop_watch import watch_candidates
 from ..shared_objects import history_names
 from . import in_place
 from .control_body import is_control_body
@@ -824,6 +825,42 @@ def _rebound_names(node: ast.AST) -> set[str]:
         elif isinstance(sub, ast.MatchAs | ast.MatchStar) and sub.name:
             names.add(sub.name)
     return names
+
+
+def rebound_only(tree: ast.Module | None, user_ns: Mapping[str, Any], lineage: Mapping[str, str]) -> frozenset[str]:
+    """The names the loop *tree* binds anew on its passes and nothing in it
+    can change in place: not assigned into (``a[i] = v``), not changed by
+    a call its text decides (``a.append(v)``), not handed to code whose
+    effect is unknown (`watch_candidates`). Such a name holding the same
+    object after the loop as before it was bound to that object again
+    (``actions = session['actions']`` on the same last session), not
+    changed through it. Empty for anything but a loop, or when what the
+    loop changes cannot be told."""
+    if tree is None or len(tree.body) != 1 or not isinstance(tree.body[0], ast.For | ast.AsyncFor | ast.While):
+        return frozenset()
+    node = tree.body[0]
+    bound = _rebound_names(node) - _assigned_into(node)
+    if not bound:
+        return frozenset()
+
+    def resolve(name: str) -> str | None:
+        return live_function_source(name, user_ns)
+
+    def is_module(name: str) -> bool:
+        return is_module_name(name, user_ns)
+
+    try:
+        changed = control_structure_mutations(
+            node,
+            lambda name: name in BUILTIN_NAMES and name not in lineage,
+            is_module,
+            namespace=user_ns,
+            resolve_source=resolve,
+        )
+        handed = watch_candidates(node, user_ns, is_module, resolve)
+    except Exception:  # noqa: BLE001 - what the loop changes is unknown: none is exempt
+        return frozenset()
+    return frozenset(bound - set(changed) - set(handed))
 
 
 def _storable_name(name: str, user_ns: dict) -> bool:

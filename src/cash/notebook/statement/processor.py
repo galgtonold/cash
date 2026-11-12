@@ -110,7 +110,7 @@ from cash.notebook.statement.input_change import (
 from cash.notebook.statement.last_runs import KeyParts, LastRuns
 from cash.notebook.statement.lineage import StatementLineageBuilder, clear_rebound_edges
 from cash.notebook.statement.miss_guard import GUARD_SKIP_REASON, MissGuard
-from cash.notebook.statement.mutation_routing import MutationRouting
+from cash.notebook.statement.mutation_routing import MutationRouting, rebound_only
 from cash.notebook.statement.mutations import MutationClassifier
 from cash.notebook.statement.output_refusals import is_history_name, live_shared_reason, unrestorable_output_reason
 from cash.notebook.statement.randomness import StatementRandomness
@@ -234,6 +234,7 @@ from ..shared_objects import (
     children_of,
     forget_heap_unreadable,
     heap_unreadable,
+    held_only_by_names,
     history_names,
     holds_part_of,
     is_value,
@@ -4644,9 +4645,53 @@ class StatementProcessor:
                 and not foreign(other)
                 and not is_value(user_ns[other], value_types)
             }
-            return [*links, (outputs, read)] if read else links
+            if not read:
+                return links
+            # Unless an output is shown to share no object with anything but
+            # the names bound to it (`held_only_by_names`): the counts a loop
+            # fills (``trans_count[i, j] += 1``) hold no part of the sessions
+            # it read, and linked to them, each run of the loop moved the
+            # sessions on and the cell below rebuilt them.
+            alone = {}
+            for name in names:
+                bound = held_only_by_names(name, user_ns, [captured_vars, *cash_held])
+                if bound is not None:
+                    alone[name] = bound
+            if not alone:
+                return [*links, (outputs, read)]
+            kept = [(frozenset(owners) - set(alone), holders) for owners, holders in links]
+            kept = [(owners, holders) for owners, holders in kept if owners and holders]
+            kept += [([name], set(bound) - {name}) for name, bound in alone.items() if set(bound) - {name}]
+            rest = [name for name in outputs if name not in alone]
+            return [*kept, (rest, read)] if rest else kept
 
         budget = share_check_budget(cost)
+
+        def by_owner(links: list) -> list:
+            # A round of the check links every output it found held to every
+            # variable holding one of them: ``train_dl`` and ``test_dl``
+            # handed to one loop were each linked to both datasets, and a
+            # change taken through ``train_dl`` moved ``test_data``. Asked
+            # of each output alone, the check names the variables sharing
+            # an object with it; when it cannot say, within the same budget,
+            # the round's links stand.
+            coarse = [link for link in links if len(link[0]) > 1 and len(link[1]) > 1]
+            if not coarse:
+                return links
+            owners = sorted(set().union(*(set(link[0]) for link in coarse)))
+            fine: list = []
+            try:
+                for owner in owners:
+                    own = GaveUp()
+                    # Its links whether or not the owner could be stored
+                    # alone: a variable holding it is found all the same.
+                    share_group([owner], captured_vars, user_ns, cash_held, named, foreign=foreign, gave_up=own)
+                    if not own.complete:
+                        return links
+                    fine += own.links
+            except WalkBudgetExceeded:
+                return links
+            return [link for link in links if not (len(link[0]) > 1 and len(link[1]) > 1)] + fine
 
         def widened(links: list) -> list:
             # Each link's owners and every output sharing an object with
@@ -4671,7 +4716,7 @@ class StatementProcessor:
                 if not shared:
                     # Each name with the holders found for it, not every
                     # output with every holder: a block checks many names.
-                    return list(gave_up.links), True
+                    return by_owner(list(gave_up.links)), True
                 # A holder that is not a variable (a library's cache, a
                 # closure, a function's defaults): the variables found beside
                 # it, not a search from the outputs up, which would climb
@@ -5523,9 +5568,15 @@ class StatementProcessor:
         # nothing of ``data``. Nor does a loop target's object say anything:
         # it is whichever element the last pass took, the same one again
         # when the loop runs again over the same ``data``, which read as
-        # ``data`` changed in place on every run of the loop.
+        # ``data`` changed in place on every run of the loop. Nor does that
+        # of a name the loop binds anew on each pass and changes in no way
+        # (``actions = session['actions']``): bound to the last session's
+        # list again, it read as ``sessions`` changed by a loop that only
+        # counts what it holds.
         sharing = run.outputs if run.share_owners is None else run.share_owners
-        targets = _loop_targets(run.tree)
+        targets = _loop_targets(run.tree) | rebound_only(
+            run.tree, self.shell.user_ns, self.tracking_state.variable_lineage
+        )
         run.moves_holders = any(
             id(captured_vars[name]) == run.bound_before.get(name)
             for name in sharing
