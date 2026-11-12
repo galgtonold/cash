@@ -1584,6 +1584,34 @@ def watcher() -> FileWatch | None:
     return _WATCH
 
 
+def running() -> FileWatch | None:
+    """The process's `FileWatch` if one has started, else None: one is not
+    started for this (`watcher` starts one)."""
+    watch = _WATCH
+    return watch if watch is not None and watch.pid == os.getpid() else None
+
+
+def stat_kept(path: str, start: bool = False) -> os.stat_result:
+    """``stat(path)``, kept by the process's folder watch when one runs and
+    *path*'s folder can be watched (`FileWatch.before_stat`, `FileWatch.record`).
+    Taken as an ``lstat``, as the watch keeps them; a link is followed by a
+    ``stat`` of its own, not kept (the watch vouches for the link only).
+
+    For the stat a statement takes of each file it read as it ends: the
+    checks before the next cells then find it kept, where each took one of
+    its own, a stat per file on Windows for every cell below a loop over
+    50,000 files. *start*: start the process's watch if none runs yet (in
+    a cell run, where the checks before the next cells start it anyway)."""
+    watch = watcher() if start else running()
+    token = watch.before_stat(path) if watch is not None else None
+    st = own_lstat(path)
+    if _stat.S_ISLNK(st.st_mode):
+        return own_stat(path)
+    if token is not None and _stat.S_ISREG(st.st_mode):
+        watch.record(token, path, st)
+    return st
+
+
 def _platform_name() -> str:
     return "macOS" if sys.platform == "darwin" else sys.platform
 

@@ -40,6 +40,7 @@ from cash._memo import FILE_DIGESTS, LruMemo
 from cash._paths import MAIN_MODULE_NAMES, main_namespace_name, normalize_path, resolve_file_dep_path
 from cash.bulk_digest import BulkHasher
 from cash.remote_source import RemoteFileDataSource, addressing_options, read_options
+from cash.tracking import file_watch as _fw
 from cash.tracking.digest_table import current_table
 from cash.tracking.file_versions import note_same_content
 from cash.tracking.pending_digest import MOVED, DeferredDigest
@@ -449,8 +450,10 @@ def digest_later(path: str, size: int, st: os.stat_result) -> str | DeferredDige
         # block's (whose write would take the deferred digests again).
         with untracked():
             try:
-                now = own_stat(path)
-            except OSError:
+                # Kept by the folder watch, for the checks before the next
+                # cells (`file_watch.stat_kept`).
+                now = _fw.stat_kept(path, start=HASH_EPOCH is not None)
+            except (OSError, ValueError):
                 return MOVED
             if _stat_memo_key(path, now, now.st_size) != key or is_written_in_place(now, path):
                 return MOVED

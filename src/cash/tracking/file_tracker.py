@@ -16,6 +16,7 @@ from __future__ import annotations
 import contextvars
 import logging
 import os
+import stat
 import sys
 import threading
 import time
@@ -26,13 +27,14 @@ from cash._clock import perf_counter as _perf_counter
 from cash._paths import is_remote_url, normalize_path
 from cash.effect_observer import reset_in_any_context
 from cash.install_paths import normcase_path
-from cash.tracking import io_watch, native_reads
+from cash.tracking import file_dep_snapshot, io_watch, native_reads
 from cash.tracking.file_dep_snapshot import (
     digest_later,
     file_content_hash,
     realpath_of_read_this_run,
     remembered_file_digest,
 )
+from cash.tracking.file_watch import stat_kept
 from cash.tracking.pending_digest import MOVED, DeferredDigest, PendingDigest
 from cash.tracking.read_classification import (
     RESUMABLE as _RESUMABLE,
@@ -48,7 +50,6 @@ from cash.tracking.read_classification import (
     module_kind,
     own_stat,
     regular_file_stat,
-    regular_file_stat_result,
     stat_key,
 )
 from cash.tracking.read_credit import credit_read_again, credit_read_to_stack
@@ -96,6 +97,17 @@ def _same_reader(last: tuple, reader: tuple) -> bool:
         and len(last[1]) == len(reader[1])
         and all(a is b for a, b in zip(last[1], reader[1]))
     )
+
+
+def regular_file_stat_kept(path: str) -> os.stat_result | None:
+    """The stat of *path* when it is a regular file, kept by the folder watch
+    for the checks before the next cells (`file_watch.stat_kept`); None
+    otherwise."""
+    try:
+        st = stat_kept(path, start=file_dep_snapshot.HASH_EPOCH is not None)
+    except (OSError, ValueError):
+        return None
+    return st if stat.S_ISREG(st.st_mode) else None
 
 
 #: How many failed events a tracker names (`note_tracking_failed`).
@@ -468,7 +480,7 @@ class FileAccessTracker:
             if path in taken:
                 now = taken[path]
             else:
-                st = ended.get(path) or regular_file_stat_result(path)
+                st = ended.get(path) or regular_file_stat_kept(path)
                 now = stat_key(st) if st is not None else None
                 if now == before:
                     checked[path] = st

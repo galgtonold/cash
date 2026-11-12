@@ -180,3 +180,32 @@ def test_an_edit_in_a_folder_that_cannot_be_watched_is_seen(cash_magics, photos,
     target.write_text("PHOTO 08", encoding="utf-8")
     run_cash_cell(cash_magics, cell)
     assert cash_magics.shell.user_ns["data"] == "PHOTO 08"
+
+
+def test_files_a_statement_read_are_not_stat_ed_again_by_the_next_cells_check(cash_magics, photos, monkeypatch):
+    """The stat a statement takes of each file it read as it ends is kept by
+    the folder watch, so the check before the next cell takes none of its
+    own: a loop over many files pays one end-of-statement stat per file."""
+    cell = f"texts = [open(p).read() for p in sorted(os.scandir({str(photos)!r}), key=lambda e: e.name)]"
+    run_cash_cell(cash_magics, "import os")
+    run_cash_cell(cash_magics, cell)
+    if file_watch.watcher() is None:
+        pytest.skip("no folder watch on this platform")
+    real_lstat = os.lstat
+    stat_ed: list[str] = []
+    inside = os.path.normcase(os.path.normpath(photos))
+
+    def counting_lstat(path, *args, **kwargs):
+        if os.path.normcase(os.path.normpath(os.fspath(path))).startswith(inside + os.sep):
+            stat_ed.append(os.fspath(path))
+        return real_lstat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "lstat", counting_lstat)
+    assert _statuses(cash_magics, cell)[-1] == CacheStatus.RESTORED
+    monkeypatch.setattr(os, "lstat", real_lstat)
+    assert stat_ed == []
+    assert cash_magics.shell.user_ns["texts"][7] == "photo 07"
+
+    (photos / "img07.txt").write_text("PHOTO 07", encoding="utf-8")
+    run_cash_cell(cash_magics, cell)
+    assert cash_magics.shell.user_ns["texts"][7] == "PHOTO 07"

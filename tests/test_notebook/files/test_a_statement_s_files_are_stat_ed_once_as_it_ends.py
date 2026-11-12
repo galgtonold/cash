@@ -27,7 +27,7 @@ import warnings
 import pytest
 
 from cash.notebook.statement import file_deps, lineage
-from cash.tracking import file_dep_snapshot, read_classification
+from cash.tracking import file_dep_snapshot, file_tracker
 from cash.tracking.file_tracker import FileAccessTracker
 from tests._cell_driver import run_cash_cell
 
@@ -89,13 +89,13 @@ def test_the_lineage_from_shared_stats_is_the_one_fresh_stats_give(
 ):
     _, cell = files
     stats_taken: list[str] = []
-    real_stat = read_classification.regular_file_stat_result
+    real_stat = file_tracker.regular_file_stat_kept
 
     def counting(path):
         stats_taken.append(path)
         return real_stat(path)
 
-    monkeypatch.setattr("cash.tracking.file_tracker.regular_file_stat_result", counting)
+    monkeypatch.setattr("cash.tracking.file_tracker.regular_file_stat_kept", counting)
     run_cash_cell(cash_magics, cell)
     assert cash_magics.shell.user_ns["text"].startswith("relative absolute")
     (accessed, remote, probes, shared, component) = components[0]
