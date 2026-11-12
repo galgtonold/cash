@@ -356,6 +356,9 @@ class StatementRun:
     #: (``StatementProcessor._refuse_unrestorable_outputs``), so which other
     #: variables hold them is not known from it.
     share_unchecked: bool = False
+    #: The outputs whose last share-check give-up still stands as the run
+    #: starts (``ShareGiveUps.live``): checked again only as `hit` allows.
+    share_giveups_live: frozenset[str] = frozenset()
     #: The share check of its outputs found a holder that is not a variable
     #: (a library's registry, a closure, a function's defaults): the
     #: variables it found holding them all the same (``shared_objects.GaveUp``),

@@ -130,6 +130,7 @@ from cash.notebook.statement.run import (
     over_the_handed_iterable,
 )
 from cash.notebook.statement.served_frame_writes import ServedFrameWrites
+from cash.notebook.statement.share_giveups import CostlyDigests, ShareGiveUps
 from cash.notebook.statement.store import StatementStore
 from cash.notebook.statement.unstored import MEMORY_ONLY, UnstoredNotes
 from cash.notebook.tracking_state import ENTRY_HISTORY, TrackingState
@@ -349,10 +350,13 @@ class _TooCostly(Exception):
     """A value's digest did not finish within its budget."""
 
 
-def _bounded_fingerprint(value: Any, compute_hash: Callable[[Any], str], seconds: float) -> str | None:
+def _bounded_fingerprint(
+    value: Any, compute_hash: Callable[[Any], str], seconds: float, out_of_time: list[bool] | None = None
+) -> str | None:
     """*value*'s ``mutation_fingerprint``, its content read within *seconds*
     (`budgeted_hash`, not run on past them, nor marking the value costly for
-    other checks); None when it cannot be taken or not in time."""
+    other checks); None when it cannot be taken or not in time, and then
+    ``True`` appended to *out_of_time* when it was the time."""
     if seconds <= 0:
         return None
     try:
@@ -365,6 +369,8 @@ def _bounded_fingerprint(value: Any, compute_hash: Callable[[Any], str], seconds
     def content(obj: Any) -> str:
         digest = value_hash.budgeted_hash(obj, compute_hash, seconds, remember=False)
         if digest is None:
+            if out_of_time is not None:
+                out_of_time.append(True)
             raise _TooCostly
         return digest
 
@@ -875,6 +881,11 @@ class StatementProcessor:
         self._share_refused: dict[str, list] = {}
         #: Statements already warned NOTEBOOK-SHARE-UNCHECKED about.
         self._share_unchecked_warned: set[str] = set()
+        #: The share check's last give-up for each output, taken again for
+        #: the same objects (`_given_up_again`).
+        self._share_giveups = ShareGiveUps()
+        #: The holders whose digest ran out of time (`_holder_digests`).
+        self._costly_digests = CostlyDigests()
         #: Writes into served tables an array taken before did not see.
         self._served_writes = ServedFrameWrites()
         #: Moved on as each statement starts: what ran since a share check.
@@ -1728,6 +1739,9 @@ class StatementProcessor:
         run.bound_before = {
             name: id(user_ns[name]) for name in run.outputs | run.mut_observe | run.mut_assumed if name in user_ns
         }
+        run.share_giveups_live = self._share_giveups.live(
+            user_ns, self.tracking_state.variable_lineage, self.tracking_state.derivation_edges
+        )
         run.holder_digests = self._holder_digests(run)
         self._route_calls(run)
         return None
@@ -3963,6 +3977,10 @@ class StatementProcessor:
             # earlier run left; the rest as the simulation moves it.
             moved_on=run.holders_changed,
         )
+        # The give-ups this run noted or took again, with the lineages it left.
+        lineage = self.tracking_state.variable_lineage
+        self._share_giveups.settle(self.shell.user_ns, lineage, self.tracking_state.derivation_edges)
+        self._costly_digests.settle(self.shell.user_ns, lineage, run.outputs)
         self._report_saved(run, saved_metadata)
         self._tell_past_budget(run, execution.cost or execution.wall_time or 0.0)
         storage = (saved_metadata.storage if saved_metadata else None) or ()
@@ -4035,6 +4053,14 @@ class StatementProcessor:
         # saves `cost`, and finding the holders of a loop variable that is
         # an element of a list of 40,000 sessions took 6 s after a 0.1 s loop.
         budget = share_check_budget(cost)
+        if holders is not None and not run.memo_changes and self._given_up_again(run, captured_vars):
+            run.share_unchecked = True
+            run.share_gave_up = None
+            reason = _cut_short_why("finding which other variables hold objects of its outputs", budget)
+            self._note_share_refusal(run, reason)
+            run.skip_cache = True
+            run.metrics.setdefault("uncacheable_reasons", []).append(reason)
+            return None
         found: dict[str, Any] | None = None
         gave_up: list[GaveUp] = []
         anchors: dict[str, Any] = {}
@@ -4174,6 +4200,40 @@ class StatementProcessor:
             run.metrics.setdefault("uncacheable_reasons", []).append(reason)
             return None
         return holders
+
+    def _share_names(self, run: StatementRun, captured_vars: dict[str, Any]) -> list[str]:
+        """*run*'s outputs the share check looks into: neither the kernel's
+        machinery, nor a plain value, nor what pyplot's registry holds
+        (`_holders_of`)."""
+        value_types = VALUE_TYPES + library_value_types()
+        return [
+            name
+            for name in run.outputs
+            if name in captured_vars
+            and not self._kernel_object(captured_vars[name])
+            and not is_value(captured_vars[name], value_types)
+            and not holds_artists(captured_vars[name])
+        ]
+
+    def _given_up_again(self, run: StatementRun, captured_vars: dict[str, Any], names: list[str] | None = None) -> bool:
+        """Whether the share check gives up on *run*'s outputs (*names*) as
+        it last did for the same objects, without walking them
+        (`ShareGiveUps`): ``df['n'] = ...`` on a frame sharing every list
+        of a list of 40,000 sessions (``df = pd.DataFrame(logs)``) walked
+        the identity, alias and share checks for a second a statement to
+        give up again. The variables holding its objects are still looked
+        for from the outputs up, as after any give-up (`_holders_of`)."""
+        if not run.share_giveups_live:
+            return False
+        if names is None:
+            names = self._share_names(run, captured_vars)
+        return self._share_giveups.hit(
+            run.share_giveups_live,
+            {name: captured_vars[name] for name in names},
+            self.shell.user_ns,
+            bound_names(run.tree) or () if run.tree is not None else (),
+            run.outputs,
+        )
 
     #: Most statements `_share_refused` remembers, and the most runs one is
     #: refused in a row without the check.
@@ -4718,8 +4778,9 @@ class StatementProcessor:
         if run.share_gave_up is not None:
             links, complete = widened(list(run.share_gave_up.links)), run.share_gave_up.complete
             return (links if complete else cut_short(links)), complete
-        timed_out = run.share_unchecked
+        timed_out = run.share_unchecked or self._given_up_again(run, captured_vars, names)
         if not timed_out:
+            self._share_giveups.forget(names)
             try:
                 gave_up = GaveUp()
                 with walk_budget(budget):
@@ -4745,6 +4806,17 @@ class StatementProcessor:
             skip_name=lambda name: foreign(name) or name in names,
             ignore=[captured_vars, run.metrics, echo, *cash_held],
         )
+        if len(names) == 1 and found_names:
+            # Taken again for the same objects (`ShareGiveUps`).
+            self._share_giveups.note(
+                names[0], captured_vars[names[0]], {name: user_ns[name] for name in found_names if name in user_ns}
+            )
+        elif len(names) == 1 and not complete:
+            # Cut short before it found them again: the holders the last
+            # give-up found still stand, as long as nothing else moved.
+            self._share_giveups.keep(names[0], captured_vars[names[0]])
+        else:
+            self._share_giveups.forget(names)
         links = [(outputs, found_names)]
         # The search up finds what holds the outputs, not what they hold:
         # ``box = Box(BIG)`` with ``box`` holding ``BIG`` in a pandas object
@@ -5432,9 +5504,11 @@ class StatementProcessor:
         by then is left out, and moves on as a holder as before. A variable
         no edge links is not looked for: it moves.
         """
+        self._costly_digests.begin()
         if not run.bound_before or self.compute_hash is None:
             return {}
         edges = self.tracking_state.derivation_edges
+        lineage = self.tracking_state.variable_lineage
         user_ns = self.shell.user_ns
         names: set[str] = set()
         for name in run.bound_before:
@@ -5454,8 +5528,22 @@ class StatementProcessor:
                     continue
             except Exception:  # noqa: BLE001 - a value whose attribute lookups raise: not digested, it moves
                 continue
+            # Known to run out of time for this object at this lineage: it
+            # moves on, as after a digest that ran out (`CostlyDigests`);
+            # the digest of a list of 40,000 sessions held by a frame was
+            # read past its budget and thrown away each statement.
+            if self._costly_digests.known(name, value, lineage.get(name)):
+                continue
             if id(value) not in by_object:
-                by_object[id(value)] = _bounded_fingerprint(value, self.compute_hash, deadline - _perf_counter())
+                # Remembered only for the first object read, which had the
+                # whole budget: not for one left with what others did not use.
+                first = not by_object
+                out_of_time: list[bool] = []
+                by_object[id(value)] = _bounded_fingerprint(
+                    value, self.compute_hash, deadline - _perf_counter(), out_of_time
+                )
+                if out_of_time and first:
+                    self._costly_digests.note(name, value)
             digest = by_object[id(value)]
             if digest is not None:
                 digests[name] = digest

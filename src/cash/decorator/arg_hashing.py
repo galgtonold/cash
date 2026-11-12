@@ -1584,7 +1584,7 @@ class FrameDigests:
             if entry is None or entry[0]() is not obj or not entry[6] or not entry[6].ids:
                 continue
             try:
-                moved = not _object_blocks(entry[1]) <= _object_blocks(obj)
+                moved = not object_blocks(entry[1]) <= object_blocks(obj)
             except Exception:  # noqa: BLE001 - a pandas internals change: the memo is only a speedup
                 moved = True
             if moved:
@@ -1740,7 +1740,7 @@ class FrameDigests:
                 columns[column] = (key, *alive)[:_COLUMN_OWNERS]
 
 
-def _object_blocks(frame: Any) -> set[int]:
+def object_blocks(frame: Any) -> set[int]:
     """The ids of the arrays that own the memory of *frame*'s object blocks."""
     import numpy as np
 
