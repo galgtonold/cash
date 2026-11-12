@@ -64,6 +64,9 @@ class StaleValueGuard:
         #: compared (`hashed_by_lineage`). Never a strong reference: holding
         #: the value would keep it alive and count as a second holder.
         self._started_from: dict[tuple[int, str], tuple[int, Any]] = {}
+        #: The cell :meth:`note_cell_start` last recorded, with the names it
+        #: recorded for it (`note_cell_raised`).
+        self._noted_at_start: tuple[int | None, frozenset[str]] = (None, frozenset())
         #: Function name -> the last cell checked that calls it (see
         #: :meth:`_mark_stateful_funcs_broken`).
         self._stateful_called_in: dict[str, int] = {}
@@ -725,6 +728,7 @@ class StaleValueGuard:
         """
         self._class_state_at_start(cell_idx)
         user_ns = self.shell.user_ns
+        noted: set[str] = set()
         for var_name in names:
             value = user_ns.get(var_name)
             if value is None or not (hashed_by_lineage(value) or _weakly_held(value)):
@@ -738,6 +742,27 @@ class StaleValueGuard:
             except TypeError:
                 ref = None
             self._started_from[(cell_idx, var_name)] = (id(value), ref)
+            noted.add(var_name)
+        self._noted_at_start = (cell_idx, frozenset(noted))
+
+    def note_cell_raised(self, cell_idx: int, changed: set[str]) -> None:
+        """Cell *cell_idx* raised, having changed in place at most *changed*:
+        forget the object it started from, as :meth:`note_cell_start`
+        recorded it for this run, for every other name.
+
+        Such an object is as the upstream check passed it, and its next run
+        takes it as it is (`_started_from_before`). Kept, a cell re-run while
+        its error is fixed (``rows[0] = rows['x']`` raising before it writes)
+        rebuilt every large value it changes in place each time, where plain
+        Python only shows the error. A record from an earlier run (a name
+        this run did not start from) stays: that run may have written it.
+        """
+        noted_idx, noted = self._noted_at_start
+        if noted_idx != cell_idx:
+            return
+        for var_name in noted - changed:
+            self._started_from.pop((cell_idx, var_name), None)
+        self._noted_at_start = (None, frozenset())
 
     def _classes_changed_elsewhere(
         self, stateful: frozenset[str], notebook_cells: list[str] | None, current_cell_idx: int | None
