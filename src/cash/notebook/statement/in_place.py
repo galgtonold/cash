@@ -246,6 +246,7 @@ def identity_kept(
             ) and holder_refusal(name, restored[name], restored) is None
             why = None if fits else _copy_refusal(live, namespace, name)
         except Exception:  # noqa: BLE001 - an object whose own lookups raise: it runs
+            forget_routed(live)
             return into, f"'{name}' could not be checked for what points at it, and a copy would not be that object"
         if fits:
             # Not when another value of the entry holds the stored copy
@@ -254,6 +255,8 @@ def identity_kept(
             into.add(name)
             continue
         if why is not None:
+            # A loop writing into it is routed afresh too (`routed_as_a_copy`).
+            forget_routed(live)
             kind = type(live).__name__
             return into, f"{why}; a {kind} is not written into, and a copy would not be that object"
     return into, None
