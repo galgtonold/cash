@@ -838,6 +838,8 @@ def loop_watch_candidates(
         seen.add(name)
         if name in targets:
             pending.extend(targets[name])
+            if name in targets[name]:
+                resolved.add(name)
         else:
             resolved.add(name)
     return frozenset(name for name in resolved if _watchable(name, namespace, is_module))
@@ -975,6 +977,109 @@ def _runs_now(tree: ast.AST) -> Iterable[ast.AST]:
         pending.extend(ast.iter_child_nodes(node))
 
 
+def _bound_first(loop: ast.For | ast.While) -> set[str]:
+    """The names the body of *loop* binds before anything in the loop reads
+    them.
+
+    ``actions = session['actions']`` opening the body of ``for session in
+    sessions:`` binds ``actions`` before any code of the loop sees it: what
+    it was bound to before the loop is never handed to anything, and each
+    pass hands over a list ``sessions`` holds. Watched as itself, the name
+    showed the list left by the loop before and, after it, the last
+    session's list: changed, on every run, though nothing was. What a call
+    can change through it is what holds the values it is bound to, watched
+    instead, as for a loop target (`loop_target_parts`). A name the loop
+    also binds in a way not followed (``:=``, ``global``, an import, a
+    ``with ... as``) is left out: watched as itself too."""
+    header = loop.test if isinstance(loop, ast.While) else ast.Tuple(elts=[loop.target, loop.iter], ctx=ast.Load())
+    seen = {sub.id for sub in walk_tree(header) if isinstance(sub, ast.Name)}
+    first: set[str] = set()
+    for stmt in loop.body:
+        if (
+            isinstance(stmt, ast.Assign)
+            and len(stmt.targets) == 1
+            and isinstance(stmt.targets[0], ast.Name)
+            and stmt.targets[0].id not in seen
+        ):
+            name = stmt.targets[0].id
+            reads = {sub.id for sub in walk_tree(stmt.value) if isinstance(sub, ast.Name)}
+            if name not in reads:
+                first.add(name)
+            seen |= reads | {name}
+            continue
+        seen |= {sub.id for sub in walk_tree(stmt) if isinstance(sub, ast.Name)}
+        seen |= {
+            sub.name
+            for sub in walk_tree(stmt)
+            if isinstance(sub, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
+        }
+    module = ast.Module(body=[*loop.body, *loop.orelse], type_ignores=[])
+    for sub in walk_tree(module):
+        if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store | ast.Del) and sub.id in first:
+            # Bound by a loop target, followed through `loop_target_parts`; by
+            # an assignment, followed through its value; by an augmented
+            # assignment, which changes the object in place as the text says.
+            if not _bound_by_target_or_augment(sub, module):
+                first.discard(sub.id)
+        elif isinstance(sub, ast.Global | ast.Nonlocal | ast.alias | ast.ExceptHandler):
+            first -= _names_of(sub)
+        elif isinstance(sub, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            first.discard(sub.name)
+    return first
+
+
+def _bound_by_target_or_augment(name: ast.Name, module: ast.Module) -> bool:
+    """Whether *name* is stored by a loop's target, an augmented
+    assignment or a plain assignment in *module*."""
+    for sub in walk_tree(module):
+        if isinstance(sub, ast.For) and any(t is name for t in walk_tree(sub.target)):
+            return True
+        if isinstance(sub, ast.AugAssign) and sub.target is name:
+            return True
+        if isinstance(sub, ast.Assign | ast.AnnAssign):
+            targets = sub.targets if isinstance(sub, ast.Assign) else [sub.target]
+            if any(t is name for target in targets for t in walk_tree(target)):
+                return True
+    return False
+
+
+def _names_of(node: ast.AST) -> set[str]:
+    """The names a ``global``, ``nonlocal``, import alias or ``except ... as`` binds."""
+    if isinstance(node, ast.Global | ast.Nonlocal):
+        return set(node.names)
+    if isinstance(node, ast.alias):
+        return {(node.asname or node.name).split(".")[0]}
+    if isinstance(node, ast.ExceptHandler) and node.name:
+        return {node.name}
+    return set()
+
+
+def _bound_values(loop: ast.For | ast.While) -> dict[str, list[ast.expr]]:
+    """Each name a plain assignment in the body of *loop* binds, with the
+    values it binds it to (loop targets are followed through
+    `loop_target_parts`)."""
+    bound: dict[str, list[ast.expr]] = {}
+    for sub in walk_tree(ast.Module(body=[*loop.body, *loop.orelse], type_ignores=[])):
+        if isinstance(sub, ast.Assign | ast.AnnAssign) and sub.value is not None:
+            targets = sub.targets if isinstance(sub, ast.Assign) else [sub.target]
+            for name in {t.id for target in targets for t in walk_tree(target) if isinstance(t, ast.Name)}:
+                bound.setdefault(name, []).append(sub.value)
+    return bound
+
+
+def _bound_inside(value: ast.expr) -> set[str]:
+    """The names *value* binds for itself: a lambda's parameters, a
+    comprehension's targets."""
+    names: set[str] = set()
+    for sub in walk_tree(value):
+        if isinstance(sub, ast.Lambda):
+            args = sub.args
+            names |= {a.arg for a in (*args.posonlyargs, *args.args, *args.kwonlyargs, args.vararg, args.kwarg) if a}
+        elif isinstance(sub, ast.comprehension):
+            names |= {t.id for t in walk_tree(sub.target) if isinstance(t, ast.Name)}
+    return names
+
+
 def _watch_statements(stmts: list[ast.stmt], names: _LoopNames, found: set[str], targets: dict[str, set[str]]) -> None:
     """Gather into *found* what each of *stmts* hands to unknown code, and
     into *targets* the names each loop among them iterates, per target. A
@@ -986,6 +1091,22 @@ def _watch_statements(stmts: list[ast.stmt], names: _LoopNames, found: set[str],
                     roots = _iterable_roots(values, names) if values is not None else set()
                     for target in (n.id for n in walk_tree(part) if isinstance(n, ast.Name)):
                         targets.setdefault(target, set()).update(roots)
+            if isinstance(stmt, (ast.For, ast.While)):
+                first = _bound_first(stmt)
+                loop_targets = {
+                    t.id
+                    for loop in walk_tree(stmt)
+                    if isinstance(loop, ast.For)
+                    for t in walk_tree(loop.target)
+                    if isinstance(t, ast.Name)
+                }
+                for name, values in _bound_values(stmt).items():
+                    for value in values:
+                        targets.setdefault(name, set()).update(_iterable_roots(value, names) - _bound_inside(value))
+                    if name not in first and name not in loop_targets:
+                        # What it held before the loop may be handed over
+                        # too: watched as itself as well.
+                        targets[name].add(name)
             if isinstance(stmt, (ast.If, ast.While)):
                 found |= _handed_to_unknown_code(_as_statement(stmt.test), names, bare=False)
             if isinstance(stmt, ast.With):

@@ -421,6 +421,9 @@ class StatementLineage:
         )
         if verdict is None:
             return candidates
+        # As the runtime reads it (``InLoopChanges.open_watch``): only what
+        # is still a candidate.
+        verdict = set(verdict) & candidates
         unseen = candidates - set(verdict)
         if unseen:
             unseen -= rewatch_exempt(ast.Module(body=[node], type_ignores=[]), user_ns, self._function_source)
