@@ -4667,6 +4667,32 @@ class StatementProcessor:
 
         budget = share_check_budget(cost)
 
+        def by_owner(links: list) -> list:
+            # A round of the check links every output it found held to every
+            # variable holding one of them: ``train_dl`` and ``test_dl``
+            # handed to one loop were each linked to both datasets, and a
+            # change taken through ``train_dl`` moved ``test_data``. Asked
+            # of each output alone, the check names the variables sharing
+            # an object with it; when it cannot say, within the same budget,
+            # the round's links stand.
+            coarse = [link for link in links if len(link[0]) > 1 and len(link[1]) > 1]
+            if not coarse:
+                return links
+            owners = sorted(set().union(*(set(link[0]) for link in coarse)))
+            fine: list = []
+            try:
+                for owner in owners:
+                    own = GaveUp()
+                    # Its links whether or not the owner could be stored
+                    # alone: a variable holding it is found all the same.
+                    share_group([owner], captured_vars, user_ns, cash_held, named, foreign=foreign, gave_up=own)
+                    if not own.complete:
+                        return links
+                    fine += own.links
+            except WalkBudgetExceeded:
+                return links
+            return [link for link in links if not (len(link[0]) > 1 and len(link[1]) > 1)] + fine
+
         def widened(links: list) -> list:
             # Each link's owners and every output sharing an object with
             # them (`owners_sharing`); all of them when that is cut short.
@@ -4690,7 +4716,7 @@ class StatementProcessor:
                 if not shared:
                     # Each name with the holders found for it, not every
                     # output with every holder: a block checks many names.
-                    return list(gave_up.links), True
+                    return by_owner(list(gave_up.links)), True
                 # A holder that is not a variable (a library's cache, a
                 # closure, a function's defaults): the variables found beside
                 # it, not a search from the outputs up, which would climb
