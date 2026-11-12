@@ -169,6 +169,11 @@ def _parse_text(code: str) -> ast.Module | None:
         return None
 
 
+# The memo behind `parse_cached`, so its bound and contents read as before.
+parse_cached.cache_info = _parse_text.cache_info  # type: ignore[attr-defined]
+parse_cached.cache_clear = _parse_text.cache_clear  # type: ignore[attr-defined]
+
+
 def copy_tree(node: ast.AST) -> Any:
     """*node* and everything under it as new nodes, except the constants, which
     the copy shares with the original.
