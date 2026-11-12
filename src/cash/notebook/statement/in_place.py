@@ -27,10 +27,19 @@ An object of a kind no restore goes into, which the loop only assigns into
 (``arr[i] = v``), is bound to the stored copy as any output is
 (`bound_as_a_copy`), unless the notebook holds it by a weak reference or
 its ``id()``.
+
+A statement (not a loop) that writes into a variable (``arr[3] = 7``,
+``d[k] = v``, ``o.x = 1``, ``arr += 1``) stores it as a plain output, which
+a hit would bind to the stored copy. An ``id()`` key or a weak reference
+taken after the entry was stored would then miss the object plain Python
+keeps. A hit writes the stored state into the live object instead where it
+can (`identity_kept`), and binds the copy only while the notebook holds
+neither that object nor one it holds by identity; else the statement runs.
 """
 
 from __future__ import annotations
 
+import ast
 import sys
 import types
 import weakref
@@ -53,12 +62,14 @@ from .identity_holders import IdentityHeld, library_parts
 __all__ = [
     "bound_as_a_copy",
     "holder_refusal",
+    "identity_kept",
     "memory_refusal",
     "ready",
     "refusal",
     "restorable_kind",
     "restore_into",
     "written_into",
+    "written_names",
 ]
 
 #: Containers restored by their contents.
@@ -173,6 +184,86 @@ def bound_as_a_copy(obj: Any, namespace: Mapping[str, Any]) -> bool:
     if restorable_kind(obj) or isinstance(obj, (list, dict, set)):
         return False
     return _held_itself(obj, namespace) is None
+
+
+def written_names(tree: ast.AST | None, mutated: Iterable[str]) -> set[str]:
+    """Of *mutated*, the names a statement changes in place, those it keeps
+    bound to the same object: not one it binds anew (``arr = f(arr)``,
+    where ``f`` changes its argument), except by augmented assignment
+    (``arr += 1``), which keeps the object of any kind that is written
+    into (`rewrite_in_place`)."""
+    names = set(mutated)
+    if tree is None or not names:
+        return names
+    rebound: set[str] = set()
+    augmented: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store | ast.Del):
+            rebound.add(node.id)
+        elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
+            augmented.add(node.target.id)
+        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            rebound.add(node.name)
+        elif isinstance(node, ast.alias):
+            rebound.add((node.asname or node.name).split(".")[0])
+        elif isinstance(node, ast.Global | ast.Nonlocal):
+            rebound.update(node.names)
+    return names - (rebound - augmented)
+
+
+def identity_kept(
+    names: Iterable[str], restored: Mapping[str, Any], namespace: Mapping[str, Any]
+) -> tuple[set[str], str | None]:
+    """For a hit of a statement that wrote into the variables *names*
+    (`written_names`), stored as plain outputs: those whose stored state
+    goes into the live object, and why the hit must not be served, or None.
+
+    Plain Python keeps the object a statement writes into, so whatever
+    finds it by identity still finds it: ``reg = {id(arr): 'a'}`` or
+    ``weakref.ref(arr)``, taken after the entry was stored. A copy bound in
+    its place is another object. So the state is written into the live
+    object whenever `rewrite_in_place.mismatch` allows it (an array, a
+    frame or a Series, a list, dict or set of plain values, unchanged in
+    shape) and no other value the entry restores holds it
+    (`holder_refusal`). Any other object is bound to the copy only while the notebook
+    holds neither it nor an object it holds by identity (`_copy_refusal`);
+    else the statement runs."""
+    into: set[str] = set()
+    for name in sorted(names):
+        if name not in namespace or name not in restored:
+            continue
+        live = namespace[name]
+        if type(live) in IMMUTABLE_LEAF_TYPES:
+            # A number or a string is a new object in plain Python too.
+            continue
+        if (
+            rewrite_in_place.mismatch(live, restored[name]) is None
+            and holder_refusal(name, restored[name], restored) is None
+        ):
+            # Not when another value of the entry holds the stored copy
+            # (``frames = [d1]`` stored with ``d1['z'] = ...``): restored, it
+            # would hold the copy beside the live object.
+            into.add(name)
+            continue
+        why = _copy_refusal(live, namespace, name)
+        if why is not None:
+            kind = type(live).__name__
+            return into, f"{why}; a {kind} is not written into, and a copy would not be that object"
+    return into, None
+
+
+def _copy_refusal(obj: Any, namespace: Mapping[str, Any], name: str) -> str | None:
+    """Why *obj* may not be replaced by a copy: the notebook holds it, or an
+    object it holds, by identity (a weak reference, its ``id()``), or holds
+    more than can be looked through (`_held_by_the_notebook`); or *obj*
+    holds more than `_MAX_SEEN` objects."""
+    parts: set[int] = set()
+    weakly: list[Any] = []
+    if _reaches([obj], _NOTHING, seen=parts, weakly=weakly) is None:
+        return f"'{name}' holds too many objects to check that nothing points at them"
+    refs = [ref for item in weakly for ref in weakref.getweakrefs(item) if id(ref) not in parts]
+    held = _held_by_the_notebook(parts, refs, namespace)
+    return None if held is None else str(_identity_refusal(held, it=f"'{name}' or an object it holds"))
 
 
 def _held_itself(obj: Any, namespace: Mapping[str, Any]) -> str | None:

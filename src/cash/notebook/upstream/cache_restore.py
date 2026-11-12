@@ -46,6 +46,7 @@ from ..restored_var import FORWARD_PROBE_PLACEHOLDER, HeldObject, apply_held_var
 from ..run_memo import stats_this_run
 from ..statement import in_place
 from ..statement._metadata import StatementCacheMetadata
+from ..statement.control_body import is_one_structure
 from ..statement.derivation_edges import note_bound_in_cell
 from ..statement.directives import statement_directives, ttl_floor_from_called_functions
 from ..statement.in_place import restore_into
@@ -243,10 +244,12 @@ class CacheRestorer:
                     logger.debug("[UPSTREAM] Restore failed: a variable stored with the outputs changed")
                     return set(), _perf_counter() - start_time, 0.0
 
-                why = self._live_refusal(stmt_code, outputs, metadata, variables_to_restore)
+                why, into = self._live_refusal(stmt_code, outputs, metadata, variables_to_restore)
                 if why is not None:
                     logger.debug("[UPSTREAM] Restore failed: %s", why)
                     return set(), _perf_counter() - start_time, 0.0
+                if into:
+                    metadata = {**metadata, "restored_into": sorted({*(metadata.get("restored_into") or ()), *into})}
 
                 # 4. Success! Restore into shell.
                 # Cache stores variables under 'variables' key (see StatementStore._payload)
@@ -464,10 +467,12 @@ class CacheRestorer:
 
     def _live_refusal(
         self, stmt_code: str, outputs: set[str], metadata: dict, variables_to_restore: dict
-    ) -> str | None:
+    ) -> tuple[str | None, set[str]]:
         """Why the live objects forbid restoring *variables_to_restore*, as
         a hit at the statement's own place refuses (`StatementHit.serve`,
-        `StatementProcessor._live_objects_shared`); None when they do not.
+        `StatementProcessor._live_objects_shared`), or None when they do
+        not; and the variables the statement wrote into whose stored state
+        goes into the live object (`in_place.identity_kept`).
 
         A copy bound where something points at the live object (a weak
         reference, an ``id()`` key: ``bound_copies``) or where another
@@ -478,7 +483,7 @@ class CacheRestorer:
         user_ns = self.shell.user_ns
         for name in metadata.get("bound_copies") or ():
             if name in user_ns and not in_place.bound_as_a_copy(user_ns[name], user_ns):
-                return f"something points at {name} now"
+                return f"something points at {name} now", set()
         holders = set(metadata.get("holders") or ())
         names = {
             name
@@ -486,18 +491,28 @@ class CacheRestorer:
             if name in user_ns and user_ns.get(name) is not FORWARD_PROBE_PLACEHOLDER
         }
         try:
+            tree = parse_cached(stmt_code)
             mutated = set(analyze_statement(stmt_code, None, user_ns).all_mutated_vars) & (
                 outputs | set(variables_to_restore)
             )
         except (SyntaxError, ValueError, TypeError):
-            return "cash could not read what it changes in place"
+            return "cash could not read what it changes in place", set()
+        into: set[str] = set()
+        if not is_one_structure(tree):
+            # As at a hit: what it wrote into keeps its object.
+            written = in_place.written_names(tree, mutated)
+            written -= {*(metadata.get("restored_into") or ()), *(metadata.get("bound_copies") or ()), *holders}
+            if written:
+                into, why = in_place.identity_kept(written, variables_to_restore, user_ns)
+                if why is not None:
+                    return why, set()
         keep = (holders | mutated) & names
         if not keep:
-            return None
+            return None, into
         # What the analyses kept of the user's objects is cash's reference,
         # not a holder of the user's.
         forget_held_answers()
-        return live_shared_reason(names, keep, user_ns, shell=self.shell)
+        return live_shared_reason(names, keep, user_ns, shell=self.shell), into
 
     def _move_to_final_lineages(self, restored_vars: set[str], metadata: dict, final_lineages: dict[str, str]) -> None:
         """Give each of *restored_vars* the lineage it leaves the statement

@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import pickle
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from cash import rewrite_in_place
@@ -110,6 +111,19 @@ class CacheHitServer:
             for name in metadata.bound_copies:
                 if name in user_ns and not in_place.bound_as_a_copy(user_ns[name], user_ns):
                     return self._refused(f"something points at {name} now")
+        if metadata is not None and run.analysis is not None and not is_one_structure(run.tree):
+            # What the statement wrote into keeps its object, as in plain
+            # Python: an id() key or a weak reference taken since the entry
+            # was stored still finds it (`in_place.identity_kept`).
+            variables = cached_data.get("variables") if isinstance(cached_data, dict) else None
+            written = in_place.written_names(run.tree, set(run.analysis.all_mutated_vars) & run.outputs)
+            written -= {*(metadata.restored_into or ()), *(metadata.bound_copies or ()), *(metadata.holders or ())}
+            if written and isinstance(variables, dict):
+                into, why = in_place.identity_kept(written, variables, self._restorer.shell.user_ns)
+                if why is not None:
+                    return self._refused(why)
+                if into:
+                    metadata = replace(metadata, restored_into=sorted({*(metadata.restored_into or ()), *into}))
         if metadata is not None and metadata.anchors:
             # The variables' objects the entry holds by reference: the live
             # ones, or a miss when one changed (`anchors`).
