@@ -901,6 +901,8 @@ class UpstreamChecker:
         codes_before: dict[str, str],
         notebook_cells: list[str],
         current_cell_idx: int,
+        cells_before: dict[str, int | None],
+        bound_by_before: dict[str, str],
     ) -> None:
         """Say NOTEBOOK-CHANGED-BELOW for a name the repair rebuilt on the
         way to the cell's inputs that a cell below had changed in place.
@@ -916,7 +918,15 @@ class UpstreamChecker:
             before = bindings_before.get(name, _UNBOUND)
             if before is _UNBOUND or self.shell.user_ns.get(name, _UNBOUND) is before:
                 continue
-            warn_changed_below(name, codes_before.get(name), notebook_cells, current_cell_idx, warned, along=True)
+            warn_changed_below(
+                name,
+                codes_before.get(name),
+                notebook_cells,
+                current_cell_idx,
+                warned,
+                along=True,
+                bound_at=(cells_before.get(name), bound_by_before.get(name)),
+            )
 
     @staticmethod
     def _written_in(statements: list[str], written: list[tuple[int, Any]], notebook_cells: list[str]) -> dict[str, int]:
@@ -1111,7 +1121,9 @@ class UpstreamChecker:
             )
             self.rng.label_rerun_metrics(executed_metrics, rng_rerun)
             total_execution_time = self.replay.sum_execution_times(executed_metrics)
-            self._warn_rebuilt_changed_below(rebuilt, bindings_before, codes_before, notebook_cells, current_cell_idx)
+            self._warn_rebuilt_changed_below(
+                rebuilt, bindings_before, codes_before, notebook_cells, current_cell_idx, cells_before, bound_by_before
+            )
 
             # Put the random streams the cell draws from where a run from the
             # top has them before it. After the re-runs above, so it is the

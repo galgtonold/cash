@@ -80,9 +80,24 @@ def _as_written(cell: str, code: str) -> str | None:
     return _statements_of(cell).get(code)
 
 
-def _cell_below_holding(code: str, cells: list[str], cell_idx: int) -> tuple[int, str] | None:
-    """The one cell below *cell_idx* that holds the statement *code*, with
-    the statement as written there, when no cell at or above it holds it."""
+def _cell_below_holding(
+    code: str, cells: list[str], cell_idx: int, bound_at: tuple[int | None, str | None] | None = None
+) -> tuple[int, str] | None:
+    """The cell below *cell_idx* that holds the statement *code*, with the
+    statement as written there.
+
+    *bound_at* is where the run that bound the name last ran its statement
+    (``TrackingState.bound_in_cell`` and ``bound_by``): when that statement
+    is *code* and the cell there still holds it, that cell decides, whatever
+    other cells hold the same text (``df = pd.read_csv(...)`` above and
+    below). Otherwise, by the text alone: the one cell below that holds it,
+    when no cell at or above *cell_idx* does."""
+    if bound_at is not None:
+        at, by = bound_at
+        if at is not None and by is not None and 0 <= at < len(cells) and strip_markers(by).strip() == code:
+            written = _as_written(cells[at], code)
+            if written is not None:
+                return (at, written) if at > cell_idx else None
     if any(_as_written(cell, code) is not None for cell in cells[: cell_idx + 1]):
         return None
     below = [(i, written) for i in range(cell_idx + 1, len(cells)) if (written := _as_written(cells[i], code))]
@@ -191,6 +206,7 @@ def warn_changed_below(
     through: str | None = None,
     maybe: bool = False,
     along: bool = False,
+    bound_at: tuple[int | None, str | None] | None = None,
 ) -> bool:
     """Warn NOTEBOOK-CHANGED-BELOW when *name*, an input of cell *cell_idx*
     that is about to be rebuilt as the cells above leave it, was last changed
@@ -201,14 +217,16 @@ def warn_changed_below(
     changes); *maybe*: the walk over *through* was cut short, so it may
     hold *name*. *along*: *name* is no input of the cell but was rebuilt
     on the way to one (``played``, to rebuild ``hist`` the cell reads).
-    Once per cell, name and statement (*warned*). Returns whether it
+    *bound_at*: the cell whose run bound *name* last and the statement it
+    ran there, which names the cell below when several cells hold
+    *last_code*. Once per cell, name and statement (*warned*). Returns whether it
     warned."""
     if not last_code or not 0 <= cell_idx < len(cells):
         return False
     code = strip_markers(last_code).strip()
     if not code:
         return False
-    found = _cell_below_holding(code, cells, cell_idx)
+    found = _cell_below_holding(code, cells, cell_idx, bound_at)
     if found is None:
         return False
     # Bound anew below (``lines = lines2``), not changed in place: the

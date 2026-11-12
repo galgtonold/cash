@@ -55,3 +55,49 @@ def test_a_binding_in_a_cell_above_is_quiet(cash_magics):
     """The binding the re-run reads is above it: what plain Jupyter has too."""
     cells = [CELLS[0], "s = s * 2", CELLS[1]]
     assert not _run(cash_magics, [0, 1, 2, 2], cells)
+
+
+# The same binding twice, above and below the re-run cell, with an in-place
+# change between them: the copy below ran last, so the live `s` is its value.
+TWICE = [
+    "import pandas as pd",
+    "s = pd.Series([0.0, 1.0, 2.0])",
+    "s.iloc[0] = 1e9",
+    "out = float(s.sum())",
+    "s = pd.Series([0.0, 1.0, 2.0])",
+]
+IDS = [f"c{i}" for i in range(6)]
+
+
+def _run_ids(cash_magics, indices, cells):
+    ids = IDS[: len(cells)]
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        for i in indices:
+            run_cash_cell(cash_magics, cells[i], cells=cells, cell_ids=ids, cell_id=ids[i])
+    return _changed_below(caught)
+
+
+def test_a_binding_below_that_a_cell_above_also_holds_is_named(cash_magics):
+    """The statement that bound `s` last is in cell 5 and in cell 2 above:
+    the cell that ran it last decides, and the re-run of cell 4 says that
+    cell 5 below bound the value it does not read."""
+    assert not _run_ids(cash_magics, [0, 1, 2, 3, 4], TWICE)
+    found = _run_ids(cash_magics, [3], TWICE)
+    assert len(found) == 1, found
+    assert "'s'" in found[0] and "cell 5 below binds anew" in found[0], found
+    assert cash_magics.shell.user_ns["out"] == 1e9 + 3.0
+
+
+def test_rerunning_the_copy_above_keeps_the_rerun_below_it_quiet(cash_magics):
+    """Cell 2 run again binds `s` above cell 4: what plain Jupyter reads too."""
+    assert not _run_ids(cash_magics, [0, 1, 2, 3, 4, 1], TWICE)
+    assert not _run_ids(cash_magics, [3], TWICE)
+
+
+def test_of_two_copies_below_the_one_that_ran_last_is_named(cash_magics):
+    cells = [*TWICE, TWICE[4]]
+    assert not _run_ids(cash_magics, [0, 1, 2, 3, 4, 5, 4], cells)
+    found = _run_ids(cash_magics, [3], cells)
+    assert len(found) == 1, found
+    assert "cell 5 below binds anew" in found[0], found

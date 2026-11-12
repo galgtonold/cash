@@ -584,15 +584,29 @@ class MismatchClassifier:
         # Rebuilt, it loses an in-place change a cell below made: say so.
         codes = self.tracking_state.executed_cell_codes
         cells, idx, warned = m.check.notebook_cells, m.check.current_cell_idx, self._warned_changed_below
-        if not warn_changed_below(m.var_name, codes.get(m.var_name), cells, idx, warned):
+        if not warn_changed_below(
+            m.var_name, codes.get(m.var_name), cells, idx, warned, bound_at=self._bound_at(m.var_name)
+        ):
             # Changed through what it holds: ``BIG.append(...)`` below, read
             # here through ``draw``'s default ``rows=BIG``.
             held, maybe = self._held_by(m.var_name)
             for name in sorted(held | maybe):
                 warn_changed_below(
-                    name, codes.get(name), cells, idx, warned, through=m.var_name, maybe=name not in held
+                    name,
+                    codes.get(name),
+                    cells,
+                    idx,
+                    warned,
+                    through=m.var_name,
+                    maybe=name not in held,
+                    bound_at=self._bound_at(name),
                 )
         return True
+
+    def _bound_at(self, name: str) -> tuple[int | None, str | None]:
+        """The cell whose run bound *name* last and the statement it ran
+        there (``TrackingState.bound_in_cell``, ``bound_by``)."""
+        return self.tracking_state.bound_in_cell.get(name), self.tracking_state.bound_by.get(name)
 
     def _held_by(self, name: str) -> tuple[set[str], set[str]]:
         """The variables whose object *name*'s object holds, by identity (a
@@ -905,9 +919,20 @@ class MismatchClassifier:
             ids, complete = held_objects(user_ns.get(name))
             for other in sorted(changed - {name}):
                 if id(user_ns[other]) in ids:
-                    warn_changed_below(other, codes.get(other), cells, idx, warned, through=name)
+                    warn_changed_below(
+                        other, codes.get(other), cells, idx, warned, through=name, bound_at=self._bound_at(other)
+                    )
                 elif not complete:
-                    warn_changed_below(other, codes.get(other), cells, idx, warned, through=name, maybe=True)
+                    warn_changed_below(
+                        other,
+                        codes.get(other),
+                        cells,
+                        idx,
+                        warned,
+                        through=name,
+                        maybe=True,
+                        bound_at=self._bound_at(other),
+                    )
 
     def _rebuild_what_shares_a_rebuilt_object(
         self, broken_vars: set[str], simulation_trace: list, check: CellCheck | None = None
