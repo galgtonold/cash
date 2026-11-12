@@ -1,13 +1,15 @@
 """A loop over an object next to a big notebook does not walk the whole
-notebook again before each statement.
+notebook before it runs.
 
 Three small loops beside a list of 200,000 lists of words cost each run of
-their cell over a second: before each, the notebook was walked for a weak
-reference to, or the ``id()`` of, the object the loop assigns into, and
-after each the other variables were walked for a weak reference although
-only cash had made one. The route a loop takes is remembered for its
-object (a hit asks again of the live objects), and the other variables are
-walked only for a weak reference the user made.
+their cell over a second, and ``df.loc[i, c] = v`` in a loop over a fresh
+frame beside 2,000,000 objects 0.8 s a run: before each loop, the notebook
+was walked for a weak reference to, or the ``id()`` of, the object the loop
+assigns into, and after each the other variables were walked for a weak
+reference although only cash had made one. A loop is routed as a copy with
+no walk (a hit asks of the live objects, and one it refuses walks before
+its next loops), and the other variables are walked only for a weak
+reference the user made.
 """
 
 from __future__ import annotations
@@ -33,9 +35,9 @@ def _words(count=20_000):
 
 @pytest.fixture(autouse=True)
 def _fresh_routes():
-    in_place._ROUTED.clear()
+    in_place._REFUSED.clear()
     yield
-    in_place._ROUTED.clear()
+    in_place._REFUSED.clear()
 
 
 def _counting(monkeypatch):
@@ -50,7 +52,7 @@ def _counting(monkeypatch):
     return calls
 
 
-def test_a_loops_route_is_remembered_for_its_object(monkeypatch):
+def test_a_loops_route_walks_nothing(monkeypatch):
     calls = _counting(monkeypatch)
     arr = np.zeros(10)
     ns = {"arr": arr, "words": _words()}
@@ -58,13 +60,26 @@ def test_a_loops_route_is_remembered_for_its_object(monkeypatch):
     assert in_place.routed_as_a_copy(arr, ns)
     assert in_place.routed_as_a_copy(arr, ns)
 
-    assert len(calls) == 1
+    assert calls == []
 
 
-def test_an_object_held_by_its_id_is_asked_each_time(monkeypatch):
+def test_a_frame_a_loop_writes_into_is_routed_with_no_walk(monkeypatch):
+    """The shape of ``for i in range(n): df.loc[i, 'b'] = ...`` on a frame
+    pandas keeps a weak reference to inside itself."""
+    pd = pytest.importorskip("pandas")
+    calls = _counting(monkeypatch)
+    df = pd.DataFrame({"a": range(5), "b": 0.0})
+
+    assert in_place.routed_as_a_copy(df, {"df": df, "held": [(i, str(i)) for i in range(20_000)]})
+
+    assert calls == []
+
+
+def test_an_object_a_hit_refused_is_asked_each_time(monkeypatch):
     calls = _counting(monkeypatch)
     arr = np.zeros(10)
     ns = {"arr": arr, "reg": {id(arr): "a"}}
+    in_place.forget_routed(arr)
 
     assert not in_place.routed_as_a_copy(arr, ns)
     assert not in_place.routed_as_a_copy(arr, ns)
@@ -72,31 +87,46 @@ def test_an_object_held_by_its_id_is_asked_each_time(monkeypatch):
     assert len(calls) == 2
 
 
-def test_a_forgotten_route_is_asked_again(monkeypatch):
+def test_a_refused_object_no_longer_held_is_routed_with_no_walk_again(monkeypatch):
     arr = np.zeros(10)
-    ns = {"arr": arr}
-    assert in_place.routed_as_a_copy(arr, ns)
-    ns["reg"] = {id(arr): "a"}
-
+    ns = {"arr": arr, "reg": {id(arr): "a"}}
     in_place.forget_routed(arr)
-
     assert not in_place.routed_as_a_copy(arr, ns)
+    del ns["reg"]
+    assert in_place.routed_as_a_copy(arr, ns)
+    calls = _counting(monkeypatch)
+
+    assert in_place.routed_as_a_copy(arr, ns)
+
+    assert calls == []
 
 
-def test_a_route_goes_with_its_object():
+def test_an_object_without_weak_references_is_asked_each_time(monkeypatch):
+    calls = _counting(monkeypatch)
+    obj = np.float64(1.5)
+    ns = {"x": obj}
+
+    assert in_place.routed_as_a_copy(obj, ns)
+    assert in_place.routed_as_a_copy(obj, ns)
+
+    assert len(calls) == 2
+
+
+def test_a_refusal_goes_with_its_object():
     arr = np.zeros(10)
-    assert in_place.routed_as_a_copy(arr, {"arr": arr})
+    in_place.forget_routed(arr)
     key = id(arr)
+    assert key in in_place._REFUSED
 
     del arr
 
-    assert key not in in_place._ROUTED
+    assert key not in in_place._REFUSED
 
 
-def test_the_reference_a_route_keeps_is_not_the_notebooks():
+def test_the_reference_a_refusal_keeps_is_not_the_notebooks():
     arr = np.zeros(10)
     ns = {"arr": arr}
-    in_place.routed_as_a_copy(arr, ns)
+    in_place.forget_routed(arr)
 
     assert weakref.getweakrefcount(arr)
     assert in_place.bound_as_a_copy(arr, ns)
