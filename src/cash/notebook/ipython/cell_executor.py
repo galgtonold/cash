@@ -536,6 +536,9 @@ class CellExecutor:
             control_structure_processor,
         )
         self._plots = PlotRuns(shell, statement_processor, upstream_checker)
+        #: ``(rows, hook_start)`` of the last cell whose statements raised,
+        #: until `take_failed_cell` hands them on.
+        self._failed_cell: tuple[list[ProcessResult], float] | None = None
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -555,6 +558,7 @@ class CellExecutor:
         - :class:`PipelineSyntaxError` — the cell's own AST failed to parse
         - :class:`RunInstead` — the caller runs its source through IPython
         """
+        self._failed_cell = None
         with self._cell_scope():
             cell = self._prepare_cell(raw_cell, ttl, cell_id)
             if not isinstance(cell, _CellRun):
@@ -565,6 +569,9 @@ class CellExecutor:
             except _BodyNotRun:
                 self._badges.close(cell.badge_display_id)
                 return PipelineSyntaxError()
+            except BaseException:
+                self._failed_cell = (cell.all_metrics, cell.hook_start)
+                raise
             return self._complete_cell(cell, result)
 
     async def execute_cell_async(
@@ -580,6 +587,7 @@ class CellExecutor:
         through :meth:`_execute_cell_statements_async`, so a top-level
         ``await`` runs on IPython's live loop.
         """
+        self._failed_cell = None
         with self._cell_scope():
             cell = self._prepare_cell(raw_cell, ttl, cell_id)
             if not isinstance(cell, _CellRun):
@@ -590,7 +598,18 @@ class CellExecutor:
             except _BodyNotRun:
                 self._badges.close(cell.badge_display_id)
                 return PipelineSyntaxError()
+            except BaseException:
+                self._failed_cell = (cell.all_metrics, cell.hook_start)
+                raise
             return self._complete_cell(cell, result)
+
+    def take_failed_cell(self) -> tuple[list[ProcessResult], float] | None:
+        """The rows of the cell that just raised, with when its hook started,
+        once: the statements that ran before the error, the upstream ones
+        among them, and the one that raised. None when the last cell did not
+        get as far as its statements."""
+        failed, self._failed_cell = self._failed_cell, None
+        return failed
 
     @contextlib.contextmanager
     def _cell_scope(self) -> Iterator[None]:

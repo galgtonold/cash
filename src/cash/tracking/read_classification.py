@@ -353,6 +353,12 @@ _module_kinds: LruMemo[str, tuple[bool, bool, bool, str]] = LruMemo(SOURCE_FILES
 _RESUMABLE = 0x20 | 0x80 | 0x200  # CO_GENERATOR | CO_COROUTINE | CO_ASYNC_GENERATOR
 
 
+#: How many anchors (`incidental_read`) a tracker keeps: one per cash frame
+#: its reads come from below, such as a statement's runner and a wrapper of
+#: a reader called in it.
+ANCHORS_KEPT = 4
+
+
 def incidental_read(path: str, own_package: str | None = None, anchor: list | None = None) -> str | None:
     """Why the read of *path* happening now is not the user's data, or None.
 
@@ -362,11 +368,12 @@ def incidental_read(path: str, own_package: str | None = None, anchor: list | No
     package directory. *own_package* is the top-level package of the code
     being cached -- its own files are its data, even when it is installed.
 
-    *anchor*, a tracker's one-slot list, keeps what the walk found below
-    cash's frame above the reading code (a notebook statement's runner): a
-    running frame's callers do not change, so the next read from under the
-    same frame replays that part, a handful of steps, instead of walking
-    the ~50 frames again (60 us a read in a 20,000-file loop).
+    *anchor*, a tracker's list, keeps what the walk found below cash's
+    frame above the reading code (a notebook statement's runner), newest
+    first, up to `ANCHORS_KEPT` of them: a running frame's callers do not
+    change, so the next read from under the same frame replays that part, a
+    handful of steps, instead of walking the ~50 frames again (60 us a read
+    in a 20,000-file loop).
     """
     path_nc = normcase_path(path)
     if _under(path_nc, interpreter_roots()) and not _under(path_nc, site_roots()):
@@ -381,12 +388,19 @@ def incidental_read(path: str, own_package: str | None = None, anchor: list | No
         kind = module_kind(frame)
         top = kind[3]
         if anchor is not None and top == "cash" and below_top not in (None, "cash"):
-            mark = anchor[0]
-            if mark is not None and mark[0] is frame and mark[1] == own_package and mark[2] == installed:
-                return _replay(mark[3], path_nc, state)
+            for mark in anchor:
+                if mark is not None and mark[0] is frame and mark[1] == own_package and mark[2] == installed:
+                    return _replay(mark[3], path_nc, state)
             if not frame.f_code.co_flags & _RESUMABLE:
                 steps = _steps_below(frame, own_package, installed)
-                anchor[0] = (frame, own_package, installed, steps)
+                mark = (frame, own_package, installed, steps)
+                # Newest first, beside the ones before: a loop whose body
+                # reads through cash's wrapper of a reader (``pd.read_csv``)
+                # as well as by ``open`` set the slot to the wrapper's frame,
+                # gone by the next ``open``, and both walked the whole stack
+                # for every read. One slice assignment, so pool threads
+                # sharing the list never see it half made.
+                anchor[:] = (mark, *anchor[: ANCHORS_KEPT - 1]) if anchor[0] is not None else (mark,)
                 return _replay(steps, path_nc, state)
         below_top = top
         why = _frame_says(frame, kind, own_package, installed, path_nc, state)

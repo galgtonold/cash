@@ -314,7 +314,7 @@ class MutationRouting:
             for name in (run.outputs & _assigned_into(node)) - run.est_fit - _rebound_names(node):
                 if not _storable_name(name, user_ns):
                     continue
-                if in_place.bound_as_a_copy(user_ns.get(name), user_ns):
+                if in_place.routed_as_a_copy(user_ns.get(name), user_ns):
                     copies.add(name)
                 else:
                     stored.add(name)

@@ -355,8 +355,9 @@ def test_an_import_while_another_thread_imports_is_still_the_import_s(tmp_path):
 
 def test_an_atexit_callback_taken_back_is_not_a_change():
     """``joblib.Parallel`` registers a clean-up with ``atexit`` for each
-    run and unregisters it when the run is done: nothing is left, though
-    ``atexit``'s count of callbacks never goes down."""
+    run and unregisters it when the run is done: nothing is left, whether
+    ``atexit``'s count of callbacks stays up (to Python 3.13) or goes down
+    with it (3.14 on)."""
     import atexit
 
     from cash.tracking import process_registries
@@ -374,6 +375,47 @@ def test_an_atexit_callback_taken_back_is_not_a_change():
         assert process_registries.changed(before) == ["atexit's callbacks (atexit.register)"]
     finally:
         atexit.unregister(cleanup)
+
+
+def test_a_joblib_run_changes_no_registry():
+    """joblib registers a clean-up of each temporary folder it makes and
+    unregisters it once it deleted the folder. From Python 3.14 that
+    unregister takes the callback out of ``atexit``'s count, which read as
+    the run having changed ``atexit``'s callbacks. The library's own
+    registrations are left out, and so are its own unregisters of them."""
+    np = pytest.importorskip("numpy")
+    joblib = pytest.importorskip("joblib")
+    from cash.tracking import process_registries
+
+    # Over joblib's 1 MB ``max_nbytes``: the array goes to such a folder.
+    big = np.arange(300_000, dtype=float)
+    for _ in range(2):
+        before = process_registries.snapshot()
+        sums = joblib.Parallel(n_jobs=2)(joblib.delayed(np.sum)(big) for _ in range(2))
+        assert sums == [big.sum()] * 2
+        assert process_registries.changed(before) == []
+
+
+LDA_CELLS = [
+    "import numpy as np\nfrom sklearn.decomposition import LatentDirichletAllocation\n"
+    "X = np.random.default_rng(0).poisson(0.5, size=(200, 50))",
+    "lda = LatentDirichletAllocation(n_components=3, max_iter=2, random_state=0, n_jobs=2).fit(X)",
+]
+
+
+@pytest.mark.usefixtures("store_everything")
+@pytest.mark.timeout(120)
+def test_a_fit_on_two_jobs_is_stored(cash_magics):
+    """scikit-learn's ``n_jobs=2`` runs through joblib, whose ``atexit``
+    clean-up removes a temporary folder only the run makes: a hit makes no
+    folder, so skipping it changes nothing (p13's 36 s LDA fit ran again
+    every time on Python 3.14)."""
+    pytest.importorskip("sklearn")
+    for _ in range(2):
+        for cell in LDA_CELLS:
+            run_cash_cell(cash_magics, cell, cells=LDA_CELLS)
+    statuses = [str(s["status"]) for s in cash_magics._last_cell_metrics["statements"]]
+    assert statuses == ["RESTORED"], statuses
 
 
 @pytest.mark.usefixtures("store_everything")

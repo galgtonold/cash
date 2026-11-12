@@ -44,7 +44,7 @@ import sys
 import types
 import weakref
 from collections.abc import Iterable, Mapping
-from itertools import compress
+from itertools import chain, compress
 from operator import not_
 from typing import Any
 
@@ -61,6 +61,7 @@ from .identity_holders import IdentityHeld, library_parts
 
 __all__ = [
     "bound_as_a_copy",
+    "forget_routed",
     "holder_refusal",
     "identity_kept",
     "memory_refusal",
@@ -68,6 +69,7 @@ __all__ = [
     "refusal",
     "restorable_kind",
     "restore_into",
+    "routed_as_a_copy",
     "written_into",
     "written_names",
 ]
@@ -126,7 +128,7 @@ def refusal(obj: Any, namespace: Mapping[str, Any] | None = None) -> str | None:
         return "it holds itself, and a copy would hold the copy"
     # A weak reference the state holds itself comes back with it (pandas'
     # between the blocks of a frame).
-    refs = [ref for item in weakly for ref in weakref.getweakrefs(item) if id(ref) not in parts]
+    refs = [ref for item in weakly for ref in _users_refs(item) if id(ref) not in parts]
     held = _held_by_the_notebook(parts, refs, namespace or {})
     return None if held is None else _identity_refusal(held)
 
@@ -261,18 +263,72 @@ def _copy_refusal(obj: Any, namespace: Mapping[str, Any], name: str) -> str | No
     weakly: list[Any] = []
     if _reaches([obj], _NOTHING, seen=parts, weakly=weakly) is None:
         return f"'{name}' holds too many objects to check that nothing points at them"
-    refs = [ref for item in weakly for ref in weakref.getweakrefs(item) if id(ref) not in parts]
+    refs = [ref for item in weakly for ref in _users_refs(item) if id(ref) not in parts]
     held = _held_by_the_notebook(parts, refs, namespace)
     return None if held is None else str(_identity_refusal(held, it=f"'{name}' or an object it holds"))
+
+
+def routed_as_a_copy(obj: Any, namespace: Mapping[str, Any]) -> bool:
+    """`bound_as_a_copy`, as a loop's routing asks it before the loop runs,
+    remembered for the object while it lives: the notebook is walked once
+    for it, not before each loop that assigns into it (a list of 200,000
+    lists of words cost each such loop 0.2 s).
+
+    Only a route: a hit asks `bound_as_a_copy` again of the live objects,
+    and one it refuses is forgotten (`forget_routed`), so a weak reference
+    or an ``id()`` taken since is seen. An object the notebook holds by
+    identity is not remembered, and is asked each time."""
+    if restorable_kind(obj) or isinstance(obj, (list, dict, set)):
+        return False
+    key = id(obj)
+    known = _ROUTED.get(key)
+    if known is not None and known() is obj:
+        return True
+    if _held_itself(obj, namespace) is not None:
+        return False
+    try:
+        kept = _weak.ref(obj, lambda _gone, key=key: _forget_route(key, _gone))
+    except TypeError:  # no weak reference to it: asked each time
+        return True
+    if len(_ROUTED) >= _MAX_ROUTED:
+        _ROUTED.clear()
+    _ROUTED[key] = kept
+    return True
+
+
+def forget_routed(obj: Any) -> None:
+    """Drop what `routed_as_a_copy` remembered of *obj*: a hit found it
+    held by identity, and its next loop is routed afresh."""
+    known = _ROUTED.get(id(obj))
+    if known is not None and known() is obj:
+        del _ROUTED[id(obj)]
+
+
+def _forget_route(key: int, gone: Any) -> None:
+    if _ROUTED.get(key) is gone:
+        del _ROUTED[key]
+
+
+#: The objects `routed_as_a_copy` found not held by identity, by their
+#: ``id()``, each by a reference of cash's (`cash._weak.ref`), which no
+#: walk counts as the notebook's.
+_ROUTED: dict[int, weakref.ReferenceType] = {}
+_MAX_ROUTED = 1024
+
+
+def _users_refs(obj: Any) -> list[Any]:
+    """The weak references to *obj* cash did not make (`cash._weak.is_cash_ref`):
+    cash's own are never the notebook's."""
+    try:
+        return [ref for ref in weakref.getweakrefs(obj) if not _weak.is_cash_ref(ref)]
+    except TypeError:
+        return []
 
 
 def _held_itself(obj: Any, namespace: Mapping[str, Any]) -> str | None:
     """How the notebook holds *obj* itself by identity (`_held_by_the_notebook`):
     a weak reference to it, or its ``id()``; None when it does not."""
-    try:
-        refs = weakref.getweakrefs(obj)
-    except TypeError:
-        refs = []
+    refs = _users_refs(obj)
     if refs:
         # One *obj* holds itself comes back with the copy (pandas keeps one
         # to the frame in its ``_flags``).
@@ -406,21 +462,19 @@ def _held_below(
             if type(held) is str:
                 return held
             seen.add(id(value))
-            try:
-                if not parts.isdisjoint(held) or not texts.isdisjoint(held):
-                    return _BY_ID
-            except TypeError:  # an unhashable item: one at a time
-                if any(type(item) in (int, str) and (item in parts or item in texts) for item in held):
-                    return _BY_ID
             if len(held) > _MAX_SCANNED:
-                # Not looked inside one item at a time: a container of
-                # numbers, strings and the like keeps nothing else; what
-                # any other holds is read a level at a time at C speed.
+                # Not looked inside one item at a time: its numbers and
+                # strings are compared at C speed, and what any other item
+                # holds is read a level at a time (`_read_in_bulk`).
                 if set(map(type, held)) <= _LEAVES:
+                    if _holds_one_of(held, parts, texts):
+                        return _BY_ID
                     continue
                 held = _read_in_bulk(held, parts, texts)
                 if type(held) is str:
                     return held
+            elif _holds_one_of(held, parts, texts):
+                return _BY_ID
             budget[0] -= len(held) + 1
             if budget[0] < 0:
                 return _TOO_MANY
@@ -465,6 +519,18 @@ def _written_in_python(klass: type) -> bool:
 _GC_READS: weakref.WeakKeyDictionary[type, bool] = _weak.WeakKeyDictionary()
 
 
+def _holds_one_of(held: list[Any], parts: set[int], texts: set[str]) -> bool:
+    """Whether a number or a text among *held* is one of *parts* or *texts*."""
+    try:
+        return not parts.isdisjoint(held) or not texts.isdisjoint(held)
+    except TypeError:  # an unhashable item: the leaves alone
+        leaves = [item for item in held if type(item) in _LEAVES]
+        try:
+            return not parts.isdisjoint(leaves) or not texts.isdisjoint(leaves)
+        except TypeError:  # an unhashable leaf (a signalling NaN): one at a time
+            return any(type(item) in (int, str) and (item in parts or item in texts) for item in leaves)
+
+
 def _read_in_bulk(held: list[Any], parts: set[int], texts: set[str]) -> list[Any] | str:
     """What the items of *held*, a container too big to walk one item at a
     time, hold, read a level at a time at C speed: `_BY_ID` when a number
@@ -472,7 +538,12 @@ def _read_in_bulk(held: list[Any], parts: set[int], texts: set[str]) -> list[Any
     left for `_held_below` to look at itself (classes, functions, weak
     references, an object of a C type...), or `_TOO_MANY` when they are
     many. A ``TarFile``'s 100,000 ``TarInfo`` members (mlbook ch08 keeps
-    the archive it extracted) hold numbers, names and empty dicts."""
+    the archive it extracted) hold numbers, names and empty dicts.
+
+    Each level is sorted by its items' classes, not looked at one item at
+    a time: a list of 200,000 lists of words cost each loop 0.3 s. A
+    dict's keys are read as well as its values, since the garbage
+    collector does not report a dict's string keys (``{hex(id(p)): ...}``)."""
     left: dict[int, Any] = {}
     found = held
     met = 0
@@ -480,23 +551,40 @@ def _read_in_bulk(held: list[Any], parts: set[int], texts: set[str]) -> list[Any
         met += len(found)
         if met > _MAX_BULK:
             return _TOO_MANY
-        leaf = list(map(_LEAVES.__contains__, map(type, found)))
-        leaves = list(compress(found, leaf))
-        try:
-            if not parts.isdisjoint(leaves) or not texts.isdisjoint(leaves):
+        kinds = list(map(type, found))
+        present = set(kinds)
+        if present <= _LEAVES:
+            if _holds_one_of(found, parts, texts):
                 return _BY_ID
-        except TypeError:  # an unhashable leaf (a signalling NaN): one at a time
-            if any(type(item) in (int, str) and (item in parts or item in texts) for item in leaves):
+            return list(left.values())
+        if present.isdisjoint(_LEAVES):
+            others, other_kinds = found, kinds
+        else:
+            leaf = list(map(_LEAVES.__contains__, kinds))
+            if _holds_one_of(list(compress(found, leaf)), parts, texts):
                 return _BY_ID
-        level: dict[int, Any] = {}
-        for value in compress(found, map(not_, leaf)):
-            (level if _gc_reads_it_all(type(value)) else left)[id(value)] = value
+            others = list(compress(found, map(not_, leaf)))
+            other_kinds = list(compress(kinds, map(not_, leaf)))
+            present -= _LEAVES
+        reads = {kind: _gc_reads_it_all(kind) for kind in present}
+        if all(reads.values()):
+            level = dict(zip(map(id, others), others))
+        else:
+            readable = list(map(reads.__getitem__, other_kinds))
+            inside = list(compress(others, readable))
+            level = dict(zip(map(id, inside), inside))
+            rest = list(compress(others, map(not_, readable)))
+            left.update(zip(map(id, rest), rest))
         if len(left) > _MAX_SCANNED:
             return _TOO_MANY
         if len(level) <= _MAX_SCANNED:
             left.update(level)
             return list(left.values())
-        found = get_referents(*level.values())
+        values = list(level.values())
+        found = get_referents(*values)
+        if dict in reads:
+            # The keys too: the collector leaves out a dict's string keys.
+            found.extend(chain.from_iterable(map(dict.keys, compress(values, map(dict.__instancecheck__, values)))))
     return _TOO_MANY
 
 

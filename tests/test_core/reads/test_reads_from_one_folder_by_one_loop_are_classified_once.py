@@ -8,7 +8,8 @@ so a read from the folder of the last one, by the same code below the same
 anchor frame and with ``sys.path`` as it was, takes the last answer. Each
 case here is answered as the full walk answers it: a package installed into
 a folder put on ``sys.path`` in the middle of the loop, two functions taking
-turns reading one folder, and a folder that is itself on ``sys.path``,
+turns reading one folder, a loop reading by ``open`` and through cash's
+wrapper of a reader by turns, and a folder that is itself on ``sys.path``,
 where a module file is a package of its own.
 """
 
@@ -137,7 +138,9 @@ def test_two_readers_taking_turns_are_each_credited_their_own_files(tmp_path, mo
     steps.where = tmp_path
 
     (fast, fast_code), (full, full_code), again = _both_ways(monkeypatch, steps)
-    assert len(again) == 3  # the second read of each pair after the first
+    # Both readers are kept: every read but the first two (the very first
+    # had no anchor yet) and the first by ``second``.
+    assert len(again) == 5
     assert fast.accessed_files == full.accessed_files == _resolved(files)
     for statement in (fast_code, full_code):
         assert _credited(statement, "first", files) == {f for i, f in enumerate(files) if i % 4 < 2}
@@ -206,3 +209,30 @@ def test_a_library_function_equal_to_a_user_helper_is_not_taken_for_it(tmp_path)
     assert {
         f for f in files if normalize_path(os.path.realpath(f)) in read_credit.credited_reads(helper.__code__)
     } == set(files)
+
+
+def test_a_loop_reading_by_open_and_through_a_wrapper_takes_both_answers(tmp_path, monkeypatch):
+    """The wrapper's frame is a newer anchor than the statement's runner, and
+    gone by the next ``open``: with one anchor and one reader kept, every
+    read of the loop was walked in full (E10's ``pd.concat`` loop shape)."""
+    files = _files(tmp_path / "mixed", [f"m{i}.txt" for i in range(8)])
+    wrapper = _code(
+        "cash.tracking.fake_reader_wrapper",
+        "def read_through(path):\n    with open(path, encoding='utf-8') as fh:\n        return fh.read()\n",
+    )["read_through"]
+
+    def steps():
+        out = []
+        for p in files:
+            out.append(("first", p))
+            out.append(lambda p=p: wrapper(p))
+        return out
+
+    steps.where = tmp_path
+    (fast, fast_code), (full, full_code), again = _both_ways(monkeypatch, steps)
+    # All but the first read of each kind took an earlier answer, and the
+    # second ``open`` (the first had no anchor yet).
+    assert len(again) == 2 * len(files) - 3
+    assert fast.accessed_files == full.accessed_files == _resolved(files)
+    for statement in (fast_code, full_code):
+        assert _credited(statement, "first", files) == set(files)
