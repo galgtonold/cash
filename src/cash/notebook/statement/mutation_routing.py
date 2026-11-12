@@ -35,6 +35,7 @@ from ...value_types import BUILTIN_NAMES
 from ..cache_key import statement_source_hash
 from ..call_key import changes_its_closure
 from ..callee_reach import CWD, ENVIRON, module_state_names, module_state_writes, process_state_writes, state_holders
+from ..loop_watch import watch_candidates
 from ..shared_objects import history_names
 from . import in_place
 from .control_body import is_control_body
@@ -319,17 +320,37 @@ class MutationRouting:
                 else:
                     stored.add(name)
             run.bound_copies = copies
-            if stored and not self._cheap_to_rerun(run):
-                run.outputs = run.outputs | stored
-                run.est_fit = run.est_fit | stored
-                run.metrics["stored_in_place"] = sorted(stored)
-                changed -= stored
+            changed -= self._store_loop_in_place(run, stored)
         run.in_place = changed
         if run.in_place:
             _skip(
                 run,
                 f"In-place mutation on: {', '.join(sorted(run.in_place))} (statement re-executes)",
             )
+
+    def _store_loop_in_place(self, run: StatementRun, stored: set[str]) -> set[str]:
+        """Store *stored*, names a loop changes in place, as its outputs, a
+        hit restoring them into the live objects, unless the loop last ran
+        faster than that would save. The names stored."""
+        if not stored or self._cheap_to_rerun(run):
+            return set()
+        run.outputs = run.outputs | stored
+        run.est_fit = run.est_fit | stored
+        run.metrics["stored_in_place"] = sorted(set(run.metrics.get("stored_in_place", ())) | stored)
+        return stored
+
+    def reroute_refused(self, run: StatementRun) -> None:
+        """After a hit refused *run*'s entry because the notebook now holds
+        an object it binds to the stored copy (`in_place.forget_routed`),
+        store that object to be written into instead, as a route that
+        walked the notebook would have (`in_place.routed_as_a_copy` walks
+        only for an object a hit refused): else the run stores the copy
+        again, and no hit serves it."""
+        user_ns = self.shell.user_ns
+        held = {name for name in run.bound_copies if name in user_ns and in_place.refused(user_ns[name])}
+        if held:
+            # One not stored stays bound to a copy, which a hit asks again.
+            run.bound_copies = run.bound_copies - self._store_loop_in_place(run, held)
 
     def _route_receivers(
         self, run: StatementRun, effects: StatementEffects, mut_pre_route: set[str], fit_only: set[str] = frozenset()
@@ -824,6 +845,42 @@ def _rebound_names(node: ast.AST) -> set[str]:
         elif isinstance(sub, ast.MatchAs | ast.MatchStar) and sub.name:
             names.add(sub.name)
     return names
+
+
+def rebound_only(tree: ast.Module | None, user_ns: Mapping[str, Any], lineage: Mapping[str, str]) -> frozenset[str]:
+    """The names the loop *tree* binds anew on its passes and nothing in it
+    can change in place: not assigned into (``a[i] = v``), not changed by
+    a call its text decides (``a.append(v)``), not handed to code whose
+    effect is unknown (`watch_candidates`). Such a name holding the same
+    object after the loop as before it was bound to that object again
+    (``actions = session['actions']`` on the same last session), not
+    changed through it. Empty for anything but a loop, or when what the
+    loop changes cannot be told."""
+    if tree is None or len(tree.body) != 1 or not isinstance(tree.body[0], ast.For | ast.AsyncFor | ast.While):
+        return frozenset()
+    node = tree.body[0]
+    bound = _rebound_names(node) - _assigned_into(node)
+    if not bound:
+        return frozenset()
+
+    def resolve(name: str) -> str | None:
+        return live_function_source(name, user_ns)
+
+    def is_module(name: str) -> bool:
+        return is_module_name(name, user_ns)
+
+    try:
+        changed = control_structure_mutations(
+            node,
+            lambda name: name in BUILTIN_NAMES and name not in lineage,
+            is_module,
+            namespace=user_ns,
+            resolve_source=resolve,
+        )
+        handed = watch_candidates(node, user_ns, is_module, resolve)
+    except Exception:  # noqa: BLE001 - what the loop changes is unknown: none is exempt
+        return frozenset()
+    return frozenset(bound - set(changed) - set(handed))
 
 
 def _storable_name(name: str, user_ns: dict) -> bool:

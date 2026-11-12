@@ -67,6 +67,7 @@ __all__ = [
     "memory_refusal",
     "ready",
     "refusal",
+    "refused",
     "restorable_kind",
     "restore_into",
     "routed_as_a_copy",
@@ -329,51 +330,62 @@ def _copy_refusal(obj: Any, namespace: Mapping[str, Any], name: str) -> str | No
 
 
 def routed_as_a_copy(obj: Any, namespace: Mapping[str, Any]) -> bool:
-    """`bound_as_a_copy`, as a loop's routing asks it before the loop runs,
-    remembered for the object while it lives: the notebook is walked once
-    for it, not before each loop that assigns into it (a list of 200,000
-    lists of words cost each such loop 0.2 s).
+    """`bound_as_a_copy`, as a loop's routing asks it before the loop runs:
+    yes, with no walk of the notebook, unless a hit already refused the
+    object (`forget_routed`).
 
-    Only a route: a hit asks `bound_as_a_copy` again of the live objects,
-    and one it refuses is forgotten (`forget_routed`), so a weak reference
-    or an ``id()`` taken since is seen. An object the notebook holds by
-    identity is not remembered, and is asked each time."""
+    Only a route: a hit asks `bound_as_a_copy` of the live objects (a weak
+    reference or an ``id()`` taken after the store must be seen there
+    anyway), so routing a held object as a copy stores an entry no hit
+    serves, never a wrong one. Walking the notebook before each loop cost
+    a loop beside 2,000,000 objects 0.8 s a run (``df.loc[i, c] = v`` in
+    a loop over a fresh frame, which no memo of the route spared). Once a
+    hit refused the object, its next routes walk, so a held object is
+    then stored to be written into, and an object no weak reference can
+    be taken to, whose refusal cannot be remembered, is walked each time."""
     if restorable_kind(obj) or isinstance(obj, (list, dict, set)):
         return False
-    key = id(obj)
-    known = _ROUTED.get(key)
-    if known is not None and known() is obj:
+    if not refused(obj):
+        try:
+            _weak.ref(obj)
+        except TypeError:  # its refusal could not be remembered: walked each time
+            return _held_itself(obj, namespace) is None
         return True
     if _held_itself(obj, namespace) is not None:
         return False
-    try:
-        kept = _weak.ref(obj, lambda _gone, key=key: _forget_route(key, _gone))
-    except TypeError:  # no weak reference to it: asked each time
-        return True
-    if len(_ROUTED) >= _MAX_ROUTED:
-        _ROUTED.clear()
-    _ROUTED[key] = kept
+    _REFUSED.pop(id(obj), None)
     return True
 
 
 def forget_routed(obj: Any) -> None:
-    """Drop what `routed_as_a_copy` remembered of *obj*: a hit found it
-    held by identity, and its next loop is routed afresh."""
-    known = _ROUTED.get(id(obj))
-    if known is not None and known() is obj:
-        del _ROUTED[id(obj)]
+    """Remember that a hit found *obj* held by identity: its next loops
+    walk the notebook before they are routed (`routed_as_a_copy`)."""
+    key = id(obj)
+    try:
+        kept = _weak.ref(obj, lambda _gone, key=key: _forget_refusal(key, _gone))
+    except TypeError:  # routed by a walk each time anyway
+        return
+    if len(_REFUSED) >= _MAX_REFUSED:
+        _REFUSED.clear()
+    _REFUSED[key] = kept
 
 
-def _forget_route(key: int, gone: Any) -> None:
-    if _ROUTED.get(key) is gone:
-        del _ROUTED[key]
+def refused(obj: Any) -> bool:
+    """Whether a hit found *obj* held by identity (`forget_routed`)."""
+    known = _REFUSED.get(id(obj))
+    return known is not None and known() is obj
 
 
-#: The objects `routed_as_a_copy` found not held by identity, by their
+def _forget_refusal(key: int, gone: Any) -> None:
+    if _REFUSED.get(key) is gone:
+        del _REFUSED[key]
+
+
+#: The objects a hit found held by identity (`forget_routed`), by their
 #: ``id()``, each by a reference of cash's (`cash._weak.ref`), which no
 #: walk counts as the notebook's.
-_ROUTED: dict[int, weakref.ReferenceType] = {}
-_MAX_ROUTED = 1024
+_REFUSED: dict[int, weakref.ReferenceType] = {}
+_MAX_REFUSED = 1024
 
 
 def _users_refs(obj: Any) -> list[Any]:
