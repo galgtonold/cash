@@ -2,13 +2,13 @@
 
 Before memoization, a single ``run_all`` re-read and re-parsed the notebook file
 ~30 times (the magic reads once per cell; the upstream checker reads twice per
-cell), and each read paid a ``_wait_for_notebook_save`` sleep on the freshly
+cell), and each read paid a fixed save-settle sleep on the freshly
 saved file — adding >1s of pure overhead per edit even though no user code was
 recomputed.
 
 This test pins the fix: across a ``run_all`` after an edit, the notebook is
 actually read (the cache-miss path, which is the only place
-``_wait_for_notebook_save`` runs) only a small bounded number of times.
+``_read_saved_notebook`` runs) only a small bounded number of times.
 """
 
 import pytest
@@ -50,9 +50,9 @@ def test_edit_does_not_trigger_notebook_read_storm(nb_runner):
         (
             "from cash.notebook import server_discovery as _sd\n"
             "_sd._READS = 0\n"
-            "_orig = _sd._wait_for_notebook_save\n"
+            "_orig = _sd._read_saved_notebook\n"
             "def _w(p):\n    _sd._READS += 1\n    return _orig(p)\n"
-            "_sd._wait_for_notebook_save = _w\n"
+            "_sd._read_saved_notebook = _w\n"
         ),
     )
 
@@ -75,7 +75,7 @@ def test_edit_does_not_trigger_notebook_read_storm(nb_runner):
         # tests in test_numpy_out_rerun.py ("306.0" not in "36.0" -- the edit
         # to an upstream cell never reached the downstream one), reproduced in
         # 5s from a two-file run.
-        _exec(nb_runner, ("from cash.notebook import server_discovery as _sd\n_sd._wait_for_notebook_save = _orig\n"))
+        _exec(nb_runner, ("from cash.notebook import server_discovery as _sd\n_sd._read_saved_notebook = _orig\n"))
 
     # Per file state we parse once (the code-only and with-ids views share it).
     # A small bound (<= 4) leaves slack while still catching the ~30x storm.
