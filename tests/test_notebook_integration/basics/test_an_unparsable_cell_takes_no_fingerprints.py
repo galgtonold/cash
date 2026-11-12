@@ -119,7 +119,7 @@ def test_an_automagic_line_that_runs_python_keeps_its_fingerprints(nb_runner, tm
     change a tracked value in place: cash still fingerprints around it, and a
     statement reading the value sees the change."""
     script = tmp_path / "grow.py"
-    script.write_text("data.append([-1])\n")
+    script.write_text("data.append([-1])\n", encoding="utf-8")
     probe = f'run -i "{script}"'
 
     outcome, taken = _run_counted(nb_runner, [_DATA], probe)
