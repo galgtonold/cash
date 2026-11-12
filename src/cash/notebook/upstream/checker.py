@@ -30,6 +30,7 @@ from ..server_discovery import (
 from ..shared_objects import hold_repair_snapshot, release_repair_snapshot
 from ..staleness import StalenessTracker, normalise_source
 from ..statement.carrier_advances import reachable_generators
+from ..string_lookups import cell_reads_names_unseen
 from ..tracking_state import TrackingState
 from .changed_below import warn_changed_below
 from .notebook_vetting import NotebookVetter
@@ -793,14 +794,20 @@ class UpstreamChecker:
 
     @staticmethod
     def _repair_cells(
-        statements: list[str], restored_info: list[ProcessResult], notebook_cells: list[str]
+        statements: list[str], restored_info: list[ProcessResult], notebook_cells: list[str], current_cell_idx: int
     ) -> dict[str, int]:
         """``{name: the index of the last cell}`` a statement the repair
         re-ran or restored that touches the name stands in: one it restored
         binding it, or one it re-ran reading or binding it (``y.append(2)``
         binds nothing by its text, yet changes ``y``). A statement not found
-        in the notebook leaves its names out."""
-        cells = statement_cells(tuple(notebook_cells))
+        in the notebook leaves its names out.
+
+        Only the cells up to the cell count: the repair runs what stands
+        above it. A cell below repeating the text (``housing_prepared =
+        cat_pipeline.fit_transform(housing)`` again in a later section) is
+        not where the re-run stands, and taken for it the name it binds
+        would look bound by the repair there, not below."""
+        cells = statement_cells(tuple(notebook_cells[: current_cell_idx + 1]))
         found: dict[str, int] = {}
 
         def note(code: str, names: Any) -> None:
@@ -831,9 +838,12 @@ class UpstreamChecker:
         sessions: dict[str, str],
         current_cell_idx: int,
         notebook_cells: list[str],
+        cell_code: str,
+        required_inputs: set[str],
     ) -> None:
         """Put back the live binding of each name the repair rebound from a
-        cell above the one whose run bound it last, itself above the cell.
+        cell above the one whose run bound it last, when that cell is above
+        the cell, or below it and the cell provably never touches the name.
 
         Restoring or re-running a statement binds every name it binds:
         ``X, y = make_moons(...)``, run again on the way to a ``voting_clf``,
@@ -857,27 +867,46 @@ class UpstreamChecker:
         - the live lineage is the one a run from the top has where the cell
           starts (``simulated_lineage``).
 
-        Not a name the cell itself or a cell below it bound: a run from the
-        top gives the cell what the repair gave it (``b = b * 10`` run again
-        reads ``b`` as the cell above made it). Such a name keeps what the
-        repair gave it, and NOTEBOOK-CHANGED-BELOW says so
-        (`_warn_rebuilt_changed_below`); the partner rule keeps a name a
-        cell below bound out of a repair to begin with
-        (``MismatchClassifier._made_below``).
+        Not a name the cell itself bound, nor one a cell below bound that
+        the cell may read: a run from the top gives the cell what the repair
+        gave it (``b = b * 10`` run again reads ``b`` as the cell above made
+        it). Such a name keeps what the repair gave it, and
+        NOTEBOOK-CHANGED-BELOW says so (`_warn_rebuilt_changed_below`); the
+        partner rule keeps a name a cell below bound out of a repair to
+        begin with (``MismatchClassifier._made_below``).
+
+        A name a cell below bound that the cell neither reads nor binds, by
+        its text or through a function it calls, with no way to read a name
+        it does not show (`cell_reads_names_unseen`), is put back: the
+        statement re-run to repair an input binds it on the way
+        (``housing_prepared = cat_pipeline.fit_transform(housing)``, re-run
+        for ``cat_pipeline``). The cell's run is the same either way, and
+        after it plain Jupyter has the live value, which no cell then run
+        rebinds; the repaired one would stand until the cell below runs
+        again. The statement there must still stand in it and bind the name
+        unconditionally, as for a cell above, so that the cell recorded is
+        the one that bound it.
         """
         user_ns = self.shell.user_ns
         state = self.tracking_state
+        untouched: set[str] | None = None
         for name, repaired_at in sorted(rebound.items()):
             at = cells.get(name)
-            if at is None or at <= repaired_at or not 0 <= at < current_cell_idx:
-                # Bound by the cell itself or one below it: a run from the
-                # top gives the cell what the repair gave it, and however the
-                # cell reads the name (``globals()['n']`` in a function it
-                # calls, ``__main__.n``), that is what it must read.
+            if at is None or at <= repaired_at or at == current_cell_idx or not 0 <= at < len(notebook_cells):
                 continue
+            below = at > current_cell_idx
+            if below:
+                if untouched is None:
+                    untouched = self._untouched_by_cell(cell_code, required_inputs)
+                if name not in untouched:
+                    # The cell may read it: a run from the top gives the cell
+                    # what the repair gave it, and however the cell reads the
+                    # name (``globals()['n']`` in a function it calls,
+                    # ``__main__.n``), that is what it must read.
+                    continue
             if not _binds_unconditionally(notebook_cells[at], bound_by.get(name), name):
                 continue
-            if state.simulated_lineage.get(name) != lineages.get(name):
+            if not below and state.simulated_lineage.get(name) != lineages.get(name):
                 # The statement that bound it is no longer what the cell
                 # there says (``data = data + [4]`` commented out).
                 continue
@@ -893,6 +922,22 @@ class UpstreamChecker:
             if name in sessions:
                 state.current_session_hashes[name] = sessions[name]
             trace_event("kept_live_binding", name=name, bound_in=at, repaired_in=repaired_at)
+
+    def _untouched_by_cell(self, cell_code: str, required_inputs: set[str]) -> set[str]:
+        """The live names the cell provably neither reads nor binds: not
+        among *required_inputs* (its reads and what the functions it calls
+        read), not named by its text, and the cell has no way to read a
+        name it does not show (`cell_reads_names_unseen`). Empty when that
+        cannot be shown."""
+        user_ns = self.shell.user_ns
+        if cell_reads_names_unseen(cell_code, required_inputs, user_ns, self.tracking_state.variable_lineage):
+            return set()
+        try:
+            reads, binds = CodeAnalyzer.analyze_code_block(cell_code)
+        except SyntaxError:
+            return set()
+        named = {node.id for node in ast.walk(ast.parse(cell_code)) if isinstance(node, ast.Name)}
+        return set(user_ns) - required_inputs - reads - binds - named
 
     def _warn_rebuilt_changed_below(
         self,
@@ -1109,7 +1154,7 @@ class UpstreamChecker:
             written_in = self._written_in(statements_to_reexecute, written, notebook_cells)
             written.clear()
             self._keep_live_bindings(
-                self._repair_cells(statements_to_reexecute, restored_info, notebook_cells),
+                self._repair_cells(statements_to_reexecute, restored_info, notebook_cells, current_cell_idx),
                 bindings_before,
                 lineages_before,
                 codes_before,
@@ -1118,6 +1163,8 @@ class UpstreamChecker:
                 session_before,
                 current_cell_idx,
                 notebook_cells,
+                cell_code,
+                required_inputs,
             )
             self.rng.label_rerun_metrics(executed_metrics, rng_rerun)
             total_execution_time = self.replay.sum_execution_times(executed_metrics)
