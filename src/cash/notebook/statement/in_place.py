@@ -61,6 +61,7 @@ from .identity_holders import IdentityHeld, library_parts
 
 __all__ = [
     "bound_as_a_copy",
+    "copies_kept",
     "forget_routed",
     "holder_refusal",
     "identity_kept",
@@ -259,6 +260,46 @@ def identity_kept(
             forget_routed(live)
             kind = type(live).__name__
             return into, f"{why}; a {kind} is not written into, and a copy would not be that object"
+    return into, None
+
+
+def copies_kept(
+    names: Iterable[str], restored: Mapping[str, Any], namespace: Mapping[str, Any]
+) -> tuple[set[str], str | None]:
+    """For a hit of a loop that bound the variables *names* to the stored
+    copy (``bound_copies``: ``arr[i] = v`` on a NumPy array): those whose
+    stored state goes into the live object instead, and why the hit must
+    not be served, or None.
+
+    A copy stays bound while nothing holds the live object by identity
+    (`bound_as_a_copy`). One the notebook holds now (``reg = {id(arr):
+    'a'}``, taken after the entry was stored) is written into when
+    `rewrite_in_place.mismatch` allows it (an array, a frame or a Series,
+    unchanged in shape) and no other value the entry restores holds it
+    (`holder_refusal`), as a statement's is (`identity_kept`): a loop whose
+    passes ran one by one is served so, and so is one whose rest ran as one
+    unit. Any other is refused, and its next loop routed afresh
+    (`forget_routed`)."""
+    into: set[str] = set()
+    for name in sorted(names):
+        if name not in namespace:
+            continue
+        live = namespace[name]
+        if bound_as_a_copy(live, namespace):
+            continue
+        if name in restored and written_into(live):
+            try:
+                fits = (
+                    rewrite_in_place.mismatch(live, restored[name]) is None
+                    and holder_refusal(name, restored[name], restored) is None
+                )
+            except Exception:  # noqa: BLE001 - an object whose own lookups raise: it runs
+                fits = False
+            if fits:
+                into.add(name)
+                continue
+        forget_routed(live)
+        return into, f"something points at {name} now"
     return into, None
 
 

@@ -107,12 +107,19 @@ class CacheHitServer:
         if metadata is not None and metadata.bound_copies:
             # Bound to the stored copy: a weak reference or an id() made
             # since points at the live object, which the copy is not.
-            user_ns = self._restorer.shell.user_ns
-            for name in metadata.bound_copies:
-                if name in user_ns and not in_place.bound_as_a_copy(user_ns[name], user_ns):
-                    # Its next loop is routed afresh (`in_place.routed_as_a_copy`).
-                    in_place.forget_routed(user_ns[name])
-                    return self._refused(f"something points at {name} now")
+            # One the stored state can be written into keeps its object
+            # instead (`in_place.copies_kept`); a refused one's next loop is
+            # routed afresh (`in_place.routed_as_a_copy`).
+            variables = cached_data.get("variables") if isinstance(cached_data, dict) else None
+            into, why = in_place.copies_kept(
+                metadata.bound_copies,
+                variables if isinstance(variables, dict) else {},
+                self._restorer.shell.user_ns,
+            )
+            if why is not None:
+                return self._refused(why)
+            if into:
+                metadata = replace(metadata, restored_into=sorted({*(metadata.restored_into or ()), *into}))
         if metadata is not None and run.analysis is not None and not is_one_structure(run.tree):
             # What the statement wrote into keeps its object, as in plain
             # Python: an id() key or a weak reference taken since the entry
