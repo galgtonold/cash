@@ -170,13 +170,24 @@ _warned_unseen = False
 
 def _warn_unseen_once() -> None:
     """NOTEBOOK-LOOKUPS-UNSEEN, once per session: what a statement finds
-    by a lookup is not checked here (`_REASON`)."""
+    by a lookup is not checked here (`_REASON`); below Python 3.12 neither
+    is the code it runs (a finalizer it causes, a routine a loop swaps in)."""
     global _warned_unseen
     if _warned_unseen:
         return
     _warned_unseen = True
+    # Below Python 3.12 the code a statement runs is not recorded either:
+    # what only that shows is not seen, and the first sentence, the one a
+    # warning shows by default, names it too.
+    old = _REASON == _OLD_PYTHON
+    unseen = (
+        "what a statement finds by a lookup, a finalizer its own garbage runs, or a library routine a "
+        "loop swaps into a module attribute"
+        if old
+        else "what a statement finds by a lookup"
+    )
     what = (
-        f"cash cannot watch what a statement finds by a lookup as it runs, as {_REASON}. "
+        f"cash cannot watch {unseen} as it runs, as {_REASON}. "
         "An object found by its name, such as a logger in "
         "`seen = logging.getLogger('app').level`, is not checked: once another cell "
         "changes it, the statement is served what it read before."
@@ -186,6 +197,13 @@ def _warn_unseen_once() -> None:
         "(`log = logging.getLogger('app')`) and read it through that, or run on "
         "Python 3.12 or newer with the monitoring tool ids 5 or 2 free."
     )
+    if old:
+        what += (
+            " Nor is the code it runs seen: a `__del__` or `weakref.finalize` its garbage runs that changes "
+            "a global, or a routine a loop swaps in (`m.get = logging.getLogger`) and calls on its next "
+            "pass, is left out, and the statement is served without it."
+        )
+        fix += " For a finalizer or a swapped-in routine, run on Python 3.12 or newer."
     log_diagnostic(_logger, CODE_UNSEEN, what, fix)
     warn_diagnostic(CashWarning, CODE_UNSEEN, what, fix, location=("<cash>", 0))
 

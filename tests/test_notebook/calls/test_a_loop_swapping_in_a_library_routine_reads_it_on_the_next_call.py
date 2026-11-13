@@ -15,9 +15,11 @@ from __future__ import annotations
 
 import logging
 import sys
+import warnings
 
 import pytest
 
+from cash.tracking import lookups_seen
 from tests._cell_driver import run_cash_cell
 
 needs_trace = pytest.mark.skipif(
@@ -61,3 +63,23 @@ def test_the_second_call_reads_the_logger_on_every_run(cash_magics, mock_shell, 
     for _ in range(2):
         run_cash_cell(cash_magics, cell, cells=cells)
         assert mock_shell.user_ns["lv"] == [-1, 20]
+
+
+@pytest.mark.skipif(sys.version_info >= (3, 12), reason="from Python 3.12 the swap is seen (above)")
+@pytest.mark.parametrize("swap", sorted(SWAPS))
+def test_below_python_3_12_a_warning_names_the_swap_unseen(cash_magics, monkeypatch, swap):
+    """Below Python 3.12 the routine swapped in is not seen, and the second
+    call may be served the first call's answer: NOTEBOOK-LOOKUPS-UNSEEN says
+    so, naming a routine a loop swaps in and the Python that sees it."""
+    monkeypatch.setattr(lookups_seen, "_warned_unseen", False)
+    cell = _cell(SWAPS[swap])
+    cells = [SETUP, cell]
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        run_cash_cell(cash_magics, SETUP, cells=cells)
+        for _ in range(2):
+            run_cash_cell(cash_magics, cell, cells=cells)
+    said = [str(w.message) for w in caught if getattr(w.message, "code", None) == "NOTEBOOK-LOOKUPS-UNSEEN"]
+    assert len(said) == 1, "the unseen swap was not said"
+    assert "swaps" in said[0]
+    assert "Python 3.12" in said[0]
