@@ -746,7 +746,6 @@ class ForLoopHandler:
         loop_code = ast.unparse(node)
         in_loop = self.statement_processor.in_loop
         in_loop.open_watch(node, loop_code, self.statement_processor.resolve_live_function_source)
-        in_loop.run_in_passes(node)
         overlay = in_loop.push_overlay(_helpers.target_roots(self.shell, self.statement_processor, node))
         try:
             for idx, iteration_value in enumerate(source):
@@ -1042,9 +1041,6 @@ class ForLoopHandler:
                     _stamp_body_index(m, body_idx)
             if was_computed:
                 iteration_cached = False
-                if not is_control_structure(body_node):
-                    # It ran, not served: what it hands was handed.
-                    self.statement_processor.in_loop.statement_ran(node, body_idx)
         return iteration_cached
 
     def _name_a_moved_iterable(
