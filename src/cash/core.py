@@ -763,7 +763,7 @@ class Cash:
 
         wrapper = self._wrappers.wrap(cf)
         try:
-            self._decorations[func_name] = (cf, options, weakref.ref(wrapper))
+            self._decorations[func_name] = (cf, options, _weak.ref(wrapper))
         except TypeError:
             pass  # not weak-referenceable: decorated anew each time
         return wrapper
