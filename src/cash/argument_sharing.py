@@ -299,6 +299,11 @@ def reads_of(unit: Any, func: Callable) -> tuple[tuple, ...]:
     on a thread the trace did not follow, or a closure made outside the
     call."""
     if unit is None:
+        if sys.version_info < (3, 12):
+            # No fallback reads the code instead: a global read through a
+            # method, another module or a decorated helper is found only by
+            # what ran, so a guess from the text could serve a wrong result.
+            raise Unknown("what the call ran is recorded on Python 3.12 or newer only (sys.monitoring)")
         raise Unknown("what the call ran was not recorded")
     from .tracking.trace_items import name_table
 

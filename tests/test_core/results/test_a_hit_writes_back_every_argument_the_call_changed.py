@@ -9,13 +9,22 @@ sorted the caller's list and left the dict and the array as they were.
 
 from __future__ import annotations
 
+import sys
 import textwrap
 
 import numpy as np
+import pytest
 
 from tests._scripts import run_python
 
+needs_trace = pytest.mark.skipif(
+    sys.version_info < (3, 12),
+    reason="what a call ran is recorded with sys.monitoring, Python 3.12+; below it a call that changes its "
+    "argument in place runs every time, with a warning",
+)
 
+
+@needs_trace
 def test_a_list_a_dict_and_an_array_are_all_written_back(disk_cash):
     runs = []
 
@@ -63,6 +72,7 @@ SCRIPT = textwrap.dedent("""
 """)
 
 
+@needs_trace
 def test_a_new_process_writes_back_both(tmp_path):
     (tmp_path / "job.py").write_text(SCRIPT, encoding="utf-8")
     first = run_python("job.py", cwd=tmp_path).stdout.strip()

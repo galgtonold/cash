@@ -10,7 +10,16 @@ a hit writes ``a`` back: two warnings that contradict each other.
 
 from __future__ import annotations
 
+import sys
 import warnings
+
+import pytest
+
+needs_trace = pytest.mark.skipif(
+    sys.version_info < (3, 12),
+    reason="what a call ran is recorded with sys.monitoring, Python 3.12+; below it a call that changes its "
+    "argument in place runs every time, with a warning",
+)
 
 
 def _branchy(a, flag):
@@ -19,6 +28,7 @@ def _branchy(a, flag):
     return 0
 
 
+@needs_trace
 def test_only_the_line_saying_a_hit_writes_it_back(disk_cash):
     cached = disk_cash.cache(_branchy)
     with warnings.catch_warnings(record=True) as caught:

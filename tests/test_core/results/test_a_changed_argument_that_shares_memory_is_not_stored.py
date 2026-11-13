@@ -14,10 +14,17 @@ from __future__ import annotations
 
 import functools
 import importlib
+import sys
 import warnings
 
 import numpy as np
 import pytest
+
+needs_trace = pytest.mark.skipif(
+    sys.version_info < (3, 12),
+    reason="what a call ran is recorded with sys.monitoring, Python 3.12+; below it a call that changes its "
+    "argument in place runs every time, with a warning",
+)
 
 
 def _view_sum(a, b):
@@ -213,6 +220,7 @@ def test_a_global_of_another_module_is_seen(disk_cash, tmp_path, monkeypatch):
     assert got == plain == 105.0
 
 
+@needs_trace
 def test_the_warning_names_the_parameter(disk_cash):
     """``np.put`` changes ``a`` where reading the source does not see it,
     so the warning is the one the run gives."""

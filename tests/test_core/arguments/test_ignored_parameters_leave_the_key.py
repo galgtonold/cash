@@ -9,6 +9,7 @@ raises. The in-place-change check does not look at the ignored ones.
 from __future__ import annotations
 
 import logging
+import sys
 import textwrap
 import warnings
 from typing import Annotated
@@ -17,6 +18,12 @@ import pytest
 
 import cash
 from tests._scripts import run_python
+
+needs_trace = pytest.mark.skipif(
+    sys.version_info < (3, 12),
+    reason="what a call ran is recorded with sys.monitoring, Python 3.12+; below it a call that changes its "
+    "argument in place runs every time, with a warning",
+)
 
 
 def test_an_ignored_parameter_does_not_split_entries(cash_instance):
@@ -222,6 +229,7 @@ def test_an_ignored_argument_is_not_checked_for_in_place_changes(cash_instance):
     assert "is not stored" not in text
 
 
+@needs_trace
 def test_a_keyed_argument_beside_an_ignored_one_is_still_checked(cash_instance):
     @cash_instance.cache(ignore=["scratch"])
     def run(rows, scratch):
