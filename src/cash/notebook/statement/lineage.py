@@ -103,6 +103,8 @@ def _record_file_reads(
             stats=file_stats,
         )
     if cache_key:
+        # It ran: its own reads say what it gives now, not a restore of it.
+        tracking_state.restored_entries.pop(cache_key, None)
         tracking_state.statement_file_reads[cache_key] = (
             frozenset(accessed_files or ()),
             frozenset(accessed_remote or ()),

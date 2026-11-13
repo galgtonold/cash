@@ -1158,13 +1158,24 @@ class StatementLineage:
     def _entry_metadata(self, cache_key: str) -> dict | None | object:
         """The metadata of *cache_key*'s entry, read once for the statement
         (`_lookup_cached_lineages` takes it); `_UNREAD` when it could not be
-        read, for the lookup to try again as it always did."""
+        read, for the lookup to try again as it always did.
+
+        For an entry gone since the runtime restored the statement from it
+        this session (evicted, or dropped as no faster than its compute),
+        the metadata it was restored with (`TrackingState.restored_entries`):
+        the outputs hold what that restore gave them, checked against the
+        files it recorded as a stored entry is. Built afresh, their lineage
+        took the files they inherited, which no run of the statement makes,
+        and the cells below rebuilt them as stale."""
         if not self.probe.cash_instance:
             return None
         try:
-            return self.probe.metadata(cache_key)
+            found = self.probe.metadata(cache_key)
         except (KeyError, TypeError, OSError, ValueError):
             return _UNREAD
+        if found is None:
+            return self.tracking_state.restored_entries.get(cache_key)
+        return found
 
     @staticmethod
     def _stale_paths(hist_files: Mapping[str, Any]) -> list[str]:

@@ -179,6 +179,7 @@ class CacheRestorer:
 
             # 2. Query Memory Backend first (fastest) - Or just generic backend
             metadata, cached_data = self.probe.backend().get(cache_key)
+            found = metadata
             if cached_data is not None:
                 # Call results the entry refers to rather than copies (call_refs).
                 cached_data = resolve_call_refs(cached_data, self.probe.backend())
@@ -262,6 +263,10 @@ class CacheRestorer:
                 )
                 if holders and restored_vars:
                     self.tracking_state.held_with[cache_key] = dict(holders) if metadata.get("holders_moved") else {}
+                if restored_vars:
+                    # For the simulation, should the entry be gone when it
+                    # is asked of again (`TrackingState.restored_entries`).
+                    self.tracking_state.restored_entries[cache_key] = dict(found)
                 if restored_vars and metadata.get("anchor_links"):
                     # As the run linked them (`anchors`).
                     link_anchors(

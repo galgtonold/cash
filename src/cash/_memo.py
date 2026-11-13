@@ -36,6 +36,7 @@ __all__ = [
     "READ_PATHS",
     "RECORDS",
     "RECORDS_AS_RUN",
+    "RESTORED_ENTRIES",
     "REMOTE_URLS",
     "RESULT_TYPES",
     "SOURCE_FILES",
@@ -228,6 +229,11 @@ PRODUCER_SNAPSHOTS = 64
 #: read, by its cache key, for the statements below it to take over when
 #: its entry holds none: a folder read's records run to thousands of files.
 RECORDS_AS_RUN = 64
+
+#: The metadata of each entry a statement was restored from this session,
+#: by its cache key: one per statement of the notebook, its file records
+#: shared with the entry's (`TrackingState.restored_entries`).
+RESTORED_ENTRIES = 1 << 14
 
 #: One entry's own file records, read back, per token that names them
 #: (`cash.notebook.file_records`), and one entry's records with those it
