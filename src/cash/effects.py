@@ -876,13 +876,22 @@ def environment_parts_component(parts: Iterable[tuple[str, str]]) -> str:
     return f":env:{joined}" if joined else ""
 
 
+#: How many keys have folded an environment read in this process: a key
+#: built while it moved holds a value no watcher sees
+#: (`cash.decorator.state_memo`).
+ENVIRONMENT_READS_FOLDED = [0]
+
+
 def environment_component(entries: Iterable[EnvironmentInput], note: Callable[[str, str], None] | None = None) -> str:
     """The key component for the environment reads *entries*: their current
     values, digested. Empty when there are none, so a key that reads no
     environment is exactly what it was. *note* is told each read's label and
     digest, for the account of why a key changed."""
     parts = []
-    for entry in sorted(set(entries)):
+    entries = sorted(set(entries))
+    if entries:
+        ENVIRONMENT_READS_FOLDED[0] += 1
+    for entry in entries:
         digest = _environment_digest(entry)
         if note is not None:
             note(environment_label(entry), digest)

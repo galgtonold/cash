@@ -65,6 +65,7 @@ from typing import TYPE_CHECKING, Any
 
 from .. import _native, _weak
 from .._clock import perf_counter as _perf_counter
+from .._memo import CODE_OBJECTS, LruMemo
 from ..analysis.helper_code import own_code_is_user
 from ..source_reading import own_source
 from ..tracking.tracker_context import active_tracker
@@ -103,7 +104,11 @@ class HitMemoMismatch(AssertionError):
 def bump() -> None:
     """Something cash keeps changed in a way any key may read (a clear, a
     registration, a setting): no remembered hit is served until it is met
-    again through the ordinary path."""
+    again through the ordinary path. Nor is a remembered state segment
+    (`state_memo`)."""
+    from . import state_memo
+
+    state_memo.moved()
     if _cw is not None:
         _cw.bump_cash()
 
@@ -244,9 +249,21 @@ def _code_names(code: types.CodeType, into: set[str]) -> None:
             into.add(const)
 
 
-def _signature_names(source: str) -> set[str]:
+#: `_signature_names` by source text: a scan of a function's world parsed
+#: each function's source again, most of what a scan cost.
+_SIGNATURE_NAMES: LruMemo[str, frozenset[str]] = LruMemo(CODE_OBJECTS)
+
+
+def _signature_names(source: str) -> frozenset[str]:
     """The names the annotations in *source*'s ``def`` line read (a key may
     resolve them); every identifier of *source* when it does not parse."""
+    found = _SIGNATURE_NAMES.get(source)
+    if found is None:
+        found = _SIGNATURE_NAMES[source] = frozenset(_parse_signature_names(source))
+    return found
+
+
+def _parse_signature_names(source: str) -> set[str]:
     try:
         tree = ast.parse(textwrap.dedent(source))
     except (SyntaxError, ValueError):
@@ -284,6 +301,9 @@ class _Scan:
         #: The user classes met: what an ABC registers and the classes
         #: defined below them move no watched dict (`family`).
         self.classes: list[type] = []
+        #: The library classes met, MRO included: watched, and only the
+        #: attributes the scanned code names looked into (`finish`).
+        self.library_classes: list[type] = []
         self.count = 0
 
     def _first(self, key: Any, obj: Any) -> bool:
@@ -445,8 +465,14 @@ class _Scan:
             if tag is None:
                 raise Ineligible("a class without a version tag")
             self.types[id(k)] = (k, tag)
-            if is_user_code_object(k):
-                self.classes.append(k)
+            if not is_user_code_object(k):
+                # A library's class is keyed by its name, its code not read
+                # (`_library_class_attr_parts`): what a key reads of it is
+                # an attribute the code names (``pd.Timestamp.max``), and a
+                # rebinding of any is a type event, which the watch sees.
+                self.library_classes.append(k)
+                continue
+            self.classes.append(k)
             for name, attr in list(vars(k).items()):
                 if _is_dunder(name) or name.startswith("_abc_"):
                     # Machinery, never data the key reads; but code it runs.
@@ -454,6 +480,30 @@ class _Scan:
                         self.value(attr, frozenset())
                     continue
                 self.value(attr, frozenset())
+
+    def finish(self) -> None:
+        """Look into the attributes of the library classes met that the
+        scanned code names, until no new name is met."""
+        from .key_values import plain_data_kind
+
+        done: set[tuple[int, str]] = set()
+        while True:
+            pending = []
+            names = self.names
+            for k in list(self.library_classes):
+                ns = vars(k)
+                for name in names.intersection(ns) if len(names) < len(ns) else [n for n in ns if n in names]:
+                    if (id(k), name) not in done:
+                        pending.append((k, name))
+            if not pending:
+                return
+            for k, name in pending:
+                done.add((id(k), name))
+                attr = vars(k)[name]
+                # Only data is keyed of a library's class: a descriptor or
+                # a method of its own is its code, keyed by its name.
+                if plain_data_kind(attr) is not None:
+                    self.value(attr, frozenset())
 
     def family(self) -> _Family | None:
         """What a fast hit checks of the user classes met that no watcher
@@ -546,6 +596,7 @@ def scan(spec: CachedFunction, registry: Any) -> tuple[tuple, tuple, list, _Fami
             if dep not in visited:
                 visited.add(dep)
                 stack.append(dep)
+    s.finish()
     _watch_modules()
     s.commit()
     cells = tuple(x for pair in s.cells for x in pair)
@@ -579,6 +630,7 @@ def scan_trace(spec: CachedFunction, registry: Any, items: list) -> tuple[tuple,
         else:
             # A lookup by name or an import by name: checked on each hit.
             raise Ineligible(f"a traced {kind}")
+    s.finish()
     _watch_modules()
     s.commit()
     cells = tuple(x for pair in s.cells for x in pair)
@@ -1104,14 +1156,14 @@ def memo_for(spec: CachedFunction, runner: Any) -> HitMemo | None:
     memo = spec.hit_memo
     if memo is not None:
         return memo
-    if not ENABLED or spec.hit_state is None or not _plain_spec(spec):
+    if not ENABLED or spec.hit_state is None or not plain_spec(spec):
         return None
     memo = HitMemo(spec, runner)
     spec.hit_memo = memo
     return memo
 
 
-def _plain_spec(spec: CachedFunction) -> bool:
+def plain_spec(spec: CachedFunction) -> bool:
     import inspect
 
     return not (

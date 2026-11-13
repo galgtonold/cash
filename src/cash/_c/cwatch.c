@@ -2653,6 +2653,25 @@ declined:
 }
 
 
+/* world_holds(cells, types) -> bool
+ *   What `fast_lookup` checks of a memo besides its epochs and entries:
+ *   every cell holds what it held, every class is as it was watched.
+ *   For the decorator's state memo (cash/decorator/state_memo.py). */
+static PyObject *py_world_holds(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs != 2 || !PyTuple_CheckExact(args[0]) || !PyTuple_CheckExact(args[1])) {
+        PyErr_SetString(PyExc_TypeError, "world_holds(cells tuple, types tuple)"); return NULL;
+    }
+    PyObject *cells = args[0], *types = args[1];
+    for (Py_ssize_t i = 0; i + 1 < PyTuple_GET_SIZE(cells); i += 2)
+        if (!still_held(PyTuple_GET_ITEM(cells, i), PyTuple_GET_ITEM(cells, i + 1))) Py_RETURN_FALSE;
+    for (Py_ssize_t i = 0; i + 1 < PyTuple_GET_SIZE(types); i += 2) {
+        PyObject *t = PyTuple_GET_ITEM(types, i);
+        if (!PyType_Check(t) || !type_tag_is(PyTuple_GET_ITEM(types, i + 1), (PyTypeObject *)t)) Py_RETURN_FALSE;
+    }
+    Py_RETURN_TRUE;
+}
+
+
 /* -- serving a fast hit in C ------------------------------------------- */
 /* memo state list slots (hit_memo keeps the same numbers) */
 enum { S_WORLD = 0, S_ENTRIES, S_CELLS, S_TYPES, S_SERVE, S_ACC, S_SPEC, S_LOG, S_GUARD, S_CLEAR_AT, S_FLAGS,
@@ -3023,6 +3042,7 @@ static PyMethodDef methods[] = {
     {"expect_set", (PyCFunction)(void (*)(void))py_expect_set, METH_FASTCALL, ""},
     {"expect_clear", py_expect_clear, METH_NOARGS, ""},
     {"fast_lookup", (PyCFunction)(void (*)(void))py_fast_lookup, METH_FASTCALL, ""},
+    {"world_holds", (PyCFunction)(void (*)(void))py_world_holds, METH_FASTCALL, ""},
     {"fast_call", (PyCFunction)(void (*)(void))py_fast_call, METH_FASTCALL, ""},
     {"hit_configure", py_hit_configure, METH_VARARGS, ""},
     {"take_touches", py_take_touches, METH_NOARGS, ""},
