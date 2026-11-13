@@ -388,6 +388,8 @@ class UpstreamChecker:
         # A name the previous cell's forward probe held and no restore filled.
         self.simulator.restorer.drop_probe_placeholders()
         self.tracking_state.probe_held.clear()
+        # What the cell that ran last left (`StaleValueGuard.note_cell_left`).
+        self.simulator.stale_values.note_cell_left(self.tracking_state.running_cell)
         # Unplaced until the check has found the cell and rebuilt what is above it.
         self.tracking_state.running_cell = None
         self.tracking_state.running_cell_rerun = False
