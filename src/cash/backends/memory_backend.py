@@ -963,7 +963,9 @@ class InMemoryBackend(CacheBackend):
                 reuse = shared_blocks.BlockReuse.for_frame(frame)
             timed = shared_blocks.bytes_to_copy(frame) if record_cells is not None and frame.ndim == 2 else 0
             started = time.perf_counter()
-            copied = frame_sharing.copy_keeping_blocks(frame, arrow=arrow, reuse=reuse)
+            copied = frame_sharing.copy_keeping_blocks(
+                frame, arrow=arrow, reuse=reuse, storing=record_cells is not None
+            )
             if timed >= _STORE_TIMED_BYTES:
                 _note_store_copy_speed(timed, time.perf_counter() - started)
         if not _own_metadata(frame, copied):

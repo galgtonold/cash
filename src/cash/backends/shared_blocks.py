@@ -20,7 +20,7 @@ rebinds a table and adds a column (``df["hour"] = ...``) stores the same
 frame again, its other blocks the very arrays the tier copied a statement
 before. The tier remembers which caller's array each stored block was
 copied from (`keep`); when that array is stored again, its bytes are
-compared with the stored block's (`_same_bytes`), and only an exact match
+compared with the stored block's (`same_bytes`), and only an exact match
 is taken. The caller may have written the array in place since, past
 pandas (``s.array[0] = ...``); comparing reads both, writes nothing and
 allocates nothing, where the copy it replaces wrote fresh pages.
@@ -37,7 +37,7 @@ from ..content_hashers import column_memory_key, known_column_pieces, pandas_val
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["BlockReuse", "bytes_to_copy", "compared_count", "content_keys", "is_kept", "reused_count"]
+__all__ = ["BlockReuse", "bytes_to_copy", "compared_count", "content_keys", "is_kept", "reused_count", "same_bytes"]
 
 #: ``content key -> weak reference`` to block values a stored table holds.
 _KEPT: dict[tuple, Any] = {}
@@ -71,7 +71,7 @@ def reused_count() -> tuple[int, int]:
 
 def compared_count() -> tuple[int, int]:
     """Caller's blocks compared with the stored block copied from them
-    (`_same_bytes`), and the bytes of each side compared."""
+    (`same_bytes`), and the bytes of each side compared."""
     return _Counts.compared, _Counts.compared_bytes
 
 
@@ -164,7 +164,7 @@ class BlockReuse:
         stored = refs[1]()
         if stored is None or block_layout(stored) != source[1]:
             return None
-        return stored if _same_bytes(block.values, stored) else None
+        return stored if same_bytes(block.values, stored) else None
 
     def keep(self, copied: Any) -> None:
         """Make the blocks of *copied*, the stored copy of the table, the
@@ -238,7 +238,7 @@ def content_keys(frame: Any) -> dict[tuple, tuple]:
 
 def _sources(frame: Any) -> dict[tuple, tuple[Any, tuple]]:
     """``positions -> (values, layout)`` for each block of *frame* whose
-    bytes `_same_bytes` can compare."""
+    bytes `same_bytes` can compare."""
     sources = {}
     try:
         for block in frame._mgr.blocks:
@@ -279,14 +279,16 @@ def _raw(values: Any) -> Any:
     return getattr(values, "_ndarray", values)
 
 
-#: Elements `_same_bytes` compares at a time: what it allocates is this many
+#: Elements `same_bytes` compares at a time: what it allocates is this many
 #: booleans, whatever the size of the block.
 _COMPARE_CHUNK = 1 << 20
 
 
-def _same_bytes(values: Any, stored: Any) -> bool:
+def same_bytes(values: Any, stored: Any, *, counted: bool = True) -> bool:
     """Do the block values *values* and *stored*, of one `block_layout`, hold the
-    same bytes? Read in memory order, a chunk at a time."""
+    same bytes? Read in memory order, a chunk at a time. *counted* False:
+    not a block's compare, left out of `compared_count` (an index's labels,
+    `frame_sharing`)."""
     import numpy as np
 
     a, b = _raw(values), _raw(stored)
@@ -297,8 +299,9 @@ def _same_bytes(values: Any, stored: Any) -> bool:
         return False
     if a.size != b.size or not (a.flags.c_contiguous and b.flags.c_contiguous):
         return False
-    _Counts.compared += 1
-    _Counts.compared_bytes += int(a.size)
+    if counted:
+        _Counts.compared += 1
+        _Counts.compared_bytes += int(a.size)
     if a.size % 8 == 0:
         a, b = a.view(np.uint64), b.view(np.uint64)
     out = np.empty(min(a.size, _COMPARE_CHUNK), dtype=bool)
