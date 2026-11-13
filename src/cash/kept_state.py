@@ -2367,6 +2367,8 @@ _REDUCES_BY_VALUE = frozenset(
     {
         ("pandas._libs.tslibs.timestamps", "_Timestamp"),
         ("pandas", "Timedelta"),
+        # pandas 2 names its Timedelta for the module that defines it.
+        ("pandas._libs.tslibs.timedeltas", "Timedelta"),
     }
 )
 
@@ -2446,7 +2448,12 @@ def _own_attrs(obj: Any) -> dict:
     the process: keyed with it, a value holding a logger changed whenever
     any library made a logger, and keying it nested a pickle per logger
     until the stack ran out. What a class holds is the class's state, read
-    where the class is."""
+    where the class is.
+
+    Nor the ``_cache`` dict pandas' ``cache_readonly`` properties fill as
+    they are read (`_fills_cache_readonly`): a pandas 2 Index notes its
+    lookup engine there on the first column read, and keyed with it, a
+    value holding a frame changed whenever a call read a column of it."""
     attrs = _instance_attrs(obj)
     if not attrs:
         return attrs
@@ -2454,6 +2461,8 @@ def _own_attrs(obj: Any) -> dict:
     own: dict = {}
     for name, value in attrs.items():
         if any(klass.__dict__.get(name, _NOT_HELD) is value for klass in t.__mro__):
+            continue
+        if name == "_cache" and type(value) is dict and _fills_cache_readonly(t):
             continue
         if type(value) is types.FunctionType and value.__dict__.get(_INSTRUMENTATION) is True:
             # Cash's own, set on the object while a statement runs and
@@ -2464,6 +2473,34 @@ def _own_attrs(obj: Any) -> dict:
 
 
 _NOT_HELD = object()
+
+
+def _fills_cache_readonly(t: type) -> bool:
+    """Does *t* have a pandas ``cache_readonly`` property? Each one keeps
+    what it computed from the object, which pandas does not change in
+    place (an Index), in the object's ``_cache`` dict: derived from the
+    rest, never state of its own. Known by the descriptor, not by the
+    attribute's name. Remembered per type."""
+    try:
+        return _FILLS_CACHE_READONLY[t]
+    except KeyError:
+        pass
+    except TypeError:  # a class whose metaclass makes it unhashable
+        return _decide_fills_cache_readonly(t)
+    found = _FILLS_CACHE_READONLY[t] = _decide_fills_cache_readonly(t)
+    return found
+
+
+def _decide_fills_cache_readonly(t: type) -> bool:
+    for klass in t.__mro__:
+        for value in klass.__dict__.values():
+            kind = type(value)
+            if kind.__name__ == "CachedProperty" and kind.__module__ == "pandas._libs.properties":
+                return True
+    return False
+
+
+_FILLS_CACHE_READONLY: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()
 
 #: The attribute `mark_instrumentation` sets on a function of cash's own.
 _INSTRUMENTATION = "__cash_instrumentation__"
