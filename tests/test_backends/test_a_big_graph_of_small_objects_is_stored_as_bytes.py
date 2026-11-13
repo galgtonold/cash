@@ -94,7 +94,7 @@ PROGRAM = textwrap.dedent("""
 def trie_module(tmp_path, monkeypatch):
     folder = tmp_path / "mod"
     folder.mkdir()
-    (folder / "trie_nodes.py").write_text(TRIE)
+    (folder / "trie_nodes.py").write_text(TRIE, encoding="utf-8")
     monkeypatch.syspath_prepend(str(folder))
     sys.modules.pop("trie_nodes", None)
     import trie_nodes
