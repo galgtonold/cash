@@ -26,6 +26,7 @@ import functools
 import pathlib
 import sys
 import uuid
+import weakref
 from collections.abc import Mapping
 from typing import Any
 
@@ -197,3 +198,17 @@ def is_runtime_machinery(value: Any) -> bool:
     """Is *value* a lock, event, thread, logger, handler, stream or socket
     (`RUNTIME_MACHINERY_TYPES`)?"""
     return isinstance(value, RUNTIME_MACHINERY_TYPES) or type(value).__module__ in _RUNTIME_MACHINERY_MODULES
+
+
+def is_dead_proxy(value: Any) -> bool:
+    """Is *value* a ``weakref.proxy`` whose object is gone? Every read of
+    one raises ``ReferenceError``, ``isinstance`` included; it holds nothing.
+    A library may keep one in an attribute after the object went (numba's
+    dispatchers do)."""
+    if type(value) not in weakref.ProxyTypes:
+        return False
+    try:
+        value.__class__  # the read is the test
+    except ReferenceError:
+        return True
+    return False

@@ -12,7 +12,7 @@ from typing import Any
 from .._type_memo import TypeMemo, type_key
 from ..analysis.helper_code import is_mock, renamed
 from ..jit_functions import jit_python_function
-from ..value_types import IMMUTABLE_LEAF_TYPES
+from ..value_types import IMMUTABLE_LEAF_TYPES, is_dead_proxy
 from .module_identity import module_ref
 from .user_code import is_user_class, is_user_code_object, own_package
 
@@ -218,6 +218,10 @@ def _stabilized(v: Any, hash_callable, _path: frozenset[int], carried: bool) -> 
         return v, False
     if id(v) in _path:
         return ("__cash_cycle__", type(v).__qualname__), False
+    if is_dead_proxy(v):
+        # Its object is gone: it holds nothing, the same in every process,
+        # and any read of it (pickling included) raises.
+        return ("__cash_dead_proxy__",), True
     if issubclass(type(v), types.ModuleType):
         # A module cannot be pickled: `{"fft": numpy.fft}` warned unhashable,
         # and switching it to `scipy.fft` served the old result. Which module.
