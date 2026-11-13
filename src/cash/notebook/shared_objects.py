@@ -1752,7 +1752,7 @@ def _value_records(children: Any, exact: frozenset[type]) -> list[Any] | None:
 _JUST_TUPLE = frozenset({tuple})
 
 
-def holds_part_of(value: Any, sources: Iterable[Any]) -> bool:
+def holds_part_of(value: Any, sources: Iterable[Any], value_held: bool = True) -> bool:
     """Whether *value* is or holds an object one of *sources* is or holds.
 
     A function's result restored as a copy is only the same as calling the
@@ -1763,10 +1763,15 @@ def holds_part_of(value: Any, sources: Iterable[Any]) -> bool:
     the builtin containers and the attributes of the notebook's own objects.
     A numpy view holds the arrays it sits on (`view_bases`), on both sides:
     ``window(a, 2)`` returning ``a[2:5]`` holds part of ``a``.
+
+    Not *value_held*: nothing but the caller holds *value* itself. Then,
+    when it holds no other object with an identity (a frame of numbers and
+    text, ``pd.concat(frames)``), no source can hold it, and the sources
+    are not read: a list of 87,000 frames was walked frame by frame.
     """
     value_types = VALUE_TYPES + library_value_types()
     own = set(_identities(value, value_types))
-    if not own:
+    if not own or (not value_held and own == {id(value)}):
         return False
     return any(key in own for source in sources for key in _identities(source, value_types))
 

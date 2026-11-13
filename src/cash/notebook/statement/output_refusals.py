@@ -179,15 +179,20 @@ def _value_refusal(
     restored_into: set[str] | frozenset[str] = frozenset(),
     homes: dict[int, str] | None = None,
 ) -> str | None:
-    """The first refusal one output's value earns on its own."""
+    """The first refusal one output's value earns on its own.
+
+    The identity walk before the alias check: when it gives up on a value
+    holding more objects than it looks through, the alias check need not
+    walk them all again (a list of 87,000 small frames, 2 s), nor fill
+    *homes* for a statement that is not stored."""
     refusals: tuple[Callable[[str, Any], str | None], ...] = (
-        lambda name, value: _alias_refusal(name, value, user_ns, cash_held, inputs, homes),
         identity_coupled_reason,
         _consumable_refusal,
         _context_variable_refusal,
         lambda name, value: identity_held_reason(
             name, value, user_ns, weak_holders=name not in restored_into, more=_answers_budget(name, value)
         ),
+        lambda name, value: _alias_refusal(name, value, user_ns, cash_held, inputs, homes),
     )
     for refusal in refusals:
         for out in outputs:
