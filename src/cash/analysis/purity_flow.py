@@ -30,7 +30,17 @@ import types
 from contextvars import ContextVar
 from typing import Any
 
-__all__ = ["fresh_name_nodes", "receiver_is_fresh", "LogOnlyFlow", "is_log_helper", "is_log_line"]
+__all__ = [
+    "fresh_name_nodes",
+    "fresh_flow_nodes",
+    "library_fresh_calls",
+    "fresh_call_candidates",
+    "resolve_fresh_call_candidates",
+    "receiver_is_fresh",
+    "LogOnlyFlow",
+    "is_log_helper",
+    "is_log_line",
+]
 
 _FRESH_CONSTRUCTOR_NAMES = frozenset(
     {
@@ -528,9 +538,16 @@ def library_fresh_calls(func_def: ast.AST, namespace: dict[str, Any]) -> frozens
     module that happens to be called ``np`` is not taken for numpy. A name
     the body rebinds is left out: the namespace no longer says what it is.
     """
+    return resolve_fresh_call_candidates(fresh_call_candidates(func_def), namespace)
+
+
+def fresh_call_candidates(func_def: ast.AST) -> tuple[ast.Call, ...]:
+    """The calls in *func_def* `library_fresh_calls` resolves: rooted at a
+    name the body does not rebind, not a view by name, not told to share. A
+    function of the tree alone."""
     rebound = {n.id for n in ast.walk(func_def) if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del))}
     rebound |= {a.arg for a in ast.walk(func_def) if isinstance(a, ast.arg)}
-    found: set[int] = set()
+    found: list[ast.Call] = []
     for node in ast.walk(func_def):
         if not isinstance(node, ast.Call):
             continue
@@ -543,7 +560,15 @@ def library_fresh_calls(func_def: ast.AST, namespace: dict[str, Any]) -> frozens
         name = func.attr if isinstance(func, ast.Attribute) else root.id
         if name in _LIBRARY_VIEW_FUNCTIONS or any(kw.arg in _SHARING_KEYWORDS for kw in node.keywords):
             continue
-        obj = _resolve_callee(func, namespace)
+        found.append(node)
+    return tuple(found)
+
+
+def resolve_fresh_call_candidates(candidates: tuple[ast.Call, ...], namespace: dict[str, Any]) -> frozenset[int]:
+    """The `library_fresh_calls` among *candidates*, resolved through *namespace*."""
+    found: set[int] = set()
+    for node in candidates:
+        obj = _resolve_callee(node.func, namespace)
         if obj is _UNRESOLVED or issubclass(type(obj), types.ModuleType) or not callable(obj):
             continue
         real_name = _plain_attr(obj, "__name__")
@@ -983,18 +1008,25 @@ def fresh_name_nodes(func_def: ast.AST, namespace: dict[str, Any] | None = None)
 
     Nested function bodies are not walked; their names are never marked.
     """
+    calls = library_fresh_calls(func_def, namespace) if namespace else frozenset()
+    return fresh_flow_nodes(func_def, calls) | calls
+
+
+def fresh_flow_nodes(func_def: ast.AST, calls: frozenset[int]) -> frozenset[int]:
+    """The flow half of `fresh_name_nodes`, given the fresh library *calls*:
+    a function of the tree and *calls* alone, so a caller that keeps the
+    tree may keep the answer too."""
     excluded: set[str] = set()
     for node in ast.walk(func_def):
         if isinstance(node, (ast.Global, ast.Nonlocal)):
             excluded.update(node.names)
-    calls = library_fresh_calls(func_def, namespace) if namespace else frozenset()
     flow = _FreshFlow(frozenset(excluded), _escaped_names(func_def))
     token = _FRESH_CALLS.set(calls)
     try:
         flow.block(getattr(func_def, "body", []), set())
     finally:
         _FRESH_CALLS.reset(token)
-    return frozenset(k for k, v in flow.marks.items() if v) | calls
+    return frozenset(k for k, v in flow.marks.items() if v)
 
 
 # -- ambient reads that only reach a log line --------------------------------
