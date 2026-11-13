@@ -29,6 +29,7 @@ import sys
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
+from .code_swaps import note_report
 from .data_source import state_token_of
 
 if TYPE_CHECKING:
@@ -233,6 +234,9 @@ class DependencyStateHasher:
         #    The node's own qualname is skipped (its source is already in
         #    step 1); unresolved helpers fall back to the recorded snapshot.
         report = own_report if own_report is not None else self._purity_reports.get(node)
+        # The code each helper ran when walked, compared again after the
+        # body (`cash.code_swaps`).
+        note_report(report)
         if report is not None and report.helper_source_hashes:
             current = self._helper_resolver.current_hashes(report)
             for qual in sorted(report.helper_source_hashes):

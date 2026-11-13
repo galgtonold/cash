@@ -437,6 +437,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # -- STORE: compute succeeded, the write did not ------------------------
         "STORE-CODE-CHANGED",  # a code file changed on disk after the key
         # was read, so the result was not stored
+        "STORE-CODE-SWAPPED",  # a function's code is replaced during every
+        # call, so its key never describes the code that ran: not stored
         "STORE-CHUNK-FAILED",  # a chunked write failed partway; the entry is
         # incomplete on retrieval
         "CACHE-RESULT-SHARED",  # the result shares state with the caller's own object

@@ -11,6 +11,7 @@ from typing import Any
 
 from .._annotation_refs import annotation_referents
 from .._memo import CODE_OBJECTS, LruMemo
+from ..code_swaps import settable
 from ..install_paths import is_user_module
 from .arg_hashing import is_opaque
 from .call_state import KeyBuildFailed
@@ -51,14 +52,18 @@ class CodeRefs:
     (`CodeRefs.reached`)."""
 
     def __init__(self) -> None:
-        # object -> tuple of (code object, globals dict) it carries. Static for
-        # as long as that object exists (a redefinition makes a new one), so it
-        # is safe to memo; the NAMES those code objects reference are resolved
-        # fresh per call, because what a name is bound to can change.
-        self._code_refs_cache: LruMemo[Any, tuple] = LruMemo(CODE_OBJECTS)
+        # object -> (the functions whose code was read and that code, the
+        # (code object, globals dict) pairs it carries). Held while each of
+        # those functions still runs that code: a redefinition makes a new
+        # object, but ``%autoreload`` and networkx's ``argmap`` set
+        # ``__code__`` on the same one. The NAMES those code objects
+        # reference are resolved fresh per call, because what a name is
+        # bound to can change.
+        self._code_refs_cache: LruMemo[Any, tuple[tuple, tuple]] = LruMemo(CODE_OBJECTS)
 
-    def _code_and_globals(self, obj: Any):
-        """Yield ``(code object, globals)`` for the code *obj* carries."""
+    def _code_and_globals(self, obj: Any, read_from: list | None = None):
+        """Yield ``(code object, globals)`` for the code *obj* carries;
+        each ``(function, its code)`` read goes on *read_from*."""
         carriers: list[Any] = []
         if isinstance(obj, type):
             for base in obj.__mro__:
@@ -92,6 +97,8 @@ class CodeRefs:
                     code = getattr(layer, "__code__", None)
                     glb = getattr(layer, "__globals__", None)
                     if isinstance(code, types.CodeType) and isinstance(glb, dict):
+                        if read_from is not None and settable(layer):
+                            read_from.append((layer, code))
                         yield from walk_nested_code(code, glb)
 
     def targets(self, obj: Any) -> list[Any]:
@@ -111,13 +118,16 @@ class CodeRefs:
         """
         pairs = None
         try:
-            pairs = self._code_refs_cache.get(obj)
+            cached = self._code_refs_cache.get(obj)
         except TypeError:
-            pass  # unhashable - recompute each time rather than fail
+            cached = None  # unhashable - recompute each time rather than fail
+        if cached is not None and all(getattr(fn, "__code__", None) is code for fn, code in cached[0]):
+            pairs = cached[1]
         if pairs is None:
-            pairs = tuple(self._code_and_globals(obj))
+            read_from: list = []
+            pairs = tuple(self._code_and_globals(obj, read_from))
             try:
-                self._code_refs_cache[obj] = pairs
+                self._code_refs_cache[obj] = (tuple(read_from), pairs)
             except TypeError:
                 pass
 
