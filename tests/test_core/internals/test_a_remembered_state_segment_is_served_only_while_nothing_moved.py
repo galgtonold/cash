@@ -68,6 +68,13 @@ def outer(x):
     return inner(x) * 10
 
 
+INNER_CACHED = None
+
+
+def via_wrapper(x):
+    return INNER_CACHED(x) * 10
+
+
 def tally(x):
     COUNTS.setdefault(x, x)  # not a write the source shows: learned when seen
     return x
@@ -290,3 +297,40 @@ def test_verify_mode_raises_on_a_stale_reuse(c, monkeypatch):
     RATE = 9
     with pytest.raises(state_memo.StateMemoMismatch):
         c._keys._code_state(spec, [], note=True)
+
+
+def test_a_source_hash_written_straight_into_the_registry(c, memo_kind, monkeypatch):
+    """``app.source_hashes[name] = ...`` bypasses registration: the
+    registry's own dicts move the generation on any write."""
+    monkeypatch.setattr(sys.modules[__name__], "INNER_CACHED", c.cache(inner))
+    f = c.cache(via_wrapper)
+    old = _warm(c, f, 1)
+    c.source_hashes[inner.__module__ + "." + inner.__qualname__] = "changed"
+    _check(c, f, memo_kind, old)
+
+
+def test_a_data_source_token_is_never_remembered(c):
+    """A token no watcher sees: a segment that folded one is built again."""
+    from cash import DataSource
+
+    class Version(DataSource):
+        token = "v1"
+
+        def get_id(self) -> str:
+            return "version"
+
+        def state_token(self) -> str:
+            return self.token
+
+    version = Version()
+    f = c.cache(depends_on=[version])(times_rate)
+    f(1)
+    before = state_memo.STATS["remembered"]
+    seen = set()
+    for token in ("v1", "v1", "v2", "v2", "v3"):
+        version.token = token
+        got, fresh = _state(c, f)
+        assert got == fresh
+        seen.add(got)
+    assert len(seen) == 3
+    assert state_memo.STATS["remembered"] == before

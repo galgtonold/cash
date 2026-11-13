@@ -63,7 +63,7 @@ from typing import TYPE_CHECKING, Any
 from .. import _native
 from .._active import ACTIVE_CONFIG, EXPLAINING
 from ..code_swaps import FOLDED_CODE, FoldedCode
-from ..dependency_state import STATE_LEDGER
+from ..dependency_state import OUTSIDE_READS_FOLDED, STATE_LEDGER
 from ..effects import ENVIRONMENT_READS_FOLDED
 from . import hit_memo, walk_scope
 from .call_state import CAPTURE_WATCH, REACHED_TTLS
@@ -79,6 +79,7 @@ if TYPE_CHECKING:
 __all__ = [
     "ENABLED",
     "GEN",
+    "GenerationDict",
     "VERIFY",
     "StateMemoMismatch",
     "folded_outside_world",
@@ -107,7 +108,8 @@ _world_holds = _cw.world_holds if ENABLED else None
 GEN = [0]
 
 #: Folds whose output does not come from the world alone (a random stream's
-#: epoch, an environment variable): counted by `folded_outside_world`, and a
+#: epoch, an environment variable, a data source token): counted by
+#: `folded_outside_world` and the modules it sums, and a
 #: build that counted one is not remembered.
 OUTSIDE = [0]
 
@@ -125,13 +127,58 @@ def moved() -> None:
     GEN[0] += 1
 
 
+class GenerationDict(dict):
+    """A dict of cash's own state that a state segment reads (the
+    registry's source hashes, functions, data sources, reports): any write
+    to it, through the registry or straight into it, is a `moved`. Reads
+    are a plain dict's."""
+
+    __slots__ = ()
+
+    def __setitem__(self, key, value) -> None:
+        super().__setitem__(key, value)
+        moved()
+
+    def __delitem__(self, key) -> None:
+        super().__delitem__(key)
+        moved()
+
+    def __ior__(self, other):
+        result = super().__ior__(other)
+        moved()
+        return result
+
+    def update(self, *args, **kwargs) -> None:
+        super().update(*args, **kwargs)
+        moved()
+
+    def setdefault(self, key, default=None):
+        result = super().setdefault(key, default)
+        moved()
+        return result
+
+    def pop(self, *args):
+        result = super().pop(*args)
+        moved()
+        return result
+
+    def popitem(self):
+        result = super().popitem()
+        moved()
+        return result
+
+    def clear(self) -> None:
+        super().clear()
+        moved()
+
+
 def folded_outside_world() -> None:
     """The fold now running folded something no watcher sees."""
     OUTSIDE[0] += 1
 
 
 def _outside() -> int:
-    return OUTSIDE[0] + ENVIRONMENT_READS_FOLDED[0]
+    return OUTSIDE[0] + ENVIRONMENT_READS_FOLDED[0] + OUTSIDE_READS_FOLDED[0]
 
 
 def status() -> dict:

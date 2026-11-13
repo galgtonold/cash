@@ -24,7 +24,7 @@ import types
 import pytest
 
 from cash import Cash
-from cash.decorator import helper_fold_memo, hit_memo
+from cash.decorator import helper_fold_memo, hit_memo, state_memo
 
 pytestmark = [
     pytest.mark.skipif(not hit_memo.ENABLED, reason="the helper fold memo needs the C extension"),
@@ -195,7 +195,11 @@ def _ran(f, *args):
     return result
 
 
-def test_the_fold_is_served_from_the_memo(c):
+def test_the_fold_is_served_from_the_memo(c, monkeypatch):
+    """With the function's whole state segment remembered
+    (`state_memo`), the helper's fold is not asked for at all; this is
+    about the call that still folds it."""
+    monkeypatch.setattr(state_memo, "ENABLED", False)
     f = c.cache(through_helper)
     assert _warm(f, Box(1)) == 1 * 3 + 1 + 10 + 100
     before = helper_fold_memo.STATS["served"]

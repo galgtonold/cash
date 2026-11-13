@@ -6,6 +6,8 @@ import sys
 import types
 from typing import Any
 
+_OWN_PACKAGE = __name__.partition(".")[0]
+
 
 def module_ref(module: types.ModuleType) -> str:
     """The identity of *module* in a key: its import name, the same in every
@@ -40,7 +42,15 @@ def module_ref(module: types.ModuleType) -> str:
 
 def module_ref_part(label: str, value: Any) -> list[tuple[str, str]]:
     """The key part for *label* holding the module *value*:
-    ``(label#module, name)``; none when *value* is not a module."""
+    ``(label#module, name)``; none when *value* is not a module.
+
+    None for cash's own package either: ``with cash.assume_safe():`` reads
+    the name ``cash`` only to mark lines, and wrapping lines in it must
+    leave the key alone (`source_norm`). A name rebound from cash to
+    another module still moves the key: that module's part appears."""
     if not issubclass(type(value), types.ModuleType):
         return []
-    return [(f"{label}#module", module_ref(value))]
+    ref = module_ref(value)
+    if ref == _OWN_PACKAGE or ref.startswith(_OWN_PACKAGE + "."):
+        return []
+    return [(f"{label}#module", ref)]

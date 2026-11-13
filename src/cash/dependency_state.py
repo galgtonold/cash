@@ -39,6 +39,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "DependencyStateHasher",
+    "OUTSIDE_READS_FOLDED",
     "HelperResolver",
     "SysModulesHelperResolver",
     "STATE_LEDGER",
@@ -60,6 +61,12 @@ def ledger_note(label: Any, value: Any) -> None:
     ledger = STATE_LEDGER.get()
     if ledger is not None:
         ledger[label] = value
+
+
+#: Data source tokens and declared dependencies re-resolved by `compute`:
+#: what no watcher sees, so a state segment that folded one is not
+#: remembered (`cash.decorator.state_memo`).
+OUTSIDE_READS_FOLDED = [0]
 
 
 @runtime_checkable
@@ -214,11 +221,13 @@ class DependencyStateHasher:
             # The source's change token (mtime / version / digest); warns if a
             # source mistakenly returns a bool, which can't track changes.
             hashes.append(state_token_of(self._data_sources[node]))
+            OUTSIDE_READS_FOLDED[0] += 1
         elif node in self._declared_dep_snapshots:
             # A declared plain-callable dep: re-resolve its live
             # source hash so a disk edit + reload is seen; fall back to the
             # registration-time snapshot when resolution fails.
             live = self._declared_dep_resolver(node) if self._declared_dep_resolver is not None else None
+            OUTSIDE_READS_FOLDED[0] += 1
             hashes.append(live if live is not None else self._declared_dep_snapshots[node])
 
         if note and hashes:
