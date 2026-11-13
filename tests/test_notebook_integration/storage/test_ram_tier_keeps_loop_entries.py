@@ -57,6 +57,14 @@ if hasattr(C, "_test_orig"):
 """
 _RAM = "__import__('cash')._active.default_cash().backend.backends[0]"
 _SMALL_CAP = f"(setattr({_RAM}, '_max_size_bytes', {CAP}), setattr({_RAM}, 'max_memory_percent', 1.0))"
+#: Each pass its own entry, whatever the passes measure: restored, a read
+#: of a 77 KB file saves about what its restore costs, and a busy machine
+#: measured the passes cheap and ran the rest of the loop as one unit
+#: (`single_unit_policy.passes_were_cheap`): {'RESTORED': 8, 'COMPUTED': 12}
+#: in the control arm, the unit counted among the reads.
+_PASS_BY_PASS = (
+    "setattr(__import__('cash.notebook.control_structures.single_unit_policy', fromlist=['_']), 'CHEAP_PASSES', 10**9)"
+)
 _COUNTS = "__import__('cash.notebook.statement.processor', fromlist=['_']).StatementProcessor._test_n"
 _RESET = f"{_COUNTS}.clear()"
 
@@ -129,6 +137,7 @@ def test_a_later_cell_overflowing_the_ram_tier_leaves_the_loop_cached(nb_runner,
     nb_runner.run_cell(1)
     assert nb_runner.peek(f"type({_RAM}).__name__") == "'InMemoryBackend'"
     nb_runner.peek(_SMALL_CAP)
+    nb_runner.peek(_PASS_BY_PASS)
     nb_runner.peek(f"exec({_TEE!r}, {{}})")
     nb_runner.run_cell(2)
     nb_runner.run_cell(3)
