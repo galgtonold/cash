@@ -4,7 +4,6 @@ is part of the key, not their pickled bytes."""
 from __future__ import annotations
 
 import ast
-import contextvars
 import functools
 import hashlib
 import inspect
@@ -33,6 +32,7 @@ from ..loaded_code import class_functions
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, is_runtime_machinery
 from . import code_trace
 from .arg_hashing import is_opaque, is_plain_data
+from .call_state import CARRIER_LOOKUPS
 from .class_data import class_surface_functions, implicit_access_functions
 from .closure_fold import CLASS_BODY_CELLS
 from .user_code import cached_function_in, is_user_code_object
@@ -46,15 +46,6 @@ if TYPE_CHECKING:
     from .globals_fold import GlobalsFold
 
 logger = logging.getLogger(__name__)
-
-#: The run-time lookups by name in code the arguments of the call whose key
-#: is being built carry (`CodeArgs.carrier_lookups`), which no key part
-#: covers: set by `KeyBuilder.resolve`, None otherwise. The call is then
-#: served only on a trace of what it ran, or runs uncached, as the same line
-#: in the cached function's own body does.
-CARRIER_LOOKUPS: contextvars.ContextVar[list[PurityIssue] | None] = contextvars.ContextVar(
-    "_cash_carrier_lookups", default=None
-)
 
 #: How many containers deep one recursive stretch of the search for user code
 #: goes. Not a limit on what is searched: what lies deeper is set aside and

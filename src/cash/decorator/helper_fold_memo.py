@@ -17,7 +17,8 @@ watcher sees the environment.
 An entry is the fold's whole effect: the state hash it turned *state_in*
 into, and what it left in the key build -- the pairs it marked as folded
 (`LoggedSeen`), its capture watch, ledger, reads-folded and folded-code
-records -- replayed on reuse. It is looked up by the helper, the cached
+records, the run-time lookups by name it met (`CARRIER_LOOKUPS`) --
+replayed on reuse. It is looked up by the helper, the cached
 function's code and name, the decorator names folded with it, the state
 hash it started from and what the build had folded before it, so a reuse
 is the same step of the same build. ``CASH_HITPATH_VERIFY=1`` folds again
@@ -36,7 +37,7 @@ from ..code_swaps import FOLDED_CODE, FoldedCode
 from ..dependency_state import STATE_LEDGER
 from ..effects import ENVIRONMENT_READS
 from . import hit_memo
-from .call_state import CAPTURE_WATCH
+from .call_state import CAPTURE_WATCH, CARRIER_LOOKUPS
 
 _MASK = (1 << 64) - 1
 
@@ -120,6 +121,7 @@ class _Entry:
         "folded",
         "helper",
         "ledger",
+        "lookups",
         "owners",
         "reports",
         "owner",
@@ -133,7 +135,7 @@ def _effects() -> tuple:
     """The key build's records a helper fold writes to."""
     from .globals_fold import READS_FOLDED
 
-    return CAPTURE_WATCH.get(), STATE_LEDGER.get(), READS_FOLDED.get(), FOLDED_CODE.get()
+    return CAPTURE_WATCH.get(), STATE_LEDGER.get(), READS_FOLDED.get(), FOLDED_CODE.get(), CARRIER_LOOKUPS.get()
 
 
 class HelperFoldMemo:
@@ -207,18 +209,22 @@ class HelperFoldMemo:
         its own, then hand what it wrote on to the build's."""
         from .globals_fold import READS_FOLDED
 
-        watch, ledger, folded, code = _effects()
+        watch, ledger, folded, code, lookups = _effects()
         start = len(seen.log)
         tokens: list[tuple[contextvars.ContextVar, contextvars.Token]] = []
         own_watch = {} if watch is not None else None
         own_ledger = {} if ledger is not None else None
         own_folded = _ReadThrough(folded) if folded is not None else None
         own_code = FoldedCode() if code is not None else None
+        # Kept whether or not this build collects them (`explain()` does
+        # not): the entry may be replayed into one that does.
+        own_lookups: list = []
         for var, value in (
             (CAPTURE_WATCH, own_watch),
             (STATE_LEDGER, own_ledger),
             (READS_FOLDED, own_folded),
             (FOLDED_CODE, own_code),
+            (CARRIER_LOOKUPS, own_lookups),
         ):
             tokens.append((var, var.set(value)))
         try:
@@ -235,12 +241,13 @@ class HelperFoldMemo:
         entry.folded = dict(own_folded) if own_folded else {}
         entry.owners = dict(own_code.owners) if own_code is not None else {}
         entry.reports = dict(own_code.reports) if own_code is not None else {}
+        entry.lookups = tuple(own_lookups)
         self._replay(entry, None)
         return entry, state_out
 
     def _replay(self, entry: _Entry, seen: LoggedSeen | None) -> None:
         """Leave in the key build what the remembered fold left there."""
-        watch, ledger, folded, code = _effects()
+        watch, ledger, folded, code, lookups = _effects()
         if seen is not None:
             seen.update(entry.added)
         if watch is not None and entry.watch:
@@ -252,6 +259,8 @@ class HelperFoldMemo:
         if code is not None:
             code.owners.update(entry.owners)
             code.reports.update(entry.reports)
+        if lookups is not None and entry.lookups:
+            lookups.extend(entry.lookups)
 
     def _verify(self, entry: _Entry, seen: LoggedSeen, compute: Callable[[], str]) -> None:
         """Fold again and compare with the entry, as the fast path's verify
@@ -264,6 +273,7 @@ class HelperFoldMemo:
             and fresh.ledger == entry.ledger
             and fresh.folded.keys() == entry.folded.keys()
             and fresh.owners.keys() == entry.owners.keys()
+            and fresh.lookups == entry.lookups
         )
         if not same:
             raise hit_memo.HitMemoMismatch(

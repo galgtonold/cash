@@ -68,6 +68,7 @@ from .cached_function import CachedFunction
 from .call_state import (
     CACHE_MISS,
     CAPTURE_WATCH,
+    CARRIER_LOOKUPS,
     NESTED_CASH_SECONDS,
     REACHED_TTLS,
     THREADS_IN_CALLS,
@@ -81,7 +82,6 @@ from .call_state import (
 )
 from .class_data import CLASSES_FOLDED
 from .closure_fold import EVERY_PARAMETER, bound_owner, defaults_of
-from .code_args import CARRIER_LOOKUPS
 from .dynamic_sources import (
     Resolution,
     dynamic_sources_fresh,
