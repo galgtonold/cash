@@ -254,7 +254,45 @@ class StatementReplay:
         with each statement's index just before it runs (the random streams
         put where a run has them there, ``RngRewind.before_statement``).
         """
-        executed_metrics = []
+        executed_metrics: list[ProcessResult] = []
+        try:
+            return self._reexecute(
+                statements,
+                process_callback,
+                global_ttl,
+                executed_metrics,
+                progress_callback,
+                restored_info,
+                control_structure_callback,
+                annotations,
+                notebook_cells,
+                exec_sources,
+                before_statement,
+            )
+        except UpstreamStateError as failure:
+            # What ran before the failure, and the statement that failed, is
+            # the cell's to count (``CellExecutor.take_failed_cell``): the
+            # cell raises, but that time was spent.
+            if failure.upstream_metrics is None:
+                failure.upstream_metrics = (restored_info or []) + executed_metrics
+            raise
+
+    def _reexecute(
+        self,
+        statements: list[str],
+        process_callback: Callable[..., ProcessResult],
+        global_ttl: int | None,
+        executed_metrics: list[ProcessResult],
+        progress_callback: Callable[..., None] | None,
+        restored_info: list[ProcessResult] | None,
+        control_structure_callback: Callable[..., Any] | None,
+        annotations: dict[str, Any] | None,
+        notebook_cells: list[str] | None,
+        exec_sources: dict[str, str] | None,
+        before_statement: Callable[[int], None] | None,
+    ) -> list[ProcessResult]:
+        """:meth:`reexecute`, its rows gathered into *executed_metrics* as
+        each statement runs."""
         total_upstream_steps = len(statements)
 
         for stmt_idx, stmt_code in enumerate(statements):
