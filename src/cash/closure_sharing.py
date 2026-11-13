@@ -46,11 +46,15 @@ def _leaves() -> frozenset:
     """`_LEAVES` with numpy's exact number types (`numpy_scalar_set`),
     which hold a number and take no attribute: a list of a million
     ``np.float64`` (``list(arr)``) was read a scalar at a time, through its
-    reduce, past the time and not stored."""
+    reduce, past the time and not stored. With numpy's ``datetime64`` and
+    ``timedelta64`` as well, as atomic: ``list(frame['t'].diff())`` gave a
+    list of 868,000 walked through two calls each, 27 s of a session."""
     global _WITH_SCALARS
     scalars = numpy_scalar_set()
     if _WITH_SCALARS[0] is not scalars:
-        _WITH_SCALARS = (scalars, _LEAVES | scalars)
+        numpy = sys.modules.get("numpy")
+        times = frozenset() if numpy is None else frozenset((numpy.datetime64, numpy.timedelta64))
+        _WITH_SCALARS = (scalars, _LEAVES | scalars | times)
     return _WITH_SCALARS[1]
 
 

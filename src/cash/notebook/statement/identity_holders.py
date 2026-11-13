@@ -101,13 +101,22 @@ def _value_kinds() -> tuple[frozenset[type], frozenset[type]]:
     numpy's ``str_`` and ``bytes_``, read as any object is: text spelling
     an ``id()`` is looked for in exact strings alone. ``list(series.diff())``
     over times gives a list of a million Timedeltas, which counted against
-    `_MAX_SEEN` one by one, so a loop filling one ran again every time."""
+    `_MAX_SEEN` one by one, so a loop filling one ran again every time.
+
+    ``timedelta64`` subclasses ``signedinteger`` but is a time, not an
+    integer: ``int()`` of one in seconds is a ``TypeError`` (its ``.item()``
+    is a ``datetime.timedelta``), which broke the user's loop collecting
+    them. It and ``datetime64`` are leaves and never read as an id()."""
     global _VALUE_KINDS
     values = library_exact_values()
     if _VALUE_KINDS[0] is not values:
         numpy = sys.modules.get("numpy")
         extra = frozenset(kind for kind in values if not issubclass(kind, (str, bytes)))
-        ints = frozenset(kind for kind in extra if numpy is not None and issubclass(kind, numpy.integer))
+        ints = frozenset(
+            kind
+            for kind in extra
+            if numpy is not None and issubclass(kind, numpy.integer) and not issubclass(kind, numpy.timedelta64)
+        )
         _VALUE_KINDS = (values, _LEAVES | extra, ints)
     return _VALUE_KINDS[1], _VALUE_KINDS[2]
 
@@ -245,15 +254,23 @@ def identity_held_reason(
     stays the object those references find. *more*: objects the walk looks
     at beyond `_MAX_SEEN` (the answers a statement put into a helper memo,
     as many as the memo holds)."""
-    user_kinds: dict[type, bool] = {}
-    walk = _Walk(user_kinds, targets=[] if weak_holders else None)
-    walk.budget += more
-    walk.allowance = walk.budget
-    walk.run([value])
-    found = _held_by_id(name, value, walk, user_kinds, user_ns)
-    if found is None and walk.targets:
-        found = _weakly_held(name, walk.targets, user_ns)
-    return found
+    try:
+        user_kinds: dict[type, bool] = {}
+        walk = _Walk(user_kinds, targets=[] if weak_holders else None)
+        walk.budget += more
+        walk.allowance = walk.budget
+        walk.run([value])
+        found = _held_by_id(name, value, walk, user_kinds, user_ns)
+        if found is None and walk.targets:
+            found = _weakly_held(name, walk.targets, user_ns)
+        return found
+    except Exception as error:  # noqa: BLE001 - cash's own bookkeeping never breaks the user's cell
+        # Not known whether it holds an id(): not stored, and said so.
+        what = (
+            f"cash could not look through '{name}' for an object it points at by identity "
+            f"({type(error).__name__}: {error}), so this statement runs every time instead."
+        )
+        return IdentityHeld(f"'{name}' could not be looked through", name, "an id()", what)
 
 
 def _held_by_id(

@@ -349,6 +349,9 @@ def _enter(value: Any, walk: _Walk) -> Any:
     if type(value) in _plain_data.numpy_scalar_set():
         # A number: pickled by value, nothing inside to order.
         return ("__cash_np__", value.dtype.char, value.tobytes())
+    if type(value) in numpy_times():
+        # A time: its 8 bytes in its unit, which ``dtype.str`` spells.
+        return ("__cash_np__", value.dtype.str, value.tobytes())
     if type(value) in pandas_dates():
         form = _date_form(value)
         if form is _ZONED:
@@ -750,20 +753,55 @@ def _numbers_form(value: list | tuple) -> tuple | None:
     if len(kinds) != 1:
         return None
     kind = kinds.pop()
-    if kind not in _plain_data.numpy_scalar_set():
+    if kind in numpy_times():
+        dtypes = set(map(_DTYPE, value))
+        if len(dtypes) != 1:  # units apart: each its own form
+            return tuple(("__cash_np__", item.dtype.str, item.tobytes()) for item in value)
+        dtype = dtypes.pop()
+        tag = dtype.str
+    elif kind in _plain_data.numpy_scalar_set():
+        dtype = kind
+        tag = None
+    else:
         return None
     import numpy as np
 
-    array = np.array(value, dtype=kind)
+    array = np.array(value, dtype=dtype)
     raw = array.tobytes()
     size = array.itemsize
     return tuple(
         zip(
             repeat("__cash_np__"),
-            repeat(array.dtype.char),
+            repeat(array.dtype.char if tag is None else tag),
             map(raw.__getitem__, map(slice, range(0, len(raw), size), range(size, len(raw) + size, size))),
         )
     )
+
+
+def numpy_times() -> frozenset:
+    """numpy's ``datetime64`` and ``timedelta64`` when numpy is loaded
+    (never imported here); empty otherwise. Each keys as its 8 bytes and
+    its unit: a list of 868,000 of them (``list(frame['t'].diff())``) was
+    pickled one by one."""
+    numpy = sys.modules.get("numpy")
+    known = _NUMPY_TIMES
+    if numpy is known[0]:
+        return known[1]
+    return _numpy_times(numpy)
+
+
+def _numpy_times(numpy: Any) -> frozenset:
+    global _NUMPY_TIMES
+    try:
+        found = frozenset((numpy.datetime64, numpy.timedelta64))
+    except AttributeError:  # no numpy, or one still importing
+        return frozenset()
+    _NUMPY_TIMES = (numpy, found)
+    return found
+
+
+_NUMPY_TIMES: tuple[Any, frozenset] = (None, frozenset())
+_DTYPE = operator.attrgetter("dtype")
 
 
 def pandas_dates() -> frozenset:
@@ -1072,7 +1110,13 @@ def record_class(value: list | tuple, family: Callable[[type], str | None]) -> t
         return None
     t = kinds.pop()
     kind = _record_kind(t)
-    if kind is None or family(t) is not None or t in _plain_data.numpy_scalar_set() or t in _plain_data.fake_clock()[0]:
+    if (
+        kind is None
+        or family(t) is not None
+        or t in _plain_data.numpy_scalar_set()
+        or t in numpy_times()
+        or t in _plain_data.fake_clock()[0]
+    ):
         return None
     members = value if len(value) == 1 or type(value[0]) is t and len(set(map(type, value))) == 1 else None
     if members is None:
@@ -1296,8 +1340,8 @@ def contains_set(value: Any, found: dict[int, Any] | None = None, clean: dict[in
             # the process, 270 us on each call of any function that reads a
             # module `logger`.
             continue
-        if kind in _plain_data.numpy_scalar_set():
-            continue  # a number; without this, an MRO walk per scalar
+        if kind in _plain_data.numpy_scalar_set() or kind in numpy_times():
+            continue  # a number or a time; without this, an MRO walk per scalar
         seen.add(id(node))
         held.append(node)
         if isinstance(node, dict):

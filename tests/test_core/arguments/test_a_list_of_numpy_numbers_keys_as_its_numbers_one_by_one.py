@@ -22,6 +22,10 @@ CASES = {
     "float16": list(np.random.default_rng(2).random(200).astype(np.float16)),
     "two types": list(np.arange(200)) + [np.float64(1.0)],
     "with a python int": list(np.arange(200)) + [3],
+    "timedelta64 in seconds": list(np.arange(300).astype("timedelta64[s]")),
+    "timedelta64 of two units": list(np.arange(150).astype("timedelta64[s]"))
+    + list(np.arange(150).astype("timedelta64[ms]")),
+    "datetime64 in seconds with NaT": list(np.arange(300).astype("datetime64[s]")) + [np.datetime64("NaT", "s")],
 }
 
 
