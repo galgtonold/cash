@@ -116,6 +116,11 @@ def relocated_definition(
     return None
 
 
+#: Does ``st_ctime`` move with every write and ``utime``? Not on Windows,
+#: where it is the creation time (`_pyc_postdates_source`).
+_HAS_CHANGE_TIME = os.name != "nt"
+
+
 def _pyc_postdates_source(st: object, pyc_st: object) -> bool:
     """True when the ``.pyc`` was written after the source's last save had settled.
 
@@ -127,8 +132,27 @@ def _pyc_postdates_source(st: object, pyc_st: object) -> bool:
     tick after the source's mtime (`stat_has_settled`'s window, which covers
     the coarsest clocks) was compiled from the last save: any later save would
     carry a later mtime, which the header would not match.
+
+    Unless the save put the old mtime back: ``os.utime``, ``cp -p``, ``tar``
+    and ``rsync -t`` all do, and a same-size edit restored to the second the
+    ``.pyc`` recorded matched the header again -- Python loaded the old
+    bytecode in every later process, and cash, taking the ``.pyc`` as proof,
+    keyed that old code's results by the new text (a result persisted, and
+    served to the process that finally runs the new code). The change time
+    no save can set back: on POSIX ``st_ctime`` moves with every write and
+    every ``utime``, so a source whose ctime is not strictly older than the
+    ``.pyc`` changed after it was compiled -- or within its tick, which no
+    clock can order. On Windows ``st_ctime`` is the creation time, which an
+    in-place save keeps (and robocopy, unzip and ``git checkout`` restore
+    mtimes), so nothing there tells a put-back save from no save: the header
+    is no proof, and the callers compare the ``.pyc``'s code, or the loaded
+    code, with the file compiled -- once per file version per process.
     """
-    return pyc_st.st_mtime - st.st_mtime > SETTLED_SECONDS
+    if not _HAS_CHANGE_TIME:
+        return False
+    if pyc_st.st_mtime - st.st_mtime <= SETTLED_SECONDS:
+        return False
+    return st.st_ctime_ns < pyc_st.st_mtime_ns
 
 
 def loaded_module_matches_disk(module: object) -> bool:

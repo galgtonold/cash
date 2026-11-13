@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import os
+import time
 import types
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
@@ -26,6 +27,7 @@ from ..remote_source import (
     validation_is_expensive,
     warn_validation_cost_once,
 )
+from ..source_reading import SETTLED_SECONDS
 from ..tracking.file_dep_snapshot import (
     attach_code_relative,
     dep_path_for_this_process,
@@ -37,7 +39,7 @@ from ..tracking.file_tracker import unrecorded_reads
 from ..tracking.read_credit import credited_reads
 from ..tracking.tracker_context import active_tracker
 from .cache_metadata import CacheMetadata
-from .function_identity import CODE_KEYED_STATS
+from .function_identity import CODE_KEYED_STATS, file_stamp
 
 if TYPE_CHECKING:
     from .cached_function import CachedFunction
@@ -45,6 +47,10 @@ if TYPE_CHECKING:
     from .reporting import Notices
 
 logger = logging.getLogger(__name__)
+
+#: `SETTLED_SECONDS` in nanoseconds: a code file written more recently is
+#: compared by its text, not its stat (`FileDeps.code_moved_since_keyed`).
+_SETTLED_NS = int(SETTLED_SECONDS * 1_000_000_000)
 
 
 def snapshot_tracked_deps(tracker: Any, code_module: str | None = None) -> dict[str, dict[str, Any]] | None:
@@ -547,9 +553,13 @@ class FileDeps:
         entry is still right.
 
         One ``os.stat`` per code file, on a miss only; the text is re-read only
-        for a file that moved.
+        for a file that moved, or that was written within a tick of now
+        (`cash.source_reading.stat_has_settled`'s window, on the mtime or
+        the ctime): a same-size save in the tick its key was read in
+        keeps the whole stat, so only the text can tell.
         """
-        stats: dict[str, tuple[int, int] | None] = {}
+        stats: dict[str, tuple[int, tuple[int, int, int]] | None] = {}
+        racy: set[str] = set()
         moved: list[str] = []
         for fn in self._registry.code_functions(func, func_name):
             code = _code_of(fn)
@@ -560,11 +570,13 @@ class FileDeps:
             if path not in stats:
                 try:
                     st = os.stat(path)
-                    stats[path] = (st.st_size, st.st_mtime_ns)
+                    stats[path] = (st.st_size, file_stamp(st))
+                    if time.time_ns() - max(st.st_mtime_ns, st.st_ctime_ns) <= _SETTLED_NS:
+                        racy.add(path)
                 except OSError:
                     stats[path] = None
             now = stats[path]
-            if now is None or now == (rec[2], rec[3]) or path in moved:
+            if now is None or path in moved or (now == (rec[2], rec[3]) and path not in racy):
                 continue
             # None -- the function is gone from the file -- is not the same text.
             same_text = own_source_digest(fn) == rec[4]

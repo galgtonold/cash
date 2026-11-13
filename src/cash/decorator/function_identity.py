@@ -11,6 +11,7 @@ import logging
 import operator
 import os
 import pickle
+import sys
 import types
 import weakref
 from collections.abc import Callable
@@ -25,7 +26,7 @@ from ..content_hashers import BUILTIN_CONTENT
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning
 from ..jit_functions import jit_identity, jit_python_function
-from ..loaded_code import code_objects_of, loaded_class_identity, loaded_code_matches_disk
+from ..loaded_code import code_objects_of, loaded_class_identity, loaded_code_matches_disk, loaded_module_matches_disk
 from ..source_norm import bytecode_identity, code_consts_without_docstring
 from ..source_reading import defining_file
 
@@ -53,19 +54,28 @@ logger = logging.getLogger(__name__)
 # Module-level rather than per-instance: the digest depends only on the code
 # object, so two Cash instances cannot legitimately disagree about it.
 SOURCE_HASH_MEMO: LruMemo[int, tuple[Any, str, tuple]] = LruMemo(CODE_OBJECTS)
-#: ``id(code) -> (code, path, size, mtime_ns, text digest)``: the stat of the
+#: ``id(code) -> (code, path, size, stamp, text digest)``: the stat of the
 #: file whose text a function's key was read from, taken just before reading
-#: it, and that text's digest. The store compares both with the file now
-#: (`FileDeps.code_moved_since_keyed`).
-CODE_KEYED_STATS: LruMemo[int, tuple[Any, str, int, int, str]] = LruMemo(CODE_OBJECTS)
+#: it (``stamp``: `file_stamp`), and that text's digest. The store compares
+#: both with the file now (`FileDeps.code_moved_since_keyed`).
+CODE_KEYED_STATS: LruMemo[int, tuple[Any, str, int, tuple[int, int, int], str]] = LruMemo(CODE_OBJECTS)
 
 
 #: Source files already reported as edited-since-load, one notice per file.
 _SOURCE_CHANGED_WARNED: set[str] = set()
 
 
-def stat_code_file(fn: Any) -> tuple[Any, str, int, int] | None:
-    """``(code, path, size, mtime_ns)`` for *fn*'s source file, or None."""
+def file_stamp(st: os.stat_result) -> tuple[int, int, int]:
+    """``(mtime_ns, ctime_ns, inode)``: what besides the size moves when a file
+    is saved. The mtime alone does not: ``cp -p``, ``tar``, ``rsync -t`` and
+    ``os.utime`` put it back, and a same-size edit restored that way had the
+    stat of the text it replaced. A POSIX ctime moves with every write and
+    every ``utime``; a save by rename moves the inode."""
+    return (st.st_mtime_ns, st.st_ctime_ns, st.st_ino)
+
+
+def stat_code_file(fn: Any) -> tuple[Any, str, int, tuple[int, int, int]] | None:
+    """``(code, path, size, file_stamp)`` for *fn*'s source file, or None."""
     code = getattr(fn, "__code__", None)
     path = getattr(code, "co_filename", "") or ""
     if not path or is_pseudo_filename(path):
@@ -79,7 +89,7 @@ def stat_code_file(fn: Any) -> tuple[Any, str, int, int] | None:
         st = os.stat(path)
     except OSError:
         return None
-    return (code, path, st.st_size, st.st_mtime_ns)
+    return (code, path, st.st_size, file_stamp(st))
 
 
 def warn_source_changed_since_load(fn: Callable) -> None:
@@ -90,7 +100,26 @@ def warn_source_changed_since_load(fn: Callable) -> None:
         return
     _SOURCE_CHANGED_WARNED.add(path)
     name = getattr(fn, "__qualname__", None) or getattr(fn, "__name__", "a function")
+    module = sys.modules.get(getattr(fn, "__module__", None) or "")
     try:
+        if module is not None and getattr(module, "__file__", None) == path and not loaded_module_matches_disk(module):
+            # Not an edit after the import: Python loaded bytecode compiled
+            # from an earlier save, and will again in every restart.
+            warn_diagnostic(
+                CashCacheIneffectiveWarning,
+                "KEY-SOURCE-CHANGED",
+                f"Python ran {name}() from {path}'s cached bytecode (.pyc), which "
+                f"was compiled from an earlier save of the file: the save that "
+                f"followed kept its size and its modification time to the second, "
+                f"which is all the .pyc is checked against. cash keys it by the "
+                f"code actually running, so results stay correct -- but they are "
+                f"the old code's, and every restart runs the old code again.",
+                "delete the file's __pycache__ entry (or touch the file) and "
+                "restart. Copies that keep timestamps (cp -p, tar, rsync -t) "
+                "open this window; compiling with "
+                "--invalidation-mode checked-hash closes it.",
+            )
+            return
         warn_diagnostic(
             CashCacheIneffectiveWarning,
             "KEY-SOURCE-CHANGED",

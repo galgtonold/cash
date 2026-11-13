@@ -1611,7 +1611,7 @@ message, so cash can record that read.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/loaded_code.py:loaded_code_matches_disk @1bf4a975, cash/decorator/function_identity.py:warn_source_changed_since_load @4f566032 -->
+<!-- claim: cash/loaded_code.py:loaded_code_matches_disk @1bf4a975, cash/decorator/function_identity.py:warn_source_changed_since_load @96528104 -->
 <!-- claim: cash/loaded_code.py:_pyc_proves_unchanged @42e99e55 -->
 **What happened.** A file holding a cached function or a helper was edited
 after this process imported it, or the import loaded bytecode compiled from an
@@ -1625,11 +1625,14 @@ on the new code.
 **What to do.** Restart the process to run the new code. A deploy that copies
 files before restarting a service triggers this.
 
-If it appears again right after a restart, Python is loading bytecode from an
-earlier save: its `.pyc` records the file's modification time in whole
-seconds and its size, so an edit that keeps the size within a second of the
-last import looks current. Save the file again, or delete its `__pycache__`
-entry.
+If the warning says the code ran from cached bytecode (`.pyc`), a restart
+does not help: Python is loading bytecode from an earlier save. The `.pyc`
+records the file's modification time in whole seconds and its size, so an
+edit that keeps the size and lands in the same second, or that a copy put the
+old modification time back on (`cp -p`, `tar`, `rsync -t`), looks current.
+Save the file again, or delete its `__pycache__` entry; compiling with
+`--invalidation-mode checked-hash` closes the gap. cash still keys every such
+run by the old code, so the new code's first run recomputes.
 
 **When it is safe to ignore.** Always, for correctness. Look into it if you
 did not expect the file to change.

@@ -97,12 +97,53 @@ def test_a_function_loaded_from_a_stale_pyc_is_not_proven_by_its_header(helper, 
     assert loaded_code_matches_disk(module.f) is False
 
 
-def test_a_pyc_written_after_the_source_settled_is_still_proof(helper, monkeypatch):
-    """Control: the fast path stands when the ``.pyc`` postdates the save by
-    more than a tick -- nothing is compiled to decide."""
+def _after_tick(folder, ns):
+    """Wait until a fresh write's timestamp is past *ns*: a coarse clock puts
+    writes made close together in one tick, which no comparison can order."""
+    probe = folder / "tick.probe"
+    for _ in range(500):
+        probe.write_bytes(b"x")
+        stamp = os.stat(probe).st_mtime_ns
+        os.remove(probe)
+        if stamp > ns:
+            return
+        time.sleep(0.002)  # the clock's tick, polled
+
+
+def _settled_then_restored(name, path):
+    """Compile OLD long after its save, then save NEW at the same size with
+    the old mtime put back (``cp -p``, ``tar``, ``os.utime``): the header
+    matches and the ``.pyc`` postdates the recorded mtime by far."""
+    old = time.time() - 100
+    os.utime(path, (old, old))
+    _after_tick(path.parent, os.stat(path).st_ctime_ns)
+    _compile(path)
+    first = os.stat(path)
+    path.write_text(NEW, encoding="utf-8")
+    os.utime(path, ns=(first.st_atime_ns, first.st_mtime_ns))
+    module = _import(name)
+    assert module.f([1, 2, 3, 4]) == 10, "Python compiled the edit: the stale .pyc was never used"
+    return module
+
+
+def test_a_pyc_compiled_after_the_source_settled_is_no_proof_once_the_mtime_is_put_back(helper, monkeypatch):
+    monkeypatch.setattr(process_start, "_PROCESS_START", time.time() + 60)
+    module = _settled_then_restored(*helper)
+    assert loaded_code_matches_disk(module.f) is False
+    assert loaded_module_matches_disk(module) is False
+
+
+@pytest.mark.skipif(
+    os.name == "nt", reason="no change time on Windows: the file is compiled instead (tested below with it off)"
+)
+def test_the_proof_by_header_compiles_nothing_for_a_file_saved_before_its_pyc(helper, monkeypatch):
+    """The cold path's cost: a helper checked out, then imported (its ``.pyc``
+    written a tick or more after the save), is proven by one stat and one
+    16-byte read, not by compiling its module."""
     name, path = helper
     old = time.time() - 100
     os.utime(path, (old, old))
+    _after_tick(path.parent, os.stat(path).st_ctime_ns)
     _compile(path)
     module = _import(name)
     monkeypatch.setattr(process_start, "_PROCESS_START", time.time() + 60)
@@ -111,5 +152,32 @@ def test_a_pyc_written_after_the_source_settled_is_still_proof(helper, monkeypat
         raise AssertionError("the header was proof, and the file was compiled anyway")
 
     monkeypatch.setattr(loaded_code, "_compiled_module", no_compile)
+    started = time.perf_counter()
+    for _ in range(200):
+        assert loaded_code_matches_disk(module.f) is True
+    assert time.perf_counter() - started < 1.0, "200 header checks should take milliseconds"
+    assert loaded_module_matches_disk(module) is True
+
+
+def test_without_a_change_time_a_put_back_mtime_is_caught_by_the_code(helper, monkeypatch):
+    """Windows: ``st_ctime`` is the creation time, so no stat tells a
+    put-back save from none. The header proves nothing there; the loaded code
+    is compared with the file compiled."""
+    monkeypatch.setattr(loaded_code, "_HAS_CHANGE_TIME", False)
+    monkeypatch.setattr(process_start, "_PROCESS_START", time.time() + 60)
+    module = _settled_then_restored(*helper)
+    assert loaded_code_matches_disk(module.f) is False
+    assert loaded_module_matches_disk(module) is False
+
+
+def test_without_a_change_time_an_unedited_file_still_matches(helper, monkeypatch):
+    """Control: the compiled comparison passes a file nobody touched."""
+    monkeypatch.setattr(loaded_code, "_HAS_CHANGE_TIME", False)
+    name, path = helper
+    old = time.time() - 100
+    os.utime(path, (old, old))
+    _compile(path)
+    module = _import(name)
+    monkeypatch.setattr(process_start, "_PROCESS_START", time.time() + 60)
     assert loaded_code_matches_disk(module.f) is True
     assert loaded_module_matches_disk(module) is True

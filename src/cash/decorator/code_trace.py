@@ -54,6 +54,7 @@ import importlib
 import os
 import sys
 import threading
+import time
 import types
 import weakref
 from collections.abc import Callable, Iterable, Mapping
@@ -76,6 +77,7 @@ from ..analysis.purity_report import (
     PurityIssue,
     is_name_lookup,
 )
+from ..source_reading import SETTLED_SECONDS, stat_has_settled
 from ..tracking.process_registries import register_atexit
 from ..tracking.tracker_context import untracked
 
@@ -814,7 +816,11 @@ def _lookup_digest(module: str, qualname: str, name: str) -> str | None:
     return _digest(ns[name]) if name in ns else _ABSENT
 
 
-_FILE_DIGESTS: dict[tuple[str, int, int], str] = {}
+#: ``(path, size, mtime_ns, ctime_ns, inode) -> digest`` of files that had
+#: settled when read. The mtime alone let a same-size save that put it back
+#: (``cp -p``, ``os.utime``) keep the old digest, and one inside the tick the
+#: digest was read in kept it too: the racy-git rule, as `stat_has_settled`.
+_FILE_DIGESTS: dict[tuple[str, int, int, int, int], str] = {}
 
 
 def _file_digest(path: str | None) -> str | None:
@@ -824,14 +830,17 @@ def _file_digest(path: str | None) -> str | None:
         st = os.stat(path)
     except OSError:
         return None
-    slot = (path, st.st_mtime_ns, st.st_size)
+    slot = (path, st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_ino)
     got = _FILE_DIGESTS.get(slot)
     if got is None:
+        settled = stat_has_settled(st) and time.time() - st.st_ctime > SETTLED_SECONDS
         try:
             with open(path, "rb") as fh:
                 got = hashlib.blake2b(fh.read(), digest_size=16).hexdigest()
         except OSError:
             return None
+        if not settled:
+            return got
         if len(_FILE_DIGESTS) > 4096:
             _FILE_DIGESTS.clear()
         _FILE_DIGESTS[slot] = got
