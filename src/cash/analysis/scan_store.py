@@ -21,8 +21,9 @@ One file per module text digest would grow with every edit, so the store is
 one file per (fingerprint, file path) holding the digest it answers for;
 an edit overwrites it.
 
-``CASH_ANALYSIS_STORE=0`` turns it off, ``CASH_ANALYSIS_STORE=<dir>`` moves
-it (default: ``<per-user cache root>/analysis``). With
+It lives in the active cache dir, beside the results (``<cache
+dir>/analysis``), and only once that dir exists. ``CASH_ANALYSIS_STORE=0``
+turns it off, ``CASH_ANALYSIS_STORE=<dir>`` moves it. With
 ``CASH_ANALYSIS_MEMO_VERIFY=1`` every stored answer used is worked out again
 and `StoredScanMismatch` raised when it differs.
 """
@@ -37,7 +38,7 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
-from .._location import per_user_cache_root
+from .._active import active_config
 from ..tracking.tracker_context import untracked
 from . import tree_memo
 
@@ -91,10 +92,19 @@ def _cash_fingerprint() -> str:
 
 
 def _dir() -> Path | None:
+    """``<cache dir>/analysis/<fingerprint>``: beside the results, wherever
+    the settings put them (a pool worker's are its parent's). None when that
+    cache dir does not exist yet: the store never makes one of its own."""
     setting = _setting()
     if setting.lower() in ("0", "false", "no", "off", ""):
         return None
-    base = Path(setting) if setting.lower() not in ("1", "true", "yes", "on") else per_user_cache_root() / "analysis"
+    if setting.lower() in ("1", "true", "yes", "on"):
+        cache_dir = active_config().cache_dir
+        if not cache_dir or not os.path.isdir(cache_dir):
+            return None
+        base = Path(os.path.abspath(cache_dir)) / "analysis"
+    else:
+        base = Path(setting)
     return base / _cash_fingerprint()
 
 

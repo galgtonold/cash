@@ -846,9 +846,6 @@ def _temp_files_under_basetemp(config) -> None:
     for name in ("TMPDIR", "TEMP", "TMP"):
         os.environ[name] = str(tmp)
     tempfile.tempdir = str(tmp)
-    # The on-disk module scans (`cash.analysis.scan_store`) go under the
-    # basetemp too, not into the user's own cache.
-    os.environ.setdefault("CASH_ANALYSIS_STORE", str(tmp / "cash-analysis"))
 
 
 def pytest_collection_modifyitems(config, items):

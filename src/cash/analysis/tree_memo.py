@@ -24,10 +24,10 @@ from __future__ import annotations
 import ast
 import copy
 import os
-import weakref
 from collections.abc import Callable
 from typing import Any, TypeVar
 
+from .. import _weak
 from .._memo import PARSED_SOURCES, LruMemo
 
 __all__ = ["ENABLED", "VERIFY", "TreeMemoMismatch", "fact", "parse", "status", "stripped_def"]
@@ -55,9 +55,9 @@ class TreeMemoMismatch(AssertionError):
 _TREES: LruMemo[str, tuple[ast.Module, str | None]] = LruMemo(PARSED_SOURCES)
 #: A shared function node -> {fact name: answer}. Weak: an entry goes with
 #: its tree when `_TREES` drops it.
-_FACTS: weakref.WeakKeyDictionary[ast.AST, dict[Any, Any]] = weakref.WeakKeyDictionary()
+_FACTS: _weak.WeakKeyDictionary = _weak.WeakKeyDictionary()
 #: A stripped copy -> the shared node it was made from.
-_ORIGIN: weakref.WeakKeyDictionary[ast.AST, ast.AST] = weakref.WeakKeyDictionary()
+_ORIGIN: _weak.WeakKeyDictionary = _weak.WeakKeyDictionary()
 
 STATS = {"parsed": 0, "parse_reused": 0, "facts": 0, "facts_reused": 0, "verified": 0}
 

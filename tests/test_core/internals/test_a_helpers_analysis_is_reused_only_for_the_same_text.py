@@ -57,9 +57,14 @@ def top(x):
 """
 
 
-def _run(code_dir: Path, store: Path, *, verify: bool = False) -> dict:
+def _run(code_dir: Path, store: Path | None, *, verify: bool = False, home: Path | None = None) -> dict:
     env = dict(os.environ)
-    env["CASH_ANALYSIS_STORE"] = str(store)
+    env.pop("CASH_ANALYSIS_STORE", None)
+    if store is not None:
+        env["CASH_ANALYSIS_STORE"] = str(store)
+    if home is not None:
+        env["HOME"] = str(home)
+        env["XDG_CACHE_HOME"] = str(home / ".cache")
     env["CASH_CACHE_DIR"] = str(code_dir / ".cash")
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     if verify:
@@ -103,7 +108,7 @@ def test_an_unchanged_module_is_loaded_in_a_second_process(layout):
 def _stored_names(store: Path, code_dir: Path) -> list[str]:
     """The names the store now holds for *code_dir*'s ``mod.py``."""
     digest = hashlib.blake2b((code_dir / "mod.py").read_text(encoding="utf-8").encode(), digest_size=20).hexdigest()
-    found = [json.loads(p.read_text()) for p in store.rglob("*.json")]
+    found = [json.loads(p.read_text(encoding="utf-8")) for p in store.rglob("*.json")]
     (entry,) = [e for e in found if e["digest"] == digest]
     return entry["names"]
 
@@ -155,6 +160,21 @@ def test_a_moved_module_is_scanned_again(layout, tmp_path):
     assert len(list(store.rglob("*.json"))) == 2  # one per file
 
 
+def test_the_store_lives_in_the_cache_dir_once_that_exists(layout, tmp_path):
+    """Beside the results, wherever they go; never a folder of its own
+    elsewhere (a pool worker would make one in the per-user cache)."""
+    code_dir, _ = layout
+    home = tmp_path / "home"
+    home.mkdir()
+    first = _run(code_dir, None, home=home)
+    assert first["stored"] == 0  # analysed before the cache dir existed: nothing made
+    _run(code_dir, None, home=home)  # the cache dir exists now
+    third = _run(code_dir, None, home=home, verify=True)
+    assert third["missed"] == 0 and third["loaded"] >= 1
+    assert Path(third["dir"]).parent == code_dir / ".cash" / "analysis"
+    assert not (home / ".cache").exists()
+
+
 def test_the_scan_answers_follow_the_text(tmp_path, monkeypatch):
     monkeypatch.setenv("CASH_ANALYSIS_STORE", str(tmp_path / "store"))
     monkeypatch.setattr(tree_memo, "VERIFY", False)  # it would compute each answer again
@@ -178,9 +198,9 @@ def test_the_verify_mode_raises_on_a_stored_scan_that_is_wrong(tmp_path, monkeyp
     source = "def f():\n    A.append(1)\n"
     scan_store.scan("t", "/x/m.py", source, lambda s: frozenset({"A"}))
     (stored,) = list((tmp_path / "store").rglob("*.json"))
-    data = json.loads(stored.read_text())
+    data = json.loads(stored.read_text(encoding="utf-8"))
     data["names"] = []
-    stored.write_text(json.dumps(data))
+    stored.write_text(json.dumps(data), encoding="utf-8")
     monkeypatch.setattr(tree_memo, "VERIFY", True)
     with pytest.raises(scan_store.StoredScanMismatch):
         scan_store.scan("t", "/x/m.py", source, lambda s: frozenset({"A"}))
