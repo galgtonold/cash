@@ -40,6 +40,7 @@ __all__ = [
     "FrameState",
     "HeldByCash",
     "KeyedBefore",
+    "ResultIsArgument",
     "Shape",
     "before_call",
     "Columns",
@@ -477,12 +478,23 @@ class KeyedBefore(NamedTuple):
     args_hash: str
 
 
+class ResultIsArgument(NamedTuple):
+    """Stored in place of a result that IS an argument the call changed in
+    place (``stft(y, out=buf)`` filling and returning ``buf``): the entry
+    keeps that argument's state once, and a hit writes it into the argument
+    handed in and returns that very object, so ``result is out`` holds as
+    in a plain run. *name* is the parameter it was bound to."""
+
+    name: str
+
+
 class ArgumentsLeft:
     """A decorated call's result, stored with the state it left the
     arguments it changed in place in: ``{parameter: (before, state
     after)}``, *before* a `KeyedBefore` or the argument's fingerprint. A
     hit writes each state into the argument the caller handed in, while
-    that argument is in the state *before* names."""
+    that argument is in the state *before* names. *result* is a
+    `ResultIsArgument` when the result was one of those arguments."""
 
     __slots__ = ("reads", "result", "states")
 

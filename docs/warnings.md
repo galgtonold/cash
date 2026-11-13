@@ -623,7 +623,11 @@ attributes and object array, for:
   copy-on-write too: it is the frame's own, or one over its memory, and a
   write through it reaches the frame.
 
-Not reported: a value nothing can be written through (a number, a string,
+Not reported: a result that IS an argument the call changed in place and
+a hit writes back (`stft(y, out=buf)` filling and returning `buf`, where
+`buf` is a NumPy array, a pandas frame or Series, or a plain list, dict or
+set): a hit writes the stored state into the `buf` handed in and returns
+that object, as a plain run does. Nor a value nothing can be written through (a number, a string,
 an enum member, a frozen dataclass of immutable fields, a view of an array
 that is read-only all the way down), and a global whose type compares by
 identity (a plain class without `__eq__`, such as a sentinel), since a hit
