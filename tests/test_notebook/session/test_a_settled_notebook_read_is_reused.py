@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import types
 from pathlib import Path
 
 from cash.notebook import server_discovery as sd
@@ -69,6 +70,37 @@ def test_a_same_size_rewrite_with_its_mtime_put_back_is_read_again(tmp_path):
     assert [c.code for c in readers.saved_file(str(nb))] == ["x = 1"]
     _write(nb, "x = 2")  # same size
     os.utime(nb, ns=(old, old))
+    assert [c.code for c in readers.saved_file(str(nb))] == ["x = 2"]
+
+
+def test_where_ctime_is_the_creation_time_a_same_size_rewrite_is_read_again(tmp_path, monkeypatch):
+    """Windows: ``st_ctime`` is when the file was made, which a rewrite in
+    place leaves as it was, so the stamps alone served the old cells. The
+    bytes are compared there instead."""
+    nb = tmp_path / "nb.ipynb"
+    _write(nb, "x = 1")
+    old = time.time_ns() - 10 * 1_000_000_000
+    os.utime(nb, ns=(old, old))
+    real_stat = os.stat
+
+    def created_at_old(path, *args, **kwargs):
+        st = real_stat(path, *args, **kwargs)
+        if Path(path) != nb:
+            return st
+        fields = {f: getattr(st, f) for f in dir(st) if f.startswith("st_")}
+        return types.SimpleNamespace(**{**fields, "st_ctime": old / 1e9, "st_ctime_ns": old})
+
+    monkeypatch.setattr(sd.os, "stat", created_at_old)
+    monkeypatch.setattr(sd, "_STAT_HAS_CHANGE_TIME", False)
+    readers = sd.NotebookCellReaders()
+    assert [c.code for c in readers.saved_file(str(nb))] == ["x = 1"]
+    seen = _counting(monkeypatch)
+    assert [c.code for c in readers.saved_file(str(nb))] == ["x = 1"]
+    assert seen == {"sleep": 0, "load": 0}, "control: an unchanged file is served"
+
+    _write(nb, "x = 2")  # same size
+    os.utime(nb, ns=(old, old))
+    assert sd._stat_sig(nb) == readers._file_cells[str(nb)][0], "control: the stamps did not move"
     assert [c.code for c in readers.saved_file(str(nb))] == ["x = 2"]
 
 

@@ -884,6 +884,24 @@ def _file_signature(st: os.stat_result) -> tuple[int, ...]:
     return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
 
 
+#: Whether ``st_ctime`` is the time of the last change to the file. On
+#: Windows it is the creation time, which a rewrite in place leaves as it
+#: was: a same-size rewrite with its mtime put back keeps every stamp.
+_STAT_HAS_CHANGE_TIME = os.name != "nt"
+
+
+def _bytes_if_no_change_time(path: str) -> bytes | None:
+    """*path*'s bytes where the stamps cannot tell a rewrite with its mtime
+    put back (`_STAT_HAS_CHANGE_TIME`), to compare a later read against;
+    None elsewhere, or when it cannot be read."""
+    if _STAT_HAS_CHANGE_TIME:
+        return None
+    try:
+        return _read_bytes(path)
+    except OSError:
+        return None
+
+
 def _settled(st: os.stat_result) -> bool:
     """Whether a read of the file as *st* describes it can stand for every
     later read that finds the same `_file_signature`: no write after it can
@@ -935,8 +953,10 @@ class NotebookCellReaders:
         # reads twice) into a single parse per file state, and means a
         # freshly saved file is read and checked at most once per change
         # instead of once per read.
-        #: ``path -> (signature, cells)``, for a read `_settled` says stands.
-        self._file_cells: dict[str, tuple[tuple[int, ...], tuple[NotebookCell, ...]]] = {}
+        #: ``path -> (signature, cells, bytes)``, for a read `_settled` says
+        #: stands; *bytes* only where the stamps cannot be trusted alone
+        #: (`_bytes_if_no_change_time`).
+        self._file_cells: dict[str, tuple[tuple[int, ...], tuple[NotebookCell, ...], bytes | None]] = {}
         # The last Colab answer: (monotonic time, cells or None for a failure).
         self._colab_cells: tuple[float, tuple[NotebookCell, ...] | None] | None = None
         # VS Code backup cells, keyed by notebook path; value is (backup path,
@@ -1119,7 +1139,8 @@ class NotebookCellReaders:
         if signature is not None:
             cached = self._file_cells.get(notebook_path)
             if cached is not None and cached[0] == signature:
-                return cached[1]
+                if cached[2] is None or _bytes_if_no_change_time(notebook_path) == cached[2]:
+                    return cached[1]
 
         try:
             # Reached only on a new/changed file state: a read no write
@@ -1132,8 +1153,12 @@ class NotebookCellReaders:
             return ()
 
         # Key by the file state the read saw, so later reads of it hit the cache.
-        if _settled(st2):
-            self._file_cells[notebook_path] = (_file_signature(st2), cells)
+        # The bytes are read after the parse: kept only while the file still
+        # shows the stamps the parsed read saw.
+        data = _bytes_if_no_change_time(notebook_path)
+        kept = _STAT_HAS_CHANGE_TIME or (data is not None and _stat_sig(notebook_path) == _file_signature(st2))
+        if _settled(st2) and kept:
+            self._file_cells[notebook_path] = (_file_signature(st2), cells, data)
         else:
             self._file_cells.pop(notebook_path, None)
 
