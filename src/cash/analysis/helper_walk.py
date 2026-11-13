@@ -24,13 +24,15 @@ flagged). Users who want a library call flagged call
 from __future__ import annotations
 
 import ast
+import contextlib
+import contextvars
 import dataclasses
 import inspect
 import os
 import sys
 import textwrap
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any, NamedTuple
 
 from .. import _weak
@@ -88,6 +90,34 @@ from .unloaded_modules import source_digest
 
 #: ``(module_name, attribute chain)``: where a binding is looked up again.
 BindingPath = tuple[str, tuple[str, ...]]
+
+#: The changes each callable's walk made, per walk slot (`HelperWalk._visit`),
+#: for the walks of one key build (`shared_nodes`); None outside one.
+_SHARED_NODES: contextvars.ContextVar[dict[tuple, tuple[Any, list]] | None] = contextvars.ContextVar(
+    "cash_shared_walk_nodes", default=None
+)
+
+
+@contextlib.contextmanager
+def shared_nodes() -> Iterator[None]:
+    """Walk each callable once in the walks started inside: one key build.
+
+    A key build asks for the report of every function of every class an
+    argument holds, and each report is a walk of its own through the
+    helpers below it; the helpers they share were read, parsed and audited
+    again for each. Inside, a callable walked again for the same walk slot
+    makes the changes its first walk made, without reading it again
+    (`HelperWalk._visit`). Kept only for the build: an edit between two
+    builds is read again. Nested builds share the outer one's.
+    """
+    if _SHARED_NODES.get() is not None:
+        yield
+        return
+    token = _SHARED_NODES.set({})
+    try:
+        yield
+    finally:
+        _SHARED_NODES.reset(token)
 
 
 class _Entry(NamedTuple):
@@ -180,6 +210,16 @@ class HelperWalk:
         #: different method, which was then skipped as already walked.
         self._keep_alive: list[Any] = []
         self._unwalkable = ""
+        #: `top_package` of the root's module: all of the root a callable's
+        #: own walk depends on (`is_user_code` and the unloaded-import rules
+        #: read nothing else of it).
+        self._own_package = top_package(self._root_module)
+        #: The depth of the callable being walked, which its queued callees
+        #: are walked one below.
+        self._depth = 0
+        #: The changes the callable being walked makes to this walk, in
+        #: order, while they are recorded for the next walk (`_visit`).
+        self._record: list[tuple[str, tuple]] | None = None
         #: (id(body), id(callee)) for each exec()/eval()-built callee judged.
         self._exec_built_sites: set[tuple[int, int]] = set()
         #: Walk ids walked for their body, not only for the key (hash-only).
@@ -211,7 +251,7 @@ class HelperWalk:
             if not hash_only:
                 self._bodies_walked.add(walk_id)
             qualname = self._claim(func, walk_id, walked_reported, reported)
-            self._walk_one(_Entry(func, depth, hash_only, reported), qualname)
+            self._visit(_Entry(func, depth, hash_only, reported), qualname)
         if self._layer_failures and not self._unwalkable:
             self._unwalkable = self._layer_failures[0]
         return self._report()
@@ -282,6 +322,138 @@ class HelperWalk:
         self._walked_names[walk_id] = qualname
         return qualname
 
+    def _visit(self, entry: _Entry, qualname: str) -> None:
+        """`_walk_one`, or, inside `shared_nodes`, the changes the same
+        callable made to an earlier walk of the same key build, made again.
+
+        All a callable's walk reads of the walk it is in is what the entry
+        and its name say and the root's package; the rest of what depends
+        on the walk (which caller's binding reached it first, what is
+        already noted or queued, the clock helpers judged above it) is
+        decided when a change is made (the ``_put_`` methods), and that is
+        done again. So the report is the one walking it again would build,
+        and the callable is read, parsed and audited once per key build
+        instead of once per function of a class that reaches it."""
+        self._depth = entry.depth
+        memo = _SHARED_NODES.get()
+        func = entry.func
+        if memo is None or type(func) is types.MethodType:
+            # A bound method is made anew on every read: kept in the memo, it
+            # would outlive the walk, and a weak reference the report holds
+            # to it would stay alive where the walk's own dies.
+            self._walk_one(entry, qualname)
+            return
+        slot = (
+            id(func),
+            qualname,
+            entry.hash_only,
+            entry.reported,
+            entry.depth == 0,
+            self._own_package,
+            len(sys.modules),
+        )
+        done = memo.get(slot)
+        if done is not None and done[0] is func:
+            made: dict[int, Any] = {}
+            for name, args in done[1]:
+                getattr(self, name)(*(_made_anew(a, made) for a in args))
+            return
+        record: list[tuple[str, tuple]] = []
+        self._record = record
+        try:
+            self._walk_one(entry, qualname)
+        finally:
+            self._record = None
+        memo[slot] = (func, record)  # holds func, so its id is not reused
+
+    def _emit(self, name: str, *args: Any) -> None:
+        """Make one change to this walk (the ``_put_`` method *name*), and
+        record it for `_visit` when it is recording."""
+        if self._record is not None:
+            self._record.append((name, tuple(map(_recipe, args))))
+        getattr(self, name)(*args)
+
+    # --- the changes one callable's walk makes (see `_visit`) ---
+
+    def _put_opaque(self, qualname: str) -> None:
+        self._opaque.append(qualname)
+
+    def _put_hash(self, qualname: str, digest: str) -> None:
+        self._helper_hashes[qualname] = digest
+
+    def _put_resolution(self, func: Any, qualname: str) -> None:
+        self._record_resolution_path(func, qualname)
+
+    def _put_walked_code(self, item: tuple[Any, tuple]) -> None:
+        self._walked_code.append(item)
+
+    def _put_audited(self, func: Any) -> None:
+        self._audited.append(func)
+
+    def _put_push(self, callee: Any, hash_only: bool, reported: bool) -> None:
+        self._stack.append(_Entry(callee, self._depth + 1, hash_only, reported))
+
+    def _put_caller_path(self, callee: Any, path: BindingPath) -> None:
+        self._caller_paths.setdefault(id(callee), path)
+
+    def _put_issues(self, issues: list[PurityIssue]) -> None:
+        self._issues += issues
+
+    def _put_body_issues(
+        self,
+        code: Any,
+        below_root: bool,
+        own: list[PurityIssue],
+        more: list[PurityIssue],
+        judged: frozenset,
+        environment_reads: frozenset,
+        reported: bool,
+    ) -> None:
+        """A body's findings (*own*: its rules', *more*: the rest), and what
+        it judged and read."""
+        if below_root and code in self._judged_helpers:
+            # Judged where it is called (`clock_helper_read`). Reached any
+            # other way (``fn = now; fn()``), it reports its own read.
+            own = [i for i in own if i.kind != ISSUE_AMBIENT_READ]
+            self.composable = False
+        self._judged_helpers |= judged
+        self._environment_reads |= environment_reads
+        if reported:
+            self._issues += own + more
+
+    def _put_cached(self, callee: Any) -> None:
+        if id(callee) not in self._cached_seen:
+            self._cached_seen.add(id(callee))
+            self._cached_callees.append(held_ref(callee))
+
+    def _put_binding(self, callee: Any, path: BindingPath) -> None:
+        if path in self._seen_bindings:
+            return
+        self._seen_bindings.add(path)
+        self._bindings.append((path[0], path[1], held_ref(callee)))
+
+    def _put_unbound(self, key: tuple[str, str]) -> None:
+        self._unbound.setdefault(key, None)
+
+    def _put_unloaded(self, module_name: str) -> None:
+        self._unloaded.setdefault(module_name, None)
+
+    def _put_site_path(self, path: BindingPath, waived: bool) -> None:
+        (self._waived_paths if waived else self._unwaived_paths).add(path)
+
+    def _put_unkeyable(self, why: str) -> None:
+        self._unkeyable.append(why)
+
+    def _put_layer_failure(self, why: str) -> None:
+        self._layer_failures.append(why)
+
+    def _put_exec_built(self, site: tuple[int, int], issues: list[PurityIssue]) -> None:
+        """An exec()-built callee met at *site*: reported once per body."""
+        if site in self._exec_built_sites:
+            return
+        self._exec_built_sites.add(site)
+        self._issues += issues
+
     def _walk_one(self, entry: _Entry, qualname: str) -> None:
         """Key one callable, audit it if it is a function body, and queue
         what it reaches.
@@ -308,15 +480,15 @@ class HelperWalk:
         # uniformly. `callable_identity` is the digest the live check
         # recomputes: for a wrapper it folds in what it wraps, which the text
         # alone does not.
-        self._helper_hashes[qualname] = callable_identity(func)
-        self._record_resolution_path(func, qualname)
+        self._emit("_put_hash", qualname, callable_identity(func))
+        self._emit("_put_resolution", func, qualname)
         self._record_walked_code(func)
 
         try:
             tree = tree_memo.parse(src)
         except SyntaxError:
             if entry.reported:
-                self._opaque.append(qualname)
+                self._emit("_put_opaque", qualname)
             return
 
         func_def = None if entry.hash_only else _find_first_function_def(tree)
@@ -338,8 +510,8 @@ class HelperWalk:
             # changes what every instance holds. Keep walking what it builds,
             # so the closure stays transitive.
             if entry.reported:
-                self._opaque.append(qualname)
-            self._queue_class_refs(func, tree, entry.depth, entry.reported)
+                self._emit("_put_opaque", qualname)
+            self._queue_class_refs(func, tree, entry.reported)
             if type(func) is types.FunctionType and func.__code__.co_name == "<lambda>":
                 # A lambda: its source is the statement it sits in, with no
                 # def to audit. What it calls still computes its result
@@ -351,11 +523,11 @@ class HelperWalk:
 
         body = self._audit(entry._replace(func=code_fn), qualname, func_def, src, tree)
         if entry.reported:
-            self._audited.append(func)
+            self._emit("_put_audited", func)
         self._queue_called(body)
         self._queue_named_values(body)
         self._queue_attribute_values(body)
-        self._queue_annotation_refs(code_fn, entry.depth, entry.reported)
+        self._queue_annotation_refs(code_fn, entry.reported)
 
     def _record_walked_code(self, func: Any) -> None:
         """Remember the code *func* ran when walked (`PurityReport.walked_code`)."""
@@ -364,9 +536,10 @@ class HelperWalk:
         if not codes:
             return
         try:
-            self._walked_code.append((_weak.ref(owner), codes))
+            item = (_weak.ref(owner), codes)
         except TypeError:  # not weak-referenceable
-            pass
+            return
+        self._emit("_put_walked_code", item)
 
     def _walk_without_source(self, entry: _Entry, qualname: str) -> None:
         """A callable whose source cannot be read: an opaque leaf for PURITY,
@@ -383,9 +556,9 @@ class HelperWalk:
         """
         func = entry.func
         if entry.reported:
-            self._opaque.append(qualname)
-        self._helper_hashes[qualname] = compiled_identity(func)
-        self._record_resolution_path(func, qualname)
+            self._emit("_put_opaque", qualname)
+        self._emit("_put_hash", qualname, compiled_identity(func))
+        self._emit("_put_resolution", func, qualname)
         self._record_walked_code(func)
         code_fn = jit_python_function(func) or func
         if type(code_fn) is types.FunctionType:
@@ -409,8 +582,8 @@ class HelperWalk:
             path = binding_path(func, chain)
             self._note_binding(callee, path)
             if path is not None:
-                self._caller_paths.setdefault(id(callee), path)
-            self._stack.append(_Entry(callee, entry.depth + 1, False, entry.reported))
+                self._emit("_put_caller_path", callee, path)
+            self._emit("_put_push", callee, False, entry.reported)
 
     # --- auditing one body ---
 
@@ -449,31 +622,36 @@ class HelperWalk:
         )
         visitor.visit(func_def)
         visitor.finalize_taint()
-        issues = visitor.issues + dispatch_issues
+        own = visitor.issues + dispatch_issues
         if visitor.opens_tracked_database:
-            issues = [i for i in issues if i.effect_kind is not EffectKind.DB_READ]
-        if entry.depth > 0 and getattr(func, "__code__", None) in self._judged_helpers:
-            # Judged where it is called (`clock_helper_read`). Reached any
-            # other way (``fn = now; fn()``), it reports its own read.
-            issues = [i for i in issues if i.kind != ISSUE_AMBIENT_READ]
-            self.composable = False
-        self._judged_helpers |= visitor.judged_helpers
-        self._environment_reads |= visitor.environment_reads
+            own = [i for i in own if i.effect_kind is not EffectKind.DB_READ]
         # Reads of module globals that are reassigned or mutated somewhere in
         # the module: the cached result won't change when the global does.
-        issues += mutable_global_reads(func, func_def, qualname, visitor.read_names, _scope_locals(func_def))
+        more = mutable_global_reads(func, func_def, qualname, visitor.read_names, _scope_locals(func_def))
         if self._unvouched:
-            issues += self._unvouched_import_issues(func_def, qualname)
+            more += self._unvouched_import_issues(func_def, qualname)
 
         # Drop what THIS function's source says it has already audited.
         # Filtered per function, against that function's own source, so a
         # waiver written in a helper covers the helper and nothing else.
         audited, function_scope = _waived_lines(src, tree, func)
-        issues = _drop_audited(issues, audited, function_scope)
+        own = _drop_audited(own, audited, function_scope)
+        more = _drop_audited(more, audited, function_scope)
         if entry.reported:
             # Only now, after the waivers matched against the function's own
             # source: report lines as the FILE numbers them.
-            self._issues += _anchor_issue_lines(issues, func)
+            own = _anchor_issue_lines(own, func)
+            more = _anchor_issue_lines(more, func)
+        self._emit(
+            "_put_body_issues",
+            getattr(func, "__code__", None),
+            entry.depth > 0,
+            own,
+            more,
+            frozenset(visitor.judged_helpers),
+            frozenset(visitor.environment_reads),
+            entry.reported,
+        )
         return _Body(
             func=func,
             func_def=func_def,
@@ -505,7 +683,7 @@ class HelperWalk:
             for unloaded in unloaded_local_imports(module_name, prefix, dotted.get(local, ()), self._root_module):
                 # Walked once it is loaded (`bindings_changed`); keyed by
                 # its source until then (`ModuleAttrFold.local_binding_parts`).
-                self._unloaded.setdefault(unloaded, None)
+                self._emit("_put_unloaded", unloaded)
                 if source_digest(unloaded, self._root_module) is None:
                     self._unvouched.setdefault(local, unloaded)
         return namespace, local_imports
@@ -551,7 +729,7 @@ class HelperWalk:
                 start = getattr(call_node, "lineno", 0)
                 end = getattr(call_node, "end_lineno", None) or start
                 on_waived = any(n in body.audited for n in range(start, end + 1))
-                (self._waived_paths if on_waived else self._unwaived_paths).add(site_path)
+                self._emit("_put_site_path", site_path, on_waived)
             self._queue_helper(
                 body,
                 resolve_callee(call_node.func, body.namespace, modules_only=False),
@@ -578,7 +756,7 @@ class HelperWalk:
                 # Its code shapes the result all the same; followed for the
                 # key, not audited.
                 self._note_decided_at_run_time(body, name, value)
-                self._queue_hash_only(value, body.func, body.depth, body.reported)
+                self._queue_hash_only(value, body.func, body.reported)
             elif value is not None:
                 self._queue_special_functions(body, value)
 
@@ -620,7 +798,7 @@ class HelperWalk:
                 where=body.qualname,
                 line=node.lineno,
             )
-            self._issues += _anchor_issue_lines([issue], body.func)
+            self._emit("_put_issues", _anchor_issue_lines([issue], body.func))
             return
 
     def _queue_special_functions(self, body: _Body, value: Any) -> None:
@@ -664,7 +842,7 @@ class HelperWalk:
             ):
                 self._queue_helper(body, value, getattr(node, "lineno", 0), _call_site_path(body, chain))
             elif isinstance(value, type):
-                self._queue_hash_only(value, body.func, body.depth, body.reported)
+                self._queue_hash_only(value, body.func, body.reported)
 
     def _queue_helper(self, body: _Body, callee: Any, line: int, path: BindingPath | None) -> None:
         """Queue *callee*, reached from *body* through *path*, if it is user
@@ -678,7 +856,7 @@ class HelperWalk:
         if is_mock(callee):
             self._note_binding(callee, path)
             where = f"{path[0]}.{'.'.join(path[1])}" if path else "a callee"
-            self._unkeyable.append(f"{where} is a {type(callee).__name__}")
+            self._emit("_put_unkeyable", f"{where} is a {type(callee).__name__}")
             return
         # A call to another @cash.cache-decorated function is a
         # dependency-graph edge, not a helper to walk: its own source hash and
@@ -697,19 +875,22 @@ class HelperWalk:
         # in the body, so its constants (`factor = 2`) reach the key only if
         # the class is keyed, as a class read by name is.
         if type(callee) is types.MethodType and isinstance(callee.__self__, type):
-            self._queue_hash_only(callee.__self__, body.func, body.depth, body.reported)
+            self._queue_hash_only(callee.__self__, body.func, body.reported)
         # A ``@pure`` or ``@stateful`` callee settles what the helper may DO,
         # not what it computes: it is walked below like any helper, so an
         # edit to it moves its callers' keys, and only its findings are left
         # out (``reported`` in the walk).
         if is_stateful(callee) and body.reported:
-            self._issues.append(
-                PurityIssue(
-                    kind=ISSUE_IMPURE_CALL,
-                    description=f"calls @stateful {qualname_of(callee)}()",
-                    where=body.qualname,
-                    line=line,
-                )
+            self._emit(
+                "_put_issues",
+                [
+                    PurityIssue(
+                        kind=ISSUE_IMPURE_CALL,
+                        description=f"calls @stateful {qualname_of(callee)}()",
+                        where=body.qualname,
+                        line=line,
+                    )
+                ],
             )
         if is_exec_built(callee) and not _captured_by_root(body, callee):
             # Its source is a string the program built or read: as
@@ -717,10 +898,7 @@ class HelperWalk:
             # once per body, at the first site: a call site (which a waiver
             # on its line covers) comes before the bare read of the name.
             self._note_library_binding(callee, path)
-            site = (id(body.func), id(callee))
-            if site in self._exec_built_sites:
-                return
-            self._exec_built_sites.add(site)
+            issues = []
             if body.reported and line not in body.audited:
                 issue = PurityIssue(
                     kind=ISSUE_UNTRACKABLE_DEP,
@@ -729,7 +907,8 @@ class HelperWalk:
                     where=body.qualname,
                     line=line,
                 )
-                self._issues += _anchor_issue_lines([issue], body.func)
+                issues = _anchor_issue_lines([issue], body.func)
+            self._emit("_put_exec_built", (id(body.func), id(callee)), issues)
             return
         layers = self._user_layers(callee)
         if layers is None:
@@ -744,10 +923,10 @@ class HelperWalk:
         self._note_binding(callee, path)
         if own:
             if path is not None:
-                self._caller_paths.setdefault(id(callee), path)
-            self._stack.append(_Entry(callee, body.depth + 1, False, body.reported))
+                self._emit("_put_caller_path", callee, path)
+            self._emit("_put_push", callee, False, body.reported)
         for layer in layers:
-            self._stack.append(_Entry(layer, body.depth + 1, False, body.reported))
+            self._emit("_put_push", layer, False, body.reported)
 
     def _user_layers(self, callee: Any) -> list[Any] | None:
         """The user-code functions *callee* runs besides its own code: the
@@ -759,7 +938,7 @@ class HelperWalk:
         try:
             callee_layers = callable_layers(callee)
         except UnwalkableLayers as e:
-            self._layer_failures.append(str(e))
+            self._emit("_put_layer_failure", str(e))
             return None
         layers = []
         for layer in callee_layers:
@@ -787,7 +966,7 @@ class HelperWalk:
         ):
             self._note_binding(callee, path)
 
-    def _queue_hash_only(self, target: Any, owner: Any, depth: int, reported: bool) -> None:
+    def _queue_hash_only(self, target: Any, owner: Any, reported: bool) -> None:
         if target is None or target is owner or not callable(target):
             return
         if getattr(target, "_cash_cached", False) is True:
@@ -796,16 +975,16 @@ class HelperWalk:
             return
         if not is_user_code(target, self._root_module):
             return
-        self._stack.append(_Entry(target, depth + 1, True, reported))
+        self._emit("_put_push", target, True, reported)
 
-    def _queue_annotation_refs(self, obj: Any, depth: int, reported: bool) -> None:
+    def _queue_annotation_refs(self, obj: Any, reported: bool) -> None:
         """Queue, hash-only, the user classes and functions *obj*'s
         annotations name (see ``cash._annotation_refs``): pydantic runs a
         field type's validators, a ``get_type_hints`` builder constructs it."""
         for target in annotation_referents(obj, lambda o: is_user_code(o, self._root_module)):
-            self._queue_hash_only(target, obj, depth, reported)
+            self._queue_hash_only(target, obj, reported)
 
-    def _queue_class_refs(self, cls: Any, tree: ast.AST, depth: int, reported: bool) -> None:
+    def _queue_class_refs(self, cls: Any, tree: ast.AST, reported: bool) -> None:
         """Queue user-code objects a CLASS body constructs, hash-only.
 
         Names only, from actual Call nodes: an annotation (``value: B``)
@@ -814,15 +993,13 @@ class HelperWalk:
         if not isinstance(cls, type):
             return
         for called in called_names_in_tree(tree):
-            self._queue_hash_only(resolve_in_class_namespaces(cls, called), cls, depth, reported)
-        self._queue_annotation_refs(cls, depth, reported)
+            self._queue_hash_only(resolve_in_class_namespaces(cls, called), cls, reported)
+        self._queue_annotation_refs(cls, reported)
 
     # --- what the report records ---
 
     def _note_cached(self, callee: Any) -> None:
-        if id(callee) not in self._cached_seen:
-            self._cached_seen.add(id(callee))
-            self._cached_callees.append(held_ref(callee))
+        self._emit("_put_cached", callee)
 
     def _note_if_unbound(self, body: _Body, path: BindingPath, shadowed: frozenset[str]) -> None:
         """Note a bare called name its module has not bound (yet): a builtin,
@@ -832,13 +1009,11 @@ class HelperWalk:
         if name in shadowed or name in body.local_imports:
             return
         if name not in (getattr(body.func, "__globals__", None) or ()):
-            self._unbound.setdefault((path[0], name), None)
+            self._emit("_put_unbound", (path[0], name))
 
     def _note_binding(self, callee: Any, path: BindingPath | None) -> None:
-        if path is None or path in self._seen_bindings:
-            return
-        self._seen_bindings.add(path)
-        self._bindings.append((path[0], path[1], held_ref(callee)))
+        if path is not None:
+            self._emit("_put_binding", callee, path)
 
     def _record_resolution_path(self, func: Callable[..., Any], qualname: str) -> None:
         """Note where to re-resolve *func* from ``sys.modules`` per call.
@@ -925,6 +1100,31 @@ class HelperWalk:
             except TypeError:
                 continue
         return tuple(whole)
+
+
+class _BoundMethod(NamedTuple):
+    """A bound method in a recorded change (`HelperWalk._emit`): made anew
+    each time the change is made again, as reading it again would, so the
+    record keeps no method alive that the walk would have let go."""
+
+    func: Any
+    owner: Any
+
+
+def _recipe(arg: Any) -> Any:
+    """*arg* as `HelperWalk._visit` records it."""
+    return _BoundMethod(arg.__func__, arg.__self__) if type(arg) is types.MethodType else arg
+
+
+def _made_anew(arg: Any, made: dict[int, Any]) -> Any:
+    """*arg* as a recorded change is made again: one new method per recorded
+    one, the same within one replay as the one read was within its walk."""
+    if type(arg) is not _BoundMethod:
+        return arg
+    method = made.get(id(arg))
+    if method is None:
+        method = made[id(arg)] = types.MethodType(arg.func, arg.owner)
+    return method
 
 
 def _is_function(value: Any) -> bool:

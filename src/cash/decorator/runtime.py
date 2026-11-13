@@ -22,6 +22,7 @@ from .. import _weak, argument_sharing, rewrite_in_place
 from .._active import EXPLAINING as _EXPLAINING
 from .._clock import perf_counter as _perf_counter
 from ..analysis.handed_callables import hands_a_state_changing_callable
+from ..analysis.helper_walk import shared_nodes
 from ..analysis.purity_report import PurityReport, describe_untrackable
 from ..backends._base import ttl_expired, written_at
 from ..code_swaps import FOLDED_CODE, FoldedCode, note_owner
@@ -748,8 +749,13 @@ class KeyBuilder:
         `KeyBuildFailed`, or whatever else a step raised. Never keys the call
         without a part that failed. Warnings from the steps are silent while
         `_EXPLAINING` is set. *split* holds the ids of the iterator copies
-        made for the key alone (`split_for_key`).
+        made for the key alone (`split_for_key`). Each helper the build's
+        purity walks reach is read and audited once (`shared_nodes`).
         """
+        with shared_nodes():
+            return self._build(spec, args, kwargs, split)
+
+    def _build(self, spec: CachedFunction, args: tuple, kwargs: dict, split: frozenset[int]) -> BuiltKey:
         func, func_name = spec.func, spec.name
         iterators = iterator_arguments(spec.signature, args, kwargs) if args or kwargs else []
         # One plain-data census per argument, shared across the key
@@ -889,8 +895,9 @@ class KeyBuilder:
             (_EXPLAINING, _EXPLAINING.set(True)),
         )
         try:
-            state_hash = self._code_state(spec, [], note=True)
-            self._method_deps.fold_method_class_deps(spec.func, args, state_hash)
+            with shared_nodes():
+                state_hash = self._code_state(spec, [], note=True)
+                self._method_deps.fold_method_class_deps(spec.func, args, state_hash)
         except Exception:  # noqa: BLE001 - cannot be built now: it cannot be shown unchanged
             return None
         finally:
