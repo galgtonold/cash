@@ -272,8 +272,12 @@ def _is_dunder(name: str) -> bool:
 class _Scan:
     """What one cached function's key can read, made watched (see module doc)."""
 
-    def __init__(self, root_module: str | None) -> None:
+    def __init__(self, root_module: str | None, root: Any = None) -> None:
         self.root_module = root_module
+        #: The cached function itself: the names on its decorator lines
+        #: are not read by its key (`GlobalReads.decorator_global_names`
+        #: is folded for a function held inside a decorator only).
+        self.root = root
         self.seen: set = set()
         self.keep: list = []
         self.cells: list = []
@@ -395,11 +399,16 @@ class _Scan:
             source = own_source(f)
         except Exception:  # noqa: BLE001 - no source: the bytecode names it reads
             source = ""
-        if source:
+        # The root's decorators ran once, at its definition: what they name
+        # now changes nothing its key reads. ``@cache(level=10)`` over a
+        # library function kept every call of it off this path, for a
+        # counter deep in the decorator's own machinery.
+        if source and f is not self.root:
             for line in source.splitlines():
                 if _DEF_LINE.match(line):
                     break
                 decorated.update(_IDENT.findall(line))
+        if source:
             self.names.update(_signature_names(source))
         self.names.update(own)
         self.names.update(decorated)
@@ -516,7 +525,7 @@ def scan(spec: CachedFunction, registry: Any) -> tuple[tuple, tuple, list, _Fami
     reaches, and the classes whose family it checks (`_Scan.family`);
     raises `Ineligible`."""
     func, name = spec.func, spec.name
-    s = _Scan(getattr(func, "__module__", None))
+    s = _Scan(getattr(func, "__module__", None), func)
     s.value(func, frozenset())
     graph = registry.graph
     stack, visited = [name], {name}
