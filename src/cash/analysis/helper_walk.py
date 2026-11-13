@@ -43,6 +43,7 @@ from ..jit_functions import jit_python_function
 from ..loaded_code import code_objects_of
 from ..purity import is_pure, is_stateful
 from ..source_reading import getsourcelines, own_source
+from . import tree_memo
 from .ambient_reads import log_helper_names, log_only_ambient_reads, method_namespace
 from .annotations import assume_safe_block_lines, audited_lines
 from .ast_util import bytecode_global_refs, resolve_callee
@@ -71,7 +72,7 @@ from .helper_code import (
     qualname_of,
 )
 from .mutable_globals import mutable_global_reads
-from .purity_flow import fresh_name_nodes
+from .purity_flow import fresh_call_candidates, fresh_flow_nodes, resolve_fresh_call_candidates
 from .purity_report import (
     ANSWERED_AT_RUN_TIME,
     ISSUE_AMBIENT_READ,
@@ -312,7 +313,7 @@ class HelperWalk:
         self._record_walked_code(func)
 
         try:
-            tree = ast.parse(src)
+            tree = tree_memo.parse(src)
         except SyntaxError:
             if entry.reported:
                 self._opaque.append(qualname)
@@ -429,7 +430,9 @@ class HelperWalk:
         # as if they were body statements walks into the decorator factory's
         # source (cash's own internals), flagging its mutations as the
         # user's. Only the function body is analysed.
-        func_def.decorator_list = []
+        # A copy: the tree is shared with every other walk that met this
+        # source (`tree_memo`).
+        func_def = tree_memo.stripped_def(func_def)
         param_names = _param_names(func_def)
         namespace, local_imports = self._body_namespace(func, func_def)
         dispatch_issues = spell_static_dispatch(func_def, namespace, qualname)
@@ -437,7 +440,7 @@ class HelperWalk:
         visitor = PurityVisitor(
             qualname=qualname,
             param_names=param_names,
-            fresh_nodes=fresh_name_nodes(func_def, namespace),
+            fresh_nodes=_fresh_name_nodes(func_def, namespace),
             log_only=log_only_ambient_reads(func_def, func, ambient_namespace),
             namespace=namespace,
             log_helpers=log_helper_names(func_def, func),
@@ -458,7 +461,7 @@ class HelperWalk:
         self._environment_reads |= visitor.environment_reads
         # Reads of module globals that are reassigned or mutated somewhere in
         # the module: the cached result won't change when the global does.
-        issues += mutable_global_reads(func, func_def, qualname, visitor.read_names)
+        issues += mutable_global_reads(func, func_def, qualname, visitor.read_names, _scope_locals(func_def))
         if self._unvouched:
             issues += self._unvouched_import_issues(func_def, qualname)
 
@@ -542,7 +545,7 @@ class HelperWalk:
             site_path = _call_site_path(body, chain)
             if site_path is not None and len(site_path[1]) == 1 and site_path[1] == chain:
                 if shadowed is None:
-                    shadowed = body.param_names | scope_locals(body.func_def)
+                    shadowed = body.param_names | _scope_locals(body.func_def)
                 self._note_if_unbound(body, site_path, shadowed)
             if site_path is not None:
                 start = getattr(call_node, "lineno", 0)
@@ -646,7 +649,7 @@ class HelperWalk:
         Resolved statically (no property runs), from a module or class the
         name is bound to, not a local or parameter that shadows it.
         """
-        shadowed = (body.param_names | scope_locals(body.func_def)) - body.local_imports.keys()
+        shadowed = (body.param_names | _scope_locals(body.func_def)) - body.local_imports.keys()
         for node in body.visitor.read_attributes:
             chain = callee_chain(node)
             if chain is None or chain[0] in shadowed:
@@ -936,6 +939,22 @@ def _walk_id(func: Any) -> Any:
     if type(func) is types.MethodType:
         return (id(func.__func__), id(func.__self__))
     return id(func)
+
+
+def _fresh_name_nodes(func_def: ast.AST, namespace: dict[str, Any]) -> frozenset[int]:
+    """`purity_flow.fresh_name_nodes`, its flow half kept with the tree: it
+    reads the tree and the fresh library calls, which are resolved through
+    *namespace* on every walk."""
+    calls: frozenset[int] = frozenset()
+    if namespace:
+        candidates = tree_memo.fact(func_def, "fresh_call_candidates", fresh_call_candidates)
+        calls = resolve_fresh_call_candidates(candidates, namespace)
+    return tree_memo.fact(func_def, ("fresh_flow", calls), lambda node: fresh_flow_nodes(node, calls)) | calls
+
+
+def _scope_locals(func_def: ast.AST) -> frozenset[str]:
+    """`scope_locals`, kept with the tree."""
+    return tree_memo.fact(func_def, "scope_locals", scope_locals)
 
 
 def _param_names(func_def: ast.FunctionDef | ast.AsyncFunctionDef) -> frozenset[str]:

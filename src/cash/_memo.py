@@ -27,6 +27,7 @@ __all__ = [
     "FRAMES",
     "FROZEN_RESULTS",
     "MODULE_ANALYSES",
+    "PARSED_SOURCES",
     "MODULE_READ_DIGESTS",
     "NOTEBOOK_FUNCTIONS",
     "NOTEBOOK_STATEMENTS",
@@ -133,6 +134,10 @@ PATCH_SITES = 1024
 #: One analysis per module file whose names are read; each holds the file's
 #: top-level bindings.
 MODULE_ANALYSES = 1024
+
+#: One parsed tree per helper source text the walk met: a process reaching
+#: a large library through its cached functions meets a few hundred.
+PARSED_SOURCES = 1024
 
 #: One digest per module file and set of names read from it.
 MODULE_READ_DIGESTS = 4096

@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import ast
 import builtins
+import functools
 import hashlib
 import os
 import sys
@@ -958,12 +959,18 @@ def _named_kind(name: str, call: ast.Call) -> EffectKind | None:
 _ROOTS: dict[str, Any] = {"loaded": None, "roots": {}}
 
 
-def _resolution_table() -> set[str]:
-    return (
+@functools.cache
+def _resolution_table() -> tuple[frozenset[str], tuple[str, ...]]:
+    """The names resolved through a namespace, and their top-level modules
+    (sorted). Built once: the tables are constants, and `_roots` runs for
+    every call the walk classifies, where rebuilding them was most of its
+    cost."""
+    table = frozenset(
         {name for name, kind in MODULE_CALLS.items() if kind in _RESOLVED_KINDS}
         | set(CLOCK_WHEN_ARG_CALLS)
         | set(CLOCK_WHEN_ARGS_OMITTED)
     )
+    return table, tuple(sorted({entry.split(".", 1)[0] for entry in table}))
 
 
 def _roots() -> dict[int, tuple[Any, str]]:
@@ -971,8 +978,9 @@ def _roots() -> dict[int, tuple[Any, str]]:
     function a resolvable name passes through (``datetime``,
     ``datetime.datetime``, ``time.time``, ``pandas.Timestamp``), among the
     modules loaded now. Rebuilt when that set changes; never imports one."""
-    table = _resolution_table()
-    loaded = tuple(sorted({entry.split(".", 1)[0] for entry in table} & set(sys.modules)))
+    table, tops = _resolution_table()
+    modules = sys.modules
+    loaded = tuple(top for top in tops if top in modules)
     if _ROOTS["loaded"] == loaded:
         return _ROOTS["roots"]
     roots: dict[int, tuple[Any, str]] = {}
