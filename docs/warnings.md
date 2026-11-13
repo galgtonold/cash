@@ -2174,7 +2174,9 @@ would not give it. They are the values the kernel holds, which is what you
 see without cash, but a result built from them is not the notebook's result.
 
 **What to do.** Fix the error and run the cell that raised again, then the
-cells below it.
+cells below it. A name the cell changes and also reads starts that run from
+what the cells above give, as after a run that went through, not from what
+the failed run left: the cell ends at the value a run from the top gives.
 
 **When it is safe to ignore.** While you are still looking into the error.
 

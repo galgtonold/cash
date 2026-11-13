@@ -382,6 +382,10 @@ class ClassificationResult:
     (`MismatchClassifier.backward_scan_pass`), and a plan that re-runs a
     statement changing one rebuilds it after all
     (`ReexecutionPlanner.rerun_what_changes_kept_sharers`)."""
+    texts_not_above: tuple[str, ...] = ()
+    """The running cell's texts (`CellCheck.own_texts`) and the cells below
+    it: a value one of their statements bound is never an unsaved edit to a
+    cell above."""
 
 
 class ReexecutionPlan(NamedTuple):
