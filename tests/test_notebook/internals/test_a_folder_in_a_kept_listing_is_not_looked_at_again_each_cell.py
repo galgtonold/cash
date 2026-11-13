@@ -161,3 +161,32 @@ def test_a_folder_changed_since_is_looked_at_again(people, lstats, tmp_path):
     assert os.stat(folder).st_mtime_ns != first_listed_mtime, "the write left the folder's time: nothing is measured"
     assert found[folder][1].st_mtime_ns == os.stat(folder).st_mtime_ns
     assert found["people/p07"][1].st_mtime_ns == os.stat(folder).st_mtime_ns
+
+
+def test_a_change_beside_the_folders_leaves_their_stats_kept(people, lstats, tmp_path):
+    """Windows reports the folder holding them changed once after the first
+    pass (NTFS brings its entry for each folder up to date when the folder
+    is first opened), and every folder was looked at again before the next
+    cell. A change in that folder that leaves each folder as it was keeps
+    their stats: the check before the cell finds each one as kept."""
+    stats_this_run(people)
+    (tmp_path / "people" / "notes.txt").write_bytes(b"beside")
+    _next_run()
+    lstats.clear()
+    found = stats_this_run(people)
+    assert lstats == [], f"the folders were looked at again: {len(lstats)} lstats"
+    for p in people:
+        assert found[p][1] is not None and found[p][1].st_mtime_ns == os.stat(p).st_mtime_ns
+
+
+def test_a_folder_changed_beside_is_looked_at_again(people, lstats, tmp_path):
+    """Positive control: a folder whose own stat changed is not kept."""
+    stats_this_run(people)
+    folder = tmp_path / "people" / "p03"
+    st = os.stat(folder)
+    os.utime(folder, ns=(st.st_atime_ns, st.st_mtime_ns - 10**9))
+    _next_run()
+    lstats.clear()
+    found = stats_this_run(people)
+    assert found[str(folder)][1].st_mtime_ns == os.stat(folder).st_mtime_ns
+    assert found["people/p03"][1].st_mtime_ns == os.stat(folder).st_mtime_ns
