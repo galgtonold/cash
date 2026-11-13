@@ -883,6 +883,11 @@ class ReexecutionPlanner:
         produced = (simulation_trace[p].produced_lineages or {}).get(v)
         if produced is None or self.tracking_state.variable_lineage.get(v) != produced:
             return False
+        # A lineage is not a value: the simulation records an import's
+        # lineage for the names it binds whether or not the kernel binds them
+        # (`_propagate_import_lineage`), as after a restart.
+        if v not in self._user_ns():
+            return False
         reads = set(simulation_trace[p].inputs or ())
         if reads & restored:
             return False

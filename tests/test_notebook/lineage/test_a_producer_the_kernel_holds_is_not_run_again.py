@@ -20,11 +20,14 @@ from cash.notebook.upstream._types import TraceEntry
 from cash.notebook.upstream.simulator import NotebookSimulator
 
 
-def _planner(live: dict[str, str]):
+def _planner(live: dict[str, str], bound: set[str] | None = None):
+    """A planner whose kernel binds *bound* (every name of *live* by
+    default), each at its lineage in *live*."""
     state = TrackingState()
     for name, lineage in live.items():
         state.lineage.record(name, lineage)
-    return NotebookSimulator(types.SimpleNamespace(user_ns={}), None, state).planner
+    user_ns = {name: object() for name in (live if bound is None else bound)}
+    return NotebookSimulator(types.SimpleNamespace(user_ns=user_ns), None, state).planner
 
 
 def _entry(stmt, outputs=(), inputs=(), consumed=None, produced=None):
@@ -60,6 +63,14 @@ def test_the_shadowed_name_pass_brings_in_a_producer_the_kernel_does_not_hold():
         [3, 4], TRACE, FINAL
     )
     assert 2 in scheduled, scheduled
+
+
+def test_a_lineage_for_a_name_the_kernel_does_not_bind_brings_the_producer_in():
+    """The simulation records an import's lineage for a name the kernel
+    does not bind (after a restart): that is not a value the kernel holds."""
+    planner = _planner({"df_final": "F1", "data": "A0", "df": "D0"}, bound={"data", "df"})
+    assert 2 in planner._complete_shadowed_var_producers([3, 4], TRACE, FINAL)
+    assert 2 in planner._schedule_conditional_producer_inits([3, 4], TRACE, {"df_final", "data"})
 
 
 def test_the_initializer_pass_leaves_out_a_producer_the_kernel_holds():

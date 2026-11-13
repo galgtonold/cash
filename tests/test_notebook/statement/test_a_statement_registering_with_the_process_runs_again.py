@@ -37,6 +37,9 @@ SETUP = (
     "    np.random.seed(None)\nexcept ImportError:\n    pass\n"
     "try:\n    import matplotlib\n    import matplotlib.style\nexcept ImportError:\n    pass\n"
     "OLD_LIMIT = sys.getrecursionlimit()\n"
+    # Windows has no SIGUSR1; SIGBREAK (Ctrl+Break) is a signal of its own
+    # nothing else in the process handles.
+    "SIG = getattr(signal, 'SIGUSR1', None) or signal.SIGBREAK\n"
     "try:\n    from cash.tracking.process_registries import _OWN_ATEXIT\n"
     "except ImportError:  # before it\n    _OWN_ATEXIT = [0]\n"
     "def users_atexit():\n"
@@ -51,9 +54,9 @@ CASES = {
     # own apart (`register_atexit`): the statement adds one each run.
     "atexit": ("atexit.register(cb)", "users_atexit() > COUNT", "atexit.unregister(cb); COUNT = users_atexit()"),
     "signal": (
-        "signal.signal(signal.SIGUSR1, cb)",
-        "signal.getsignal(signal.SIGUSR1) is cb",
-        "signal.signal(signal.SIGUSR1, signal.SIG_DFL)",
+        "signal.signal(SIG, cb)",
+        "signal.getsignal(SIG) is cb",
+        "signal.signal(SIG, signal.SIG_DFL)",
     ),
     "excepthook": ("sys.excepthook = cb", "sys.excepthook is cb", "sys.excepthook = sys.__excepthook__"),
     "threading-excepthook": (

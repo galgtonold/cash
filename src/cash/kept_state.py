@@ -224,7 +224,7 @@ def _dumps_also_keyed(
     differs: list[bool] = [] if watch is None else watch
     table = _KeepDict(protocol, extra, watch=differs)
     if FLAT_FIRST and not _surely_shallow(value):
-        walk = _Walk(getattr(sink, "walked", None), reducer_override)
+        walk = _Walk(getattr(sink, "walked", None), reducer_override, differs)
         if not _at_most_deep(value, _SAFE_DEPTH, table, _flat_leaf(None), walk):
             if sink is not None:
                 raise RecursionError("pickled flat first on this Python: digested over its keyed bytes")
@@ -403,16 +403,20 @@ class _Walk:
     (`override`): the user's ``__reduce_ex__`` runs once per pickle, as on
     other Pythons. *check* runs after each reduce with the bytes of data
     reduced so far (a digest's deadline, `stored_pickle._Sink.walked`):
-    the time a pickle takes is mostly its reduces, which here run first."""
+    the time a pickle takes is mostly its reduces, which here run first.
+    *watch* (`dumps_also_keyed`'s) is told of an array a key packs
+    (`flat_array`), which the walk does not reduce, so *check* can stop the
+    pickle there before it reduces what follows."""
 
-    __slots__ = ("check", "data", "first", "reduced")
+    __slots__ = ("check", "data", "first", "reduced", "watch")
 
-    def __init__(self, check: Callable[[int], Any] | None = None, first: Any = None) -> None:
+    def __init__(self, check: Callable[[int], Any] | None = None, first: Any = None, watch: list | None = None) -> None:
         self.check = check
         self.data = 0
         #: The pickle's own ``reducer_override``, asked before the table as
         #: the pickler asks it.
         self.first = first
+        self.watch = watch
         #: id -> (object, reduce with its item iterators as lists)
         self.reduced: dict[int, tuple[Any, tuple]] = {}
 
@@ -429,6 +433,21 @@ class _Walk:
             self.data += _data_bytes(reduced)
             self.check(self.data)
         return reduced
+
+    def flat_array(self, obj: Any) -> None:
+        """Met *obj*, an array pickled whole: *watch* is told when a key
+        packs its records (`packed_records`), as the store's reduce of it
+        will tell it, and *check* runs."""
+        try:
+            dtype = obj.dtype
+            if (dtype.fields is not None or dtype.subdtype is not None) and _packed_dtype(
+                dtype.type, dtype
+            ) is not None:
+                self.watch.append(True)
+        except Exception:  # noqa: BLE001 - left to the store's reduce, as before
+            return
+        if self.check is not None:
+            self.check(self.data)
 
     def override(self) -> Callable[[Any], Any]:
         """A ``reducer_override`` giving each object its kept reduce, with
@@ -477,6 +496,9 @@ def _reduced_parts(obj: Any, reducers: Any, leaf: Any, walk: _Walk | None = None
     `flatten` follows it: nothing for an object pickled whole. *walk* keeps
     the reduce (`_Walk`)."""
     obj_type = type(obj)
+    if walk is not None and walk.watch is not None and _flat_array(obj):
+        walk.flat_array(obj)  # a library's type, a leaf: told here
+        return []
     if leaf(obj) or obj_type in _WHOLE or issubclass(obj_type, type) or _flat_array(obj):
         return []
     reduced = reducers[obj_type](obj) if walk is None else walk.reduce(obj, reducers)

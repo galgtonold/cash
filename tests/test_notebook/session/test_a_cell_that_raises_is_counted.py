@@ -13,6 +13,10 @@ from unittest.mock import MagicMock
 
 from cash.notebook.cache_status import CacheStatus
 
+#: How early ``time.sleep`` may wake by ``perf_counter``: a tick of the
+#: Windows timer (15.6 ms); 0.2 s measured 0.1993 s there.
+SLEEP_EARLY_S = 0.016
+
 
 def _through_the_hook(magics, code: str) -> None:
     """Run *code* as the ``%cash_on`` hook does, IPython's own run_cell
@@ -37,9 +41,9 @@ def test_the_statements_before_the_error_are_shown_and_counted(cash_magics):
     rows = {row["code"]: row for row in last["statements"]}
     assert "x = (time.sleep(0.2), 1)[1]" in rows, rows
     assert rows["x = (time.sleep(0.2), 1)[1]"]["status"] == CacheStatus.COMPUTED
-    assert rows["x = (time.sleep(0.2), 1)[1]"]["execution_time"] >= 0.2
+    assert rows["x = (time.sleep(0.2), 1)[1]"]["execution_time"] >= 0.2 - SLEEP_EARLY_S
     assert rows["y = x / z"]["status"] == CacheStatus.ERROR
-    assert 0.2 <= last["total_time"] <= took
+    assert 0.2 - SLEEP_EARLY_S <= last["total_time"] <= took
     assert cash_magics.session.stats["cells_executed"] == before + 1
 
     # Raised before any statement ran: nothing of the cell before is

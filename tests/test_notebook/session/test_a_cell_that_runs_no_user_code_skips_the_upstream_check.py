@@ -11,16 +11,32 @@ keeps the old path.
 from __future__ import annotations
 
 import pytest
-from IPython.testing.globalipapp import get_ipython
+from IPython.core.interactiveshell import InteractiveShell
 
 from cash.notebook.ipython.ipython_cell import runs_no_user_code
 
 
 @pytest.fixture(scope="module")
 def transform():
-    shell = get_ipython()
+    """A real shell's ``transform_cell``, automagic on.
+
+    ``InteractiveShell.instance()`` returns whatever shell this worker
+    already holds (an earlier test's, or a terminal one), where
+    ``globalipapp.get_ipython()`` asked for a ``TerminalInteractiveShell``
+    and raised ``MultipleInstanceError`` after a test that had left a plain
+    one. A shell made here is cleared again, and one found keeps its
+    automagic setting.
+    """
+    found = InteractiveShell.initialized()
+    shell = InteractiveShell.instance()
+    automagic = shell.automagic
     shell.automagic = True
-    return shell.transform_cell
+    try:
+        yield shell.transform_cell
+    finally:
+        shell.automagic = automagic
+        if not found:
+            InteractiveShell.clear_instance()
 
 
 @pytest.mark.parametrize(

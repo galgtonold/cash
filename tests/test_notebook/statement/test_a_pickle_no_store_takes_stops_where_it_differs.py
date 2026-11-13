@@ -15,8 +15,9 @@ is the keyed pickle's, as it always was.
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
-from cash import stored_pickle
+from cash import kept_state, stored_pickle
 
 REDUCED: list[int] = []
 
@@ -38,7 +39,13 @@ def _padded(rows: int = 1 << 15) -> np.ndarray:
     return np.zeros(rows, dtype=dtype)
 
 
-def test_the_store_pickle_stops_at_an_object_a_key_pickles_otherwise():
+@pytest.mark.parametrize("walked_first", [False, True], ids=["pickled", "walked-first"])
+def test_the_store_pickle_stops_at_an_object_a_key_pickles_otherwise(walked_first, monkeypatch):
+    """Walked first (3.10 on Windows, `kept_state.FLAT_FIRST`), the walk
+    reduces the user's objects before the pickle writes a byte: it stops
+    at the padded array too, before it reduces what follows."""
+    if walked_first:
+        monkeypatch.setattr(kept_state, "FLAT_FIRST", True)
     value = [_padded(), Counted()]
     outside = stored_pickle.object_digest(value)
     REDUCED.clear()

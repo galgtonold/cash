@@ -210,6 +210,20 @@ def test_one_stalled_load_does_not_take_a_result_off_disk(tiers, cash_instance, 
     assert _disk_bytes(disk) >= Fit(1 << 17).model["exog"].nbytes, "one stalled restore took the result off disk"
 
 
+def test_a_stalled_load_whose_second_read_fails_leaves_the_result_on_disk(tiers, cash_instance, tmp_path, monkeypatch):
+    """The second reading fails (a file another process holds, the entry
+    gone): one stalled reading is all there is, which is not enough, and
+    the result is left unjudged on disk."""
+    magics, _ram, disk = tiers
+    run_cash_cell(magics, "fit = fit_model()")
+    disk = _restart(cash_instance, disk, tmp_path)
+    STALLS.append(SLOW_LOAD_S)
+    monkeypatch.setattr(TieredBackend, "_read_seconds", staticmethod(lambda _backend, _key: float("inf")))
+    assert _rerun_restores(magics)
+    assert LOADS == [SLOW_LOAD_S], "the stall was not taken alone: the test measures nothing"
+    assert _disk_bytes(disk) >= Fit(1 << 17).model["exog"].nbytes, "a stalled restore read once took it off disk"
+
+
 @pytest.mark.parametrize("elsewhere", [False, True], ids=["by the restore", "on another thread"])
 def test_a_slow_restore_that_imported_is_judged_on_its_second_read(tiers, cash_instance, tmp_path, elsewhere):
     """A module imported during the first restore (the first statsmodels

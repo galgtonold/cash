@@ -256,7 +256,13 @@ class _Sink:
     def walked(self, done: int) -> None:
         """`check` for a walk before the pickle (`kept_state._Walk`), which
         reduces objects before anything is written: *done* is what it
-        estimates the pickle to hold by then. Only the deadline."""
+        estimates the pickle to hold by then. The deadline, and
+        `stop_unless_keyed`: a Python that walks first (3.10 on Windows)
+        reduces every object before a byte is written, and a stop left to
+        `write` let the walk reduce them all for the keyed pickle to reduce
+        again."""
+        if self.stop_unless_keyed:
+            raise _NotKeyed
         if self._deadline is not None and perf_counter() > self._deadline:
             self._deadline = run_on(self._deadline, done)
 
