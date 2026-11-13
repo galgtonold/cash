@@ -309,6 +309,9 @@ class StatementRun:
     #: moves.
     holder_digests: dict[str, str] = field(default_factory=dict)
     holder_digest_budget: float = 0.0
+    #: Its holders' digests after it ran are collected for the next
+    #: statement (`DigestCarry.begin_after`).
+    carrying_after: bool = False
     #: The variables whose objects the outputs hold that are stored as the
     #: variable, not copied, each with its content digest: a restore binds
     #: the live object again, when its digest is still this one
