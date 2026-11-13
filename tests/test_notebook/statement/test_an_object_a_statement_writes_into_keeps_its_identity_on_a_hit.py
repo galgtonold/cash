@@ -21,6 +21,7 @@ import weakref
 import pytest
 
 from cash.notebook.cache_status import CacheStatus
+from cash.notebook.statement import processor
 from tests._cell_driver import run_cash_cell
 
 MAKE = (
@@ -71,10 +72,14 @@ def _statuses(magics) -> dict[str, str]:
 
 @pytest.mark.parametrize(("body", "take", "check", "served"), CASES)
 def test_an_id_or_weak_reference_taken_after_the_store_still_finds_the_object(
-    cash_magics, cash_instance, body, take, check, served
+    cash_magics, cash_instance, monkeypatch, body, take, check, served
 ):
     cash_instance.config.min_execution_time_to_cache_seconds = 0.0
     cash_instance.config.call_cost_floor_seconds = 0.0
+    # What is pinned is how a hit keeps the object, not the share check's
+    # time: a loop pass costs microseconds, so its check may take only the
+    # floor, which a busy runner overran for one pass of ten.
+    monkeypatch.setattr(processor, "SHARE_CHECK_FLOOR_S", 5.0)
     ns = cash_magics.shell.user_ns
     cells = [MAKE, body]
     for cell in cells:
@@ -94,7 +99,8 @@ def test_an_id_or_weak_reference_taken_after_the_store_still_finds_the_object(
                 assert held is None or held() is ns[var]
         assert bool(ns["r"]) is True
     # Where the state can be written into the object, the entry is still served.
-    assert (statuses == {CacheStatus.RESTORED}) is served, statuses
+    rows = cash_magics.cash_status("dict")["last_cell"]["statements"]
+    assert (statuses == {CacheStatus.RESTORED}) is served, rows
 
 
 def test_a_copy_is_still_bound_when_nothing_holds_the_object_by_identity(cash_magics, cash_instance):
