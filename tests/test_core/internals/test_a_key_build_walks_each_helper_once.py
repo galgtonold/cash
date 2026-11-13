@@ -138,39 +138,40 @@ print(key, walks, result, Estimator._fit.cache_info()["hits"])
 """
 
 
-def _run(tmp_path, mode: str, cache: str = "cache") -> tuple[str, int, int, int]:
+def _run(tmp_path, mode: str, cache: str = "cache", trace: str = "1") -> tuple[str, int, int, int]:
     """(key, callables walked, result, hits) of ``_fit`` in a fresh process."""
-    out = run_python("-W", "ignore", "-c", _KEY_SCRIPT, mode, cwd=tmp_path, cache_dir=tmp_path / cache)
+    out = run_python(
+        "-W", "ignore", "-c", _KEY_SCRIPT, mode, cwd=tmp_path, cache_dir=tmp_path / cache, env={"CASH_TRACE": trace}
+    )
     key, walks, result, hits = out.stdout.split()[-4:]
     return key, int(walks), int(result), int(hits)
 
 
-def test_the_key_is_the_one_walking_every_helper_again_gives(tmp_path):
+@pytest.mark.parametrize("trace", ["1", "0"])
+def test_the_key_is_the_one_walking_every_helper_again_gives(tmp_path, trace):
     _write_package(tmp_path)
-    old_key, old_walks, old_result, _ = _run(tmp_path, "old", "old")
-    new_key, new_walks, new_result, _ = _run(tmp_path, "new", "new")
+    old_key, old_walks, old_result, _ = _run(tmp_path, "old", "old", trace=trace)
+    new_key, new_walks, new_result, _ = _run(tmp_path, "new", "new", trace=trace)
     assert new_key == old_key
     assert new_result == old_result
     assert new_walks * 5 <= old_walks, f"walked {new_walks} callables, against {old_walks} unshared"
 
 
-@pytest.mark.xfail(
-    sys.version_info < (3, 12),
-    strict=True,
-    reason="a helper reached only through a method of self is not in the key; 3.12+ catches the edit "
-    "by the trace of what the call ran, earlier versions serve the old result (before this change too)",
-)
+# A helper reached only through a method of ``self`` (``H.h3`` in
+# ``Base.m0_1``): with a trace (3.12+) the call's trace names it; without one
+# (before 3.12, ``CASH_TRACE=0``) the methods' helpers are in the key.
+@pytest.mark.parametrize("trace", ["1", "0"])
 @pytest.mark.parametrize("edit", [3, 17, -1], ids=["shared-helper", "deep-helper", "only-through-a-cycle"])
-def test_an_edit_to_a_walked_helper_misses(tmp_path, edit):
+def test_an_edit_to_a_walked_helper_misses(tmp_path, edit, trace):
     _write_package(tmp_path)
-    _, _, before, _ = _run(tmp_path, "new")
-    assert _run(tmp_path, "new")[3] == 1, "an unchanged estimator was not served from the cache"
+    _, _, before, _ = _run(tmp_path, "new", trace=trace)
+    assert _run(tmp_path, "new", trace=trace)[3] == 1, "an unchanged estimator was not served from the cache"
     _write_package(tmp_path, edit=edit)
-    fresh = _run(tmp_path, "old", "fresh")[2]
-    key, _, after, hits = _run(tmp_path, "new")
+    fresh = _run(tmp_path, "old", "fresh", trace=trace)[2]
+    key, _, after, hits = _run(tmp_path, "new", trace=trace)
     assert hits == 0, f"an edit to a helper was served the result from before it ({before})"
     assert after == fresh
-    assert key == _run(tmp_path, "old", "fresh")[0]
+    assert key == _run(tmp_path, "old", "fresh", trace=trace)[0]
 
 
 # --- the reports, shape by shape ---
