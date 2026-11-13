@@ -7,7 +7,7 @@ import hashlib
 import pickle
 import sys
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -786,7 +786,9 @@ class GlobalsFold:
             )
         return state_hash
 
-    def fold_dependency_read_globals(self, func: Callable, func_name: str, state_hash: str) -> str:
+    def fold_dependency_read_globals(
+        self, func: Callable, func_name: str, state_hash: str, covered: Collection[tuple[str, str]] = ()
+    ) -> str:
         """Fold the globals the CACHED functions this one calls read.
 
         The third of the three channels a global can reach a key through, and
@@ -820,6 +822,8 @@ class GlobalsFold:
         Transitive, because the chain is: ``outer`` -> ``inner`` -> a helper in
         a third module reading a global in a fourth. Each dependency's own
         helpers go through the same fold as if they were this function's.
+        A *covered* edge's callee is one of the caller's helpers, whose
+        reads `fold_helper_read_globals` folded.
         """
         owner_code = getattr(func, "__code__", None)
         # Pre-seed with what this function already folded for itself, so a
@@ -830,13 +834,13 @@ class GlobalsFold:
             for name in self._reads.read_global_data_names(func):
                 seen.add((id(own_globals), name))
         visited = {func_name}
-        stack = sorted(self._registry.graph.get_dependencies(func_name))
+        stack = [(func_name, dep) for dep in sorted(self._registry.graph.get_dependencies(func_name))]
         while stack:
-            dep = stack.pop()
-            if dep in visited:
+            node, dep = stack.pop()
+            if dep in visited or (node, dep) in covered:
                 continue
             visited.add(dep)
-            stack.extend(sorted(self._registry.graph.get_dependencies(dep)))
+            stack.extend((dep, d) for d in sorted(self._registry.graph.get_dependencies(dep)))
             dep_func = self._registry.functions.get(dep)
             if dep_func is None or getattr(dep_func, "__globals__", None) is None:
                 continue

@@ -15,7 +15,7 @@ import os
 import pickle
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Collection, Iterator
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from .. import _weak, argument_sharing, rewrite_in_place
@@ -540,13 +540,17 @@ class KeyBuilder:
         """
         func, func_name = spec.func, spec.name
         note_owner(func, code_objects_of(func))
+        # Edges the dependency state left out as already walked as helpers:
+        # the folds below over the same graph leave them out too.
+        covered: set[tuple[str, str]] = set()
         state_hash = self._state_hasher.compute(
             func_name,
             own_source_override=self._pins.pin_own_source(func),
             own_report=self._registry.report_for(func, func_name),
             note=note,
+            covered=covered,
         )
-        state_hash = self._fold_callee_bindings(func_name, state_hash)
+        state_hash = self._fold_callee_bindings(func_name, state_hash, covered)
         state_hash = self._files.fold_declared_files(spec, state_hash)
         chain.append(state_hash)
         state_hash = self._closures.fold_closure(func, func_name, state_hash)
@@ -561,7 +565,7 @@ class KeyBuilder:
         chain.append(state_hash)
         state_hash = self._globals.fold_read_globals(func, func_name, state_hash)
         state_hash = self._globals.fold_helper_read_globals(func, func_name, state_hash)
-        state_hash = self._globals.fold_dependency_read_globals(func, func_name, state_hash)
+        state_hash = self._globals.fold_dependency_read_globals(func, func_name, state_hash, covered)
         chain.append(state_hash)
         state_hash = self._rng.fold_rng_epoch(func_name, state_hash)
         chain.append(state_hash)
@@ -573,7 +577,7 @@ class KeyBuilder:
             state_hash = self._fold_key_function(spec, state_hash)
         return state_hash
 
-    def _fold_callee_bindings(self, func_name: str, state_hash: str) -> str:
+    def _fold_callee_bindings(self, func_name: str, state_hash: str, covered: Collection[tuple[str, str]] = ()) -> str:
         """Fold what each cached function *func_name* calls is bound to: its
         captured variables and its parameter defaults, transitively.
 
@@ -585,7 +589,9 @@ class KeyBuilder:
         They are folded by the same rules as the caller's own
         (`ClosureFold.fold_closure`, `ClosureFold.fold_defaults`). A callee
         another registry describes (`FunctionRegistry.reached_callee`) is
-        keyed whole by its own state already.
+        keyed whole by its own state already, and a *covered* edge's callee
+        was keyed as a helper, defaults and captures included
+        (`HelperIdentity.identity`).
 
         Raises `KeyBuildFailed` when a callee's default cannot be hashed.
         """
@@ -598,7 +604,7 @@ class KeyBuilder:
         try:
             while stack:
                 node, dep = stack.pop()
-                if dep in visited:
+                if dep in visited or (node, dep) in covered:
                     continue
                 visited.add(dep)
                 dep_func = self._registry.functions.get(dep)
