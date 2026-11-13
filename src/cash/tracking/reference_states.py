@@ -158,10 +158,15 @@ def _digest_now(recipe: bytes) -> str:
 
 def _digest(obj: Any) -> str | None:
     """The digest of *obj* with its state (`kept_state.state_digest`), or
-    None when it cannot be read."""
+    None when it cannot be read: also when the object's own code raises
+    (a ``__getattr__`` raising ``KeyError`` or ``RuntimeError`` for
+    ``__getstate__``), which stopped the statement where plain Python ran
+    it."""
     try:
         return kept_state.state_digest(obj)
     except (*HASH_ERRORS, MemoryError):
+        return None
+    except Exception:  # noqa: BLE001 - the object's own error: not read, so never served
         return None
 
 
