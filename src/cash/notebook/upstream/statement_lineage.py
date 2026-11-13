@@ -84,7 +84,7 @@ from ..lineage_formula import (
     value_digests_key,
     without_drawn,
 )
-from ..loop_watch import branch_changes, loop_watch_hash, watch_candidates
+from ..loop_watch import branch_changes, loop_handed_hash, loop_watch_hash, watch_candidates
 from ..pyplot_draws import pyplot_draw_names
 from ..restored_var import present_holders
 from ..run_memo import HeldPaths, file_component_this_run, file_state_this_run, stats_this_run
@@ -407,12 +407,17 @@ class StatementLineage:
         before (it first ran on no items), which the runtime then sees as
         it runs it. So such a run counts every name the loop hands straight
         to such code; at worst a reader below is planned again and hits.
-        Those names, beyond the record, are added to *unseen_out*."""
+        Not one a call of its body was seen handed, in a run where that
+        call ran, without changing it (``loop_handed_hash``): only one never
+        handed yet, or handed only where a run may skip it (a branch, a
+        ``while`` loop's body). Those names, beyond the record, are added to
+        *unseen_out*."""
         if isinstance(node, (ast.If, ast.Try)):
             return self.branch_verdict_changes(node, virtual_modules)
         if not isinstance(node, WATCHED_STRUCTURES):
             return set()
-        verdict = self._mutation_verdict(loop_watch_hash(ast.unparse(node)))
+        code = ast.unparse(node)
+        verdict = self._mutation_verdict(loop_watch_hash(code))
         user_ns = self.shell.user_ns
         candidates = set(
             watch_candidates(
@@ -427,6 +432,12 @@ class StatementLineage:
         unseen = candidates - set(verdict)
         if unseen:
             unseen -= rewatch_exempt(ast.Module(body=[node], type_ignores=[]), user_ns, self._function_source)
+        if unseen:
+            # What a call of its body was handed in a run where that call
+            # ran, and was seen not to change (``InLoopChanges.finish_watch``):
+            # not a loop that first ran on no items. ``model.fit(X_train,
+            # y_train)`` over the models compared moves neither.
+            unseen -= self._mutation_verdict(loop_handed_hash(code)) or set()
         if unseen and inputs_changed is not None and inputs_changed():
             if unseen_out is not None:
                 unseen_out |= unseen

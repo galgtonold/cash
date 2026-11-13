@@ -26,7 +26,14 @@ from typing import TYPE_CHECKING
 
 from ...analysis.mutation_effects import WATCHED_STRUCTURES, is_module_name
 from ...analysis.namespace_effects import rewatch_exempt
-from ..loop_watch import LoopWatch, branch_changes, loop_watch_hash, watch_candidates
+from ..loop_watch import (
+    LoopWatch,
+    branch_changes,
+    loop_handed_hash,
+    loop_watch_hash,
+    surely_handed,
+    watch_candidates,
+)
 from .derivation_edges import bump_derived_lineages
 
 if TYPE_CHECKING:
@@ -85,6 +92,8 @@ class InLoopChanges:
         self._records = records
         #: The open watch of each loop source running now.
         self._watches: dict[str, LoopWatch] = {}
+        #: The same watches, by the loop node they were opened for.
+        self._by_node: dict[int, LoopWatch] = {}
         #: The overlay of each decomposed loop running now, innermost last.
         self._overlays: list[IterationOverlay] = []
         #: Verdict keys no earlier kernel recorded.
@@ -118,6 +127,7 @@ class InLoopChanges:
             return None
         open_ = self._watches.get(code)
         if open_ is not None:
+            self._by_node.setdefault(id(node), open_)
             return open_
         user_ns = self.shell.user_ns
         try:
@@ -146,8 +156,30 @@ class InLoopChanges:
                 observed.clear()
             observed.add(state)
         watch = LoopWatch.start(code, candidates, verdict, user_ns, rewatch=rewatch)
+        if watch.watching:
+            # What its statements surely hand, for the record of what a run
+            # whose body ran was handed (`finish_watch`).
+            try:
+                handed, reach = surely_handed(node, user_ns, lambda name: is_module_name(name, user_ns), resolve_source)
+                watch.follow_passes(node, handed, reach, user_ns)
+            except Exception:  # nothing is recorded as handed
+                logger.debug("[CONTROL] loop handoff analysis failed", exc_info=True)
         self._watches[code] = watch
+        self._by_node[id(node)] = watch
         return watch
+
+    def run_in_passes(self, node: ast.AST) -> None:
+        """The loop *node* runs pass by pass: what its statements were
+        handed is known from those seen running (:meth:`statement_ran`)."""
+        watch = self._by_node.get(id(node))
+        if watch is not None:
+            watch.passes = True
+
+    def statement_ran(self, node: ast.AST, index: int) -> None:
+        """Statement *index* of the body of the loop *node* ran on a pass."""
+        watch = self._by_node.get(id(node))
+        if watch is not None:
+            watch.ran(index)
 
     def _observed_state(self, cache_key: str | None) -> str:
         """A digest of what a loop runs on: its key, when it has one, and
@@ -173,6 +205,15 @@ class InLoopChanges:
         if learning or (watch.verdict is not None and seen - watch.verdict):
             self.tracking_state.mutation_verdicts[watch.key] = set(seen)
             self._records.persist_mutation_verdict(watch.key, set(seen))
+        if watch.seen_handed:
+            # What a call of the body was handed in a run where it ran, and
+            # watched around it: the simulation's ground for leaving it out
+            # of what the loop may change on new inputs (``loop_watch_changes``).
+            key = loop_handed_hash(code)
+            known = self._verdict(key) or frozenset()
+            if watch.seen_handed - known:
+                self.tracking_state.mutation_verdicts[key] = set(known | watch.seen_handed)
+                self._records.persist_mutation_verdict(key, set(known | watch.seen_handed))
         return seen
 
     def close_watch(self, code: str, ran: bool) -> frozenset[str]:
@@ -188,10 +229,12 @@ class InLoopChanges:
             return watch.assumed()
         finally:
             self._watches.pop(code, None)
+            self._by_node = {k: w for k, w in self._by_node.items() if w is not watch}
 
     def drop_watches(self) -> None:
         """Forget every open watch: a structure that failed leaves none."""
         self._watches.clear()
+        self._by_node.clear()
 
     def branch_verdict_changes(self, node: ast.AST, resolve_source: Callable[[str], str | None]) -> set[str]:
         """What the statements, loops and ``with`` blocks in the branches of
