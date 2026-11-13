@@ -147,7 +147,8 @@ def test_the_trie_is_stored_and_served_in_the_next_process(tmp_path: Path):
             assert "STORE-PARTS-UNCHECKED" not in codes, codes
             print("hit" if any(e["cache_hit"] for e in c._calls.entries) else "miss")
             """
-        )
+        ),
+        encoding="utf-8",
     )
     runs = [
         subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=300, cwd=tmp_path)
