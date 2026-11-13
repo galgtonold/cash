@@ -1630,7 +1630,7 @@ class InMemoryBackend(CacheBackend):
             kept.served = True
             if MEASURED_ROUND_TRIP not in metadata:
                 seconds = time.perf_counter() - started
-                if _judged_by_compute(metadata) and seconds >= metadata["execution_time"]:
+                if _judged_by_compute(metadata) and seconds >= _saved_seconds(metadata):
                     # About to drop it: one stalled reading (a full garbage
                     # collection, the writer holding the interpreter lock) is
                     # not enough, so it is read again and the faster kept.
@@ -1648,7 +1648,7 @@ class InMemoryBackend(CacheBackend):
             class_name = metadata.get(ROUND_TRIP_CLASS)
         if class_name is not None:
             note_round_trip(class_name, size, seconds)
-        if _judged_by_compute(metadata) and seconds >= metadata["execution_time"]:
+        if _judged_by_compute(metadata) and seconds >= _saved_seconds(metadata):
             with self._lock:
                 entry = self._store.get(key)
                 if entry is not None and entry[1] is kept:
@@ -3082,7 +3082,7 @@ def _hit_no_faster(value: Any, unpickle_seconds: float, metadata: MetadataDict) 
     same way, so it would be no faster than computing it again."""
     if type(value) is dict or _copied_as_data(type(value)) or not _judged_by_compute(metadata):
         return False
-    return unpickle_seconds >= metadata["execution_time"]
+    return unpickle_seconds >= _saved_seconds(metadata)
 
 
 def _may_refuse(unpickle_seconds: float, metadata: MetadataDict) -> bool:
@@ -3092,7 +3092,7 @@ def _may_refuse(unpickle_seconds: float, metadata: MetadataDict) -> bool:
     (``PersistencePolicy.pays_to_restore``, 20% by default); a reading of
     half the compute or more is close enough to either line to be taken
     again."""
-    return _judged_by_compute(metadata) and 2 * unpickle_seconds >= metadata["execution_time"]
+    return _judged_by_compute(metadata) and 2 * unpickle_seconds >= _saved_seconds(metadata)
 
 
 def _judged_by_compute(metadata: MetadataDict) -> bool:
@@ -3102,6 +3102,19 @@ def _judged_by_compute(metadata: MetadataDict) -> bool:
     if metadata.get("decorator_entry") or metadata.get("force_persist") or metadata.get("copy_required"):
         return False
     return bool(metadata.get("execution_time"))
+
+
+def _saved_seconds(metadata: MetadataDict) -> float:
+    """What a hit of the entry *metadata* describes saves: the compute it
+    records, or, for one written to disk for what rebuilding it costs
+    (``rebuild_time``, `TieredBackend.persist_from_memory`), that.
+
+    ``forest_reg = make_pipeline(preprocessing, ...)`` took 0.2 ms over a
+    ``preprocessing`` kept in memory only; it was written to disk for the
+    0.15 s a restart re-runs to get it back. Judged by its 0.2 ms, its first
+    restore after a restart (a few ms) was no faster, and dropped it: the
+    next cell found it gone and rebuilt the chain behind it."""
+    return max(float(metadata.get("execution_time") or 0.0), float(metadata.get("rebuild_time") or 0.0))
 
 
 def _slower_than_its_compute(value: Any, size: int, metadata: MetadataDict) -> bool:
@@ -3120,8 +3133,8 @@ def _slower_than_its_compute(value: Any, size: int, metadata: MetadataDict) -> b
         # No object of its class read back here yet: the fitted cost model's
         # price of reading one of its size into RAM. Not put on the entry as
         # a reading: nothing was read.
-        return cost_model.estimated_restore_time(kind.__name__, size, "ram") >= metadata["execution_time"]
-    if predicted < metadata["execution_time"]:
+        return cost_model.estimated_restore_time(kind.__name__, size, "ram") >= _saved_seconds(metadata)
+    if predicted < _saved_seconds(metadata):
         return False
     metadata[MEASURED_ROUND_TRIP] = predicted
     return True
@@ -3150,7 +3163,7 @@ def restore_too_slow(value: Any, metadata: MetadataDict, seconds: float) -> bool
     reading first."""
     if not _credited_class(value, metadata):
         return False
-    return _judged_by_compute(metadata) and seconds >= metadata["execution_time"]
+    return _judged_by_compute(metadata) and seconds >= _saved_seconds(metadata)
 
 
 def _credited_class(value: Any, metadata: MetadataDict) -> str | None:
@@ -3171,7 +3184,7 @@ def restored_no_faster(value: Any, metadata: MetadataDict, seconds: float) -> bo
     """Credit what restoring *value* from a slower tier took, *seconds*, to
     its class (of its biggest value, for a notebook entry): the next store
     of one is judged on it (`round_trip_seconds`). True when the restore
-    was no faster than the compute its entry records, for an entry the
+    was no faster than what its entry saves (`_saved_seconds`), for an entry the
     policy may refuse (`_judged_by_compute`): then it is not worth keeping
     there.
 
@@ -3183,7 +3196,7 @@ def restored_no_faster(value: Any, metadata: MetadataDict, seconds: float) -> bo
     if not name:
         return False
     note_round_trip(name, int(metadata.get("cost_model_size_bytes") or metadata.get("size") or 0), seconds)
-    return _judged_by_compute(metadata) and seconds >= metadata["execution_time"]
+    return _judged_by_compute(metadata) and seconds >= _saved_seconds(metadata)
 
 
 def _learned_round_trip(value: Any, size: int, metadata: MetadataDict) -> float | None:
