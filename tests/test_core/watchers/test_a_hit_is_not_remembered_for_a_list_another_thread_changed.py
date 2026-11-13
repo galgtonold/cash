@@ -22,7 +22,7 @@ import threading
 import pytest
 
 from cash import Cash
-from cash.decorator import hit_memo
+from cash.decorator import hit_memo, runtime
 
 pytestmark = [
     pytest.mark.skipif(not hit_memo.ENABLED, reason="the fast hit path needs the C extension"),
@@ -231,7 +231,7 @@ def test_a_hit_keyed_while_short_threads_changed_and_put_back_the_list(watching,
 
     monkeypatch.setattr(hit_memo, "epochs", epochs)
     monkeypatch.setattr(hit_memo.HitMemo, "_entry", entry)
-    monkeypatch.setattr(threading, "active_count", lambda: 1)
+    monkeypatch.setattr(runtime, "other_thread_alive", lambda _namespace: False)
     f = Cash(backend="memory", register_magic=False).cache(total)
     watching["lst"] = lst
     changed = make()
