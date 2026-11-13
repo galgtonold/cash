@@ -136,6 +136,7 @@ class CacheRestorer:
         expected_lineages: dict[str, str] | None = None,
         final_lineages: dict[str, str] | None = None,
         keep: set[str] | frozenset[str] = frozenset(),
+        holders_allowed: Callable[[set[str], set[str]], bool] | None = None,
     ) -> tuple[set[str], float, float]:
         """Attempt to restore a statement using virtual input hashes.
 
@@ -152,6 +153,11 @@ class CacheRestorer:
         further down bound them again, so what they hold now is not the
         statement's (``a, b = split()`` restored for ``b`` leaves the ``a``
         that ``a = list(a)`` made below it).
+
+        *holders_allowed*, when given, is asked with the variables the entry
+        would restore with the outputs (``holders``) and the outputs: the
+        restore is refused when it answers False (a holder the repair keeps
+        live, which a restore would give a new object).
 
         Returns:
             Tuple of (set of variables successfully restored, restore_time_seconds, saved_time_seconds).
@@ -238,6 +244,11 @@ class CacheRestorer:
                     variables_to_restore = {
                         k: v for k, v in variables_to_restore.items() if k not in keep or k in holders
                     }
+                if holders and holders_allowed is not None and not holders_allowed(set(holders), set(outputs)):
+                    logger.debug(
+                        "[UPSTREAM] Restore failed: it would give a variable the repair keeps live a new object"
+                    )
+                    return set(), _perf_counter() - start_time, 0.0
                 lineage = self.tracking_state.variable_lineage
                 if any(lineage.get(name) != before for name, before in holders.items()):
                     # As at a hit (``CacheFreshnessChecker``): the entry would
