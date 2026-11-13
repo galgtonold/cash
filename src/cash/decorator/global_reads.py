@@ -15,6 +15,7 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 from .._memo import CODE_OBJECTS, LruMemo
+from ..analysis.ast_util import module_attribute
 from ..analysis.bytecode import GLOBAL_WRITES, argvals, instructions
 from ..analysis.helper_bindings import dotted_imports, local_import_map
 from ..analysis.helper_code import own_code_is_user
@@ -229,8 +230,14 @@ def reaches_namespace_by_name(scopes: tuple, module_globals: dict[str, Any]) -> 
             value = module_globals.get(name)
             members = vars(value).values() if isinstance(value, type) else (value,)
             for member in members:
-                member = getattr(member, "__func__", member)
-                member = getattr(member, "__wrapped__", member)  # a cached helper
+                try:
+                    member = getattr(member, "__func__", member)
+                    member = getattr(member, "__wrapped__", member)  # a cached helper
+                except Exception:  # noqa: BLE001 - its __getattr__ raised: not a function
+                    # A module whose import failed raises the ImportError
+                    # on any attribute read (`lazy_loader.load`); neither it
+                    # nor any other such object is a function to follow.
+                    continue
                 if type(member) is types.FunctionType and member.__globals__ is module_globals:
                     stack.append(member.__code__)
     if known_no is not None:
@@ -544,7 +551,7 @@ class GlobalReads:
                         break
                     pairs.add((path, attr))
                     path = f"{path}.{attr}"
-                    value = getattr(value, attr, None) if issubclass(type(value), types.ModuleType) else None
+                    value = module_attribute(value, attr) if issubclass(type(value), types.ModuleType) else None
                     j += 1
                 else:
                     if issubclass(type(value), types.ModuleType):

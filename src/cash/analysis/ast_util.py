@@ -246,12 +246,29 @@ def resolve_callee(
         if obj is None:
             return None
         if issubclass(type(obj), types.ModuleType) or _is_mock(obj):
-            obj = getattr(obj, attr, None)
+            obj = module_attribute(obj, attr)
         elif modules_only:
             return None
         else:
             obj = _static_attribute(obj, attr)
     return obj
+
+
+def module_attribute(module: Any, attr: str) -> Any | None:
+    """``module.attr``, or None when the module has no such attribute.
+
+    A module whose import failed may stand in its name and raise the
+    ``ImportError`` on the first attribute read: ``lazy_loader.load("x")``
+    with x not installed, or any module-level ``__getattr__`` that imports on
+    demand. To the code reading the name, that attribute is not there; a
+    reader resolving a callee must take it so, not give up on the whole
+    function. Which module the name holds is keyed apart (`module_ref`), so
+    installing the module still moves the key.
+    """
+    try:
+        return getattr(module, attr, None)
+    except ImportError:
+        return None
 
 
 def resolve_dotted_name(name: str, namespace: Mapping[str, Any]) -> Any | None:
