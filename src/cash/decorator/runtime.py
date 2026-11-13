@@ -22,7 +22,7 @@ from .. import _weak, argument_sharing, rewrite_in_place
 from .._active import EXPLAINING as _EXPLAINING
 from .._clock import perf_counter as _perf_counter
 from ..analysis.handed_callables import hands_a_state_changing_callable
-from ..analysis.purity_report import PurityReport
+from ..analysis.purity_report import PurityReport, describe_untrackable
 from ..backends._base import ttl_expired, written_at
 from ..code_swaps import FOLDED_CODE, FoldedCode, note_owner
 from ..dependency_state import STATE_LEDGER, ledger_note
@@ -80,6 +80,7 @@ from .call_state import (
 )
 from .class_data import CLASSES_FOLDED
 from .closure_fold import EVERY_PARAMETER, bound_owner, defaults_of
+from .code_args import CARRIER_LOOKUPS
 from .dynamic_sources import (
     Resolution,
     dynamic_sources_fresh,
@@ -493,6 +494,8 @@ class KeyBuilder:
         watch_token = CAPTURE_WATCH.set(watch)
         folded = FoldedCode()
         folded_token = FOLDED_CODE.set(folded)
+        lookups: list = []
+        lookups_token = CARRIER_LOOKUPS.set(lookups)
         try:
             if refused is not None:
                 raise refused
@@ -513,9 +516,28 @@ class KeyBuilder:
             self._args.warn_key_build_failed(func_name, args, kwargs, e)
             return Unkeyable(_KEY_FAILED), watch, ledger
         finally:
+            CARRIER_LOOKUPS.reset(lookups_token)
             FOLDED_CODE.reset(folded_token)
             CAPTURE_WATCH.reset(watch_token)
             STATE_LEDGER.reset(ledger_token)
+        if lookups:
+            # Code an argument carries picks code by a run-time name, which
+            # the key cannot name (KEY-DYNAMIC-DEPENDENCY): served only on a
+            # trace of what the call ran, as the same line in the body is,
+            # or run uncached.
+            if coroutine or not code_trace.covers(lookups):
+                return (
+                    Unkeyable(
+                        MissReason(
+                            MissKind.UNTRACKABLE,
+                            f"code an argument of {func_name} carries picks code by a run-time name "
+                            f"({describe_untrackable(lookups)}), so the call ran uncached",
+                        )
+                    ),
+                    watch,
+                    ledger,
+                )
+            needs_trace = traced = True
         built = built._replace(folded_code=folded)
         if ledger:
             slot = (func_name, built.state_hash)

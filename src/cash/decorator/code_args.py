@@ -3,11 +3,15 @@ is part of the key, not their pickled bytes."""
 
 from __future__ import annotations
 
+import ast
+import contextvars
 import functools
 import hashlib
+import inspect
 import logging
 import operator
 import sys
+import textwrap
 import types
 from typing import TYPE_CHECKING, Any
 
@@ -15,7 +19,7 @@ from .. import _plain_data, canonical_form
 from .._active import EXPLAINING as _EXPLAINING
 from .._memo import CODE_OBJECTS, LruMemo
 from ..analysis.purity_analyzer import get_analyzer
-from ..analysis.purity_report import ISSUE_AMBIENT_READ, ISSUE_UNTRACKABLE_DEP
+from ..analysis.purity_report import ISSUE_AMBIENT_READ, ISSUE_UNTRACKABLE_DEP, PurityIssue
 from ..code_digest import unwrap_partials
 from ..content_hashers import builtin_family_of, held_objects
 from ..dependency_state import ledger_note
@@ -27,6 +31,7 @@ from ..jit_functions import jit_python_function
 from ..kept_state import cached_properties, derived_views
 from ..loaded_code import class_functions
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, is_runtime_machinery
+from . import code_trace
 from .arg_hashing import is_opaque, is_plain_data
 from .class_data import class_surface_functions, implicit_access_functions
 from .closure_fold import CLASS_BODY_CELLS
@@ -41,6 +46,15 @@ if TYPE_CHECKING:
     from .globals_fold import GlobalsFold
 
 logger = logging.getLogger(__name__)
+
+#: The run-time lookups by name in code the arguments of the call whose key
+#: is being built carry (`CodeArgs.carrier_lookups`), which no key part
+#: covers: set by `KeyBuilder.resolve`, None otherwise. The call is then
+#: served only on a trace of what it ran, or runs uncached, as the same line
+#: in the cached function's own body does.
+CARRIER_LOOKUPS: contextvars.ContextVar[list[PurityIssue] | None] = contextvars.ContextVar(
+    "_cash_carrier_lookups", default=None
+)
 
 #: How many containers deep one recursive stretch of the search for user code
 #: goes. Not a limit on what is searched: what lies deeper is set aside and
@@ -173,50 +187,96 @@ class CodeArgs:
         # closure cells); see `_capturing_functions`.
         self._capturing_memo: LruMemo[type, tuple] = LruMemo(CODE_OBJECTS)
         self._installed_memo: LruMemo[tuple[int, frozenset[str]], tuple[type, tuple, tuple]] = LruMemo(CODE_OBJECTS)
+        # carrier -> (the code objects of its functions, `carrier_lookups`).
+        self._lookups_memo: LruMemo[Any, tuple[tuple, tuple]] = LruMemo(CODE_OBJECTS)
 
-    def _warn_untrackable_in_carrier_once(self, carrier: Any, func_name: str = "?", param: str | None = None) -> None:
-        """Say once that code reached through an argument resolves a dependency
-        at runtime, so an edit behind it will NOT invalidate.
+    def carrier_lookups(self, carrier: Any) -> tuple[PurityIssue, ...]:
+        """The run-time lookups by name (KEY-UNTRACKABLE-DEP findings) in the
+        code *carrier* runs that its key part does not cover.
 
-        The cached function's own body refuses such a line
-        (``untrackable_dep``); a method of an argument's class was never
-        analysed, and ``getattr(MOD, name)()`` there served a stale result in
-        silence. ``# @cash:assume-safe`` on the line, or a ``with
-        cash.assume_safe():`` block around it, waives it, as in the function
-        itself.
+        A class's own and inherited methods and what they call are looked
+        at (`class_surface_functions`). ``getattr(self, name)(...)`` in a
+        method of the class (or ``m = getattr(self, name); m()``) is left
+        out: it picks a method of the instance's class, and every one of
+        those is keyed with the class (`CodeSurface.class_surface_parts`),
+        as is a function the instance holds. Kept per carrier while its
+        functions run the same code.
         """
-        if _EXPLAINING.get():
-            return
-
-        functions = class_functions(carrier) if isinstance(carrier, type) else [getattr(carrier, "__func__", carrier)]
+        functions = _carrier_functions(carrier, class_surface_functions)
+        if not functions:
+            return ()
+        codes = tuple(fn.__code__ for fn in functions)
+        try:
+            entry = self._lookups_memo.get(carrier)
+        except TypeError:
+            entry = None
+        if entry is not None and len(entry[0]) == len(codes) and all(map(operator.is_, entry[0], codes)):
+            return entry[1]
+        own = _own_methods(carrier) if isinstance(carrier, type) else {}
+        found: list[PurityIssue] = []
+        marks: set = set()
         for fn in functions:
-            if type(fn) is not types.FunctionType:
-                continue
-            mark = (id(fn.__code__), func_name)
-            if mark in self._warned_untrackable_carrier:
-                continue
-            self._warned_untrackable_carrier.add(mark)
             try:
-                issues = [i for i in get_analyzer().analyze_reached(fn).issues if i.kind == ISSUE_UNTRACKABLE_DEP]
+                issues = get_analyzer().analyze_reached(fn).issues
             except Exception:  # noqa: BLE001 - never break a call
                 continue
-            if not issues:
-                continue
-            first = issues[0]
-            where = f"the argument `{param}` of {func_name}" if param else f"a call of {func_name}"
-            what = (
-                f"{fn.__qualname__}, reached through {where}, resolves a dependency "
-                f"from a runtime value (line {first.line}: {first.description}), so an "
-                f"edit to what it reaches will NOT invalidate the cache."
-            )
-            fix = (
-                "call what it needs by name, or name it with "
-                "@cash.cache(depends_on=[...]); put `# @cash:assume-safe` on that "
-                "line, or `with cash.assume_safe():` around it, once you have "
-                "checked a stale result cannot matter."
-            )
-            log_diagnostic(logger, "KEY-DYNAMIC-DEPENDENCY", what, fix)
-            warn_diagnostic(CashImpurityWarning, "KEY-DYNAMIC-DEPENDENCY", what, fix)
+            for issue in issues:
+                if issue.kind != ISSUE_UNTRACKABLE_DEP:
+                    continue
+                mark = (issue.filename, issue.line, issue.where, issue.description)
+                if mark in marks:
+                    continue
+                marks.add(mark)
+                method = _named_method(own, issue)
+                if method is not None and _dispatches_on_own_instance(method, issue.line):
+                    continue
+                found.append(issue)
+        result = tuple(found)
+        try:
+            self._lookups_memo[carrier] = (codes, result)
+        except TypeError:
+            pass
+        return result
+
+    def _warn_untrackable_in_carrier_once(
+        self, carrier: Any, issues: tuple[PurityIssue, ...], func_name: str = "?", param: str | None = None
+    ) -> None:
+        """Say once that code reached through an argument resolves a dependency
+        at runtime (*issues*, `carrier_lookups`), which the key cannot name.
+
+        The call is served only on a trace of what it ran (Python 3.12+, a
+        lookup by name), or runs uncached, as the same line in the cached
+        function's own body does (``untrackable_dep``): a method of an
+        argument's class was never analysed, and ``getattr(MOD, name)()``
+        there served a stale result. ``# @cash:assume-safe`` on the line, or
+        a ``with cash.assume_safe():`` block around it, waives it, as in the
+        function itself.
+        """
+        if _EXPLAINING.get() or not issues:
+            return
+        first = issues[0]
+        mark = (first.filename, first.line, first.where, func_name)
+        if mark in self._warned_untrackable_carrier:
+            return
+        self._warned_untrackable_carrier.add(mark)
+        where = f"the argument `{param}` of {func_name}" if param else f"a call of {func_name}"
+        if code_trace.covers(issues):
+            outcome = "so the call is served only while a trace of what it ran still holds."
+        else:
+            outcome = "so the call runs uncached."
+        what = (
+            f"{first.where or carrier_name(carrier)}, reached through {where}, resolves a dependency "
+            f"from a runtime value (line {first.line}: {first.description}), which the cache "
+            f"key cannot name, {outcome}"
+        )
+        fix = (
+            "call what it needs by name, or name it with "
+            "@cash.cache(depends_on=[...]); put `# @cash:assume-safe` on that "
+            "line, or `with cash.assume_safe():` around it, once you have "
+            "checked a stale result cannot matter."
+        )
+        log_diagnostic(logger, "KEY-DYNAMIC-DEPENDENCY", what, fix)
+        warn_diagnostic(CashImpurityWarning, "KEY-DYNAMIC-DEPENDENCY", what, fix)
 
     def _warn_unhashable_code_once(self, carrier: Any, func_name: str = "?", param: str | None = None) -> None:
         """Tell the user once that a reached type's code is NOT in the key.
@@ -847,7 +907,12 @@ class CodeArgs:
                     parts.extend(self._carrier_capture_parts(carrier))
                     parts.extend(self._function_capture_parts(carrier))
                     env |= self._carrier_environment_reads(carrier)
-                    self._warn_untrackable_in_carrier_once(carrier, func_name, param)
+                    lookups = self.carrier_lookups(carrier)
+                    if lookups:
+                        pending = CARRIER_LOOKUPS.get()
+                        if pending is not None:
+                            pending.extend(lookups)
+                        self._warn_untrackable_in_carrier_once(carrier, lookups, func_name, param)
                     self._warn_ambient_in_carrier_once(carrier, func_name, param)
             elif is_user_code_carrier(carrier):
                 # User code we could not hash: a C-extension type, an
@@ -1071,3 +1136,123 @@ def _carrier_functions(carrier: Any, of_class: Any) -> list[types.FunctionType]:
     fn = unwrap_partials(carrier)
     fn = getattr(fn, "__func__", fn)
     return [fn] if type(fn) is types.FunctionType and is_user_code_object(fn) else []
+
+
+def _own_methods(cls: type) -> dict[str, types.FunctionType]:
+    """``qualname -> function`` for the plain methods *cls* and its bases
+    define, whose first parameter is an instance of *cls* when called on one."""
+    found: dict[str, types.FunctionType] = {}
+    for klass in cls.__mro__:
+        for member in vars(klass).values():
+            # The function a ``functools.wraps`` decorator wraps (sklearn's
+            # ``_fit_context``) shares the wrapper's name and is the one
+            # that holds the lookup: the innermost layer stands for the name.
+            layers: dict[str, types.FunctionType] = {}
+            depth = 0
+            while type(member) is types.FunctionType and depth < 100:
+                layers[member.__qualname__] = member
+                member = getattr(member, "__wrapped__", None)
+                depth += 1
+            for name, fn in layers.items():
+                found.setdefault(name, fn)
+    return found
+
+
+def _named_method(own: dict[str, types.FunctionType], issue: PurityIssue) -> types.FunctionType | None:
+    """The method of *own* the finding *issue* is in. A finding names it
+    with its module in front (`PurityIssue.where`), spelled as the file is
+    for a script's ``__main__``, and gives its file."""
+    where = issue.where
+    for qualname, fn in own.items():
+        if (where == qualname or where.endswith("." + qualname)) and (
+            not issue.filename or issue.filename == fn.__code__.co_filename
+        ):
+            return fn
+    return None
+
+
+#: code object -> {file line: does every run-time lookup on it dispatch on
+#: the method's own instance}; see `_dispatches_on_own_instance`.
+_SELF_DISPATCH: LruMemo[types.CodeType, dict[int, bool]] = LruMemo(CODE_OBJECTS)
+
+
+def _dispatches_on_own_instance(method: types.FunctionType, line: int) -> bool:
+    """Does every call on file *line* of *method* that picks code by a
+    run-time name pick a method of the instance it was called on:
+    ``getattr(self, name)(...)``, or a local only ever bound from
+    ``getattr(self, name)``, with ``self`` never rebound?"""
+    code = method.__code__
+    lines = _SELF_DISPATCH.get(code)
+    if lines is None:
+        lines = _self_dispatch_lines(method)
+        _SELF_DISPATCH[code] = lines
+    return lines.get(line, False)
+
+
+def _self_dispatch_lines(method: types.FunctionType) -> dict[int, bool]:
+    code = method.__code__
+    if not code.co_argcount:
+        return {}
+    try:
+        tree = ast.parse(textwrap.dedent(inspect.getsource(method)))
+    except (OSError, TypeError, SyntaxError, IndentationError):
+        return {}
+    node = tree.body[0] if tree.body else None
+    if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return {}
+    params = [*node.args.posonlyargs, *node.args.args]
+    if not params:
+        return {}
+    me = params[0].arg
+    offset = code.co_firstlineno - 1
+
+    def on_me(expr: ast.AST) -> bool:
+        return (
+            isinstance(expr, ast.Call)
+            and isinstance(expr.func, ast.Name)
+            and expr.func.id == "getattr"
+            and len(expr.args) >= 2
+            and isinstance(expr.args[0], ast.Name)
+            and expr.args[0].id == me
+        )
+
+    bound: dict[str, bool] = {}
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Name) and isinstance(sub.ctx, (ast.Store, ast.Del)) and sub.id == me:
+            return {}
+        if isinstance(sub, ast.arg) and sub.arg == me and sub is not params[0]:
+            return {}
+        if isinstance(sub, (ast.Global, ast.Nonlocal)) and me in sub.names:
+            return {}
+        if isinstance(sub, (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.NamedExpr)):
+            targets = sub.targets if isinstance(sub, ast.Assign) else [sub.target]
+            value = sub.value
+            for target in targets:
+                for name in ast.walk(target):
+                    if isinstance(name, ast.Name):
+                        ok = isinstance(target, ast.Name) and value is not None and on_me(value)
+                        bound[name.id] = bound.get(name.id, True) and ok
+        elif isinstance(sub, (ast.For, ast.AsyncFor, ast.With, ast.AsyncWith, ast.comprehension)):
+            holders = (
+                [sub.target]
+                if not isinstance(sub, (ast.With, ast.AsyncWith))
+                else [i.optional_vars for i in sub.items if i.optional_vars is not None]
+            )
+            for holder in holders:
+                for name in ast.walk(holder):
+                    if isinstance(name, ast.Name):
+                        bound[name.id] = False
+    verdicts: dict[int, bool] = {}
+    for sub in ast.walk(node):
+        if not isinstance(sub, ast.Call):
+            continue
+        func = sub.func
+        if isinstance(func, ast.Call) and isinstance(func.func, ast.Name) and func.func.id == "getattr":
+            ok = on_me(func)
+        elif isinstance(func, ast.Name) and func.id in bound:
+            ok = bound[func.id]
+        else:
+            continue
+        at = sub.lineno + offset
+        verdicts[at] = verdicts.get(at, True) and ok
+    return verdicts
