@@ -42,7 +42,7 @@ from .._active import active_config
 from ..tracking.tracker_context import untracked
 from . import tree_memo
 
-__all__ = ["StoredScanMismatch", "scan", "status"]
+__all__ = ["StoredScanMismatch", "load_record", "save_record", "scan", "status"]
 
 #: Layout of a stored file; a change makes every older one a miss.
 _FORMAT = 1
@@ -115,16 +115,11 @@ def scan(kind: str, path: str, source: str, compute: Callable[[str], frozenset[s
     stored file; the text decides). *compute* returns None when it gave up
     for a reason outside the text (a recursion limit): the answer is then
     empty and not stored."""
-    try:
-        with untracked():
-            directory = _dir()
-    except OSError:
-        directory = None
+    directory = _store_dir()
     if directory is None:
         return compute(source) or frozenset()
     digest = hashlib.blake2b(source.encode("utf-8", "surrogatepass"), digest_size=20).hexdigest()
-    slot = hashlib.blake2b(f"{kind}\0{path}".encode("utf-8", "surrogatepass"), digest_size=12).hexdigest()
-    file = directory / f"{slot}.json"
+    file = _slot_file(directory, kind, path)
     stored = _read(file, kind, digest)
     if stored is not None:
         STATS["loaded"] += 1
@@ -142,13 +137,51 @@ def scan(kind: str, path: str, source: str, compute: Callable[[str], frozenset[s
     return answer
 
 
-def _read(file: Path, kind: str, digest: str) -> frozenset[str] | None:
+def _slot_file(directory: Path, kind: str, path: str) -> Path:
+    slot = hashlib.blake2b(f"{kind}\0{path}".encode("utf-8", "surrogatepass"), digest_size=12).hexdigest()
+    return directory / f"{slot}.json"
+
+
+def _store_dir() -> Path | None:
+    try:
+        with untracked():
+            return _dir()
+    except OSError:
+        return None
+
+
+def load_record(kind: str, path: str, digest: str) -> dict | None:
+    """The record an earlier process stored (`save_record`) for the file at
+    *path* when its text digested to *digest*, under this Python and this
+    cash; None when there is none, or the store is off."""
+    directory = _store_dir()
+    if directory is None:
+        return None
+    return _load(_slot_file(directory, kind, path), kind, digest)
+
+
+def save_record(kind: str, path: str, digest: str, data: dict) -> None:
+    """Store *data* (JSON) as what the text of *path* digested to *digest*
+    gives; it replaces the record of any other text of that file. Best effort."""
+    directory = _store_dir()
+    if directory is not None:
+        _write(directory, _slot_file(directory, kind, path), {**data, "kind": kind, "digest": digest})
+
+
+def _load(file: Path, kind: str, digest: str) -> dict | None:
     try:
         with untracked():
             data = json.loads(file.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     if not isinstance(data, dict) or data.get("kind") != kind or data.get("digest") != digest:
+        return None
+    return data
+
+
+def _read(file: Path, kind: str, digest: str) -> frozenset[str] | None:
+    data = _load(file, kind, digest)
+    if data is None:
         return None
     names = data.get("names")
     if not isinstance(names, list) or not all(isinstance(n, str) for n in names):

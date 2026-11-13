@@ -109,7 +109,7 @@ def _stored_names(store: Path, code_dir: Path) -> list[str]:
     """The names the store now holds for *code_dir*'s ``mod.py``."""
     digest = hashlib.blake2b((code_dir / "mod.py").read_text(encoding="utf-8").encode(), digest_size=20).hexdigest()
     found = [json.loads(p.read_text(encoding="utf-8")) for p in store.rglob("*.json")]
-    (entry,) = [e for e in found if e["digest"] == digest]
+    (entry,) = [e for e in found if e["digest"] == digest and "names" in e]
     return entry["names"]
 
 
@@ -157,7 +157,8 @@ def test_a_moved_module_is_scanned_again(layout, tmp_path):
     _write(moved, _MODULE)
     again = _run(moved, store, verify=True)
     assert again["missed"] >= 1
-    assert len(list(store.rglob("*.json"))) == 2  # one per file
+    scans = [p for p in store.rglob("*.json") if "names" in json.loads(p.read_text(encoding="utf-8"))]
+    assert len(scans) == 2  # one per file
 
 
 def test_the_store_lives_in_the_cache_dir_once_that_exists(layout, tmp_path):

@@ -6,7 +6,8 @@ the source on disk. If the file was edited after this process imported it
 digest describes the new text while the old code runs, and a result of the
 old code would be stored, and served after a restart, under the new code's
 key. The checks here tell the two apart: from the module's ``.pyc`` when it
-proves the import saw this file, else by compiling the file.
+proves the import saw this file, else by what the file's text compiles to
+(compiled once per text, and kept under the text's digest).
 
 Recompiling just the function's text is not a valid comparison: bytecode
 depends on the surrounding module (inside its module the compiler can see
@@ -23,6 +24,7 @@ import importlib.util
 import io
 import marshal
 import os
+import sys
 import types
 
 from ._memo import COMPILED_MODULES, LruMemo
@@ -46,7 +48,12 @@ __all__ = [
     "relocated_definition",
 ]
 
-_MODULE_CODE_CACHE: LruMemo[str, tuple[int, int, types.CodeType | None, tuple[str, ...]]] = LruMemo(COMPILED_MODULES)
+#: path -> (mtime_ns, size, digest of the text, its compiled code, its lines).
+#: The stat is -1 for a text read before it had settled: only its digest
+#: (`_compiled_text`) finds it then.
+_MODULE_CODE_CACHE: LruMemo[str, tuple[int, int, str, types.CodeType | None, tuple[str, ...]]] = LruMemo(
+    COMPILED_MODULES
+)
 
 
 def _compiled_module(path: str) -> types.CodeType | None:
@@ -63,20 +70,79 @@ def _compiled_module_and_lines(path: str) -> tuple[types.CodeType | None, tuple[
         return None, ()
     cached = _MODULE_CODE_CACHE.get(path)
     if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
-        return cached[2], cached[3]
+        return cached[3], cached[4]
     settled = stat_has_settled(st)
-    lines: tuple[str, ...] = ()
+    text = _read_text(path)
+    if text is None:
+        return None, ()
+    code, lines = _compiled_text(path, text)
+    if settled:
+        _MODULE_CODE_CACHE[path] = (st.st_mtime_ns, st.st_size, text[1], code, lines)
+    return code, lines
+
+
+def _read_text(path: str) -> tuple[bytes, str] | None:
+    """The bytes of *path* and their digest; None when it cannot be read."""
     try:
         source = read_code_file(path)
+    except OSError:
+        return None
+    return source, hashlib.blake2b(source, digest_size=20).hexdigest()
+
+
+def _compiled_text(path: str, text: tuple[bytes, str]) -> tuple[types.CodeType | None, tuple[str, ...]]:
+    """*text* (`_read_text`) compiled as the file at *path*, with its lines;
+    kept per path and found again by the text's digest."""
+    source, digest = text
+    cached = _MODULE_CODE_CACHE.get(path)
+    if cached is not None and cached[2] == digest:
+        return cached[3], cached[4]
+    lines: tuple[str, ...] = ()
+    try:
         code: types.CodeType | None = compile(source, path, "exec", dont_inherit=True)
         # As the import decodes it: its coding cookie, universal newlines.
         lines = tuple(io.StringIO(importlib.util.decode_source(source)).readlines())
-    except (OSError, SyntaxError, ValueError):
+    except (SyntaxError, ValueError):
         code = None
-    if not settled:
-        return code, lines
-    _MODULE_CODE_CACHE[path] = (st.st_mtime_ns, st.st_size, code, lines)
+    _MODULE_CODE_CACHE[path] = (-1, -1, digest, code, lines)
     return code, lines
+
+
+#: What a module file's text compiles to, kept on disk (`scan_store`) so a
+#: fresh process need not compile it again to compare: the optimisation level
+#: is part of it (the store's own key holds the Python and cash).
+_RECORD_KIND = f"compiled-code-o{sys.flags.optimize}"
+#: path -> (digest of the text, its record): read from the store once per text.
+_RECORDS: LruMemo[str, tuple[str, dict]] = LruMemo(COMPILED_MODULES)
+
+
+def _record(path: str, digest: str) -> dict:
+    """The stored facts about the text of *path* that digests to *digest*:
+    ``{"functions": {name: [bytecode identities]}, "pyc": [digests of .pyc
+    bodies whose code is that text's]}``, each worked out from the text
+    itself and only ever added to. Content-addressed, so as exact as
+    compiling: a different text (a same-size save with the mtime put back)
+    has a different digest and finds no record."""
+    cached = _RECORDS.get(path)
+    if cached is not None and cached[0] == digest:
+        return cached[1]
+    from .analysis import scan_store  # loaded_code is imported by modules scan_store's imports need
+
+    data = scan_store.load_record(_RECORD_KIND, path, digest)
+    functions = data.get("functions") if data is not None else None
+    pyc = data.get("pyc") if data is not None else None
+    record = {
+        "functions": functions if isinstance(functions, dict) else {},
+        "pyc": pyc if isinstance(pyc, list) else [],
+    }
+    _RECORDS[path] = (digest, record)
+    return record
+
+
+def _save_record(path: str, digest: str, record: dict) -> None:
+    from .analysis import scan_store
+
+    scan_store.save_record(_RECORD_KIND, path, digest, record)
 
 
 def relocated_definition(
@@ -146,7 +212,9 @@ def _pyc_postdates_source(st: object, pyc_st: object) -> bool:
     in-place save keeps (and robocopy, unzip and ``git checkout`` restore
     mtimes), so nothing there tells a put-back save from no save: the header
     is no proof, and the callers compare the ``.pyc``'s code, or the loaded
-    code, with the file compiled -- once per file version per process.
+    code, with what the file's text compiles to: compiled once per text and
+    kept on disk under the text's digest (`_record`), so a later process
+    pays a read and a digest of the file, not a compile.
     """
     if not _HAS_CHANGE_TIME:
         return False
@@ -198,14 +266,27 @@ def loaded_module_matches_disk(module: object) -> bool:
             body = fh.readall()
     except (OSError, ValueError, NotImplementedError):
         return True
+    text = _read_text(path)
+    if text is None:
+        return True
+    # A .pyc body proven to be this text's code before (here or by an earlier
+    # process) is not compiled again: both are compared by digest.
+    record = _record(path, text[1])
+    body_digest = hashlib.blake2b(body, digest_size=20).hexdigest()
+    if body_digest in record["pyc"]:
+        return True
     try:
         loaded = marshal.loads(body)
     except (EOFError, ValueError, TypeError):
         return True
-    on_disk = _compiled_module(path)
+    on_disk = _compiled_text(path, text)[0]
     if on_disk is None:
         return True  # nothing to reload to: the error belongs to the next import
-    return loaded == on_disk
+    if loaded != on_disk:
+        return False
+    record["pyc"] = [*record["pyc"][-7:], body_digest]
+    _save_record(path, text[1], record)
+    return True
 
 
 def _pyc_proves_unchanged(path: str, st: object) -> bool:
@@ -317,21 +398,40 @@ def loaded_code_matches_disk(fn: object) -> bool:
             return True
     except OSError:
         return True
-    module = _compiled_module(path)
-    if module is None:
+    # Compared through the text's record (`_record`): the bytecode identities
+    # of its code objects under this function's name, worked out from the
+    # text once -- here or by an earlier process -- and found again by the
+    # text's digest. Reading and digesting the file costs a fraction of
+    # compiling it, which a process paid for every helper file it checked.
+    text = _read_text(path)
+    if text is None:
+        return False  # gone between the stat and the read: not what runs
+    record = _record(path, text[1])
+    name = getattr(code, "co_qualname", None)
+    if name is None:
+        name = "name:" + code.co_name
+    functions = record["functions"]
+    known = functions.get(name, False)
+    if known is not None and not isinstance(known, list):
+        module = _compiled_text(path, text)[0]
+        if module is None:
+            known = None
+        else:
+            # Not ``types.FunctionType(candidate, {})``: that raises for a
+            # nested function with free variables (it needs a closure), and
+            # only the code is read anyway.
+            known = [
+                bytecode_identity(types.SimpleNamespace(__code__=candidate))
+                for candidate in _code_by_name(module).get(name, ())
+            ]
+        functions[name] = known
+        _save_record(path, text[1], record)
+    if known is None:
         return False  # the file no longer compiles: it is not what runs
     live = bytecode_identity(fn)
     if live is None:
         return True
-    qualname = getattr(code, "co_qualname", None)
-    for candidate in _code_by_name(module).get(qualname if qualname is not None else "name:" + code.co_name, ()):
-        # Not ``types.FunctionType(candidate, {})``: that raises for a nested
-        # function with free variables (it needs a closure), and only the
-        # code is read anyway.
-        probe = types.SimpleNamespace(__code__=candidate)
-        if bytecode_identity(probe) == live:
-            return True
-    return False
+    return live in known
 
 
 def class_functions(cls: type) -> list[types.FunctionType]:
