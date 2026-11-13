@@ -335,6 +335,18 @@ def _enter(value: Any, walk: _Walk) -> Any:
             return _Descend(_zoned_steps(value))
         if form is not None:
             return form
+    if _pandas_index(type(value)):
+        # By its labels and schema, not pickled: its pickle carries what
+        # pandas cached about the labels (`content_hashers.hash_pandas_index`).
+        from .content_hashers import hash_pandas_index
+
+        first = seen.get(id(value))
+        if first is not None:
+            return ("__cash_alias__", first[0])
+        digest = hash_pandas_index(value)
+        if digest is not None:
+            seen[id(value)] = (len(seen), value)
+            return ("__cash_index__", digest)
     family = walk.content.family(type(value))
     if family is not None:
         if family in _WRITABLE_FAMILIES:
@@ -366,6 +378,17 @@ def _enter(value: Any, walk: _Walk) -> Any:
         # container while the walk lasts.
         seen[id(value)] = (len(seen), value)
     return _Descend(_object_steps(value, walk))
+
+
+def _pandas_index(type_: type) -> bool:
+    """Is *type_* one of pandas' own index classes? A user's subclass may
+    keep state of its own, and is pickled as before."""
+    module = type_.__module__
+    if module != "pandas" and not module.startswith("pandas."):
+        return False
+    pd = sys.modules.get("pandas")
+    index = getattr(pd, "Index", None)
+    return isinstance(index, type) and issubclass(type_, index)
 
 
 #: Containers whose identity code can observe by writing through one
