@@ -848,6 +848,7 @@ class MismatchClassifier:
                 trace_codes,
                 own_texts=check.own_texts,
             ),
+            texts_not_above=check.own_texts + tuple(check.notebook_cells[check.current_cell_idx + 1 :]),
         )
         loop_var_input_lineages = self.loop_rules.build_loop_var_input_lineages(
             sim.trace,
@@ -1016,7 +1017,38 @@ class MismatchClassifier:
         if inp_producing_code is None:
             return False
         normalized_inp_code = strip_markers(inp_producing_code).strip()
-        return normalized_inp_code not in result.trace_codes and self._ran_the_notebook_version(inp, result.trace_codes)
+        return (
+            normalized_inp_code not in result.trace_codes
+            and self._ran_the_notebook_version(inp, result.trace_codes)
+            and not self._bound_not_above(normalized_inp_code, result)
+        )
+
+    @staticmethod
+    def _bound_not_above(producing_code: str, result: ClassificationResult) -> bool:
+        """Whether *producing_code*, the statement that last bound a name, is
+        one of the running cell's or of a cell below it
+        (`ClassificationResult.texts_not_above`).
+
+        Such a value is no unsaved edit to a cell above: its producer above
+        is what a statement above reads. Trusted as one, an edited cell
+        rebinding ``t`` had ``df_new = df.drop(np.where(t == False)[0])``
+        above it re-run on its own ``t``, a value neither a plain kernel nor
+        a run from the top gives."""
+        return bool(producing_code) and any(
+            cell_holds_statement(text, producing_code) for text in result.texts_not_above if text
+        )
+
+    @staticmethod
+    def _reads_what_it_makes(producing_code: str, stmt_code: str) -> bool:
+        """Whether *producing_code*, which bound an input of *stmt_code*,
+        reads a name *stmt_code* binds: it ran after it, so its value is no
+        input from above the statement."""
+        try:
+            reads, _ = CodeAnalyzer.analyze_code_block(producing_code)
+            _, makes = CodeAnalyzer.analyze_code_block(stmt_code)
+        except (SyntaxError, ValueError, RecursionError):
+            return False
+        return bool(set(reads) & set(makes))
 
     def _all_tainted_inputs_valid(
         self,
@@ -1053,7 +1085,9 @@ class MismatchClassifier:
                 continue
             if inp not in self.shell.user_ns:
                 return False
-            if self._check_tainted_input_valid(inp, sim, result):
+            if self._check_tainted_input_valid(inp, sim, result) and not self._reads_what_it_makes(
+                strip_markers(self.tracking_state.executed_cell_codes.get(inp) or "").strip(), stmt_code
+            ):
                 logger.debug(
                     "[UPSTREAM] Input '%s' has different lineage but produced "
                     "by unsaved edit (code not on disk). Trusting in-memory value.",
@@ -1142,7 +1176,11 @@ class MismatchClassifier:
         if inp_prod_code is None:
             return False
         norm_code = strip_markers(inp_prod_code).strip()
-        if norm_code not in result.trace_codes and self._ran_the_notebook_version(inp, result.trace_codes):
+        if (
+            norm_code not in result.trace_codes
+            and self._ran_the_notebook_version(inp, result.trace_codes)
+            and not self._bound_not_above(norm_code, result)
+        ):
             logger.debug(
                 "[UPSTREAM] Input '%s' lineage mismatch but produced by unsaved edit. Trusting in-memory.", inp
             )

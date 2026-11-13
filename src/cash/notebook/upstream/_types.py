@@ -372,6 +372,10 @@ class ClassificationResult:
     """Broken names a cell that raised part way left, or built from them
     (``SimulationResult.vars_left_by_failed_runs``): kept as they are, and
     warned about (``NOTEBOOK-FAILED-CELL``)."""
+    texts_not_above: tuple[str, ...] = ()
+    """The running cell's texts (`CellCheck.own_texts`) and the cells below
+    it: a value one of their statements bound is never an unsaved edit to a
+    cell above."""
 
 
 class ReexecutionPlan(NamedTuple):
