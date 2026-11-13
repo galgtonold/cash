@@ -14,6 +14,7 @@ from .._memo import CODE_OBJECTS, LruMemo
 from ..install_paths import is_user_module
 from .arg_hashing import is_opaque
 from .call_state import KeyBuildFailed
+from .global_values import KEY_BUILD_DIGESTS
 from .user_code import cash_wrapped, is_cash_wrapper, is_user_code_object, user_layers
 
 #: How many user-code objects one reference walk (`CodeRefs.reached`)
@@ -188,13 +189,43 @@ class CodeRefs:
         Lazy: each object is yielded as the walk reaches it. Past
         `MAX_CODE_REF_TARGETS` it raises `KeyBuildFailed`.
         """
+        # The names it resolves do not move while one key build runs, and
+        # a package reaches the same few hundred functions from each of
+        # thousands of places (networkx): walked once per key build.
+        build = KEY_BUILD_DIGESTS.get()
+        if build is not None:
+            hit = build.get(("reached", id(obj)))
+            if hit is not None and hit[0] is obj:
+                yield from hit[1]
+                return
+        walked: list[Any] = []
+        for target in self._reached_now(obj):
+            walked.append(target)
+            yield target
+        if build is not None:
+            build[("reached", id(obj))] = (obj, walked)
+
+    def _targets_in_build(self, source: Any, build: dict | None) -> list[Any]:
+        """`targets`, resolved once per key build (*build*)."""
+        if build is None:
+            return self.targets(source)
+        hit = build.get(("targets", id(source)))
+        if hit is not None and hit[0] is source:
+            return hit[1]
+        found = self.targets(source)
+        build[("targets", id(source))] = (source, found)
+        return found
+
+    def _reached_now(self, obj: Any) -> Iterator[Any]:
+        """`reached`, walked now."""
+        build = KEY_BUILD_DIGESTS.get()
         seen: set[int] = {id(obj)}
         keep: list[Any] = [obj]
         frontier: list[Any] = [obj]
         while frontier:
             following: list[Any] = []
             for source in frontier:
-                for target in self.targets(source):
+                for target in self._targets_in_build(source, build):
                     if id(target) in seen:
                         continue
                     seen.add(id(target))

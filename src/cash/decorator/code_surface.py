@@ -10,7 +10,6 @@ import logging
 import pickle
 import re
 import sys
-import threading
 import types
 from typing import TYPE_CHECKING, Any
 
@@ -19,10 +18,12 @@ from ..analysis.helper_code import renamed
 from ..code_digest import source_digest, unwrap_partials
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..source_norm import code_consts_without_docstring
+from . import walk_scope
 from .arg_hashing import is_opaque
 from .call_state import KeyBuildFailed
 from .code_refs import CodeRefs
 from .function_identity import hash_callable_source
+from .global_values import KEY_BUILD_DIGESTS
 from .key_values import SYNC_TYPES, is_immutable_capture, iter_contained
 from .user_code import cash_wrapped, is_cash_wrapper, is_user_class, is_user_code_object, user_layers
 
@@ -77,9 +78,6 @@ class CodeSurface:
         # id(), so a redefinition (a new object) is a distinct memo entry.
         self._code_surface_cache: LruMemo[Any, tuple[tuple | None, list, str]] = LruMemo(CODE_OBJECTS)
         self._refs = CodeRefs()
-        # The objects whose own surface is being computed on this thread,
-        # outermost first; see `_code_surface_own`.
-        self._in_progress = threading.local()
 
     def _code_identity(self, fn: Any) -> tuple:
         """The bytecode-level identity of a callable, or ``()`` if it has none.
@@ -284,21 +282,41 @@ class CodeSurface:
         # many frames up the walk it sits, which is as stable across
         # processes as the walk itself and leaves nothing out, since the
         # frame it names is folding the object in full.
-        stack: list[list] = self._in_progress.__dict__.setdefault("stack", [])
+        stack: list[list] = walk_scope.walk_local(self, list)
         for depth, frame in enumerate(stack):
             if frame[0] is obj:
                 top = stack[-1]
                 top[1] = min(top[1], depth)
+                walk_scope.close_on(("surface", id(obj)))
                 return f"<backref:{len(stack) - 1 - depth}>"
+        # Within one key build nothing the walk reads changes, so a surface
+        # is walked once per build (`KEY_BUILD_DIGESTS`), even one the memo
+        # above cannot keep: a function holding a function in its defaults
+        # (every function networkx's argmap wraps), or one a cycle closes on.
+        # Unremembered, each was walked again from every function whose
+        # defaults or code reached it, which grew with the package and took
+        # minutes for one networkx call. Only a digest that is the same
+        # wherever the walk enters is kept (`walk_scope`).
+        build = KEY_BUILD_DIGESTS.get()
+        item = ("surface", id(obj))
+        if build is not None:
+            hit = build.get(item)
+            if hit is not None and hit[0] is obj and walk_scope.servable(hit[2]):
+                walk_scope.note_callees(hit[2].touched)
+                return hit[1]
         # Each frame: the object, and the outermost frame a back-reference
         # in its walk pointed to (none yet).
         stack.append([obj, sys.maxsize])
+        scope = walk_scope.enter(item)
         try:
             digest, layers = self._own_digest(obj, is_type)
         finally:
+            record = walk_scope.leave(scope)
             frame = stack.pop()
         if digest is None:
             return None
+        if build is not None and record is not None:
+            build[item] = (obj, digest, record)
         # An object on a cycle is not memoized: its digest depends on where
         # the walk entered the cycle (from *a*, *b* folds a back-reference
         # to *a*; on its own, *b* folds *a* in full), and serving one
@@ -310,6 +328,10 @@ class CodeSurface:
         if frame[1] <= here:
             if frame[1] < here:
                 stack[-1][1] = min(stack[-1][1], frame[1])
+            return digest
+        if record is None or record.touched:
+            # It holds the state of a cached function it reaches, globals
+            # and all, which is read again for each key.
             return digest
         # A function's defaults are rebound (`f.__defaults__ = ...`) or
         # mutated in place on the same object: the memo holds only while

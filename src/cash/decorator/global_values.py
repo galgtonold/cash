@@ -19,6 +19,7 @@ from ..analysis.purity_policy import REPORTED_METHODS
 from ..dependency_state import SysModulesHelperResolver
 from ..exceptions import CashImpurityWarning
 from ..jit_functions import jit_identity, jit_python_function
+from . import walk_scope
 from .code_tables import CodeTable
 from .function_identity import hash_callable_source
 from .key_values import (
@@ -185,17 +186,28 @@ class GlobalValues:
         of a table of plain functions (`table_digest`), and for the rest of
         one key build (`KEY_BUILD_DIGESTS`)."""
         build = KEY_BUILD_DIGESTS.get()
+        item = ("data", id(value))
         if build is not None:
-            entry = build.get(("data", id(value)))
-            if entry is not None and entry[0] is value:
+            entry = build.get(item)
+            if entry is not None and entry[0] is value and walk_scope.servable(entry[2]):
+                walk_scope.note_callees(entry[2].touched)
                 return entry[1]
-        digest = self.table_digest(
-            "data",
-            value,
-            lambda: self._args.hash_payload((stabilize_for_global_hash(value, self.data_callable_identity),), {}),
-        )
-        if build is not None:
-            build[("data", id(value))] = (value, digest)
+        # A cached function it holds is keyed by its state, which folds a
+        # ``cycle:`` marker for one being built around it: the digest is
+        # kept only as `walk_scope` says it is the same elsewhere. Kept
+        # regardless, the first digest built inside such a cycle stood in
+        # for the one built outside it, and the key moved between calls.
+        scope = walk_scope.enter(item)
+        try:
+            digest = self.table_digest(
+                "data",
+                value,
+                lambda: self._args.hash_payload((stabilize_for_global_hash(value, self.data_callable_identity),), {}),
+            )
+        finally:
+            record = walk_scope.leave(scope)
+        if build is not None and record is not None:
+            build[item] = (value, digest, record)
         return digest
 
     def table_digest(self, kind: str, value: Any, compute: Callable[[], str]) -> str:
