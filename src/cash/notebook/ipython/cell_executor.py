@@ -168,6 +168,21 @@ def _stored_names(node: ast.AST) -> set[str]:
     return names
 
 
+def _plain_rebinds(node: ast.AST) -> set[str]:
+    """The names a statement only binds anew in the cell's scope: its
+    ``Name`` targets (``df = ...``, a loop's ``acc = acc + new``), less the
+    targets of an augmented assignment, which may change the object in
+    place (``acc += new`` on a list)."""
+    bound: set[str] = set()
+    augmented: set[str] = set()
+    for sub in _cell_scope_nodes(node):
+        if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store):
+            bound.add(sub.id)
+        elif isinstance(sub, ast.AugAssign) and isinstance(sub.target, ast.Name):
+            augmented.add(sub.target.id)
+    return bound - augmented
+
+
 def _read_names(node: ast.AST) -> set[str]:
     """The names a statement reads from the cell's scope: every load in it,
     less the names only a comprehension or lambda inside binds."""
@@ -191,10 +206,12 @@ def _changed_by_a_failed_step(
     namespace: dict[str, Any] | None = None,
     resolve_source: Callable[[str], str | None] | None = None,
     evaluated: ast.stmt | None = None,
+    *,
+    with_bindings: bool = True,
 ) -> set[str]:
     """The names statement *node* may have changed before it raised: what it
     changes in place (``lst.append(x)``), and for a loop or branch also what
-    its body binds, since part of it ran.
+    its body binds, since part of it ran (not with *with_bindings* false).
 
     *evaluated* is given for an assignment that raised before its first
     write (``df['r'] = df['typo'] * 2``, `_evaluated_before_its_writes`):
@@ -214,7 +231,7 @@ def _changed_by_a_failed_step(
         changed = set(analyze_statement(ast.unparse(node), node).all_mutated_vars)
     except Exception:  # noqa: BLE001 - an analysis of arbitrary code: assume nothing changed in place
         changed = set()
-    if is_control_structure(node):
+    if with_bindings and is_control_structure(node):
         changed |= _stored_names(node)
     if namespace is not None and resolve_source is not None:
         changed |= _changed_by_its_callees(node, namespace, resolve_source)
@@ -1422,7 +1439,7 @@ class CellExecutor:
                     for name in left:
                         self.tracking_state.lineage.discard(name)
                     self.tracking_state.failed_cell_names[digest] = frozenset(left)
-                    self._note_what_the_cell_left(tree.body[:i], left)
+                    self._note_what_the_cell_left(tree.body[:i], left, node, cell.evaluated_when_raised)
                     # The plan skipped or restored statements by the version the
                     # whole cell ends with; a name a statement at or after this one
                     # writes holds a version a plain run never reached here.
@@ -1456,20 +1473,43 @@ class CellExecutor:
 
         return (all_metrics, buffered_result_outputs, badge_render_time)
 
-    def _note_what_the_cell_left(self, ran: list[ast.stmt], left: set[str]) -> None:
+    def _note_what_the_cell_left(
+        self,
+        ran: list[ast.stmt],
+        left: set[str],
+        failed: ast.stmt | None = None,
+        evaluated: ast.stmt | None = None,
+    ) -> None:
         """Tell the upstream check what the cell that just raised may have
         changed in place: what the statements before the failed one (*ran*)
-        change, and *left*, what the failed one may have changed before it
-        raised. Every other value it starts from is as the cells above left
-        it, and its next run takes it as it is."""
+        change, and *left*, what the failed one (*failed*) may have changed
+        before it raised. Every other value it starts from is as the cells
+        above left it, and its next run takes it as it is.
+
+        A name these statements only bind anew (``acc = acc + new`` in a
+        loop that raised before reaching it) is told apart: a binding gives
+        the name another object, so while it still holds the one the cell
+        started from, no write of the run reached it."""
         checker = self._upstream_checker
         if checker is None:
             return
         changed = set(left)
         resolve = self._statement_processor.resolve_live_function_source
+        user_ns = self.shell.user_ns
+        rebound: set[str] = set()
+        in_place: set[str] = set()
         for node in ran:
-            changed |= _stored_names(node) | _changed_by_a_failed_step(node, self.shell.user_ns, resolve)
-        checker.note_cell_raised(changed)
+            changed |= _stored_names(node) | _changed_by_a_failed_step(node, user_ns, resolve)
+            rebound |= _plain_rebinds(node)
+            in_place |= (_stored_names(node) - _plain_rebinds(node)) | _changed_by_a_failed_step(
+                node, user_ns, resolve, with_bindings=False
+            )
+        if failed is not None and evaluated is None:
+            rebound |= _plain_rebinds(failed)
+            in_place |= (_stored_names(failed) - _plain_rebinds(failed)) | _changed_by_a_failed_step(
+                failed, user_ns, resolve, with_bindings=False
+            )
+        checker.note_cell_raised(changed, rebound_only=rebound - in_place)
 
     def _drop_what_a_failed_run_left(self, names: set[str], failed: int) -> None:
         """Forget the lineage of *names*, which the cell left in a state no

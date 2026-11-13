@@ -702,16 +702,19 @@ class StaleValueGuard:
         trace_event("shared_kept", var=var_name, partners=below)
         return True
 
-    def _started_from_before(self, var_name: str, live_value: Any) -> bool:
-        """Whether the current cell started from *live_value* last time it ran.
+    def _started_from_before(self, var_name: str, live_value: Any, cell_idx: int | None = None) -> bool:
+        """Whether the current cell (or *cell_idx*) started from *live_value*
+        last time it ran.
 
         Fails closed: a recorded ``id`` without a weak reference (a list or
         dict takes none) that a new object happens to reuse reads as the same
         object, which costs a needless rebuild, never a doubled write.
         """
-        if self._cell_idx is None:
+        if cell_idx is None:
+            cell_idx = self._cell_idx
+        if cell_idx is None:
             return True
-        seen = self._started_from.get((self._cell_idx, var_name))
+        seen = self._started_from.get((cell_idx, var_name))
         if seen is None:
             return False
         seen_id, ref = seen
@@ -745,7 +748,7 @@ class StaleValueGuard:
             noted.add(var_name)
         self._noted_at_start = (cell_idx, frozenset(noted))
 
-    def note_cell_raised(self, cell_idx: int, changed: set[str]) -> None:
+    def note_cell_raised(self, cell_idx: int, changed: set[str], rebound_only: set[str] = frozenset()) -> None:
         """Cell *cell_idx* raised, having changed in place at most *changed*:
         forget the object it started from, as :meth:`note_cell_start`
         recorded it for this run, for every other name.
@@ -756,11 +759,26 @@ class StaleValueGuard:
         rebuilt every large value it changes in place each time, where plain
         Python only shows the error. A record from an earlier run (a name
         this run did not start from) stays: that run may have written it.
+
+        So is the record of a name among *changed* that the run can only
+        have bound anew (*rebound_only*: ``acc = acc + new`` in a loop that
+        raised before reaching it) and that still holds the object it
+        started from: no write of the run reached it. Kept, the next run
+        took the value for the cell's own output and put back what the
+        cells above make, dropping what the runs before had built, where a
+        plain kernel goes on from it.
         """
         noted_idx, noted = self._noted_at_start
         if noted_idx != cell_idx:
             return
-        for var_name in noted - changed:
+        user_ns = self.shell.user_ns
+        for var_name in noted:
+            if var_name in changed and not (
+                var_name in rebound_only
+                and var_name in user_ns
+                and self._started_from_before(var_name, user_ns[var_name], cell_idx)
+            ):
+                continue
             self._started_from.pop((cell_idx, var_name), None)
         self._noted_at_start = (None, frozenset())
 

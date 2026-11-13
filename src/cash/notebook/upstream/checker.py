@@ -227,12 +227,13 @@ class UpstreamChecker:
         see :meth:`NotebookSimulator.plan_cell_run`."""
         return self.simulator.plan_cell_run(nodes, raw_cell, occurrence_counts)
 
-    def note_cell_raised(self, changed: set[str]) -> None:
+    def note_cell_raised(self, changed: set[str], rebound_only: set[str] = frozenset()) -> None:
         """The cell being run raised, and may have changed only *changed* in
-        place before it did -- see :meth:`StaleValueGuard.note_cell_raised`."""
+        place before it did; *rebound_only* of them it can only have bound
+        anew -- see :meth:`StaleValueGuard.note_cell_raised`."""
         cell_idx = self.tracking_state.running_cell
         if cell_idx is not None:
-            self.simulator.stale_values.note_cell_raised(cell_idx, changed)
+            self.simulator.stale_values.note_cell_raised(cell_idx, changed, rebound_only)
 
     def cell_touches_rng(self, src: str) -> bool:
         """True if *src* seeds or draws -- see :meth:`RngRewind.cell_touches_rng`."""
