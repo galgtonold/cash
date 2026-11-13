@@ -29,6 +29,7 @@ import weakref
 from collections.abc import Mapping
 from typing import Any
 
+from . import _weak
 from ._type_memo import per_type
 
 #: The registry's settings that change what a quantity computes or prints.
@@ -110,7 +111,7 @@ def _unwrapped(registry: Any) -> Any:
 
 #: registry -> (fingerprint, definitions seen, digest). Weak: a registry
 #: dropped is forgotten.
-_DIGESTS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_DIGESTS: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()
 
 
 #: id(registry) -> digest, for one key build: a call whose arguments and
