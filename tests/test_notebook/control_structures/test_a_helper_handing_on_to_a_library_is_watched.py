@@ -30,10 +30,24 @@ SOURCES = {
     "reshuffle": "def reshuffle():\n    random.Random(SEED).shuffle(DECK)\n",
     "total": "def total(rows):\n    return sum(sum(r) for r in rows)\n",
     "count": "def count(rows):\n    return len(rows) + len(H)\n",
+    "shuf": "def shuf(r, xs):\n    r.shuffle(xs)\n",
+    "mix_with": "def mix_with(r):\n    r.shuffle(DECK)\n",
+    "fit_all": "def fit_all(m, X):\n    m.fit(X)\n",
+    "own_rng": "def own_rng(xs):\n    g = random.Random(0)\n    g.shuffle(xs)\n",
     "rec": "def rec(h, n):\n    if n:\n        rec(h, n - 1)\n    heapq.heappush(h, n)\n",
 }
 
-NAMESPACE = {"heapq": heapq, "random": random, "h": [], "H": [], "DECK": [1, 2, 3], "SEED": 1, "xs": [3, 1], "n": 2}
+NAMESPACE = {
+    "heapq": heapq,
+    "random": random,
+    "rng": random.Random(1),
+    "h": [],
+    "H": [],
+    "DECK": [1, 2, 3],
+    "SEED": 1,
+    "xs": [3, 1],
+    "n": 2,
+}
 
 
 def _is_module(name: str) -> bool:
@@ -56,6 +70,10 @@ def _loop(code: str) -> frozenset[str]:
         ("while n:\n    reshuffle()\n    n -= 1", {"DECK"}),
         ("while n:\n    list(map(lambda v: push(h, v), [1]))\n    n -= 1", {"h"}),
         ("while n:\n    rec(h, 2)\n    n -= 1", {"h"}),
+        ("for i in range(2):\n    shuf(rng, xs)", {"xs"}),
+        ("for i in range(2):\n    fit_all(rng, xs)", {"xs"}),
+        ("for i in range(2):\n    own_rng(xs)", {"xs"}),
+        ("for i in range(2):\n    mix_with(rng)", {"DECK"}),
     ],
     ids=[
         "while",
@@ -67,6 +85,10 @@ def _loop(code: str) -> frozenset[str]:
         "global-shuffle",
         "lambda",
         "recursive",
+        "a-parameters-method",
+        "a-parameters-method-of-the-users",
+        "a-locals-method",
+        "a-parameters-method-handed-a-global",
     ],
 )
 def test_a_loop_watches_what_a_helper_hands_on(loop, expected):
@@ -94,7 +116,13 @@ def test_what_a_helper_hands_on_is_split_into_parameters_and_globals():
 
 @pytest.mark.parametrize(
     "statement, global_name",
-    [("push_global(xs[-1])", "H"), ("reshuffle()", "DECK"), ("r = [push_global(x) for x in [1]]", "H")],
+    [
+        ("push_global(xs[-1])", "H"),
+        ("reshuffle()", "DECK"),
+        ("r = [push_global(x) for x in [1]]", "H"),
+        ("mix_with(rng)", "DECK"),
+        ("n = mix_with(rng)", "DECK"),
+    ],
 )
 def test_a_statement_watches_the_global_a_helper_hands_on(statement, global_name):
     assert global_name in call_arguments(ast.parse(statement), NAMESPACE, SOURCES.get)
@@ -102,3 +130,17 @@ def test_a_statement_watches_the_global_a_helper_hands_on(statement, global_name
 
 def test_a_statement_calling_a_reading_helper_watches_no_global():
     assert "H" not in call_arguments(ast.parse("c = count(xs)"), NAMESPACE, SOURCES.get)
+
+
+@pytest.mark.parametrize(
+    "name, params, free",
+    [("shuf", {"r", "xs"}, set()), ("mix_with", {"r"}, {"DECK"}), ("own_rng", {"xs"}, set())],
+)
+def test_what_a_method_of_a_parameter_or_a_local_is_handed_counts_as_handed_on(name, params, free):
+    """``r`` is bound only when the helper runs: ``r.shuffle(xs)`` is no
+    call of an unbound name that fails first, and ``xs`` (a parameter, so
+    the caller's argument) or ``DECK`` (a global) is handed on."""
+    from cash.analysis.namespace_effects import function_handoffs
+
+    fdef = resolve_function_def(name, SOURCES.get)
+    assert function_handoffs(fdef, NAMESPACE, SOURCES.get) == (frozenset(params), frozenset(free))

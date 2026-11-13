@@ -1896,7 +1896,9 @@ def _call_handoffs(
     if _maps_a_reading_lambda(call, local, user_ns):
         return
     arg_names = [arg.id for arg in args if isinstance(arg, ast.Name)]
-    if _only_reads(call, arg_names, user_ns if isinstance(user_ns, dict) else dict(user_ns)):
+    if not _called_through_a_local(func, local) and _only_reads(
+        call, arg_names, user_ns if isinstance(user_ns, dict) else dict(user_ns)
+    ):
         return
     for arg in args:
         roots.update(
@@ -1904,6 +1906,21 @@ def _call_handoffs(
             for name in argument_roots(arg, iterated)
             if name in local or not _followed_elsewhere(user_ns.get(name))
         )
+
+
+def _called_through_a_local(func: ast.expr, local: frozenset[str] | set[str]) -> bool:
+    """Whether *func* is reached from a parameter or a local of the function
+    (``r.shuffle`` in ``def shuf(r, xs): r.shuffle(xs)``, ``g.shuffle`` after
+    ``g = random.Random(0)``): bound only when the function runs, so the
+    notebook's namespace says nothing about it. Not "unbound, so it fails
+    before it runs" (`_only_reads`): what it is handed counts as handed to
+    code whose effect is unknown, mapped back to the caller's arguments for
+    a parameter. ``xs`` was left out, and a hit on ``mix(rng)`` (``def
+    mix(r): r.shuffle(DECK)``) left ``DECK`` unshuffled."""
+    root = func
+    while isinstance(root, (ast.Attribute, ast.Subscript)):
+        root = root.value
+    return isinstance(root, ast.Name) and root.id in local
 
 
 #: Builtins that hand each item of what they iterate to the function they
