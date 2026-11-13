@@ -7,11 +7,14 @@ from __future__ import annotations
 import functools
 import threading
 import types
+import weakref
+from collections.abc import Mapping
 from typing import Any
 
 from .._type_memo import TypeMemo, type_key
 from ..analysis.helper_code import is_mock, renamed
 from ..jit_functions import jit_python_function
+from ..pint_values import pint_kind
 from ..value_types import IMMUTABLE_LEAF_TYPES, is_dead_proxy
 from .module_identity import module_ref
 from .user_code import is_user_class, is_user_code_object, own_package
@@ -212,6 +215,10 @@ def _reads_as_its_dict(t: type) -> bool:
     return all(set(getattr(k, "__slots__", ())) <= {"__dict__", "__weakref__"} for k in t.__mro__)
 
 
+#: The weak containers of the standard library, keyed by their entries.
+_WEAK_CONTAINERS = (weakref.WeakValueDictionary, weakref.WeakKeyDictionary, weakref.WeakSet)
+
+
 def _stabilized(v: Any, hash_callable, _path: frozenset[int], carried: bool) -> tuple[Any, bool]:
     """`stabilize_for_global_hash`, and whether any code was rewritten."""
     if type(v) in _NO_CODE_LEAVES:
@@ -220,6 +227,25 @@ def _stabilized(v: Any, hash_callable, _path: frozenset[int], carried: bool) -> 
         return ("__cash_cycle__", type(v).__qualname__), False
     if is_dead_proxy(v):
         return ("__cash_dead_proxy__",), False
+    if pint_kind(type(v)) is not None:
+        # Keyed by its definitions in its canonical form, not walked: a
+        # registry holds caches it derived and weak indexes (`cash.pint_values`).
+        return v, False
+    if isinstance(v, _WEAK_CONTAINERS):
+        # What the program reads from it (``cache[k]``), not the machinery
+        # that drops an entry whose object died: its ``_remove`` callback
+        # holds a weak reference to the container as a default, and walking
+        # it made the key unbuildable (KEY-UNHASHABLE-DEFAULT). Entries are
+        # kept, not skipped: cash cannot tell a cache of derived entries
+        # from a registry that changes what the holder does.
+        live = dict(v.items()) if isinstance(v, Mapping) else list(v)
+        inner, _ = _stabilized(live, hash_callable, _path | {id(v)}, carried)
+        if isinstance(inner, list):
+            try:
+                inner = frozenset(inner)  # a set: its form is ordered
+            except TypeError:
+                pass
+        return ("__cash_weak__", type(v).__qualname__, inner), True
     if issubclass(type(v), types.ModuleType):
         # A module cannot be pickled: `{"fft": numpy.fft}` warned unhashable,
         # and switching it to `scipy.fft` served the old result. Which module.

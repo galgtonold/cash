@@ -36,6 +36,7 @@ from ..handed_digests import Stored
 from ..handed_digests import claim as claim_handed_digests
 from ..loaded_code import code_objects_of
 from ..mutation_fingerprint import mutation_fingerprint
+from ..pint_values import BUILD_DIGESTS as PINT_DIGESTS
 from ..tracking import process_registries
 from ..tracking.env_reads import environment_digests, environment_unchanged, note_reads
 from ..tracking.env_reads import recording as recording_env_reads
@@ -741,6 +742,7 @@ class KeyBuilder:
         ttls_token = REACHED_TTLS.set(reached_ttls)
         # Each value module data holds is hashed once per key (`KEY_BUILD_DIGESTS`).
         digests_token = KEY_BUILD_DIGESTS.set({})
+        pint_token = PINT_DIGESTS.set({})
         try:
             # The state after each fold, in `_STATE_STAGES` order: when no
             # named part moved, the first stage whose output did is the one
@@ -815,6 +817,7 @@ class KeyBuilder:
                     content.armed = False
             self._args.note_arg_cost(func_name)
         finally:
+            PINT_DIGESTS.reset(pint_token)
             KEY_BUILD_DIGESTS.reset(digests_token)
             PLAIN_CENSUS.memo = previous
             REACHED_TTLS.reset(ttls_token)
@@ -850,6 +853,7 @@ class KeyBuilder:
             (READS_FOLDED, READS_FOLDED.set({})),
             (REACHED_TTLS, REACHED_TTLS.set([])),
             (KEY_BUILD_DIGESTS, KEY_BUILD_DIGESTS.set({})),
+            (PINT_DIGESTS, PINT_DIGESTS.set({})),
             (STATE_LEDGER, STATE_LEDGER.set(ledger)),
             (CAPTURE_WATCH, CAPTURE_WATCH.set(None)),
             (_EXPLAINING, _EXPLAINING.set(True)),

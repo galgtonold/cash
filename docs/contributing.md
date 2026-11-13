@@ -104,6 +104,8 @@ src/cash/
 │                       #   helpers
 ├── canonical_form.py   # the form a key pickles a value in
 ├── content_hashers.py  # content hashes of frames, arrays, tables
+├── pint_values.py      # pint quantities and unit registries, keyed by
+│                       #   value and by the registry's definitions
 ├── sizing.py           # how big a frame, array or container is
 ├── value_hash.py       # the notebook's value hash (compute_hash)
 ├── mutation_fingerprint.py # a digest that moves on an in-place edit

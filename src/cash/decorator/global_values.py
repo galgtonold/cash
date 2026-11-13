@@ -30,7 +30,7 @@ from .key_values import (
     reduced_state,
     stabilize_for_global_hash,
 )
-from .user_code import is_cash_wrapper
+from .user_code import is_cash_wrapper, unnamed_library_class
 
 if TYPE_CHECKING:
     from .arg_hashing import ArgHasher
@@ -256,6 +256,15 @@ class GlobalValues:
         cannot be hashed, which warns KEY-UNHASHABLE-GLOBAL once.
         """
         ref = code_ref(value)
+        if ref is not None and isinstance(value, type) and unnamed_library_class(value):
+            # Its name finds another class (pint's ``ureg.Quantity`` is
+            # ``pint:Quantity`` for every registry): what it holds besides
+            # its bases' code says which one.
+            data = {k: v for k, v in vars(value).items() if not k.startswith("__")}
+            try:
+                return f"{ref}:{self.data_digest(data)}" if data else ref
+            except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError, RecursionError):
+                ref = None  # warned below, as a value that cannot be hashed
         if ref is not None:
             return ref
         if is_mock(value) or is_cash_wrapper(value):
