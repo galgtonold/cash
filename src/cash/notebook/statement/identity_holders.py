@@ -220,14 +220,16 @@ def identity_held_reason(
     walk = _Walk(user_kinds, targets=[] if weak_holders else None)
     walk.budget += more
     walk.run([value])
-    found = _held_by_id(name, walk, user_kinds, user_ns)
+    found = _held_by_id(name, value, walk, user_kinds, user_ns)
     if found is None and walk.targets:
         found = _weakly_held(name, walk.targets, user_ns)
     return found
 
 
-def _held_by_id(name: str, walk: _Walk, user_kinds: dict[type, bool], user_ns: dict[str, Any]) -> IdentityHeld | None:
-    """`identity_held_reason`'s answer for what the value itself holds, from
+def _held_by_id(
+    name: str, value: Any, walk: _Walk, user_kinds: dict[type, bool], user_ns: dict[str, Any]
+) -> IdentityHeld | None:
+    """`identity_held_reason`'s answer for what *value* itself holds, from
     its *walk*."""
     if walk.unread or walk.cut:
         what = (
@@ -277,6 +279,17 @@ def _held_by_id(name: str, walk: _Walk, user_kinds: dict[type, bool], user_ns: d
         held = _Walk(user_kinds, seen=set(walk.seen_all()), quiet=True, candidates=frozenset(candidates))
         held.id_arrays = [] if in_arrays else None
         held.run([v for k, v in user_ns.items() if k != name and not is_history_name(k)])
+        if not held.found and not held.cut:
+            # The value's own strings and numbers: its walk keeps no leaf's
+            # id, and ``pair = (s, id(s))`` with *s* nowhere else is its
+            # own. Looked through again only now, for the numbers it holds.
+            own = _Walk(user_kinds, quiet=True, candidates=frozenset(candidates))
+            own.id_arrays = [] if in_arrays else None
+            own.run([value])
+            held.found = own.found
+            if own.id_arrays is not None:
+                held.id_arrays = [*(held.id_arrays or ()), *own.id_arrays]
+                held.leaf_ids.extend(own.leaf_ids)
         if held.cut and not held.found:
             # Not known to be an id(): the notebook's objects were not all
             # looked through.
@@ -805,7 +818,11 @@ def _any_held(in_arrays: list[Any], held: _Walk) -> bool:
     of those ids are looked up."""
     numpy = sys.modules["numpy"]
     ids = numpy.concatenate(
-        [numpy.fromiter(held.seen, dtype=numpy.int64, count=len(held.seen)), *(held.id_arrays or ())]
+        [
+            numpy.fromiter(held.seen, dtype=numpy.int64, count=len(held.seen)),
+            numpy.array(held.leaf_ids, dtype=numpy.int64),
+            *(held.id_arrays or ()),
+        ]
     )
     if not ids.size:
         return False
@@ -917,6 +934,10 @@ class _Walk:
         #: as NumPy arrays, when an array's numbers are looked for; None
         #: otherwise.
         self.id_arrays: list[Any] | None = None
+        #: The ids of the strings, numbers and other leaves a *quiet* walk
+        #: met, kept only when an array's numbers are looked for
+        #: (`id_arrays`); otherwise each is only looked up in `candidates`.
+        self.leaf_ids: list[int] = []
 
     def run(self, roots: list[Any]) -> None:
         level = list(roots)
@@ -971,17 +992,18 @@ class _Walk:
 
     def _open(self, item: Any, into: list[Any]) -> None:
         kind = type(item)
-        if kind is int:
-            self.numbers.add(item)
-            return
-        if kind is str:
-            # ``hex(id(x))`` or ``str(id(x))``: an id() as well.
-            if not self.quiet:
+        if kind is int or kind is str or kind in _LEAVES:
+            if self.quiet:
+                # Looking for an id(): a string or a float is an object an
+                # ``id()`` names as well, at a new address after a restart.
+                self._leaf_held(item)
+            elif kind is int:
+                self.numbers.add(item)
+            elif kind is str:
+                # ``hex(id(x))`` or ``str(id(x))``: an id() as well.
                 number = as_address(item)
                 if number is not None:
                     self.numbers.add(number)
-            return
-        if kind in _LEAVES:
             return
         key = id(item)
         if key in self.seen:
@@ -1181,6 +1203,11 @@ class _Walk:
                 # third of a frame's read.
                 self._unseen.append(records)
         if self.quiet:
+            # The leaves read at once, and the records holding them: an
+            # ``id()`` of one is looked for as `_open` looks for one.
+            if flat is not items:
+                self._leaves_held(records)
+            self._leaves_held(flat)
             return True
         if not big or flat is not items or not kinds <= _KEPT_KINDS:
             self._read_leaves(flat, kinds)
@@ -1324,6 +1351,20 @@ class _Walk:
         else:
             self.numbers.update(item for item in flat if type(item) is int and item >= _LOWEST_ADDRESS)
 
+    def _leaf_held(self, item: Any) -> None:
+        """Note a leaf a *quiet* walk met, for the ids looked for."""
+        if self.id_arrays is not None:
+            self.leaf_ids.append(id(item))
+        if self.candidates and id(item) in self.candidates:
+            self.found = True
+
+    def _leaves_held(self, items: list[Any]) -> None:
+        """`_leaf_held` for each of *items*, at C speed."""
+        if self.id_arrays is not None:
+            self.leaf_ids.extend(map(id, items))
+        if self.candidates and not self.candidates.isdisjoint(map(id, items)):
+            self.found = True
+
     def _note_ids(self, items: Any) -> None:
         """Keep the ids of *items* for an array's numbers, when looked for."""
         if self.id_arrays is not None:
@@ -1357,6 +1398,9 @@ class _Walk:
         if not self.candidates.isdisjoint(map(id, states)):
             self.found = True
         self._note_ids(states)
+        if self.candidates or self.id_arrays is not None:
+            # Their attributes' strings and numbers too: ``id(pts[7].name)``.
+            self._leaves_held(list(chain.from_iterable(map(dict.values, states))))
         return True
 
     def _opens(self, item: Any) -> bool:
