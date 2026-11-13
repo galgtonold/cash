@@ -16,7 +16,6 @@ from __future__ import annotations
 
 from cash import Cash, DataSource, FileBackend
 
-
 FACTOR = 3
 
 
