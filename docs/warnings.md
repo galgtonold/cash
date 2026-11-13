@@ -2327,21 +2327,31 @@ not matter to any cell: put `# @cash:assume-safe` on the statement.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/tracking/lookups_seen.py:arm @621f5c02, cash/tracking/lookups_seen.py:_warn_unseen_once @51c2c97b, cash/tracking/lookups_seen.py:_install @9b846e79 -->
+<!-- claim: cash/tracking/lookups_seen.py:arm @621f5c02, cash/tracking/lookups_seen.py:_warn_unseen_once @71cd55a2, cash/tracking/lookups_seen.py:_install @9b846e79 -->
 **What happened.** cash cannot watch what a statement finds as it runs:
 `sys.monitoring` needs Python 3.12 or newer, or other tools hold the
-monitoring tool ids cash asks for (5 and 2).
+monitoring tool ids cash asks for (5 and 2). Below Python 3.12 the code a
+statement runs is not recorded either, and the warning names that too.
 
 **Why it matters.** An object that pickles by its name, such as a logger,
 can be found without a variable holding it:
 `seen = logging.getLogger("app").level`. Such an object is not checked. After
 another cell changes it (`logging.getLogger("app").setLevel(10)`), the
-statement is served the value it read before.
+statement is served the value it read before. Below Python 3.12 two more
+things are not seen, and the statement is served without them:
+
+- a finalizer the statement's own garbage runs (a `__del__`, a
+  `weakref.finalize`) that changes a global the statement's text does not
+  name;
+- a library routine a loop swaps into a module attribute and calls on its
+  next pass (`m.get = logging.getLogger` inside the function a
+  comprehension calls): the next call is served the routine swapped out.
 
 **What to do.** Bind the object to a variable in a cell of its own
 (`log = logging.getLogger("app")`) and read it through that variable: a
 variable's objects are checked on every Python. Or run on Python 3.12 or
-newer, without another tool holding both ids.
+newer, without another tool holding both ids. For a finalizer or a
+swapped-in routine, run on Python 3.12 or newer.
 
 **When it is safe to ignore.** When no statement reads a logger, or another
 object found by its name, that a later cell changes. It is shown once per

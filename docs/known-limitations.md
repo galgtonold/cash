@@ -680,7 +680,11 @@ does a call cash keeps that starts after that. Before Python 3.12, or when
 other tools hold the monitoring tool ids cash asks for (5 and 2), none of these lookups is
 checked, and [NOTEBOOK-LOOKUPS-UNSEEN](warnings.md#notebook-lookups-unseen)
 says so once, at the first statement that calls something or reads an
-attribute.
+attribute. Before Python 3.12 the same warning also names a finalizer a
+statement's own garbage runs and a library routine a loop swaps into a
+module attribute: neither is seen there, so a statement may be served
+without the finalizer's change or with the routine swapped out; run on
+Python 3.12 or newer for those.
 **Fix:** bind the object to a variable in a cell of its own
 (`log = logging.getLogger("app")`) and read it through that variable.
 
