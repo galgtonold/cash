@@ -24,6 +24,7 @@ from ..jit_functions import jit_python_function
 from ..value_types import CODELESS_PRIMS
 from .closure_fold import iter_code_scopes
 from .key_values import iter_contained, plain_data_kind
+from .module_identity import module_ref_part
 from .user_code import cash_wrapped, is_cash_wrapper, is_user_class, is_user_code_object, own_package, wraps_code
 
 if TYPE_CHECKING:
@@ -134,11 +135,14 @@ def _library_attr_parts(
         return []
     value = namespace[attr]
     label = f"{mod_name}.{attr}"
-    if issubclass(type(value), types.ModuleType) or label in reader.learned:
+    if label in reader.learned:
         return []
     code = getattr(reader.func, "__code__", None)
     if isinstance(code, types.CodeType) and (mod_name, attr) in written_module_attrs(code):
         return []
+    if issubclass(type(value), types.ModuleType):
+        # `lib.backend = scipy.fft` (a library's `set_fftlib`): which module.
+        return module_ref_part(label, value)
     if isinstance(value, type) or callable(value):
         name = renamed(value)
         return [(f"{label}#name", name)] if name else []
@@ -306,6 +310,7 @@ class ModuleAttrFold:
 
         def fold(label: str, value: Any) -> None:
             if issubclass(type(value), types.ModuleType):
+                parts.extend(module_ref_part(label, value))
                 return
             if isinstance(value, type) or (callable(value) and not isinstance(value, (dict, list, tuple, set))):
                 # Code: the helper walk follows the user's; what it names is keyed here.
@@ -331,6 +336,9 @@ class ModuleAttrFold:
                 parts.append((f"local:{name}#source:{unloaded}", source_digest(unloaded, root_module) or "unvouched"))
         for name, attrs in attr_reads.items():
             obj = resolve(name)
+            # Which module the name holds (`from .backends import LIB` then
+            # `LIB.fft(x)`); a user module's attributes are folded below.
+            parts.extend(module_ref_part(f"local:{name}", obj))
             if not issubclass(type(obj), types.ModuleType) or not is_user_module(obj, own_pkg):
                 continue
             for attr in sorted(attrs):
@@ -341,8 +349,9 @@ class ModuleAttrFold:
                 fold(f"local:{name}.{attr}", value)
         for name in sorted(bare_reads):
             obj = resolve(name)
-            if obj is not None and not issubclass(type(obj), types.ModuleType):
-                fold(f"local:{name}", obj)
+            if obj is None or (name in attr_reads and issubclass(type(obj), types.ModuleType)):
+                continue  # a module read as `name.attr` too is keyed above
+            fold(f"local:{name}", obj)
         return parts
 
     def module_attr_parts(
@@ -367,7 +376,8 @@ class ModuleAttrFold:
           fold the data globals the callee reads from its own module too.
 
         Callables, classes and nested modules are skipped as data (the first is
-        handled by the helper channel, the others carry no editable value) --
+        handled by the helper channel, the others carry no editable value);
+        a nested module is keyed by which module it is (`module_ref_part`) --
         except what a library-made callable was built with (``conf.SMOOTH =
         partial(gaussian_filter, sigma=...)``), which is folded when *watch*
         is given, so the drift guard can see it too (`GlobalValues.carried_global_hash`).
@@ -419,7 +429,8 @@ class ModuleAttrFold:
             # `settings.DTYPE = np.float32` edited to `np.float64`.
             return class_parts + self._ref_parts(reader, label, value)
         if issubclass(type(value), types.ModuleType):
-            return []
+            # `settings.BACKEND = numpy` edited to `scipy`.
+            return module_ref_part(label, value)
         parts: list[tuple[str, str]] = []
         if is_mod:
             parts.extend(self._held_class_parts(reader, label, value))
@@ -506,6 +517,7 @@ class ModuleAttrFold:
                 continue
             iv = helper_globals[inner]
             if issubclass(type(iv), types.ModuleType):
+                parts.extend(module_ref_part(f"{label}.{inner}", iv))
                 continue
             if isinstance(iv, type) or (callable(iv) and not isinstance(iv, (dict, list, tuple, set))):
                 ref = self._values.code_ref_part(iv, getattr(value, "__module__", None), func_name, f"{label}.{inner}")
@@ -523,9 +535,9 @@ class ModuleAttrFold:
         if not isinstance(stored, dict) or attr not in stored or not is_user_code_object(fn):
             return []
         value = stored[attr]
-        if issubclass(type(value), (types.ModuleType, type)) or (
-            callable(value) and not isinstance(value, (dict, list, tuple, set))
-        ):
+        if issubclass(type(value), types.ModuleType):
+            return module_ref_part(f"{name}.{attr}", value)
+        if isinstance(value, type) or (callable(value) and not isinstance(value, (dict, list, tuple, set))):
             return []
         h = self._values.safe_global_hash(value, func_name, f"{name}.{attr}")
         return [(f"{name}.{attr}", h)] if h is not None else []

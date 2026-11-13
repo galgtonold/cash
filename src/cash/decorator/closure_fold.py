@@ -30,6 +30,7 @@ from .arg_hashing import CODE_VALUE_TYPES, is_opaque
 from .call_state import CAPTURE_WATCH, KeyBuildFailed
 from .function_identity import code_fingerprint, hash_callable_source
 from .key_values import SYNC_TYPES, code_ref, is_immutable_capture, plain_data_kind, stabilize_for_global_hash
+from .module_identity import module_ref
 from .user_code import is_cash_wrapper, is_user_class, is_user_code_object, own_package
 
 if TYPE_CHECKING:
@@ -286,7 +287,7 @@ def module_capture_identity(module: types.ModuleType, attrs: frozenset[str]) -> 
         value = namespace.get(attr)
         if issubclass(type(value), (types.FunctionType, type)) and is_user_code_object(value):
             code.append((attr, hash_callable_source(value)))
-    return ("module", module.__name__, tuple(code))
+    return ("module", module_ref(module), tuple(code))
 
 
 class CaptureAnalysis:
@@ -622,7 +623,12 @@ class HelperIdentity:
                 # What it names is keyed here, for the code the helper walk
                 # does not follow: `make(np.float32)` and `make(np.float64)`,
                 # `make(sum)` and `make(max)` shared one key.
-                ref = None if issubclass(type(value), types.ModuleType) or is_cash_wrapper(value) else code_ref(value)
+                if issubclass(type(value), types.ModuleType):
+                    # `make(numpy.fft)` and `make(scipy.fft)`: which module.
+                    ref = f"module:{module_ref(value)}"
+                    captures.append((name, ref))
+                    continue
+                ref = None if is_cash_wrapper(value) else code_ref(value)
                 if ref is not None:
                     captures.append((name, f"ref:{ref}"))
                 continue
