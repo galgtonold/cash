@@ -4789,11 +4789,16 @@ class StatementProcessor:
             # A round of the check links every output it found held to every
             # variable holding one of them: ``train_dl`` and ``test_dl``
             # handed to one loop were each linked to both datasets, and a
-            # change taken through ``train_dl`` moved ``test_data``. Asked
+            # change taken through ``train_dl`` moved ``test_data``. One
+            # holder is no proof either: a loop's ``model``, held by
+            # ``models``, and ``y_train``, the base of a view, went as one
+            # link, and each fit that changed ``models`` moved ``y_train``,
+            # so a cell reading only the data ran the loop again. Asked
             # of each output alone, the check names the variables sharing
             # an object with it; when it cannot say, within the same budget,
-            # the round's links stand.
-            coarse = [link for link in links if len(link[0]) > 1 and len(link[1]) > 1]
+            # the round's links stand. The same holds for the links found
+            # beside a holder that is not a variable.
+            coarse = [link for link in links if len(link[0]) > 1]
             if not coarse:
                 return links
             owners = sorted(set().union(*(set(link[0]) for link in coarse)))
@@ -4809,7 +4814,7 @@ class StatementProcessor:
                     fine += own.links
             except WalkBudgetExceeded:
                 return links
-            return [link for link in links if not (len(link[0]) > 1 and len(link[1]) > 1)] + fine
+            return [link for link in links if len(link[0]) <= 1] + fine
 
         def widened(links: list) -> list:
             # Each link's owners and every output sharing an object with
@@ -4840,7 +4845,7 @@ class StatementProcessor:
                 # closure, a function's defaults): the variables found beside
                 # it, not a search from the outputs up, which would climb
                 # through the library until its budget ran out.
-                links = widened(list(gave_up.links))
+                links = widened(by_owner(list(gave_up.links)))
                 return (links if gave_up.complete else cut_short(links)), gave_up.complete
             except WalkBudgetExceeded:
                 timed_out = True
