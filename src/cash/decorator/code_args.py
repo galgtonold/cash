@@ -24,6 +24,7 @@ from ..effects import environment_component
 from ..exceptions import CashImpurityWarning
 from ..install_paths import is_user_code_module
 from ..jit_functions import jit_python_function
+from ..kept_state import cached_properties, derived_views
 from ..loaded_code import class_functions
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, is_runtime_machinery
 from .arg_hashing import is_opaque, is_plain_data
@@ -485,7 +486,7 @@ class CodeArgs:
             yield from self._iter_library_held(value, _depth, _seen)
             return
         attrs = getattr(value, "__dict__", None)
-        values: list[Any] = list(attrs.values()) if isinstance(attrs, dict) else []
+        values: list[Any] = self._held_attributes(value, attrs) if isinstance(attrs, dict) else []
         for klass in type(value).__mro__:
             slots = klass.__dict__.get("__slots__", ())
             for slot in (slots,) if isinstance(slots, str) else slots:
@@ -501,6 +502,31 @@ class CodeArgs:
         _seen.add(id(value))
         for v in held:
             yield from self._walk_carriers(v, _depth + 1, _seen)
+
+    def _held_attributes(self, value: Any, attrs: dict) -> list[Any]:
+        """The values of *value*'s ``__dict__`` the carrier walk follows: all
+        of them, but a view a ``functools.cached_property`` filled whose class
+        *value*'s class's code reaches.
+
+        networkx fills ``G.adj`` with an ``AdjacencyView`` the first time
+        the body reads it, so the walk of ``G`` found one more class after
+        the first call than before it, and an identical second call missed
+        ("a function or class passed as an argument changed"). Such a view
+        holds nothing but links to *value* and what *value* already holds
+        (`kept_state.derived_views`, which the value channel leaves out
+        too), and its class is folded with *value*'s class: the getter that
+        makes it names it, and `CodeSurface.code_surface_hash` folds every
+        class that code reaches. A view whose class the code does not reach
+        (picked at run time) is still walked.
+        """
+        if not cached_properties(type(value)):
+            return list(attrs.values())
+        views = derived_views(value)
+        if not views or is_opaque(type(value)):
+            return list(attrs.values())
+        return [
+            held for name, held in attrs.items() if name not in views or not self._code.reaches(type(value), type(held))
+        ]
 
     def _iter_library_held(self, value: Any, _depth: int, _seen: set):
         """User code a LIBRARY object holds: looked for, not keyed on the way.
