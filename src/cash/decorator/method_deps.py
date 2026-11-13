@@ -5,6 +5,7 @@ members it reads (``self.helper()``, ``self.RATE``) and the bases
 from __future__ import annotations
 
 import ast
+import functools
 import hashlib
 import inspect
 import pickle
@@ -16,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 from .._memo import CODE_OBJECTS, LruMemo
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..source_reading import getsource
+from .closure_fold import bound_owner
 from .function_identity import hash_callable_source
 
 if TYPE_CHECKING:
@@ -117,12 +119,27 @@ class MethodClassDeps:
         ``self.__dict__``) is already covered by hashing ``self`` itself, so it
         is skipped here -- ``getattr(class, attr)`` simply misses it.
         """
+        # A BOUND method (``cash.cache(est._fit)``) carries its ``self`` as
+        # ``__self__``, not in ``args``: the code it reaches through ``self``
+        # -- a subclass's override and what that calls -- is resolved
+        # against ``type(__self__)`` just the same. Looking in ``args[0]``
+        # instead found nothing, and editing that override served the old
+        # result.
+        bound, bound_self = bound_owner(func)
+        method = func
+        while isinstance(method, functools.partial):
+            method = method.func
+        if bound and inspect.ismethod(method):
+            func = method.__func__
         self_name, attrs, uses_super = self._analyze_method_self_deps(func)
         if self_name is None or (not attrs and not uses_super):
             return state_hash
-        if not args:
+        if bound and inspect.ismethod(method):
+            owner = bound_self
+        elif not args:
             return state_hash
-        owner = args[0]
+        else:
+            owner = args[0]
         # Resolve the class this method was called against, and confirm ``owner``
         # really is its ``self``/``cls`` (guard against a plain function whose
         # first parameter merely happens to be named ``self``). ``owner`` is the
