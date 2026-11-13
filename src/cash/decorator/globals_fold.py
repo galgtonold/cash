@@ -25,6 +25,7 @@ from .call_state import CAPTURE_WATCH, KeyBuildFailed
 from .code_tables import CodeTable
 from .global_reads import reach_pass
 from .global_values import UNHASHABLE_GLOBAL_FIX
+from .helper_fold_memo import HelperFoldMemo, LoggedSeen
 from .key_values import (
     carried_payload,
     iter_contained,
@@ -180,6 +181,8 @@ class GlobalsFold:
         #: (label, function, owner code, id(value)) -> what a table of plain
         #: functions held as data made of the key last time (`held_value_code_parts`).
         self._held_tables: LruMemo[tuple, _HeldTable] = LruMemo(TABLES)
+        #: Helper folds remembered while nothing they read moved.
+        self._helper_memo = HelperFoldMemo()
         #: The argument walk, which a data global's code goes through too;
         #: set by `CodeArgs`, which is built after this.
         self.code_args: CodeArgs | None = None
@@ -621,7 +624,7 @@ class GlobalsFold:
         # Pre-seed with what the cached function itself already folded, so a
         # global it reads directly is not folded a second time on behalf of a
         # helper that also reads it.
-        seen: set = set()
+        seen = LoggedSeen()
         own_globals = getattr(func, "__globals__", None)
         if isinstance(own_globals, dict):
             for name in self._reads.read_global_data_names(func):
@@ -634,6 +637,34 @@ class GlobalsFold:
             owner_code=owner_code,
             seen=seen,
         )
+
+    def _fold_helper(
+        self,
+        target: Callable,
+        func: Callable,
+        func_name: str,
+        state_hash: str,
+        owner_code: Any,
+        seen: set,
+        extra_names: tuple[str, ...] = (),
+    ) -> str:
+        """`fold_read_globals` of one helper, remembered while nothing it
+        reads can have moved (`HelperFoldMemo`) when this is the cached
+        function's own key build and no other fold is running."""
+
+        def compute() -> str:
+            return self.fold_read_globals(
+                target, func_name, state_hash, owner_code=owner_code, seen=seen, extra_names=extra_names
+            )
+
+        if type(seen) is not LoggedSeen or walk_scope.walk_local(self, set):
+            return compute()
+        folded = READS_FOLDED.get()
+        if folded is not None and (id(target), id(owner_code), extra_names) in folded:
+            return compute()  # folded earlier in this key: `_fold_once` adds nothing new
+        key = (id(target), id(owner_code), extra_names, func_name)
+        module = getattr(func, "__module__", None)
+        return self._helper_memo.fold(target, key, owner_code, module, state_hash, seen, compute)
 
     def fold_passed_function_reads(self, fn: types.FunctionType, func_name: str, owner_code: Any) -> str:
         """What a function that reaches the call as data reads, as one digest
@@ -719,7 +750,7 @@ class GlobalsFold:
             target = jit_python_function(target) or target
             if getattr(target, "__globals__", None) is None:
                 continue
-            state_hash = self.fold_read_globals(target, func_name, state_hash, owner_code=owner_code, seen=seen)
+            state_hash = self._fold_helper(target, func, func_name, state_hash, owner_code, seen)
         return state_hash
 
     def _fold_binding_data(self, report: PurityReport, func: Callable, state_hash: str, owner_code: Any) -> str:
@@ -776,12 +807,13 @@ class GlobalsFold:
                 continue
             if target is None or target is func or getattr(target, "__globals__", None) is None:
                 continue
-            state_hash = self.fold_read_globals(
+            state_hash = self._fold_helper(
                 target,
+                func,
                 func_name,
                 state_hash,
-                owner_code=owner_code,
-                seen=seen,
+                owner_code,
+                seen,
                 extra_names=self._reads.decorator_global_names(target),
             )
         return state_hash
