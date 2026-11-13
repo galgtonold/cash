@@ -7,7 +7,7 @@ from collections.abc import Iterable, Mapping, Set
 from dataclasses import MISSING, dataclass, field, fields
 from typing import TYPE_CHECKING, Any
 
-from cash._memo import RECORDS_AS_RUN, LruMemo
+from cash._memo import RECORDS_AS_RUN, RESTORED_ENTRIES, LruMemo
 from cash._user_attrs import has_attribute
 from cash.notebook.file_round_trips import FileRoundTrips
 from cash.notebook.lineage_store import InputLineages, LineageStore
@@ -353,6 +353,17 @@ class TrackingState:
     # tuple each time, so a loop can tell its own record from an older one.
     # W: StatementStore, StatementRestorer. R: ControlStructureProcessor.
     entry_file_states: dict[str, tuple[Mapping[str, Any] | None]] = field(default_factory=dict)
+
+    # Cache key -> the metadata (`StatementCacheMetadata.to_dict`) of the
+    # entry the statement was restored from this session, until it runs
+    # again. The simulation takes it for an entry gone since (evicted, or
+    # dropped as no faster than its compute): the outputs hold what that
+    # restore gave them. Without it the simulation built their lineage
+    # from the files they inherited, which no run of the statement makes
+    # (its own reads are known only once it ran, `statement_file_reads`),
+    # and rebuilt them as stale. Session state, like the values it describes.
+    # W: StatementRestorer, StatementLineageBuilder. R: StatementLineage.
+    restored_entries: LruMemo[str, dict[str, Any]] = field(default_factory=lambda: LruMemo(RESTORED_ENTRIES))
 
     # Cache key -> the file records that statement made of what it read on
     # its last run this session (``store._RecordsAsRun``), taken when first

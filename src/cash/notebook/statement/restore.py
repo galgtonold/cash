@@ -182,6 +182,10 @@ class StatementRestorer:
                         ", ".join(sorted(object_rng_states)),
                     )
                 restore_object_rng_states(object_rng_states, self.shell.user_ns)
+            if metadata is not None and metadata.key:
+                # What the outputs now hold, for the simulation to take should
+                # the entry be gone by the time it is asked of again.
+                tracking_state.restored_entries[metadata.key] = metadata.to_dict()
 
             var_restore_time = _perf_counter() - t_var
 
