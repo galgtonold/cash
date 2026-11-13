@@ -6,7 +6,6 @@ import contextvars
 import hashlib
 import pickle
 import sys
-import threading
 import types
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -21,6 +20,7 @@ from ..dependency_state import STATE_LEDGER, ledger_note
 from ..effects import environment_component
 from ..exceptions import CashImpurityWarning
 from ..jit_functions import jit_python_function
+from . import walk_scope
 from .call_state import CAPTURE_WATCH, KeyBuildFailed
 from .code_tables import CodeTable
 from .global_reads import reach_pass
@@ -183,8 +183,6 @@ class GlobalsFold:
         #: The argument walk, which a data global's code goes through too;
         #: set by `CodeArgs`, which is built after this.
         self.code_args: CodeArgs | None = None
-        #: The folds running on this thread, by `fold_read_globals`'s key.
-        self._folding = threading.local()
 
     def fold_read_globals(
         self,
@@ -223,7 +221,7 @@ class GlobalsFold:
         # (networkx's `Graph.to_directed_class` through `nx.DiGraph`).
         # The fold already running folds it in full, so it is keyed here
         # as a back-reference to that fold, and the walk ends.
-        running: set = self._folding.__dict__.setdefault("keys", set())
+        running: set = walk_scope.walk_local(self, set)
         fold_key = (id(func), id(owner_code), extra_names)
         if fold_key in running:
             back = f"{state_hash}|refold:{getattr(func, '__qualname__', '?')}"

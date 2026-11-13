@@ -41,7 +41,7 @@ from ..tracking.randomness import (
     replay_argument_carriers,
     replayable,
 )
-from . import code_trace, hit_memo
+from . import code_trace, hit_memo, walk_scope
 from .arg_hashing import (
     CALL_POLARS,
     CONTENT_KEYED,
@@ -636,7 +636,38 @@ class KeyBuilder:
             reached_ttls.append(self._registry.effective_ttl(func_name, spec.ttl))
         active = _CALLEE_STATES.get()
         if func_name in active:
+            walk_scope.note_callees((func_name,))
             return f"cycle:{func_name}"
+        # Reached from many places in one key build (a package whose module
+        # namespace holds its cached functions: every function reading
+        # ``nx.foo`` reaches it), it is built once per key build, in a walk
+        # of its own, and served while the same digest would come out
+        # (`walk_scope`). The TTLs its own callees added are added again for
+        # each caller.
+        build = KEY_BUILD_DIGESTS.get()
+        item = ("callee", func_name)
+        if build is not None:
+            hit = build.get(item)
+            if hit is not None and hit[0] is func and walk_scope.servable(hit[2]):
+                if reached_ttls is not None:
+                    reached_ttls.extend(hit[3])
+                walk_scope.note_callees((func_name, *hit[2].touched))
+                return hit[1]
+        ttls_from = len(reached_ttls) if reached_ttls is not None else 0
+        with walk_scope.isolated(item, func_name) as frame:
+            state = self._callee_state_now(spec)
+        touched = frozenset(frame.touched)
+        if build is not None:
+            ttls = tuple(reached_ttls[ttls_from:]) if reached_ttls is not None else ()
+            build[item] = (func, state, walk_scope.Record(frozenset(), touched), ttls)
+        walk_scope.note_callees((func_name, *touched))
+        return state
+
+    def _callee_state_now(self, spec: CachedFunction) -> str:
+        """`callee_state` built now, for a function no running build of a
+        callee state is building."""
+        func, func_name = spec.func, spec.name
+        active = _CALLEE_STATES.get()
         token = _CALLEE_STATES.set(active | {func_name})
         ledger_token = STATE_LEDGER.set(None)
         watch_token = CAPTURE_WATCH.set(None)
