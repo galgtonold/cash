@@ -58,6 +58,7 @@ __all__ = [
     "classify_call",
     "dotted_name",
     "environ_membership",
+    "ENVIRONMENT_READS",
     "environment_component",
     "environment_digests",
     "environment_entry_digest",
@@ -845,7 +846,13 @@ def _environment_value(kind: str, name: str) -> str | None:
     return os.environ.get(name)
 
 
+#: How many environment values were read for a key, ever: a memo of key
+#: parts that no watcher covers keeps none made while this moved.
+ENVIRONMENT_READS = [0]
+
+
 def _environment_digest(entry: EnvironmentInput) -> str:
+    ENVIRONMENT_READS[0] += 1
     kind, name = entry
     try:
         value = _environment_value(kind, name)

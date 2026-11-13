@@ -15,6 +15,7 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 from .._memo import CODE_OBJECTS, LruMemo
+from .._user_attrs import importable_attr
 from ..analysis.bytecode import GLOBAL_WRITES, argvals, instructions
 from ..analysis.helper_bindings import dotted_imports, local_import_map
 from ..analysis.helper_code import own_code_is_user
@@ -229,8 +230,8 @@ def reaches_namespace_by_name(scopes: tuple, module_globals: dict[str, Any]) -> 
             value = module_globals.get(name)
             members = vars(value).values() if isinstance(value, type) else (value,)
             for member in members:
-                member = getattr(member, "__func__", member)
-                member = getattr(member, "__wrapped__", member)  # a cached helper
+                member = importable_attr(member, "__func__", member)
+                member = importable_attr(member, "__wrapped__", member)  # a cached helper
                 if type(member) is types.FunctionType and member.__globals__ is module_globals:
                     stack.append(member.__code__)
     if known_no is not None:
@@ -544,7 +545,7 @@ class GlobalReads:
                         break
                     pairs.add((path, attr))
                     path = f"{path}.{attr}"
-                    value = getattr(value, attr, None) if issubclass(type(value), types.ModuleType) else None
+                    value = importable_attr(value, attr) if issubclass(type(value), types.ModuleType) else None
                     j += 1
                 else:
                     if issubclass(type(value), types.ModuleType):

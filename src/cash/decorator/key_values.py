@@ -12,7 +12,7 @@ from typing import Any
 from .._type_memo import TypeMemo, type_key
 from ..analysis.helper_code import is_mock, renamed
 from ..jit_functions import jit_python_function
-from ..value_types import IMMUTABLE_LEAF_TYPES
+from ..value_types import IMMUTABLE_LEAF_TYPES, is_dead_proxy
 from .user_code import is_user_class, is_user_code_object, own_package
 
 
@@ -217,6 +217,8 @@ def _stabilized(v: Any, hash_callable, _path: frozenset[int], carried: bool) -> 
         return v, False
     if id(v) in _path:
         return ("__cash_cycle__", type(v).__qualname__), False
+    if is_dead_proxy(v):
+        return ("__cash_dead_proxy__",), False
     if isinstance(v, type):
         # A class pickles by name, which an edit does not move: a registry
         # `REG = {"double": Double}` read as `models.REG[name]()` served the

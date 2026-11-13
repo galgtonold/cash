@@ -168,6 +168,11 @@ RESULT_TYPES = 256
 #: One stored-key record per cached function, as last read from disk.
 RECORDS = 256
 
+#: One remembered globals fold per helper and key-build step
+#: (`helper_fold_memo`): a function reaching a library's ~1,000 helpers
+#: fills about that many.
+HELPER_FOLDS = 16384
+
 #: One key-build ledger per function and state, for `explain()`.
 STATE_LEDGERS = 512
 

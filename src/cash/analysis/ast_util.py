@@ -25,7 +25,7 @@ import weakref
 from collections.abc import Iterator, Mapping
 from typing import Any, Literal
 
-from cash._user_attrs import instance_of, own_dict
+from cash._user_attrs import importable_attr, instance_of, own_dict
 from cash.control_markers import neutral_markers
 
 from .. import _weak
@@ -246,7 +246,7 @@ def resolve_callee(
         if obj is None:
             return None
         if issubclass(type(obj), types.ModuleType) or _is_mock(obj):
-            obj = getattr(obj, attr, None)
+            obj = importable_attr(obj, attr)
         elif modules_only:
             return None
         else:

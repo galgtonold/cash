@@ -668,6 +668,25 @@ def _clock_helper_call(node: ast.Call, namespace: Mapping[str, Any]) -> str | No
 # ---------------------------------------------------------------------------
 
 
+def _reaches_cached_wrapper(obj: Any) -> bool:
+    """Is *obj*, or a layer its ``__wrapped__`` chain passes, the wrapper
+    ``@cash.cache`` returns? The function under a wrapper is not: called
+    or referenced bare, it runs uncached, and the helper walk keys it by
+    its code like any helper. Made a cached-function edge only because
+    something else in the process had wrapped it, the caller's key would
+    turn on whether that wrapping ran before the caller was analysed."""
+    walked: set[int] = set()
+    while obj is not None and id(obj) not in walked:
+        walked.add(id(obj))
+        try:
+            if getattr(obj, "_cash_cached", False) is True:
+                return True
+            obj = getattr(obj, "__wrapped__", None)
+        except Exception:  # noqa: BLE001 - an object's __getattr__ may raise anything
+            return False
+    return False
+
+
 def _callee_name(obj: Any, known_by_id: Mapping[int, str]) -> str | None:
     """The ``module.qualname`` a called or referenced *obj* is registered under.
 
@@ -861,7 +880,11 @@ class CodeAnalyzer:
 
     @staticmethod
     def find_called_functions_and_gaps(
-        func: Callable, known_functions: dict[str, Callable] | None = None, *, include_references: bool = False
+        func: Callable,
+        known_functions: dict[str, Callable] | None = None,
+        *,
+        include_references: bool = False,
+        wrappers_only: bool = False,
     ) -> tuple[set[str], list[str]]:
         """`find_called_functions`, and the call chains in *func* that go
         through a property or ``__getattr__`` of the user's code to
@@ -874,6 +897,10 @@ class CodeAnalyzer:
         When that finds no cached function, every cached function named
         like the attribute (``inner``) counts instead, so editing any of
         them invalidates; when none is named so either, the chain is a gap.
+
+        ``wrappers_only`` counts a known function only where the body
+        reaches it through its ``@cash.cache`` wrapper
+        (`_reaches_cached_wrapper`); the bare function is a helper.
         """
         code = getattr(func, "__code__", None)
         visitor = _CallVisitor(frozenset(getattr(code, "co_freevars", ()) or ()))
@@ -916,6 +943,8 @@ class CodeAnalyzer:
                 for target in targets:
                     try:
                         target = unwrap_partials(target)
+                        if wrappers_only and not _reaches_cached_wrapper(target):
+                            continue
                         fqn = _callee_name(target, known_by_id)
                     except AttributeError:
                         continue  # Expected: some callables lack __qualname__
@@ -940,7 +969,7 @@ class CodeAnalyzer:
             for name in dict.fromkeys(visitor.referenced):
                 if name in called:
                     continue
-                fqn = CodeAnalyzer._referenced_function(name, globals_dict, known_by_id)
+                fqn = CodeAnalyzer._referenced_function(name, globals_dict, known_by_id, wrappers_only)
                 if fqn is not None and fqn in known_functions:
                     resolved_qualnames.add(fqn)
 
@@ -948,7 +977,10 @@ class CodeAnalyzer:
 
     @staticmethod
     def _referenced_function(
-        name: str, globals_dict: dict[str, Any], known_by_id: Mapping[int, str] | None = None
+        name: str,
+        globals_dict: dict[str, Any],
+        known_by_id: Mapping[int, str] | None = None,
+        wrappers_only: bool = False,
     ) -> str | None:
         """``module.qualname`` of the function a READ name holds, or None.
 
@@ -964,6 +996,8 @@ class CodeAnalyzer:
                 obj = inspect.getattr_static(obj, part, None)
             obj = unwrap_partials(obj)
             if not callable(obj) or isinstance(obj, type):
+                return None
+            if wrappers_only and not _reaches_cached_wrapper(obj):
                 return None
             return _callee_name(obj, known_by_id or {})
         except Exception:  # noqa: BLE001 - a probe of arbitrary globals

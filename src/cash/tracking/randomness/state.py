@@ -534,9 +534,10 @@ _UNREADABLE = object()
 def _is_user_function(value: object) -> bool:
     """A function the user wrote: walked into. Library code is not, both for
     cost and because a library's own generators are its business."""
+    from ..._user_attrs import importable_attr
     from ...install_paths import is_user_code_file
 
-    code = getattr(getattr(value, "__func__", value), "__code__", None)
+    code = importable_attr(importable_attr(value, "__func__", value), "__code__")
     return code is not None and is_user_code_file(code.co_filename)
 
 

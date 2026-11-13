@@ -26,6 +26,7 @@ import functools
 import pathlib
 import sys
 import uuid
+import weakref
 from collections.abc import Mapping
 from typing import Any
 
@@ -193,7 +194,30 @@ RUNTIME_MACHINERY_TYPES: tuple[type, ...] = _runtime_machinery_types()
 _RUNTIME_MACHINERY_MODULES = ("asyncio.locks", "multiprocessing.synchronize")
 
 
+#: The types of ``weakref.proxy(obj)``. Every operation on one, an
+#: ``isinstance`` included, goes to the object it refers to.
+WEAK_PROXY_TYPES: tuple[type, ...] = (weakref.ProxyType, weakref.CallableProxyType)
+
+
+def is_dead_proxy(value: Any) -> bool:
+    """Is *value* a ``weakref.proxy`` whose object is gone? It refers to
+    nothing, so it holds no code and no data: every read of it, an
+    ``isinstance`` too, raises ReferenceError. Library objects keep them
+    (a compiler's dispatcher pointing back at its owner), and a walk of
+    what such an object holds met one and failed the key build."""
+    if type(value) not in WEAK_PROXY_TYPES:
+        return False
+    try:
+        value.__class__  # the read is the test
+    except ReferenceError:
+        return True
+    return False
+
+
 def is_runtime_machinery(value: Any) -> bool:
     """Is *value* a lock, event, thread, logger, handler, stream or socket
-    (`RUNTIME_MACHINERY_TYPES`)?"""
+    (`RUNTIME_MACHINERY_TYPES`)? A dead weak proxy (`is_dead_proxy`) is
+    counted with them: it holds nothing a result depends on."""
+    if is_dead_proxy(value):
+        return True
     return isinstance(value, RUNTIME_MACHINERY_TYPES) or type(value).__module__ in _RUNTIME_MACHINERY_MODULES

@@ -66,10 +66,11 @@ from typing import TYPE_CHECKING, Any
 from .. import _native, _weak
 from .._clock import perf_counter as _perf_counter
 from ..analysis.helper_code import own_code_is_user
+from ..jit_functions import jit_python_function
 from ..source_reading import own_source
 from ..tracking.tracker_context import active_tracker
 from .call_state import NESTED_CASH_SECONDS
-from .user_code import is_cash_wrapper, is_user_code_object
+from .user_code import cash_wrapped, is_cash_wrapper, is_user_class, is_user_code_object, own_package
 
 if TYPE_CHECKING:
     from .cached_function import CachedFunction
@@ -272,8 +273,20 @@ def _is_dunder(name: str) -> bool:
 class _Scan:
     """What one cached function's key can read, made watched (see module doc)."""
 
-    def __init__(self, root_module: str | None) -> None:
+    def __init__(self, root_module: str | None, root: Any = None) -> None:
         self.root_module = root_module
+        #: `watch_helper`: what one helper's globals fold reads, not the
+        #: world below the code it names (see `value`).
+        self.shallow = False
+        self.shallow_pkg: str | None = None
+        #: In shallow mode, scanning a module's attributes: a function read
+        #: as ``mod.f`` has the globals it reads folded one level deep
+        #: (`ModuleAttrs._helper_constant_parts`).
+        self.in_module = False
+        #: The cached function itself: the names on its decorator lines
+        #: are not read by its key (`GlobalReads.decorator_global_names`
+        #: is folded for a function held inside a decorator only).
+        self.root = root
         self.seen: set = set()
         self.keep: list = []
         self.cells: list = []
@@ -312,10 +325,21 @@ class _Scan:
             if self._first(("module", id(v), id(names)), v):
                 self.module(v, names)
             return
+        if self.shallow and (t is types.FunctionType or (isinstance(v, type) and not self._folds_class(v))):
+            if self._first(("named", id(v)), v):
+                self._named(v, t, names)
+            return
         if not self._first(id(v), v):
             return
         if _is_cash(v, t):
             return  # cash's own objects: what of them a key reads moves the cash epoch
+        shallow, self.shallow = self.shallow, False
+        try:
+            self._inside(v, t, names)
+        finally:
+            self.shallow = shallow
+
+    def _inside(self, v: Any, t: type, names: frozenset) -> None:
         if t is tuple or t is frozenset:
             for item in v:
                 self.value(item, names)
@@ -366,9 +390,67 @@ class _Scan:
         if type(md) is not dict:
             raise Ineligible("a module without a plain namespace")
         self.watch(md, False)
+        in_module, self.in_module = self.in_module, self.shallow
+        try:
+            for name in names:
+                if name in md:
+                    self.value(md[name], names)
+        finally:
+            self.in_module = in_module
+
+    def _one_level(self, f: types.FunctionType) -> None:
+        """The globals *f*'s code names, at the depth a helper's own are."""
+        own: set[str] = set()
+        _code_names(f.__code__, own)
+        self.names.update(own)
+        names = frozenset(own)
+        g = f.__globals__
+        self.watch(g, False)
         for name in names:
-            if name in md:
-                self.value(md[name], names)
+            if name in g:
+                self.value(g[name], names)
+
+    def _named(self, v: Any, t: type, names: frozenset) -> None:
+        """Shallow mode: a function or library class a helper's global or
+        module attribute names. Its globals fold keys it by name
+        (`GlobalValues.code_ref_part`), what that code reads being the
+        code's own fold; but it also reads, of a function, its names, the
+        attributes stored on it (``scale.k``) and, read as ``mod.f``, the
+        globals it reads; of a library class, the attributes the helper
+        names (``lib.Class.ATTR``) and its name. Those are watched; the
+        rest of its world is not."""
+        shallow, in_module, self.shallow, self.in_module = self.shallow, self.in_module, False, False
+        try:
+            if t is types.FunctionType:
+                self.cells.append((v, (v.__name__, v.__qualname__)))
+                attrs = v.__dict__
+                self.watch(attrs, True)
+                for name in names:
+                    if name in attrs:
+                        self.value(attrs[name], names)
+                if in_module:
+                    target = cash_wrapped(v)
+                    target = jit_python_function(target) or target
+                    if type(target) is types.FunctionType and self._first(("one level", id(target)), target):
+                        self.shallow = True
+                        self._one_level(target)
+                return
+            if not (v.__flags__ & _HEAPTYPE):
+                return  # a builtin class: nothing in it changes
+            for k in v.__mro__:
+                if not (k.__flags__ & _HEAPTYPE):
+                    continue
+                if id(k) not in self.types:
+                    tag = _cw.world_watch_type(k)
+                    if tag is None:
+                        raise Ineligible("a class without a version tag")
+                    self.types[id(k)] = (k, tag)
+                held = vars(k)
+                for name in names:
+                    if name in held:
+                        self.value(held[name], names)
+        finally:
+            self.shallow, self.in_module = shallow, in_module
 
     def function(self, f: types.FunctionType) -> None:
         if is_cash_wrapper(f):
@@ -395,11 +477,16 @@ class _Scan:
             source = own_source(f)
         except Exception:  # noqa: BLE001 - no source: the bytecode names it reads
             source = ""
-        if source:
+        # The root's decorators ran once, at its definition: what they name
+        # now changes nothing its key reads. ``@cache(level=10)`` over a
+        # library function kept every call of it off this path, for a
+        # counter deep in the decorator's own machinery.
+        if source and f is not self.root:
             for line in source.splitlines():
                 if _DEF_LINE.match(line):
                     break
                 decorated.update(_IDENT.findall(line))
+        if source:
             self.names.update(_signature_names(source))
         self.names.update(own)
         self.names.update(decorated)
@@ -414,6 +501,15 @@ class _Scan:
                 self.value(g[name], names)
             elif type(b) is dict and name in b:
                 self.value(b[name], names)
+        # Defaults, closure and attributes are read in full: a default
+        # function's own reads are folded with the function's (`_default_parts`).
+        shallow, self.shallow = self.shallow, False
+        try:
+            self._held_by(f, names)
+        finally:
+            self.shallow = shallow
+
+    def _held_by(self, f: types.FunctionType, names: frozenset) -> None:
         for default in f.__defaults__ or ():
             self.value(default, names)
         kw = f.__kwdefaults__
@@ -433,7 +529,19 @@ class _Scan:
         for item in list(attrs.values()):
             self.value(item, names)
 
+    def _folds_class(self, cls: type) -> bool:
+        """Does a helper's globals fold read into *cls* (its data and its
+        methods' reads), rather than key it by name?"""
+        return is_user_class(cls, self.shallow_pkg) or is_user_code_object(cls)
+
     def klass(self, cls: type) -> None:
+        shallow, self.shallow = self.shallow, False
+        try:
+            self._klass(cls)
+        finally:
+            self.shallow = shallow
+
+    def _klass(self, cls: type) -> None:
         if not (cls.__flags__ & _HEAPTYPE):
             return  # a builtin class: nothing in it changes
         if type(cls) not in _METACLASSES:
@@ -487,6 +595,47 @@ _WATCHED_MODULES: set[int] = set()
 _WATCH_LOCK = threading.Lock()
 
 
+def world_epochs() -> tuple[int, int] | None:
+    """``(world epoch, cash epoch)``, or None without the fast path."""
+    if not ENABLED:
+        return None
+    return _world_epoch(), _cash_epoch()
+
+
+def watch_helper(helper: Any, root_module: str | None) -> tuple:
+    """Watch everything *helper*'s code names, as `scan` watches a cached
+    function's world, so that while the world epoch stands still nothing it
+    reads has moved; returns its cells (closure cells and what they held,
+    the function and its names), which no watcher sees and `cells_hold`
+    compares. Raises `Ineligible` for a helper of library code (its reads
+    are not watched here) or one whose world holds what no watcher sees."""
+    if type(helper) is not types.FunctionType or not own_code_is_user(helper, root_module):
+        raise Ineligible("a helper the scan does not watch")
+    s = _Scan(root_module)
+    s.shallow, s.shallow_pkg = True, own_package(helper)
+    s._first(id(helper), helper)
+    s.function(helper)
+    s.commit()
+    return tuple(s.cells)
+
+
+def cells_hold(cells: tuple) -> bool:
+    """Does every cell `watch_helper` returned still hold what it held?"""
+    for owner, held in cells:
+        if type(owner) is types.CellType:
+            try:
+                if owner.cell_contents is not held:
+                    return False
+            except ValueError:
+                return False
+        elif type(owner) is types.FunctionType:
+            if owner.__name__ is not held[0] or owner.__qualname__ is not held[1]:
+                return False
+        else:
+            return False
+    return True
+
+
 def _watch_modules() -> None:
     """Watch every module's namespace (keyed) and ``sys.modules`` (every
     change): a helper cash finds by name can live in any of them."""
@@ -516,7 +665,7 @@ def scan(spec: CachedFunction, registry: Any) -> tuple[tuple, tuple, list, _Fami
     reaches, and the classes whose family it checks (`_Scan.family`);
     raises `Ineligible`."""
     func, name = spec.func, spec.name
-    s = _Scan(getattr(func, "__module__", None))
+    s = _Scan(getattr(func, "__module__", None), func)
     s.value(func, frozenset())
     graph = registry.graph
     stack, visited = [name], {name}

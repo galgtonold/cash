@@ -21,6 +21,7 @@ from ._console import encodable
 from .analytics import AnalyticsManager
 from .backends import CacheBackend
 from .backends.factory import build_tiered
+from .code_digest import callable_identity
 from .config.resolve import get_config
 from .config.schema import CashConfig
 from .content_hashers import builtin_hash_family
@@ -219,6 +220,20 @@ def _in_kernel() -> bool:
     return getattr(get_ipython(), "kernel", None) is not None
 
 
+def _same_options(a: Any, b: Any) -> bool:
+    """Are two ``cache(...)`` options the same: the very objects, or equal
+    plain values (numbers, strings, lists of them)?"""
+    if a is b:
+        return True
+    if type(a) is not type(b):
+        return False
+    if isinstance(a, (list, tuple)):
+        return len(a) == len(b) and all(_same_options(x, y) for x, y in zip(a, b))
+    if isinstance(a, (int, float, str, bytes, datetime.timedelta)):
+        return a == b
+    return False
+
+
 class Cash:
     """A cache with its own configuration and backend.
 
@@ -343,6 +358,9 @@ class Cash:
         self._analytics: AnalyticsManager | None = None
 
         self._registry = FunctionRegistry()
+        #: name -> (the CachedFunction, its options, its wrapper) of the
+        #: last decoration (`Cash._decorated_before`).
+        self._decorations: dict[str, tuple[CachedFunction, tuple, Any]] = {}
         # The registry's tables, under the names Cash publishes them by.
         self.graph = self._registry.graph
         self.functions = self._registry.functions
@@ -669,6 +687,25 @@ class Cash:
                 ignore=ignore,
             )
 
+        options = (
+            depends_on,
+            dynamic_depends_on,
+            file_depends_on,
+            ttl,
+            cache_if,
+            chunk_max_items,
+            chunk_max_bytes,
+            strict,
+            assume_safe,
+            allow_random,
+            frozen,
+            key,
+            ignore,
+        )
+        again = self._decorated_before(func, options)
+        if again is not None:
+            return again
+
         cf = CachedFunction(
             func,
             func_key(func),
@@ -724,7 +761,42 @@ class Cash:
             except Exception:  # the first miss installs them anyway
                 logger.debug("[CORE] could not install the read watch at decoration", exc_info=True)
 
-        return self._wrappers.wrap(cf)
+        wrapper = self._wrappers.wrap(cf)
+        try:
+            self._decorations[func_name] = (cf, options, weakref.ref(wrapper))
+        except TypeError:
+            pass  # not weak-referenceable: decorated anew each time
+        return wrapper
+
+    def _decorated_before(self, func: Callable[..., Any], options: tuple) -> Callable[..., Any] | None:
+        """The wrapper an earlier ``cache(func, ...)`` of this very function,
+        with the same options, returned, while it is still the one
+        registered and the function's code is what it was; else None.
+
+        Libraries that cache through a factory (``cache(func)(args)``, the
+        joblib ``Memory.cache`` shape) decorate the same function on every
+        call. Registered anew each time, it re-ran the decoration's checks
+        and, being "a new function", dropped every remembered fast hit in
+        the process: a cheap call cost milliseconds.
+        """
+        try:
+            name = func_key(func)
+        except Exception:  # noqa: BLE001 - the ordinary path reports it
+            return None
+        held = self._decorations.get(name)
+        if held is None:
+            return None
+        cf, before, ref = held
+        wrapper = ref()
+        if (
+            wrapper is None
+            or cf.func is not func
+            or self._registry.cached.get(name) is not cf
+            or not _same_options(before, options)
+            or callable_identity(func) != self.source_hashes.get(name)
+        ):
+            return None
+        return wrapper
 
     def _check_key_function(self, cf: CachedFunction) -> None:
         """KEY-FUNCTION-IMPURE when reading the ``key=`` function finds it reads

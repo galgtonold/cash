@@ -44,6 +44,7 @@ import sysconfig
 
 from ._memo import SOURCE_FILES, LruMemo
 from ._paths import is_pseudo_filename, normalize_path
+from ._user_attrs import importable_attr
 
 __all__ = [
     "in_own_package",
@@ -372,9 +373,9 @@ def is_user_module(mod: object, own_pkg: str | None = None) -> bool:
     """Is *mod* a module of the user's (strict): inside *own_pkg*
     (`in_own_package`), or loaded from a file that `is_user_path` accepts?
     A module with no file has nothing on disk to judge, so not."""
-    if in_own_package(getattr(mod, "__name__", None), own_pkg):
+    if in_own_package(importable_attr(mod, "__name__"), own_pkg):
         return True
-    path = getattr(mod, "__file__", None)
+    path = importable_attr(mod, "__file__")
     return isinstance(path, str) and bool(path) and is_user_path(path)
 
 

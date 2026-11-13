@@ -635,7 +635,7 @@ class FunctionRegistry:
         self.populated.add(func_name)
         try:
             called_names, gaps = CodeAnalyzer.find_called_functions_and_gaps(
-                func, self.functions, include_references=True
+                func, self.functions, include_references=True, wrappers_only=True
             )
             for called in called_names:
                 if called != func_name:
