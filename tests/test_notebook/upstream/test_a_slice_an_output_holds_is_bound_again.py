@@ -193,7 +193,7 @@ def _runs_every_time(magics, cells: list[str], probe: str) -> None:
     [
         pytest.param("X = np.array([1, 'a', 2.0, None, 5, 6], dtype=object)", id="objects"),
         pytest.param(
-            "X = np.lib.format.open_memmap(path, mode='w+', dtype='float64', shape=(6,))\nX[:] = np.arange(6.0)",
+            "X = np.lib.format.open_memmap(path, mode='r+')\nX[:] = np.arange(6.0)",
             id="memmap",
         ),
     ],
@@ -201,8 +201,14 @@ def _runs_every_time(magics, cells: list[str], probe: str) -> None:
 def test_a_slice_with_no_content_digest_runs_every_time(cash_magics, clean_backend, tmp_path, make):
     """A slice of an array of objects (its bytes are addresses of objects
     that may change) or of a memmap (a subclass, whose memory is a file):
-    no digest checks it, so the entry is not stored."""
+    no digest checks it, so the entry is not stored.
+
+    The memmap opens the file made here with ``r+``: ``w+`` truncates it,
+    which Windows refuses (``EINVAL``) while the memmap of the run before
+    still maps it.
+    """
     path = str(tmp_path / "x.npy")
+    np.save(path, np.zeros(6))
     cells = [KEEPER, f"path = {path!r}", make, "X_train = X[:4]", FIT]
     probe = "X[0] = 9\nseen = [model.X_ is X_train, model.X_[0] == 9, list(model.X_)]"
     control = [KEEPER, "X = np.arange(6.0)", "X_train = X[:4]", FIT]
