@@ -96,6 +96,7 @@ __all__ = [
     "call_only_reads",
     "handed_through_items",
     "proven_unchanged",
+    "users_method_call",
 ]
 
 
@@ -1577,7 +1578,7 @@ def call_arguments(
     source = resolve_source or _live_user_function_source(user_ns)
     for call in statement_calls(tree, control_bodies=False):
         if users_callee(call.func, user_ns):
-            if isinstance(call.func, ast.Name):
+            if isinstance(call.func, ast.Name) or users_method_call(call, user_ns) is not None:
                 named_users_calls.append(call)
         elif not _asks_for_a_write(call, user_ns):
             continue
@@ -1789,12 +1790,14 @@ def _function_shape(
 def calls_with_lambdas(tree: ast.AST, *, control_bodies: bool = True) -> list[ast.Call]:
     """The calls *tree* makes as it runs (`statement_calls`), and those in
     the body of a ``lambda`` it hands to one of them (``map(lambda v:
-    push(h, v), xs)``)."""
+    push(h, v), xs)``) or calls at once (``(lambda: rng.shuffle(DECK))()``,
+    whose ``DECK`` was left unwatched)."""
     calls = statement_calls(tree, control_bodies=control_bodies)
     pending = list(calls)
     while pending:
         call = pending.pop()
-        for arg in [*call.args, *(kw.value for kw in call.keywords)]:
+        for arg in [call.func, *call.args, *(kw.value for kw in call.keywords)]:
+            # ``(lambda: rng.shuffle(DECK))()`` runs its body there and then.
             if isinstance(arg, ast.Lambda):
                 inner = statement_calls(arg.body)
                 calls.extend(inner)
@@ -1858,6 +1861,17 @@ def _call_handoffs(
             # method it holds is bound to changes, watched by the names that
             # hold it; by the container itself when none does.
             roots.update(_holders_of_bound(user_ns.get(holder.id), user_ns) or {holder.id})
+    method = users_method_call(call, user_ns, local)
+    if method is not None:
+        name, as_called = method
+        if name in seen:
+            cuts.append(True)
+        else:
+            callee = _readable_function(name, resolve_source)
+            if callee is not None:
+                callee_params, callee_free = _handoffs(callee, user_ns, resolve_source, seen | {name}, cuts)
+                roots.update(handed_to_params(as_called, callee, callee_params, iterated))
+                free.update(callee_free)
     if isinstance(func, ast.Attribute):
         if isinstance(func.value, ast.Name) and func.value.id not in local and func.value.id in user_ns:
             # ``H.push = functools.partial(list.append, LOG)`` then
@@ -2537,6 +2551,14 @@ def _handed_globals(
     out: set[str] = set()
     for call in calls:
         func = call.func
+        method = users_method_call(call, user_ns)
+        if method is not None:
+            name, as_called = method
+            fdef = _readable_function(name, resolve_source)
+            if fdef is not None:
+                params, free = function_handoffs(fdef, user_ns, resolve_source, frozenset({name}))
+                out |= free | handed_to_params(as_called, fdef, params, {})
+            continue
         if not isinstance(func, ast.Name):
             continue
         fdef = _readable_function(func.id, resolve_source)
@@ -2544,6 +2566,55 @@ def _handed_globals(
             continue
         out |= function_handoffs(fdef, user_ns, resolve_source, frozenset({func.id}))[1]
     return frozenset(out)
+
+
+def users_method_call(
+    call: ast.Call, user_ns: Mapping[str, Any], local: frozenset[str] | set[str] = frozenset()
+) -> tuple[str, ast.Call] | None:
+    """``(name, call)`` for a call of a method of a class of the user's:
+    ``m.go(SEED)`` with ``m`` an object of one, ``Mixer().go(SEED)`` or
+    ``Mixer.go(m, SEED)``. *name* is the dotted name its source resolves
+    by (``m.go``, ``Mixer.go``), *call* the call as the method's own
+    parameters see it, the receiver handed to ``self``. None for anything
+    else, a library's object above all (``clf.fit(X)``), which costs a
+    dictionary lookup and no source.
+
+    Its body is followed as a helper's is (`function_handoffs`): a method
+    that does ``random.Random(seed).shuffle(DECK)`` hands ``DECK`` on, and
+    a hit on ``Mixer().go(SEED)`` left ``DECK`` unshuffled after a restart."""
+    func = call.func
+    if not isinstance(func, ast.Attribute):
+        return None
+    receiver = func.value
+    constructed = isinstance(receiver, ast.Call) and isinstance(receiver.func, ast.Name)
+    head = receiver.func if constructed else receiver
+    if not isinstance(head, ast.Name) or head.id in local:
+        return None
+    value = user_ns.get(head.id, _ABSENT_NAME)
+    if value is _ABSENT_NAME or instance_of(value, types.ModuleType):
+        return None
+    is_class = issubclass(type(value), type)
+    if constructed and not is_class:
+        return None
+    cls = value if is_class else type(value)
+    try:
+        method = inspect.getattr_static(cls, func.attr)
+    except AttributeError:
+        return None
+    if not is_class and inspect.getattr_static(value, func.attr, None) is not method:
+        return None  # an instance's own attribute, not the class's method
+    bound = constructed or not is_class
+    if issubclass(type(method), staticmethod):
+        method, bound = method.__func__, False
+    elif issubclass(type(method), classmethod):
+        method, bound = method.__func__, True
+    if type(method) is not types.FunctionType or not is_user_code_file(method.__code__.co_filename):
+        return None
+    name = f"{head.id}.{func.attr}"
+    if not bound:
+        return name, call
+    as_called = ast.Call(func=func, args=[receiver, *call.args], keywords=call.keywords)
+    return name, as_called
 
 
 def handed_through_items(
