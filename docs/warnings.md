@@ -1270,10 +1270,14 @@ that code picks what it calls at run time: `getattr(module, name)()` with
 `name` in a variable, `eval`, a dynamic import. The message names the method,
 line and argument.
 
-**Why it matters.** cash cannot follow the call, so editing the function it
-lands on will not invalidate the entry. (The same line in the cached
-function's own body runs uncached instead:
-[KEY-UNTRACKABLE-DEP](#key-untrackable-dep).)
+**Why it matters.** The key cannot name the function the call lands on, so
+the call is treated as the same line in the cached function's own body is
+([KEY-UNTRACKABLE-DEP](#key-untrackable-dep)): on Python 3.12 and newer a
+lookup by name (`getattr`, `import_module`) is served only while a trace of
+what the call ran still holds; anything else, or any lookup on an older
+Python or with `CASH_TRACE=0`, runs uncached. `getattr(self, name)()` in a
+method of the argument's own class is not reported: every method of that
+class is in the key already.
 
 **What to do.** Call the function by name where you can. Otherwise list the
 candidates with `depends_on=[...]`.
