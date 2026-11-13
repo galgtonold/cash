@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import abc
 import collections
+import operator
 import sys
 import types
+from itertools import compress, repeat
 from typing import Any
 
 from ._type_memo import TypeMemo, mro_mark, mro_of, per_type, same_mro, type_key
@@ -314,6 +316,35 @@ _SLOT_READERS = (types.GetSetDescriptorType, types.MemberDescriptorType)
 _DICT_READERS: TypeMemo[bool] = TypeMemo()
 
 
+def has_dict_slot(kind: type) -> bool:
+    """Is the ``__dict__`` *kind*'s MRO finds first the slot Python gives
+    an instance (`own_dict`)? Read through ``type``'s own descriptors: a
+    metaclass's hook is not asked."""
+    slot = _DICT_READERS.get(type_key(kind))
+    if slot is None:
+        slot = False
+        for klass in mro_of(kind):
+            found = _CLASS_DICT(klass).get("__dict__")
+            if found is not None:
+                slot = type(found) in _SLOT_READERS
+                break
+        _DICT_READERS.put(kind, slot)
+    return slot
+
+
+def own_dicts(objs: list, kind: type) -> list[dict]:
+    """The attribute dicts `own_dict` gives of *objs*, all of class *kind*,
+    those it gives None for left out. Read a list at a time: a tree of a
+    few hundred thousand small nodes is read in C, not a call per node."""
+    if not objs or not has_dict_slot(kind):
+        return []
+    try:
+        found = list(map(object.__getattribute__, objs, repeat("__dict__")))
+    except Exception:  # noqa: BLE001 - one object's own slot: read one by one
+        return [d for d in map(own_dict, objs) if d is not None]
+    return list(compress(found, map(operator.is_, map(type, found), repeat(dict))))
+
+
 def own_dict(obj: Any, subclasses: bool = False) -> dict | None:
     """The attribute dict Python keeps for *obj*, read without running code
     of the object's, or None when it has none.
@@ -329,18 +360,7 @@ def own_dict(obj: Any, subclasses: bool = False) -> dict | None:
     is given only with *subclasses*: read it with ``dict``'s own methods
     (``dict.values(own)``), so none of the subclass's runs.
     """
-    kind = type(obj)
-    slot = _DICT_READERS.get(type_key(kind))
-    if slot is None:
-        slot = False
-        # Through ``type``'s own descriptors: a metaclass's hook is not asked.
-        for klass in mro_of(kind):
-            found = _CLASS_DICT(klass).get("__dict__")
-            if found is not None:
-                slot = type(found) in _SLOT_READERS
-                break
-        _DICT_READERS.put(kind, slot)
-    if not slot:
+    if not has_dict_slot(type(obj)):
         return None
     try:
         # The slot found first along the MRO is a data descriptor, so this
