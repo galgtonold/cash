@@ -28,8 +28,9 @@ def test_a_time_column_is_not_taken_out(monkeypatch):
     monkeypatch.setattr(identity_holders, "_pandas_column", counted)
     forget_flat_reads()
     assert identity_held_reason("frames", frames, {"frames": frames}) is None
-    # Of the columns, the 8-byte integers alone, once per frame.
-    assert taken.count("int64") == 200
+    # Of the columns, the 8-byte integers alone, and those straight from
+    # the frame's own arrays: none is made a column of its own.
+    assert "int64" not in taken
     assert not {"datetime64[ns]", "float64"} & set(taken)
 
 

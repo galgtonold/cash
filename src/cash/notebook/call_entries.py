@@ -343,7 +343,7 @@ class CallEntries:
             parts = library_parts_held(result)
             reached = self._reached(result, fn, root_held or parts != {})
             return (
-                not holds_part_of(result, (*sources, *reached))
+                not holds_part_of(result, (*sources, *reached), value_held=root_held)
                 and not (parts != {} and self._shares_library_parts(result, parts, (*sources, *reached)))
                 and not self._borrows(result, sources, reached, fn)
                 # Held by something else (*root_held*), and that holder is

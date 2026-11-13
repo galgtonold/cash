@@ -391,10 +391,20 @@ def _pandas_parts(pandas: Any, value: Any) -> list[Any]:
                 # Arrow's text straight from the frame's array.
                 for at in columns:
                     spelled = _arrow_text_numbers(arrays[at]) if arrays else None
+                    if spelled is None and arrays and _plain_array(arrays[at], dtype):
+                        # A NumPy column of objects: the very array the
+                        # column's ``to_numpy`` gives, without a column made
+                        # for it (``iloc``), most of the read of a small frame.
+                        spelled = arrays[at]
                     parts.append(spelled if spelled is not None else _pandas_column(value.iloc[:, at], dtype))
                 continue
             if not _may_keep_an_id(dtype):
                 continue  # not taken out of the frame only to be passed over
+            if arrays and all(_plain_array(arrays[at], dtype) for at in columns):
+                # The frame's own NumPy arrays of 8-byte integers, as they
+                # are: the same numbers ``iloc`` would copy out of them.
+                parts.extend(arrays[at] for at in columns)
+                continue
             column = _pandas_column(value.iloc[:, columns], dtype)
             if column is not None:
                 parts.append(column)
@@ -406,6 +416,13 @@ def _pandas_parts(pandas: Any, value: Any) -> list[Any]:
     if isinstance(value, pandas.Series):
         parts.append(value.index)
     return parts
+
+
+def _plain_array(array: Any, dtype: Any) -> bool:
+    """Whether *array*, a frame's own array for one column, is a 1-D NumPy
+    array of *dtype*: what reading the column through ``iloc`` would give
+    (as `_pandas_column` reads it) holds the same values."""
+    return _numpy_array(type(array)) and array.ndim == 1 and array.dtype == dtype
 
 
 def _may_keep_an_id(dtype: Any) -> bool:
@@ -879,6 +896,9 @@ class _Walk:
         #: or a function giving them.
         self._unseen: list[Any] = []
         self.budget = _MAX_SEEN
+        #: The ids queued for the next level that will count against the
+        #: budget, while `run` counts ahead (`_count_ahead`); None otherwise.
+        self._queued: set[int] | None = None
         self.refs: list[Any] = []
         self.numbers: set[int] = set()
         self.arrays: list[Any] = []
@@ -901,6 +921,14 @@ class _Walk:
     def run(self, roots: list[Any]) -> None:
         level = list(roots)
         levels = self.levels
+        # The value's own walk counts what it queued for the next level
+        # (`_count_ahead`): each of those objects costs the budget once when
+        # opened, so once they outnumber what is left of it, the walk is cut
+        # all the same, and stops here. A list of 87,000 small frames was
+        # opened frame by frame, every text column read, to pass the budget
+        # on their parts a level down; counted ahead, it stops a third of
+        # the way through the frames with the same answer.
+        ahead = levels is None and not self.quiet
         while level:
             if levels is not None:
                 if levels <= 0:
@@ -908,14 +936,38 @@ class _Walk:
                     return
                 levels -= 1
             into: list[Any] = []
+            queued: set[int] = set()
+            self._queued = queued if ahead else None
             for item in level:
+                start = len(into)
                 self._open(item, into)
                 if self.cut:
                     # Past the budget the answer is known: the rest of the
                     # level was only counted (a list of 1.3 million
                     # Timedeltas was, six times over the budget).
                     return
+                if ahead and len(into) > start and self._count_ahead(into, start, queued):
+                    self.cut = True
+                    return
             level = into
+        self._queued = None
+
+    def _count_ahead(self, into: list[Any], start: int, queued: set[int]) -> bool:
+        """Add to *queued* the ids of the objects *into* got from *start*
+        on that opening them will count against the budget: neither a leaf
+        nor seen already. True when they are more than the budget has left:
+        the walk is certain to be cut a level down. An object queued that
+        this level opens before then is taken out of *queued* when seen
+        (`_open`), so none is counted that the budget would not pay for."""
+        seen = self.seen
+        for item in into[start:]:
+            kind = type(item)
+            if kind is int or kind is str or kind in _LEAVES:
+                continue
+            key = id(item)
+            if key not in seen:
+                queued.add(key)
+        return len(queued) > self.budget
 
     def _open(self, item: Any, into: list[Any]) -> None:
         kind = type(item)
@@ -935,6 +987,8 @@ class _Walk:
         if key in self.seen:
             return
         self.seen.add(key)
+        if self._queued:
+            self._queued.discard(key)
         self.budget -= 1
         if self.budget < 0:
             self.cut = True
