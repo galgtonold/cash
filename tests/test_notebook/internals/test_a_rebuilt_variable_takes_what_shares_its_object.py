@@ -44,3 +44,69 @@ def test_a_holder_a_cell_makes_is_rebuilt_with_it():
     edges = {"w": {"y"}, "y": {"w"}}
     ns = {"w": 0, "y": 0}
     assert _closed(edges, {"w"}, ns, {"w"}, cells=["w = [1]", "y = (w, 2)"]) == {"w", "y"}
+
+
+def _restore_check(edges, kept, user_ns, needed=(), resolved=()):
+    from cash.notebook.upstream.mismatch_classifier import _BackwardScan
+
+    state = TrackingState()
+    state.derivation_edges.update(edges)
+    fake = SimpleNamespace(tracking_state=state, shell=SimpleNamespace(user_ns=user_ns))
+    scan = _BackwardScan(needed=set(needed), resolved=set(resolved))
+    return MismatchClassifier._restore_keeps_sharing(fake, kept, scan)
+
+
+def test_a_restore_giving_a_kept_variable_a_new_object_needs_all_that_shares_it():
+    """``full``'s entry stores ``pre`` and ``lin`` with it; ``late``, made
+    below ``full`` on ``pre`` and not rebuilt, would keep the old ``pre``."""
+    edges = {"pre": {"full", "lin", "late"}, "full": {"pre"}, "lin": {"pre"}, "late": {"pre"}}
+    ns = dict.fromkeys(["pre", "full", "lin", "late"], 0)
+    kept = {"pre", "lin"}
+    assert not _restore_check(edges, kept, ns)({"pre", "lin"}, {"full"})
+    assert kept == {"pre", "lin"}
+    assert _restore_check(edges, kept, ns, resolved={"late"})({"pre", "lin"}, {"full"})
+    # Restored, they have new objects: no longer kept live.
+    assert kept == set()
+
+
+def test_a_restore_storing_no_kept_variable_is_taken():
+    assert _restore_check({"a": {"b"}}, {"pre"}, {"a": 0, "b": 0})({"b"}, {"a"})
+
+
+def _plan_fallback(trace, scheduled, restored, kept, edges, user_ns):
+    from cash.notebook.upstream.reexecution_planner import ReexecutionPlanner
+
+    state = TrackingState()
+    state.derivation_edges.update(edges)
+    fake = SimpleNamespace(tracking_state=state, shell=SimpleNamespace(user_ns=user_ns))
+    return ReexecutionPlanner.rerun_what_changes_kept_sharers(fake, scheduled, trace, restored, kept)
+
+
+def _entry(code, outputs):
+    return SimpleNamespace(stmt_code=code, outputs=set(outputs), inputs=set())
+
+
+def test_a_plan_changing_a_kept_variable_rebuilds_it_and_what_holds_it():
+    """A later pass scheduled ``pre.fit(d)``: ``pre`` and ``lin``, kept live,
+    are made again from their bindings, and ``full``'s restore, which bound
+    the old ``pre``, runs instead."""
+    trace = [
+        _entry("pre = Pre()", {"pre"}),
+        _entry("lin = Pipe([pre])", {"lin"}),
+        _entry("lin.fit(d)", {"lin", "pre"}),
+        _entry("full = Pipe([pre])", {"full"}),
+        _entry("pre.fit(d)", {"pre", "lin", "full"}),
+    ]
+    edges = {"pre": {"lin", "full"}, "lin": {"pre"}, "full": {"pre"}}
+    ns = dict.fromkeys(["pre", "lin", "full"], 0)
+    kept = {"pre", "lin"}
+    restored = [{"code": "full = Pipe([pre])", "restored_vars": ["full"], "position": 3}]
+    assert _plan_fallback(trace, [4], restored, kept, edges, ns) == [0, 1, 2, 3, 4]
+    assert kept == set()
+
+
+def test_a_plan_leaving_kept_variables_alone_is_unchanged():
+    trace = [_entry("pre = Pre()", {"pre"}), _entry("full = Pipe([pre])", {"full"})]
+    kept = {"pre"}
+    assert _plan_fallback(trace, [1], [], kept, {"pre": {"full"}}, {"pre": 0, "full": 0}) == [1]
+    assert kept == {"pre"}

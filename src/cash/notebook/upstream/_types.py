@@ -372,6 +372,16 @@ class ClassificationResult:
     """Broken names a cell that raised part way left, or built from them
     (``SimulationResult.vars_left_by_failed_runs``): kept as they are, and
     warned about (``NOTEBOOK-FAILED-CELL``)."""
+    kept_sharers: set[str] = field(default_factory=set)
+    """Names sharing an object with a rebuilt one that the rebuild leaves
+    live (`MismatchClassifier._rebuild_what_shares_a_rebuilt_object`): made
+    and last changed above every statement the rebuild can re-run, and as
+    the cells above leave them. The rebuilt name, made again, holds their
+    live objects. A restore that would give one of them a new object is
+    taken only when every name sharing with it is rebuilt too
+    (`MismatchClassifier.backward_scan_pass`), and a plan that re-runs a
+    statement changing one rebuilds it after all
+    (`ReexecutionPlanner.rerun_what_changes_kept_sharers`)."""
 
 
 class ReexecutionPlan(NamedTuple):

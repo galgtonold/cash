@@ -23,6 +23,7 @@ from ..call_key import TooMuchToLookThrough, holds_a_closure_with_state
 from ..consumables import is_consumable_unrestorable, is_write_stream
 from ..held_functions import defined_again_held
 from ..stateful_carriers import carrier_kind_from_producer, stateful_carrier_kind
+from ..statement.derivation_edges import shared_object_partners
 from ..statement.mutation_routing import functions_in
 from ._types import CellCheck, ClassificationResult, ReexecutionPlan, SimulationResult, latest_producer
 from .carrier_fills import fills_carrier
@@ -253,6 +254,12 @@ class ReexecutionPlanner:
             stmts_to_run_indices = self._reopen_drawn_inputs(
                 stmts_to_run_indices,
                 simulation_trace,
+            )
+            stmts_to_run_indices = self.rerun_what_changes_kept_sharers(
+                stmts_to_run_indices,
+                simulation_trace,
+                restored_statements_info,
+                result.kept_sharers,
             )
             if len(stmts_to_run_indices) == before:
                 break
@@ -617,6 +624,59 @@ class ReexecutionPlanner:
             cell_no=cell_no,
             planned=True,
         )
+
+    def rerun_what_changes_kept_sharers(
+        self,
+        stmts_to_run_indices: list[int],
+        simulation_trace: list,
+        restored: list[dict],
+        kept: set[str],
+    ) -> list[int]:
+        """Rebuild a variable the classifier kept live beside a rebuilt one
+        it shares an object with (``ClassificationResult.kept_sharers``)
+        after all, when a statement of the plan changes it.
+
+        The classifier keeps it only when nothing the backward scan can
+        re-run changes it; a later pass of the plan (a file writer, a
+        producer brought in for an input) may still schedule one that does.
+        Changed again on top of the change it already had, it would hold
+        what no Run All gives. Then it is made again as the full cascade
+        made it: every statement from its last binding on that changes it,
+        each statement restored with a variable sharing an object with it
+        re-run instead (a restore anchored it to the old object), and so on
+        for every kept variable those change. *kept* loses the names."""
+        if not kept or not stmts_to_run_indices:
+            return stmts_to_run_indices
+        scheduled = set(stmts_to_run_indices)
+        changed = {name for i in scheduled for name in simulation_trace[i].outputs or () if name in kept}
+        if not changed:
+            return stmts_to_run_indices
+        edges = self.tracking_state.derivation_edges
+        user_ns = self.shell.user_ns
+        while changed:
+            kept -= changed
+            logger.debug("[UPSTREAM] %s, kept live, is changed by the plan. Rebuilding it.", sorted(changed))
+            reach = set(changed)
+            todo = list(changed)
+            while todo:
+                for partner in shared_object_partners(edges, todo.pop()):
+                    if partner not in reach and partner in user_ns:
+                        reach.add(partner)
+                        todo.append(partner)
+            for name in changed:
+                start = 0
+                for i, entry in enumerate(simulation_trace):
+                    if name in (entry.outputs or ()) and name in CodeAnalyzer.analyze_code_block(entry.stmt_code)[1]:
+                        start = i
+                for i in range(start, len(simulation_trace)):
+                    if name in (simulation_trace[i].outputs or ()):
+                        scheduled.add(i)
+            for info in restored:
+                position = info.get("position")
+                if isinstance(position, int) and reach & set(info.get("restored_vars") or ()):
+                    scheduled.add(position)
+            changed = {name for i in scheduled for name in simulation_trace[i].outputs or () if name in kept}
+        return sorted(scheduled)
 
     def _reopen_drawn_inputs(self, stmts_to_run_indices: list[int], simulation_trace: list) -> list[int]:
         """Schedule the statement that made each open file, generator or
