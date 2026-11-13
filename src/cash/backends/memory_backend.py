@@ -26,7 +26,7 @@ from cash.exceptions import CacheBackendError
 from .. import _native, _plain_data, _weak, cost_model, held_reads, kept_state, stored_pickle
 from .._lazy_module import LazyModule
 from ..cost_model import GENERIC_FAMILY
-from ..sizing import memory_footprint, pickled_size_estimate
+from ..sizing import memory_footprint, pickled_size_estimate, slot_values
 from ..source_reading import read_code_file
 from ..value_types import IMMUTABLE_PRIMS
 from . import block_digests, frame_sharing, heap_blocks, iterative_copy, set_order, shared_blocks
@@ -293,15 +293,24 @@ def _at_least(value: Any, nbytes: int, nodes: int = 2048, items: int = 64) -> bo
     *items* from each container -- take at least *nbytes* themselves
     (``sys.getsizeof``)? Cheap whatever *value*'s size: a graph's adjacency
     dict alone is a megabyte at 40,000 nodes. True means big; False only
-    that these few objects are not."""
+    that these few objects are not.
+
+    True too when more than *nodes* objects are reached: a graph of many
+    small objects (a trie of 250,000 slotted nodes) is big by their number,
+    which these few never add up to. Kept as its pickle bytes, it is pickled
+    once, where its copy was a pickle round trip with a Python call per
+    object and its size a walk of every object; one under a megabyte after
+    all costs one pickle that its copy, a round trip, makes anyway."""
     total = 0
     seen: set[int] = set()
     level = [value]
     while level and len(seen) < nodes:
         found: list = []
         for obj in level:
-            if id(obj) in seen or len(seen) >= nodes:
+            if id(obj) in seen:
                 continue
+            if len(seen) >= nodes:
+                return True
             seen.add(id(obj))
             kind = type(obj)
             if kind.__sizeof__ is not object.__sizeof__ and kind not in _SIZED_CHEAPLY:
@@ -320,6 +329,7 @@ def _at_least(value: Any, nbytes: int, nodes: int = 2048, items: int = 64) -> bo
                 attrs = own_dict(obj)
                 if attrs is not None:
                     found.extend(itertools.islice(attrs.values(), items))
+                found.extend(slot_values(obj))
         level = found
     return False
 

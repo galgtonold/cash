@@ -767,6 +767,13 @@ def _attr_values(obj: Any) -> list:
     """The values in *obj*'s ``__dict__`` and ``__slots__``."""
     attrs = own_dict(obj)
     values = list(attrs.values()) if attrs is not None else []
+    values.extend(slot_values(obj))
+    return values
+
+
+def slot_values(obj: Any) -> list:
+    """The values set in *obj*'s ``__slots__``, read as pickle reads them."""
+    values = []
     for name in slot_names(type(obj)):
         value = slot_value(obj, name)
         if value is not None:
