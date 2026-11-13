@@ -29,8 +29,12 @@ pytestmark = pytest.mark.core
 GLOBAL_ROWS: list = []
 
 
+_EXPORTS = {"a.csv": {"qty": [1, 2]}}
+
+
 def read_export(path):
-    return {"qty": [1, 2]}
+    # What the module keeps: anyone's object, not one made for the caller.
+    return _EXPORTS[path]
 
 
 def _issues(fn):

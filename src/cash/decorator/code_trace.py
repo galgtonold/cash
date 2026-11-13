@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import builtins
 import dis
+import functools
 import hashlib
 import importlib
 import os
@@ -169,7 +170,7 @@ def _unit_class() -> type:
         """What one traced call saw: `Unit`'s fields, its lookups by name
         and the items of what was served inside it."""
 
-        __slots__ = ("cached_codes", "callees", "lookups", "lookups_followed")
+        __slots__ = ("cached_codes", "callees", "lookups", "lookups_followed", "sites")
 
         def __init__(self, kind: str) -> None:
             super().__init__(kind)
@@ -184,6 +185,10 @@ def _unit_class() -> type:
             #: A notebook statement's: its own lookups by a string are ones
             #: its trace follows (``cache_key.lookups_followed``).
             self.lookups_followed = False
+            #: A traced call's: code of a function that writes through its
+            #: parameters -> ``(caller code, offset of the call)`` for each
+            #: start of it (`_Recorder.site_codes`, `cash.analysis.out_arguments`).
+            self.sites: dict[types.CodeType, set[tuple[types.CodeType, int]]] = {}
 
         def absorb(self, inner: Any) -> None:
             super().absorb(inner)
@@ -197,6 +202,7 @@ TraceUnit: Any = None
 
 
 def _recorder_class() -> type:
+    from ..analysis.out_arguments import writes_through_parameters
     from ..install_paths import is_user_path, known_user_path
     from ..tracking import trace_recorder as rec
 
@@ -243,6 +249,11 @@ def _recorder_class() -> type:
             # Code that is gone cannot run again, so nothing it would have
             # recorded is lost; code still alive stays.
             self.user_codes: weakref.WeakKeyDictionary[types.CodeType, int] = _weak.WeakKeyDictionary()
+            #: The user's top-level functions that write through their
+            #: parameters (`out_arguments.writes_through_parameters`): their
+            #: start event stays armed while a call is traced, and each start
+            #: records where it was called from (`TraceUnit.sites`).
+            self.site_codes: weakref.WeakSet[types.CodeType] = _weak.WeakSet()
             self.rearm: set[types.CodeType] = set()
             #: The user's code that looks names up by a string in its own
             #: globals (`string_lookups`): what it calls is recorded for a
@@ -263,7 +274,11 @@ def _recorder_class() -> type:
             mon.register_callback(self.tool, ev.PY_RESUME, self._guarded(self._on_resume))
             mon.register_callback(self.tool, ev.CALL, self._guarded(self._on_call))
             mon.register_callback(self.disc, ev.PY_START, self._guarded(self._discover))
-            mon.register_callback(self.disc, ev.PY_RESUME, self._guarded(self._discover))
+            # A partial adds no Python frame: `_discover` reads the watched
+            # frame at `WATCHED_FRAME`.
+            mon.register_callback(
+                self.disc, ev.PY_RESUME, self._guarded(functools.partial(self._discover, resumed=True))
+            )
             mon.set_events(self.disc, ev.PY_START | ev.PY_RESUME)
             return True
 
@@ -314,9 +329,14 @@ def _recorder_class() -> type:
                 and mon.get_events(self.disc) == mon.events.PY_START | mon.events.PY_RESUME
             )
 
-        def _discover(self, code: types.CodeType, offset: int) -> Any:
+        def _discover(self, code: types.CodeType, offset: int, *, resumed: bool = False) -> Any:
             """First sight of *code*: arm local events on it when it is the
-            user's (or starts a process pool), and record this run of it."""
+            user's (or starts a process pool), and record this run of it.
+
+            Told a start from a resume by the event, not by *offset*: a
+            generator's ``PY_START`` comes from the ``RESUME`` after its
+            ``RETURN_GENERATOR``, at a non-zero offset, so a generator a call
+            made and ran itself read as one it resumed (`generator_resumed`)."""
             filename = code.co_filename
             if filename.endswith(_PYPLOT_FILES):
                 # pyplot's own code: seen as it runs, once per unit, to tell
@@ -363,8 +383,12 @@ def _recorder_class() -> type:
                 events |= mon.events.CALL
             self.user_codes[code] = events
             mon.set_local_events(self.tool, code, events)
+            if not pool and writes_through_parameters(code):
+                self.site_codes.add(code)
+                if self.active:
+                    self._note_site(code, frame)
             if self.active or self.stack:
-                if code.co_flags & rec.RESUMABLE and offset:
+                if resumed and code.co_flags & rec.RESUMABLE:
                     self._seen_resume(code, g, kind)
                 else:
                     self._seen_start(code, frame, g, kind)
@@ -441,6 +465,14 @@ def _recorder_class() -> type:
             inside_collection = collecting()
             if not inside_collection:
                 self.rearm.add(code)
+            site = self.active and code in self.site_codes
+            if site:
+                # Every start, not the first one: where each was called
+                # from decides what its writes change.
+                frame = sys._getframe(rec.WATCHED_FRAME)
+                self._note_site(code, frame)
+                if not self.stack and all(code in u.codes for u in self.active):
+                    return None
             if self.active or self.stack:
                 frame = sys._getframe(rec.WATCHED_FRAME)
                 g = frame.f_globals
@@ -450,7 +482,13 @@ def _recorder_class() -> type:
                 self._seen_start(code, frame, g, kind)
             # Code a garbage collection runs (a ``__del__``) is left armed: a
             # run of it by the unit's own code is told apart (`Unit.collected`).
-            return None if inside_collection else DISABLE
+            return None if inside_collection or site else DISABLE
+
+        def _note_site(self, code: types.CodeType, frame: Any) -> None:
+            caller = frame.f_back
+            site = (caller.f_code, caller.f_lasti) if caller is not None else (None, -1)
+            for unit in self.active:
+                unit.sites.setdefault(code, set()).add(site)
 
         def _seen_start(self, code: types.CodeType, frame: Any, g: dict, kind: tuple) -> None:
             if own_work_inside():
@@ -1031,27 +1069,140 @@ def _chain_digest(module: str, chain: str) -> str | None:
     return _digest(obj)
 
 
-def _refusal_in(functions: Iterable[Any]) -> str | None:
+def _refusal_in(functions: Iterable[Any], unit: Any = None) -> str | None:
     """Why a function the call ran makes its result unsafe to serve: a
     finding a hit would skip (a side effect, a clock read, eval), or a
-    random generator of its own it draws from."""
+    random generator of its own it draws from. A finding in a helper that
+    did not run (`_helpers_not_run`), and one on a parameter every caller
+    handed an object it made itself (`_OutArguments`), is not one."""
     from ..analysis.purity_analyzer import get_analyzer
     from ..tracking.randomness.state import capture_reachable_carrier_states
 
-    seen: set[int] = set()
-    for fn in functions:
-        if id(fn) in seen:
-            continue
-        seen.add(id(fn))
+    out = _OutArguments(unit)
+    for fn in dict.fromkeys(functions):
         report = get_analyzer().analyze_reached(fn)
         if report.unwalkable:
             return f"it ran {fn.__qualname__}, whose helpers cash could not all walk"
+        idle = _helpers_not_run(report, unit)
         for issue in report.issues:
             if issue.kind in _REFUSED_KINDS or (issue.kind == ISSUE_UNTRACKABLE_DEP and not is_name_lookup(issue)):
+                if issue.where in idle or out.excuses(issue):
+                    continue
                 return f"it ran {fn.__qualname__}, which {issue.description} (line {issue.line})"
         if capture_reachable_carrier_states(fn):
             return f"it ran {fn.__qualname__}, which can draw from a random generator it holds"
     return None
+
+
+def _helpers_not_run(report: Any, unit: Any) -> set[str]:
+    """The names findings go under (`qualname_of`) of the helpers *report*
+    walked that did not run in the call: what a hit skips is what ran, and
+    a helper of the user's that ran is in the trace (`Unit.codes`). The
+    same arguments take the same path while the trace's items hold, so a
+    finding in a branch the call did not take is one no hit of it skips;
+    a call that takes it records it and is judged on it."""
+    if unit is None:
+        return set()
+    from ..analysis.helper_code import qualname_of
+
+    codes = unit.codes
+    idle: set[str] = set()
+    ran: set[str] = set()
+    for ref, walked in getattr(report, "walked_code", ()) or ():
+        fn = ref()
+        if type(fn) is not types.FunctionType or not _user_module(sys.modules.get(fn.__module__)):
+            continue
+        name = qualname_of(fn)
+        (ran if any(c in codes for c in walked) else idle).add(name)
+    return idle - ran
+
+
+class _OutArguments:
+    """Which findings on a parameter the call sites a traced call ran
+    excuse (`cash.analysis.out_arguments`): the trace recorded where each
+    function that writes through its parameters was called from
+    (`TraceUnit.sites`)."""
+
+    def __init__(self, unit: Any) -> None:
+        self.unit = unit
+        self._by_name: dict[str, Any] | None = None
+        self._judged: dict[tuple[str, str], bool] = {}
+
+    def _functions(self) -> dict[str, Any]:
+        """``qualname_of(fn) -> fn`` for each function with recorded sites."""
+        if self._by_name is None:
+            from ..analysis.helper_code import qualname_of
+
+            self._by_name = {}
+            for code in getattr(self.unit, "sites", {}) if self.unit is not None else ():
+                fn = self._function_of(code)
+                if fn is not None:
+                    self._by_name[qualname_of(fn)] = fn
+        return self._by_name
+
+    def _function_of(self, code: types.CodeType) -> Any:
+        from ..tracking.trace_items import resolve
+
+        where = self.unit.codes.get(code)
+        if where is None:
+            return None
+        g, module = where
+        _rc, fn, _owner = resolve(module, code.co_qualname, g, module)
+        return fn if type(fn) is types.FunctionType and fn.__code__ is code else None
+
+    def excuses(self, issue: Any) -> bool:
+        from ..analysis.out_arguments import mutated_parameter
+
+        if self.unit is None:
+            return False
+        param = mutated_parameter(issue)
+        if param is not None:
+            return self._excused(issue.where, param)
+        if issue.kind == ISSUE_DISCARDED_CALL:
+            return self._discard_excused(issue)
+        return False
+
+    def _excused(self, where: str, param: str) -> bool:
+        key = (where, param)
+        if key not in self._judged:
+            self._judged[key] = self._judge(where, param)
+        return self._judged[key]
+
+    def _judge(self, where: str, param: str) -> bool:
+        from ..analysis.out_arguments import site_hands_own
+
+        fn = self._functions().get(where)
+        if fn is None:
+            return False
+        sites = self.unit.sites.get(fn.__code__)
+        if not sites:
+            return False
+        for caller_code, lasti in sites:
+            caller = self._function_of(caller_code)
+            if caller is None or not site_hands_own(fn, param, caller, caller_code, lasti):
+                return False
+        return True
+
+    def _discard_excused(self, issue: Any) -> bool:
+        """``fill(x, buf)`` drops what ``fill`` returns: what such a call is
+        for is its effect. Excused when that function's every finding on a
+        parameter is excused; any other finding of its own is reported as
+        itself."""
+        from ..analysis.out_arguments import mutated_parameter
+        from ..analysis.purity_analyzer import get_analyzer
+
+        text = getattr(issue, "description", "")
+        if not (text.startswith("discards return of ") and text.endswith("(...)")):
+            return False
+        name = text[len("discards return of ") : -len("(...)")]
+        for qualname, fn in self._functions().items():
+            if fn.__name__ != name:
+                continue
+            own = [i for i in get_analyzer().analyze_reached(fn).issues if i.where == qualname]
+            params = [mutated_parameter(i) for i in own]
+            if params and all(p is not None and self._excused(qualname, p) for p in params):
+                return True
+        return False
 
 
 def build(unit: Any, static_codes: set[types.CodeType], *, strict: bool = True) -> tuple[list[tuple] | None, str]:
@@ -1066,7 +1217,7 @@ def build(unit: Any, static_codes: set[types.CodeType], *, strict: bool = True) 
         with call_starts(unit.cells):
             b = _Build(unit, static_codes)
             items = b.run()
-        why = _refusal_in(b.functions) if strict else None
+        why = _refusal_in(b.functions, unit) if strict else None
         if why is not None:
             return None, why
         return items, ""
