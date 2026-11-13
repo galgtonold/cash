@@ -220,6 +220,17 @@ CAPTURE_WATCH: "contextvars.ContextVar[dict | None]" = contextvars.ContextVar("_
 REACHED_TTLS: "contextvars.ContextVar[list | None]" = contextvars.ContextVar("_cash_reached_ttls", default=None)
 
 
+#: The run-time lookups by name (KEY-UNTRACKABLE-DEP findings) in code the
+#: values a key build reaches carry -- an argument, a data global, a capture
+#: (`CodeArgs.carrier_lookups`) -- which no key part covers: set by
+#: `KeyBuilder.resolve`, None otherwise. The call is then served only on a
+#: trace of what it ran, or runs uncached, as the same line in the cached
+#: function's own body does. A remembered fold (`state_memo`,
+#: `helper_fold_memo`, a held table) leaves the lookups it found here again
+#: on reuse, as it leaves its watch and ledger.
+CARRIER_LOOKUPS: "contextvars.ContextVar[list | None]" = contextvars.ContextVar("_cash_carrier_lookups", default=None)
+
+
 #: `ResultStore.refusal` was not handed a capture watch (the streaming path).
 NO_WATCH = object()
 

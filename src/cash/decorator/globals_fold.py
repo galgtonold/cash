@@ -21,7 +21,7 @@ from ..effects import environment_component
 from ..exceptions import CashImpurityWarning
 from ..jit_functions import jit_python_function
 from . import walk_scope
-from .call_state import CAPTURE_WATCH, KeyBuildFailed
+from .call_state import CAPTURE_WATCH, CARRIER_LOOKUPS, KeyBuildFailed
 from .code_tables import CodeTable
 from .global_reads import reach_pass
 from .global_values import UNHASHABLE_GLOBAL_FIX
@@ -79,8 +79,9 @@ class _ReadsFold:
 class _HeldTable:
     """What `GlobalsFold.held_value_code_parts` built for a table of plain
     functions, and what building it left behind -- the drift guard's watch,
-    the ledger, the functions folded this key build -- to be left again when
-    the snapshot still holds."""
+    the ledger, the functions folded this key build, the run-time lookups by
+    name its code makes (`CARRIER_LOOKUPS`) -- to be left again when the
+    snapshot still holds."""
 
     table: CodeTable
     owner_code: Any
@@ -90,6 +91,7 @@ class _HeldTable:
     watch: dict
     ledger: dict
     folded: dict
+    lookups: tuple
     #: The digest of *parts* when there is no environment read, once taken
     #: (`GlobalsFold.captured_code_digest`).
     digest: str | None = None
@@ -102,14 +104,16 @@ class _Taken:
     watch: dict | None
     ledger: dict | None
     folded: dict | None
+    lookups: int
 
     @classmethod
     def before(cls, folded: dict | None) -> _Taken:
-        watch, ledger = CAPTURE_WATCH.get(), STATE_LEDGER.get()
+        watch, ledger, lookups = CAPTURE_WATCH.get(), STATE_LEDGER.get(), CARRIER_LOOKUPS.get()
         return cls(
             None if watch is None else dict(watch),
             None if ledger is None else dict(ledger),
             None if folded is None else dict(folded),
+            len(lookups) if lookups is not None else 0,
         )
 
     def after(
@@ -124,6 +128,7 @@ class _Taken:
             _added(self.watch, CAPTURE_WATCH.get()),
             _added(self.ledger, STATE_LEDGER.get()),
             _added(self.folded, folded),
+            tuple((CARRIER_LOOKUPS.get() or [])[self.lookups :]),
         )
 
 
@@ -146,6 +151,9 @@ def _replay(entry: _HeldTable, folded: dict | None) -> None:
         ledger.update(entry.ledger)
     if folded is not None and entry.folded:
         folded.update(entry.folded)
+    lookups = CARRIER_LOOKUPS.get()
+    if lookups is not None and entry.lookups:
+        lookups.extend(entry.lookups)
 
 
 class GlobalsFold:
@@ -504,13 +512,24 @@ class GlobalsFold:
             _replay(entry, folded)
             return list(entry.parts), set(entry.env), entry
         table = self._held_table(v, owner_code, folded)
-        before = _Taken.before(folded) if table is not None else None
-        env: set = set()
-        parts = build(env)
-        if table is None or before is None:
+        # The lookups are collected for the entry whether or not this build
+        # does (`explain()` does not): it may be replayed into one that does.
+        own_lookups = None
+        if table is not None and CARRIER_LOOKUPS.get() is None:
+            own_lookups = CARRIER_LOOKUPS.set([])
+        try:
+            before = _Taken.before(folded) if table is not None else None
+            env: set = set()
+            parts = build(env)
+            entry = None
+            if table is not None and before is not None:
+                entry = before.after(table, owner_code, self._mutations.of(owner_code, "global"), parts, env, folded)
+        finally:
+            if own_lookups is not None:
+                CARRIER_LOOKUPS.reset(own_lookups)
+        if entry is None:
             self._held_tables.pop(memo_key, None)
             return parts, env, None
-        entry = before.after(table, owner_code, self._mutations.of(owner_code, "global"), parts, env, folded)
         self._held_tables[memo_key] = entry
         return parts, env, entry
 

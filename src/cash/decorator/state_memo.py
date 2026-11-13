@@ -38,8 +38,9 @@ draw), an environment variable or a file's content.
 
 What a fold leaves behind besides its digest -- the stages of the state
 chain, the ledger that names each part for a miss's explanation, what the
-drift guard watches, the code it folded, the TTLs and digests of the cached
-functions it reached, the classes and globals it folded for the rest of the
+drift guard watches, the code it folded, the run-time lookups by name in
+the code a data global carries (`CARRIER_LOOKUPS`), the TTLs and digests of
+the cached functions it reached, the classes and globals it folded for the rest of the
 key, the cached functions its walk touched -- is captured whole: the fold
 runs once into empty containers of its own (`_sandboxed`), and what they hold
 afterwards is written into the caller's, on the first call as on every
@@ -66,7 +67,7 @@ from ..code_swaps import FOLDED_CODE, FoldedCode
 from ..dependency_state import OUTSIDE_READS_FOLDED, STATE_LEDGER
 from ..effects import ENVIRONMENT_READS_FOLDED
 from . import hit_memo, walk_scope
-from .call_state import CAPTURE_WATCH, REACHED_TTLS
+from .call_state import CAPTURE_WATCH, CARRIER_LOOKUPS, REACHED_TTLS
 from .class_data import CLASSES_FOLDED
 from .global_values import KEY_BUILD_DIGESTS
 from .globals_fold import READS_FOLDED
@@ -208,6 +209,7 @@ class _Capture:
     touched: frozenset
     low: int
     members: frozenset
+    lookups: tuple
 
 
 def _mode(name: str, note: bool) -> tuple | None:
@@ -223,7 +225,8 @@ def _mode(name: str, note: bool) -> tuple | None:
     digests = KEY_BUILD_DIGESTS.get()
     classes = CLASSES_FOLDED.get()
     reads = READS_FOLDED.get()
-    if watch or ttls or digests or classes or reads:
+    lookups = CARRIER_LOOKUPS.get()
+    if watch or ttls or digests or classes or reads or lookups:
         return None
     if folded is not None and (folded.owners or folded.reports):
         return None
@@ -256,6 +259,7 @@ def _mode(name: str, note: bool) -> tuple | None:
         digests is None,
         classes is None,
         reads is None,
+        lookups is None,
         bool(callees),
         item,
         building,
@@ -282,6 +286,7 @@ def _sandboxed(build: Callable[[list], str]) -> _Capture:
     new_digests = None if digests is None else {}
     new_classes = None if classes is None else set()
     new_reads = None if reads is None else {}
+    new_lookups: list = []
     tokens = (
         (STATE_LEDGER, STATE_LEDGER.set(new_ledger)),
         (CAPTURE_WATCH, CAPTURE_WATCH.set(new_watch)),
@@ -290,6 +295,7 @@ def _sandboxed(build: Callable[[list], str]) -> _Capture:
         (KEY_BUILD_DIGESTS, KEY_BUILD_DIGESTS.set(new_digests)),
         (CLASSES_FOLDED, CLASSES_FOLDED.set(new_classes)),
         (READS_FOLDED, READS_FOLDED.set(new_reads)),
+        (CARRIER_LOOKUPS, CARRIER_LOOKUPS.set(new_lookups)),
     )
     frames = walk_scope.stack()
     chain: list = []
@@ -313,6 +319,7 @@ def _sandboxed(build: Callable[[list], str]) -> _Capture:
         frozenset(own.touched) if own is not None else frozenset(),
         own.low if own is not None else sys.maxsize,
         frozenset(own.members) if own is not None else frozenset(),
+        tuple(new_lookups),
     )
 
 
@@ -341,6 +348,9 @@ def _apply(cap: _Capture, chain: list) -> None:
     reads = READS_FOLDED.get()
     if reads is not None:
         reads.update(cap.reads)
+    lookups = CARRIER_LOOKUPS.get()
+    if lookups is not None:
+        lookups.extend(cap.lookups)
     frames = walk_scope.stack()
     if frames:
         frame = frames[0]
@@ -367,7 +377,7 @@ def _same(a: Any, b: Any, depth: int = 0) -> bool:
 def _differences(kept: _Capture, built: _Capture) -> list[str]:
     out = [
         name
-        for name in ("state", "chain", "ledger", "watch", "ttls", "classes", "touched", "low", "members")
+        for name in ("state", "chain", "ledger", "watch", "ttls", "classes", "touched", "low", "members", "lookups")
         if not _same(getattr(kept, name), getattr(built, name))
     ]
     for name in ("owners", "reports", "digests", "reads"):

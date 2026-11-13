@@ -4,7 +4,6 @@ is part of the key, not their pickled bytes."""
 from __future__ import annotations
 
 import ast
-import contextvars
 import functools
 import hashlib
 import inspect
@@ -33,6 +32,7 @@ from ..loaded_code import class_functions
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, is_runtime_machinery
 from . import code_trace
 from .arg_hashing import is_opaque, is_plain_data
+from .call_state import CARRIER_LOOKUPS
 from .class_data import class_surface_functions, implicit_access_functions
 from .closure_fold import CLASS_BODY_CELLS
 from .user_code import cached_function_in, is_user_code_object
@@ -46,15 +46,6 @@ if TYPE_CHECKING:
     from .globals_fold import GlobalsFold
 
 logger = logging.getLogger(__name__)
-
-#: The run-time lookups by name in code the arguments of the call whose key
-#: is being built carry (`CodeArgs.carrier_lookups`), which no key part
-#: covers: set by `KeyBuilder.resolve`, None otherwise. The call is then
-#: served only on a trace of what it ran, or runs uncached, as the same line
-#: in the cached function's own body does.
-CARRIER_LOOKUPS: contextvars.ContextVar[list[PurityIssue] | None] = contextvars.ContextVar(
-    "_cash_carrier_lookups", default=None
-)
 
 #: How many containers deep one recursive stretch of the search for user code
 #: goes. Not a limit on what is searched: what lies deeper is set aside and
@@ -906,6 +897,7 @@ class CodeArgs:
                     parts.extend(self._carrier_read_global_parts(carrier, func_name, owner_code))
                     parts.extend(self._carrier_capture_parts(carrier))
                     parts.extend(self._function_capture_parts(carrier))
+                    parts.extend(self._carrier_helper_parts(carrier, owner_code))
                     env |= self._carrier_environment_reads(carrier)
                     lookups = self.carrier_lookups(carrier)
                     if lookups:
@@ -925,6 +917,33 @@ class CodeArgs:
             component = environment_component(env, note=lambda label, digest: ledger_note(("env", label), digest))
             parts.append(f"argenv:{component}")
         return parts
+
+    def _carrier_helper_parts(self, carrier: Any, owner_code: Any) -> list[str]:
+        """Key parts for the helpers the code *carrier* runs reaches, when
+        no trace of the call will check them: before Python 3.12, with
+        ``CASH_TRACE=0``, or for a coroutine (`code_trace.on`).
+
+        Its code is keyed by what it loads by name
+        (`CodeSurface.code_surface_hash`), which misses a helper reached
+        through a module (``H.helper(x)``) or another method of ``self``:
+        an edit to it was served the old result unless the call's trace
+        caught it. The purity walk of each of its functions finds them
+        (`GlobalValues.reached_helper_digests`), as it does for the cached
+        function's own helpers. With a trace this is left out: the trace
+        names every function the call ran and checks its code on a lookup.
+        """
+        if code_trace.on() and not (
+            isinstance(owner_code, types.CodeType) and owner_code.co_flags & inspect.CO_COROUTINE
+        ):
+            return []
+        functions = _carrier_functions(carrier, class_surface_functions)
+        if not functions:
+            return []
+        digests = self._values.reached_helper_digests(functions)
+        if not digests:
+            return []
+        payload = ",".join(f"{q}={d}" for q, d in sorted(digests.items()))
+        return [f"helpers:{carrier_name(carrier)}:{hashlib.sha256(payload.encode('utf-8')).hexdigest()}"]
 
     def _carrier_capture_parts(self, carrier: Any) -> list[str]:
         """Key parts for what the functions of a class *carrier* captured: a

@@ -9,7 +9,7 @@ and every call walked and audited every helper the estimator's code reaches
 again: seconds per hit on a real estimator, for a call that took a tenth.
 
 The second hit walks no helper again, reads each array once and the frame
-not at all, and a write into any array the estimator holds still misses.
+not at all (once, without pandas' copy-on-write), and a write into any array the estimator holds still misses.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ import pytest
 from cash import Cash, FileBackend
 from cash.analysis.helper_walk import HelperWalk
 from cash.decorator import arg_hashing
+from cash.decorator.arg_hashing import is_cow_pandas
 
 pytestmark = pytest.mark.core
 
@@ -93,7 +94,13 @@ def test_the_second_hit_walks_no_helper_and_reads_each_array_once(tmp_path, coun
     assert f.cache_info()["hits"] == 2
     assert counted.get("walks", 0) == 0, "a hit walked the helpers of the estimator's code again"
     assert counted.get("ndarray", 0) <= 3, f"a hit read an array more than once: {counted}"
-    assert counted.get("DataFrame", 0) == 0, f"a hit read the unchanged frame again: {counted}"
+    if is_cow_pandas(est.frame):
+        assert counted.get("DataFrame", 0) == 0, f"a hit read the unchanged frame again: {counted}"
+    else:
+        # Without copy-on-write (pandas before 3, unless turned on) a write
+        # into a frame's blocks moves nothing cash can check, so a hit reads
+        # it -- once.
+        assert counted.get("DataFrame", 0) <= 1, f"a hit read the frame more than once: {counted}"
 
 
 def test_a_new_instance_of_the_same_class_walks_no_helper_again(tmp_path, counted):

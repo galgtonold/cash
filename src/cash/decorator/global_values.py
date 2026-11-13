@@ -13,6 +13,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from .._memo import CODE_OBJECTS, TABLES, LruMemo
+from ..analysis.helper_bindings import UNRESOLVED, resolve_binding
 from ..analysis.helper_code import callable_layers, is_mock, own_code_is_user, qualname_of
 from ..analysis.purity_analyzer import get_analyzer
 from ..analysis.purity_policy import REPORTED_METHODS
@@ -147,6 +148,52 @@ class GlobalValues:
         live = self._data_helper_resolver.current_hashes(report)
         helpers = ",".join(f"{q}={live.get(q, h)}" for q, h in sorted(report.helper_source_hashes.items()))
         return hashlib.sha256(f"{own}|{helpers}".encode("utf-8")).hexdigest()
+
+    def reached_helper_digests(self, functions: list[types.FunctionType]) -> dict[str, str]:
+        """``qualname -> digest`` of every helper the purity walk of one of
+        *functions* reached, besides *functions* themselves: their code as
+        a call of a helper keys it (`HelperIdentity.identity`), resolved
+        now where it resolves, else as it was walked.
+
+        The code a value carries is keyed by what it loads by name
+        (`CodeSurface.code_surface_hash`); a helper its methods reach
+        through a module (``H.helper(x)``) or through another method of
+        ``self`` is found only by this walk. Each helper is resolved once,
+        however many of *functions* reach it.
+        """
+        found: dict[str, str] = {}
+        own = {qualname_of(fn) for fn in functions}
+        for fn in functions:
+            if not own_code_is_user(fn, getattr(fn, "__module__", None)):
+                continue
+            try:
+                report = get_analyzer().analyze_reached(fn)
+            except Exception:  # noqa: BLE001 - the reads fold refuses what cannot be walked
+                continue
+            for qual, digest in report.helper_source_hashes.items():
+                if qual in own or qual in found:
+                    continue
+                found[qual] = self._helper_digest_now(report, qual, digest)
+        return found
+
+    def _helper_digest_now(self, report: Any, qual: str, walked: str) -> str:
+        """*report*'s helper *qual* as `SysModulesHelperResolver` hashes it
+        now, or *walked*, its digest when analysed, when it does not resolve."""
+        path = report.helper_resolution_paths.get(qual)
+        target: Any = None
+        if path is not None:
+            target = resolve_binding(*path)
+            if target is UNRESOLVED:
+                target = None
+        if target is None:
+            ref = report.helper_objects.get(qual)
+            target = ref() if ref is not None else None
+        if target is None or not callable(target):
+            return walked
+        try:
+            return self._helpers.identity(target)
+        except (OSError, TypeError, AttributeError):
+            return walked
 
     def global_value_digest(self, value: Any, plain: str | None = None) -> str:
         """The digest a data global's *value* is keyed by, and checked against
