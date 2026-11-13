@@ -1095,6 +1095,15 @@ class CallRunner:
                 if why is not None:
                     verdict = MissReason(MissKind.ARGS, why)
                 cached_data = left.result
+                if isinstance(cached_data, rewrite_in_place.ResultIsArgument) and verdict is None:
+                    # The argument handed in, which the writes below fill
+                    # with the state the call left it in: a plain run
+                    # returns that very object.
+                    lives = dict(zip(left.states, (live for live, _ in writes)))
+                    if cached_data.name not in lives:
+                        verdict = MissReason(MissKind.ARGS, f"the argument {cached_data.name!r} it returns is missing")
+                    else:
+                        cached_data = lives[cached_data.name]
             if verdict is not None:
                 self._misses.note_miss(func_name, cache_key, verdict)
                 return CACHE_MISS
@@ -1650,6 +1659,22 @@ class CallRunner:
         observer.forget("argument mutation")
         return left
 
+    def result_argument(
+        self, func_name: str, result: Any, args_left: dict[str, tuple[Any, Any]] | None, arguments: tuple[tuple, dict]
+    ) -> str | None:
+        """The parameter in *args_left* whose argument *result* is, by
+        identity, or None. Such an argument is a NumPy array, a pandas
+        frame or Series or a plain container (`arguments_left` keeps no
+        other), whose state the entry keeps and a hit writes back in place,
+        so a hit can hand back the argument itself as a plain run does."""
+        if not args_left:
+            return None
+        named = self._checked_named(func_name, *arguments) or {}
+        for name in args_left:
+            if name in named and named[name] is result:
+                return name
+        return None
+
     def _unwritable_args(self, func_name: str, arguments: tuple[tuple, dict]) -> list[str]:
         """The parameters whose argument no hit writes a state back into
         (`rewrite_in_place.refusal`), so a change cash may not see in it --
@@ -1921,7 +1946,11 @@ class CallRunner:
         auto_file_deps = snapshot_tracked_deps(run.tracker, getattr(func, "__module__", None))
         execution_time = _perf_counter() - call.call_start
 
-        shared = self._purity.warn_shared_result(func, func_name, res, args, kwargs)
+        # A result that IS an argument the call changed and a hit writes
+        # back (``stft(y, out=buf)``) is handed back as that argument by a
+        # hit too, so it shares nothing a hit would hand back apart.
+        result_is = self.result_argument(func_name, res, args_left, call.checked or (args, kwargs))
+        shared = None if result_is else self._purity.warn_shared_result(func, func_name, res, args, kwargs)
         # The stream comparison above, read for a draw no seed stands behind:
         # one the source scan could not see (a library a helper calls).
         self._rng.warn_observed_draw(func_name, run.rng_drew, res)
@@ -2003,6 +2032,7 @@ class CallRunner:
                     shared_result=shared,
                     args_left=args_left,
                     args_reads=run.args_reads,
+                    result_is=result_is,
                 ),
                 res,
             )
