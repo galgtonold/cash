@@ -14,6 +14,7 @@ import ast
 import builtins
 import functools
 import inspect
+import itertools
 import os
 import pathlib
 import sys
@@ -61,8 +62,11 @@ from .handed_callables import handed_callable_values, iteration_bindings
 from .mutations import MUTATING_METHODS, RECEIVER_READONLY_WRITE_METHODS, chain_is_pure
 from .read_only_callees import (
     ESTIMATOR_READ_ARGUMENTS,
+    ESTIMATOR_READING_METHODS,
     NOT_A_LITERAL,
+    cross_validation_reads_its_arguments,
     estimator_reads_its_arguments,
+    estimator_stand_in,
     reads_its_arguments_only,
     turns_on_a_write,
 )
@@ -2812,12 +2816,19 @@ def proven_unchanged(
     * a scikit-learn estimator's ``fit``/``predict``/``transform``...
       (`estimator_reads_its_arguments`, the one assumption made about that
       library, voided by ``copy=False``);
+    * one of ``sklearn.model_selection``'s cross-validation functions
+      handed such an estimator (`cross_validation_reads_its_arguments`);
+    * a function of the user's that hands it only to such calls, read on
+      its body with its parameters bound to what the call hands them
+      (``evaluate(model, X_train, y_train)``);
     * a library function known to only read (`call_only_reads`).
 
     The receiver is the object the namespace holds under its name; under a
     loop's target, each item of a list or tuple, or each value of a dict
-    walked through ``.items()`` / ``.values()``. A name read any other way
-    (``Z = X``, ``X[0]``, ``f(X.T)``), or bound in the tree, is not proven.
+    walked through ``.items()`` / ``.values()``; an estimator of
+    scikit-learn's the tree builds (``GridSearchCV(model, grid)``,
+    `_stand_ins`). A name read any other way (``Z = X``, ``X[0]``,
+    ``f(X.T)``), or bound in the tree, is not proven.
     """
     if tree is None:
         return frozenset()
@@ -2855,8 +2866,13 @@ def _read_by_a_proven_call(
     except Exception:  # noqa: BLE001 - not proven
         return False
     func = call.func
-    if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
-        receivers = _receiver_values(func.value.id, tree, user_ns)
+    if isinstance(func, ast.Attribute) and isinstance(func.value, (ast.Name, ast.Call)):
+        # A name, or an estimator built in the call's own text
+        # (``GridSearchCV(model, grid).fit(X, y)``).
+        if isinstance(func.value, ast.Name):
+            receivers = _receiver_values(func.value.id, tree, user_ns)
+        else:
+            receivers = _stand_ins(func.value, tree, user_ns, parents, 0)
         if not receivers:
             return False
         # X, y and sample_weight only (`ESTIMATOR_READ_ARGUMENTS`).
@@ -2870,20 +2886,260 @@ def _read_by_a_proven_call(
             or _method_leaves(obj, func.attr, call, node.id, user_ns)
             for obj in receivers
         )
+    if _cross_validation_reads(call, node, tree, user_ns, parents):
+        return True
     if isinstance(func, ast.Name) and func.id in user_ns:
         fdef = _readable_function(func.id, resolve_source)
-        return fdef is not None and _leaves_argument(fdef, call, node.id, user_ns, resolve_source)
+        return fdef is not None and (
+            _leaves_argument(fdef, call, node.id, user_ns, resolve_source)
+            or _helper_hands_it_to_proven_calls(
+                user_ns[func.id], fdef, call, node, tree, user_ns, parents, resolve_source
+            )
+        )
     return False
+
+
+#: How many values a stand-in expression may take (`_stand_ins`), and how
+#: deep a helper of the user's is followed (`_helper_hands_it_to_proven_calls`).
+_STAND_INS_KEPT = 64
+_HELPER_DEPTH_KEPT = 4
+_helper_depth = [0]
+
+#: Stands, in a helper's namespace, for a parameter whose value is not known.
+_UNKNOWN_VALUE = object()
+
+#: What may be done with a name bound to an estimator built in the text
+#: (``search = GridSearchCV(model, grid)``): its reading methods called, or
+#: a fitted attribute read into a value (``search.best_score_``).
+_STAND_IN_METHODS = ESTIMATOR_READING_METHODS | {"predict_log_proba", "score_samples", "get_params"}
+
+
+def _stand_ins(
+    expr: ast.expr, tree: ast.Module, user_ns: Mapping[str, Any], parents: Mapping[int, ast.AST], depth: int
+) -> list[Any] | None:
+    """The values *expr* may take when the calls of *tree* run, found
+    without running anything of the user's; None when that cannot be told.
+
+    A literal; a name (`_receiver_values`); an item of a dict, list or tuple
+    the namespace holds and *tree* only reads items of (``grids[name]``: any
+    of them); a list, tuple or dict display of those; and an estimator of
+    scikit-learn's built from those (``GridSearchCV(model, grids[name])``,
+    ``make_pipeline(StandardScaler(), model)``, `estimator_stand_in`), or
+    one ``.fit(...)`` returns, itself. Each combination is built, up to
+    `_STAND_INS_KEPT` of them."""
+    if depth > 8:
+        return None
+    if isinstance(expr, ast.Constant):
+        return [expr.value]
+    if isinstance(expr, ast.Name):
+        return _receiver_values(expr.id, tree, user_ns, depth + 1)
+    if isinstance(expr, ast.Subscript) and isinstance(expr.value, ast.Name):
+        held = user_ns.get(expr.value.id)
+        if type(held) not in (dict, list, tuple) or not _only_items_read(expr.value.id, tree, parents):
+            return None
+        values = list(held.values()) if type(held) is dict else list(held)
+        return values if 0 < len(values) <= _STAND_INS_KEPT else None
+    if isinstance(expr, (ast.List, ast.Tuple)):
+        combos = _combinations([_stand_ins(e, tree, user_ns, parents, depth + 1) for e in expr.elts])
+        return None if combos is None else [list(c) if isinstance(expr, ast.List) else tuple(c) for c in combos]
+    if isinstance(expr, ast.Dict):
+        if any(k is None or not isinstance(k, ast.Constant) for k in expr.keys):
+            return None
+        combos = _combinations([_stand_ins(v, tree, user_ns, parents, depth + 1) for v in expr.values])
+        keys = [k.value for k in expr.keys if isinstance(k, ast.Constant)]
+        return None if combos is None else [dict(zip(keys, c, strict=True)) for c in combos]
+    if not isinstance(expr, ast.Call) or any(isinstance(a, ast.Starred) for a in expr.args):
+        return None
+    if any(kw.arg is None for kw in expr.keywords):
+        return None
+    func = expr.func
+    if isinstance(func, ast.Attribute) and func.attr in ("fit", "partial_fit"):
+        # scikit-learn's ``fit`` returns the estimator itself.
+        fitted = _stand_ins(func.value, tree, user_ns, parents, depth + 1)
+        if not fitted or not all(type(v).__module__.partition(".")[0] == "sklearn" for v in fitted):
+            return None
+        return fitted
+    callee = resolve_callee(func, user_ns)
+    if callee is None:
+        return None
+    options = [_stand_ins(a, tree, user_ns, parents, depth + 1) for a in expr.args]
+    options += [_stand_ins(kw.value, tree, user_ns, parents, depth + 1) for kw in expr.keywords]
+    combos = _combinations(options)
+    if combos is None:
+        return None
+    n = len(expr.args)
+    built = []
+    for combo in combos:
+        value = estimator_stand_in(
+            callee, combo[:n], {kw.arg: v for kw, v in zip(expr.keywords, combo[n:], strict=True) if kw.arg}
+        )
+        if value is None:
+            return None
+        built.append(value)
+    return built
+
+
+def _combinations(options: list[list[Any] | None]) -> list[tuple[Any, ...]] | None:
+    if any(o is None for o in options):
+        return None
+    count = 1
+    for o in options:
+        count *= len(o or ())
+    if count == 0 or count > _STAND_INS_KEPT:
+        return None
+    return list(itertools.product(*(o or () for o in options)))
+
+
+def _only_items_read(name: str, tree: ast.Module, parents: Mapping[int, ast.AST]) -> bool:
+    """Whether every place *tree* names *name* reads one item of it (``grids[k]``)."""
+    for n in walk_tree(tree):
+        if isinstance(n, ast.Name) and n.id == name:
+            parent = parents.get(id(n))
+            if not (isinstance(n.ctx, ast.Load) and isinstance(parent, ast.Subscript) and parent.value is n):
+                return False
+            if not isinstance(parent.ctx, ast.Load) or isinstance(
+                parents.get(id(parent)), (ast.Attribute, ast.Subscript)
+            ):
+                return False
+            grand = parents.get(id(parent))
+            if isinstance(grand, ast.Call) and grand.func is parent:
+                return False
+    return True
+
+
+def _only_used_as_estimator(name: str, tree: ast.Module, parents: Mapping[int, ast.AST]) -> bool:
+    """Whether every read of *name* in *tree* calls one of its reading
+    methods (``search.fit(X, y)``) or reads a fitted attribute into a value
+    (``score = search.best_score_``): nothing changes the estimator built
+    under it between its building and its use."""
+    for n in walk_tree(tree):
+        if not (isinstance(n, ast.Name) and n.id == name and isinstance(n.ctx, ast.Load)):
+            continue
+        parent = parents.get(id(n))
+        if not (isinstance(parent, ast.Attribute) and isinstance(parent.ctx, ast.Load)):
+            return False
+        grand = parents.get(id(parent))
+        if isinstance(grand, ast.Call) and grand.func is parent:
+            if parent.attr not in _STAND_IN_METHODS:
+                return False
+        elif isinstance(grand, (ast.Call, ast.Attribute, ast.Subscript, ast.keyword, ast.Starred)):
+            return False
+    return True
+
+
+def _cross_validation_reads(
+    call: ast.Call, node: ast.Name, tree: ast.Module, user_ns: Mapping[str, Any], parents: Mapping[int, ast.AST]
+) -> bool:
+    """``cross_val_score(model, X, y, cv=5)``: *node* is ``X`` or ``y``, and
+    the function leaves them as they were (`cross_validation_reads_its_arguments`)."""
+    if not isinstance(call.func, (ast.Name, ast.Attribute)) or len(call.args) > 3:
+        return False
+    if any(isinstance(a, ast.Starred) for a in call.args) or any(kw.arg is None for kw in call.keywords):
+        return False
+    if not (node in call.args[1:3] or any(kw.value is node and kw.arg in ("X", "y") for kw in call.keywords)):
+        return False
+    fn = resolve_callee(call.func, user_ns)
+    if fn is None:
+        return False
+    estimator = call.args[0] if call.args else next((kw.value for kw in call.keywords if kw.arg == "estimator"), None)
+    if estimator is None:
+        return False
+    estimators = _stand_ins(estimator, tree, user_ns, parents, 0)
+    others: list[Any] = []
+    for kw in call.keywords:
+        if kw.arg in ("estimator", "X", "y"):
+            continue
+        values = _stand_ins(kw.value, tree, user_ns, parents, 0)
+        if values is None:
+            return False
+        others += values
+    return estimators is not None and cross_validation_reads_its_arguments(fn, estimators, others)
+
+
+def _helper_hands_it_to_proven_calls(
+    fn: Any,
+    fdef: ast.FunctionDef | ast.AsyncFunctionDef,
+    call: ast.Call,
+    node: ast.Name,
+    tree: ast.Module,
+    user_ns: Mapping[str, Any],
+    parents: Mapping[int, ast.AST],
+    resolve_source: Callable[[str], str | None] | None,
+) -> bool:
+    """``evaluate(model, X_train, y_train)`` with ``def evaluate(model, X,
+    y): model.fit(X, y)``: the helper of the user's hands what it is given
+    under *node* only to calls proven to leave it (`proven_unchanged`, read
+    on its body with its parameters bound to what *call* hands them: each
+    model the loop walks). Its parameters must all be given by name or
+    position, or have a default; one whose value is not known stands as
+    unknown, so nothing is proven through it."""
+    if type(fn) is not types.FunctionType or fn.__code__.co_freevars or not isinstance(fn.__globals__, dict):
+        return False
+    if fdef.args.vararg or fdef.args.kwarg or node.id not in user_ns:
+        return False
+    if any(isinstance(a, ast.Starred) for a in call.args) or any(kw.arg is None for kw in call.keywords):
+        return False
+    positional = positional_param_names(fdef)
+    names = all_param_names(fdef)
+    if len(call.args) > len(positional):
+        return False
+    slots: dict[str, ast.expr] = dict(zip(positional, call.args, strict=False))
+    for kw in call.keywords:
+        if kw.arg not in names or kw.arg in slots:
+            return False
+        slots[kw.arg] = kw.value
+    targets = {p for p, a in slots.items() if a is node}
+    if not targets:
+        return False
+    try:
+        signature = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return False
+    params: list[str] = []
+    options: list[list[Any] | None] = []
+    for p in names:
+        arg = slots.get(p)
+        if arg is node:
+            values: list[Any] | None = [user_ns[node.id]]
+        elif arg is None:
+            default = signature.parameters[p].default if p in signature.parameters else inspect.Parameter.empty
+            if default is inspect.Parameter.empty:
+                return False
+            values = [default]
+        else:
+            values = _stand_ins(arg, tree, user_ns, parents, 0) or [_UNKNOWN_VALUE]
+        params.append(p)
+        options.append(values)
+    combos = _combinations(options)
+    if combos is None or _helper_depth[0] >= _HELPER_DEPTH_KEPT:
+        return False
+    body = ast.Module(body=fdef.body, type_ignores=[])
+    # A helper of the notebook's reads its source as the cell's calls do.
+    resolver = resolve_source if fn.__globals__ is user_ns else None
+    _helper_depth[0] += 1
+    try:
+        for combo in combos:
+            namespace = dict(fn.__globals__)
+            namespace.update(zip(params, combo, strict=True))
+            if not targets <= proven_unchanged(body, targets, namespace, resolver):
+                return False
+    finally:
+        _helper_depth[0] -= 1
+    return True
 
 
 def _plain_arguments(call: ast.Call) -> list[ast.expr]:
     return [*call.args, *(kw.value for kw in call.keywords if kw.arg is not None)]
 
 
-def _receiver_values(name: str, tree: ast.Module, user_ns: Mapping[str, Any]) -> list[Any] | None:
+def _receiver_values(name: str, tree: ast.Module, user_ns: Mapping[str, Any], depth: int = 0) -> list[Any] | None:
     """The objects *name* holds when the calls of *tree* run on it: the
-    namespace's, or, for a loop target, the items its loop walks; None when
-    that cannot be told without running anything."""
+    namespace's, or, for a loop target, the items its loop walks (those of
+    a list or tuple display built as `_stand_ins` builds them); for a name
+    *tree* binds once, to an estimator of scikit-learn's built in its text
+    (``search = GridSearchCV(model, grid)``) and only used as one, those it
+    may build, and what the namespace holds under it. None when that cannot
+    be told without running anything."""
     loops = [
         loop
         for loop in walk_tree(tree)
@@ -2895,13 +3151,24 @@ def _receiver_values(name: str, tree: ast.Module, user_ns: Mapping[str, Any]) ->
         if isinstance(n, ast.Name) and n.id == name and isinstance(n.ctx, (ast.Store, ast.Del))
     ]
     if not loops:
-        return None if stores or name not in user_ns else [user_ns[name]]
+        if not stores:
+            return None if name not in user_ns else [user_ns[name]]
+        return _built_in_text(name, stores, tree, user_ns, depth)
     if len(loops) != 1 or len(stores) != 1:
         return None
     target, header = loops[0].target, loops[0].iter
     if isinstance(target, ast.Name) and isinstance(header, ast.Name):
         items = user_ns.get(header.id)
         return list(items) if type(items) in (list, tuple) else None
+    if isinstance(target, ast.Name) and isinstance(header, (ast.List, ast.Tuple)):
+        parents = _parents(tree)
+        found: list[Any] = []
+        for item in header.elts:
+            values = _stand_ins(item, tree, user_ns, parents, depth + 1)
+            if values is None:
+                return None
+            found += values
+        return found
     if not (
         isinstance(header, ast.Call)
         and not header.args
@@ -2923,6 +3190,31 @@ def _receiver_values(name: str, tree: ast.Module, user_ns: Mapping[str, Any]) ->
     ):
         return values
     return None
+
+
+def _parents(tree: ast.AST) -> dict[int, ast.AST]:
+    return {id(child): node for node in walk_tree(tree) for child in ast.iter_child_nodes(node)}
+
+
+def _built_in_text(
+    name: str, stores: list[ast.Name], tree: ast.Module, user_ns: Mapping[str, Any], depth: int
+) -> list[Any] | None:
+    """`_receiver_values` for a name *tree* binds once, by ``name = ...``,
+    to an estimator of scikit-learn's it builds (`_stand_ins`), and uses
+    only as one (`_only_used_as_estimator`). Before that binding runs (a
+    call above it in a loop's first pass) it holds the namespace's value."""
+    if len(stores) != 1:
+        return None
+    parents = _parents(tree)
+    assign = parents.get(id(stores[0]))
+    if not (isinstance(assign, ast.Assign) and assign.targets == [stores[0]]):
+        return None
+    if not _only_used_as_estimator(name, tree, parents):
+        return None
+    values = _stand_ins(assign.value, tree, user_ns, parents, depth + 1)
+    if not values or not all(type(v).__module__.partition(".")[0] == "sklearn" for v in values):
+        return None
+    return values + ([user_ns[name]] if name in user_ns else [])
 
 
 def _method_leaves(obj: Any, method: str, call: ast.Call, name: str, user_ns: Mapping[str, Any]) -> bool:
