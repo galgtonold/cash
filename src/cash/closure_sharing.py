@@ -30,7 +30,7 @@ from cash._clock import CpuLimit
 from cash._native import kernels as _KERNELS
 from cash._plain_data import TREE_NODES, in_a_look, numpy_scalar_set, tree_facts, tree_levels
 from cash._type_memo import MroMemo, TypeMemo, type_key
-from cash._user_attrs import own_dict
+from cash._user_attrs import own_dict, own_dicts
 from cash.install_paths import is_user_code_module
 from cash.kept_state import reduce_counted
 from cash.live_state import is_live_stream
@@ -114,7 +114,10 @@ def closures_sharing(captured_vars: Mapping[str, Any], seconds: float) -> Closur
             return ClosureCheck([], finished=False)
         if found:
             plain.add(name)
-    places: set[int] = set()
+    # Each object is kept until the answer, so an id stands for one object
+    # only: a reduce's temporary freed a level later gave its id to another,
+    # which was then taken as met and not read.
+    places: dict[int, Any] = {}
     functions: list[tuple[str, types.FunctionType]] = []
     for name, value in captured_vars.items():
         if name not in plain and not _walk(name, value, places, functions, limit):
@@ -178,7 +181,7 @@ def _holds_a_closure(captured_vars: Mapping[str, Any], seconds: float) -> bool |
         held: list[Iterable[Any]] = []
         kinds = set(map(type, level))
         for kind in kinds:
-            group = level if len(kinds) == 1 else [item for item in level if type(item) is kind]
+            group = level if len(kinds) == 1 else _of_kind(level, kind)
             if kind in _SEQUENCES:
                 held.append(chain.from_iterable(group))
             elif kind is dict:
@@ -191,6 +194,10 @@ def _holds_a_closure(captured_vars: Mapping[str, Any], seconds: float) -> bool |
                 if kind.__name__ == "Timestamp":
                     held.append(item.tzinfo for item in group if item.tzinfo is not None)
             elif not issubclass(kind, _OPAQUE):
+                bulk = _group_parts(group, kind)
+                if bulk is not None:
+                    held.extend(bulk)
+                    continue
                 arrow = _arrow_array_kind(kind)
                 for done, item in enumerate(group, 1):
                     if done % _CLOCK_EVERY == 0 and limit.passed():
@@ -240,8 +247,8 @@ def _arrow_type_without_code(array: Any) -> bool:
     return True
 
 
-def _walk(name: str, value: Any, places: set[int], functions: list, limit: CpuLimit) -> bool:
-    """Add to *places* the id of every object *value* holds, and to
+def _walk(name: str, value: Any, places: dict[int, Any], functions: list, limit: CpuLimit) -> bool:
+    """Add to *places* every object *value* holds, by its id, and to
     *functions* each function with a closure among them, with *name*;
     False when *limit* ran out first. A level's builtin containers are read
     in bulk; an atom is neither a place nor looked into."""
@@ -252,7 +259,7 @@ def _walk(name: str, value: Any, places: set[int], functions: list, limit: CpuLi
         held: list[Iterable[Any]] = []
         kinds = set(map(type, level))
         for kind in kinds:
-            group = level if len(kinds) == 1 else [item for item in level if type(item) is kind]
+            group = level if len(kinds) == 1 else _of_kind(level, kind)
             if kind in _SEQUENCES:
                 held.append(chain.from_iterable(group))
             elif kind is dict:
@@ -261,6 +268,10 @@ def _walk(name: str, value: Any, places: set[int], functions: list, limit: CpuLi
             elif kind is types.FunctionType:
                 functions.extend((name, fn) for fn in group if fn.__closure__)
             elif not issubclass(kind, _OPAQUE):
+                bulk = _group_parts(group, kind)
+                if bulk is not None:
+                    held.extend(bulk)
+                    continue
                 for done, item in enumerate(group, 1):
                     if done % _CLOCK_EVERY == 0 and limit.passed():
                         return False
@@ -273,7 +284,7 @@ def _walk(name: str, value: Any, places: set[int], functions: list, limit: CpuLi
     return True
 
 
-def _fresh(held: list[Iterable[Any]], places: set[int] | dict[int, Any], limit: CpuLimit) -> list | None:
+def _fresh(held: list[Iterable[Any]], places: dict[int, Any], limit: CpuLimit) -> list | None:
     """What *held* yields that is not an atom and not in *places*, each
     once, now added to it; None when *limit* ran out first. Taken in
     chunks, each a few passes in C: a level of ten million strings is
@@ -284,14 +295,84 @@ def _fresh(held: list[Iterable[Any]], places: set[int] | dict[int, Any], limit: 
     while chunk := list(islice(items, _CHUNK)):
         if not leaves.issuperset(map(type, chunk)):
             chunk = _without_leaf_records(chunk)
-            new = {id(item): item for item in chunk if type(item) not in leaves}
-            for key in places.keys() & new.keys() if isinstance(places, dict) else places.intersection(new):
+            chunk = list(compress(chunk, map(operator.not_, map(leaves.__contains__, map(type, chunk)))))
+            new = dict(zip(map(id, chunk), chunk))
+            for key in places.keys() & new.keys():
                 del new[key]
             places.update(new)
             fresh.extend(new.values())
         if limit.passed():
             return None
     return fresh
+
+
+def _of_kind(level: list, kind: type) -> list:
+    """The objects of *level* whose class is exactly *kind*, told in C."""
+    return list(compress(level, map(operator.is_, map(type, level), repeat(kind))))
+
+
+#: Per class, whether `_group_parts` reads its objects a list at a time.
+_IN_BULK: TypeMemo[bool] = TypeMemo()
+#: What makes an object pickle as other than its attributes and slots.
+_REDUCE_HOOKS = ("__reduce_ex__", "__reduce__", "__getstate__", "__getnewargs_ex__", "__getnewargs__")
+_HEAP_TYPE = 1 << 9
+#: A class's ``__dict__`` as ``type`` reads it: no metaclass of the user's runs.
+_CLASS_DICT = type.__dict__["__dict__"].__get__
+
+
+def _read_in_bulk(kind: type) -> bool:
+    """Does `_object_parts` read an object of *kind* as its attributes and
+    its slots alone? So for a class of the user's, whose own methods are
+    never asked, and for a library's whose every class but ``object`` a
+    ``class`` statement made and defines no hook of pickle's
+    (`_REDUCE_HOOKS`): its ``__reduce_ex__`` is ``object``'s, which hands
+    pickle the class and those same attributes and slots. Not a builtin
+    container's subclass, a bound method or a stream, read on their own."""
+    found = _IN_BULK.get(type_key(kind))
+    if found is None:
+        mro = kind.__mro__
+        found = not (
+            kind is types.MethodType
+            or issubclass(kind, _BUILTIN_CONTAINERS)
+            or issubclass(kind, io.IOBase)
+            or any("_cash_wrapped_stream" in _CLASS_DICT(klass) for klass in mro)
+        ) and (
+            _users(kind)
+            or all(
+                klass.__flags__ & _HEAP_TYPE and not any(hook in _CLASS_DICT(klass) for hook in _REDUCE_HOOKS)
+                for klass in mro[:-1]
+            )
+        )
+        found = _IN_BULK.put(kind, found)
+    return found
+
+
+def _group_parts(group: list, kind: type) -> list[Iterable[Any]] | None:
+    """What `_object_parts` gives of each object of *group*, all of class
+    *kind*, read a list at a time, or None when they are read one by one
+    (`_read_in_bulk`): a trie of a few hundred thousand small nodes was
+    read a node at a time, past the time, and never stored."""
+    if not _read_in_bulk(kind):
+        return None
+    parts: list[Iterable[Any]] = [chain.from_iterable(map(dict.values, own_dicts(group, kind)))]
+    for reader in slot_readers(kind):
+        try:
+            parts.append(list(map(reader.__get__, group)))
+        except AttributeError:  # an empty slot somewhere: read one by one
+            parts.append(_set_slots(reader, group))
+    return parts
+
+
+def _set_slots(reader: Any, group: list) -> list:
+    """What the slot *reader* holds in each object of *group*, its empty
+    ones left out."""
+    found = []
+    for item in group:
+        try:
+            found.append(reader.__get__(item))
+        except AttributeError:
+            continue
+    return found
 
 
 def _without_leaf_records(chunk: list) -> list:
@@ -446,7 +527,7 @@ def _reduced(item: Any, kind: type) -> list:
     return parts
 
 
-def _reaches(fn: types.FunctionType, places: set[int], limit: CpuLimit) -> bool | None:
+def _reaches(fn: types.FunctionType, places: dict[int, Any], limit: CpuLimit) -> bool | None:
     """Does what *fn*'s closure holds reach an object in *places*? None
     when *limit* ran out first. Another function met on the way is not
     followed: its own check is its own."""
@@ -456,7 +537,7 @@ def _reaches(fn: types.FunctionType, places: set[int], limit: CpuLimit) -> bool 
             held.append(cell.cell_contents)
         except ValueError:  # an empty cell
             continue
-    reached: set[int] = set()
+    reached: dict[int, Any] = {}
     level = _fresh([held], reached, limit)
     while level:
         if any(id(item) in places for item in level if not issubclass(type(item), _OPAQUE)):
