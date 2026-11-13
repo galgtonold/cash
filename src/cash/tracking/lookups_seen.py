@@ -44,7 +44,7 @@ from ..analysis.analysis_budget import ANALYSIS_BUDGET_FLOOR_S
 from ..diagnostics import log_diagnostic, warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning, CashWarning
 from ..install_paths import is_cash_path, is_user_path
-from ..value_hash import HASH_ERRORS, note_known_by_reference, recipes_met
+from ..value_hash import note_known_by_reference, recipes_met
 from .process_registries import importing
 
 __all__ = ["available", "collecting", "note", "watching"]
@@ -1009,7 +1009,7 @@ def _note_now(obj: Any) -> bool:
         return True
     try:
         digest = kept_state.state_digest(obj) if key else ""
-    except (*HASH_ERRORS, MemoryError):
+    except Exception:  # noqa: BLE001 - whatever its own code raises: not read
         digest = ""
     for found in missing:
         found[key] = digest

@@ -409,3 +409,39 @@ def test_an_object_with_odd_lookups_runs_as_plain_python(cash_magics, tmp_path, 
         for cell in cells:
             run_cash_cell(cash_magics, cell, cells=cells)
         assert cash_magics.shell.user_ns["w"] == _plain(cells)["w"] == 6
+
+
+@pytest.mark.parametrize("cls", ["Record", "Loud"])
+def test_such_an_object_where_a_name_pickled_by_reference_was_is_read_as_changed(cls):
+    """A name of ``__main__`` a value once held by reference (pickled as the
+    name), bound now to such an object: whether it moved is answered, not
+    raised. Pickling it asks for ``__getstate__`` (on Python 3.10, where
+    ``object`` has none, through the object's own ``__getattr__``), and the
+    KeyError or RuntimeError failed the statement reading it."""
+    import sys
+
+    from cash import value_hash
+    from cash.tracking import reference_states
+
+    main = sys.modules["__main__"]
+    ns: dict = {}
+    exec(CLASSES.replace("__name__ = '__main__'\n", ""), ns)
+
+    class Named:
+        def __reduce__(self):
+            return "_cash_test_held_by_name"
+
+    Named.__module__ = "__main__"
+    Named.__qualname__ = "Named"
+    # Raises what its ``__getattr__`` raises on every Python.
+    ns[cls].__getstate__ = lambda self: self.missing
+    try:
+        main._cash_test_held_by_name = Named()
+        value_hash.compute_hash([main._cash_test_held_by_name])
+        before = reference_states.known_states()
+        assert any(digest != reference_states.UNFINDABLE for digest in before.values())
+        main._cash_test_held_by_name = ns[cls](None)
+        assert reference_states.moved(before)
+    finally:
+        del ns[cls].__getstate__
+        del main._cash_test_held_by_name
