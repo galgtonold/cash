@@ -461,3 +461,45 @@ def test_a_value_holding_no_strings_id_is_restored(value, notebook):
 
     s = _text()
     assert identity_held_reason("key", value(s), notebook(s)) is None
+
+
+@pytest.mark.parametrize("many", [3, 20_000], ids=["a few", "more than are read one by one"])
+@pytest.mark.parametrize("own", [False, True], ids=["the notebook's", "the value's own"])
+def test_the_id_of_a_library_scalar_is_found(many, own):
+    """The value's own walk reads numpy's and pandas' exact scalars as
+    leaves, at C speed; an ``id()`` of one is looked for all the same."""
+    numpy = pytest.importorskip("numpy")
+    pandas = pytest.importorskip("pandas")
+    from cash.notebook.statement.identity_holders import identity_held_reason
+
+    for scalars in (
+        [numpy.float64(i) / 3 for i in range(many)],
+        [pandas.Timedelta(seconds=i) for i in range(many)],
+    ):
+        target = scalars[-1]
+        if own:
+            held = identity_held_reason("pair", [scalars, id(target)], {})
+        else:
+            held = identity_held_reason("key", id(target), {"scalars": scalars})
+        assert held is not None, type(target)
+        assert held.kind == "an id()"
+
+
+def test_the_id_of_its_own_string_is_found_past_the_walks_count():
+    """Looked through again for its own strings, the value is read as its
+    own walk read it: 300,000 numpy scalars cost nothing, and records past
+    the count are read while a share check has time left. Counted one by
+    one instead, the look was cut and the value called unreadable."""
+    numpy = pytest.importorskip("numpy")
+    from cash.notebook.shared_objects import walk_budget
+    from cash.notebook.statement.identity_holders import identity_held_reason
+
+    s = _text()
+    scalars = [numpy.int64(i) for i in range(300_000)] + [s, id(s)]
+    held = identity_held_reason("scalars", scalars, {})
+    assert held is not None and held.kind == "an id()", held
+    records = [{"line": i, "name": f"n{i}"} for i in range(300_000)]
+    records[-1].update(s=s, ref=id(s))
+    with walk_budget(600.0):
+        held = identity_held_reason("records", records, {})
+    assert held is not None and held.kind == "an id()", held

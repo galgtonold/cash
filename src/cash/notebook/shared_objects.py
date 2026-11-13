@@ -71,6 +71,7 @@ __all__ = [
     "anchors_held",
     "attrs_copied_apart",
     "history_names",
+    "library_exact_values",
     "holds_part_of",
     "output_history",
     "referring_names",
@@ -78,6 +79,7 @@ __all__ = [
     "share_group",
     "shared_names",
     "view_base_names",
+    "walk_time_left",
 ]
 
 #: Values whose identity no program relies on: equal ones are interchangeable.
@@ -508,6 +510,22 @@ def exact_value_types() -> frozenset[type]:
     if complete:
         _EXACT_WITH_LIBRARIES[key] = result
     return result
+
+
+def library_exact_values() -> frozenset[type]:
+    """`exact_value_types` without `EXACT_VALUE_TYPES`: numpy's exact
+    scalar types and, while none had an attribute set (`scalar_identity`),
+    pandas' ``Timestamp``, ``Timedelta``, ``NaT`` and ``NA``. Each holds a
+    value and no object of the notebook's."""
+    exact = exact_value_types()
+    known = _LIBRARY_EXACT
+    if known[0] is not exact:
+        known = _LIBRARY_EXACT[:] = [exact, exact - EXACT_VALUE_TYPES]
+    return known[1]
+
+
+#: ``[exact_value_types(), library_exact_values()]`` as last found.
+_LIBRARY_EXACT: list[frozenset[type]] = [frozenset(), frozenset()]
 
 
 #: `tree_leaves` and `object_free_leaves` for each `exact_value_types`.
@@ -1972,6 +1990,14 @@ def walk_budget(seconds: float) -> Iterator[None]:
         yield
     finally:
         _DEADLINE[0] = before
+
+
+def walk_time_left() -> bool:
+    """Is a :func:`walk_budget` in progress with time left? A walk with a
+    fixed count of its own (the identity walk's) goes on past it while
+    this holds."""
+    limit = _DEADLINE[0]
+    return limit is not None and not limit.passed()
 
 
 def check_walk_budget() -> None:
