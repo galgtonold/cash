@@ -787,6 +787,11 @@ class CellExecutor:
             cell_id=cell_id,
         )
         if isinstance(upstream_result, RunInstead):
+            # A statement above, re-run for this cell, failed: what ran up to
+            # it is counted as a cell whose statements raised is.
+            ran = attribute_or(upstream_result.error, "upstream_metrics", None)
+            if ran:
+                self._failed_cell = (list(pre_upstream_metrics) + list(ran), hook_start)
             return upstream_result
         upstream_metrics, _restore_time, _execution_time = upstream_result
 

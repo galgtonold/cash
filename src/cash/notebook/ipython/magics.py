@@ -840,6 +840,8 @@ class CashMagics(Magics):
             with self._history_records(), self._statement_processor.running_as_written():
                 outcome = self._original_run_cell(result.source, *args, **kwargs)
             self._cell_executor.note_ran_as_written(raw_cell, result, outcome)
+            # The statements above re-run for it before one failed, if any.
+            self._record_failed_cell()
             return outcome
         if isinstance(result, PipelineSyntaxError):
             with (
@@ -926,6 +928,8 @@ class CashMagics(Magics):
             with self._history_records(), self._statement_processor.running_as_written():
                 outcome = await self._original_run_cell_async(result.source, *args, **kwargs)
             self._cell_executor.note_ran_as_written(raw_cell, result, outcome)
+            # The statements above re-run for it before one failed, if any.
+            self._record_failed_cell()
             return outcome
         if isinstance(result, PipelineSyntaxError):
             # The cell's own AST failed to parse — let IPython handle it (it

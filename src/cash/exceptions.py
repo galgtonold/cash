@@ -121,6 +121,10 @@ class UpstreamStateError(CashError):
     that statement, or run the notebook from the top.
     """
 
+    #: The rows of the statements re-run before it failed, and of the one
+    #: that failed, for the cell's statistics; None until the re-run sets them.
+    upstream_metrics: list | None = None
+
 
 class ForwardReferenceError(CashError):
     """Notebook: a cell reads a name that only a later cell defines.
