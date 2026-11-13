@@ -12,7 +12,6 @@ import hashlib
 import logging
 import random
 import sys
-import types
 from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
@@ -535,17 +534,11 @@ _UNREADABLE = object()
 def _is_user_function(value: object) -> bool:
     """A function the user wrote: walked into. Library code is not, both for
     cost and because a library's own generators are its business."""
+    from ..._user_attrs import importable_attr
     from ...install_paths import is_user_code_file
 
-    if issubclass(type(value), types.ModuleType):
-        # Not a function; and one standing in for a module whose import
-        # failed raises the ImportError on any attribute read.
-        return False
-    try:
-        code = getattr(getattr(value, "__func__", value), "__code__", None)
-    except Exception:  # noqa: BLE001 - an object whose attribute read raises is no function
-        return False
-    return type(code) is types.CodeType and is_user_code_file(code.co_filename)
+    code = importable_attr(importable_attr(value, "__func__", value), "__code__")
+    return code is not None and is_user_code_file(code.co_filename)
 
 
 def _cell_filled(cell) -> bool:

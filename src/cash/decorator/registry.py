@@ -24,7 +24,7 @@ from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning, CashImpurityWarning
 from ..graph import DependencyGraph
 from ..source_norm import bytecode_identity
-from . import code_trace, hit_memo
+from . import code_trace, hit_memo, state_memo
 from .cached_function import CachedFunction, PurityMode
 from .call_state import KeyBuildFailed
 from .explain import MissKind, MissReason
@@ -166,18 +166,18 @@ class FunctionRegistry:
         #: func_name -> its decoration's options and per-process state.
         self.cached: dict[str, CachedFunction] = {}
         #: func_name -> the decorated function.
-        self.functions: dict[str, Callable[..., Any]] = {}
+        self.functions: dict[str, Callable[..., Any]] = state_memo.GenerationDict()
         #: func_name -> its source identity at decoration.
-        self.source_hashes: dict[str, str] = {}
+        self.source_hashes: dict[str, str] = state_memo.GenerationDict()
         #: DataSource id -> the source, from ``depends_on``.
-        self.data_sources: dict[str, DataSource] = {}
+        self.data_sources: dict[str, DataSource] = state_memo.GenerationDict()
         #: Edges from a cached function to what it calls or declares.
         self.graph = DependencyGraph()
         #: func_name -> its purity report. Helper source hashes from it fold
         #: into the key's state hash, so cross-process helper edits invalidate.
         #: For a closure this is only the latest one analysed under the name;
         #: read a function's own through `report_for`.
-        self.purity_reports: dict[str, PurityReport] = {}
+        self.purity_reports: dict[str, PurityReport] = state_memo.GenerationDict()
         #: closure -> its own purity report. Two closures from one factory
         #: share a name but can call different helpers through what they
         #: capture (``make(ha)`` and ``make(hb)`` reading ``cap.helper``), and
@@ -217,7 +217,7 @@ class FunctionRegistry:
         #: snapshot at registration, and a ``(module, attr_chain)`` path for
         #: live re-resolution, so editing the dep on disk and reloading
         #: invalidates the parent key.
-        self.declared_dep_snapshots: dict[str, str] = {}
+        self.declared_dep_snapshots: dict[str, str] = state_memo.GenerationDict()
         self._declared_dep_paths: dict[str, tuple[str, tuple[str, ...]]] = {}
         #: func_name -> {callee name -> ref()} for each cached function its
         #: analysis reached (`PurityReport.cached_callees`): the object the
@@ -374,6 +374,7 @@ class FunctionRegistry:
         # A downstream that depends on this function inherits its TTL
         # (effective TTL = min over the dependency closure).
         self._effective_ttl_cache.clear()
+        state_memo.moved()
         return inert
 
     def _register_static_dependencies(
@@ -633,7 +634,13 @@ class FunctionRegistry:
         cheap on repeated registrations.
         """
         self.populated.add(func_name)
+        state_memo.moved()
         try:
+            # A bare reference to a function wrapped elsewhere is an edge
+            # too: the key leaves it out when the caller's helpers already
+            # hold all it folds (`DependencyStateHasher._walked_as_helper`), and
+            # keeps it when it carries more -- a data source, a declared
+            # dependency -- which the helper walk does not fold.
             called_names, gaps = CodeAnalyzer.find_called_functions_and_gaps(
                 func, self.functions, include_references=True
             )
@@ -691,3 +698,4 @@ class FunctionRegistry:
                 self._closure_reports[func] = report
             except TypeError:
                 pass  # not weak-referenceable: the name's report stands for it
+        state_memo.moved()

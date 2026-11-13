@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import ast
 import builtins
+import functools
 import hashlib
 import os
 import sys
@@ -58,6 +59,7 @@ __all__ = [
     "classify_call",
     "dotted_name",
     "environ_membership",
+    "ENVIRONMENT_READS",
     "environment_component",
     "environment_digests",
     "environment_entry_digest",
@@ -845,7 +847,13 @@ def _environment_value(kind: str, name: str) -> str | None:
     return os.environ.get(name)
 
 
+#: How many environment values were read for a key, ever: a memo of key
+#: parts that no watcher covers keeps none made while this moved.
+ENVIRONMENT_READS = [0]
+
+
 def _environment_digest(entry: EnvironmentInput) -> str:
+    ENVIRONMENT_READS[0] += 1
     kind, name = entry
     try:
         value = _environment_value(kind, name)
@@ -876,13 +884,22 @@ def environment_parts_component(parts: Iterable[tuple[str, str]]) -> str:
     return f":env:{joined}" if joined else ""
 
 
+#: How many keys have folded an environment read in this process: a key
+#: built while it moved holds a value no watcher sees
+#: (`cash.decorator.state_memo`).
+ENVIRONMENT_READS_FOLDED = [0]
+
+
 def environment_component(entries: Iterable[EnvironmentInput], note: Callable[[str, str], None] | None = None) -> str:
     """The key component for the environment reads *entries*: their current
     values, digested. Empty when there are none, so a key that reads no
     environment is exactly what it was. *note* is told each read's label and
     digest, for the account of why a key changed."""
     parts = []
-    for entry in sorted(set(entries)):
+    entries = sorted(set(entries))
+    if entries:
+        ENVIRONMENT_READS_FOLDED[0] += 1
+    for entry in entries:
         digest = _environment_digest(entry)
         if note is not None:
             note(environment_label(entry), digest)
@@ -942,12 +959,18 @@ def _named_kind(name: str, call: ast.Call) -> EffectKind | None:
 _ROOTS: dict[str, Any] = {"loaded": None, "roots": {}}
 
 
-def _resolution_table() -> set[str]:
-    return (
+@functools.cache
+def _resolution_table() -> tuple[frozenset[str], tuple[str, ...]]:
+    """The names resolved through a namespace, and their top-level modules
+    (sorted). Built once: the tables are constants, and `_roots` runs for
+    every call the walk classifies, where rebuilding them was most of its
+    cost."""
+    table = frozenset(
         {name for name, kind in MODULE_CALLS.items() if kind in _RESOLVED_KINDS}
         | set(CLOCK_WHEN_ARG_CALLS)
         | set(CLOCK_WHEN_ARGS_OMITTED)
     )
+    return table, tuple(sorted({entry.split(".", 1)[0] for entry in table}))
 
 
 def _roots() -> dict[int, tuple[Any, str]]:
@@ -955,8 +978,9 @@ def _roots() -> dict[int, tuple[Any, str]]:
     function a resolvable name passes through (``datetime``,
     ``datetime.datetime``, ``time.time``, ``pandas.Timestamp``), among the
     modules loaded now. Rebuilt when that set changes; never imports one."""
-    table = _resolution_table()
-    loaded = tuple(sorted({entry.split(".", 1)[0] for entry in table} & set(sys.modules)))
+    table, tops = _resolution_table()
+    modules = sys.modules
+    loaded = tuple(top for top in tops if top in modules)
     if _ROOTS["loaded"] == loaded:
         return _ROOTS["roots"]
     roots: dict[int, tuple[Any, str]] = {}

@@ -57,7 +57,7 @@ from . import code_trace
 from .arg_hashing import WatchedSince, is_cow_pandas
 from .arg_key import keyed_arguments
 from .cash_key import cash_key_method_of_type
-from .closure_fold import capture_digest, iter_code_scopes, unsafe_uses_of
+from .closure_fold import bound_values, capture_digest, iter_code_scopes, unsafe_uses_of
 from .function_identity import func_key
 from .key_values import is_immutable_capture, plain_data_kind
 from .user_code import own_package
@@ -71,6 +71,9 @@ if TYPE_CHECKING:
     from .global_values import GlobalValues
     from .registry import FunctionRegistry
     from .reporting import Notices
+
+#: A class's attributes that are its code, not its data: compared by identity.
+_DESCRIPTORS = (classmethod, staticmethod, property, type)
 
 logger = logging.getLogger(__name__)
 
@@ -755,7 +758,12 @@ class LearnedMutations:
 
     def learn(self, code: Any, scope: str, name: str) -> None:
         """Record that a call of *code* mutated *name* in *scope*."""
-        self._by_code.setdefault((code, scope), set()).add(name)
+        names = self._by_code.setdefault((code, scope), set())
+        if name not in names:
+            from . import state_memo
+
+            names.add(name)
+            state_memo.moved()
 
 
 #: Exact types whose instances cannot change once built (no subclass: one
@@ -1458,6 +1466,68 @@ class PurityChecks:
         observer.record(
             "argument mutation",
             f"the call changed {shown} in place -- the result was not stored, so this call runs every time",
+        )
+
+    def bound_state(self, func: Callable) -> list[tuple[str, Any, Any]]:
+        """``[(name, value, state)]`` of what *func* binds into every call
+        (`closure_fold.bound_values`), before the body: the instance of
+        ``cash.cache(est.fit)``, the class of a classmethod, a partial's
+        arguments. None of them is an argument of the call, so the
+        in-place-change check over the arguments never looked at them, and
+        ``est.fit`` setting ``self.result_`` was stored; a second estimator
+        got the hit and no ``result_``."""
+        return [(name, value, self._bound_digest(value)) for name, value in bound_values(func)]
+
+    def _bound_digest(self, value: Any) -> Any:
+        """What `PurityChecks.bound_state` compares across the body: the
+        value's hash as an argument's is taken, or for a class, its
+        attributes (a class hashes by name, which does not move when a
+        classmethod sets ``cls.x``). An instance that cannot be hashed is
+        compared by the identities of its attributes, which an assignment
+        moves. None when nothing can be taken."""
+        if isinstance(value, type):
+            parts = []
+            for attr, held in sorted(vars(value).items()):
+                if attr in ("__dict__", "__weakref__", "__doc__") or is_routine(held) or isinstance(held, _DESCRIPTORS):
+                    parts.append((attr, id(held)))
+                    continue
+                try:
+                    parts.append((attr, self._args.hash_payload((held,), {})))
+                except Exception:  # noqa: BLE001 - its identity still shows a rebinding
+                    parts.append((attr, id(held)))
+            return tuple(parts)
+        try:
+            return self._args.hash_payload((value,), {})
+        except Exception:  # noqa: BLE001 - fall back to the attributes' identities
+            pass
+        attrs = getattr(value, "__dict__", None)
+        held = dict(attrs) if isinstance(attrs, dict) else {}
+        for klass in type(value).__mro__:
+            for slot in getattr(klass, "__slots__", ()) or ():
+                if isinstance(slot, str) and slot not in ("__dict__", "__weakref__"):
+                    held.setdefault(slot, getattr(value, slot, None))
+        if not held and not isinstance(attrs, dict):
+            return None
+        return ("ids", tuple(sorted((k, id(v)) for k, v in held.items())))
+
+    def check_bound_mutation(self, func_name: str, observer: EffectObserver | None) -> None:
+        """Did the body change what the callable binds (`bound_state`)?
+        Named among the arguments the call changed in place: a hit would not
+        make the change, so the result is not stored, as for an argument.
+        Never written back by a hit: ``self`` is no argument a hit is handed."""
+        if observer is None or not observer.bound_before:
+            return
+        moved = []
+        for name, value, before in observer.bound_before:
+            if before is None or self._bound_digest(value) != before:
+                moved.append(name)
+        if not moved:
+            return
+        observer.mutated_args = list(dict.fromkeys([*(observer.mutated_args or ()), *moved]))
+        observer.record(
+            "argument mutation",
+            f"the call changed {', '.join(repr(n) for n in moved)}, which the cached callable is bound to, in "
+            f"place -- the result was not stored, so this call runs every time",
         )
 
     def _unnamed_may_change(

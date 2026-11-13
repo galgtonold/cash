@@ -15,7 +15,7 @@ import os
 import pickle
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Collection, Iterator
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from .. import _weak, argument_sharing, rewrite_in_place
@@ -48,7 +48,8 @@ from ..tracking.randomness import (
     replay_argument_carriers,
     replayable,
 )
-from . import code_trace, hit_memo, walk_scope
+from ..tracking.trace_recorder import other_thread_alive
+from . import code_trace, hit_memo, state_memo, walk_scope
 from .arg_hashing import (
     CALL_POLARS,
     CONTENT_KEYED,
@@ -124,7 +125,7 @@ logger = logging.getLogger(__name__)
 
 #: Cached functions whose `KeyBuilder.callee_state` is being built on this
 #: thread, so one that reaches itself folds its name instead of recursing.
-_CALLEE_STATES: contextvars.ContextVar[frozenset[str]] = contextvars.ContextVar(
+CALLEE_STATES: contextvars.ContextVar[frozenset[str]] = contextvars.ContextVar(
     "_cash_callee_states", default=frozenset()
 )
 
@@ -524,6 +525,14 @@ class KeyBuilder:
         return built, watch, ledger
 
     def _code_state(self, spec: CachedFunction, chain: list[str], *, note: bool = False) -> str:
+        """`_code_state_now`, or what it gave last time while nothing it
+        reads has moved since (`state_memo`)."""
+        memo = state_memo.memo_for(spec)
+        if memo is None:
+            return self._code_state_now(spec, chain, note=note)
+        return memo.code_state(self, spec, chain, note)
+
+    def _code_state_now(self, spec: CachedFunction, chain: list[str], *, note: bool = False) -> str:
         """The state segment before anything the arguments decide: the
         function's code, helpers, cached callees, declared files, closure,
         defaults, globals, RNG epoch and environment. Appends each stage to
@@ -540,13 +549,17 @@ class KeyBuilder:
         """
         func, func_name = spec.func, spec.name
         note_owner(func, code_objects_of(func))
+        # Edges the dependency state left out as already walked as helpers:
+        # the folds below over the same graph leave them out too.
+        covered: set[tuple[str, str]] = set()
         state_hash = self._state_hasher.compute(
             func_name,
             own_source_override=self._pins.pin_own_source(func),
             own_report=self._registry.report_for(func, func_name),
             note=note,
+            covered=covered,
         )
-        state_hash = self._fold_callee_bindings(func_name, state_hash)
+        state_hash = self._fold_callee_bindings(func_name, state_hash, covered)
         state_hash = self._files.fold_declared_files(spec, state_hash)
         chain.append(state_hash)
         state_hash = self._closures.fold_closure(func, func_name, state_hash)
@@ -561,7 +574,7 @@ class KeyBuilder:
         chain.append(state_hash)
         state_hash = self._globals.fold_read_globals(func, func_name, state_hash)
         state_hash = self._globals.fold_helper_read_globals(func, func_name, state_hash)
-        state_hash = self._globals.fold_dependency_read_globals(func, func_name, state_hash)
+        state_hash = self._globals.fold_dependency_read_globals(func, func_name, state_hash, covered)
         chain.append(state_hash)
         state_hash = self._rng.fold_rng_epoch(func_name, state_hash)
         chain.append(state_hash)
@@ -573,7 +586,7 @@ class KeyBuilder:
             state_hash = self._fold_key_function(spec, state_hash)
         return state_hash
 
-    def _fold_callee_bindings(self, func_name: str, state_hash: str) -> str:
+    def _fold_callee_bindings(self, func_name: str, state_hash: str, covered: Collection[tuple[str, str]] = ()) -> str:
         """Fold what each cached function *func_name* calls is bound to: its
         captured variables and its parameter defaults, transitively.
 
@@ -585,7 +598,9 @@ class KeyBuilder:
         They are folded by the same rules as the caller's own
         (`ClosureFold.fold_closure`, `ClosureFold.fold_defaults`). A callee
         another registry describes (`FunctionRegistry.reached_callee`) is
-        keyed whole by its own state already.
+        keyed whole by its own state already, and a *covered* edge's callee
+        was keyed as a helper, defaults and captures included
+        (`HelperIdentity.identity`).
 
         Raises `KeyBuildFailed` when a callee's default cannot be hashed.
         """
@@ -598,7 +613,7 @@ class KeyBuilder:
         try:
             while stack:
                 node, dep = stack.pop()
-                if dep in visited:
+                if dep in visited or (node, dep) in covered:
                     continue
                 visited.add(dep)
                 dep_func = self._registry.functions.get(dep)
@@ -646,7 +661,7 @@ class KeyBuilder:
         if reached_ttls is not None:
             # What the caller computes from this function is as fresh as it.
             reached_ttls.append(self._registry.effective_ttl(func_name, spec.ttl))
-        active = _CALLEE_STATES.get()
+        active = CALLEE_STATES.get()
         if func_name in active:
             walk_scope.note_callees((func_name,))
             return f"cycle:{func_name}"
@@ -679,8 +694,8 @@ class KeyBuilder:
         """`callee_state` built now, for a function no running build of a
         callee state is building."""
         func, func_name = spec.func, spec.name
-        active = _CALLEE_STATES.get()
-        token = _CALLEE_STATES.set(active | {func_name})
+        active = CALLEE_STATES.get()
+        token = CALLEE_STATES.set(active | {func_name})
         ledger_token = STATE_LEDGER.set(None)
         watch_token = CAPTURE_WATCH.set(None)
         # The callee's digest folds its own classes, whatever the caller folded.
@@ -697,7 +712,7 @@ class KeyBuilder:
             CLASSES_FOLDED.reset(classes_token)
             CAPTURE_WATCH.reset(watch_token)
             STATE_LEDGER.reset(ledger_token)
-            _CALLEE_STATES.reset(token)
+            CALLEE_STATES.reset(token)
 
     def build(self, spec: CachedFunction, args: tuple, kwargs: dict, split: frozenset[int] = frozenset()) -> BuiltKey:
         """The cache key for calling *spec*'s function with these arguments.
@@ -1771,6 +1786,7 @@ class CallRunner:
             func_name, args, kwargs, call.keyed_parts
         )
         run.observer.held_generators = self._purity.held_generators(func_name, args, kwargs)
+        run.observer.bound_before = self._purity.bound_state(func)
         # Watch the global RNG across the call: a draw inside the body is an
         # input the key cannot see statically.
         run.rng_pre = capture_rng_pre_state()
@@ -1827,13 +1843,16 @@ class CallRunner:
         global the call read, or change it in place, without the body
         doing so itself. Checking costs a second build of the key's state
         segment, on a miss only, so a single-threaded script does not pay
-        it. What the drift guard watches (`CAPTURE_WATCH`) is left to it:
-        the call itself moves a random generator it draws from, or a memo a
-        callable keeps.
+        it. Cash's own threads (its writers, its flusher, a held-back write's
+        timer) run no code of the user's and do not count
+        (`other_thread_alive`): counted, they made every miss of a script
+        that had stored anything pay the rebuild. What the drift guard
+        watches (`CAPTURE_WATCH`) is left to it: the call itself moves a
+        random generator it draws from, or a memo a callable keeps.
         """
         if not call.ledger:
             return None
-        if threading.active_count() == 1 and not inspect.iscoroutinefunction(spec.func):
+        if not inspect.iscoroutinefunction(spec.func) and not other_thread_alive(None):
             return None
         return lambda: _ledger_moved(call.ledger, self._keys.ledger_now(spec, call.args), call.capture_watch)
 
@@ -1883,10 +1902,11 @@ class CallRunner:
             self._purity.check_argument_mutation(
                 func_name, *(call.checked or (args, kwargs)), call.call_args_hash, run.observer
             )
+        self._purity.check_bound_mutation(func_name, run.observer)
         args_left = self.arguments_left(spec, run, call.checked or (args, kwargs), call.ran_unit)
         self._files.credit_remembered_reads(func_name, run.tracker, args, kwargs)
         self._files.warn_unrecorded_reads(func_name, run.tracker)
-        auto_file_deps = snapshot_tracked_deps(run.tracker, func.__module__)
+        auto_file_deps = snapshot_tracked_deps(run.tracker, getattr(func, "__module__", None))
         execution_time = _perf_counter() - call.call_start
 
         shared = self._purity.warn_shared_result(func, func_name, res, args, kwargs)

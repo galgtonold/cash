@@ -39,6 +39,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "DependencyStateHasher",
+    "OUTSIDE_READS_FOLDED",
     "HelperResolver",
     "SysModulesHelperResolver",
     "STATE_LEDGER",
@@ -60,6 +61,12 @@ def ledger_note(label: Any, value: Any) -> None:
     ledger = STATE_LEDGER.get()
     if ledger is not None:
         ledger[label] = value
+
+
+#: Data source tokens and declared dependencies re-resolved by `compute`:
+#: what no watcher sees, so a state segment that folded one is not
+#: remembered (`cash.decorator.state_memo`).
+OUTSIDE_READS_FOLDED = [0]
 
 
 @runtime_checkable
@@ -168,6 +175,7 @@ class DependencyStateHasher:
         own_source_override: str | None = None,
         own_report: PurityReport | None = None,
         note: bool = False,
+        covered: set[tuple[str, str]] | None = None,
     ) -> str:
         """Return the dependency state hash for *node*.
 
@@ -190,6 +198,10 @@ class DependencyStateHasher:
 
         ``note`` records the root's parts in `STATE_LEDGER`; only the
         decorator's key build asks, never a nested identity lookup.
+
+        ``covered`` collects each ``(caller, callee)`` edge left out because
+        the caller's helpers already hold the callee (`_walked_as_helper`),
+        for the key's other folds over the graph to leave out as well.
         """
         if visited is None:
             visited = set()
@@ -209,23 +221,41 @@ class DependencyStateHasher:
             # The source's change token (mtime / version / digest); warns if a
             # source mistakenly returns a bool, which can't track changes.
             hashes.append(state_token_of(self._data_sources[node]))
+            OUTSIDE_READS_FOLDED[0] += 1
         elif node in self._declared_dep_snapshots:
             # A declared plain-callable dep: re-resolve its live
             # source hash so a disk edit + reload is seen; fall back to the
             # registration-time snapshot when resolution fails.
             live = self._declared_dep_resolver(node) if self._declared_dep_resolver is not None else None
+            OUTSIDE_READS_FOLDED[0] += 1
             hashes.append(live if live is not None else self._declared_dep_snapshots[node])
 
         if note and hashes:
             ledger_note("source", hashes[0])
 
+        report = own_report if own_report is not None else self._purity_reports.get(node)
+        helpers = self._helper_values(report)
+
         # 2. Dependencies' state, sorted for determinism.
         for dep in sorted(self._graph.get_dependencies(node)):
             reached = self._reached_callee(node, dep) if self._reached_callee is not None else None
+            if reached is None and self._walked_as_helper(dep, report, helpers, set()):
+                # Already in step 3, whole: a cached function this node calls
+                # as the plain function (``cache(func)(x)`` wraps it inside
+                # the body). Whether it was wrapped before this node was
+                # first keyed depends on the order the program ran in and on
+                # which earlier calls were hits, so the edge is no key part.
+                if covered is not None:
+                    covered.add((node, dep))
+                continue
             # A cached function this registry does not describe keys by its
             # own state, built by the instance that owns it for the object
             # the caller reaches.
-            state = f"reached:{reached._cash_state()}" if reached is not None else self.compute(dep, visited)
+            state = (
+                f"reached:{reached._cash_state()}"
+                if reached is not None
+                else self.compute(dep, visited, covered=covered)
+            )
             hashes.append(state)
             if note:
                 ledger_note(("calls", dep), state)
@@ -233,18 +263,68 @@ class DependencyStateHasher:
         # 3. Transitive helper source hashes, re-resolved live per call.
         #    The node's own qualname is skipped (its source is already in
         #    step 1); unresolved helpers fall back to the recorded snapshot.
-        report = own_report if own_report is not None else self._purity_reports.get(node)
         # The code each helper ran when walked, compared again after the
         # body (`cash.code_swaps`).
         note_report(report)
-        if report is not None and report.helper_source_hashes:
-            current = self._helper_resolver.current_hashes(report)
-            for qual in sorted(report.helper_source_hashes):
-                if qual == node:
-                    continue
-                helper = current.get(qual, report.helper_source_hashes[qual])
-                hashes.append(f"helper:{qual}:{helper}")
-                if note:
-                    ledger_note(("helper", qual), helper)
+        for qual in sorted(helpers):
+            if qual == node:
+                continue
+            hashes.append(f"helper:{qual}:{helpers[qual]}")
+            if note:
+                ledger_note(("helper", qual), helpers[qual])
 
         return hashlib.sha256(":".join(hashes).encode("utf-8")).hexdigest()
+
+    def _helper_values(self, report: PurityReport | None) -> dict[str, str]:
+        """``{qualname: digest}`` of *report*'s helpers, live where they resolve."""
+        if report is None or not report.helper_source_hashes:
+            return {}
+        current = self._helper_resolver.current_hashes(report)
+        return {qual: current.get(qual, digest) for qual, digest in report.helper_source_hashes.items()}
+
+    def _walked_as_helper(self, dep: str, report: PurityReport | None, helpers: dict[str, str], seen: set[str]) -> bool:
+        """Does *helpers* (the caller's step 3) already hold all that *dep*'s
+        own state hash would fold?
+
+        True only for a cached function of this registry that the caller's
+        analysis walked as a plain helper of the same name, the very object
+        registered, whose own helpers all appear in *helpers* with the same
+        digests, and whose own dependencies are covered the same way. A data
+        source, a declared dependency, a function another instance caches or
+        a helper digest that differs keeps the edge, so nothing it folds
+        leaves the key.
+        """
+        if dep in seen:
+            return True
+        seen.add(dep)
+        func = self._functions.get(dep)
+        if func is None or report is None or dep not in helpers:
+            return False
+        if _resolve_helper(report, dep) is not func:
+            return False
+        own = self._purity_reports.get(dep)
+        if own is not None and not set(own.environment_reads or ()) <= set(report.environment_reads or ()):
+            return False
+        for qual, digest in self._helper_values(own).items():
+            if qual != dep and helpers.get(qual) != digest:
+                return False
+        for inner in self._graph.get_dependencies(dep):
+            if self._reached_callee is not None and self._reached_callee(dep, inner) is not None:
+                return False
+            if not self._walked_as_helper(inner, report, helpers, seen):
+                return False
+        return True
+
+
+def _resolve_helper(report: PurityReport, qual: str) -> Any:
+    """The object *report*'s helper *qual* is now, or None if it does not resolve."""
+    path = report.helper_resolution_paths.get(qual)
+    if path is not None:
+        obj: Any = sys.modules.get(path[0])
+        for attr in path[1]:
+            if obj is None:
+                return None
+            obj = getattr(obj, attr, None)
+        return obj
+    ref = getattr(report, "helper_objects", {}).get(qual)
+    return ref() if ref is not None else None

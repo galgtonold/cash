@@ -325,6 +325,16 @@ Set `CASH_HITPATH=0` in the environment to turn this off.
 `CASH_HITPATH_VERIFY=1` builds the key behind every such hit as well and
 raises if the two differ; it exists to test cash itself.
 
+A call keyed in full still reuses part of the work: the code segment of the
+key (the function's code, its helpers' and cached callees', the globals,
+captures and defaults they read) is remembered per function and reused while
+the same watchers show nothing it reads moved and cash's own state it reads
+(registrations, pins, learned mutations, settings) is unchanged. A segment
+that read the random seed state or an environment variable is not
+remembered. `CASH_STATE_MEMO=0` turns this off; `CASH_STATE_MEMO_VERIFY=1`
+(or `CASH_HITPATH_VERIFY=1`) folds the segment again behind every reuse and
+raises if the two differ.
+
 ## Related
 
 - [`@cash.cache` guide](../decorator.md): every parameter, with examples.

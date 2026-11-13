@@ -9,7 +9,7 @@ from collections.abc import Callable
 from typing import Any, NamedTuple
 
 from ..sizing import memory_footprint, pickled_size_estimate
-from . import memory_backend, set_order, write_cost
+from . import chunk_store, memory_backend, set_order, write_cost
 from ._base import MEASURED_ROUND_TRIP, CacheBackend, MetadataDict, entry_expired, store_seconds
 from ._writes import PendingWrites
 from .clear_watch import ClearWatcher
@@ -427,6 +427,19 @@ class TieredBackend(CacheBackend):
             logger.debug("could not size a value for the disk tier alone", exc_info=True)
             return False
 
+    @staticmethod
+    def _waits_for_a_hit(value: Any) -> bool:
+        """Does *value* hold as many bytes of arrays as a chunk the disk tier
+        maps rather than reads (`chunk_store.MAP_MIN_BYTES`), so that it can
+        wait on disk for its first hit? That hit maps them back and keeps
+        the value in RAM for the hits after. Records and other objects,
+        which a read unpickles one by one, go to the RAM tier as before."""
+        try:
+            return _array_bytes(value) >= chunk_store.MAP_MIN_BYTES
+        except Exception:  # the RAM tier takes it, as before
+            logger.debug("could not size a value for the disk tier first", exc_info=True)
+            return False
+
     def _drop_from_first_tier(self, key: str) -> None:
         """An older RAM copy of *key* is not served over the one on disk."""
         try:
@@ -806,7 +819,17 @@ class TieredBackend(CacheBackend):
         # every hit reads it from disk (`DISK_ALONE`). Otherwise, or when no
         # disk tier takes it, the RAM tier is written first, as always.
         disk_alone = len(self.backends) > 1 and self._goes_to_disk_alone(value)
-        if not disk_alone:
+        # A big result of a decorated function goes to disk first as well,
+        # and into the RAM tier at its first hit (`get`, which takes it as
+        # read once already, `_remember_read`): most are never asked for
+        # again in the process that made them, and the RAM tier kept a copy
+        # of each up to its cap -- 3 GB over a solar model's one-year runs,
+        # against 0.35 GB plain. Unlike a value kept on disk alone, it is
+        # not marked so (`DISK_ALONE`).
+        disk_first = disk_alone or (
+            len(self.backends) > 1 and bool(metadata.get("decorator_entry")) and self._waits_for_a_hit(value)
+        )
+        if not disk_first:
             write_first_tier()
         elif not metadata.get("size"):
             # What the RAM tier would have put there: the bytes ceiling below
@@ -857,14 +880,18 @@ class TieredBackend(CacheBackend):
                 self._persist_call_refs(metadata.get("call_refs"), settled=True)
             try:
                 with write_cost.sampling(*self._priced(metadata, cap_size)):
-                    if decision.persist and disk_alone:
-                        metadata[DISK_ALONE] = True
+                    if decision.persist and disk_first:
+                        if disk_alone:
+                            metadata[DISK_ALONE] = True
                         self._drop_from_first_tier(key)
                         writes = self._write_persistent_tiers(key, value, metadata, serializer, cap_size)
                         if not self._persisted(writes.stored):
                             metadata.pop(DISK_ALONE, None)
-                            disk_alone = False
+                            disk_alone = disk_first = False
                             write_first_tier()
+                        elif not disk_alone:
+                            # Counted as read once: the first hit keeps it in RAM.
+                            self._remember_read(key)
                     elif decision.persist:
                         # The RAM tier's own copy, when it has one nothing changes: a
                         # tier that takes it serializes it in the background, and the
@@ -893,8 +920,8 @@ class TieredBackend(CacheBackend):
                         )
                     else:
                         writes = _TierWrites([], False, cap_size, [], [])
-                        if disk_alone:
-                            disk_alone = False
+                        if disk_first:
+                            disk_alone = disk_first = False
                             write_first_tier()
             finally:
                 self._release_handoff()
@@ -931,6 +958,37 @@ class TieredBackend(CacheBackend):
         # Log visibility
         if stored_destinations:
             logger.debug("[STORAGE] Stored in: %s", ", ".join(stored_destinations))
+
+
+#: The items of a dict, list or tuple `_array_bytes` looks into: a result's
+#: few parts (``frame, summary, n = build()``), not a list of records.
+_ARRAY_PARTS_MAX = 64
+
+
+def _array_bytes(value: Any, depth: int = 0) -> int:
+    """The bytes *value* keeps in numpy arrays of numbers, dates and the
+    like: its own, a pandas table's blocks and labels, or those of the few
+    parts of a dict, list or tuple around them. Object arrays count
+    nothing. Reads sizes only."""
+    kind = type(value)
+    if kind is dict or kind is list or kind is tuple:
+        if depth >= 4 or len(value) > _ARRAY_PARTS_MAX:
+            return 0
+        items = value.values() if kind is dict else value
+        return sum(_array_bytes(item, depth + 1) for item in items)
+    numpy = sys.modules.get("numpy")
+    if numpy is not None and kind is numpy.ndarray:
+        return 0 if value.dtype.hasobject else int(value.nbytes)
+    pandas = sys.modules.get("pandas")
+    if pandas is None or kind not in (pandas.DataFrame, pandas.Series):
+        return 0
+    arrays = [getattr(block.values, "_ndarray", block.values) for block in value._mgr.blocks]
+    index = value.index
+    if not isinstance(index, (pandas.RangeIndex, pandas.MultiIndex)):
+        # A range's labels are built when read; a MultiIndex's are levels.
+        arrays.append(getattr(index, "_data", None))
+    arrays = [getattr(array, "_ndarray", array) for array in arrays]
+    return sum(int(array.nbytes) for array in arrays if type(array) is numpy.ndarray and not array.dtype.hasobject)
 
 
 def _writes_bytes_as_they_are(backend: CacheBackend) -> bool:

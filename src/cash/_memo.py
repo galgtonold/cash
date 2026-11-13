@@ -27,6 +27,7 @@ __all__ = [
     "FRAMES",
     "FROZEN_RESULTS",
     "MODULE_ANALYSES",
+    "PARSED_SOURCES",
     "MODULE_READ_DIGESTS",
     "NOTEBOOK_FUNCTIONS",
     "NOTEBOOK_STATEMENTS",
@@ -134,6 +135,10 @@ PATCH_SITES = 1024
 #: top-level bindings.
 MODULE_ANALYSES = 1024
 
+#: One parsed tree per helper source text the walk met: a process reaching
+#: a large library through its cached functions meets a few hundred.
+PARSED_SOURCES = 1024
+
 #: One digest per module file and set of names read from it.
 MODULE_READ_DIGESTS = 4096
 
@@ -167,6 +172,11 @@ RESULT_TYPES = 256
 
 #: One stored-key record per cached function, as last read from disk.
 RECORDS = 256
+
+#: One remembered globals fold per helper and key-build step
+#: (`helper_fold_memo`): a function reaching a library's ~1,000 helpers
+#: fills about that many.
+HELPER_FOLDS = 16384
 
 #: One key-build ledger per function and state, for `explain()`.
 STATE_LEDGERS = 512

@@ -106,6 +106,13 @@ def warn_source_changed_since_load(fn: Callable) -> None:
         logger.debug("Could not emit the source-changed notice", exc_info=True)
 
 
+def _generation_moved() -> None:
+    """A pin changed: a remembered state segment read the old one."""
+    from . import state_memo
+
+    state_memo.moved()
+
+
 def func_key(func: Callable) -> str:
     """Return a module-qualified key for a function.
 
@@ -365,6 +372,7 @@ class OwnSourcePins:
                     if live is not None:
                         pin = live
                         self._own_pins[key] = (entry[0], live)
+                        _generation_moved()
             return pin
         at_decoration = source_hash is not None
         keyed_stat = stat_code_file(func)
@@ -387,6 +395,7 @@ class OwnSourcePins:
         self._own_pins_unverified.discard(key)
         if key in self._own_pins or len(self._own_pins) < self.OWN_PINS_MAX:
             self._own_pins[key] = (self._pin_owner_ref(owner, key), pin)
+            _generation_moved()
             if at_decoration:
                 self._own_pins_unverified.add(key)
         return pin

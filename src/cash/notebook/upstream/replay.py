@@ -244,6 +244,8 @@ class StatementReplay:
         notebook_cells: list[str] | None = None,
         exec_sources: dict[str, str] | None = None,
         before_statement: Callable[[int], None] | None = None,
+        should_run: Callable[[str], bool] | None = None,
+        skipped: list[str] | None = None,
     ) -> list[ProcessResult]:
         """Re-execute a list of statements and return their metrics.
 
@@ -253,11 +255,60 @@ class StatementReplay:
         (see :meth:`statement_exec_sources`). *before_statement* is called
         with each statement's index just before it runs (the random streams
         put where a run has them there, ``RngRewind.before_statement``).
+        A statement *should_run* answers False for is left out, and added to
+        *skipped*.
         """
-        executed_metrics = []
+        executed_metrics: list[ProcessResult] = []
+        try:
+            return self._reexecute(
+                statements,
+                process_callback,
+                global_ttl,
+                executed_metrics,
+                progress_callback,
+                restored_info,
+                control_structure_callback,
+                annotations,
+                notebook_cells,
+                exec_sources,
+                before_statement,
+                should_run,
+                skipped,
+            )
+        except UpstreamStateError as failure:
+            # What ran before the failure, and the statement that failed, is
+            # the cell's to count (``CellExecutor.take_failed_cell``): the
+            # cell raises, but that time was spent.
+            if failure.upstream_metrics is None:
+                failure.upstream_metrics = (restored_info or []) + executed_metrics
+            raise
+
+    def _reexecute(
+        self,
+        statements: list[str],
+        process_callback: Callable[..., ProcessResult],
+        global_ttl: int | None,
+        executed_metrics: list[ProcessResult],
+        progress_callback: Callable[..., None] | None,
+        restored_info: list[ProcessResult] | None,
+        control_structure_callback: Callable[..., Any] | None,
+        annotations: dict[str, Any] | None,
+        notebook_cells: list[str] | None,
+        exec_sources: dict[str, str] | None,
+        before_statement: Callable[[int], None] | None,
+        should_run: Callable[[str], bool] | None,
+        skipped: list[str] | None,
+    ) -> list[ProcessResult]:
+        """:meth:`reexecute`, its rows gathered into *executed_metrics* as
+        each statement runs."""
         total_upstream_steps = len(statements)
 
         for stmt_idx, stmt_code in enumerate(statements):
+            if should_run is not None and not should_run(stmt_code):
+                logger.debug("[UPSTREAM] Not re-running, nothing it draws from moves as it is read: %.40s", stmt_code)
+                if skipped is not None:
+                    skipped.append(stmt_code)
+                continue
             # The badge's "Upstream" section is what tells the user; this line
             # is for ``%cash_debug`` (and the integration tests that read it).
             if logger.isEnabledFor(logging.DEBUG):

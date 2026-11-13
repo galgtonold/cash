@@ -84,6 +84,10 @@ class StaleValueGuard:
         #: ``(cell index, class) -> ClassState`` saved where the cell started
         #: on its last run in order (`class_state.ClassState`).
         self._class_saved: dict[tuple[int, str], ClassState] = {}
+        #: Cell index -> ``name -> (id, weak reference or None)`` of each
+        #: value its last run, which raised, may have written
+        #: (`note_cell_raised`); read and dropped at the cell's next check.
+        self._left_by_failed_run: dict[int, dict[str, tuple[int, Any]]] = {}
         #: The cell the current check is for.
         self._cell_idx: int | None = None
         self._cells: list[str] | None = None
@@ -140,6 +144,7 @@ class StaleValueGuard:
         self._put_back_instead_of_rerun(broken_vars, current_cell_idx, virtual_lineage)
         self._cell_idx = current_cell_idx
         self._cells = notebook_cells
+        left_by_failed_run = self._left_by_failed_run.pop(current_cell_idx, {}) if current_cell_idx is not None else {}
         if not required_inputs:
             return
         reassigned = effects.reassigned
@@ -150,6 +155,7 @@ class StaleValueGuard:
         self_written = reassigned | inplace_self
         if not self_written:
             return
+        self._reset_what_a_failed_run_left(left_by_failed_run, self_written & required_inputs, broken_vars)
         self._keep_shared_own_writes(inplace_self & broken_vars, broken_vars, virtual_lineage)
         # Vars that an *upstream* cell also mutates in place. A no-lineage var
         # mutated across several cells (``results.append(..)`` once per cell) has
@@ -702,16 +708,19 @@ class StaleValueGuard:
         trace_event("shared_kept", var=var_name, partners=below)
         return True
 
-    def _started_from_before(self, var_name: str, live_value: Any) -> bool:
-        """Whether the current cell started from *live_value* last time it ran.
+    def _started_from_before(self, var_name: str, live_value: Any, cell_idx: int | None = None) -> bool:
+        """Whether the current cell (or *cell_idx*) started from *live_value*
+        last time it ran.
 
         Fails closed: a recorded ``id`` without a weak reference (a list or
         dict takes none) that a new object happens to reuse reads as the same
         object, which costs a needless rebuild, never a doubled write.
         """
-        if self._cell_idx is None:
+        if cell_idx is None:
+            cell_idx = self._cell_idx
+        if cell_idx is None:
             return True
-        seen = self._started_from.get((self._cell_idx, var_name))
+        seen = self._started_from.get((cell_idx, var_name))
         if seen is None:
             return False
         seen_id, ref = seen
@@ -745,7 +754,7 @@ class StaleValueGuard:
             noted.add(var_name)
         self._noted_at_start = (cell_idx, frozenset(noted))
 
-    def note_cell_raised(self, cell_idx: int, changed: set[str]) -> None:
+    def note_cell_raised(self, cell_idx: int, changed: set[str], rebound_only: set[str] = frozenset()) -> None:
         """Cell *cell_idx* raised, having changed in place at most *changed*:
         forget the object it started from, as :meth:`note_cell_start`
         recorded it for this run, for every other name.
@@ -756,13 +765,63 @@ class StaleValueGuard:
         rebuilt every large value it changes in place each time, where plain
         Python only shows the error. A record from an earlier run (a name
         this run did not start from) stays: that run may have written it.
+
+        So is the record of a name among *changed* that the run can only
+        have bound anew (*rebound_only*: ``acc = acc + new`` in a loop that
+        raised before reaching it) and that still holds the object it
+        started from: no write of the run reached it, so it is as the
+        cells above gave it. Kept, each next attempt rebuilt it again.
+
+        Every other name the run may have written, as it left it, is kept
+        for the cell's next check, which rebuilds it from the cells above
+        (`_reset_what_a_failed_run_left`).
         """
+        user_ns = self.shell.user_ns
         noted_idx, noted = self._noted_at_start
         if noted_idx != cell_idx:
-            return
-        for var_name in noted - changed:
+            noted = frozenset()
+        untouched: set[str] = set()
+        for var_name in noted:
+            if var_name in changed and not (
+                var_name in rebound_only
+                and var_name in user_ns
+                and self._started_from_before(var_name, user_ns[var_name], cell_idx)
+            ):
+                continue
+            untouched.add(var_name)
             self._started_from.pop((cell_idx, var_name), None)
         self._noted_at_start = (None, frozenset())
+        left: dict[str, tuple[int, Any]] = {}
+        for var_name in changed - untouched:
+            if var_name in user_ns:
+                left[var_name] = _identity(user_ns[var_name])
+        self._left_by_failed_run[cell_idx] = left
+
+    def _reset_what_a_failed_run_left(
+        self, left: dict[str, tuple[int, Any]], self_written: set[str], broken_vars: set[str]
+    ) -> None:
+        """Mark broken each of *self_written* (names the cell changes and
+        reads) that still holds the value its last run, which raised, left
+        (*left*, `note_cell_raised`): its next run starts from what the
+        cells above give, as after a run that went through.
+
+        One rule for every re-run of a cell that changes a name it reads:
+        it starts from the cells above, so the cell's value is the one
+        Restart & Run All gives. Kept instead, a run after a failed one went
+        on from what the failed run left, where a run after one that went
+        through started again: ok, part way, ok left an accumulator neither
+        a plain kernel (each run on top of the last) nor Run All gives.
+        A value the cells above have made again since is not touched."""
+        user_ns = self.shell.user_ns
+        for var_name in sorted(self_written & left.keys()):
+            if var_name not in user_ns or var_name in broken_vars:
+                continue
+            seen_id, ref = left[var_name]
+            live = user_ns[var_name]
+            same = ref() is live if ref is not None else seen_id == id(live)
+            if same and not self._kept_for_partner_below(var_name, live):
+                logger.debug("[UPSTREAM_DEBUG] '%s' holds what the cell's failed run left; rebuilt.", var_name)
+                broken_vars.add(var_name)
 
     def _classes_changed_elsewhere(
         self, stateful: frozenset[str], notebook_cells: list[str] | None, current_cell_idx: int | None
@@ -987,6 +1046,14 @@ class StaleValueGuard:
             except (SyntaxError, ValueError, TypeError):
                 continue
         return muts
+
+
+def _identity(value: Any) -> tuple[int, Any]:
+    """``(id, weak reference or None)`` of *value*: never a strong one."""
+    try:
+        return id(value), _weak.ref(value)
+    except TypeError:
+        return id(value), None
 
 
 def _weakly_held(value: Any) -> bool:

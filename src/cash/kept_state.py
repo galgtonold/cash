@@ -39,6 +39,7 @@ from . import _native, _weak
 from ._own_work import own_work
 from ._user_attrs import instance_of
 from .live_state import is_live_stream, live_reduce
+from .value_types import WEAK_PROXY_TYPES, is_dead_proxy
 
 __all__ = [
     "Ahead",
@@ -1414,6 +1415,8 @@ class _KeepDict(dict):
     def _chosen_reducer(self, t: type) -> Any:
         if issubclass(t, type):
             raise KeyError(t)  # a class: pickled by name, as pickle does
+        if t in WEAK_PROXY_TYPES and self._watch is None:
+            return functools.partial(_reduce_weak_proxy, protocol=self._protocol)
         registered = copyreg.dispatch_table.get(t)
         if self._watch is not None:
             reducer = _watched(self._store_reducer(t, registered), t, registered, self._watch)
@@ -1462,6 +1465,21 @@ class _KeepDict(dict):
         if cached_properties(t) and _leaves_views_out(t):
             reducer = functools.partial(_reduce_without_views, reducer=reducer, which=stored_views)
         return reducer
+
+
+def dead_weak_proxy() -> None:
+    """What a ``weakref.proxy`` whose object is gone stands for in a key
+    pickle: one reference to this function, the same for every such
+    proxy (`value_types.is_dead_proxy`)."""
+
+
+def _reduce_weak_proxy(proxy: Any, protocol: int) -> Any:
+    """A live proxy pickles as the object it refers to, as pickle itself
+    does it; a dead one as `dead_weak_proxy`, where pickle raised
+    ReferenceError and the key could not be built."""
+    if is_dead_proxy(proxy):
+        return (dead_weak_proxy, ())
+    return proxy.__reduce_ex__(protocol)
 
 
 def _names_apart(reducer: Any, names: dict[str, str]) -> Callable[[Any], Any]:

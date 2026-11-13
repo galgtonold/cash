@@ -7,7 +7,7 @@ import logging
 import sys
 import textwrap
 import types
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from cash._user_attrs import has_attribute
@@ -108,6 +108,11 @@ class ReexecutionPlanner:
         self.probe = probe
         #: ``(trace, its length, the indices)`` `unrun_process_writers` last found.
         self._process_writers_of: tuple[list, int, tuple[int, ...]] | None = None
+        #: The statements of the last plan that draw from a name not live
+        #: when it was made (after a restart), by code: run only when that
+        #: name, made again by the plan, moves as it is read
+        #: (`_redraw_remade_streams`); with True, refused then instead.
+        self.draws_if_stream: dict[str, tuple[frozenset[str], bool]] = {}
         #: The file-writer pass, with the memos it keeps.
         self.file_writers = FileWriterScheduler(shell, tracking_state, probe)
         #: Refuses figure saves whose figure would be written blank.
@@ -141,6 +146,10 @@ class ReexecutionPlanner:
         notebook_cells = check.notebook_cells
         simulation_trace = sim.trace
         broken_vars = result.broken_vars
+        self.draws_if_stream = {}
+        #: Trace index -> (names it draws, refused when one is a stream):
+        #: what `_redraw_remade_streams` added on a name it could not see.
+        draws_if_stream: dict[int, tuple[frozenset[str], bool]] = {}
         virtual_lineage = sim.virtual_lineage
         virtual_modules = sim.virtual_modules
         if logger.isEnabledFor(logging.DEBUG):
@@ -261,6 +270,13 @@ class ReexecutionPlanner:
                 restored_statements_info,
                 result.kept_sharers,
             )
+            stmts_to_run_indices = self._redraw_remade_streams(
+                stmts_to_run_indices,
+                simulation_trace,
+                check,
+                None,
+                restored_codes={info.get("code") for info in restored_statements_info},
+            )
             if len(stmts_to_run_indices) == before:
                 break
 
@@ -303,10 +319,23 @@ class ReexecutionPlanner:
             restored_statements_info,
         )
 
+        # Last, once no other pass can take them for statements that run
+        # (and plan what they read): the draws from a name the kernel does
+        # not hold yet, run only if it turns out a stream.
+        stmts_to_run_indices = self._redraw_remade_streams(
+            stmts_to_run_indices,
+            simulation_trace,
+            check,
+            draws_if_stream,
+            restored_codes={info.get("code") for info in restored_statements_info},
+        )
         statements_to_reexecute: list[str] = []
+        sure = {simulation_trace[idx].stmt_code for idx in stmts_to_run_indices if idx not in draws_if_stream}
         for idx in stmts_to_run_indices:
             stmt_code = simulation_trace[idx].stmt_code
             statements_to_reexecute.append(stmt_code)
+            if idx in draws_if_stream and stmt_code not in sure:
+                self.draws_if_stream[stmt_code] = draws_if_stream[idx]
             trace_event("schedule_reexec", stmt=stmt_code[:80])
             logger.debug("[UPSTREAM] Scheduled for execution: %s", stmt_code[:40])
 
@@ -833,6 +862,104 @@ class ReexecutionPlanner:
                         sorted(touched & consumed),
                         stmt_code,
                     )
+        return sorted(scheduled)
+
+    def _redraw_remade_streams(
+        self,
+        stmts_to_run_indices: list[int],
+        simulation_trace: list,
+        check: CellCheck,
+        draws_if_stream: dict[int, tuple[frozenset[str], bool]] | None,
+        restored_codes: set[str | None] | frozenset[str] = frozenset(),
+    ) -> list[int]:
+        """Schedule, after each statement of the plan that makes an open file,
+        a generator or an iterator afresh, every statement between it and the
+        reader that draws from it, as a run from the top runs them.
+
+        Such a value moves as it is read. Made again alone, it stands where
+        it was made: ``f = open(path)`` re-run after a restart, without the
+        ``header = f.readline()`` below it, and ``rows = f.readlines()`` in
+        the cell read the header as a row. The draws are scheduled only when
+        something reads the name after them: the cell, or a statement of the
+        plan.
+
+        A name live in the kernel is seen for what it is; with
+        *draws_if_stream* None only those are taken. One that is not (after a
+        restart) cannot be told until the plan makes it, so its draws go
+        into *draws_if_stream*: run only when the value the plan made moves
+        as it is read. That call comes after every other pass, so none of
+        them plans for a draw that may not run (``table.to_csv(OUT / ...)``
+        taken for a draw from a re-made ``OUT`` brought the backtest that
+        makes ``table`` in), nor finds one planned that it needs to run. A draw that also changes, on top of what it
+        finds, a name no statement above makes afresh (``lines.append(
+        f.readline())``) cannot be run again without applying that change
+        twice: the plan is refused (:class:`UpstreamRepairGap`), at once for
+        a live stream and as it runs for one that was not live.
+
+        A statement the backward scan restored (*restored_codes*) is left as
+        it is: a draw from a stream is never stored, so one restored drew
+        from no stream, and taking it into the plan would drop its restore
+        for a re-run the replay then leaves out (``big = (sleep(.4), k *
+        1000)[1]`` restored below a re-run ``k = 5``).
+        """
+        if not stmts_to_run_indices:
+            return stmts_to_run_indices
+        user_ns = self._user_ns()
+        required = set(check.required_inputs or ())
+        scheduled = set(stmts_to_run_indices)
+        for made_at in sorted(stmts_to_run_indices):
+            entry = simulation_trace[made_at]
+            if import_only(entry.stmt_code):
+                # A module, or a name taken from one: not made afresh here.
+                continue
+            for name in sorted(set(entry.outputs or ()) - set(entry.inputs or ())):
+                live = name in user_ns
+                if live != (draws_if_stream is None) or (live and not _drawn_in_place(user_ns[name])):
+                    continue
+                end = next(
+                    (
+                        j
+                        for j in range(made_at + 1, len(simulation_trace))
+                        if name in (simulation_trace[j].outputs or ())
+                        and name not in (simulation_trace[j].inputs or ())
+                    ),
+                    len(simulation_trace),
+                )
+                drawers = [
+                    j
+                    for j in range(made_at + 1, end)
+                    if j not in scheduled
+                    and simulation_trace[j].stmt_code not in restored_codes
+                    and _draws(simulation_trace[j], name)
+                ]
+                if not drawers:
+                    continue
+                read_after = (end == len(simulation_trace) and name in required) or any(
+                    k in scheduled and name in (simulation_trace[k].inputs or ()) for k in range(drawers[0] + 1, end)
+                )
+                if not read_after:
+                    continue
+                for j in drawers:
+                    rebuilds = _rebuilds_of_what_it_changes(simulation_trace, j, {name})
+                    if rebuilds is None and live:
+                        raise _redraw_gap(simulation_trace[j].stmt_code, name)
+                    new = ({j} | (rebuilds or set())) - scheduled
+                    if draws_if_stream is not None:
+                        for k in new:
+                            names, refused = draws_if_stream.get(k, (frozenset(), False))
+                            draws_if_stream[k] = (names | {name}, refused or (k == j and rebuilds is None))
+                    scheduled |= new
+                    if new and logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(
+                            "[UPSTREAM] [%s] makes %r again%s: re-running %s, which draw from it",
+                            made_at,
+                            name,
+                            "" if live else " (run if it is a stream)",
+                            sorted(new),
+                        )
+                    trace_event("redraw_remade_stream", name=name, added=sorted(new), live=live)
+        if len(scheduled) == len(stmts_to_run_indices):
+            return stmts_to_run_indices
         return sorted(scheduled)
 
     def _complete_shadowed_var_producers(
@@ -1598,6 +1725,85 @@ def _rebuilds_of_what_it_changes(simulation_trace: list, index: int, consumables
             return None
         rebuilds.update(writers)
     return rebuilds
+
+
+def _draws(entry: Any, name: str) -> bool:
+    """Whether the trace *entry* reads *name* in a way that draws from it
+    (`consumed_input_names`); when its text cannot be read, it is taken to."""
+    if name not in (entry.inputs or ()):
+        return False
+    try:
+        return name in consumed_input_names(parse_cached(textwrap.dedent(entry.stmt_code)))
+    except (SyntaxError, ValueError, TypeError):
+        return True
+
+
+def _redraw_gap(stmt_code: str, name: str) -> UpstreamRepairGap:
+    """The gap for a draw from *name* the plan cannot run again (`_redraw_remade_streams`)."""
+    return UpstreamRepairGap(
+        f"Cash would make {name!r} again without re-running {stmt_code.splitlines()[0][:60]!r}",
+        stmt_code=stmt_code,
+        error_text=(
+            f"it draws from {name!r}, which moves as it is read, and changes something no statement above makes again"
+        ),
+        producer=name,
+        cell_no=None,
+        planned=True,
+    )
+
+
+def redraw_check(
+    draws_if_stream: Mapping[str, tuple[frozenset[str], bool]], user_ns: Mapping[str, Any]
+) -> Callable[[str], bool]:
+    """For the replay: whether a statement of the plan runs. One the plan
+    added only for a name it could not see (`_redraw_remade_streams`) runs
+    when that name, made again by now, moves as it is read, and is refused
+    then (:class:`UpstreamRepairGap`) when it cannot be run again."""
+
+    def should_run(stmt_code: str) -> bool:
+        found = draws_if_stream.get(stmt_code)
+        if found is None:
+            return True
+        names, refused = found
+        streams = sorted(name for name in names if _drawn_in_place(user_ns.get(name)))
+        if streams and refused:
+            raise _redraw_gap(stmt_code, streams[0])
+        return bool(streams)
+
+    return should_run
+
+
+def with_conditional_draws(
+    planned: list[str], chained: list[str], draws_if_stream: Mapping[str, object]
+) -> tuple[list[str], list[int | None]]:
+    """*chained* (the plan without its draws-if-stream, with the random
+    stream's seeds put in) with those draws put back before the statement
+    that followed each in *planned*; and, for each statement, its index in
+    *chained*, None for a draw put back."""
+    pending = [(i, code) for i, code in enumerate(planned) if code in draws_if_stream]
+    if not pending:
+        return chained, list(range(len(chained)))
+    pending_codes = {code for _, code in pending}
+    before: dict[str, list[str]] = {}
+    tail: list[str] = []
+    for i, code in pending:
+        anchor = next((later for later in planned[i + 1 :] if later not in pending_codes), None)
+        if anchor is None:
+            tail.append(code)
+        else:
+            before.setdefault(anchor, []).append(code)
+    out: list[str] = []
+    positions: list[int | None] = []
+    for k, code in enumerate(chained):
+        for draw in before.pop(code, ()):
+            out.append(draw)
+            positions.append(None)
+        out.append(code)
+        positions.append(k)
+    for draw in [*(d for draws in before.values() for d in draws), *tail]:
+        out.append(draw)
+        positions.append(None)
+    return out, positions
 
 
 def _import_failure(stmt_code: str) -> str | None:

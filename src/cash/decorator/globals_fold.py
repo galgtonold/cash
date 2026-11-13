@@ -7,7 +7,7 @@ import hashlib
 import pickle
 import sys
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -25,6 +25,7 @@ from .call_state import CAPTURE_WATCH, KeyBuildFailed
 from .code_tables import CodeTable
 from .global_reads import reach_pass
 from .global_values import UNHASHABLE_GLOBAL_FIX
+from .helper_fold_memo import HelperFoldMemo, LoggedSeen
 from .key_values import (
     carried_payload,
     iter_contained,
@@ -181,6 +182,8 @@ class GlobalsFold:
         #: (label, function, owner code, id(value)) -> what a table of plain
         #: functions held as data made of the key last time (`held_value_code_parts`).
         self._held_tables: LruMemo[tuple, _HeldTable] = LruMemo(TABLES)
+        #: Helper folds remembered while nothing they read moved.
+        self._helper_memo = HelperFoldMemo()
         #: The argument walk, which a data global's code goes through too;
         #: set by `CodeArgs`, which is built after this.
         self.code_args: CodeArgs | None = None
@@ -626,7 +629,7 @@ class GlobalsFold:
         # Pre-seed with what the cached function itself already folded, so a
         # global it reads directly is not folded a second time on behalf of a
         # helper that also reads it.
-        seen: set = set()
+        seen = LoggedSeen()
         own_globals = getattr(func, "__globals__", None)
         if isinstance(own_globals, dict):
             for name in self._reads.read_global_data_names(func):
@@ -639,6 +642,34 @@ class GlobalsFold:
             owner_code=owner_code,
             seen=seen,
         )
+
+    def _fold_helper(
+        self,
+        target: Callable,
+        func: Callable,
+        func_name: str,
+        state_hash: str,
+        owner_code: Any,
+        seen: set,
+        extra_names: tuple[str, ...] = (),
+    ) -> str:
+        """`fold_read_globals` of one helper, remembered while nothing it
+        reads can have moved (`HelperFoldMemo`) when this is the cached
+        function's own key build and no other fold is running."""
+
+        def compute() -> str:
+            return self.fold_read_globals(
+                target, func_name, state_hash, owner_code=owner_code, seen=seen, extra_names=extra_names
+            )
+
+        if type(seen) is not LoggedSeen or walk_scope.walk_local(self, set):
+            return compute()
+        folded = READS_FOLDED.get()
+        if folded is not None and (id(target), id(owner_code), extra_names) in folded:
+            return compute()  # folded earlier in this key: `_fold_once` adds nothing new
+        key = (id(target), id(owner_code), extra_names, func_name)
+        module = getattr(func, "__module__", None)
+        return self._helper_memo.fold(target, key, owner_code, module, state_hash, seen, compute)
 
     def fold_passed_function_reads(self, fn: types.FunctionType, func_name: str, owner_code: Any) -> str:
         """What a function that reaches the call as data reads, as one digest
@@ -724,7 +755,7 @@ class GlobalsFold:
             target = jit_python_function(target) or target
             if getattr(target, "__globals__", None) is None:
                 continue
-            state_hash = self.fold_read_globals(target, func_name, state_hash, owner_code=owner_code, seen=seen)
+            state_hash = self._fold_helper(target, func, func_name, state_hash, owner_code, seen)
         return state_hash
 
     def _fold_binding_data(self, report: PurityReport, func: Callable, state_hash: str, owner_code: Any) -> str:
@@ -781,17 +812,20 @@ class GlobalsFold:
                 continue
             if target is None or target is func or getattr(target, "__globals__", None) is None:
                 continue
-            state_hash = self.fold_read_globals(
+            state_hash = self._fold_helper(
                 target,
+                func,
                 func_name,
                 state_hash,
-                owner_code=owner_code,
-                seen=seen,
+                owner_code,
+                seen,
                 extra_names=self._reads.decorator_global_names(target),
             )
         return state_hash
 
-    def fold_dependency_read_globals(self, func: Callable, func_name: str, state_hash: str) -> str:
+    def fold_dependency_read_globals(
+        self, func: Callable, func_name: str, state_hash: str, covered: Collection[tuple[str, str]] = ()
+    ) -> str:
         """Fold the globals the CACHED functions this one calls read.
 
         The third of the three channels a global can reach a key through, and
@@ -825,6 +859,8 @@ class GlobalsFold:
         Transitive, because the chain is: ``outer`` -> ``inner`` -> a helper in
         a third module reading a global in a fourth. Each dependency's own
         helpers go through the same fold as if they were this function's.
+        A *covered* edge's callee is one of the caller's helpers, whose
+        reads `fold_helper_read_globals` folded.
         """
         owner_code = getattr(func, "__code__", None)
         # Pre-seed with what this function already folded for itself, so a
@@ -835,13 +871,13 @@ class GlobalsFold:
             for name in self._reads.read_global_data_names(func):
                 seen.add((id(own_globals), name))
         visited = {func_name}
-        stack = sorted(self._registry.graph.get_dependencies(func_name))
+        stack = [(func_name, dep) for dep in sorted(self._registry.graph.get_dependencies(func_name))]
         while stack:
-            dep = stack.pop()
-            if dep in visited:
+            node, dep = stack.pop()
+            if dep in visited or (node, dep) in covered:
                 continue
             visited.add(dep)
-            stack.extend(sorted(self._registry.graph.get_dependencies(dep)))
+            stack.extend((dep, d) for d in sorted(self._registry.graph.get_dependencies(dep)))
             dep_func = self._registry.functions.get(dep)
             if dep_func is None or getattr(dep_func, "__globals__", None) is None:
                 continue

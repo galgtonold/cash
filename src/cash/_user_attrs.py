@@ -39,6 +39,25 @@ def attribute_or(obj: Any, name: str, default: Any = None) -> Any:
     return found
 
 
+def importable_attr(obj: Any, name: str, default: Any = None) -> Any:
+    """``getattr(obj, name, default)``, and *default* too when the read
+    raises ImportError.
+
+    A lazily imported optional dependency (``resampy =
+    lazy.load("resampy")`` with resampy not installed) is a module object
+    whose every attribute raises ImportError: a call through it cannot run
+    in this process, so it reaches no code to key. Installed later, the
+    name resolves and the code it reaches changes the caller's key. Any
+    other error still propagates: what it hides could be code the call
+    runs. A lazily loaded module that IS installed is read with
+    ``getattr`` like any module, so it loads and its functions are keyed.
+    """
+    try:
+        return getattr(obj, name, default)
+    except ImportError:
+        return default
+
+
 def metadata_attribute(obj: Any, name: str, default: Any = None) -> Any:
     """`attribute_or` for a fact cash only reads about *obj* (its
     ``nbytes``, its ``shape``), never running the user's code for it.

@@ -62,6 +62,7 @@ from cash._user_attrs import attribute_or, builtin_base, builtin_items, has_attr
 from cash._weak import callback_of, is_cash_ref
 from cash.closure_sharing import slot_readers
 from cash.install_paths import is_user_code_module
+from cash.notebook.shared_objects import library_exact_values, walk_time_left
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
 __all__ = ["IdentityHeld", "as_address", "end_cell_reads", "forget_flat_reads", "identity_held_reason", "library_parts"]
@@ -76,8 +77,12 @@ _SMALL_FLAT = 8
 _NESTED = frozenset({list, tuple})
 _NESTED_LEVELS = 8
 _JUST_TUPLES = frozenset({tuple})
-#: Most objects one walk looks at.
+#: Most objects one walk looks at, outside a share check's time
+#: (`walk_time_left`); within it, the walk goes on `_MORE_SEEN` objects at
+#: a time while the time lasts.
 _MAX_SEEN = 200_000
+#: Objects a walk past `_MAX_SEEN` looks at between two reads of the clock.
+_MORE_SEEN = 50_000
 #: Restored as themselves, by reference: a weak reference to one stays right.
 _BY_REFERENCE = (type, types.ModuleType, types.FunctionType, types.BuiltinFunctionType, types.MethodType)
 _REFERENCES = (weakref.ReferenceType, weakref.ProxyType, weakref.CallableProxyType)
@@ -86,6 +91,30 @@ _WEAK_CONTAINERS = (weakref.WeakValueDictionary, weakref.WeakKeyDictionary, weak
 #: Hold nothing else; never the target of a registry's ``id()``.
 _LEAVES = frozenset(IMMUTABLE_LEAF_TYPES)
 _DICT = operator.attrgetter("__dict__")
+
+
+def _value_kinds() -> tuple[frozenset[type], frozenset[type]]:
+    """`_LEAVES` with the library's exact value types
+    (`library_exact_values`: numpy's scalars and, while none had an
+    attribute set, pandas' ``Timestamp`` and ``Timedelta``), and those of
+    them that are numpy integers, each read as the ``int`` it is. Not
+    numpy's ``str_`` and ``bytes_``, read as any object is: text spelling
+    an ``id()`` is looked for in exact strings alone. ``list(series.diff())``
+    over times gives a list of a million Timedeltas, which counted against
+    `_MAX_SEEN` one by one, so a loop filling one ran again every time."""
+    global _VALUE_KINDS
+    values = library_exact_values()
+    if _VALUE_KINDS[0] is not values:
+        numpy = sys.modules.get("numpy")
+        extra = frozenset(kind for kind in values if not issubclass(kind, (str, bytes)))
+        ints = frozenset(kind for kind in extra if numpy is not None and issubclass(kind, numpy.integer))
+        _VALUE_KINDS = (values, _LEAVES | extra, ints)
+    return _VALUE_KINDS[1], _VALUE_KINDS[2]
+
+
+#: ``(library_exact_values(), leaves, integer leaves)`` as `_value_kinds`
+#: last found them.
+_VALUE_KINDS: tuple[frozenset, frozenset[type], frozenset[type]] = (frozenset(), _LEAVES, frozenset())
 #: The smallest ``id()`` looked for: an object's address. Nothing is mapped
 #: below an executable's base, 0x400000 on Linux when not position
 #: independent and far higher otherwise (macOS keeps the lowest 4 GiB
@@ -219,15 +248,18 @@ def identity_held_reason(
     user_kinds: dict[type, bool] = {}
     walk = _Walk(user_kinds, targets=[] if weak_holders else None)
     walk.budget += more
+    walk.allowance = walk.budget
     walk.run([value])
-    found = _held_by_id(name, walk, user_kinds, user_ns)
+    found = _held_by_id(name, value, walk, user_kinds, user_ns)
     if found is None and walk.targets:
         found = _weakly_held(name, walk.targets, user_ns)
     return found
 
 
-def _held_by_id(name: str, walk: _Walk, user_kinds: dict[type, bool], user_ns: dict[str, Any]) -> IdentityHeld | None:
-    """`identity_held_reason`'s answer for what the value itself holds, from
+def _held_by_id(
+    name: str, value: Any, walk: _Walk, user_kinds: dict[type, bool], user_ns: dict[str, Any]
+) -> IdentityHeld | None:
+    """`identity_held_reason`'s answer for what *value* itself holds, from
     its *walk*."""
     if walk.unread or walk.cut:
         what = (
@@ -277,6 +309,23 @@ def _held_by_id(name: str, walk: _Walk, user_kinds: dict[type, bool], user_ns: d
         held = _Walk(user_kinds, seen=set(walk.seen_all()), quiet=True, candidates=frozenset(candidates))
         held.id_arrays = [] if in_arrays else None
         held.run([v for k, v in user_ns.items() if k != name and not is_history_name(k)])
+        known = held.found or not candidates.isdisjoint(held.seen) or bool(in_arrays and _any_held(in_arrays, held))
+        if not known and not held.cut:
+            # The value's own strings and numbers: its walk keeps no leaf's
+            # id, and ``pair = (s, id(s))`` with *s* nowhere else is its
+            # own. Looked through again only now, for the numbers it holds,
+            # with the leaves and the count its own walk had: a library's
+            # scalars cost nothing, and a share check's time counts too.
+            own = _Walk(user_kinds, quiet=True, candidates=frozenset(candidates))
+            own.leaves = _value_kinds()[0]
+            own.budget = walk.allowance + walk.granted
+            own.id_arrays = [] if in_arrays else None
+            own.run([value])
+            # Cut short, not known to hold none: as the notebook's look is.
+            held.found, held.cut = own.found, own.cut
+            if own.id_arrays is not None:
+                held.id_arrays = [*(held.id_arrays or ()), *own.id_arrays]
+                held.leaf_ids.extend(own.leaf_ids)
         if held.cut and not held.found:
             # Not known to be an id(): the notebook's objects were not all
             # looked through.
@@ -805,7 +854,11 @@ def _any_held(in_arrays: list[Any], held: _Walk) -> bool:
     of those ids are looked up."""
     numpy = sys.modules["numpy"]
     ids = numpy.concatenate(
-        [numpy.fromiter(held.seen, dtype=numpy.int64, count=len(held.seen)), *(held.id_arrays or ())]
+        [
+            numpy.fromiter(held.seen, dtype=numpy.int64, count=len(held.seen)),
+            numpy.array(held.leaf_ids, dtype=numpy.int64),
+            *(held.id_arrays or ()),
+        ]
     )
     if not ids.size:
         return False
@@ -888,6 +941,11 @@ class _Walk:
         levels: int | None = None,
     ) -> None:
         self.user_kinds = user_kinds
+        #: What the value's own walk reads as a leaf (`_value_kinds`), and
+        #: which of those are numpy's integers, read as the ``int`` each
+        #: is. Looking through the notebook (*quiet*), a library's scalar
+        #: is an object like any other: a registry may hold its ``id()``.
+        self.leaves, self.int_leaves = (_LEAVES, frozenset()) if quiet else _value_kinds()
         self.targets = targets
         self.keep_refs = keep_refs
         self.levels = levels
@@ -896,6 +954,10 @@ class _Walk:
         #: or a function giving them.
         self._unseen: list[Any] = []
         self.budget = _MAX_SEEN
+        #: What `_more` added to *budget*.
+        self.granted = 0
+        #: *budget* as the walk started, `identity_held_reason`'s extra included.
+        self.allowance = _MAX_SEEN
         #: The ids queued for the next level that will count against the
         #: budget, while `run` counts ahead (`_count_ahead`); None otherwise.
         self._queued: set[int] | None = None
@@ -917,6 +979,10 @@ class _Walk:
         #: as NumPy arrays, when an array's numbers are looked for; None
         #: otherwise.
         self.id_arrays: list[Any] | None = None
+        #: The ids of the strings, numbers and other leaves a *quiet* walk
+        #: met, kept only when an array's numbers are looked for
+        #: (`id_arrays`); otherwise each is only looked up in `candidates`.
+        self.leaf_ids: list[int] = []
 
     def run(self, roots: list[Any]) -> None:
         level = list(roots)
@@ -962,26 +1028,47 @@ class _Walk:
         seen = self.seen
         for item in into[start:]:
             kind = type(item)
-            if kind is int or kind is str or kind in _LEAVES:
+            if kind is int or kind is str or kind in self.leaves:
                 continue
             key = id(item)
             if key not in seen:
                 queued.add(key)
-        return len(queued) > self.budget
+        return len(queued) > self.budget and not walk_time_left()
+
+    def _more(self, needed: int) -> bool:
+        """Past the budget by *needed* objects: True, with the budget raised
+        past them, while the share check this walk runs in has time left
+        (`walk_time_left`). A loop that ran for minutes filling a list of a
+        million records is worth the seconds its walk takes; at a fixed
+        count the walk was cut, and the loop ran again every time."""
+        if self.quiet or not walk_time_left():
+            return False
+        self.budget += needed + _MORE_SEEN
+        self.granted += needed + _MORE_SEEN
+        return True
 
     def _open(self, item: Any, into: list[Any]) -> None:
         kind = type(item)
-        if kind is int:
-            self.numbers.add(item)
-            return
-        if kind is str:
-            # ``hex(id(x))`` or ``str(id(x))``: an id() as well.
-            if not self.quiet:
+        if kind is int or kind is str or kind in _LEAVES:
+            if self.quiet:
+                # Looking for an id(): a string or a float is an object an
+                # ``id()`` names as well, at a new address after a restart.
+                self._leaf_held(item)
+            elif kind is int:
+                self.numbers.add(item)
+            elif kind is str:
+                # ``hex(id(x))`` or ``str(id(x))``: an id() as well.
                 number = as_address(item)
                 if number is not None:
                     self.numbers.add(number)
             return
-        if kind in _LEAVES:
+        if kind in self.leaves:
+            # A library's scalar, read so by the value's own walk alone (a
+            # *quiet* walk's leaves are `_LEAVES`): holds nothing, but an
+            # id() of it is the value's own all the same. Costs no budget.
+            self.seen.add(id(item))
+            if kind in self.int_leaves:
+                self.numbers.add(int(item))
             return
         key = id(item)
         if key in self.seen:
@@ -990,7 +1077,7 @@ class _Walk:
         if self._queued:
             self._queued.discard(key)
         self.budget -= 1
-        if self.budget < 0:
+        if self.budget < 0 and not self._more(-self.budget):
             self.cut = True
             return
         if self.targets is not None and weakref.getweakrefcount(item) and self._notebook_own(kind):
@@ -1138,7 +1225,7 @@ class _Walk:
                 return True
         # Read into a set of its own: what it finds, all of it, is what it
         # keeps, numbers met before in this walk too.
-        numbers, budget, unseen = self.numbers, self.budget, len(self._unseen)
+        numbers, budget, unseen = self.numbers, self.budget - self.granted, len(self._unseen)
         self.numbers = set()
         try:
             done = self._read_flat_now(items)
@@ -1146,7 +1233,8 @@ class _Walk:
             found, self.numbers = self.numbers, numbers
             numbers |= found
         if done and not self.cut and witness is not None and len(_SHAPE_READS) < _MAX_SHAPE_READS:
-            _SHAPE_READS[witness] = (frozenset(found), budget - self.budget, len(self._unseen) > unseen)
+            spent = budget - (self.budget - self.granted)
+            _SHAPE_READS[witness] = (frozenset(found), spent, len(self._unseen) > unseen)
         return done
 
     def _read_flat_now(self, items: list[Any]) -> bool:
@@ -1154,9 +1242,15 @@ class _Walk:
         big = len(items) > _MAX_SCANNED
         kinds = set(map(type, items))
         flat: Any = items
-        if not kinds <= _LEAVES:
-            if not kinds <= _LEAVES | {tuple}:
-                if self.quiet or not kinds <= _LEAVES | _NESTED:
+        if not kinds.isdisjoint(self.leaves - _LEAVES) and kinds <= self.leaves:
+            # A library's scalars, each seen as `_open` sees it: their ids
+            # only when asked (`seen_all`).
+            self._unseen.append(items if kinds.isdisjoint(_LEAVES) else [i for i in items if type(i) not in _LEAVES])
+        elif not kinds <= _LEAVES:
+            # A record's library scalars are read as any object is.
+            leaves = _LEAVES
+            if not kinds <= leaves | {tuple}:
+                if self.quiet or not kinds <= leaves | _NESTED:
                     return False
                 return self._read_nested(items)
             if kinds == _JUST_TUPLES and not self.quiet and _NESTED_LEAVES is not None:
@@ -1167,8 +1261,8 @@ class _Walk:
             records = items if kinds == _JUST_TUPLES else [item for item in items if type(item) is tuple]
             flat = list(chain.from_iterable(records))
             kinds = set(map(type, flat))
-            if not kinds <= _LEAVES:
-                if not self.quiet and kinds <= _LEAVES | _NESTED:
+            if not kinds <= leaves:
+                if not self.quiet and kinds <= leaves | _NESTED:
                     # Records holding lists of records (``(user, [(action,
                     # time), ...])``, student_8's 87,000 sessions): read a
                     # level at a time, where each list took a read of its own.
@@ -1181,6 +1275,11 @@ class _Walk:
                 # third of a frame's read.
                 self._unseen.append(records)
         if self.quiet:
+            # The leaves read at once, and the records holding them: an
+            # ``id()`` of one is looked for as `_open` looks for one.
+            if flat is not items:
+                self._leaves_held(records)
+            self._leaves_held(flat)
             return True
         if not big or flat is not items or not kinds <= _KEPT_KINDS:
             self._read_leaves(flat, kinds)
@@ -1202,7 +1301,7 @@ class _Walk:
                 return False
             if read is not NotImplemented:
                 nodes, texts, ints, leaf_kinds, lists = read
-                if lists > self.budget:
+                if lists > self.budget and not self._more(lists - self.budget):
                     # Against all this walk has seen, the containers an
                     # earlier read only noted (`seen_all`) too: walked
                     # again, those cost nothing.
@@ -1252,7 +1351,7 @@ class _Walk:
             level = list(chain.from_iterable(inner))
         else:
             return False
-        if lists > self.budget:
+        if lists > self.budget and not self._more(lists - self.budget):
             # As the C read above tells it, read to the end: more containers
             # than the budget, none seen before, is the walk's cut, known
             # without opening them one at a time (Python 3.10 and 3.11 have
@@ -1302,6 +1401,11 @@ class _Walk:
             self._read_texts(texts)
         if int in kinds:
             self._read_ints(flat, kinds == {int})
+        numpy_ints = kinds & self.int_leaves
+        if numpy_ints:
+            # Each as the ``int`` it is: ``np.int64(id(x))`` is an id() too.
+            kind_of = map(type, flat)
+            self._read_ints(list(map(int, compress(flat, map(numpy_ints.__contains__, kind_of)))), True)
 
     def _read_texts(self, texts: list[str]) -> None:
         """The numbers *texts*, each one once and none longer than a number
@@ -1323,6 +1427,20 @@ class _Walk:
                 self.numbers.update(flat)
         else:
             self.numbers.update(item for item in flat if type(item) is int and item >= _LOWEST_ADDRESS)
+
+    def _leaf_held(self, item: Any) -> None:
+        """Note a leaf a *quiet* walk met, for the ids looked for."""
+        if self.id_arrays is not None:
+            self.leaf_ids.append(id(item))
+        if self.candidates and id(item) in self.candidates:
+            self.found = True
+
+    def _leaves_held(self, items: list[Any]) -> None:
+        """`_leaf_held` for each of *items*, at C speed."""
+        if self.id_arrays is not None:
+            self.leaf_ids.extend(map(id, items))
+        if self.candidates and not self.candidates.isdisjoint(map(id, items)):
+            self.found = True
 
     def _note_ids(self, items: Any) -> None:
         """Keep the ids of *items* for an array's numbers, when looked for."""
@@ -1357,13 +1475,16 @@ class _Walk:
         if not self.candidates.isdisjoint(map(id, states)):
             self.found = True
         self._note_ids(states)
+        if self.candidates or self.id_arrays is not None:
+            # Their attributes' strings and numbers too: ``id(pts[7].name)``.
+            self._leaves_held(list(chain.from_iterable(map(dict.values, states))))
         return True
 
     def _opens(self, item: Any) -> bool:
         """Whether `_open` would look into *item*, or keep it as a weak
         reference, had the walk gone a level deeper."""
         kind = type(item)
-        if kind in (int, str) or kind in _LEAVES or id(item) in self.seen_all():
+        if kind in (int, str) or kind in self.leaves or id(item) in self.seen_all():
             return False
         if issubclass(kind, _BY_REFERENCE):
             return self.quiet and bool(_code_parts(item))

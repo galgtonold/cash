@@ -369,3 +369,137 @@ def test_a_number_the_notebook_is_too_big_to_look_through_for_is_not_called_an_i
     assert held is not None
     assert held.kind == "a container cash cannot read"
     assert "more objects than cash looks through" in held
+
+
+def _text() -> str:
+    """A string built at run time: no literal the compiler shares."""
+    return "x" * 40 + str(len("abc"))
+
+
+#: A string the notebook does not hold, alive for the whole test: a freed
+#: one's address could be another object's.
+_OTHER = "y" * 40 + str(len("ab"))
+
+
+def _held_text(s: str) -> dict:
+    return {"holder": {"a": {"b": [s]}}}
+
+
+@pytest.mark.parametrize(
+    ("value", "notebook"),
+    [
+        (lambda s: id(s), _held_text),
+        (lambda s: {id(s): "seen"}, _held_text),
+        (lambda s: id(s), lambda s: {"s": s}),
+        (lambda s: id(s), lambda s: {"words": ["a"] * 20_000 + [s]}),
+        (lambda s: id(s), lambda s: {"rows": [(1, "a")] * 20_000 + [(2, s)]}),
+        (lambda s: (s, id(s)), lambda s: {}),
+        (lambda s: [id(s)] * 20 + [s], lambda s: {}),
+    ],
+    ids=[
+        "bare, nested",
+        "an id key, nested",
+        "a variable",
+        "in a big list of strings",
+        "in a big list of records",
+        "the value's own string",
+        "the value's own string beside many ids",
+    ],
+)
+def test_the_id_of_a_string_the_notebook_holds_is_found(value, notebook):
+    """A string is an object an ``id()`` names, at a new address after a
+    restart, as a list is. The look for the object never met strings, and
+    ``key = id(holder['a']['b'][0])`` was stored and served stale after a
+    restart in any notebook small enough to be looked through."""
+    from cash.notebook.statement.identity_holders import identity_held_reason
+
+    s = _text()
+    held = identity_held_reason("key", value(s), notebook(s))
+    assert held is not None
+    assert held.kind == "an id()"
+
+
+def test_the_id_of_a_float_or_a_records_text_is_found():
+    from cash.notebook.statement.identity_holders import identity_held_reason
+
+    class P:
+        pass
+
+    f = 1.5 * len("abc")
+    assert identity_held_reason("key", id(f), {"holder": [f]}) is not None
+    points = [P() for _ in range(12_000)]
+    for point in points:
+        point.name = "n"
+    points[7].name = s = _text()
+    assert identity_held_reason("key", id(s), {"points": points}) is not None
+
+
+def test_an_array_holding_the_id_of_a_string_is_found():
+    numpy = pytest.importorskip("numpy")
+    from cash.notebook.statement.identity_holders import identity_held_reason
+
+    s = _text()
+    arr = numpy.array([id(s)], dtype=numpy.int64)
+    assert identity_held_reason("arr", arr, {"holder": [s]}) is not None
+    # A bare id beside an array of numbers that are no id of the notebook's.
+    beside = [numpy.array([id(_OTHER)], dtype=numpy.int64), id(s)]
+    assert identity_held_reason("beside", beside, {"holder": [s]}) is not None
+
+
+@pytest.mark.parametrize(
+    ("value", "notebook"),
+    [
+        (lambda s: id(_OTHER), _held_text),
+        (lambda s: 12345, _held_text),
+        (lambda s: [len(s)] * 20 + [s], lambda s: {"words": ["a"] * 20_000 + [s]}),
+        (lambda s: {"name": s}, _held_text),
+    ],
+    ids=["another string's id", "a small number", "the string's length", "the string itself"],
+)
+def test_a_value_holding_no_strings_id_is_restored(value, notebook):
+    from cash.notebook.statement.identity_holders import identity_held_reason
+
+    s = _text()
+    assert identity_held_reason("key", value(s), notebook(s)) is None
+
+
+@pytest.mark.parametrize("many", [3, 20_000], ids=["a few", "more than are read one by one"])
+@pytest.mark.parametrize("own", [False, True], ids=["the notebook's", "the value's own"])
+def test_the_id_of_a_library_scalar_is_found(many, own):
+    """The value's own walk reads numpy's and pandas' exact scalars as
+    leaves, at C speed; an ``id()`` of one is looked for all the same."""
+    numpy = pytest.importorskip("numpy")
+    pandas = pytest.importorskip("pandas")
+    from cash.notebook.statement.identity_holders import identity_held_reason
+
+    for scalars in (
+        [numpy.float64(i) / 3 for i in range(many)],
+        [pandas.Timedelta(seconds=i) for i in range(many)],
+    ):
+        target = scalars[-1]
+        if own:
+            held = identity_held_reason("pair", [scalars, id(target)], {})
+        else:
+            held = identity_held_reason("key", id(target), {"scalars": scalars})
+        assert held is not None, type(target)
+        assert held.kind == "an id()"
+
+
+def test_the_id_of_its_own_string_is_found_past_the_walks_count():
+    """Looked through again for its own strings, the value is read as its
+    own walk read it: 300,000 numpy scalars cost nothing, and records past
+    the count are read while a share check has time left. Counted one by
+    one instead, the look was cut and the value called unreadable."""
+    numpy = pytest.importorskip("numpy")
+    from cash.notebook.shared_objects import walk_budget
+    from cash.notebook.statement.identity_holders import identity_held_reason
+
+    s = _text()
+    scalars = [numpy.int64(i) for i in range(300_000)] + [s, id(s)]
+    held = identity_held_reason("scalars", scalars, {})
+    assert held is not None and held.kind == "an id()", held
+    records = [{"line": i, "name": f"n{i}"} for i in range(300_000)]
+    records[-1].update(s=s, ref=id(s))
+    with walk_budget(600.0):
+        held = identity_held_reason("records", records, {})
+    assert held is not None and held.kind == "an id()", held

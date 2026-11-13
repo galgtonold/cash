@@ -219,9 +219,7 @@ def _stabilized(v: Any, hash_callable, _path: frozenset[int], carried: bool) -> 
     if id(v) in _path:
         return ("__cash_cycle__", type(v).__qualname__), False
     if is_dead_proxy(v):
-        # Its object is gone: it holds nothing, the same in every process,
-        # and any read of it (pickling included) raises.
-        return ("__cash_dead_proxy__",), True
+        return ("__cash_dead_proxy__",), False
     if issubclass(type(v), types.ModuleType):
         # A module cannot be pickled: `{"fft": numpy.fft}` warned unhashable,
         # and switching it to `scipy.fft` served the old result. Which module.

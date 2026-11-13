@@ -59,7 +59,13 @@ from .file_effects import (
 )
 from .handed_callables import handed_callable_values, iteration_bindings
 from .mutations import MUTATING_METHODS, RECEIVER_READONLY_WRITE_METHODS, chain_is_pure
-from .read_only_callees import NOT_A_LITERAL, reads_its_arguments_only, turns_on_a_write
+from .read_only_callees import (
+    ESTIMATOR_READ_ARGUMENTS,
+    NOT_A_LITERAL,
+    estimator_reads_its_arguments,
+    reads_its_arguments_only,
+    turns_on_a_write,
+)
 
 __all__ = [
     "bound_to_state",
@@ -89,6 +95,7 @@ __all__ = [
     "fits_its_receiver",
     "call_only_reads",
     "handed_through_items",
+    "proven_unchanged",
 ]
 
 
@@ -1896,7 +1903,9 @@ def _call_handoffs(
     if _maps_a_reading_lambda(call, local, user_ns):
         return
     arg_names = [arg.id for arg in args if isinstance(arg, ast.Name)]
-    if _only_reads(call, arg_names, user_ns if isinstance(user_ns, dict) else dict(user_ns)):
+    if not _called_through_a_local(func, local) and _only_reads(
+        call, arg_names, user_ns if isinstance(user_ns, dict) else dict(user_ns)
+    ):
         return
     for arg in args:
         roots.update(
@@ -1904,6 +1913,21 @@ def _call_handoffs(
             for name in argument_roots(arg, iterated)
             if name in local or not _followed_elsewhere(user_ns.get(name))
         )
+
+
+def _called_through_a_local(func: ast.expr, local: frozenset[str] | set[str]) -> bool:
+    """Whether *func* is reached from a parameter or a local of the function
+    (``r.shuffle`` in ``def shuf(r, xs): r.shuffle(xs)``, ``g.shuffle`` after
+    ``g = random.Random(0)``): bound only when the function runs, so the
+    notebook's namespace says nothing about it. Not "unbound, so it fails
+    before it runs" (`_only_reads`): what it is handed counts as handed to
+    code whose effect is unknown, mapped back to the caller's arguments for
+    a parameter. ``xs`` was left out, and a hit on ``mix(rng)`` (``def
+    mix(r): r.shuffle(DECK)``) left ``DECK`` unshuffled."""
+    root = func
+    while isinstance(root, (ast.Attribute, ast.Subscript)):
+        root = root.value
+    return isinstance(root, ast.Name) and root.id in local
 
 
 #: Builtins that hand each item of what they iterate to the function they
@@ -2693,3 +2717,182 @@ def call_only_reads(call: ast.Call, arg_names: list[str], user_ns: dict, *, boun
     ``np.mean(a)``), on pandas, numpy or builtin values. *bound_by_now*:
     see `_only_reads`."""
     return _only_reads(call, arg_names, user_ns, bound_by_now=bound_by_now)
+
+
+def proven_unchanged(
+    tree: ast.Module | None,
+    names: Iterable[str],
+    user_ns: Mapping[str, Any],
+    resolve_source: Callable[[str], str | None] | None,
+) -> frozenset[str]:
+    """Those of *names* no call in *tree* (a statement, or a loop as one
+    unit) can change: every place the tree reads one is a plain argument
+    of a call proven to leave it as it was.
+
+    A verdict learned from earlier runs is learned again on new inputs: a
+    call that left ``X`` alone on the data it had may change it on other
+    data (dummy rows first, real ones later), so what a run did is no
+    proof. Proven here means:
+
+    * a function or method of the user's whose source is read, that
+      neither changes the parameter it is handed in place
+      (`params_mutated_in_function`) nor hands it to code whose effect is
+      unknown (`function_handoffs`);
+    * a scikit-learn estimator's ``fit``/``predict``/``transform``...
+      (`estimator_reads_its_arguments`, the one assumption made about that
+      library, voided by ``copy=False``);
+    * a library function known to only read (`call_only_reads`).
+
+    The receiver is the object the namespace holds under its name; under a
+    loop's target, each item of a list or tuple, or each value of a dict
+    walked through ``.items()`` / ``.values()``. A name read any other way
+    (``Z = X``, ``X[0]``, ``f(X.T)``), or bound in the tree, is not proven.
+    """
+    if tree is None:
+        return frozenset()
+    parents = {id(child): node for node in walk_tree(tree) for child in ast.iter_child_nodes(node)}
+    bound = {
+        node.id for node in walk_tree(tree) if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del))
+    }
+    proven: set[str] = set()
+    for name in set(names) - bound:
+        reads = [node for node in walk_tree(tree) if isinstance(node, ast.Name) and node.id == name]
+        if reads and all(_read_by_a_proven_call(node, parents, tree, user_ns, resolve_source) for node in reads):
+            proven.add(name)
+    return frozenset(proven)
+
+
+def _read_by_a_proven_call(
+    node: ast.Name,
+    parents: Mapping[int, ast.AST],
+    tree: ast.Module,
+    user_ns: Mapping[str, Any],
+    resolve_source: Callable[[str], str | None] | None,
+) -> bool:
+    parent = parents.get(id(node))
+    if isinstance(parent, ast.keyword):
+        if parent.arg is None:
+            return False
+        parent = parents.get(id(parent))
+    if not isinstance(parent, ast.Call) or node is parent.func or node not in _plain_arguments(parent):
+        return False
+    call = parent
+    try:
+        namespace = user_ns if isinstance(user_ns, dict) else dict(user_ns)
+        if call_only_reads(call, [node.id], namespace, bound_by_now=False):
+            return True
+    except Exception:  # noqa: BLE001 - not proven
+        return False
+    func = call.func
+    if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+        receivers = _receiver_values(func.value.id, tree, user_ns)
+        if not receivers:
+            return False
+        # X, y and sample_weight only (`ESTIMATOR_READ_ARGUMENTS`).
+        read_slot = node in call.args[:2] or any(
+            kw.value is node and kw.arg in ESTIMATOR_READ_ARGUMENTS for kw in call.keywords
+        )
+        if read_slot and any(isinstance(arg, ast.Starred) for arg in call.args[:2]):
+            read_slot = False
+        return all(
+            (read_slot and estimator_reads_its_arguments(obj, func.attr))
+            or _method_leaves(obj, func.attr, call, node.id, user_ns)
+            for obj in receivers
+        )
+    if isinstance(func, ast.Name) and func.id in user_ns:
+        fdef = _readable_function(func.id, resolve_source)
+        return fdef is not None and _leaves_argument(fdef, call, node.id, user_ns, resolve_source)
+    return False
+
+
+def _plain_arguments(call: ast.Call) -> list[ast.expr]:
+    return [*call.args, *(kw.value for kw in call.keywords if kw.arg is not None)]
+
+
+def _receiver_values(name: str, tree: ast.Module, user_ns: Mapping[str, Any]) -> list[Any] | None:
+    """The objects *name* holds when the calls of *tree* run on it: the
+    namespace's, or, for a loop target, the items its loop walks; None when
+    that cannot be told without running anything."""
+    loops = [
+        loop
+        for loop in walk_tree(tree)
+        if isinstance(loop, ast.For) and any(isinstance(n, ast.Name) and n.id == name for n in walk_tree(loop.target))
+    ]
+    stores = [
+        n
+        for n in walk_tree(tree)
+        if isinstance(n, ast.Name) and n.id == name and isinstance(n.ctx, (ast.Store, ast.Del))
+    ]
+    if not loops:
+        return None if stores or name not in user_ns else [user_ns[name]]
+    if len(loops) != 1 or len(stores) != 1:
+        return None
+    target, header = loops[0].target, loops[0].iter
+    if isinstance(target, ast.Name) and isinstance(header, ast.Name):
+        items = user_ns.get(header.id)
+        return list(items) if type(items) in (list, tuple) else None
+    if not (
+        isinstance(header, ast.Call)
+        and not header.args
+        and not header.keywords
+        and isinstance(header.func, ast.Attribute)
+        and isinstance(header.func.value, ast.Name)
+        and type(user_ns.get(header.func.value.id)) is dict
+    ):
+        return None
+    values = list(user_ns[header.func.value.id].values())
+    if header.func.attr == "values" and isinstance(target, ast.Name):
+        return values
+    if (
+        header.func.attr == "items"
+        and isinstance(target, ast.Tuple)
+        and len(target.elts) == 2
+        and isinstance(target.elts[1], ast.Name)
+        and target.elts[1].id == name
+    ):
+        return values
+    return None
+
+
+def _method_leaves(obj: Any, method: str, call: ast.Call, name: str, user_ns: Mapping[str, Any]) -> bool:
+    """Whether *obj*'s *method*, a function of the user's whose source is
+    read, leaves what *call* hands it under *name* as it was."""
+    try:
+        fn = inspect.getattr_static(type(obj), method)
+    except AttributeError:
+        return False
+    if type(fn) is not types.FunctionType or not is_user_code_file(fn.__code__.co_filename):
+        return False
+    try:
+        source = inspect.getsource(fn)
+    except SOURCE_RETRIEVAL_ERRORS:
+        return False
+    try:
+        fdef = resolve_function_def(method, lambda _name: source)
+    except Exception:  # noqa: BLE001 - unreadable: not proven
+        return False
+    if fdef is None:
+        return False
+    # The bound call hands the object as the first parameter.
+    bound = ast.Call(
+        func=call.func, args=[ast.Name(id="__cash_self__", ctx=ast.Load()), *call.args], keywords=call.keywords
+    )
+    return _leaves_argument(fdef, bound, name, user_ns, None)
+
+
+def _leaves_argument(
+    fdef: ast.FunctionDef | ast.AsyncFunctionDef,
+    call: ast.Call,
+    name: str,
+    user_ns: Mapping[str, Any],
+    resolve_source: Callable[[str], str | None] | None,
+) -> bool:
+    """Whether *fdef*, called as *call*, can change nothing it is handed
+    under *name*: the parameters taking it are neither changed in place by
+    its body nor handed on to code whose effect is unknown."""
+    try:
+        handed, _free = function_handoffs(fdef, user_ns, resolve_source)
+        changed = frozenset(handed) | params_mutated_in_function(fdef, resolve_source)
+    except Exception:  # noqa: BLE001 - not analysed: not proven
+        return False
+    return name not in handed_to_params(call, fdef, changed, {})

@@ -26,7 +26,7 @@ from ..install_paths import is_user_code_module
 from ..jit_functions import jit_python_function
 from ..kept_state import cached_properties, derived_views
 from ..loaded_code import class_functions
-from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, is_dead_proxy, is_runtime_machinery
+from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, is_runtime_machinery
 from .arg_hashing import is_opaque, is_plain_data
 from .class_data import class_surface_functions, implicit_access_functions
 from .closure_fold import CLASS_BODY_CELLS
@@ -562,8 +562,6 @@ class CodeArgs:
         for v in values:
             if type(v) in CODELESS_PRIMS or id(v) in _seen or issubclass(type(v), types.ModuleType):
                 continue
-            if is_dead_proxy(v):
-                continue  # holds nothing, and every read of it raises
             if is_runtime_machinery(v):
                 continue
             if type(v) in BUILTIN_CONTAINERS:

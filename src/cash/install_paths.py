@@ -41,11 +41,10 @@ import os
 import site
 import sys
 import sysconfig
-import types
-from typing import Any
 
 from ._memo import SOURCE_FILES, LruMemo
 from ._paths import is_pseudo_filename, normalize_path
+from ._user_attrs import importable_attr
 
 __all__ = [
     "in_own_package",
@@ -59,7 +58,6 @@ __all__ = [
     "is_user_module",
     "is_user_path",
     "known_user_path",
-    "module_dunder",
     "top_package",
     "norm_dir",
     "normcase_path",
@@ -371,32 +369,13 @@ _FILELESS_NON_USER = frozenset(sys.builtin_module_names) | {
 _INTERPRETER_ORIGINS = frozenset({"built-in", "frozen"})
 
 
-def module_dunder(mod: object, name: str, default: Any = None) -> Any:
-    """``mod.<name>`` for a module dunder, read from the module's namespace.
-
-    A module's own ``__getattr__`` runs for a dunder it never set
-    (``__file__`` of a module built in memory), and one standing in for a
-    module whose import failed raises the ``ImportError`` there
-    (``lazy_loader.load("x")`` with x not installed). Read from the
-    namespace, such a module simply has no file.
-    """
-    if issubclass(type(mod), types.ModuleType):
-        namespace = object.__getattribute__(mod, "__dict__")
-        if type(namespace) is dict:
-            return namespace.get(name, default)
-    try:
-        return getattr(mod, name, default)
-    except Exception:  # noqa: BLE001 - an object whose attribute read raised has none
-        return default
-
-
 def is_user_module(mod: object, own_pkg: str | None = None) -> bool:
     """Is *mod* a module of the user's (strict): inside *own_pkg*
     (`in_own_package`), or loaded from a file that `is_user_path` accepts?
     A module with no file has nothing on disk to judge, so not."""
-    if in_own_package(module_dunder(mod, "__name__"), own_pkg):
+    if in_own_package(importable_attr(mod, "__name__"), own_pkg):
         return True
-    path = module_dunder(mod, "__file__")
+    path = importable_attr(mod, "__file__")
     return isinstance(path, str) and bool(path) and is_user_path(path)
 
 
@@ -406,9 +385,9 @@ def is_user_code_module(mod: object, own_pkg: str | None = None) -> bool:
     they are what the user edits. A module built into or frozen into the
     interpreter is judged by its spec, not its name (``_io`` calls itself
     ``io``)."""
-    if module_dunder(mod, "__file__") is None and not in_own_package(module_dunder(mod, "__name__"), own_pkg):
-        name = module_dunder(mod, "__name__", "") or ""
-        origin = getattr(module_dunder(mod, "__spec__"), "origin", None)
+    if getattr(mod, "__file__", None) is None and not in_own_package(getattr(mod, "__name__", None), own_pkg):
+        name = getattr(mod, "__name__", "") or ""
+        origin = getattr(getattr(mod, "__spec__", None), "origin", None)
         return origin not in _INTERPRETER_ORIGINS and name not in _FILELESS_NON_USER
     return is_user_module(mod, own_pkg)
 

@@ -20,6 +20,7 @@ from .._memo import MODULE_ANALYSES, LruMemo
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..source_reading import settled_source_version, source_version_unchanged
 from ..value_types import BUILTIN_NAMES
+from . import scan_store
 from .ast_util import walk_tree
 from .callee_effects import module_function_global_changes, scope_locals
 from .purity_report import ISSUE_MUTABLE_GLOBAL, PurityIssue
@@ -58,7 +59,8 @@ def module_modified_globals(module: Any) -> frozenset[str]:
         source = inspect.getsource(module)
     except SOURCE_RETRIEVAL_ERRORS:
         return frozenset()
-    modified = modified_globals_in_source(source)
+    path = version[0] if version is not None else (getattr(module, "__file__", None) or module.__name__)
+    modified = scan_store.scan("modified_globals", path, source, _scan_modified_globals)
     if version is not None and source_version_unchanged(version):
         _MODULE_MUTATIONS[version] = modified
     return modified
@@ -70,6 +72,13 @@ _MODULE_MUTATIONS: LruMemo[tuple[str, int, int], frozenset[str]] = LruMemo(MODUL
 
 @functools.lru_cache(maxsize=256)
 def modified_globals_in_source(source: str) -> frozenset[str]:
+    return _scan_modified_globals(source) or frozenset()
+
+
+@functools.lru_cache(maxsize=256)
+def _scan_modified_globals(source: str) -> frozenset[str] | None:
+    """`modified_globals_in_source`, or None when the scan gave up on the
+    recursion limit, which is not the text's doing (`scan_store`)."""
     try:
         tree = ast.parse(textwrap.dedent(source))
     except (SyntaxError, ValueError):
@@ -85,7 +94,7 @@ def modified_globals_in_source(source: str) -> frozenset[str]:
         return module_function_global_changes(tree, _imported_module_names(tree))
     except RecursionError:
         logger.debug("global-mutation scan gave up on a deeply nested module")
-        return frozenset()
+        return None
 
 
 def mutable_global_reads(
@@ -93,6 +102,7 @@ def mutable_global_reads(
     func_def: ast.AST,
     qualname: str,
     read_names: dict[str, None],
+    locals_: frozenset[str] | None = None,
 ) -> list[PurityIssue]:
     """An issue for each module global *func* reads that is reassigned or
     mutated elsewhere in its module - the result would go stale when that
@@ -107,7 +117,8 @@ def mutable_global_reads(
     if not modified:
         return []
     module_ns = getattr(func, "__globals__", None) or {}
-    locals_ = scope_locals(func_def)
+    if locals_ is None:
+        locals_ = scope_locals(func_def)
     freevars = set(getattr(getattr(func, "__code__", None), "co_freevars", ()) or ())
     own_name = getattr(func, "__name__", None)
     candidates = (read_names.keys() & modified) - locals_ - freevars - BUILTIN_NAMES

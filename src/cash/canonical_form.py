@@ -36,7 +36,14 @@ from . import _plain_data, _weak, kept_state
 from ._memo import SORTED_SETS, LruMemo
 from ._type_memo import TypeMemo, type_key
 from .sizing import SPARSE_PARTS, pandas_nbytes
-from .value_types import CODELESS_PRIMS, IMMUTABLE_PRIMS, LEAF_TYPES, PARSED_VALUE_TYPES
+from .value_types import (
+    CODELESS_PRIMS,
+    IMMUTABLE_PRIMS,
+    LEAF_TYPES,
+    PARSED_VALUE_TYPES,
+    WEAK_PROXY_TYPES,
+    is_dead_proxy,
+)
 
 
 class CyclicValueError(TypeError):
@@ -309,6 +316,10 @@ class _Descend:
         self.steps = steps
 
 
+#: The form of a ``weakref.proxy`` whose object is gone.
+DEAD_PROXY_FORM = ("__cash_dead_proxy__",)
+
+
 def _enter(value: Any, walk: _Walk) -> Any:
     """*value*'s form when it needs no walk below it (a primitive, a hooked
     or content-hashed value, a container met before), else a `_Descend`
@@ -322,6 +333,9 @@ def _enter(value: Any, walk: _Walk) -> Any:
                 return ("__cash_alias__", first[0])
             seen[id(value)] = (len(seen), value)
         return value
+    if type(value) in WEAK_PROXY_TYPES and is_dead_proxy(value):
+        # Refers to nothing: one form for every such proxy (`is_dead_proxy`).
+        return DEAD_PROXY_FORM
     if walk.hook is not None:
         stand_in = walk.hook(value)
         if stand_in is not NOT_HOOKED:
@@ -335,6 +349,18 @@ def _enter(value: Any, walk: _Walk) -> Any:
             return _Descend(_zoned_steps(value))
         if form is not None:
             return form
+    if _pandas_index(type(value)):
+        # By its labels and schema, not pickled: its pickle carries what
+        # pandas cached about the labels (`content_hashers.hash_pandas_index`).
+        from .content_hashers import hash_pandas_index
+
+        first = seen.get(id(value))
+        if first is not None:
+            return ("__cash_alias__", first[0])
+        digest = hash_pandas_index(value)
+        if digest is not None:
+            seen[id(value)] = (len(seen), value)
+            return ("__cash_index__", digest)
     family = walk.content.family(type(value))
     if family is not None:
         if family in _WRITABLE_FAMILIES:
@@ -366,6 +392,17 @@ def _enter(value: Any, walk: _Walk) -> Any:
         # container while the walk lasts.
         seen[id(value)] = (len(seen), value)
     return _Descend(_object_steps(value, walk))
+
+
+def _pandas_index(type_: type) -> bool:
+    """Is *type_* one of pandas' own index classes? A user's subclass may
+    keep state of its own, and is pickled as before."""
+    module = type_.__module__
+    if module != "pandas" and not module.startswith("pandas."):
+        return False
+    pd = sys.modules.get("pandas")
+    index = getattr(pd, "Index", None)
+    return isinstance(index, type) and issubclass(type_, index)
 
 
 #: Containers whose identity code can observe by writing through one
@@ -1217,7 +1254,7 @@ def contains_set(value: Any, found: dict[int, Any] | None = None, clean: dict[in
         # Exact-type test, matching ``CODELESS_PRIMS``'s own contract: a
         # str/int SUBCLASS can carry a ``__dict__`` holding a set and must
         # still be walked.
-        if kind in CODELESS_PRIMS:
+        if kind in CODELESS_PRIMS or (kind in WEAK_PROXY_TYPES and is_dead_proxy(node)):
             continue
         if isinstance(node, (set, frozenset)) or (found is not None and id(node) in found):
             if found is not None:

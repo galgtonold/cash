@@ -810,7 +810,12 @@ def _frozen_index(index: Any) -> Any:
     itself when it holds no array (a range). An index is never written
     through pandas, only through a handle (``index.array``). Copied, because
     a deep pandas copy of a table may keep the caller's label array, and the
-    caller's index must stay as writable as it was."""
+    caller's index must stay as writable as it was.
+
+    Not copied when the tier has the labels frozen already (`_kept_labels`):
+    every result of a loop over one table carries that table's index, and
+    each store copied it again -- for a Series of floats over dates, as many
+    bytes as the values, in RAM for as long as the entry lives."""
     import pandas as pd
 
     if isinstance(index, pd.RangeIndex):
@@ -819,9 +824,82 @@ def _frozen_index(index: Any) -> Any:
     if _python_text(data):
         copied = data.copy()
         return _same_index(index, copied._from_backing_data(_read_only(copied._ndarray)))
-    if not _ndarray_parts(data):
+    parts = _ndarray_parts(data)
+    if not parts:
         return index  # Arrow labels: immutable memory (`_private_axes`)
-    return _same_index(index, _freeze_values(data.copy()))
+    kept = _kept_labels(data, parts[0][1])
+    if kept is not None:
+        return _same_index(index, kept)
+    frozen = _freeze_values(data.copy())
+    _remember_labels(parts[0][1], frozen)
+    return _same_index(index, frozen)
+
+
+#: ``id(a caller's label array) -> (weak reference to it, weak reference
+#: to the frozen label values the tier copied from it)``: `_kept_labels`.
+_LABELS_FROM: dict[int, tuple[Any, Any]] = {}
+_LABELS_LOCK = threading.Lock()
+
+
+def _kept_labels(data: Any, array: Any) -> Any:
+    """Frozen label values with the content of an index's *data* (whose
+    numpy array is *array*) that the tier holds already, or None.
+
+    *data* itself when the tier froze it (a hit's index, or one this store
+    shared): read-only memory no holder can make writable again, seen
+    through a view (`_freeze_values`). Else the values the tier froze when
+    it last copied *array*, if that copy still lives, is of the same type,
+    dtype and ``freq`` and holds the same bytes: *array* may have been
+    written in place since, past pandas, and is compared, not trusted
+    (`shared_blocks.same_bytes`). An object array is never matched: equal
+    pointers say nothing of what the objects hold now."""
+    from .shared_blocks import same_bytes
+
+    if array.dtype.hasobject:
+        return None
+    if not array.flags.writeable and is_frozen(array):
+        return _freeze_values(data)
+    with _LABELS_LOCK:
+        refs = _LABELS_FROM.get(id(array))
+    if refs is None or refs[0]() is not array:
+        return None
+    stored = refs[1]()
+    if stored is None or type(stored) is not type(data) or stored.dtype != data.dtype:
+        return None
+    if array_freq(stored) != array_freq(data):
+        return None
+    stored_parts = _ndarray_parts(stored)
+    if not stored_parts:
+        return None
+    stored_array = stored_parts[0][1]
+    if stored_array.flags.writeable or not is_frozen(stored_array) or stored_array.shape != array.shape:
+        return None
+    return stored if same_bytes(array, stored_array, counted=False) else None
+
+
+def _remember_labels(array: Any, frozen: Any) -> None:
+    """Record that the frozen label values *frozen* were copied from the
+    caller's label *array*, for as long as both live (`_kept_labels`)."""
+    if array.dtype.hasobject:
+        return
+    at = id(array)
+    made: list[tuple[Any, Any]] = []
+
+    def forget(_ref: Any) -> None:
+        lock = _LABELS_LOCK
+        if lock is None:  # at interpreter exit, the module's globals cleared
+            return
+        with lock:
+            if made and _LABELS_FROM.get(at) is made[0]:
+                del _LABELS_FROM[at]
+
+    try:
+        entry = (_weak.ref(array, forget), _weak.ref(frozen, forget))
+    except TypeError:  # values that take no weak reference: not remembered
+        return
+    made.append(entry)
+    with _LABELS_LOCK:
+        _LABELS_FROM[at] = entry
 
 
 def frozen_already(frame: Any) -> bool:
@@ -1263,7 +1341,7 @@ def _checked_works() -> bool:
     return ok
 
 
-def copy_keeping_blocks(frame: Any, *, arrow: bool = True, reuse: Any = None) -> Any:
+def copy_keeping_blocks(frame: Any, *, arrow: bool = True, reuse: Any = None, storing: bool = False) -> Any:
     """``frame.copy(deep=True)`` with *frame*'s blocks as they are, and
     nothing of *frame*'s left in it (`own_parts`).
 
@@ -1286,12 +1364,16 @@ def copy_keeping_blocks(frame: Any, *, arrow: bool = True, reuse: Any = None) ->
     *reuse*, when storing: a `shared_blocks.BlockReuse` for *frame*, whose
     ``find`` gives the values of a block of the same content the RAM tier
     already keeps; such a block is not copied again.
+
+    *storing*: the copy is the one the RAM tier keeps, so its labels of
+    numbers and dates are frozen as they are copied, or taken from an entry
+    that holds them already (`_owned_axis`).
     """
     try:
         mgr = frame._mgr
         if frame.ndim != 2:
             copied = frame.copy(deep=True)
-            own_parts(copied, arrow=arrow)
+            own_parts(copied, arrow=arrow, storing=storing)
             return copied
         blocks = []
         for block in mgr.blocks:
@@ -1299,7 +1381,7 @@ def copy_keeping_blocks(frame: Any, *, arrow: bool = True, reuse: Any = None) ->
             if values is None:
                 values = _copy_values(block.values, arrow)
             blocks.append(type(block)(values, placement=block._mgr_locs, ndim=block.ndim, refs=None))
-        axes = [_owned_axis(axis, arrow) for axis in mgr.axes]
+        axes = [_owned_axis(axis, arrow, storing) for axis in mgr.axes]
         copied_mgr = type(mgr).from_blocks(blocks, axes)
         return frame._constructor_from_mgr(copied_mgr, axes=copied_mgr.axes).__finalize__(frame, method="copy")
     except Exception:
@@ -1309,7 +1391,7 @@ def copy_keeping_blocks(frame: Any, *, arrow: bool = True, reuse: Any = None) ->
         return copied
 
 
-def own_parts(copied: Any, *, arrow: bool = True) -> None:
+def own_parts(copied: Any, *, arrow: bool = True, storing: bool = False) -> None:
     """Make a deep pandas copy *copied* keep nothing of the table it was
     copied from, in place.
 
@@ -1325,6 +1407,7 @@ def own_parts(copied: Any, *, arrow: bool = True) -> None:
     Every chunk with a buffer that is not memory Arrow allocated itself is
     copied (`_owned_arrow`); the rest, which nothing but Arrow holds, is
     shared. *arrow* False: the RAM tier's own data (a hit), all shared.
+    *storing*: as `copy_keeping_blocks` takes it.
     """
     from pandas.core.arrays.arrow import ArrowExtensionArray
 
@@ -1338,14 +1421,15 @@ def own_parts(copied: Any, *, arrow: bool = True) -> None:
             block.values = _owned_categories(block.values, arrow)
     for name in ("index",) if copied.ndim == 1 else ("index", "columns"):
         axis = getattr(copied, name)
-        owned = _owned_axis(axis, arrow)
+        owned = _owned_axis(axis, arrow, storing)
         if owned is not axis:
             setattr(copied, name, owned)
 
 
-def _owned_axis(axis: Any, arrow: bool = True) -> Any:
+def _owned_axis(axis: Any, arrow: bool = True, storing: bool = False) -> Any:
     """A copy of *axis* holding no label array of *axis*'s (`own_parts`); a
-    range itself, which holds none."""
+    range itself, which holds none. *storing*: labels of numbers and dates
+    frozen, for the RAM tier to keep (`_frozen_index`)."""
     import pandas as pd
 
     if _is_range(axis):
@@ -1361,6 +1445,16 @@ def _owned_axis(axis: Any, arrow: bool = True) -> Any:
     data = getattr(axis, "_data", None)
     if isinstance(data, (ArrowExtensionArray, _categorical())):
         return type(axis)._simple_new(_copy_values(data, arrow), name=axis.name)
+    if storing and enabled():
+        # Storing: labels of numbers and dates are made the tier's own, frozen,
+        # here -- not copied now and again when the table is frozen -- and
+        # taken from an entry that holds them already (`_frozen_index`).
+        parts = _ndarray_parts(data) if data is not None else None
+        if parts and not parts[0][1].dtype.hasobject:
+            try:
+                return _frozen_index(axis)
+            except ValueError:  # its freq would be lost: copied as before
+                logger.debug("cash: an index's labels copied unfrozen", exc_info=True)
     return axis.copy(deep=True)
 
 
