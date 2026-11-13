@@ -86,6 +86,9 @@ def test_the_holder_check_walks_records_two_names_reach_into_one_inside_the_othe
 def test_the_closure_check_does_not_walk_each_record(monkeypatch):
     monkeypatch.setattr(_CountingSet, "calls", 0)
     monkeypatch.setattr(call_key, "_EXACT_ATOMS", _CountingSet(call_key._EXACT_ATOMS))
+    # The walk's atoms are the counting set alone: no library's scalars
+    # joined to them in a set of their own.
+    monkeypatch.setattr(call_key, "library_exact_values", frozenset)
 
     assert not call_key.holds_a_closure_with_state(_records(5_000))
     assert _CountingSet.calls < 10
@@ -94,6 +97,9 @@ def test_the_closure_check_does_not_walk_each_record(monkeypatch):
 def test_the_closure_check_walks_records_holding_a_function(monkeypatch):
     monkeypatch.setattr(_CountingSet, "calls", 0)
     monkeypatch.setattr(call_key, "_EXACT_ATOMS", _CountingSet(call_key._EXACT_ATOMS))
+    # The walk's atoms are the counting set alone: no library's scalars
+    # joined to them in a set of their own.
+    monkeypatch.setattr(call_key, "library_exact_values", frozenset)
     records = _records(5_000)
     records[-1]["fn"] = len
 

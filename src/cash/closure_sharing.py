@@ -28,7 +28,7 @@ from typing import Any, NamedTuple
 
 from cash._clock import CpuLimit
 from cash._native import kernels as _KERNELS
-from cash._plain_data import TREE_NODES, in_a_look, tree_facts, tree_levels
+from cash._plain_data import TREE_NODES, in_a_look, numpy_scalar_set, tree_facts, tree_levels
 from cash._type_memo import MroMemo, TypeMemo, type_key
 from cash._user_attrs import own_dict
 from cash.install_paths import is_user_code_module
@@ -40,6 +40,22 @@ __all__ = ["ClosureCheck", "closure_check_budget", "closures_sharing"]
 
 #: Hold nothing: not looked inside, and no place of the value's either.
 _LEAVES = frozenset(IMMUTABLE_LEAF_TYPES) | {pickle.PickleBuffer, memoryview}
+
+
+def _leaves() -> frozenset:
+    """`_LEAVES` with numpy's exact number types (`numpy_scalar_set`),
+    which hold a number and take no attribute: a list of a million
+    ``np.float64`` (``list(arr)``) was read a scalar at a time, through its
+    reduce, past the time and not stored."""
+    global _WITH_SCALARS
+    scalars = numpy_scalar_set()
+    if _WITH_SCALARS[0] is not scalars:
+        _WITH_SCALARS = (scalars, _LEAVES | scalars)
+    return _WITH_SCALARS[1]
+
+
+#: ``(numpy_scalar_set(), _leaves())`` as `_leaves` last found them.
+_WITH_SCALARS: tuple[frozenset, frozenset] = (frozenset(), _LEAVES)
 #: The builtin containers, read in bulk a level at a time.
 _SEQUENCES = frozenset({tuple, list, set, frozenset})
 #: The builtin containers whose subclasses' items `_object_parts` reads.
@@ -262,7 +278,7 @@ def _fresh(held: list[Iterable[Any]], places: set[int] | dict[int, Any], limit: 
     once, now added to it; None when *limit* ran out first. Taken in
     chunks, each a few passes in C: a level of ten million strings is
     typed and dropped, never remembered one by one."""
-    leaves = _LEAVES
+    leaves = _leaves()
     items = chain.from_iterable(held)
     fresh: list = []
     while chunk := list(islice(items, _CHUNK)):

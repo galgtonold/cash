@@ -49,6 +49,7 @@ from cash.install_paths import is_user_code_module, is_user_path
 from cash.notebook import shadow as _shadow
 from cash.notebook.cache_key import CacheKeyContext, body_imports_of, compute_cache_key, remember_body_imports
 from cash.notebook.call_effects import closure_cells, rebinds_its_closure
+from cash.notebook.shared_objects import library_exact_values
 from cash.sizing import pandas_nbytes
 from cash.source_reading import own_source, wrapper_layers
 from cash.value_hash import compute_hash
@@ -1681,7 +1682,11 @@ def holds_a_closure_with_state(
     stack = [value]
     seen: set[int] = set()
     looked_into = 0
-    atoms = _EXACT_ATOMS
+    # NumPy's scalars and pandas' times too (`library_exact_values`): a
+    # list of a million ``np.float64`` or ``Timedelta`` (``list(series)``)
+    # holds no function, and was pushed a value at a time, past `_STEPS_AT`.
+    extra = library_exact_values()
+    atoms = _EXACT_ATOMS if extra <= _EXACT_ATOMS else _EXACT_ATOMS | extra
     # How each type is read, for this walk: thousands of records share one.
     readings: dict[type, int] = {}
     record_kinds: set[type] = set()  # classes of flat records, pushed once

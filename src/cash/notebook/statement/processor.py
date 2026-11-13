@@ -239,6 +239,7 @@ from ..shared_objects import (
     history_names,
     holds_part_of,
     is_value,
+    library_exact_values,
     library_value_types,
     names_reaching,
     note_raw_attribute_writes,
@@ -533,8 +534,13 @@ def _classes_with_state(
                 if kinds <= _ATOMS:
                     break
                 # Numbers and strings (``sum(big)``) keep nothing and cost
-                # none of the budget.
-                left -= len(held) - sum(map(_ATOMS.__contains__, kinds_of))
+                # none of the budget, nor do numpy's scalars and pandas'
+                # times (`library_exact_values`), whose classes are still
+                # among those reached: three million Timedeltas a loop
+                # collected (``deltas += list(group['t'].diff())``) ran it
+                # every time.
+                plain = _ATOMS | library_exact_values()
+                left -= len(held) - sum(map(plain.__contains__, kinds_of))
                 if left < 0 or depth >= _DEPTH_READ:
                     unread = True
                     break
