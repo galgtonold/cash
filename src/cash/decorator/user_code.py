@@ -9,6 +9,7 @@ import sys
 import types
 from typing import Any
 
+from .._type_memo import per_type
 from ..analysis.helper_code import UnwalkableLayers, callable_layers
 from ..code_digest import unwrap_partials
 from ..install_paths import in_own_package, is_cash_path, is_user_code_module, top_package
@@ -194,8 +195,46 @@ def is_user_code_object(obj: Any) -> bool:
     mod = sys.modules.get(mod_name) if mod_name else None
     if mod is None or not qualname_resolves_in(mod, obj):
         verdict = _c_code_verdict(obj)
+        if verdict is None and isinstance(obj, type) and built_by_library(obj):
+            verdict = False
         return True if verdict is None else verdict
     return is_user_code_module(mod)
+
+
+def _built_by_library(cls: type) -> bool:
+    """Is *cls* a class a library built at run time with no code of its
+    own: named after a library module with a file, holding only data in
+    its namespace, every base a library class?
+
+    pint builds a ``Quantity`` class per unit registry
+    (``type("Quantity", (registry.Quantity,), {"_REGISTRY": ureg})``). It
+    names the module ``pint``, where ``pint.Quantity`` is another class, so
+    it counted as exec'd user code: a quantity argument folded the class's
+    data, the whole registry with its weak caches, and no key could be
+    built. Its code is its bases' code, each judged on its own; a function
+    or method descriptor in its own namespace, or a base of the user's,
+    keeps the lenient verdict.
+    """
+    mod = sys.modules.get(getattr(cls, "__module__", None) or "")
+    if mod is None or getattr(mod, "__file__", None) is None or is_user_code_module(mod):
+        return False
+    try:
+        if any(isinstance(v, types.FunctionType) or wraps_code(v) for v in vars(cls).values()):
+            return False
+        return not any(is_user_code_object(base) for base in cls.__mro__[1:] if base is not object)
+    except Exception:  # noqa: BLE001 - an odd class keeps the lenient verdict
+        return False
+
+
+#: `_built_by_library`, per class: asked each time such a class is judged.
+built_by_library = per_type(_built_by_library)
+
+
+def unnamed_library_class(cls: type) -> bool:
+    """Is *cls* a class a library built (`_built_by_library`) that its
+    ``module:qualname`` does not find, so the name stands for another?"""
+    mod = sys.modules.get(getattr(cls, "__module__", None) or "")
+    return mod is not None and not qualname_resolves_in(mod, cls) and built_by_library(cls)
 
 
 def qualname_resolves_in(mod: Any, obj: Any) -> bool:

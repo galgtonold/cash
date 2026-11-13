@@ -35,6 +35,7 @@ from typing import Any, NamedTuple
 from . import _plain_data, _weak, kept_state
 from ._memo import SORTED_SETS, LruMemo
 from ._type_memo import TypeMemo, type_key
+from .pint_values import is_registry_class, pint_kind, quantity_parts, registry_digest
 from .sizing import SPARSE_PARTS, pandas_nbytes
 from .value_types import (
     CODELESS_PRIMS,
@@ -340,6 +341,11 @@ def _enter(value: Any, walk: _Walk) -> Any:
         stand_in = walk.hook(value)
         if stand_in is not NOT_HOOKED:
             return stand_in
+    pint = pint_kind(type(value))
+    if pint is not None:
+        return _pint_form(value, pint)
+    if type(value) is type and is_registry_class(value):
+        return ("__cash_pint__", "class", value.__mro__[1].__qualname__, registry_digest(value._REGISTRY))
     if type(value) in _plain_data.numpy_scalar_set():
         # A number: pickled by value, nothing inside to order.
         return ("__cash_np__", value.dtype.char, value.tobytes())
@@ -392,6 +398,27 @@ def _enter(value: Any, walk: _Walk) -> Any:
         # container while the walk lasts.
         seen[id(value)] = (len(seen), value)
     return _Descend(_object_steps(value, walk))
+
+
+def _pint_form(value: Any, kind: str) -> Any:
+    """A pint quantity or unit by its magnitude and units, with its
+    registry's definitions (`cash.pint_values`): its pickle names neither
+    the registry nor what its unit names mean there. A registry alone is
+    its definitions."""
+    if kind == "registry":
+        return ("__cash_pint__", kind, registry_digest(value))
+    digest, magnitude, units = quantity_parts(value)
+    if magnitude is None:
+        return ("__cash_pint__", kind, digest, units)
+    return _Descend(_pint_steps(value, kind, digest, magnitude, units))
+
+
+def _pint_steps(value: Any, kind: str, digest: str, magnitude: Any, units: tuple) -> Generator[Any, Any, tuple]:
+    """`_pint_form` of a quantity: its magnitude walked as any value is (an
+    array by its content hasher)."""
+    t = type(value)
+    form = magnitude if type(magnitude) in _IMMUTABLE_PRIMS else (yield magnitude)
+    return ("__cash_pint__", kind, f"{t.__module__}.{t.__qualname__}", digest, form, units)
 
 
 def _pandas_index(type_: type) -> bool:
