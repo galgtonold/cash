@@ -88,6 +88,10 @@ class StaleValueGuard:
         #: value its last run, which raised, may have written
         #: (`note_cell_raised`); read and dropped at the cell's next check.
         self._left_by_failed_run: dict[int, dict[str, tuple[int, Any]]] = {}
+        #: Cell index -> ``name -> (id, weak reference or None)`` of each name
+        #: a run of the cell changed and read, with the value the cell left it
+        #: at (`note_cell_left`; None while it runs).
+        self._own_changes: dict[int, dict[str, tuple[int, Any] | None]] = {}
         #: The cell the current check is for.
         self._cell_idx: int | None = None
         self._cells: list[str] | None = None
@@ -145,6 +149,8 @@ class StaleValueGuard:
         self._cell_idx = current_cell_idx
         self._cells = notebook_cells
         left_by_failed_run = self._left_by_failed_run.pop(current_cell_idx, {}) if current_cell_idx is not None else {}
+        changes_and_reads = (effects.reassigned | effects.mutated) & required_inputs if required_inputs else set()
+        self._rebuild_what_an_edit_stopped_changing(current_cell_idx, changes_and_reads, broken_vars)
         if not required_inputs:
             return
         reassigned = effects.reassigned
@@ -155,6 +161,10 @@ class StaleValueGuard:
         self_written = reassigned | inplace_self
         if not self_written:
             return
+        if current_cell_idx is not None:
+            own = self._own_changes.setdefault(current_cell_idx, {})
+            for var_name in changes_and_reads:
+                own[var_name] = None
         self._reset_what_a_failed_run_left(left_by_failed_run, self_written & required_inputs, broken_vars)
         self._keep_shared_own_writes(inplace_self & broken_vars, broken_vars, virtual_lineage)
         # Vars that an *upstream* cell also mutates in place. A no-lineage var
@@ -754,6 +764,57 @@ class StaleValueGuard:
             noted.add(var_name)
         self._noted_at_start = (cell_idx, frozenset(noted))
 
+    def note_cell_left(self, cell_idx: int | None) -> None:
+        """Cell *cell_idx* ran last: record the value it left each name a
+        run of it changed and read (`_own_changes`)."""
+        own = self._own_changes.get(cell_idx) if cell_idx is not None else None
+        if not own:
+            return
+        user_ns = self.shell.user_ns
+        for var_name in list(own):
+            if var_name in user_ns:
+                own[var_name] = _identity(user_ns[var_name])
+            else:
+                del own[var_name]
+
+    def _rebuild_what_an_edit_stopped_changing(
+        self, cell_idx: int | None, changes_and_reads: set[str], broken_vars: set[str]
+    ) -> None:
+        """Mark broken each name an earlier run of cell *cell_idx* changed
+        and read, which the cell as it is now no longer both changes and
+        reads (*changes_and_reads*), while it still holds what the cell left
+        it at: it is rebuilt from the cells above, the value Restart & Run
+        All gives.
+
+        Every re-run of a cell that changes a name it reads starts from what
+        the cells above give, not from what the cell left (``acc =
+        pd.concat([acc, new])`` re-run, after a run that went through or one
+        that raised), so the name holds a value only the cell's text makes.
+        Edited not to change it any more (the line commented out), the cell
+        left it there: a value neither a plain kernel (every run on top of
+        the last) nor Run All (the cells above, with the cell as it is now)
+        gives. So did one edited to bind it without reading it (``acc =
+        pd.append(new)``) that raised before the binding. A name the
+        notebook has bound anew since is not touched."""
+        own = self._own_changes.get(cell_idx) if cell_idx is not None else None
+        if not own:
+            return
+        user_ns = self.shell.user_ns
+        for var_name in sorted(own):
+            if var_name in changes_and_reads:
+                continue
+            left = own.pop(var_name)
+            if left is None or var_name not in user_ns or var_name in broken_vars:
+                continue
+            live = user_ns[var_name]
+            if _same(left, live) and not self._kept_for_partner_below(var_name, live):
+                logger.debug(
+                    "[UPSTREAM_DEBUG] '%s' holds what the cell left from the cells above; the cell no "
+                    "longer changes it, so it is rebuilt.",
+                    var_name,
+                )
+                broken_vars.add(var_name)
+
     def note_cell_raised(self, cell_idx: int, changed: set[str], rebound_only: set[str] = frozenset()) -> None:
         """Cell *cell_idx* raised, having changed in place at most *changed*:
         forget the object it started from, as :meth:`note_cell_start`
@@ -1054,6 +1115,12 @@ def _identity(value: Any) -> tuple[int, Any]:
         return id(value), _weak.ref(value)
     except TypeError:
         return id(value), None
+
+
+def _same(seen: tuple[int, Any], live: Any) -> bool:
+    """Whether *live* is the object *seen* (`_identity`) recorded."""
+    seen_id, ref = seen
+    return ref() is live if ref is not None else seen_id == id(live)
 
 
 def _weakly_held(value: Any) -> bool:
