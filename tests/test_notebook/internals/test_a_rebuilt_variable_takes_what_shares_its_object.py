@@ -83,7 +83,9 @@ def _plan_fallback(trace, scheduled, restored, kept, edges, user_ns):
 
 
 def _entry(code, outputs):
-    return SimpleNamespace(stmt_code=code, outputs=set(outputs), inputs=set())
+    # Each output moves to a lineage of its own: the statement changes it.
+    lineages = {name: f"{code}->{name}" for name in outputs}
+    return SimpleNamespace(stmt_code=code, outputs=set(outputs), inputs=set(), produced_lineages=lineages)
 
 
 def test_a_plan_changing_a_kept_variable_rebuilds_it_and_what_holds_it():
@@ -110,3 +112,17 @@ def test_a_plan_leaving_kept_variables_alone_is_unchanged():
     kept = {"pre"}
     assert _plan_fallback(trace, [1], [], kept, {"pre": {"full"}}, {"pre": 0, "full": 0}) == [1]
     assert kept == {"pre"}
+
+
+def test_an_output_left_at_its_lineage_is_not_a_change():
+    """``grid.fit(X, y)`` lists ``pre``, which its search holds, and leaves it
+    at the lineage ``lin.fit`` gave it."""
+    from cash.notebook.upstream.mismatch_classifier import what_each_statement_changes
+
+    trace = [
+        SimpleNamespace(outputs={"pre"}, produced_lineages={"pre": "p0"}),
+        SimpleNamespace(outputs={"lin", "pre"}, produced_lineages={"lin": "l1", "pre": "p1"}),
+        SimpleNamespace(outputs={"grid", "pre"}, produced_lineages={"grid": "g1", "pre": "p1"}),
+        SimpleNamespace(outputs={"x"}, produced_lineages={}),
+    ]
+    assert what_each_statement_changes(trace) == [{"pre"}, {"lin", "pre"}, {"grid"}, {"x"}]

@@ -1032,12 +1032,13 @@ class MismatchClassifier:
         sharing an object with a rebuilt one) that the rebuild can leave
         live: each holds what the cells above leave it (`_live_as_above`),
         and is made and last changed by a statement above the first one the
-        rebuild of the rest can re-run (`_first_rerun`). Its object then
+        rebuild of the rest can re-run (`_first_rerun`); changed by a
+        statement as the simulation has it, which moves its lineage on. Its object then
         predates every object the rebuild makes, so it holds none of them,
         and no statement of the rebuild changes it."""
         last_change: dict[str, int] = {}
-        for i, entry in enumerate(sim.trace):
-            for name in entry.outputs or ():
+        for i, changed in enumerate(what_each_statement_changes(sim.trace)):
+            for name in changed:
                 last_change[name] = i
         kept = {
             name for name in sharers if name in last_change and name not in tainted and self._live_as_above(name, sim)
@@ -1622,6 +1623,26 @@ class MismatchClassifier:
                 )
             logger.debug("[UPSTREAM] Variable '%s' should exist but is missing.", var_name)
             broken_vars.add(var_name)
+
+
+def what_each_statement_changes(trace: list) -> list[set[str]]:
+    """The outputs each statement of *trace* binds or changes, as the
+    simulation has it: one it leaves at the lineage it had before is left
+    out. ``grid.fit(X, y)`` lists the pipelines its search holds, which
+    share objects with it, and leaves them as they were (it fits clones)."""
+    lineage_now: dict[str, str] = {}
+    changes: list[set[str]] = []
+    for entry in trace:
+        produced = entry.produced_lineages or {}
+        changed = set()
+        for name in entry.outputs or ():
+            after = produced.get(name)
+            if after is None or after != lineage_now.get(name):
+                changed.add(name)
+            if after is not None:
+                lineage_now[name] = after
+        changes.append(changed)
+    return changes
 
 
 def _made_below(tracking_state: TrackingState, user_ns: dict, check: CellCheck | None) -> frozenset[str]:

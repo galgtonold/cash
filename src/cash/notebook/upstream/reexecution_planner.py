@@ -29,7 +29,7 @@ from ._types import CellCheck, ClassificationResult, ReexecutionPlan, Simulation
 from .carrier_fills import fills_carrier
 from .figure_writes import FigureWriteGuard
 from .file_writers import FileWriterScheduler
-from .mismatch_classifier import import_only
+from .mismatch_classifier import import_only, what_each_statement_changes
 from .notebook_vetting import first_forward_read
 from .replay import UpstreamRepairGap
 
@@ -648,7 +648,8 @@ class ReexecutionPlanner:
         if not kept or not stmts_to_run_indices:
             return stmts_to_run_indices
         scheduled = set(stmts_to_run_indices)
-        changed = {name for i in scheduled for name in simulation_trace[i].outputs or () if name in kept}
+        changes = what_each_statement_changes(simulation_trace)
+        changed = {name for i in scheduled for name in changes[i] if name in kept}
         if not changed:
             return stmts_to_run_indices
         edges = self.tracking_state.derivation_edges
@@ -669,13 +670,13 @@ class ReexecutionPlanner:
                     if name in (entry.outputs or ()) and name in CodeAnalyzer.analyze_code_block(entry.stmt_code)[1]:
                         start = i
                 for i in range(start, len(simulation_trace)):
-                    if name in (simulation_trace[i].outputs or ()):
+                    if name in changes[i]:
                         scheduled.add(i)
             for info in restored:
                 position = info.get("position")
                 if isinstance(position, int) and reach & set(info.get("restored_vars") or ()):
                     scheduled.add(position)
-            changed = {name for i in scheduled for name in simulation_trace[i].outputs or () if name in kept}
+            changed = {name for i in scheduled for name in changes[i] if name in kept}
         return sorted(scheduled)
 
     def _reopen_drawn_inputs(self, stmts_to_run_indices: list[int], simulation_trace: list) -> list[int]:
