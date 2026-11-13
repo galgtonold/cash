@@ -14,7 +14,14 @@ import sys
 from collections.abc import Mapping, Sequence
 from functools import lru_cache
 
-__all__ = ["NOT_A_LITERAL", "reads_its_arguments_only", "turns_on_a_write", "write_parameter"]
+__all__ = [
+    "ESTIMATOR_READING_METHODS",
+    "NOT_A_LITERAL",
+    "estimator_reads_its_arguments",
+    "reads_its_arguments_only",
+    "turns_on_a_write",
+    "write_parameter",
+]
 
 #: Stands for an argument whose value is not known (an expression in a
 #: statement's text): it may be anything, so it may ask for a write.
@@ -170,3 +177,105 @@ def reads_its_arguments_only(
         if name in names and getattr(module, name, None) is fn:
             return not _the_call_writes(fn, args, kwargs or {}, open_ended)
     return False
+
+
+# -- scikit-learn estimators ---------------------------------------------------
+
+#: Methods of a scikit-learn estimator that leave what they are handed (``X``,
+#: ``y``, ``sample_weight``) as it was. An assumption about one popular
+#: library, stated here once: cash does not read sklearn's source to prove
+#: it. It does not hold when the estimator is asked to work in place: a
+#: ``copy=False`` scaler (``StandardScaler``, ``MinMaxScaler``,
+#: ``Normalizer``, ``Binarizer``) scales ``X`` itself, and a linear model
+#: with ``copy_X=False`` may centre it in place, so any such parameter set to
+#: ``False``, on the estimator or on one it holds, voids the rule
+#: (`estimator_reads_its_arguments`).
+ESTIMATOR_READING_METHODS = frozenset(
+    {
+        "fit",
+        "partial_fit",
+        "predict",
+        "predict_proba",
+        "decision_function",
+        "score",
+        "transform",
+        "fit_transform",
+        "inverse_transform",
+    }
+)
+
+#: The parameters through which an estimator is asked to work in place.
+_IN_PLACE_PARAMETERS = frozenset({"copy", "copy_X"})
+
+#: Modules whose objects an estimator may hold without running code of
+#: anyone else's on what it is handed (a ``RandomState``, a scoring
+#: function of sklearn's, an array of class weights).
+_TRUSTED_ROOTS = frozenset({"sklearn", "numpy", "scipy", "builtins"})
+
+_PLAIN = (type(None), bool, int, float, complex, str, bytes)
+
+
+def _root_module(obj) -> str:
+    module = getattr(obj, "__module__", None) if callable(obj) and not hasattr(obj, "get_params") else None
+    if not isinstance(module, str):
+        module = type(obj).__module__
+    return module.partition(".")[0]
+
+
+def _held_value_is_known(value, depth: int) -> bool:
+    """Whether *value*, a parameter of a scikit-learn estimator, is known
+    to do nothing to what the estimator is handed: plain data, sklearn's,
+    numpy's or scipy's own objects, and containers of those. An estimator
+    it holds must pass `estimator_reads_its_arguments`' test itself; a
+    function or splitter of the user's (``FunctionTransformer(func=f)``,
+    ``cv=MySplit()``) is handed the data, and is not known."""
+    if depth > 20:
+        return False
+    if isinstance(value, _PLAIN):
+        return True
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return all(_held_value_is_known(item, depth + 1) for item in value)
+    if isinstance(value, dict):
+        return all(_held_value_is_known(k, depth + 1) and _held_value_is_known(v, depth + 1) for k, v in value.items())
+    if _root_module(value) not in _TRUSTED_ROOTS:
+        return False
+    if callable(getattr(value, "get_params", None)) and not isinstance(value, type):
+        return _estimator_is_known(value, depth + 1)
+    return True
+
+
+def _estimator_is_known(estimator, depth: int) -> bool:
+    if type(estimator).__module__.partition(".")[0] != "sklearn":
+        return False
+    try:
+        params = estimator.get_params(deep=True)
+    except Exception:  # noqa: BLE001 - parameters not read: nothing is assumed
+        return False
+    if not isinstance(params, dict):
+        return False
+    for key, value in params.items():
+        if not isinstance(key, str):
+            return False
+        if key.rpartition("__")[2] in _IN_PLACE_PARAMETERS and value is False:
+            return False
+        if not _held_value_is_known(value, depth):
+            return False
+    return True
+
+
+def estimator_reads_its_arguments(estimator, method: str) -> bool:
+    """Whether ``estimator.method(X, y)`` leaves ``X`` and ``y`` as they were,
+    by the one assumption cash makes about scikit-learn
+    (`ESTIMATOR_READING_METHODS`): *estimator* is scikit-learn's own (not a
+    subclass of the user's), *method* is one of those methods, and no
+    ``copy`` or ``copy_X`` parameter is ``False``, on it or on any estimator
+    it holds (a ``Pipeline``'s steps, a ``GridSearchCV``'s estimator), read
+    from ``get_params(deep=True)`` now. Everything an estimator holds must
+    be known (`_held_value_is_known`); one that is not, or parameters that
+    cannot be read, answer no."""
+    if method not in ESTIMATOR_READING_METHODS:
+        return False
+    try:
+        return _estimator_is_known(estimator, 0)
+    except Exception:  # noqa: BLE001 - an estimator that cannot be inspected is not known
+        return False
