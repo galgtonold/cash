@@ -18,7 +18,10 @@ __all__ = [
     "ESTIMATOR_READING_METHODS",
     "ESTIMATOR_READ_ARGUMENTS",
     "NOT_A_LITERAL",
+    "cross_validation_reads_its_arguments",
     "estimator_reads_its_arguments",
+    "estimator_stand_in",
+    "held_value_is_known",
     "reads_its_arguments_only",
     "turns_on_a_write",
     "write_parameter",
@@ -293,3 +296,75 @@ def estimator_reads_its_arguments(estimator, method: str) -> bool:
         return _estimator_is_known(estimator, 0)
     except Exception:  # noqa: BLE001 - an estimator that cannot be inspected is not known
         return False
+
+
+#: ``sklearn.model_selection``'s functions that fit and score a clone of the
+#: estimator they are handed on rows taken from ``X`` and ``y`` (index arrays,
+#: so copies): they leave ``X`` and ``y`` as they were when the estimator's
+#: own methods do (`ESTIMATOR_READING_METHODS`).
+_CROSS_VALIDATION_FUNCTIONS = frozenset(
+    {
+        "cross_val_score",
+        "cross_validate",
+        "cross_val_predict",
+        "learning_curve",
+        "validation_curve",
+        "permutation_test_score",
+    }
+)
+
+#: The functions of scikit-learn's that build an estimator from the ones
+#: they are handed and do nothing else (``make_pipeline(scaler, model)``).
+_ESTIMATOR_FACTORIES = (("sklearn.pipeline", "make_pipeline"), ("sklearn.pipeline", "make_union"))
+
+
+def held_value_is_known(value) -> bool:
+    """Whether *value*, handed to scikit-learn beside the data, is known to
+    do nothing to that data (`_held_value_is_known`)."""
+    try:
+        return _held_value_is_known(value, 0)
+    except Exception:  # noqa: BLE001 - not inspected: not known
+        return False
+
+
+def _sklearn_own(module: str, name: str):
+    return getattr(sys.modules.get(module), name, None)
+
+
+def cross_validation_reads_its_arguments(fn, estimators: Sequence, others: Sequence) -> bool:
+    """Whether ``fn(estimator, X, y, **others)`` leaves ``X`` and ``y`` as
+    they were: *fn* is one of ``sklearn.model_selection``'s cross-validation
+    functions (`_CROSS_VALIDATION_FUNCTIONS`, by identity), every estimator
+    it may be handed passes `estimator_reads_its_arguments` for ``fit``,
+    and everything else it is handed (``cv``, ``scoring``, ``params``) is
+    known (`held_value_is_known`): a scorer or splitter of the user's is
+    handed the data."""
+    name = getattr(fn, "__name__", None)
+    if name not in _CROSS_VALIDATION_FUNCTIONS or _sklearn_own("sklearn.model_selection", name) is not fn:
+        return False
+    if not estimators:
+        return False
+    return all(estimator_reads_its_arguments(e, "fit") for e in estimators) and all(
+        held_value_is_known(v) for v in others
+    )
+
+
+def estimator_stand_in(callee, args: Sequence, kwargs: Mapping):
+    """The estimator ``callee(*args, **kwargs)`` builds, built now, or None.
+
+    Only a class of scikit-learn's own modules (``GridSearchCV(model,
+    grid)``, ``Pipeline(steps)``) or ``make_pipeline`` / ``make_union``:
+    scikit-learn's constructors only store what they are handed (its
+    ``get_params`` contract), so building one ahead runs nothing of
+    anyone's on the data. What it is built from is what the statement will
+    hand it, so `estimator_reads_its_arguments` can read its parameters."""
+    if isinstance(callee, type):
+        if callee.__module__.partition(".")[0] != "sklearn" or not callable(getattr(callee, "get_params", None)):
+            return None
+    elif not any(_sklearn_own(module, name) is callee for module, name in _ESTIMATOR_FACTORIES):
+        return None
+    try:
+        built = callee(*args, **kwargs)
+    except Exception:  # noqa: BLE001 - not built: not known
+        return None
+    return built if type(built).__module__.partition(".")[0] == "sklearn" else None
