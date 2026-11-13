@@ -157,6 +157,7 @@ def test_a_moved_module_is_scanned_again(layout, tmp_path):
 
 def test_the_scan_answers_follow_the_text(tmp_path, monkeypatch):
     monkeypatch.setenv("CASH_ANALYSIS_STORE", str(tmp_path / "store"))
+    monkeypatch.setattr(tree_memo, "VERIFY", False)  # it would compute each answer again
     calls = []
 
     def compute(source: str) -> frozenset[str]:
@@ -191,8 +192,9 @@ def test_a_scan_that_gave_up_is_not_stored(tmp_path, monkeypatch):
     assert not list((tmp_path / "store").rglob("*.json"))
 
 
-def test_a_shared_tree_is_never_changed_by_a_walk():
+def test_a_shared_tree_is_never_changed_by_a_walk(monkeypatch):
     """The walk strips decorators off a copy; the kept tree still has them."""
+    monkeypatch.setattr(tree_memo, "VERIFY", False)  # it would compute each answer again
     src = "@deco\ndef f(x):\n    y = [x]\n    return y\n"
     tree = tree_memo.parse(src)
     func_def = tree.body[0]
