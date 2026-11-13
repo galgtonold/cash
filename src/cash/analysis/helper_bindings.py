@@ -166,11 +166,49 @@ def resolve_callee_chain(namespace: dict[str, Any], chain: tuple[str, ...]) -> A
 
 
 def held_ref(obj: Any) -> Callable[[], Any]:
-    """A weak reference where the object allows one, a strong one otherwise."""
+    """A weak reference where the object allows one, a strong one otherwise.
+
+    A bound method (``Studyset.from_dataset``, a classmethod read off its
+    class) is made anew on every attribute read, so a weak reference to the
+    one the walk met died at once: `bindings_changed` saw ``None`` against
+    the live method and walked the function again on every call. It is held
+    by what it binds (`_MethodRef`) instead."""
+    if type(obj) is types.MethodType:
+        return _MethodRef(obj)
     try:
         return _weak.ref(obj)
     except TypeError:
         return lambda: obj
+
+
+class _MethodRef:
+    """`held_ref` of a bound method: its function and its ``__self__``,
+    each held as `held_ref` holds an object. Called, a method binding the
+    same two, or None once either is gone."""
+
+    __slots__ = ("_func", "_self")
+
+    def __init__(self, method: types.MethodType) -> None:
+        self._func = held_ref(method.__func__)
+        self._self = held_ref(method.__self__)
+
+    def __call__(self) -> Any:
+        func, owner = self._func(), self._self()
+        if func is None or owner is None:
+            return None
+        return types.MethodType(func, owner)
+
+    def binds(self, live: Any) -> bool:
+        """Is *live* a bound method of the same function on the same object?"""
+        return type(live) is types.MethodType and live.__func__ is self._func() and live.__self__ is self._self()
+
+
+def same_binding(live: Any, ref: Callable[[], Any]) -> bool:
+    """Does the binding *ref* holds (`held_ref`) still hold *live*?
+    Identity, and for a bound method the identity of what it binds."""
+    if type(ref) is _MethodRef:
+        return ref.binds(live)
+    return live is ref()
 
 
 UNRESOLVED = object()
@@ -202,7 +240,7 @@ def bindings_changed(report: PurityReport) -> bool:
         live = resolve_binding(module_name, chain)
         if live is UNRESOLVED:
             continue
-        if live is not ref():
+        if not same_binding(live, ref):
             return True
     for module_name, name in report.unbound_names:
         module = sys.modules.get(module_name)
