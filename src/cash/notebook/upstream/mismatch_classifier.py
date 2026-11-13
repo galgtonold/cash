@@ -24,6 +24,7 @@ from .._protocols import ShellProtocol
 from .._trace import trace_event
 from ..cache_key import statement_source_hash
 from ..cache_status import CacheStatus
+from ..lineage_formula import bound_names
 from ..lineage_store import statement_tag
 from ..statement.derivation_edges import shared_object_partners
 from ..string_lookups import cell_reads_names_unseen
@@ -1020,29 +1021,33 @@ class MismatchClassifier:
         return (
             normalized_inp_code not in result.trace_codes
             and self._ran_the_notebook_version(inp, result.trace_codes)
-            and not self._bound_not_above(normalized_inp_code, result)
+            and not self._bound_not_above(inp, normalized_inp_code, result)
         )
 
     @staticmethod
-    def _bound_not_above(producing_code: str, result: ClassificationResult) -> bool:
-        """Whether *producing_code*, the statement that last bound a name, is
-        one of the running cell's or of a cell below it
+    def _bound_not_above(name: str, producing_code: str, result: ClassificationResult) -> bool:
+        """Whether *producing_code*, the statement that last wrote *name*,
+        binds it anew and is one of the running cell's or of a cell below it
         (`ClassificationResult.texts_not_above`).
 
         Such a value is no unsaved edit to a cell above: its producer above
         is what a statement above reads. Trusted as one, an edited cell
         rebinding ``t`` had ``df_new = df.drop(np.where(t == False)[0])``
         above it re-run on its own ``t``, a value neither a plain kernel nor
-        a run from the top gives."""
-        return bool(producing_code) and any(
-            cell_holds_statement(text, producing_code) for text in result.texts_not_above if text
-        )
+        a run from the top gives. A statement that only changes the value
+        in place (``s = Sub()`` appending to ``Base.registry``) leaves the
+        value the one the cells above made, and keeps it trusted."""
+        if not producing_code or name not in (bound_names(producing_code) or ()):
+            return False
+        return any(cell_holds_statement(text, producing_code) for text in result.texts_not_above if text)
 
     @staticmethod
-    def _reads_what_it_makes(producing_code: str, stmt_code: str) -> bool:
-        """Whether *producing_code*, which bound an input of *stmt_code*,
-        reads a name *stmt_code* binds: it ran after it, so its value is no
-        input from above the statement."""
+    def _reads_what_it_makes(name: str, producing_code: str, stmt_code: str) -> bool:
+        """Whether *producing_code*, which bound *name*, an input of
+        *stmt_code*, anew, reads a name *stmt_code* binds: it ran after it,
+        so its value is no input from above the statement."""
+        if not producing_code or name not in (bound_names(producing_code) or ()):
+            return False
         try:
             reads, _ = CodeAnalyzer.analyze_code_block(producing_code)
             _, makes = CodeAnalyzer.analyze_code_block(stmt_code)
@@ -1086,7 +1091,7 @@ class MismatchClassifier:
             if inp not in self.shell.user_ns:
                 return False
             if self._check_tainted_input_valid(inp, sim, result) and not self._reads_what_it_makes(
-                strip_markers(self.tracking_state.executed_cell_codes.get(inp) or "").strip(), stmt_code
+                inp, strip_markers(self.tracking_state.executed_cell_codes.get(inp) or "").strip(), stmt_code
             ):
                 logger.debug(
                     "[UPSTREAM] Input '%s' has different lineage but produced "
@@ -1179,7 +1184,7 @@ class MismatchClassifier:
         if (
             norm_code not in result.trace_codes
             and self._ran_the_notebook_version(inp, result.trace_codes)
-            and not self._bound_not_above(norm_code, result)
+            and not self._bound_not_above(inp, norm_code, result)
         ):
             logger.debug(
                 "[UPSTREAM] Input '%s' lineage mismatch but produced by unsaved edit. Trusting in-memory.", inp
