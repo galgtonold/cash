@@ -268,6 +268,7 @@ class ReexecutionPlanner:
                 simulation_trace,
                 check,
                 draws_if_stream,
+                restored_codes={info.get("code") for info in restored_statements_info},
             )
             if len(stmts_to_run_indices) == before:
                 break
@@ -798,6 +799,7 @@ class ReexecutionPlanner:
         simulation_trace: list,
         check: CellCheck,
         draws_if_stream: dict[int, tuple[frozenset[str], bool]],
+        restored_codes: set[str | None] | frozenset[str] = frozenset(),
     ) -> list[int]:
         """Schedule, after each statement of the plan that makes an open file,
         a generator or an iterator afresh, every statement between it and the
@@ -818,6 +820,12 @@ class ReexecutionPlanner:
         f.readline())``) cannot be run again without applying that change
         twice: the plan is refused (:class:`UpstreamRepairGap`), at once for
         a live stream and as it runs for one that was not live.
+
+        A statement the backward scan restored (*restored_codes*) is left as
+        it is: a draw from a stream is never stored, so one restored drew
+        from no stream, and taking it into the plan would drop its restore
+        for a re-run the replay then leaves out (``big = (sleep(.4), k *
+        1000)[1]`` restored below a re-run ``k = 5``).
         """
         if not stmts_to_run_indices:
             return stmts_to_run_indices
@@ -840,7 +848,11 @@ class ReexecutionPlanner:
                     len(simulation_trace),
                 )
                 drawers = [
-                    j for j in range(made_at + 1, end) if j not in scheduled and _draws(simulation_trace[j], name)
+                    j
+                    for j in range(made_at + 1, end)
+                    if j not in scheduled
+                    and simulation_trace[j].stmt_code not in restored_codes
+                    and _draws(simulation_trace[j], name)
                 ]
                 if not drawers:
                     continue
