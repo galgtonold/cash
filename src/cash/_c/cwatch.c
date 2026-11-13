@@ -2453,6 +2453,60 @@ static int kb_bits(KeyB *k, double d) {
     int rc = kb_val(k, x); Py_DECREF(x); return rc;
 }
 
+/* numpy's fixed-size number types (`set_scalar_types`): an instance of one
+ * of these exact types is keyed by its type and the bytes of its value,
+ * which sit right after the object header. Two such scalars of one type and
+ * the same bytes are one value, so they key alike on the ordinary path too;
+ * the type keeps np.int64(3), np.int32(3) and 3 apart, the bytes -0.0 and
+ * 0.0 and every NaN. A subclass is not one of these types. */
+#define NP_SCALARS_MAX 32
+static PyObject *np_scalar_types[NP_SCALARS_MAX];
+static Py_ssize_t np_scalar_sizes[NP_SCALARS_MAX];
+static int np_scalars_n = 0;
+
+static inline Py_ssize_t np_scalar_size(PyTypeObject *t) {
+    for (int i = 0; i < np_scalars_n; i++)
+        if (np_scalar_types[i] == (PyObject *)t) return np_scalar_sizes[i];
+    return 0;
+}
+
+static int bytes_at_value(PyObject *o, PyObject *b) {
+    Py_ssize_t n = PyBytes_GET_SIZE(b);
+    if ((size_t)Py_TYPE(o)->tp_basicsize < sizeof(PyObject) + (size_t)n) return 0;
+    return memcmp((char *)o + sizeof(PyObject), PyBytes_AS_STRING(b), (size_t)n) == 0;
+}
+
+/* set_scalar_types(((type, sample, sample bytes, other sample, its bytes), ...))
+ * -> how many were taken. A type is taken only when its samples' bytes are
+ * where this file reads them; its exact type, not a subclass, and only a
+ * type whose bytes are all of its value (not longdouble). */
+static PyObject *py_set_scalar_types(PyObject *self, PyObject *rows) {
+    if (!PyTuple_CheckExact(rows)) { PyErr_SetString(PyExc_TypeError, "set_scalar_types(tuple)"); return NULL; }
+    PyObject *took[NP_SCALARS_MAX];
+    Py_ssize_t sizes[NP_SCALARS_MAX];
+    int n = 0;
+    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(rows) && n < NP_SCALARS_MAX; i++) {
+        PyObject *r = PyTuple_GET_ITEM(rows, i);
+        if (!PyTuple_CheckExact(r) || PyTuple_GET_SIZE(r) != 5) continue;
+        PyObject *t = PyTuple_GET_ITEM(r, 0), *a = PyTuple_GET_ITEM(r, 1), *ab = PyTuple_GET_ITEM(r, 2);
+        PyObject *b = PyTuple_GET_ITEM(r, 3), *bb = PyTuple_GET_ITEM(r, 4);
+        if (!PyType_Check(t) || Py_TYPE(a) != (PyTypeObject *)t || Py_TYPE(b) != (PyTypeObject *)t) continue;
+        if (!PyBytes_CheckExact(ab) || !PyBytes_CheckExact(bb)) continue;
+        Py_ssize_t size = PyBytes_GET_SIZE(ab);
+        if (size < 1 || size > 16 || PyBytes_GET_SIZE(bb) != size) continue;
+        if (memcmp(PyBytes_AS_STRING(ab), PyBytes_AS_STRING(bb), (size_t)size) == 0) continue;
+        if (!bytes_at_value(a, ab) || !bytes_at_value(b, bb)) continue;
+        int dup = 0;
+        for (int j = 0; j < n; j++) dup |= took[j] == t;
+        if (dup) continue;
+        took[n] = t; sizes[n] = size; n++;
+    }
+    for (int i = 0; i < np_scalars_n; i++) Py_CLEAR(np_scalar_types[i]);
+    for (int i = 0; i < n; i++) { np_scalar_types[i] = Py_NewRef(took[i]); np_scalar_sizes[i] = sizes[i]; }
+    np_scalars_n = n;
+    return PyLong_FromLong(n);
+}
+
 /* 1: encoded; 0: not a keyable value; -1: error */
 static int kb_atom(KeyB *k, PyObject *o, int depth) {
     PyTypeObject *t = Py_TYPE(o);
@@ -2466,6 +2520,16 @@ static int kb_atom(KeyB *k, PyObject *o, int depth) {
     if (t == &PyComplex_Type) {
         Py_complex c = PyComplex_AsCComplex(o);
         return (kb_sig(k, 'c') < 0 || kb_bits(k, c.real) < 0 || kb_bits(k, c.imag) < 0) ? -1 : 1;
+    }
+    if (np_scalars_n) {
+        Py_ssize_t size = np_scalar_size(t);
+        if (size) {
+            PyObject *b = PyBytes_FromStringAndSize((char *)o + sizeof(PyObject), size);
+            if (!b) return -1;
+            int rc = (kb_sig(k, 'n') < 0 || kb_val(k, (PyObject *)t) < 0 || kb_val(k, b) < 0) ? -1 : 1;
+            Py_DECREF(b);
+            return rc;
+        }
     }
     if (t == &PyTuple_Type) {
         if (depth > 32) return 0;
@@ -3038,6 +3102,7 @@ static PyMethodDef methods[] = {
     {"world_watch_type", py_world_watch_type, METH_O, ""},
     {"world_add_names", py_world_add_names, METH_O, ""},
     {"world_info", py_world_info, METH_NOARGS, ""},
+    {"set_scalar_types", py_set_scalar_types, METH_O, "the numpy number types keyed by their bytes"},
     {"memo_key", (PyCFunction)(void (*)(void))py_memo_key, METH_FASTCALL, ""},
     {"expect_set", (PyCFunction)(void (*)(void))py_expect_set, METH_FASTCALL, ""},
     {"expect_clear", py_expect_clear, METH_NOARGS, ""},

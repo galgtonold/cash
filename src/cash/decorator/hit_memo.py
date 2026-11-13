@@ -145,6 +145,37 @@ def forget(state: list | None) -> None:
             memo.state[S_ENTRIES] = {}
 
 
+#: The numpy module whose number types the extension keys by their bytes
+#: (`numpy_scalars_keyed`), or None while none is.
+_SCALARS_OF: list = [None]
+
+
+def numpy_scalars_keyed() -> int:
+    """Hand the extension numpy's fixed-size number types, once per numpy
+    module loaded, so a memo key holds ``np.int64(3)`` as its exact type and
+    the bytes of its value (iterating an array gives such scalars). Imports
+    nothing: while numpy is not loaded no argument is one. How many types
+    the extension took."""
+    numpy = sys.modules.get("numpy")
+    if numpy is None or numpy is _SCALARS_OF[0] or _cw is None or not hasattr(_cw, "set_scalar_types"):
+        return 0
+    from .._plain_data import numpy_scalar_types
+
+    rows = []
+    for t in numpy_scalar_types():
+        try:
+            size = numpy.dtype(t).itemsize
+            a, b = (
+                numpy.frombuffer(bytes(p), dtype=t)[0]
+                for p in (((0,), (1,)) if t is numpy.bool_ else (range(1, size + 1), range(0x81, 0x81 + size)))
+            )
+            rows.append((t, a, a.tobytes(), b, b.tobytes()))
+        except Exception:  # noqa: BLE001 - a type that will not say its bytes keeps the ordinary path
+            continue
+    _SCALARS_OF[0] = numpy
+    return _cw.set_scalar_types(tuple(rows))
+
+
 def epochs(spec: CachedFunction, args: tuple, kwargs: dict) -> tuple | None:
     """``(world, cash, entries, (memo key, gen))`` now for *spec* called
     with *args*, or None when the path is off: an ordinary hit is remembered
@@ -156,6 +187,8 @@ def epochs(spec: CachedFunction, args: tuple, kwargs: dict) -> tuple | None:
     new, so a hit keyed from the content in between is not filed under it."""
     if _world_epoch is None:
         return None
+    if _SCALARS_OF[0] is not sys.modules.get("numpy"):
+        numpy_scalars_keyed()
     state = spec.hit_state
     return _world_epoch(), _cash_epoch(), state[S_ENTRIES] if state is not None else None, _cw.keyed(args, kwargs)
 
