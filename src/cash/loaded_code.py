@@ -127,8 +127,22 @@ def _pyc_postdates_source(st: object, pyc_st: object) -> bool:
     tick after the source's mtime (`stat_has_settled`'s window, which covers
     the coarsest clocks) was compiled from the last save: any later save would
     carry a later mtime, which the header would not match.
+
+    Unless the save put the old mtime back: ``os.utime``, ``cp -p``, ``tar``
+    and ``rsync -t`` all do, and a same-size edit restored to the second the
+    ``.pyc`` recorded matched the header again -- Python loaded the old
+    bytecode in every later process, and cash, taking the ``.pyc`` as proof,
+    keyed that old code's results by the new text (a result persisted, and
+    served to the process that finally runs the new code). The change time
+    no save can set back: on POSIX ``st_ctime`` moves with every write and
+    every ``utime``, so a source whose ctime is not strictly older than the
+    ``.pyc`` changed after it was compiled -- or within its tick, which no
+    clock can order. On Windows ``st_ctime`` is the creation time, which an
+    in-place save keeps; there the timestamps are all there is.
     """
-    return pyc_st.st_mtime - st.st_mtime > SETTLED_SECONDS
+    if pyc_st.st_mtime - st.st_mtime <= SETTLED_SECONDS:
+        return False
+    return os.name == "nt" or st.st_ctime_ns < pyc_st.st_mtime_ns
 
 
 def loaded_module_matches_disk(module: object) -> bool:

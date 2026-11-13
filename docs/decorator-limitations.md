@@ -372,7 +372,7 @@ See [Async functions](tutorials/feature-guides/async-caching.md).
 
 ## Edits inside a running process
 
-<!-- claim: cash/loaded_code.py:code_objects_of @dc8caae4, cash/decorator/function_identity.py:warn_source_changed_since_load @4f566032 -->
+<!-- claim: cash/loaded_code.py:code_objects_of @dc8caae4, cash/decorator/function_identity.py:warn_source_changed_since_load @96528104 -->
 cash keys a function by the code that is running. An edit saved while a
 long-running process works is seen by the next process, or in this one once
 the module is reloaded (`importlib.reload`, IPython's `%autoreload`): the

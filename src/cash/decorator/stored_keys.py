@@ -253,6 +253,12 @@ if hasattr(os, "register_at_fork"):  # not on Windows, which cannot fork
     os.register_at_fork(after_in_child=_reset_after_fork_in_child)
 
 
+def _stamp(st: os.stat_result) -> tuple[int, int, int, int]:
+    """What moves when another process rewrites a record: it writes by
+    rename, so the inode does even inside one mtime tick."""
+    return (st.st_mtime_ns, st.st_size, st.st_ino, st.st_ctime_ns)
+
+
 class StoredKeyRecord:
     """Reads and writes the per-function records of one `Cash` instance."""
 
@@ -276,7 +282,7 @@ class StoredKeyRecord:
         self._lock = threading.Lock()
         # Serialises this process's rewrites of a record.
         self._io_lock = threading.Lock()
-        self._memo: LruMemo[str, tuple[tuple[int, int], Doc]] = LruMemo(RECORDS)
+        self._memo: LruMemo[str, tuple[tuple[int, int, int, int], Doc]] = LruMemo(RECORDS)
         # path -> when its memo was last found to match the file (monotonic).
         self._checked: dict[str, float] = {}
         # path -> its `_View`, kept while it is in use (`miss_facts`).
@@ -376,7 +382,7 @@ class StoredKeyRecord:
             st = os.stat(path)
         except OSError:
             return None
-        if memo is not None and memo[0] == (st.st_mtime_ns, st.st_size):
+        if memo is not None and memo[0] == _stamp(st):
             with self._lock:
                 self._checked[path] = now
             return memo[1]
@@ -399,7 +405,7 @@ class StoredKeyRecord:
                 if isinstance(value, dict):
                     doc[kind] = value
         with self._lock:
-            self._memo[path] = ((st.st_mtime_ns, st.st_size), doc)
+            self._memo[path] = (_stamp(st), doc)
             self._checked[path] = time.monotonic()
         return doc
 
