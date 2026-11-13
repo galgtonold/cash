@@ -44,7 +44,11 @@ def _runs(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _listed_as_on_windows(monkeypatch):
-    """Listings taken on every system, as on Windows: no link count."""
+    """Listings taken on every system, as on Windows: no link count and no
+    file identity (``st_ino`` and ``st_dev`` 0). A folder's entry also keeps
+    the times it had when first listed, as NTFS brings a parent's entry for
+    a folder up to date only later (when the folder is next opened). And a
+    folder has one link, as a stat on Windows says."""
     real = os.scandir
 
     class Entry:
@@ -53,6 +57,9 @@ def _listed_as_on_windows(monkeypatch):
 
         def is_symlink(self):
             return self._e.is_symlink()
+
+        def is_dir(self, follow_symlinks=True):
+            return self._e.is_dir(follow_symlinks=follow_symlinks)
 
         def stat(self):
             return self._st
@@ -64,18 +71,27 @@ def _listed_as_on_windows(monkeypatch):
         def __exit__(self, *exc):
             return None
 
+    first_listed: dict[str, os.stat_result] = {}
+
     def scandir(directory="."):
         out = Listing()
         with real(directory) as it:
             for e in it:
                 st = e.stat()
                 extra = {f: getattr(st, f) for f in dir(st) if f.startswith("st_") and f.endswith("_ns")}
-                out.append(Entry(e, os.stat_result((*st[:3], 0, *st[4:]), extra)))
+                st = os.stat_result((st[0], 0, 0, 0, *st[4:]), extra)
+                if e.is_dir():
+                    st = first_listed.setdefault(e.path, st)
+                out.append(Entry(e, st))
         return out
 
     monkeypatch.setattr(file_dep_snapshot.os, "scandir", scandir)
     monkeypatch.setattr(run_memo, "stats_from_listings", file_dep_snapshot.listing_stats)
     monkeypatch.setattr(file_dep_snapshot, "_LISTED_LINKS", {})
+    links_of = file_dep_snapshot._links_of
+    monkeypatch.setattr(
+        file_dep_snapshot, "_links_of", lambda path, key: 1 if os.path.isdir(path) else links_of(path, key)
+    )
 
 
 @pytest.fixture
@@ -135,11 +151,13 @@ def test_the_folders_are_looked_at_once_not_before_each_cell(people, lstats):
 def test_a_folder_changed_since_is_looked_at_again(people, lstats, tmp_path):
     """Positive control: the kept stat holds only while nothing changed."""
     stats_this_run(people)
+    first_listed_mtime = os.stat(tmp_path / "people" / "p07").st_mtime_ns
     (tmp_path / "people" / "p07" / "c.jpg").write_bytes(b"new")
     _next_run()
     lstats.clear()
     found = stats_this_run(people)
 
     folder = str(tmp_path / "people" / "p07")
+    assert os.stat(folder).st_mtime_ns != first_listed_mtime, "the write left the folder's time: nothing is measured"
     assert found[folder][1].st_mtime_ns == os.stat(folder).st_mtime_ns
     assert found["people/p07"][1].st_mtime_ns == os.stat(folder).st_mtime_ns

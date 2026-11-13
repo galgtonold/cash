@@ -1111,7 +1111,7 @@ def listing_stats(paths: Iterable[str]) -> dict[str, os.stat_result]:
                 for entry in entries:
                     name = os.path.normcase(entry.name)
                     path = wanted.get(name)
-                    if (path is None and every is None) or _links_elsewhere(entry):
+                    if (path is None and every is None) or _links_elsewhere(entry) or _is_folder(entry):
                         continue
                     try:
                         st = entry.stat()
@@ -1182,6 +1182,19 @@ def _links_of(path: str, key: str) -> int:
 def listed_links(path: str) -> int | None:
     """The link count a listing learnt for *path*, or None."""
     return _LISTED_LINKS.get(_link_key(path))
+
+
+def _is_folder(entry: os.DirEntry) -> bool:
+    """Is the listing's *entry* a folder? Read from the listing. A folder is
+    stat-ed by itself: NTFS brings a parent's entry for a folder up to date
+    only later (when the folder is next opened), so a listing gave a folder
+    a file was just written into its old times, and with no file identity
+    the folder watch could never keep it, so it was looked at before every
+    cell."""
+    try:
+        return entry.is_dir(follow_symlinks=False)
+    except OSError:
+        return True
 
 
 def _links_elsewhere(entry: os.DirEntry) -> bool:

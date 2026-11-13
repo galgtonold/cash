@@ -878,7 +878,7 @@ def _holds_a_draw(value: Any, depth: int, seen: set[int]) -> bool | None:
         return True
     if is_stream(value):
         return True
-    if issubclass(kind, (types.ModuleType, type)) or inspect.isroutine(value):
+    if issubclass(kind, (types.ModuleType, type)) or is_routine(value):
         return False
     if issubclass(kind, dict):
         parts: Iterable[Any] = dict.values(value)
@@ -1418,7 +1418,7 @@ def module_holders(module: types.ModuleType, namespace: Mapping[str, Any]) -> fr
         id(value)
         for value in list(own.values())
         if not issubclass(type(value), (types.ModuleType, type, *IMMUTABLE_PRIMS, tuple, frozenset))
-        and not inspect.isroutine(value)
+        and not is_routine(value)
     }
     names: set[str] = set()
     for name, held in list(namespace.items()):
@@ -1860,7 +1860,7 @@ def _is_data(value: Any) -> bool:
     return not (
         value is None
         or issubclass(type(value), (types.ModuleType, type, sqlite3.Connection, sqlite3.Cursor))
-        or inspect.isroutine(value)
+        or is_routine(value)
         or is_runtime_machinery(value)
         or attribute_or(value, "_is_file_tracker_patch", False) is True
     )

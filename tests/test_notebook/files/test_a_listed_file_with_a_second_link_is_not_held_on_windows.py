@@ -59,6 +59,9 @@ class _ListedEntry:
     def is_symlink(self) -> bool:
         return self._entry.is_symlink()
 
+    def is_dir(self, follow_symlinks: bool = True) -> bool:
+        return self._entry.is_dir(follow_symlinks=follow_symlinks)
+
     def stat(self) -> os.stat_result:
         return self._st
 

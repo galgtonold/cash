@@ -267,10 +267,18 @@ _PASSABLE_MAX = 4096
 def is_routine(obj: Any) -> bool:
     """``inspect.isroutine(obj)``, with any error the object's own lookups
     raise (`instance_of`) taken as not a routine: a function, method or
-    builtin is not an object whose lookups raise."""
+    builtin is not an object whose lookups raise.
+
+    A ``functools.partial`` is not one: it holds the arguments its answer
+    turns on, as a callable object does. Python 3.14 made it a method
+    descriptor, so ``inspect.isroutine`` says yes there and no below, and a
+    partial at a module's attribute was keyed by its type alone:
+    ``partial(base, 1)`` served for ``partial(base, 2)``."""
+    import functools
     import inspect
 
-    if own_lookup(type(obj)):
+    kind = type(obj)
+    if own_lookup(kind) or issubclass(kind, functools.partial):
         return False
     try:
         return inspect.isroutine(obj)

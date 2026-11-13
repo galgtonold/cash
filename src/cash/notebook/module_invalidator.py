@@ -21,13 +21,12 @@ The single public entry point is :meth:`ModuleInvalidator.invalidate`.
 
 from __future__ import annotations
 
-import inspect
 import logging
 import sys
 from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
-from cash._user_attrs import attribute_or, has_attribute
+from cash._user_attrs import attribute_or, has_attribute, is_routine
 
 from ..control_markers import strip_markers
 from ..diagnostics import warn_diagnostic
@@ -54,7 +53,7 @@ def _defined_in_a_module(value: Any) -> bool:
     ``isinstance(m, model.Model)`` False. An instance is a value built from
     the module, which the propagation step re-runs.
     """
-    return isinstance(value, type) or inspect.isroutine(value)
+    return isinstance(value, type) or is_routine(value)
 
 
 def _first_line(code: str) -> str:

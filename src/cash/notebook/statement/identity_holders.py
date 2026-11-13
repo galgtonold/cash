@@ -1249,10 +1249,18 @@ class _Walk:
                 lists += len(inner)
             elif list in kinds:
                 lists += sum(map(operator.is_, map(type, inner), repeat(list)))
-            if lists > self.budget:
-                return False
             level = list(chain.from_iterable(inner))
         else:
+            return False
+        if lists > self.budget:
+            # As the C read above tells it, read to the end: more containers
+            # than the budget, none seen before, is the walk's cut, known
+            # without opening them one at a time (Python 3.10 and 3.11 have
+            # no C read, and a column of 250,000 lists was opened a list at
+            # a time up to the budget).
+            if len(set(map(id, nodes)) - self.seen_all()) > self.budget:
+                self.cut = True
+                return True
             return False
         self.budget -= lists
         # Their ids only when asked (`seen_all`): most values hold no

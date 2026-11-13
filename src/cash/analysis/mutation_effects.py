@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from cash._referents import get_referents
-from cash._user_attrs import attribute_or, instance_of
+from cash._user_attrs import attribute_or, instance_of, is_routine
 
 from ..content_hashers import builtin_hash_family
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
@@ -1204,7 +1204,7 @@ def _watchable(name: str, namespace: Mapping[str, Any], is_module: Callable[[str
     value = namespace[name]
     if issubclass(type(value), (types.ModuleType, type, *_IMMUTABLE_VALUES)):
         return False
-    return not inspect.isroutine(value)
+    return not is_routine(value)
 
 
 #: Values no call can change in place.
@@ -1864,7 +1864,7 @@ def captured_call_receivers(tree: ast.Module | None, namespace: Mapping[str, Any
         if base not in namespace or method in RECEIVER_READONLY_WRITE_METHODS:
             continue
         value = namespace[base]
-        if issubclass(type(value), (types.ModuleType, type, _KNOWN_METHOD_TYPES)) or inspect.isroutine(value):
+        if issubclass(type(value), (types.ModuleType, type, _KNOWN_METHOD_TYPES)) or is_routine(value):
             continue
         if builtin_hash_family(type(value)) is not None or rng_carrier_kind(value) is not None:
             continue
