@@ -24,7 +24,7 @@ import warnings
 
 import pandas as pd
 
-from cash.decorator.arg_hashing import cow_frame_digest
+from cash.decorator.arg_hashing import cow_frame_digest, is_cow_pandas
 from cash.notebook import shared_objects as so
 from cash.notebook.statement import identity_holders
 from tests._cell_driver import run_cash_cell
@@ -49,8 +49,13 @@ def test_hashing_a_frame_adds_no_reference_to_its_lists():
     df = _frame()
     before = list(map(sys.getrefcount, df["items"]))
     first = cow_frame_digest(df)
-    assert first is not None
     assert list(map(sys.getrefcount, df["items"])) == before
+    if not is_cow_pandas(df):
+        # Without copy-on-write (pandas 2) there is no frame memo: the
+        # frame is read each time, and nothing of it is kept.
+        assert first is None
+        return
+    assert first is not None
     # The memo answers the second hash: what it keeps still vouches for it.
     assert cow_frame_digest(df) == first
     df.loc[5, "items"].append("z")

@@ -1149,7 +1149,10 @@ class _Walk:
             if read is not NotImplemented:
                 nodes, texts, ints, leaf_kinds, lists = read
                 if lists > self.budget:
-                    if len(set(map(id, nodes)) - self.seen) > self.budget:
+                    # Against all this walk has seen, the containers an
+                    # earlier read only noted (`seen_all`) too: walked
+                    # again, those cost nothing.
+                    if len(set(map(id, nodes)) - self.seen_all()) > self.budget:
                         # Walked a list at a time, each would count against
                         # the budget, and the walk would stop past it: told
                         # here, at C speed (a frame's column of 300,000

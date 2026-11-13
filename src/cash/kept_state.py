@@ -2452,11 +2452,26 @@ def _reduce_by_reference_for_key(obj: Any, reducer: Any) -> Any:
     attrs = left_out_attrs(obj, None, own_only=True)
     if type(obj) in _STDLIB_LOGGERS:
         attrs = logger_state(obj, attrs)
+    elif "_cache" in attrs and _pandas_index(type(obj)):
+        attrs = {name: value for name, value in attrs.items() if name != "_cache"}
     if not attrs:
         return reduced
     if isinstance(reduced, str):
         return _by_name_reduce(obj, reduced, attrs)
     return (reduced[0], reduced[1], attrs, *reduced[3:])
+
+
+def _pandas_index(t: type) -> bool:
+    """Is *t* a pandas Index (or a subclass)? Its reduce rebuilds it from
+    its labels and name through a function, which reads as standing by
+    reference, so its attributes are keyed beside it: but for ``_cache``,
+    pandas' memo of what it computed from the labels (its lookup engine,
+    filled by the first ``df["x"]``), not state. Keyed, a lookup changed
+    the key of an object holding the frame on pandas 2, and a call reading
+    a column was taken to change its argument and never stored."""
+    pd = sys.modules.get("pandas")
+    index = getattr(pd, "Index", None) if pd is not None else None
+    return isinstance(index, type) and issubclass(t, index)
 
 
 def _own_attrs(obj: Any) -> dict:

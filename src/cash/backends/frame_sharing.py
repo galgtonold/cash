@@ -1951,18 +1951,47 @@ def _credit_locals(
             noted[1] += 1
 
 
-def _credit_views(views: dict[int, list[Any]], counted: dict[int, int]) -> None:
+#: Python 3.14 can hand a local to a call without a reference of its own
+#: (a borrowed reference): the callee's slot then holds the value uncounted,
+#: so the slots holding a view say only how many references they may hold.
+_BORROWED_LOCALS = sys.version_info >= (3, 14)
+
+
+def _credit_views(views: dict[int, list[Any]], counted: dict[int, int], entry: Any = None, caller: Any = None) -> None:
     """Credit the base of each view the stack's locals hold, once per view
     (one view holds its base once, however many slots hold the view), and
     only when those slots are all that hold the view: a view the caller
     also holds, such as the array a write is given (``df.iloc[:, 0] = v``),
-    is the caller's reader, not the write's."""
+    is the caller's reader, not the write's. *entry* is the outermost frame
+    of the write (pandas' or cash's), *caller* the frame that called it."""
     for key in list(views):
-        view, slots = views.pop(key)
-        # Besides the slots: `view`, getrefcount's argument.
-        if sys.getrefcount(view) - 2 <= slots:
-            counted[id(view.base)] = counted.get(id(view.base), 0) + 1
-        del view
+        noted = views.pop(key)
+        # Besides the slots: `noted`, and getrefcount's argument. Read
+        # through the list, not a local, so the argument is counted on
+        # every Python.
+        if sys.getrefcount(noted[0]) - 2 <= noted[1] and not (
+            _BORROWED_LOCALS and _held_by_caller(noted, entry, caller)
+        ):
+            base = id(noted[0].base)
+            counted[base] = counted.get(base, 0) + 1
+        del noted
+
+
+def _held_by_caller(noted: list[Any], entry: Any, caller: Any) -> bool:
+    """Where slots may hold borrowed references (`_BORROWED_LOCALS`), the
+    count cannot tell the caller's reference from the write's own: is the
+    view *noted* holds one the write was given (*entry* holds it) that
+    *caller*'s locals, or anything but a frame, also hold? Asked only of a
+    view given to the write, so a write that is given none pays nothing."""
+    import gc
+    import types
+
+    view = noted[0]
+    if entry is None or not any(value is view for value in list(entry.f_locals.values())):
+        return False
+    if caller is not None and any(value is view for value in list(caller.f_locals.values())):
+        return True
+    return any(holder is not noted and not isinstance(holder, types.FrameType) for holder in gc.get_referrers(view))
 
 
 def _held_by_pandas_and_cash(objects: dict[int, Any]) -> dict[int, int]:
@@ -1978,11 +2007,17 @@ def _held_by_pandas_and_cash(objects: dict[int, Any]) -> dict[int, int]:
     counted: dict[int, int] = {}
     views: dict[int, list[Any]] = {}
     frame = sys._getframe(2)  # past `_unaccounted`, which holds `objects` alone
+    entry = caller = None
     while frame is not None:
         if frame.f_code.co_filename.startswith(inside):
             _credit_locals(frame, objects, counted, views)
+            if caller is None:
+                entry = frame
+        elif caller is None:
+            caller = frame
         frame = frame.f_back
-    _credit_views(views, counted)
+    _credit_views(views, counted, entry, caller)
+    del entry, caller
     if _DETACHING[0]:
         here = threading.get_ident()
         for thread, frame in list(sys._current_frames().items()):

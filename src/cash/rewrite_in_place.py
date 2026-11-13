@@ -248,7 +248,8 @@ class Columns(NamedTuple):
     memory, address and strides, and its row in its block; an extension
     column's array object and the address ranges of its memory), whether
     another pandas object shares each column's block (*shared*, None where
-    pandas does not say), and, per column, weak references to the array
+    pandas does not say, False throughout where pandas does not copy on
+    write), and, per column, weak references to the array
     object and to what owns its memory (*held*): memory that is gone was
     replaced, whatever array took its address since. Strong ones would
     count as names for the arrays, which the frame-hash memo reads as the
@@ -266,6 +267,7 @@ class Columns(NamedTuple):
         mgr = frame._mgr
         blocks, blknos, blklocs = mgr.blocks, mgr.blknos, mgr.blklocs
         tokens, shared, held = [], [], []
+        copies_on_write = _copies_on_write()
         for position in range(frame.shape[1]):
             block = blocks[blknos[position]]
             values = block.values
@@ -276,9 +278,24 @@ class Columns(NamedTuple):
                 owners: list = []
                 tokens.append((id(values), _memory_of(values, owners)))
                 held.append((_weak(values), tuple(_weak(_root(owner)) for owner in owners)))
+            if not copies_on_write:
+                # pandas writes a block in place however many objects
+                # share it: sharing changes nothing a call does.
+                shared.append(False)
+                continue
             refs = attribute_or(block, "refs", None)
             shared.append(bool(refs.has_reference()) if refs is not None else None)
         return cls(tuple(tokens), tuple(shared), tuple(held), _held_by_cash(frame))
+
+
+def _copies_on_write() -> bool:
+    """Does pandas copy a block other objects share before writing it?
+    Always in pandas 3; before, only with copy-on-write turned on."""
+    pd = sys.modules["pandas"]
+    try:
+        return int(pd.__version__.split(".", 1)[0]) >= 3 or pd.options.mode.copy_on_write is True
+    except Exception:  # noqa: BLE001 - unknown: taken as copying, so sharing is compared
+        return True
 
 
 def _memory_of(values: Any, owners: list) -> frozenset:
