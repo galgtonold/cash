@@ -391,6 +391,11 @@ class CodeSurface:
             return own
         return hashlib.sha256(":".join([own, *sorted(reached)]).encode("utf-8")).hexdigest()
 
+    def reaches(self, obj: Any, target: Any) -> bool:
+        """Is *target* among the user code *obj*'s code reaches
+        (`CodeRefs.reached`), whose surfaces `code_surface_hash` folds?"""
+        return any(found is target for found in self._refs.reached(obj))
+
     def _code_ref_closure(self, obj: Any) -> list[str]:
         """Own-digests of every user-code object reachable from *obj*'s code
         (`CodeRefs.reached`), in the order the walk reaches them."""
