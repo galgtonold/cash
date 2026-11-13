@@ -42,6 +42,7 @@ def keep_everything(cash_instance, monkeypatch):
     logging.getLogger(NAME).setLevel(logging.NOTSET)
 
 
+@needs_monitoring
 def test_a_statement_reading_no_logger_reads_none(cash_magics, monkeypatch):
     """Loggers the notebook made are not read for a statement that reads
     none of them."""
@@ -348,6 +349,7 @@ def test_a_module_s_list_is_looked_through_once_while_it_holds_the_same_objects(
     assert gone() is None
 
 
+@needs_monitoring
 def test_a_timestamp_is_never_reduced_to_look_for_a_name():
     """A pandas Timestamp's reduce rebuilds it from numbers, whatever it
     holds: none in a module's list of them is reduced on a statement."""

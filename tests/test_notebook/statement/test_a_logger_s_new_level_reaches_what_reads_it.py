@@ -14,12 +14,19 @@ from __future__ import annotations
 
 import logging
 import logging.handlers
+import sys
 import types
 import warnings
 
 import pytest
 
 from tests._cell_driver import run_cash_cell
+
+needs_monitoring = pytest.mark.skipif(
+    sys.version_info < (3, 12),
+    reason="sys.monitoring needs Python 3.12: below it what a statement finds by a lookup is not watched "
+    "(NOTEBOOK-LOOKUPS-UNSEEN)",
+)
 
 NAME = "cash_test_logger_level"
 
@@ -122,6 +129,7 @@ LOOKUP_SETUP = (
 )
 
 
+@needs_monitoring
 @pytest.mark.parametrize(
     "reader",
     [
@@ -168,6 +176,7 @@ def test_a_reader_looking_the_logger_up_runs_again(cash_magics, cash_instance, r
     assert cash_magics.shell.user_ns["below"] == 31
 
 
+@needs_monitoring
 @pytest.mark.parametrize(
     "setter",
     [f"logging.getLogger({NAME!r}).setLevel(10)", "set_level(10)", "done = set_level(10)"],
@@ -199,6 +208,7 @@ def _codes(caught):
     return [getattr(w.message, "code", None) for w in caught]
 
 
+@needs_monitoring
 def test_a_container_too_big_to_look_through_is_never_served(cash_magics, cash_instance):
     """An item read by C from a container too big to look through: the
     statement runs every time, and a warning says why, rather than be
@@ -214,6 +224,7 @@ def test_a_container_too_big_to_look_through_is_never_served(cash_magics, cash_i
     assert "NOTEBOOK-ITEMS-UNREAD" in _codes(caught)
 
 
+@needs_monitoring
 def test_noting_past_the_budget_is_never_served(cash_magics, cash_instance, monkeypatch):
     """Checking the loggers a statement meets takes longer than its budget:
     it runs every time, and a warning says why."""
@@ -253,6 +264,7 @@ def fresh_kernel(monkeypatch):
 FRESH_SETUP = "import logging, random\nclass Fake:\n    level = -1\ndef fake(n):\n    return Fake"
 
 
+@needs_monitoring
 @pytest.mark.usefixtures("fresh_kernel")
 @pytest.mark.parametrize(
     "reader",
@@ -281,6 +293,7 @@ def test_a_logger_a_fresh_kernel_finds_is_checked(cash_magics, cash_instance, re
     assert cash_magics.shell.user_ns["lv"] == 40
 
 
+@needs_monitoring
 def test_a_kept_call_past_the_budget_is_never_served(cash_magics, cash_instance, monkeypatch):
     """The budget ran out before the kept calls of the statement started:
     what they find is unseen, so none is served once the level changed."""

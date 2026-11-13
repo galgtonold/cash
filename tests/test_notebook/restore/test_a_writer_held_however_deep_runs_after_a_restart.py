@@ -25,6 +25,8 @@ readers and count their runs through a note a hit may skip
 (`tests._run_log`): they are still served.
 """
 
+import sys
+
 import pytest
 
 from tests._cell_driver import run_cash_cell
@@ -146,7 +148,18 @@ READERS = {
 }
 
 
-@pytest.mark.parametrize("held", READERS)
+#: A reader held through a lambda's closure is told from a writer by what
+#: ran, which only sys.monitoring records: below Python 3.12 it runs again.
+_READ_BY_WHAT_RAN = {"a_struct_reader", "a_methodcaller_of_a_reader"}
+needs_trace = pytest.mark.skipif(
+    sys.version_info < (3, 12),
+    reason="sys.monitoring needs Python 3.12: below it a reader held through a closure runs again",
+)
+
+
+@pytest.mark.parametrize(
+    "held", [pytest.param(held, marks=needs_trace if held in _READ_BY_WHAT_RAN else ()) for held in READERS]
+)
 def test_a_function_holding_only_readers_is_still_served(cash_magics, cash_instance, held):
     """Positive control: the walk does not refuse what only reads."""
     cash_instance.config.call_cost_floor_seconds = 0.0

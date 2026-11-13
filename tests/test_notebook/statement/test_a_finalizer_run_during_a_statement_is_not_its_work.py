@@ -20,6 +20,7 @@ statement is stored.
 from __future__ import annotations
 
 import gc
+import sys
 import warnings
 
 import pytest
@@ -27,6 +28,11 @@ import pytest
 from cash._gc_context import collecting
 from cash.notebook.statement.collect_first import CollectFirstStore
 from tests._cell_driver import run_cash_cell
+
+needs_trace = pytest.mark.skipif(
+    sys.version_info < (3, 12),
+    reason="sys.monitoring needs Python 3.12: below it cash does not see the code a statement runs",
+)
 
 LOG: list[str] = []
 
@@ -66,6 +72,7 @@ def collected_by_hand():
         gc.enable()
 
 
+@needs_trace
 @pytest.mark.usefixtures("store_everything", "collected_by_hand")
 def test_garbage_left_before_a_statement_keeps_it_out_once(cash_magics, mock_shell):
     LOG.clear()
@@ -88,6 +95,7 @@ def test_garbage_left_before_a_statement_keeps_it_out_once(cash_magics, mock_she
     assert not [w for w in caught if getattr(w.message, "code", None) == "NOTEBOOK-UNSEEN-WRITES"]
 
 
+@needs_trace
 @pytest.mark.usefixtures("store_everything", "collected_by_hand")
 def test_the_first_run_after_a_restart_collects_first_too(cash_magics, tmp_path):
     """Restart and run all: each statement runs once a kernel. Known in the
