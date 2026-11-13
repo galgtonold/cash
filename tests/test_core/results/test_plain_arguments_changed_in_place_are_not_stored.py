@@ -11,7 +11,15 @@ again. Either way the caller's object ends as the uncached call leaves it.
 
 from __future__ import annotations
 
+import sys
+
 import pytest
+
+needs_trace = pytest.mark.skipif(
+    sys.version_info < (3, 12),
+    reason="what a call ran is recorded with sys.monitoring, Python 3.12+; below it a call that changes its "
+    "argument in place runs every time, with a warning",
+)
 
 pytestmark = [pytest.mark.core]
 
@@ -61,6 +69,7 @@ CASES = [
 ]
 
 
+@needs_trace
 @pytest.mark.parametrize("change, make, written_back", CASES, ids=[c.__name__.strip("_") for c, _, _ in CASES])
 def test_a_change_in_place_is_seen_and_made_again_on_the_warm_run(disk_cash, change, make, written_back):
     runs = []
@@ -86,6 +95,7 @@ def test_a_change_in_place_is_seen_and_made_again_on_the_warm_run(disk_cash, cha
     assert len(runs) == (1 if written_back else 3)
 
 
+@needs_trace
 def test_a_plain_list_beside_a_changed_dict_is_seen_changing_it(disk_cash):
     """A list proved unchanged by identity does not vouch for a dict beside
     it: the dict's change is seen, and a hit makes it again."""

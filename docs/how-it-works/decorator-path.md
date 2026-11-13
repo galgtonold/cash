@@ -105,7 +105,7 @@ pickled, such as a lock, is keyed by its type; one that holds the object
 leaving it out is keyed by its content, as pickle stores the cycle. A
 library's class is keyed by what it pickles.
 
-<!-- claim: cash/kept_state.py:logger_state @37d45541, cash/kept_state.py:_handler_state @5efc2fe1, cash/kept_state.py:_stream_key @a8ddcfa6, cash/kept_state.py:_held_key @016e4acc, cash/kept_state.py:_formatter_state @42510fc6, cash/tracking/reference_states.py:_describe @c8b61130, cash/kept_state.py:_own_attrs @d8122464, cash/kept_state.py:_reduce_by_reference_for_key @3e124d7b, cash/kept_state.py:stands_by_reference @930b26cd -->
+<!-- claim: cash/kept_state.py:logger_state @37d45541, cash/kept_state.py:_handler_state @5efc2fe1, cash/kept_state.py:_stream_key @a8ddcfa6, cash/kept_state.py:_held_key @016e4acc, cash/kept_state.py:_formatter_state @42510fc6, cash/tracking/reference_states.py:_describe @c8b61130, cash/kept_state.py:_own_attrs @43743a23, cash/kept_state.py:_reduce_by_reference_for_key @3e124d7b, cash/kept_state.py:stands_by_reference @930b26cd -->
 An object that pickles by reference, by its name or by a call that looks it
 up (a logger pickles as `getLogger(name)`), is keyed with the attributes it
 holds, as a pickle by value would hold them, in an argument and in a global
@@ -119,7 +119,10 @@ is read is part of its state, except a standard library logger's: it is
 keyed by what its output follows (its name, level, parent, `propagate`,
 `disabled`, filters and handlers, and `logging.disable`'s setting), and
 the levels it notes as enabled when it logs are left out, so a call that
-logs changes no key. A standard library handler is keyed by its level,
+logs changes no key. Nor is the `_cache` dict a pandas object's `cache_readonly` properties
+fill as they are read: a pandas 2 Index notes its lookup engine there on
+the first column read, which keyed would change the key of a value holding a
+frame whenever a call read a column of it. A standard library handler is keyed by its level,
 formatter, filters and the file it writes to, by its name; a stream with no
 name (an `io.StringIO`) by the very object, through a token new in each
 session, so `handler.setStream(buf)` changes the key and an entry keyed on

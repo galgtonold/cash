@@ -10,9 +10,17 @@ frame where a plain run's did.
 
 from __future__ import annotations
 
+import sys
+
 import numpy as np
 import pandas as pd
 import pytest
+
+needs_trace = pytest.mark.skipif(
+    sys.version_info < (3, 12),
+    reason="what a call ran is recorded with sys.monitoring, Python 3.12+; below it a call that changes its "
+    "argument in place runs every time, with a warning",
+)
 
 
 def _write_into(df):
@@ -25,6 +33,7 @@ def _new_array(df):
     return 1
 
 
+@needs_trace
 def test_a_name_for_a_column_sees_what_a_plain_run_shows(disk_cash):
     """Both ways in one test: the column given a new array is the control."""
 
@@ -86,6 +95,7 @@ WRITES = {
 }
 
 
+@needs_trace
 @pytest.mark.parametrize("how", list(WRITES))
 def test_a_write_into_a_column_reaches_a_name_for_it_after_a_hit(disk_cash, how):
     body, make, sentinel = WRITES[how]

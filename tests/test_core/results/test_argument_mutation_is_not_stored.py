@@ -22,11 +22,18 @@ warm call still leaves the caller's array as the uncached call does.
 
 from __future__ import annotations
 
+import sys
 import warnings
 
 import pytest
 
 from cash import Cash
+
+needs_trace = pytest.mark.skipif(
+    sys.version_info < (3, 12),
+    reason="what a call ran is recorded with sys.monitoring, Python 3.12+; below it a call that changes its "
+    "argument in place runs every time, with a warning",
+)
 
 pytestmark = [pytest.mark.core]
 np = pytest.importorskip("numpy")
@@ -60,6 +67,7 @@ def _mask_assign(a):
 IDIOMS = [_in_place_minus_mean, _in_place_double, _clip_out, _shuffle, _mask_assign]
 
 
+@needs_trace
 @pytest.mark.parametrize("body", IDIOMS, ids=lambda f: f.__name__.lstrip("_"))
 def test_a_call_that_changes_an_array_argument_leaves_it_as_an_uncached_call_does(tmp_path, body):
     c = Cash(cache_dir=str(tmp_path / "cache"))
@@ -85,6 +93,7 @@ def test_a_call_that_changes_an_array_argument_leaves_it_as_an_uncached_call_doe
     assert named, "no warning named the argument"
 
 
+@needs_trace
 @pytest.mark.parametrize(
     "mutate",
     [

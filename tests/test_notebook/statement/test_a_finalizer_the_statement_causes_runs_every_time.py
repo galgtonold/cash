@@ -17,6 +17,7 @@ code a trace sees: it is told from the call to its callback.
 
 from __future__ import annotations
 
+import sys
 import warnings
 
 import pytest
@@ -71,8 +72,20 @@ def _status_of(cash_magics, statement):
     return [str(s["status"]) for s in cash_magics._last_cell_metrics["statements"] if s.get("code") == statement]
 
 
+#: Below Python 3.12 nothing records the code a statement runs, so a
+#: finalizer its text does not name is not seen, and the statement is served.
+needs_trace = pytest.mark.skipif(
+    sys.version_info < (3, 12),
+    reason="sys.monitoring needs Python 3.12: below it cash does not see the finalizer a statement runs",
+)
+
+
 @pytest.mark.usefixtures("store_everything")
-@pytest.mark.parametrize("setup", list(CASES.values()), ids=list(CASES))
+@pytest.mark.parametrize(
+    "setup",
+    [pytest.param(case, marks=() if case in SEEN_BY_ITS_TEXT else needs_trace) for case in CASES.values()],
+    ids=list(CASES),
+)
 def test_the_finalizer_runs_on_every_run(cash_magics, mock_shell, setup):
     """Each run of the statement runs it, and its finalizer: served, the
     change to ``LOG`` would be left out. (A run may set ``LOG`` up again

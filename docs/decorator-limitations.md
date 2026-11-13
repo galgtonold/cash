@@ -332,8 +332,9 @@ paths from the project root or pass absolute paths.
   array where the call wrote into it, as a new array where it gave the
   column one, so a name for a column's array (`h = df["a"].array`) sees
   what it sees after a plain run. Which of the two pandas does depends on
-  whether another pandas object shares the column, so a hit is served
-  only on a frame shared the way the stored one was. cash's own hold on a
+  whether another pandas object shares the column under copy-on-write
+  (pandas 3), so there a hit is served only on a frame shared the way the
+  stored one was; pandas 2 writes into the column however it is shared. cash's own hold on a
   frame it has hashed makes pandas copy a column before writing it: cash
   lets go of the frame before the body of a function seen changing its
   arguments, or whose own source changes this one. A first call that
@@ -352,7 +353,8 @@ paths from the project root or pass absolute paths.
   reads (a global, read in a helper, a method or another module of yours),
   one where cash cannot tell (the code looks names up by a string, as
   `globals()["G"]` does, or the call is not recorded, as an `async`
-  function's is not), and any other
+  function's is not, nor any call before Python 3.12, which has no
+  `sys.monitoring` to record it with), and any other
   argument (an object of your class, a list of lists, a frame given a new
   column) are not stored, so they run every time. Return a modified copy
   instead (`rows = sorted(rows)`).

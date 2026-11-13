@@ -24,7 +24,8 @@ import time
 import pytest
 
 from cash import value_hash
-from cash.notebook.statement import output_refusals
+from cash.analysis import analysis_budget
+from cash.notebook.statement import output_refusals, processor
 from cash.notebook.statement.share_giveups import CostlyDigests
 from tests._cell_driver import run_cash_cell
 
@@ -50,6 +51,19 @@ class _Walks:
             return real(*args, **kwargs)
 
         monkeypatch.setattr(output_refusals, "identity_coupled_reason", slow)
+        # The search from the outputs up that follows a give-up reads the
+        # garbage collector's referrers, whose cost grows with every object
+        # the process holds: in a worker that ran a few hundred tests it was
+        # cut short before it found ``logs``, nothing was remembered, and
+        # each statement walked again. That search's time limit is not what
+        # this pins; the share check's own (0.1 s) stays real.
+        search = processor.referring_names
+
+        def unhurried(values, user_ns, budget, *args, **kwargs):
+            return search(values, user_ns, max(budget, 60.0), *args, **kwargs)
+
+        monkeypatch.setattr(processor, "referring_names", unhurried)
+        monkeypatch.setattr(analysis_budget, "ANALYSIS_BUDGET_FLOOR_S", 60.0)
 
 
 def _frame_over_logs(cash_magics) -> None:
