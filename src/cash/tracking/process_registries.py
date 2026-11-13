@@ -311,14 +311,28 @@ def _decimal() -> tuple[Any, ...] | None:
 
 #: Each registry: what the warning calls it, how it is read, and how two
 #: reads are told the same (``==`` when None).
-def _warning_filters() -> tuple[Any, tuple[Any, ...]]:
-    return warnings.filters, tuple(warnings.filters)
+def _warning_filters() -> tuple[Any, ...]:
+    # ``defaultaction`` too: the action of a warning no filter matches.
+    return warnings.filters, tuple(warnings.filters), warnings.defaultaction
 
 
-def _same_filters(old: tuple[Any, tuple[Any, ...]], new: tuple[Any, tuple[Any, ...]]) -> bool:
+def _same_filters(old: tuple[Any, ...], new: tuple[Any, ...]) -> bool:
     # Another list: inside a ``warnings.catch_warnings()`` (cash's own
     # around a call it captures), which puts the first back when it ends.
-    return old[0] is not new[0] or old[1] == new[1]
+    return old[0] is not new[0] or old[1:] == new[1:]
+
+
+def _warning_display() -> tuple[Any, ...]:
+    # Read off the module, where ``warnings.warn`` looks them up: a call
+    # that rebinds one (``warnings.formatwarning = f``) changes how every
+    # later warning of the process reads, and a hit would not rebind it.
+    return warnings.filters, warnings.formatwarning, warnings.showwarning
+
+
+def _same_display(old: tuple[Any, ...], new: tuple[Any, ...]) -> bool:
+    # Another filters list: inside a ``catch_warnings()`` as above, which
+    # puts both hooks back too when it ends.
+    return old[0] is not new[0] or all(a is b for a, b in zip(old[1:], new[1:], strict=True))
 
 
 _REGISTRIES: tuple[tuple[str, Callable[[], Any], Callable[[Any, Any], bool] | None], ...] = (
@@ -330,7 +344,12 @@ _REGISTRIES: tuple[tuple[str, Callable[[], Any], Callable[[Any, Any], bool] | No
         _hooks,
         None,
     ),
-    ("the warnings filters (warnings.filterwarnings, warnings.simplefilter)", _warning_filters, _same_filters),
+    (
+        "the warnings filters (warnings.filterwarnings, warnings.simplefilter, warnings.defaultaction)",
+        _warning_filters,
+        _same_filters,
+    ),
+    ("how warnings are shown (warnings.formatwarning, warnings.showwarning)", _warning_display, _same_display),
     ("a logger's level, handlers or filters (logging)", _loggers, _same_loggers),
     ("pickle's reducers (copyreg.pickle)", lambda: dict(_copyreg().dispatch_table), None),
     ("the codec search functions (codecs.register)", lambda: _CODECS[0], None),
