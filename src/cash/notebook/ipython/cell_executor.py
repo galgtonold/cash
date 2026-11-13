@@ -1311,11 +1311,15 @@ class CellExecutor:
 
         #: Statements a kept plot run serves (`PlotRuns`).
         served: dict[int, ServedStatement] = {}
+        #: The statement before ran as a statement of its own, and nothing
+        #: of the cell's runs before the next one (`DigestCarry`).
+        follows = False
         source = cell.ipython.source if cell.ipython is not None else raw_cell
         plots = self._plots
         plots.begin_cell(cell)
         try:
             for i, node in enumerate(tree.body):
+                after_statement, follows = follows, False
                 if i in jump_runs:
                     plan = self._upstream_checker.plan_cell_run(
                         tree.body[i : jump_runs[i]], raw_cell, dict(stmt_occurrence_counts)
@@ -1400,6 +1404,7 @@ class CellExecutor:
                         written_later=written_later[i],
                         buffered=buffered_result_outputs,
                         first_line=node.lineno,
+                        follows_statement=after_statement and i not in jump_runs,
                     )
                 try:
                     buffered_result_outputs, render_time = yield from self._badged_steps(
@@ -1448,6 +1453,7 @@ class CellExecutor:
                     raise
                 badge_render_time += render_time
                 plots.after(i, stmt_code, stmt_display, all_metrics[rows_before:])
+                follows = not is_control_structure(node)
 
             plots.end_cell(len(tree.body) - 1)
         finally:
@@ -1563,9 +1569,11 @@ class CellExecutor:
         written_later: frozenset[str],
         buffered: list,
         first_line: int = 0,
+        follows_statement: bool = False,
     ) -> Generator[_Step, Any, list]:
         """Run one regular top-level statement; returns the buffered result
-        outputs with its own added.
+        outputs with its own added. *follows_statement*: the statement before
+        it in the cell ran as one of its own, with nothing between.
 
         ``display_code`` and ``exec_source`` differ only for a top-level
         ``def``/``class``: the badge withholds the body, and the original text
@@ -1595,6 +1603,7 @@ class CellExecutor:
                         # IPython echoes only the CELL's last expression;
                         # cash executes each statement as its own unit.
                         "is_last": is_last,
+                        "follows_statement": follows_statement,
                     }
                 )
             return self._handle_regular_stmt_metrics(metrics, is_last, cell.all_metrics, buffered)
