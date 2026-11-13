@@ -86,6 +86,7 @@ from .namespace_effects import (
     handed_to_params,
     notebook_global_rebinds,
     users_callee,
+    users_method_call,
 )
 from .object_protocol import ObjectProtocolResets, changed_through_their_objects, object_protocol_mutations
 from .writer_aliases import namespace_writer_aliases
@@ -1140,6 +1141,11 @@ def _handed_to_unknown_code(tree: ast.Module, names: _LoopNames, *, bare: bool) 
             # x)``) is watched as if handed here.
             out |= _user_function_handoffs(call, func.id, names)
             continue
+        method = users_method_call(call, namespace)
+        if method is not None:
+            # ``Mixer().go(SEED)``: the method's body, followed as a
+            # helper's is, with the receiver handed to ``self``.
+            out |= _user_function_handoffs(method[1], method[0], names)
         if isinstance(func, ast.Attribute) and call is not outer and id(call) not in chained:
             base = _receiver_root(func.value)
             inner = frozenset(c.func.attr for c in _chain_calls(func) if isinstance(c.func, ast.Attribute))
@@ -1163,7 +1169,9 @@ def _handed_to_unknown_code(tree: ast.Module, names: _LoopNames, *, bare: bool) 
 def _user_function_handoffs(call: ast.Call, name: str, names: _LoopNames) -> set[str]:
     """What *call*, to the function of the user's *name*, hands to code
     whose effect on it is unknown: its arguments for the parameters the
-    function hands on, and the globals it hands on (`function_handoffs`)."""
+    function hands on, and the globals it hands on (`function_handoffs`).
+    For a method, *call* is as `users_method_call` gives it, the receiver
+    first."""
     fdef = resolve_function_def(name, names.user_source)
     if fdef is None:
         return set()
