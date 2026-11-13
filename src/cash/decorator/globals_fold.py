@@ -31,6 +31,7 @@ from .key_values import (
     iter_contained,
     plain_data_kind,
 )
+from .module_identity import module_ref_part
 from .user_code import is_user_class, own_package
 
 if TYPE_CHECKING:
@@ -209,8 +210,9 @@ class GlobalsFold:
         A cached function reading a mutable module global (a config constant, a
         dispatch dict of callables) returned stale results when that global
         changed, with no warning. Fold the content of read *data* globals so a
-        change invalidates. Modules, plain callables (helpers - tracked via the
-        purity analyzer / dependency graph), and classes are excluded; unhashable
+        change invalidates. Plain callables (helpers - tracked via the
+        purity analyzer / dependency graph) and classes are keyed by what they
+        name, modules by which module they are (`module_ref_part`); unhashable
         data globals warn once and are skipped.
         """
         if not extra_names and type(func) is types.FunctionType and not self._reads.may_read_data(func):
@@ -351,9 +353,9 @@ class GlobalsFold:
             # catch it.
             return
         v = g[name]
-        # Modules are skipped; classes and plain callables are keyed by name
-        # here, their code elsewhere (helpers/deps). Containers of callables
-        # (dispatch dicts) ARE folded.
+        # Modules, classes and plain callables are keyed by name here, their
+        # code elsewhere (helpers/deps). Containers of callables (dispatch
+        # dicts) ARE folded.
         if isinstance(v, type):
             # A class's code is keyed as code; what it holds and what its
             # methods read is data (`ClassDataFold.class_parts`).
@@ -362,6 +364,9 @@ class GlobalsFold:
             self._code_ref_part(fold, name, v)
             return
         if issubclass(type(v), types.ModuleType):
+            # Which module: `__FFTLIB = numpy.fft` switched to `scipy.fft`
+            # changed no code, and served the result of the old one.
+            fold.parts.extend(module_ref_part(name, v))
             return
         if callable(v) and not isinstance(v, (dict, list, tuple, set)):
             carried = self._values.carried_global_hash(v, getattr(fold.func, "__module__", None))

@@ -13,6 +13,7 @@ from .._type_memo import TypeMemo, type_key
 from ..analysis.helper_code import is_mock, renamed
 from ..jit_functions import jit_python_function
 from ..value_types import IMMUTABLE_LEAF_TYPES, is_dead_proxy
+from .module_identity import module_ref
 from .user_code import is_user_class, is_user_code_object, own_package
 
 
@@ -219,6 +220,10 @@ def _stabilized(v: Any, hash_callable, _path: frozenset[int], carried: bool) -> 
         return ("__cash_cycle__", type(v).__qualname__), False
     if is_dead_proxy(v):
         return ("__cash_dead_proxy__",), False
+    if issubclass(type(v), types.ModuleType):
+        # A module cannot be pickled: `{"fft": numpy.fft}` warned unhashable,
+        # and switching it to `scipy.fft` served the old result. Which module.
+        return ("__cash_module__", module_ref(v)), True
     if isinstance(v, type):
         # A class pickles by name, which an edit does not move: a registry
         # `REG = {"double": Double}` read as `models.REG[name]()` served the
