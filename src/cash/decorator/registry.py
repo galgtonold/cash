@@ -17,7 +17,7 @@ from .. import _weak
 from ..analysis.code_analyzer import CodeAnalyzer
 from ..analysis.helper_bindings import bindings_changed, resolve_binding
 from ..analysis.purity_analyzer import get_analyzer
-from ..analysis.purity_report import PurityReport, describe_untrackable
+from ..analysis.purity_report import UNREAD_MODULE, PurityReport, describe_untrackable
 from ..code_digest import callable_identity, compiled_identity, extension_file_digest
 from ..data_source import DataSource, state_token_of
 from ..diagnostics import warn_diagnostic
@@ -579,6 +579,14 @@ class FunctionRegistry:
                         # lookup by name is cached on a trace on 3.12+.
                         if code_trace.covers(report.untrackable):
                             lookups.extend(report.untrackable)
+                        elif all(UNREAD_MODULE in i.description for i in report.untrackable):
+                            # An import of a module not loaded yet whose top
+                            # level cash cannot read without running it.
+                            reason = MissReason(
+                                MissKind.UNREAD_MODULE,
+                                f"{name} imports a module cash cannot key before it is loaded "
+                                f"({describe_untrackable(report.untrackable)}), so the call ran uncached",
+                            )
                         else:
                             reason = MissReason(
                                 MissKind.UNTRACKABLE,

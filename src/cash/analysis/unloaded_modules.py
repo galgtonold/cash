@@ -174,7 +174,9 @@ def source_digest(module_name: str, root_module: str | None) -> str | None:
     own_pkg = top_package(root_module)
     slot = (module_name, own_pkg)
     kept = _DIGESTS.get(slot)
-    if kept is not None and all(_origin(name) == origin and _stat(origin) == st for name, origin, st in kept[1]):
+    if kept is not None and all(
+        (name is None or _origin(name) == origin) and _stat(origin) == st for name, origin, st in kept[1]
+    ):
         return kept[0]
     digest, looked = _source_digest(module_name, own_pkg)
     if len(_DIGESTS) > 1024:
@@ -188,6 +190,8 @@ def _source_digest(module_name: str, own_pkg: str | None) -> tuple[str | None, t
     looked: list[tuple[str, str | None, tuple | None]] = []
     todo = [module_name]
     seen: set[str] = set()
+    #: loaded packages read only as the parent of a module below them.
+    parents_only: set[str] = set()
     while todo:
         name = todo.pop()
         parts = name.split(".")
@@ -195,12 +199,33 @@ def _source_digest(module_name: str, own_pkg: str | None) -> tuple[str | None, t
             prefix = ".".join(parts[:i])
             if prefix in seen:
                 continue
+            if i < len(parts) and prefix in sys.modules:
+                # A loaded package on the way to a module below it: importing
+                # that module does not run the package again, so nothing of its
+                # top level is the import's to vouch for. Its file is keyed, so
+                # an edit to it still moves the key; read in full only when a
+                # source names the package itself (``from pkg import VALUE``).
+                if prefix not in parents_only:
+                    parents_only.add(prefix)
+                    origin = _origin(prefix)
+                    looked.append((prefix, origin, _stat(origin)))
+                    if origin is not None:
+                        files[f"{prefix}#file"] = _file_digest(origin)
+                continue
             seen.add(prefix)
             origin = _origin(prefix)
             looked.append((prefix, origin, _stat(origin)))
             if origin is None:
                 if prefix == module_name:
-                    return None, tuple(looked)
+                    if _namespace_package(prefix):
+                        return None, tuple(looked)
+                    # No finder knows it: the import fails. Keyed by the files
+                    # that could become it (`_absent_digest`).
+                    absent = _absent_digest(prefix, looked)
+                    if absent is None:
+                        return None, tuple(looked)
+                    files[prefix] = absent
+                    continue
                 if _namespace_package(prefix):
                     # A folder with no ``__init__.py``: no code of its own to
                     # read; the modules in it are read as the parts below.
@@ -230,6 +255,47 @@ def _source_digest(module_name: str, own_pkg: str | None) -> tuple[str | None, t
         return None, tuple(looked)
     blob = "\n".join(f"{name}={digest}" for name, digest in sorted(files.items()))
     return hashlib.blake2b(blob.encode(), digest_size=16).hexdigest(), tuple(looked)
+
+
+def _file_digest(path: str) -> str:
+    try:
+        with open(path, "rb") as fh:
+            return hashlib.blake2b(fh.read(), digest_size=16).hexdigest()
+    except OSError:
+        return "unreadable"
+
+
+def _absent_digest(name: str, looked: list) -> str | None:
+    """A stable digest for module *name*, which no finder knows: the files
+    in its parent's search path that could become it -- an unbuilt ``.pyx``,
+    its C source, a stale extension -- by name and bytes, and the folders'
+    listings through *looked*, so that creating, building or editing one
+    moves the key. A finder installed later (``pyximport``) turns the
+    ``.pyx`` into the module: its bytes are in the key already. None when
+    the search path is not known."""
+    parent, _, last = name.rpartition(".")
+    path = _locate(parent)[1] if parent else sys.path
+    if path is None:
+        return None
+    try:
+        entries = [p for p in path if isinstance(p, str)]
+    except TypeError:
+        return None
+    found = []
+    for entry in entries:
+        folder = entry or os.getcwd()
+        # The folder's own stat: a file created in it moves its mtime.
+        looked.append((None, folder, _stat(folder)))
+        try:
+            names = sorted(os.listdir(folder))
+        except OSError:
+            continue
+        for fname in names:
+            if fname == last or fname.startswith(f"{last}."):
+                full = os.path.join(folder, fname)
+                looked.append((None, full, _stat(full)))
+                found.append(f"{fname}:{_file_digest(full) if os.path.isfile(full) else 'dir'}")
+    return "absent:" + hashlib.blake2b("\n".join(found).encode(), digest_size=16).hexdigest()
 
 
 def _stat(path: str | None) -> tuple | None:
