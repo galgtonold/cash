@@ -36,6 +36,7 @@ from typing import Any
 
 from .._lazy_module import LazyModule
 from .._location import per_user_cache_root
+from .._user_attrs import importable_attr
 from ..backends.cache_dir import LIBRARY_MAP_FILENAME, LIBRARY_RECORDS_FILENAME
 from ..install_paths import in_own_package, is_cash_path, is_user_path, top_package
 from ..tracking import io_watch
@@ -534,13 +535,13 @@ def _defining_module(value: Any) -> types.ModuleType | None:
 def _library_top(module: types.ModuleType, own_pkg: str | None) -> str | None:
     """*module*'s top-level package when it is a library: not the user's
     code, not cash, not the standard library."""
-    name = getattr(module, "__name__", None)
+    name = importable_attr(module, "__name__")
     top = top_package(name)
     if top is None or top in sys.stdlib_module_names or top == "builtins":
         return None
     if in_own_package(name, own_pkg):
         return None
-    file = getattr(module, "__file__", None)
+    file = importable_attr(module, "__file__")
     if file is None or is_cash_path(file) or is_user_path(file):
         return None
     return top
