@@ -126,7 +126,6 @@ def _settled_then_restored(name, path):
     return module
 
 
-@pytest.mark.skipif(os.name == "nt", reason="Windows has no change time: st_ctime is the creation time")
 def test_a_pyc_compiled_after_the_source_settled_is_no_proof_once_the_mtime_is_put_back(helper, monkeypatch):
     monkeypatch.setattr(process_start, "_PROCESS_START", time.time() + 60)
     module = _settled_then_restored(*helper)
@@ -134,6 +133,9 @@ def test_a_pyc_compiled_after_the_source_settled_is_no_proof_once_the_mtime_is_p
     assert loaded_module_matches_disk(module) is False
 
 
+@pytest.mark.skipif(
+    os.name == "nt", reason="no change time on Windows: the file is compiled instead (tested below with it off)"
+)
 def test_the_proof_by_header_compiles_nothing_for_a_file_saved_before_its_pyc(helper, monkeypatch):
     """The cold path's cost: a helper checked out, then imported (its ``.pyc``
     written a tick or more after the save), is proven by one stat and one
@@ -154,4 +156,28 @@ def test_the_proof_by_header_compiles_nothing_for_a_file_saved_before_its_pyc(he
     for _ in range(200):
         assert loaded_code_matches_disk(module.f) is True
     assert time.perf_counter() - started < 1.0, "200 header checks should take milliseconds"
+    assert loaded_module_matches_disk(module) is True
+
+
+def test_without_a_change_time_a_put_back_mtime_is_caught_by_the_code(helper, monkeypatch):
+    """Windows: ``st_ctime`` is the creation time, so no stat tells a
+    put-back save from none. The header proves nothing there; the loaded code
+    is compared with the file compiled."""
+    monkeypatch.setattr(loaded_code, "_HAS_CHANGE_TIME", False)
+    monkeypatch.setattr(process_start, "_PROCESS_START", time.time() + 60)
+    module = _settled_then_restored(*helper)
+    assert loaded_code_matches_disk(module.f) is False
+    assert loaded_module_matches_disk(module) is False
+
+
+def test_without_a_change_time_an_unedited_file_still_matches(helper, monkeypatch):
+    """Control: the compiled comparison passes a file nobody touched."""
+    monkeypatch.setattr(loaded_code, "_HAS_CHANGE_TIME", False)
+    name, path = helper
+    old = time.time() - 100
+    os.utime(path, (old, old))
+    _compile(path)
+    module = _import(name)
+    monkeypatch.setattr(process_start, "_PROCESS_START", time.time() + 60)
+    assert loaded_code_matches_disk(module.f) is True
     assert loaded_module_matches_disk(module) is True

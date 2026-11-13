@@ -116,6 +116,11 @@ def relocated_definition(
     return None
 
 
+#: Does ``st_ctime`` move with every write and ``utime``? Not on Windows,
+#: where it is the creation time (`_pyc_postdates_source`).
+_HAS_CHANGE_TIME = os.name != "nt"
+
+
 def _pyc_postdates_source(st: object, pyc_st: object) -> bool:
     """True when the ``.pyc`` was written after the source's last save had settled.
 
@@ -138,11 +143,16 @@ def _pyc_postdates_source(st: object, pyc_st: object) -> bool:
     every ``utime``, so a source whose ctime is not strictly older than the
     ``.pyc`` changed after it was compiled -- or within its tick, which no
     clock can order. On Windows ``st_ctime`` is the creation time, which an
-    in-place save keeps; there the timestamps are all there is.
+    in-place save keeps (and robocopy, unzip and ``git checkout`` restore
+    mtimes), so nothing there tells a put-back save from no save: the header
+    is no proof, and the callers compare the ``.pyc``'s code, or the loaded
+    code, with the file compiled -- once per file version per process.
     """
+    if not _HAS_CHANGE_TIME:
+        return False
     if pyc_st.st_mtime - st.st_mtime <= SETTLED_SECONDS:
         return False
-    return os.name == "nt" or st.st_ctime_ns < pyc_st.st_mtime_ns
+    return st.st_ctime_ns < pyc_st.st_mtime_ns
 
 
 def loaded_module_matches_disk(module: object) -> bool:

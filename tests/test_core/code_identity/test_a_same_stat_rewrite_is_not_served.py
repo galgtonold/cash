@@ -30,6 +30,9 @@ NEW = "def bump(x):\n    return x + 20\n"
 
 MAIN = textwrap.dedent("""
     import cash
+    import cash.loaded_code
+    if WINDOWS:  # st_ctime is the creation time there: no change time to go by
+        cash.loaded_code._HAS_CHANGE_TIME = False
     from helper import bump
 
     @cash.cache
@@ -51,16 +54,16 @@ def _run(proj, env):
     return out.stdout.split(), out.stderr
 
 
-@pytest.mark.skipif(os.name == "nt", reason="Windows has no change time: st_ctime is the creation time")
+@pytest.mark.parametrize("windows", [False, True], ids=["change-time", "no-change-time"])
 @pytest.mark.parametrize("shift_ns", [0, 1000], ids=["identical-mtime", "same-second"])
-def test_a_same_size_rewrite_with_the_mtime_put_back_is_not_served_to_the_new_code(tmp_path, shift_ns):
+def test_a_same_size_rewrite_with_the_mtime_put_back_is_not_served_to_the_new_code(tmp_path, shift_ns, windows):
     proj = tmp_path / "proj"
     proj.mkdir()
     helper = proj / "helper.py"
     helper.write_text(OLD, encoding="utf-8")
     old = int(time.time() - 100) * 1_000_000_000
     os.utime(helper, ns=(old, old))
-    (proj / "main.py").write_text(MAIN, encoding="utf-8")
+    (proj / "main.py").write_text(f"WINDOWS = {windows}\n" + MAIN, encoding="utf-8")
     env = child_env(cache_dir=tmp_path / "cache")
     env.pop("PYTHONDONTWRITEBYTECODE", None)  # the .pyc is the point
 
