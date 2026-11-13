@@ -35,9 +35,10 @@ from __future__ import annotations
 import contextlib
 import sys
 import threading
-import weakref
 from collections.abc import Callable, Hashable, Iterable, Iterator
 from typing import Any, NamedTuple
+
+from .. import _weak
 
 __all__ = ["Record", "close_on", "enter", "isolated", "leave", "note_callees", "servable", "walk_local"]
 
@@ -82,7 +83,7 @@ def walk_local(owner: object, factory: Callable[[], Any]) -> Any:
         walk = _LOCAL.walk = {}
     entry = walk.get(id(owner))
     if entry is None or entry[0]() is not owner:
-        entry = walk[id(owner)] = (weakref.ref(owner), factory())
+        entry = walk[id(owner)] = (_weak.ref(owner), factory())
     return entry[1]
 
 
