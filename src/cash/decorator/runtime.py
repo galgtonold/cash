@@ -48,6 +48,7 @@ from ..tracking.randomness import (
     replay_argument_carriers,
     replayable,
 )
+from ..tracking.trace_recorder import other_thread_alive
 from . import code_trace, hit_memo, walk_scope
 from .arg_hashing import (
     CALL_POLARS,
@@ -1827,13 +1828,16 @@ class CallRunner:
         global the call read, or change it in place, without the body
         doing so itself. Checking costs a second build of the key's state
         segment, on a miss only, so a single-threaded script does not pay
-        it. What the drift guard watches (`CAPTURE_WATCH`) is left to it:
-        the call itself moves a random generator it draws from, or a memo a
-        callable keeps.
+        it. Cash's own threads (its writers, its flusher, a held-back write's
+        timer) run no code of the user's and do not count
+        (`other_thread_alive`): counted, they made every miss of a script
+        that had stored anything pay the rebuild. What the drift guard
+        watches (`CAPTURE_WATCH`) is left to it: the call itself moves a
+        random generator it draws from, or a memo a callable keeps.
         """
         if not call.ledger:
             return None
-        if threading.active_count() == 1 and not inspect.iscoroutinefunction(spec.func):
+        if not inspect.iscoroutinefunction(spec.func) and not other_thread_alive(None):
             return None
         return lambda: _ledger_moved(call.ledger, self._keys.ledger_now(spec, call.args), call.capture_watch)
 

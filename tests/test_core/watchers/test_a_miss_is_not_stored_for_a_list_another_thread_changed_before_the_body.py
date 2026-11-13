@@ -9,7 +9,7 @@ content, so the body ran on that content and its result was stored
 under the key of the content before. Both are now taken by the key
 build, the identities before its walk, so a write after them shows,
 however many threads are alive when the body begins: the racing thread
-here has ended by then, and the count of threads is made to say one.
+here has ended by then, and the check for other threads is made to say none.
 With no other thread alive as the key is built, none can write the list
 before the body, and the identities are taken there; the racing thread
 is alive at the key build here, as it must be to race.
@@ -22,7 +22,7 @@ import threading
 import pytest
 
 from cash import Cash
-from cash.decorator import purity_checks
+from cash.decorator import purity_checks, runtime
 
 pytestmark = pytest.mark.filterwarnings("ignore::cash.exceptions.CashImpurityWarning")
 
@@ -86,7 +86,7 @@ def _cash(tmp_path, backend):
 def one_thread_counted(monkeypatch):
     """The count says one thread, as in a process the racing thread has
     left: nothing may hang on it."""
-    monkeypatch.setattr(threading, "active_count", lambda: 1)
+    monkeypatch.setattr(runtime, "other_thread_alive", lambda _namespace: False)
 
 
 @pytest.mark.parametrize("backend", ["disk", "memory"])
