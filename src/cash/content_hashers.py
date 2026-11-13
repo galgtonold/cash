@@ -211,7 +211,21 @@ def _fold_pandas_values(h: Any, value: Any, pd: Any) -> None:
             fold_buffer(h, _np_array(pd.util.hash_pandas_object(others, index=False)))
     else:
         _fold_pandas_array(h, value, pd)
-    index = value.index
+    _fold_pandas_index(h, value.index, pd)
+    if type(value).__name__ == "DataFrame":
+        # The schema keys the column labels by ``repr``, which for an object
+        # of the user's own is its address: fold the objects themselves.
+        columns = value.columns
+        levels = columns.levels if isinstance(columns, pd.MultiIndex) else [columns]
+        if any(level.dtype == object and not immutable_labels(level._values) for level in levels):
+            h.update(b"|columns|")
+            _fold_pandas_array(h, columns, pd)
+
+
+def _fold_pandas_index(h: Any, index: Any, pd: Any) -> None:
+    """Fold an index's labels into *h*: a table's or series' row labels
+    (`_fold_pandas_values`), or an index handed over alone
+    (`hash_pandas_index`)."""
     if isinstance(index, pd.MultiIndex):
         # Each level's distinct values, then which one each row holds.
         for level, codes in zip(index.levels, index.codes):
@@ -223,14 +237,35 @@ def _fold_pandas_values(h: Any, value: Any, pd: Any) -> None:
     else:
         h.update(b"|index|")
         _fold_pandas_array(h, index, pd)
-    if type(value).__name__ == "DataFrame":
-        # The schema keys the column labels by ``repr``, which for an object
-        # of the user's own is its address: fold the objects themselves.
-        columns = value.columns
-        levels = columns.levels if isinstance(columns, pd.MultiIndex) else [columns]
-        if any(level.dtype == object and not immutable_labels(level._values) for level in levels):
-            h.update(b"|columns|")
-            _fold_pandas_array(h, columns, pd)
+
+
+def hash_pandas_index(index: Any) -> str | None:
+    """Hash a pandas index handed over on its own, as a table's row labels
+    are hashed (`hash_pandas`): its class, names, dtypes and ``freq``, then
+    its labels.
+
+    Pickled, an index carries what pandas has cached about its labels:
+    reading ``index.unit`` or converting its time zone fills a cache on the
+    array under it, and pickle writes that cache too. The same dates then
+    keyed apart before and after a call that read them, and a call that
+    only read its index was taken for one that changed it in place and was
+    never stored. Its labels and what the schema names are all an index
+    holds; the cache is computed from them.
+    """
+    try:
+        import pandas as pd
+
+        dtypes = [_pandas_dtype_key(dt) for dt in getattr(index, "dtypes", [index.dtype])]
+        kind = type(index)
+        schema = (
+            f"{kind.__module__}.{kind.__qualname__}:{list(index.names)!r}:{dtypes!r}:{getattr(index, 'freq', None)!r}:"
+        )
+        h = hashlib.sha256(schema.encode("utf-8"))
+        _fold_pandas_index(h, index, pd)
+        return h.hexdigest()
+    except (ImportError, TypeError, ValueError, AttributeError, NotImplementedError, pickle.PicklingError):
+        logger.debug("Failed to hash a pandas %s", type(index).__name__)
+        return None
 
 
 # What `pandas.api.types.infer_dtype` calls an array of labels no one can
