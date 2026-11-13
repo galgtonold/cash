@@ -96,7 +96,9 @@ def _setting_changed() -> None:
     """A setting changed: no hit the decorator's fast path remembered is
     served again before an ordinary call (`cash.decorator.hit_memo`)."""
     from .._native import cwatch
+    from ..decorator import state_memo
 
+    state_memo.moved()
     bump = getattr(cwatch, "bump_cash", None)
     if bump is not None:
         bump()

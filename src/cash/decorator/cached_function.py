@@ -293,6 +293,9 @@ class CachedFunction:
     hit_memo: Any = field(default=None, repr=False)
     #: The state list its wrapper hands `_cwatch.fast_call` (`hit_memo.new_state`).
     hit_state: Any = field(default=None, repr=False)
+    #: Its remembered state segments (`state_memo.StateMemo`), made on the
+    #: first call; False when it cannot take one.
+    state_memo: Any = field(default=None, repr=False)
     _signature: Any = field(default=_UNREAD, repr=False)
 
     @property

@@ -49,7 +49,7 @@ from ..tracking.randomness import (
     replayable,
 )
 from ..tracking.trace_recorder import other_thread_alive
-from . import code_trace, hit_memo, walk_scope
+from . import code_trace, hit_memo, state_memo, walk_scope
 from .arg_hashing import (
     CALL_POLARS,
     CONTENT_KEYED,
@@ -125,7 +125,7 @@ logger = logging.getLogger(__name__)
 
 #: Cached functions whose `KeyBuilder.callee_state` is being built on this
 #: thread, so one that reaches itself folds its name instead of recursing.
-_CALLEE_STATES: contextvars.ContextVar[frozenset[str]] = contextvars.ContextVar(
+CALLEE_STATES: contextvars.ContextVar[frozenset[str]] = contextvars.ContextVar(
     "_cash_callee_states", default=frozenset()
 )
 
@@ -525,6 +525,14 @@ class KeyBuilder:
         return built, watch, ledger
 
     def _code_state(self, spec: CachedFunction, chain: list[str], *, note: bool = False) -> str:
+        """`_code_state_now`, or what it gave last time while nothing it
+        reads has moved since (`state_memo`)."""
+        memo = state_memo.memo_for(spec)
+        if memo is None:
+            return self._code_state_now(spec, chain, note=note)
+        return memo.code_state(self, spec, chain, note)
+
+    def _code_state_now(self, spec: CachedFunction, chain: list[str], *, note: bool = False) -> str:
         """The state segment before anything the arguments decide: the
         function's code, helpers, cached callees, declared files, closure,
         defaults, globals, RNG epoch and environment. Appends each stage to
@@ -647,7 +655,7 @@ class KeyBuilder:
         if reached_ttls is not None:
             # What the caller computes from this function is as fresh as it.
             reached_ttls.append(self._registry.effective_ttl(func_name, spec.ttl))
-        active = _CALLEE_STATES.get()
+        active = CALLEE_STATES.get()
         if func_name in active:
             walk_scope.note_callees((func_name,))
             return f"cycle:{func_name}"
@@ -680,8 +688,8 @@ class KeyBuilder:
         """`callee_state` built now, for a function no running build of a
         callee state is building."""
         func, func_name = spec.func, spec.name
-        active = _CALLEE_STATES.get()
-        token = _CALLEE_STATES.set(active | {func_name})
+        active = CALLEE_STATES.get()
+        token = CALLEE_STATES.set(active | {func_name})
         ledger_token = STATE_LEDGER.set(None)
         watch_token = CAPTURE_WATCH.set(None)
         # The callee's digest folds its own classes, whatever the caller folded.
@@ -698,7 +706,7 @@ class KeyBuilder:
             CLASSES_FOLDED.reset(classes_token)
             CAPTURE_WATCH.reset(watch_token)
             STATE_LEDGER.reset(ledger_token)
-            _CALLEE_STATES.reset(token)
+            CALLEE_STATES.reset(token)
 
     def build(self, spec: CachedFunction, args: tuple, kwargs: dict, split: frozenset[int] = frozenset()) -> BuiltKey:
         """The cache key for calling *spec*'s function with these arguments.

@@ -24,7 +24,7 @@ from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning, CashImpurityWarning
 from ..graph import DependencyGraph
 from ..source_norm import bytecode_identity
-from . import code_trace, hit_memo
+from . import code_trace, hit_memo, state_memo
 from .cached_function import CachedFunction, PurityMode
 from .call_state import KeyBuildFailed
 from .explain import MissKind, MissReason
@@ -374,6 +374,7 @@ class FunctionRegistry:
         # A downstream that depends on this function inherits its TTL
         # (effective TTL = min over the dependency closure).
         self._effective_ttl_cache.clear()
+        state_memo.moved()
         return inert
 
     def _register_static_dependencies(
@@ -633,6 +634,7 @@ class FunctionRegistry:
         cheap on repeated registrations.
         """
         self.populated.add(func_name)
+        state_memo.moved()
         try:
             called_names, gaps = CodeAnalyzer.find_called_functions_and_gaps(
                 func, self.functions, include_references=True, wrappers_only=True
@@ -691,3 +693,4 @@ class FunctionRegistry:
                 self._closure_reports[func] = report
             except TypeError:
                 pass  # not weak-referenceable: the name's report stands for it
+        state_memo.moved()

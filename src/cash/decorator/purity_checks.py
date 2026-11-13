@@ -755,7 +755,12 @@ class LearnedMutations:
 
     def learn(self, code: Any, scope: str, name: str) -> None:
         """Record that a call of *code* mutated *name* in *scope*."""
-        self._by_code.setdefault((code, scope), set()).add(name)
+        names = self._by_code.setdefault((code, scope), set())
+        if name not in names:
+            from . import state_memo
+
+            names.add(name)
+            state_memo.moved()
 
 
 #: Exact types whose instances cannot change once built (no subclass: one

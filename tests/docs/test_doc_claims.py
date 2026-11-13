@@ -79,6 +79,10 @@ _ENV_ALLOWLIST: frozenset[str] = frozenset(
         # (cash.decorator.hit_memo); read once at import, so not a setting.
         "CASH_HITPATH",
         "CASH_HITPATH_VERIFY",
+        # Switch the remembered state segment off, or check every reuse
+        # (cash.decorator.state_memo); read once at import, so not a setting.
+        "CASH_STATE_MEMO",
+        "CASH_STATE_MEMO_VERIFY",
         # Switches the native file hook off (cash.tracking.native_reads); one
         # process-wide switch read once at import, so not a setting.
         "CASH_NATIVE_FILE_HOOK",

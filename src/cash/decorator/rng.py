@@ -35,6 +35,7 @@ from ..tracking.randomness import (
     unseeded_streams,
     watch_seeds,
 )
+from . import state_memo
 
 if TYPE_CHECKING:
     from .backend_slot import BackendSlot
@@ -409,6 +410,7 @@ class RngWatch:
         component = seed_epoch_component(self._stream_inputs(func_name, modules))
         if not component:
             return state_hash
+        state_memo.folded_outside_world()
         return hashlib.sha256(f"{state_hash}{component}".encode("utf-8")).hexdigest()
 
     def _load_rng_draw_marker(self, func_name: str) -> set[str]:
@@ -443,6 +445,7 @@ class RngWatch:
             modules = set()
         if cf is not None:
             cf.rng_modules = modules
+            state_memo.moved()
         return modules
 
     def _store_rng_draw_marker(self, func_name: str, modules: set[str]) -> None:
@@ -489,6 +492,7 @@ class RngWatch:
         newly = bool(drew - known)
         if newly:
             known.update(drew)
+            state_memo.moved()
             self._store_rng_draw_marker(func_name, known)
         if not newly:
             return False

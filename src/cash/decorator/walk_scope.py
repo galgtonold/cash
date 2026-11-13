@@ -40,7 +40,20 @@ from typing import Any, NamedTuple
 
 from .. import _weak
 
-__all__ = ["Record", "close_on", "enter", "isolated", "leave", "note_callees", "servable", "walk_local"]
+__all__ = [
+    "Record",
+    "apart",
+    "building_now",
+    "close_on",
+    "enter",
+    "isolated",
+    "leave",
+    "note_callees",
+    "servable",
+    "stack",
+    "walk_is_idle",
+    "walk_local",
+]
 
 _LOCAL = threading.local()
 
@@ -149,6 +162,44 @@ def servable(record: Record) -> bool:
     if not record.members:
         return True
     return not any(frame.item in record.members for frame in _frames())
+
+
+def stack() -> list[_Frame]:
+    """The frames being walked on this thread, innermost last."""
+    return _frames()
+
+
+def building_now() -> tuple[str, ...]:
+    """The cached functions whose state this thread is building now."""
+    return tuple(_building())
+
+
+def walk_is_idle() -> bool:
+    """Whether no `walk_local` record on this thread holds anything."""
+    walk = getattr(_LOCAL, "walk", None)
+    if not walk:
+        return True
+    try:
+        return all(not entry[1] for entry in walk.values())
+    except TypeError:
+        return False
+
+
+@contextlib.contextmanager
+def apart(item: Hashable | None) -> Iterator[_Frame | None]:
+    """Walk with the frames and `walk_local` records around set aside: a
+    fresh frame for *item* (None: no frame) the walk collects into, as the
+    one frame the caller had would have collected (`state_memo`)."""
+    saved = getattr(_LOCAL, "frames", None)
+    saved_walk = getattr(_LOCAL, "walk", None)
+    own = _Frame(item) if item is not None else None
+    _LOCAL.frames = [own] if own is not None else []
+    _LOCAL.walk = {}
+    try:
+        yield own
+    finally:
+        _LOCAL.frames = saved
+        _LOCAL.walk = saved_walk
 
 
 @contextlib.contextmanager
