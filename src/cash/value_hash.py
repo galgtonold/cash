@@ -17,7 +17,9 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import logging
+import operator
 import pickle
+import sys
 import threading
 import weakref
 from collections.abc import Callable, Iterator
@@ -68,14 +70,85 @@ def _hash_collection(obj: Any) -> str:
     values = [v for _, v in items] if items is not None else (list(obj) if isinstance(obj, (list, tuple)) else [])
     # Asked of each TYPE once: asked of each item, a list of 200,000 ints
     # cost 0.9 s here, 30x the pickle that hashes it.
-    if any(map(_is_bulky_type, set(map(type, values)))):
+    types = set(map(type, values))
+    if any(map(_is_bulky_type, types)):
         parts = [f"{type(obj).__name__}:{len(obj)}"]
         if items is not None:
             parts.extend(f"{compute_hash(k)}={compute_hash(v)}" for k, v in items)
         else:
             parts.extend(compute_hash(v) for v in values)
         return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+    if items is None:
+        digest = _scalar_run_digest(obj, types)
+        if digest is not None:
+            return digest
     return _pickle_digest(obj)
+
+
+#: The fewest items from which a list or tuple of numpy scalars of one type
+#: is digested over its values gathered into one array (`_scalar_run_digest`)
+#: rather than pickled: below it the pickle costs a few milliseconds.
+SCALAR_RUN_MIN = 1024
+
+#: The head of a `_scalar_run_digest`, which never equals a pickle's digest.
+_SCALAR_RUN_HEAD = b"cash-scalar-run:1\0"
+
+
+def _scalar_run_type(obj: Any, types: set[type] | None = None) -> Any:
+    """The one dtype of *obj*'s items, when *obj* is a list or tuple of at
+    least `SCALAR_RUN_MIN` numpy scalars of one exact numeric type (an
+    ``np.float64``, an ``np.timedelta64`` of one unit), whose values one
+    array of that dtype holds bit for bit; None otherwise. *types*: the
+    types of its items, when known."""
+    if (type(obj) is not list and type(obj) is not tuple) or len(obj) < SCALAR_RUN_MIN:
+        return None
+    numpy = sys.modules.get("numpy")
+    if numpy is None:
+        return None
+    if types is None:
+        types = set(map(type, obj))
+    if len(types) != 1:
+        return None
+    (t,) = types
+    if t.__module__ != "numpy" or not issubclass(t, (numpy.number, numpy.bool_, numpy.datetime64, numpy.timedelta64)):
+        return None
+    if issubclass(t, (numpy.longdouble, numpy.clongdouble)):
+        # Padding bytes in its pickle, which an array copy need not keep.
+        return None
+    if issubclass(t, (numpy.datetime64, numpy.timedelta64)):
+        # One type, many units: an array of one unit would convert the rest.
+        dtypes = set(map(operator.attrgetter("dtype"), obj))
+        return dtypes.pop() if len(dtypes) == 1 else None
+    return numpy.dtype(t)
+
+
+def _scalar_run_digest(obj: Any, types: set[type] | None = None) -> str | None:
+    """*obj*'s digest over its items' bytes, when it is a run of numpy
+    scalars of one dtype (`_scalar_run_type`); None otherwise.
+
+    Pickled, each such scalar went through the key's reducer one by one: a
+    list of two million ``np.float64`` deltas took 5-17 s to digest, and a
+    statement that only read it (``len(deltas)``) digested it before and
+    after. Gathered into one array of their dtype, the values are copied bit
+    for bit (a NaN's payload, ``-0.0``), so two runs digest alike only when
+    each item has the same bytes; the container's type, the items' exact
+    type, the dtype (with its unit) and the length are in the digest too.
+    Blind to which items are one object, as an immutable scalar's identity
+    tells nothing about its value."""
+    dtype = _scalar_run_type(obj, types)
+    if dtype is None:
+        return None
+    numpy = sys.modules["numpy"]
+    try:
+        values = numpy.fromiter(obj, dtype=dtype, count=len(obj))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    item = type(obj[0])
+    sha = hashlib.sha256(_SCALAR_RUN_HEAD)
+    sha.update(f"{type(obj).__name__}\0{item.__module__}.{item.__qualname__}\0{dtype.str}\0{len(obj)}\0".encode())
+    # As bytes: a buffer of datetimes is refused on older numpy.
+    sha.update(values.view(numpy.uint8))
+    return sha.hexdigest()
 
 
 #: How long a check whether a value changed may spend pickling it before
@@ -366,7 +439,8 @@ def digest_via_pickle(obj: Any) -> bool:
         return False
     if kind is dict or kind is list or kind is tuple:
         values = obj.values() if kind is dict else obj
-        return not any(map(_is_bulky_type, set(map(type, values))))
+        types = set(map(type, values))
+        return not any(map(_is_bulky_type, types)) and _scalar_run_type(obj, types) is None
     return True
 
 
@@ -548,7 +622,13 @@ def unshared_hash(obj: Any) -> str:
     the content may count. A frame, an array or a table (`builtin_hash`),
     and a value this pickle cannot read, digest as `compute_hash` does.
     """
-    if type(obj) in _ATOMS or builtin_hash_family(type(obj)) is not None or _holds_bulky(obj):
+    if (
+        type(obj) in _ATOMS
+        or builtin_hash_family(type(obj)) is not None
+        or _holds_bulky(obj)
+        or _scalar_run_type(obj) is not None
+    ):
+        # `_scalar_run_digest` is blind to shared items already.
         return compute_hash(obj)
     try:
         return unshared_digest(obj)
