@@ -2563,6 +2563,13 @@ class ArgHasher:
             call_polars = CALL_POLARS.get()
             if call_polars is not None and builtin_family_of(type(arg)) == "polars":
                 content_digest = call_polars.digest(arg)
+            elif frame_memo:
+                # Read into the memo, which stores it: a column or row
+                # labels an unchanged frame there shares (seven series over
+                # one index) add the bytes they added to its digest unread.
+                content_digest = self._frame_memo.hash_frame(arg)
+                if content_digest is not None:
+                    return content_digest, _DIGESTED
             else:
                 content_digest = builtin_hash(arg)
         if content_digest is not None:
