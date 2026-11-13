@@ -326,6 +326,10 @@ class EffectObserver:
         #: registered hasher keys, with their state before the body
         #: (`PurityChecks.held_generators`).
         self.held_generators: list | None = None
+        #: ``[(name, value, state)]`` of what the cached callable binds into
+        #: every call -- a bound method's ``self``, a partial's arguments --
+        #: before the body (`PurityChecks.bound_state`).
+        self.bound_before: list | None = None
         #: The parameters the call changed in place, once the decorator has
         #: compared (`PurityChecks.check_argument_mutation`); None when none did.
         self.mutated_args: list[str] | None = None

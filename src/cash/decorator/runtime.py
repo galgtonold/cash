@@ -1786,6 +1786,7 @@ class CallRunner:
             func_name, args, kwargs, call.keyed_parts
         )
         run.observer.held_generators = self._purity.held_generators(func_name, args, kwargs)
+        run.observer.bound_before = self._purity.bound_state(func)
         # Watch the global RNG across the call: a draw inside the body is an
         # input the key cannot see statically.
         run.rng_pre = capture_rng_pre_state()
@@ -1901,10 +1902,11 @@ class CallRunner:
             self._purity.check_argument_mutation(
                 func_name, *(call.checked or (args, kwargs)), call.call_args_hash, run.observer
             )
+        self._purity.check_bound_mutation(func_name, run.observer)
         args_left = self.arguments_left(spec, run, call.checked or (args, kwargs), call.ran_unit)
         self._files.credit_remembered_reads(func_name, run.tracker, args, kwargs)
         self._files.warn_unrecorded_reads(func_name, run.tracker)
-        auto_file_deps = snapshot_tracked_deps(run.tracker, func.__module__)
+        auto_file_deps = snapshot_tracked_deps(run.tracker, getattr(func, "__module__", None))
         execution_time = _perf_counter() - call.call_start
 
         shared = self._purity.warn_shared_result(func, func_name, res, args, kwargs)
