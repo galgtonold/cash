@@ -49,7 +49,9 @@ def jit_python_function(obj: Any) -> types.FunctionType | None:
     A numba dispatcher has it as ``py_func`` beside its ``targetoptions``;
     any object holding both is taken to be one. numba's other wrappers
     (``DUFunc``, ``GUFunc``, ``CFunc``) keep it as ``_pyfunc`` or, through
-    ``functools.update_wrapper``, as ``__wrapped__``.
+    ``functools.update_wrapper``, as ``__wrapped__``. A ``@stencil``
+    (``StencilFunc``) keeps no ``py_func``: its kernel is the function its
+    ``kernel_ir`` was built from, ``kernel_ir.func_id.func``.
     """
     if issubclass(type(obj), (types.FunctionType, type, types.ModuleType, types.MethodType)):
         return None
@@ -63,6 +65,11 @@ def jit_python_function(obj: Any) -> types.FunctionType | None:
         return None
     for name in ("py_func", "_pyfunc", "__wrapped__"):
         fn = state.get(name)
+        if type(fn) is types.FunctionType:
+            return fn
+    kernel = state.get("kernel_ir")
+    if kernel is not None:
+        fn = _attr(_attr(kernel, "func_id"), "func")
         if type(fn) is types.FunctionType:
             return fn
     return None
@@ -121,6 +128,10 @@ def jit_options(obj: Any) -> str:
     layout = _attr(_attr(obj, "gufunc_builder"), "signature")
     if layout is not None:
         parts.append("layout=" + _stable(layout))
+    if "kernel_ir" in (_own_dict(obj) or {}):
+        # A ``@stencil``: its boundary mode and its options (``neighborhood``,
+        # ``cval``, ``standard_indexing``) change what it computes.
+        parts.append("stencil=" + _stable({"mode": _attr(obj, "mode"), "options": _attr(obj, "options")}))
     sig = _attr(obj, "_sig")
     if sig is not None:
         parts.append("sig=" + _stable(sig))

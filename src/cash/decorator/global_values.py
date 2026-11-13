@@ -18,7 +18,7 @@ from ..analysis.purity_analyzer import get_analyzer
 from ..analysis.purity_policy import REPORTED_METHODS
 from ..dependency_state import SysModulesHelperResolver
 from ..exceptions import CashImpurityWarning
-from ..jit_functions import jit_identity, jit_python_function
+from ..jit_functions import jit_identity, jit_options, jit_python_function
 from . import walk_scope
 from .code_tables import CodeTable
 from .function_identity import hash_callable_source
@@ -255,6 +255,17 @@ class GlobalValues:
         runs the user's code (the helper walk keys it), or a value that
         cannot be hashed, which warns KEY-UNHASHABLE-GLOBAL once.
         """
+        compiled = jit_python_function(value)
+        if compiled is not None and not own_code_is_user(compiled, root_module):
+            # A library's numba-compiled function (librosa's ``@stencil``
+            # ``_localmax_sten``, an ``@njit`` helper): library code, keyed by
+            # the name of the function it compiles and its compile options;
+            # the library's version is `library_versions`'. What the
+            # compiler holds (type caches, overloads, contexts) is not looked
+            # into: it grows with every new argument type.
+            name = code_ref(compiled)
+            if name is not None:
+                return f"{name}:jit:{jit_options(value)}"
         ref = code_ref(value)
         if ref is not None and isinstance(value, type) and unnamed_library_class(value):
             # Its name finds another class (pint's ``ureg.Quantity`` is
