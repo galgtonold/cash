@@ -37,6 +37,7 @@ __all__ = [
     "fresh_call_candidates",
     "resolve_fresh_call_candidates",
     "receiver_is_fresh",
+    "returns_fresh",
     "LogOnlyFlow",
     "is_log_helper",
     "is_log_line",
@@ -574,9 +575,131 @@ def resolve_fresh_call_candidates(candidates: tuple[ast.Call, ...], namespace: d
         real_name = _plain_attr(obj, "__name__")
         if real_name in _LIBRARY_VIEW_FUNCTIONS:
             continue  # ``from numpy import asarray as aa``
-        if _library_of(obj) in _NEW_OBJECT_LIBRARIES:
+        if _library_of(obj) in _NEW_OBJECT_LIBRARIES or returns_fresh(obj):
             found.add(id(node))
     return frozenset(found)
+
+
+#: How deep `returns_fresh` follows a helper whose returns are another
+#: helper's result; past it, a call is taken as not fresh.
+_RETURNS_DEPTH_LIMIT = 3
+_RETURNS_DEPTH: ContextVar[int] = ContextVar("_RETURNS_DEPTH", default=0)
+#: CO_GENERATOR | CO_COROUTINE | CO_ITERABLE_COROUTINE | CO_ASYNC_GENERATOR
+_RESUMABLE_FLAGS = 0x20 | 0x80 | 0x100 | 0x200
+
+
+def returns_fresh(fn: Any) -> bool:
+    """Does every ``return`` of the user's plain function *fn* hand back an
+    object it made itself (or None, or a constant)?
+
+    ``v = helper(n); v[mask] = 0`` where ``helper`` ends ``return
+    np.full_like(x, np.nan)`` writes into an array the call made: it was
+    reported as a scope mutation, the way a write into the caller's array
+    is. What counts as made here is what the flow pass says is fresh at each
+    ``return``, so a helper that hands back its argument
+    (``np.asarray(x)``), a view of it, a global, or a value it also stored
+    somewhere (escaped) is not fresh. Library code is not read: only
+    numpy / pandas / polars functions are known to build new objects.
+    """
+    if type(fn) is not types.FunctionType:
+        return False
+    code = fn.__code__
+    if code.co_flags & _RESUMABLE_FLAGS or code.co_name == "<lambda>":
+        return False
+    depth = _RETURNS_DEPTH.get()
+    if depth >= _RETURNS_DEPTH_LIMIT:
+        return False
+    func_def = _users_function_def(fn)
+    if func_def is None:
+        return False
+    # Names the function closes over resolve in its cells, not its globals:
+    # left unresolved, so not fresh.
+    namespace: Any = fn.__globals__
+    if code.co_freevars:
+        namespace = {k: v for k, v in namespace.items() if k not in code.co_freevars}
+    token = _RETURNS_DEPTH.set(depth + 1)
+    try:
+        from . import tree_memo
+
+        candidates = tree_memo.fact(func_def, "fresh_call_candidates", fresh_call_candidates)
+        calls = resolve_fresh_call_candidates(candidates, namespace)
+        marks = tree_memo.fact(func_def, ("fresh_flow", calls), lambda node: fresh_flow_nodes(node, calls)) | calls
+    finally:
+        _RETURNS_DEPTH.reset(token)
+    escaped = tree_memo.fact(func_def, "escaped_names", _escaped_names)
+    returned = False
+    for node in _own_returns(func_def):
+        value = node.value
+        if value is None or isinstance(value, ast.Constant):
+            continue
+        if not _returned_fresh(value, marks, escaped):
+            return False
+        returned = True
+    return returned
+
+
+def _returned_fresh(value: ast.AST, marks: frozenset[int], escaped: frozenset[str]) -> bool:
+    """Is *value*, returned, an object the function made and kept to itself:
+    fresh where returned, and not a name the body also handed to other code
+    or stored (``_CACHE[k] = v; return v`` hands back an object a global
+    holds)?"""
+    if isinstance(value, ast.IfExp):
+        return _returned_fresh(value.body, marks, escaped) and _returned_fresh(value.orelse, marks, escaped)
+    if isinstance(value, ast.Call) and id(value) in marks:
+        return True  # what a fresh call built, handed straight back
+    root = root_name(value)
+    if root is not None and root.id in escaped:
+        return False
+    if (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Attribute)
+        and value.func.attr == "item"
+        and not value.args
+        and receiver_is_fresh(value.func.value, marks)
+    ):
+        # ``V.item()`` of the array the function made: a scalar, which no
+        # write can go into.
+        return True
+    return receiver_is_fresh(value, marks)
+
+
+def _users_function_def(fn: types.FunctionType) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+    """The def of *fn*, a function of the user's code, parsed from its own
+    source; None for library code or a source that cannot be read."""
+    import textwrap
+
+    from .._paths import is_pseudo_filename
+    from ..exceptions import SOURCE_RETRIEVAL_ERRORS
+    from ..install_paths import is_user_path
+    from ..source_reading import own_source
+    from . import tree_memo
+
+    filename = fn.__code__.co_filename
+    if not is_pseudo_filename(filename) and not is_user_path(filename):
+        return None
+    try:
+        tree = tree_memo.parse(textwrap.dedent(own_source(fn)))
+    except (*SOURCE_RETRIEVAL_ERRORS, SyntaxError):
+        return None
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return node if node.name == fn.__code__.co_name else None
+    return None
+
+
+def _own_returns(func_def: ast.AST) -> list[ast.Return]:
+    """The ``return`` statements of *func_def*'s own body, not of a function
+    or class nested in it."""
+    out: list[ast.Return] = []
+    stack = list(ast.iter_child_nodes(func_def))
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+            continue
+        if isinstance(node, ast.Return):
+            out.append(node)
+        stack.extend(ast.iter_child_nodes(node))
+    return out
 
 
 #: `library_fresh_calls` of the body the flow pass is walking.
