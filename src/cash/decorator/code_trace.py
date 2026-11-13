@@ -773,6 +773,18 @@ def _namespace(module: str) -> Mapping[str, Any] | None:
     return ns if isinstance(ns, dict) else None
 
 
+def _frame_namespace(module: str, filename: str) -> dict | None:
+    """The globals of the innermost running frame of *filename* whose
+    ``__name__`` is *module*: the namespace of a script that is running but
+    that no module in ``sys.modules`` holds."""
+    frame = sys._getframe(1)
+    while frame is not None:
+        if frame.f_code.co_filename == filename and frame.f_globals.get("__name__") == module:
+            return frame.f_globals
+        frame = frame.f_back
+    return None
+
+
 def _find(module: str, qualname: str) -> Any:
     """The object *qualname* names in *module* now, or None."""
     from ..tracking.trace_items import inspect_getattr
@@ -943,6 +955,9 @@ class _Build:
                 # A module imported, a class body: what they bound is read
                 # through the items of the code that uses it.
                 continue
+            if _namespace(module) is not g:
+                self._hidden(code, g, module)
+                continue
             # A later process may not have imported the module yet (``import
             # helpers`` inside the body): the check imports it, as the call
             # would, when its file is the same; without the item, its code
@@ -978,6 +993,38 @@ class _Build:
             tuple(x) for x in unit.extra if not (x[0] == "cached" and unit.cached_codes.get(x[1]) in self.static)
         )
         return list(dict.fromkeys(out))
+
+    def _hidden(self, code: types.CodeType, g: Mapping[str, Any], module: str) -> None:
+        """Code whose globals are not those of the module its ``__name__``
+        names: a script ``runpy.run_path(path, run_name="__main__")`` runs,
+        or the script that ran it while the other one holds ``__main__``.
+        Named by module, it was looked up in the wrong namespace in the next
+        process and read as changed every time. Its items name its file
+        instead, and the check finds the namespace through a frame of that
+        file running under that name (`_frame_namespace`): the script that
+        is running the call."""
+        qn = code.co_qualname
+        filename = code.co_filename
+        if is_pseudo_filename(filename) or _frame_namespace(module, filename) is not g:
+            raise _Untraceable(f"it ran {qn} of a {module} no module holds and no running frame shows")
+        from ..tracking.trace_items import name_table, resolve
+
+        rc, fn, _owner = resolve(module, qn, g, module)
+        if rc is not code:
+            raise _Untraceable(f"it ran {module}.{qn} of {filename}, which no name there holds")
+        self.add(
+            ("file_code", module, filename, qn), _code_digest(code, fn), f"{qn} has defaults that cannot be checked"
+        )
+        table = name_table(code)
+        for name in table.reads:
+            if not isinstance(name, str) or name in _SKIP_GLOBALS or name.startswith("__cash"):
+                continue
+            value = g.get(name, _MISSING)
+            self.add(
+                ("file_global", module, filename, name),
+                _ABSENT if value is _MISSING else _digest(value),
+                f"{qn} reads the global {name}, whose value cannot be checked",
+            )
 
     def _code(self, code: types.CodeType, g: Mapping[str, Any], module: str, ran: set[str]) -> None:
         from ..tracking.trace_items import candidates, resolve
@@ -1279,6 +1326,17 @@ def verify(items: list, cached_state: Callable[[str], str | None]) -> str | None
                 rc, fn, _ = resolve(item[1], item[2], {}, "\x00")
                 now = None if rc is None else _code_digest(rc, fn)
                 what = f"{item[1]}.{item[2]}"
+            elif kind in ("file_code", "file_global"):
+                ns = _frame_namespace(item[1], item[2])
+                if kind == "file_code":
+                    from ..tracking.trace_items import resolve
+
+                    rc, fn, _ = resolve(item[1], item[3], ns, item[1]) if ns is not None else (None, None, None)
+                    now = None if rc is None else _code_digest(rc, fn)
+                    what = f"{item[3]} of {item[2]}"
+                else:
+                    now = None if ns is None else (_digest(ns[item[3]]) if item[3] in ns else _ABSENT)
+                    what = f"the global {item[3]} of {item[2]}"
             elif kind == "held":
                 ns = _namespace(item[1])
                 now = None if ns is None else (_digest(ns[item[2]]) if item[2] in ns else _ABSENT)
