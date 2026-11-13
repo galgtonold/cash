@@ -311,6 +311,7 @@ class NotebookSimulator:
         *cell_code* is the source being run, when it may differ from the saved
         cell.
         """
+        self.planner.draws_if_stream = {}
         check = CellCheck(
             current_cell_idx,
             notebook_cells,

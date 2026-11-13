@@ -34,6 +34,7 @@ from ..string_lookups import cell_reads_names_unseen
 from ..tracking_state import TrackingState
 from .changed_below import warn_changed_below
 from .notebook_vetting import NotebookVetter
+from .reexecution_planner import redraw_check
 from .replay import StatementReplay, UpstreamRepairGap, statement_cells
 from .rng_rewind import RngRewind
 from .simulator import NotebookSimulator
@@ -1168,6 +1169,8 @@ class UpstreamChecker:
                 self.rng.before_statement(index)
                 written.append((index, self.tracking_state.lineage.watch()))
 
+            draws_if_stream = self.simulator.planner.draws_if_stream
+            skipped: list[str] = []
             if statements_to_reexecute:
                 try:
                     executed_metrics = self.replay.reexecute(
@@ -1181,6 +1184,8 @@ class UpstreamChecker:
                         exec_sources=self.replay.statement_exec_sources(notebook_cells),
                         notebook_cells=notebook_cells,
                         before_statement=before_statement,
+                        should_run=redraw_check(draws_if_stream, self.shell.user_ns) if draws_if_stream else None,
+                        skipped=skipped,
                     )
                 except UpstreamRepairGap:
                     self._put_back(bindings_before, lineages_before)
@@ -1200,6 +1205,8 @@ class UpstreamChecker:
                     cache.entries, cache.cell_hashes = seen_before
                     raise
             written_in = self._written_in(statements_to_reexecute, written, notebook_cells)
+            if skipped:
+                statements_to_reexecute = [code for code in statements_to_reexecute if code not in skipped]
             written.clear()
             self._keep_live_bindings(
                 self._repair_cells(statements_to_reexecute, restored_info, notebook_cells, current_cell_idx),
