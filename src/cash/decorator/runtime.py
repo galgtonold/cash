@@ -79,7 +79,7 @@ from .call_state import (
     run_to_completion,
 )
 from .class_data import CLASSES_FOLDED
-from .closure_fold import EVERY_PARAMETER, defaults_of
+from .closure_fold import EVERY_PARAMETER, bound_owner, defaults_of
 from .dynamic_sources import (
     Resolution,
     dynamic_sources_fresh,
@@ -774,6 +774,14 @@ class KeyBuilder:
             carriers = [keyed]
             if spec.arg_key is not None and spec.arg_key.key_fn is not None:
                 carriers.insert(0, normalized_args)
+            # A bound method's ``self`` (``cash.cache(est._fit)``) is not in
+            # the arguments, but its code runs as if it were: what the body
+            # reaches through it (a subclass override, the helpers that
+            # calls) is folded as for an unbound method's ``self``. Its
+            # value is folded by `ClosureFold.fold_bound_self`.
+            bound, owner = bound_owner(func)
+            if bound:
+                carriers.append(((owner,), {}))
             for carrier_args in carriers:
                 state_hash = self._code_args.fold_code_args(
                     *carrier_args,
