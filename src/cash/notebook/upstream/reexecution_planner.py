@@ -274,7 +274,7 @@ class ReexecutionPlanner:
                 stmts_to_run_indices,
                 simulation_trace,
                 check,
-                draws_if_stream,
+                None,
                 restored_codes={info.get("code") for info in restored_statements_info},
             )
             if len(stmts_to_run_indices) == before:
@@ -319,6 +319,16 @@ class ReexecutionPlanner:
             restored_statements_info,
         )
 
+        # Last, once no other pass can take them for statements that run
+        # (and plan what they read): the draws from a name the kernel does
+        # not hold yet, run only if it turns out a stream.
+        stmts_to_run_indices = self._redraw_remade_streams(
+            stmts_to_run_indices,
+            simulation_trace,
+            check,
+            draws_if_stream,
+            restored_codes={info.get("code") for info in restored_statements_info},
+        )
         statements_to_reexecute: list[str] = []
         sure = {simulation_trace[idx].stmt_code for idx in stmts_to_run_indices if idx not in draws_if_stream}
         for idx in stmts_to_run_indices:
@@ -859,7 +869,7 @@ class ReexecutionPlanner:
         stmts_to_run_indices: list[int],
         simulation_trace: list,
         check: CellCheck,
-        draws_if_stream: dict[int, tuple[frozenset[str], bool]],
+        draws_if_stream: dict[int, tuple[frozenset[str], bool]] | None,
         restored_codes: set[str | None] | frozenset[str] = frozenset(),
     ) -> list[int]:
         """Schedule, after each statement of the plan that makes an open file,
@@ -873,10 +883,14 @@ class ReexecutionPlanner:
         something reads the name after them: the cell, or a statement of the
         plan.
 
-        A name live in the kernel is seen for what it is. One that is not
-        (after a restart) cannot be told until the plan makes it, so its
-        draws go into *draws_if_stream*: run only when the value the plan
-        made moves as it is read. A draw that also changes, on top of what it
+        A name live in the kernel is seen for what it is; with
+        *draws_if_stream* None only those are taken. One that is not (after a
+        restart) cannot be told until the plan makes it, so its draws go
+        into *draws_if_stream*: run only when the value the plan made moves
+        as it is read. That call comes after every other pass, so none of
+        them plans for a draw that may not run (``table.to_csv(OUT / ...)``
+        taken for a draw from a re-made ``OUT`` brought the backtest that
+        makes ``table`` in), nor finds one planned that it needs to run. A draw that also changes, on top of what it
         finds, a name no statement above makes afresh (``lines.append(
         f.readline())``) cannot be run again without applying that change
         twice: the plan is refused (:class:`UpstreamRepairGap`), at once for
@@ -895,9 +909,12 @@ class ReexecutionPlanner:
         scheduled = set(stmts_to_run_indices)
         for made_at in sorted(stmts_to_run_indices):
             entry = simulation_trace[made_at]
+            if import_only(entry.stmt_code):
+                # A module, or a name taken from one: not made afresh here.
+                continue
             for name in sorted(set(entry.outputs or ()) - set(entry.inputs or ())):
                 live = name in user_ns
-                if live and not _drawn_in_place(user_ns[name]):
+                if live != (draws_if_stream is None) or (live and not _drawn_in_place(user_ns[name])):
                     continue
                 end = next(
                     (
@@ -927,7 +944,7 @@ class ReexecutionPlanner:
                     if rebuilds is None and live:
                         raise _redraw_gap(simulation_trace[j].stmt_code, name)
                     new = ({j} | (rebuilds or set())) - scheduled
-                    if not live:
+                    if draws_if_stream is not None:
                         for k in new:
                             names, refused = draws_if_stream.get(k, (frozenset(), False))
                             draws_if_stream[k] = (names | {name}, refused or (k == j and rebuilds is None))
@@ -1754,6 +1771,39 @@ def redraw_check(
         return bool(streams)
 
     return should_run
+
+
+def with_conditional_draws(
+    planned: list[str], chained: list[str], draws_if_stream: Mapping[str, object]
+) -> tuple[list[str], list[int | None]]:
+    """*chained* (the plan without its draws-if-stream, with the random
+    stream's seeds put in) with those draws put back before the statement
+    that followed each in *planned*; and, for each statement, its index in
+    *chained*, None for a draw put back."""
+    pending = [(i, code) for i, code in enumerate(planned) if code in draws_if_stream]
+    if not pending:
+        return chained, list(range(len(chained)))
+    pending_codes = {code for _, code in pending}
+    before: dict[str, list[str]] = {}
+    tail: list[str] = []
+    for i, code in pending:
+        anchor = next((later for later in planned[i + 1 :] if later not in pending_codes), None)
+        if anchor is None:
+            tail.append(code)
+        else:
+            before.setdefault(anchor, []).append(code)
+    out: list[str] = []
+    positions: list[int | None] = []
+    for k, code in enumerate(chained):
+        for draw in before.pop(code, ()):
+            out.append(draw)
+            positions.append(None)
+        out.append(code)
+        positions.append(k)
+    for draw in [*(d for draws in before.values() for d in draws), *tail]:
+        out.append(draw)
+        positions.append(None)
+    return out, positions
 
 
 def _import_failure(stmt_code: str) -> str | None:

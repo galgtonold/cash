@@ -46,10 +46,10 @@ import logging
 import queue
 import sys
 import types
-import weakref
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from cash import _weak
 from cash._user_attrs import attribute_or, has_attribute, instance_of
 
 from ..analysis.ast_util import walk_tree
@@ -249,7 +249,7 @@ class UntoldPosition:
 
     def __init__(self, obj: Any) -> None:
         try:
-            self._ref: Any = weakref.ref(obj)
+            self._ref: Any = _weak.ref(obj)
         except TypeError:
             self._ref = None
 
