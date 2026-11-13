@@ -86,6 +86,9 @@ def listings(monkeypatch) -> list[str]:
         def is_symlink(self):
             return self._e.is_symlink()
 
+        def is_dir(self, follow_symlinks=True):
+            return self._e.is_dir(follow_symlinks=follow_symlinks)
+
         def stat(self):
             return self._st
 
