@@ -865,7 +865,9 @@ class MismatchClassifier:
             required_inputs, virtual_lineage, sim.virtual_modules, result.broken_vars, result.stale_magic_vars
         )
         self._repair_upstream_rerun_bindings(required_inputs, sim.trace, result.broken_vars)
-        self._rebuild_what_shares_a_rebuilt_object(result.broken_vars, sim.trace, check)
+        result.kept_sharers = self._rebuild_what_shares_a_rebuilt_object(
+            result.broken_vars, sim.trace, check, sim=sim, tainted=result.tainted_vars
+        )
         self._warn_held_changed_below(vars_to_check, check)
 
         if logger.isEnabledFor(logging.DEBUG):
@@ -935,8 +937,14 @@ class MismatchClassifier:
                     )
 
     def _rebuild_what_shares_a_rebuilt_object(
-        self, broken_vars: set[str], simulation_trace: list, check: CellCheck | None = None
-    ) -> None:
+        self,
+        broken_vars: set[str],
+        simulation_trace: list,
+        check: CellCheck | None = None,
+        *,
+        sim: SimulationResult | None = None,
+        tainted: set[str] | frozenset[str] = frozenset(),
+    ) -> set[str]:
         """Add to *broken_vars* every variable that shares an object with one
         already in it, through the edges the runtime recorded
         (``TrackingState.derivation_edges``, either way: ``g =
@@ -952,12 +960,27 @@ class MismatchClassifier:
         again (its cell was deleted, or it was bound by hand), rebuilding
         would leave it holding the old object: the variable and every broken
         one it shares an object with are then left as they are, and the cell
-        runs on the live objects, as a plain kernel runs it."""
+        runs on the live objects, as a plain kernel runs it.
+
+        The edges have no direction, so the group reaches what the rebuilt
+        variable only holds too: ``full = Pipeline([('pre', pre), ...])``
+        rebuilt took ``pre`` along, and through it every model built on
+        ``pre`` (``lin``, ``tree``) and their fits. With *sim*, a variable
+        of the group is left live (`_kept_sharers`, returned) when the
+        rebuild cannot touch its object: it was made and last changed above
+        the first statement the rebuild can re-run, and it holds what the
+        cells above leave it. Re-run, those statements reach its live object
+        by name, so the rebuilt variable shares it as a plain Run All has
+        them share it; a restore that would give it a new object instead is
+        refused unless all that shares it is rebuilt (`backward_scan_pass`).
+        A variable made after that statement, which may hold an object it
+        makes, is rebuilt as before."""
         edges = self.tracking_state.derivation_edges
         if not edges or not broken_vars:
-            return
+            return set()
         user_ns = self.shell.user_ns
         produced = {out for entry in simulation_trace or () for out in entry.outputs or ()}
+        sharers: set[str] = set()
         in_cells: set[str] | None = None
         made_below = _made_below(self.tracking_state, user_ns, check)
         for root in sorted(broken_vars):
@@ -990,7 +1013,122 @@ class MismatchClassifier:
             logger.debug(
                 "[UPSTREAM_DEBUG]   -> %s share an object with rebuilt '%s'. Marking broken.", sorted(added), root
             )
+            sharers |= added
             broken_vars |= added
+        if sim is None or not sharers:
+            return set()
+        # Decided once every group is in: what the rebuild re-runs depends on
+        # all of them.
+        kept = self._kept_sharers(sharers & broken_vars, broken_vars, sim, tainted)
+        if kept:
+            logger.debug("[UPSTREAM_DEBUG]   -> %s made above what the rebuild re-runs. Kept live.", sorted(kept))
+            broken_vars -= kept
+        return kept
+
+    def _kept_sharers(
+        self, sharers: set[str], broken_vars: set[str], sim: SimulationResult, tainted: set[str] | frozenset[str]
+    ) -> set[str]:
+        """The variables of *sharers* (taken into *broken_vars* only for
+        sharing an object with a rebuilt one) that the rebuild can leave
+        live: each holds what the cells above leave it (`_live_as_above`),
+        and is made and last changed by a statement above the first one the
+        rebuild of the rest can re-run (`_first_rerun`); changed by a
+        statement as the simulation has it, which moves its lineage on. Its object then
+        predates every object the rebuild makes, so it holds none of them,
+        and no statement of the rebuild changes it."""
+        last_change: dict[str, int] = {}
+        for i, changed in enumerate(what_each_statement_changes(sim.trace)):
+            for name in changed:
+                last_change[name] = i
+        kept = {
+            name for name in sharers if name in last_change and name not in tainted and self._live_as_above(name, sim)
+        }
+        while kept:
+            first = self._first_rerun(broken_vars - kept, sim)
+            if first is None:
+                break
+            still = {name for name in kept if last_change[name] < first}
+            if still == kept:
+                break
+            # Rebuilt after all: what rebuilding it re-runs may reach further up.
+            kept = still
+        return kept
+
+    def _live_as_above(self, name: str, sim: SimulationResult) -> bool:
+        """Whether *name* is bound and holds what the cells above leave it:
+        its lineage is the simulation's, no file behind it changed, and no
+        loop or failed cell left it with a lineage memory is not trusted for."""
+        if name not in self.shell.user_ns:
+            return False
+        live = self.tracking_state.variable_lineage.get(name)
+        return (
+            live is not None
+            and live == sim.virtual_lineage.get(name)
+            and name not in sim.vars_with_stale_files
+            and name not in sim.vars_maybe_changed_by_loops
+            and name not in sim.vars_left_by_failed_runs
+        )
+
+    def _first_rerun(self, needed: set[str], sim: SimulationResult) -> int | None:
+        """The earliest trace index the backward scan can schedule to rebuild
+        *needed*, taking every restore to fail: the scan's own walk, with an
+        input taken as needed unless it is a module or builtin in memory or a
+        name `_live_as_above`. More than the scan reads (it trusts a loop's
+        output or an unsaved edit too), never less. None when nothing runs."""
+        needed = set(needed)
+        trace = sim.trace
+        lineage = self.tracking_state.variable_lineage
+        user_ns = self.shell.user_ns
+        first = None
+        for i in range(len(trace) - 1, -1, -1):
+            entry = trace[i]
+            outputs = set(entry.outputs or ())
+            if not outputs & needed:
+                continue
+            first = i
+            text_inputs, bound = CodeAnalyzer.analyze_code_block(entry.stmt_code)
+            inputs = set(text_inputs) | set(entry.inputs or ())
+            inputs |= self.callables.absent_callee_globals(
+                inputs, sim.virtual_lineage, sim.virtual_modules
+            ) | self.callables.stale_callee_globals(inputs, sim.virtual_lineage, sim.virtual_modules)
+            for inp in inputs:
+                if inp in sim.virtual_modules and inp in user_ns:
+                    continue
+                if inp in BUILTIN_NAMES and inp not in lineage:
+                    continue
+                if not self._live_as_above(inp, sim):
+                    needed.add(inp)
+            needed -= (outputs & set(bound)) - inputs
+        return first
+
+    def _restore_keeps_sharing(self, kept: set[str], scan: _BackwardScan):
+        """The check `CacheRestorer.try_virtual_restore` asks of a restore
+        that would bind the variables *holders* to new objects: when one is
+        a variable the rebuild keeps live (*kept*), every variable sharing an
+        object with it must come back with the restore or be rebuilt by the
+        scan; else the restore is refused and the statement re-runs on the
+        live object. Taken, the restore gives them new objects: they leave
+        *kept*."""
+        edges = self.tracking_state.derivation_edges
+        user_ns = self.shell.user_ns
+
+        def allowed(holders: set[str], outputs: set[str]) -> bool:
+            held = holders & kept
+            if not held:
+                return True
+            reach = set(held)
+            todo = list(held)
+            while todo:
+                for partner in shared_object_partners(edges, todo.pop()):
+                    if partner not in reach and partner in user_ns:
+                        reach.add(partner)
+                        todo.append(partner)
+            if not reach <= holders | outputs | scan.needed | scan.resolved:
+                return False
+            kept.difference_update(held)
+            return True
+
+        return allowed
 
     def _magic_bound(self, name: str, sim: SimulationResult) -> bool:
         """Whether a magic is the last to bind or change *name* above
@@ -1266,6 +1404,7 @@ class MismatchClassifier:
         #: restore here leaves them unless the scan still needs them (as the
         #: input of a statement below that runs again).
         bound_below: set[str] = set()
+        holders_allowed = self._restore_keeps_sharing(result.kept_sharers, scan) if result.kept_sharers else None
 
         for i in range(len(trace) - 1, -1, -1):
             entry = trace[i]
@@ -1293,6 +1432,7 @@ class MismatchClassifier:
                     expected_lineages=entry.stored_lineages or entry.produced_lineages,
                     final_lineages=entry.produced_lineages if entry.stored_lineages else None,
                     keep=(outputs & later) - scan.needed,
+                    holders_allowed=holders_allowed,
                 )
             total_restore_time += restore_time
 
@@ -1483,6 +1623,26 @@ class MismatchClassifier:
                 )
             logger.debug("[UPSTREAM] Variable '%s' should exist but is missing.", var_name)
             broken_vars.add(var_name)
+
+
+def what_each_statement_changes(trace: list) -> list[set[str]]:
+    """The outputs each statement of *trace* binds or changes, as the
+    simulation has it: one it leaves at the lineage it had before is left
+    out. ``grid.fit(X, y)`` lists the pipelines its search holds, which
+    share objects with it, and leaves them as they were (it fits clones)."""
+    lineage_now: dict[str, str] = {}
+    changes: list[set[str]] = []
+    for entry in trace:
+        produced = entry.produced_lineages or {}
+        changed = set()
+        for name in entry.outputs or ():
+            after = produced.get(name)
+            if after is None or after != lineage_now.get(name):
+                changed.add(name)
+            if after is not None:
+                lineage_now[name] = after
+        changes.append(changed)
+    return changes
 
 
 def _made_below(tracking_state: TrackingState, user_ns: dict, check: CellCheck | None) -> frozenset[str]:

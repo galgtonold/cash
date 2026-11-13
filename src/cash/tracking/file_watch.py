@@ -97,6 +97,28 @@ class _Dir:
         self.alive = True
 
 
+#: The platform's second separator (``/`` on Windows; None on POSIX), and
+#: the one `watch_spelling` writes for it.
+_ALTSEP = os.altsep
+_SEP = os.sep
+#: A verbatim or device path (``\\?\C:\...``) reads ``/`` as a character.
+_VERBATIM = ("\\\\?\\", "\\\\.\\")
+
+
+def watch_spelling(path: str) -> str:
+    """The spelling the watch keeps *path* by: on Windows, with backslashes
+    only. The run records a path by its portable spelling (``C:/data/p00``,
+    `cash._paths.normalize_path`) and the system hands back the native one
+    (``C:\\data\\p00``): kept by one and asked for by the other, a folder's
+    stat was not found, and it was looked at again (``lstat``) before a
+    cell. The case is kept as given, as every other record of a path's
+    state keeps it. On POSIX, *path* itself."""
+    alt = _ALTSEP
+    if alt is None or alt not in path or path.startswith(_VERBATIM):
+        return path
+    return path.replace(alt, _SEP)
+
+
 def _ident(st: os.stat_result) -> tuple[int, int]:
     return (st.st_dev, st.st_ino)
 
@@ -264,6 +286,7 @@ class FileWatch:
     def before_stat(self, path: str) -> tuple[_Dir, int] | None:
         """Arm the watch on *path*'s folder, if it can be watched, before a
         stat of *path* is taken: the token `record` keeps that stat by."""
+        path = watch_spelling(path)
         if not os.path.isabs(path):
             return None
         folder = os.path.dirname(path)
@@ -276,6 +299,7 @@ class FileWatch:
         listed or a stat of a file in it is taken: the token `record` and
         `keep_listing` keep what was found by. One for every file of a
         folder listed at once, where each took one of its own."""
+        folder = watch_spelling(folder)
         if not os.path.isabs(folder):
             return None
         d = self._dirs.get(folder)
@@ -293,6 +317,7 @@ class FileWatch:
         whose stat agrees with one taken after that."""
         if token is None:
             return
+        path = watch_spelling(path)
         d, version = token
         kind = st.st_mode & _S_IFMT
         if kind == _S_IFREG:
@@ -340,6 +365,7 @@ class FileWatch:
         no change: a name made there is a change of the folder."""
         if token is None:
             return
+        path = watch_spelling(path)
         d, version = token
         with self._lock:
             if not d.alive or d.version != version:
@@ -375,6 +401,7 @@ class FileWatch:
         whose own watch agrees); None when there is no such entry or it
         is not kept. A stat kept already (`current`) is given instead, and
         `is_listed` says which it is. Ask after a `drain`, as for `current`."""
+        path = watch_spelling(path)
         folder, name = os.path.split(path)
         d = self._dirs.get(folder)
         if d is None:
@@ -448,12 +475,14 @@ class FileWatch:
     def absent(self, path: str) -> bool:
         """Was *path* found not there while its folder was watched, with no
         change reported since? As good as a look at the last `drain`."""
+        path = watch_spelling(path)
         d = self._home.get(path)
         return d is not None and path in d.missing
 
     def current(self, path: str) -> os.stat_result | None:
         """The stat of *path* kept while its folder was watched, if no change
         was reported since: as good as a stat taken at the last `drain`."""
+        path = watch_spelling(path)
         d = self._home.get(path)
         if d is None:
             return None
@@ -466,6 +495,7 @@ class FileWatch:
 
     def is_listed(self, path: str) -> bool:
         """Was *path*'s kept stat read from a folder listing?"""
+        path = watch_spelling(path)
         d = self._home.get(path)
         return d is not None and path in d.listed
 
@@ -476,7 +506,10 @@ class FileWatch:
         dirs: dict[int, tuple[_Dir, int]] = {}
         home = self._home
         own_of = self._self
+        spell = watch_spelling if _ALTSEP is not None else None
         for p in paths:
+            if spell is not None:
+                p = spell(p)
             d = home.get(p)
             if d is None:
                 return None
@@ -510,7 +543,10 @@ class FileWatch:
         loose: list[str] = []
         home = self._home
         own_of = self._self
+        spell = watch_spelling if _ALTSEP is not None else None
         for key, p in paths.items():
+            if spell is not None:
+                p = spell(p)
             d = home.get(p)
             st = d.records.get(p) if d is not None else None
             if st is None:
@@ -544,7 +580,10 @@ class FileWatch:
         loose: list[str] = []
         home = self._home
         own_of = self._self
+        spell = watch_spelling if _ALTSEP is not None else None
         for key, p, was in found:
+            if spell is not None:
+                p = spell(p)
             d = home.get(p)
             if d is None:
                 loose.append(key)

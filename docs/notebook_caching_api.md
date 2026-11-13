@@ -167,7 +167,9 @@ badge marks those rows cached. This holds for `run(N)` calling a function of
 yours that draws and calls `plt.show()`, for `plt.plot(x, y)` then
 `plt.show()`, for `df.plot(...)` and seaborn calls followed by `plt.show()`,
 and for a call such as `run(tsp, cities)` that opens a figure with `plt.figure(...)`,
-draws through helpers of yours and returns a value. It holds after a kernel
+draws through helpers of yours and returns a value, and for a plot shown
+inside a `with`, `if` or `try` block (its figures come after what the block
+printed). It holds after a kernel
 restart when the plot was slow enough to be written to disk.
 
 A plot that seeds Python's or NumPy's global random generator and then draws
