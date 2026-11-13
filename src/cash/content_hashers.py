@@ -236,7 +236,52 @@ def _fold_pandas_index(h: Any, index: Any, pd: Any) -> None:
         h.update(f"|range({index.start}, {index.stop}, {index.step})".encode())
     else:
         h.update(b"|index|")
-        _fold_pandas_array(h, index, pd)
+        pieces = _COLUMN_PIECES.current
+        key = index_memory_key(index, pd) if pieces is not None else None
+        if key is None:
+            _fold_pandas_array(h, index, pd)
+            return
+        piece = pieces.find(key)
+        if piece is not None:
+            h.update(piece)
+            return
+        into = _PieceRecorder(h)
+        _fold_pandas_array(into, index, pd)
+        if into.piece is not None:
+            pieces.note(key, into.piece)
+
+
+def index_memory_key(index: Any, pd: Any) -> tuple | None:
+    """What identifies the memory a frame's row labels are read from, for
+    `ColumnPieces`, as `column_memory_key` does a column's: the address,
+    shape, strides and type of the numpy array under an index of numbers
+    or dates (``DatetimeIndex`` with or without a zone). None for any other
+    index, which is read every time.
+
+    Seven series built over one year of minutes share one index: each
+    argument's digest read its 4 MB again, a third of the key's cost."""
+    import numpy as np
+
+    try:
+        route = pandas_value_route(index.dtype, pd)
+        if route not in ("raw", "datetimetz"):
+            return None
+        array = index._data
+        array = getattr(array, "_ndarray", array)
+        if type(array) is not np.ndarray or array.ndim != 1:
+            return None
+        return (
+            "index",
+            type(index).__name__,
+            array.__array_interface__["data"][0],
+            array.shape,
+            array.strides,
+            array.dtype.str,
+            str(index.dtype),
+            route,
+        )
+    except Exception:  # noqa: BLE001 - pandas internals changed: read the labels
+        return None
 
 
 def hash_pandas_index(index: Any) -> str | None:
