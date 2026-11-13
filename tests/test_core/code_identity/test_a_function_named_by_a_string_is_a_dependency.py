@@ -217,3 +217,76 @@ def test_code_of_an_object_the_argument_holds_is_a_dependency(tmp_path, edit, wa
 
     out, err = _run(tmp_path, _nested(**edit))
     assert out == want, f"served the result from before the edit: {out}"
+
+
+# Reported next: the warning was all there was. The entry was stored and
+# served, so editing ``fun1`` -- the function the run-time name picks --
+# kept the old result. A lookup the key cannot name is served only on a
+# trace of what the call ran, or the call runs uncached; with no trace
+# (``CASH_TRACE=0``, or Python before 3.12) it runs every time.
+@pytest.mark.parametrize("trace", ["1", "0"])
+def test_editing_what_a_runtime_name_in_an_argument_method_picks_recomputes(tmp_path, trace):
+    script = RUNTIME_NAME.replace("{WAIVER}", "")
+    env = {"PYTHONWARNINGS": "always", "CASH_TRACE": trace}
+
+    def run(ret):
+        (tmp_path / "main.py").write_text(script.replace("return 10", f"return {ret}"), encoding="utf-8")
+        proc = run_python("main.py", cwd=tmp_path, env=env)
+        return proc.stdout.strip(), proc.stderr
+
+    out, err = run(10)
+    assert out == "13" and "KEY-DYNAMIC-DEPENDENCY" in err, err
+    out, _ = run(10)
+    assert out == "13"
+    out, _ = run(20)
+    assert out == "23", f"served the result from before the edit: {out}"
+
+
+# ``getattr(self, name)()`` picks a method of the argument's own class, and
+# every method of that class is in the key: no warning, a hit, and an edit
+# to the method picked recomputes, with or without a trace.
+SELF_DISPATCH = textwrap.dedent("""
+    import sys
+    import cash
+
+    class Sampler:
+        def __init__(self, method_name):
+            self.method_name = method_name
+
+        def a(self):
+            return 1
+
+        def b(self):
+            return {RET}
+
+        def fit(self):
+            return getattr(self, self.method_name)()
+
+        def run(self, name):
+            method = getattr(self, name)
+            return method()
+
+    @cash.cache
+    def f(sampler, name):
+        print("[RUN]", file=sys.stderr)  # @cash:assume-safe
+        return sampler.fit() + sampler.run(name)
+
+    print(f(Sampler("b"), "b"))
+""")
+
+
+@pytest.mark.parametrize("trace", ["1", "0"])
+def test_a_method_of_the_arguments_class_picked_by_name_is_keyed(tmp_path, trace):
+    env = {"PYTHONWARNINGS": "always", "CASH_TRACE": trace}
+
+    def run(ret):
+        (tmp_path / "main.py").write_text(SELF_DISPATCH.replace("{RET}", str(ret)), encoding="utf-8")
+        proc = run_python("main.py", cwd=tmp_path, env=env)
+        return proc.stdout.strip(), proc.stderr
+
+    out, err = run(10)
+    assert out == "20" and "[RUN]" in err and "KEY-DYNAMIC-DEPENDENCY" not in err, err
+    out, err = run(10)
+    assert out == "20" and "[RUN]" not in err, "an unedited run must hit"
+    out, err = run(30)
+    assert out == "60" and "[RUN]" in err, f"served the result from before the edit: {out}"
