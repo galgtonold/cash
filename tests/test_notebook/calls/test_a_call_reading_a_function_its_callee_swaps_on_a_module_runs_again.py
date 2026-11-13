@@ -76,6 +76,17 @@ PAIRS = {
         "class K:\n    def __init__(self, v):\n        self.v = v\n    def __call__(self, n):\n        return self.v\n"
         "one, two = K(1), K(2)"
     ),
+    "callable descriptors": (
+        "class K:\n    def __init__(self, v):\n        self.v = v\n    def __call__(self, n):\n        return self.v\n"
+        "    def __get__(self, obj, owner=None):\n        return self\n"
+        "one, two = K(1), K(2)"
+    ),
+    "partial methods bound": (
+        "import functools\nclass C:\n    def __init__(self, v):\n        self.v = v\n"
+        "    def base(self, w, n):\n        return self.v + w\n"
+        "    get = functools.partialmethod(base, 0)\n"
+        "one, two = C(1).get, C(2).get"
+    ),
 }
 
 #: An argument each pair's routines answer differently for.

@@ -2037,7 +2037,7 @@ def _followed_elsewhere(value: Any) -> bool:
     generator, whose draws are followed as a carrier's are."""
     if issubclass(type(value), (types.ModuleType, type, pathlib.PurePath, _IMMUTABLE_ARGUMENT_TYPES)):
         return True
-    return inspect.isroutine(value) or rng_carrier_kind(value) is not None
+    return is_routine(value) or rng_carrier_kind(value) is not None
 
 
 def _local_aliases(fdef: ast.FunctionDef | ast.AsyncFunctionDef) -> dict[str, frozenset[str]]:

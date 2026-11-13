@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any
 from .. import _plain_data, identity_refs, value_watch
 from .._clock import perf_counter as _perf_counter
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
-from .._user_attrs import from_family
+from .._user_attrs import from_family, is_routine
 from ..analysis.bytecode import GLOBAL_WRITES, argvals
 from ..analysis.cacheability_decision import identity_coupled_reason
 from ..analysis.helper_bindings import resolve_binding
@@ -97,7 +97,7 @@ def compared_by_identity(value) -> bool:
     own object (`ResultStore.restore_identity`): ``MISSING = object()``. A
     class, function or module pickles by reference and needs none of this.
     """
-    if value is None or issubclass(type(value), (type, types.ModuleType)) or inspect.isroutine(value):
+    if value is None or issubclass(type(value), (type, types.ModuleType)) or is_routine(value):
         return False
     return type(value).__eq__ is object.__eq__
 
@@ -138,7 +138,7 @@ _PLAIN_IMMUTABLE = frozenset({int, float, complex, bool, str, bytes, type(None),
 
 def _by_reference(value) -> bool:
     """A class, function or module: pickled by reference, so a hit's is itself."""
-    return isinstance(value, (type, types.ModuleType)) or inspect.isroutine(value)
+    return isinstance(value, (type, types.ModuleType)) or is_routine(value)
 
 
 def _comes_back_as_itself(value) -> bool:

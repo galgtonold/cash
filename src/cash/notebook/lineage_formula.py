@@ -1122,6 +1122,13 @@ def _routine_parts(value: Any) -> list[str]:
                     held.append(None)
         elif kind is types.MethodType:
             held = [routine.__func__, owner]
+        elif _defined_in_python(kind):
+            # An object Python takes for a routine because its class has a
+            # ``__get__`` and no ``__set__`` (a callable descriptor, a
+            # ``partialmethod``): its answer turns on what it holds, as a
+            # callable object's does, not on its type's name.
+            parts.append(f"object:{kind.__module__}.{kind.__qualname__}")
+            _held_part(routine, parts)
         else:
             name = f"{attribute_or(routine, '__module__', None)}.{attribute_or(routine, '__qualname__', None)}"
             parts.append(f"named:{kind.__module__}.{kind.__qualname__}:{name}")
@@ -1140,6 +1147,22 @@ class _Routine:
 
     def __init__(self, value: Any) -> None:
         self.value = value
+
+
+#: A class's own ``__dict__`` as ``type`` reads it: no metaclass of the user's runs.
+_OWN_CLASS_DICT = type.__dict__["__dict__"].__get__
+
+
+def _defined_in_python(kind: type) -> bool:
+    """Whether *kind*, the type of a routine that is no function or method,
+    has a ``__get__`` or ``__call__`` written in Python: an object of the
+    user's (or of a pure-Python library) holding data, not a builtin or
+    compiled function, which is named by its qualified name."""
+    for klass in kind.__mro__:
+        own = _OWN_CLASS_DICT(klass)
+        if type(own.get("__get__")) is types.FunctionType or type(own.get("__call__")) is types.FunctionType:
+            return True
+    return False
 
 
 def _is_routine_held(item: Any) -> bool:
