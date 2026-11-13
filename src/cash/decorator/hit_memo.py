@@ -804,6 +804,11 @@ def scan_trace(spec: CachedFunction, registry: Any, items: list) -> tuple[tuple,
             names = frozenset(path if kind == "attr" else path[:1])
             s.names.update(names)
             s.value(mod, names)
+        elif kind == "import" and item[1] in sys.modules:
+            # A module loaded: the check (`code_trace.verify`) has nothing to
+            # do for it, and sys.modules is watched, so unloading or
+            # replacing it moves the guard.
+            continue
         elif kind == "cached":
             cf = registry.cached.get(item[1])
             if cf is None or cf.hit_state is None:
