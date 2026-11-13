@@ -151,6 +151,8 @@ class _Open:
     #: Whether `hidden` was read after a look through every object
     #: (`helper_memos.hidden_scan`): a memo not in it was built by the run.
     fresh: bool = False
+    #: Whether what is shown past cash's capture goes unheard (`_listen`).
+    deaf: bool = False
 
 
 class PlotRuns:
@@ -184,12 +186,63 @@ class PlotRuns:
         #: would seem to leave it alone: while one is bound, none is kept.
         self._bound_unseen: set[str] = set()
         self._parsed: dict[str, list[tuple[str, ast.stmt | None]]] = {}
+        #: The kernel's display publisher while a run is recorded, with
+        #: `_hear` hooked on it: what a statement showed past cash's capture.
+        self._listening: Any = None
+        #: ``(kind, display data)`` of what reached the notebook that way.
+        self._heard: list[tuple[str, dict]] = []
 
     # -- the cell ----------------------------------------------------------
 
     def begin_cell(self, cell: Any) -> None:
-        self._open = None
+        self._close()
         self._cell = cell
+
+    def _close(self) -> _Open | None:
+        """End the run being recorded, if any, and give it."""
+        run, self._open = self._open, None
+        pub, self._listening = self._listening, None
+        self._heard = []
+        if pub is not None:
+            try:
+                pub.unregister_hook(self._hear)
+            except Exception:  # a hook already gone: nothing to undo
+                logger.debug("%s could not unhook the display publisher", _LOG, exc_info=True)
+        return run
+
+    def _listen(self) -> bool:
+        """Hear what is shown past cash's capture while a run is recorded:
+        a compound statement (``with``, ``if``, ``try``) runs as one unit
+        whose displays go straight to the notebook. False when the kernel's
+        publisher takes no hook."""
+        pub = attribute_or(self.shell, "display_pub", None)
+        register = attribute_or(pub, "register_hook", None)
+        if register is None:
+            return False
+        try:
+            register(self._hear)
+        except Exception:  # a publisher that refuses: nothing is heard
+            logger.debug("%s could not hook the display publisher", _LOG, exc_info=True)
+            return False
+        self._listening = pub
+        return True
+
+    def _hear(self, msg: Any) -> Any:
+        """Note a display the kernel publishes (`_listen`); passes it on.
+        Cash's badge is not one; a display with an id, which may be updated
+        later, is kept as one of another kind."""
+        try:
+            content = msg.get("content") or {}
+            kind = str(msg.get("msg_type") or "")
+            display_id = (content.get("transient") or {}).get("display_id")
+            if display_id is not None and display_id == attribute_or(self._cell, "badge_display_id", None):
+                return msg
+            if display_id is not None:
+                kind = "display_with_id"
+            self._heard.append((kind, {"data": content.get("data"), "metadata": content.get("metadata")}))
+        except Exception:  # noqa: BLE001 - a message not understood: noted as one of no kind
+            self._heard.append(("", {}))
+        return msg
 
     @property
     def recording(self) -> bool:
@@ -213,6 +266,7 @@ class PlotRuns:
         self._adopt_unseen_seeds()
         lineage = dict(self._processor.tracking_state.variable_lineage)
         self._open = _Open(index, occurrence, settings, lineage, _perf_counter())
+        self._open.deaf = not self._listen()
         self._open.names = {name: id(value) for name, value in self.shell.user_ns.items()}
         try:
             if self._start_key(index) in self._draw_starts:
@@ -241,6 +295,7 @@ class PlotRuns:
         facts = [row.pop(PLOT_FACTS, None) for row in rows]
         if run is None:
             return
+        heard, self._heard = self._heard, []
         run.codes.append(code)
         # What it may bind, read from its text: the rows of a loop's passes
         # name no loop variable, and a branch not taken binds nothing now.
@@ -288,6 +343,10 @@ class PlotRuns:
             seconds += float(row.get("execution_time") or 0.0)
             if ECHO_FIELD in row:
                 run.echo = row[ECHO_FIELD]
+        why = _unseen_shown(heard, parts, run.deaf, code)
+        if why is not None:
+            run.refused = run.refused or why
+        run.shown = run.shown or any(part[2] for part in parts)
         run.statements.append(
             {
                 "code": code,
@@ -301,7 +360,7 @@ class PlotRuns:
         )
         if not _no_figures():
             return
-        self._open = None
+        self._close()
         if run.drew:
             self._note_drew(run)
             self._keep(run, flush=None)
@@ -311,7 +370,7 @@ class PlotRuns:
     def end_cell(self, last_index: int) -> None:
         """The cell's statements ran: a plot run still open ends here, where
         the inline backend shows the open figures."""
-        run, self._open = self._open, None
+        run = self._close()
         if run is None:
             return
         if run.drew:
@@ -999,6 +1058,37 @@ def _bound_modules(names: set[str], user_ns: Mapping[str, Any]) -> dict[str, str
         if isinstance(module, str) and sys.modules.get(module) is value:
             out[name] = module
     return out
+
+
+def _unseen_shown(heard: list[tuple[str, dict]], parts: list, deaf: bool, code: str) -> str | None:
+    """Why what the statement *code* showed past cash's capture cannot be
+    kept with its *parts*, or None. *heard* (`PlotRuns._hear`) also holds
+    what cash showed again of the displays it captured; what is left is
+    added to the statement's last part, to be shown after what it printed,
+    as a top-level call's displays are. Unheard
+    (*deaf*), a compound statement may have shown anything."""
+    if deaf:
+        try:
+            tree = ast.parse(code)
+        except (SyntaxError, ValueError):
+            return "cash cannot see what it showed"
+        if any(not isinstance(node, (ast.Expr, ast.Assign, ast.AugAssign, ast.AnnAssign)) for node in tree.body):
+            return f"cash cannot see what {code[:40]!r} showed"
+        return None
+    captured = [record["data"] for part in parts for record in part[2]]
+    left: list[tuple[str, dict]] = []
+    for kind, record in heard:
+        if kind == "display_data" and record.get("data") in captured:
+            captured.remove(record["data"])
+        else:
+            left.append((kind, record))
+    if not left:
+        return None
+    rich = rich_records(record for kind, record in left if kind == "display_data")
+    if rich is None or len(rich) != len(left) or not parts:
+        return f"{code[:40]!r} showed an output cash cannot show again"
+    parts[-1][2].extend(rich)
+    return None
 
 
 def _statement_binds(code: str) -> set[str] | None:

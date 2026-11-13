@@ -546,6 +546,7 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
                     folder = _watched_spelling(directory or ".")
                     if folder is None:
                         return None
+                    folder = _fw.watch_spelling(folder)
                     token = tokens.get(folder)
                     if token is None:
                         token = watch.before_listing(folder)
@@ -570,7 +571,7 @@ def stats_this_run(paths: Iterable[str]) -> RunStats:
                     from_listing.add(p)
                     if tokens:
                         twin = _watched_spelling(p)
-                        token = tokens.get(dirname(twin)) if twin is not None else None
+                        token = tokens.get(dirname(_fw.watch_spelling(twin))) if twin is not None else None
                         if token is not None:
                             watch.record(token, twin, st, listed=True)
         stat = os.stat
@@ -812,7 +813,8 @@ class _OwnStats(Mapping):
     def get(self, path: str, default: Any = None) -> Any:
         st = None if path in self._listed else self._stats.get(path)
         if st is None:
-            st = self._folders.get(path)
+            # Kept by the watch's spelling of the folder (`file_watch.watch_spelling`).
+            st = self._folders.get(_fw.watch_spelling(path))
             if st is not None and not _stat.S_ISDIR(st.st_mode):
                 st = None
         if st is None and self._watch is not None:

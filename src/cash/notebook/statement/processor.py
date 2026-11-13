@@ -256,6 +256,7 @@ from ..value_cutoff import LineageAliasStore, ValueLineageLog, use_value_lineage
 from ..write_observer import child_works, children_left_running, keeps_a_write, kept_writes, observe_writes
 from . import hidden_generators, in_place
 from .collect_first import CollectFirstStore
+from .digest_carry import DigestCarry
 from .lineage import note_own_writes
 from .observed_draws import ObservedDrawStore
 from .thread_reach import ThreadReach
@@ -936,6 +937,9 @@ class StatementProcessor:
         # A statement's argument digests, handed between its in-place-change
         # check and the calls inside it, so each hashes a big argument once.
         digests = DigestHandoff()
+        #: The holder digests a statement took after it ran, for the next
+        #: statement of the cell to take before it runs (`DigestCarry`).
+        self._digest_carry = DigestCarry()
         self._mutations = MutationClassifier(shell, self.tracking_state, compute_hash_fn, digests)
         self._calls = CallRouting(
             shell,
@@ -1382,6 +1386,7 @@ class StatementProcessor:
         walked: frozenset[str] = frozenset(),
         header_files: frozenset[str] = frozenset(),
         header_remote: frozenset[str] = frozenset(),
+        follows_statement: bool = False,
     ) -> ProcessResult:
         """
         Process a single statement: Analyze -> Check Cache -> Execute/Restore.
@@ -1431,6 +1436,10 @@ class StatementProcessor:
                 the header as written.
             header_files / header_remote: What evaluating that header read,
                 recorded as the statement's own reads.
+            follows_statement: The cell executor ran the statement before
+                this one of the same cell as a statement of its own, and
+                nothing of the cell's ran between: this one may take the
+                holder digests that one took after it ran (`DigestCarry`).
 
         Returns:
             ProcessResult with keys: 'status', 'execution_time', 'total_time',
@@ -1438,6 +1447,13 @@ class StatementProcessor:
             on cache status.
         """
         self._statements_started += 1
+        self._digest_carry.take_up(
+            follows_statement,
+            self.shell.user_ns,
+            self.tracking_state.variable_lineage,
+            self._statements_started,
+            self._thread_reach.still_running(),
+        )
         # A young file read is hashed once for the statement (`young_digests_kept`).
         with young_digests_kept():
             forget_heap_unreadable()
@@ -1484,12 +1500,19 @@ class StatementProcessor:
                 result = self._finish(run, runner.execution)
                 if shadow is not None:
                     shadow.statement_finished(run, unit, result)
-                return result
             finally:
                 self._advance_rng(run)
                 self._adopt_seeds_it_set(run, runner.execution.rng_reseeded)
                 self._remember_rng_positions(run)
                 self._move_what_reducers_wrote(run)
+            self._digest_carry.keep(
+                self.shell.user_ns,
+                self.tracking_state.variable_lineage,
+                self._statements_started,
+                self._thread_reach.still_running(),
+                last=run.is_last,
+            )
+            return result
 
     def _collect_first(self, run: StatementRun) -> None:
         """Collect the garbage before *run* when its statement's last run was
@@ -1557,6 +1580,7 @@ class StatementProcessor:
         keep_displays: bool = False,
         force_outputs: set[str] | None = None,
         is_last: bool = True,
+        follows_statement: bool = False,
     ) -> ProcessResult:
         """:meth:`process_statement` for a statement holding a top-level ``await``.
 
@@ -1564,8 +1588,12 @@ class StatementProcessor:
         awaits the compiled code on IPython's running loop. A cache hit returns
         before any coroutine is built, so an identical second run skips the
         await entirely.
+
+        No holder digest is carried into or out of it (*follows_statement*
+        is not taken up): other tasks run on the loop while it awaits.
         """
         self._statements_started += 1
+        self._digest_carry.drop()
         # A young file read is hashed once for the statement (`young_digests_kept`).
         with young_digests_kept():
             run = StatementRun(
@@ -1726,6 +1754,8 @@ class StatementProcessor:
         if cached_data and self._live_objects_shared(run, metadata):
             cached_data = None
         if cached_data and not import_needs_reexecution(run.tree, self.shell.user_ns):
+            # A restore may run code of the user's (an unpickled class's).
+            self._digest_carry.give_up()
             hit_result = self._serve_hit(run, cached_data, metadata, unseeded_fits)
             if hit_result is not None:
                 return hit_result
@@ -4082,7 +4112,13 @@ class StatementProcessor:
         )
         try:
             with walk_budget(budget), lift:
-                cash_held = [*self._calls.held_call_results(), echo, run.metrics, *self._mutations.digests.held()]
+                cash_held = [
+                    *self._calls.held_call_results(),
+                    echo,
+                    run.metrics,
+                    *self._mutations.digests.held(),
+                    *self._digest_carry.held(),
+                ]
                 if run.memo_changes:
                     # Bound in the outputs' own dict for the walk, and held
                     # by nothing else (a copy of the dict, or a local here,
@@ -4701,6 +4737,7 @@ class StatementProcessor:
             *history,
             *held,
             *self._mutations.digests.held(),
+            *self._digest_carry.held(),
         ]
 
         def foreign(name: str) -> bool:
@@ -5530,7 +5567,16 @@ class StatementProcessor:
         (``b = a``). Within `_holder_digest_budget` in all: one not digested
         by then is left out, and moves on as a holder as before. A variable
         no edge links is not looked for: it moves.
+
+        A digest the statement before took after it ran stands for one taken
+        now, when nothing can have run between (`DigestCarry`).
         """
+        try:
+            return self._take_holder_digests(run)
+        finally:
+            self._digest_carry.end_before()
+
+    def _take_holder_digests(self, run: StatementRun) -> dict[str, str]:
         self._costly_digests.begin()
         if not run.bound_before or self.compute_hash is None:
             return {}
@@ -5561,6 +5607,8 @@ class StatementProcessor:
             # read past its budget and thrown away each statement.
             if self._costly_digests.known(name, value, lineage.get(name)):
                 continue
+            if id(value) not in by_object and (carried := self._digest_carry.before(name, value, lineage.get(name))):
+                by_object[id(value)] = carried
             if id(value) not in by_object:
                 # Remembered only for the first object read, which had the
                 # whole budget: not for one left with what others did not use.
@@ -5654,6 +5702,11 @@ class StatementProcessor:
         times is in neither."""
         if not run.holder_digests or self.compute_hash is None:
             return set(), set()
+        carry = self._digest_carry
+        if not run.carrying_after:
+            # Once per statement: its first look after it ran.
+            run.carrying_after = True
+            carry.begin_after(self.shell.user_ns, self._thread_reach.still_running())
         unchanged: set[str] = set()
         changed: set[str] = set()
         by_object: dict[int, str | None] = {}
@@ -5666,6 +5719,8 @@ class StatementProcessor:
             if id(value) not in by_object:
                 by_object[id(value)] = _bounded_fingerprint(value, self.compute_hash, deadline - _perf_counter())
             after = by_object[id(value)]
+            if after is not None:
+                carry.note_after(name, value, after)
             if after == before:
                 unchanged.add(name)
             elif after is not None:
