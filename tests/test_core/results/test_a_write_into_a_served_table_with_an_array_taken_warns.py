@@ -8,6 +8,9 @@ table no other table shares, shows it ``100.0``. That cannot be matched
 without copying every hit, so the write warns, at the line that writes.
 Each script runs in a fresh interpreter: no notebook counts the writes
 after a statement there.
+
+Without copy-on-write (pandas 2) the tier hands out a copy of its own, so a
+hit behaves as a plain run: the array sees the write and nothing warns.
 """
 
 from __future__ import annotations
@@ -16,9 +19,29 @@ import textwrap
 
 import pytest
 
+from cash.backends import frame_sharing
 from tests._scripts import run_python
 
 pd = pytest.importorskip("pandas")
+
+#: Is a served table shared with the tier (pandas copy-on-write)? If not,
+#: it is a copy, and a write reaches an array taken from it as in a plain run.
+SHARED = frame_sharing.enabled()
+
+
+def _assert_left_behind(done, *, count: int | None = None) -> None:
+    """The served table's write left the array with the old value, and said
+    so; or, where the tier copies, the array saw the write and nothing warns."""
+    if SHARED:
+        assert "served 0.0" in done.stdout, done.stdout
+        if count is None:
+            assert "CACHE-SERVED-VIEW" in done.stderr, done.stderr
+        else:
+            assert done.stderr.count("CACHE-SERVED-VIEW") == count, done.stderr
+    else:
+        assert "served 100.0" in done.stdout, done.stdout
+        assert "CACHE-SERVED-VIEW" not in done.stderr, done.stderr
+
 
 SCRIPT = """
 import warnings
@@ -52,8 +75,9 @@ def test_a_view_held_across_the_write_warns_on_the_served_table(tmp_path):
         """,
     )
     assert "computed 100.0" in done.stdout, "control: the computed table is the caller's own"
-    assert "served 0.0" in done.stdout, done.stdout
-    assert done.stderr.count("CACHE-SERVED-VIEW") == 1, done.stderr
+    _assert_left_behind(done, count=1)
+    if not SHARED:
+        return
     lines = (tmp_path / "job.py").read_text(encoding="utf-8").splitlines()
     write = next(n for n, line in enumerate(lines, 1) if "# the write" in line)
     assert f"job.py:{write}:" in done.stderr, done.stderr  # blamed on the line that writes
@@ -70,8 +94,7 @@ def test_values_and_a_series_written_alone_warn_too(tmp_path):
         value = v[0]
         """,
     )
-    assert "served 0.0" in done.stdout, done.stdout
-    assert "CACHE-SERVED-VIEW" in done.stderr, done.stderr
+    _assert_left_behind(done)
 
 
 def test_a_write_with_no_array_held_does_not_warn(tmp_path):
@@ -116,8 +139,7 @@ def test_a_view_taken_and_dropped_inside_a_function_warns(tmp_path):
         """,
     )
     assert "computed 100.0" in done.stdout, done.stdout
-    assert "served 0.0" in done.stdout, done.stdout
-    assert "CACHE-SERVED-VIEW" in done.stderr, done.stderr
+    _assert_left_behind(done)
 
 
 def test_without_exact_reference_counts_it_warns_once_that_it_cannot_check(tmp_path):
@@ -145,6 +167,10 @@ def test_without_exact_reference_counts_it_warns_once_that_it_cannot_check(tmp_p
         encoding="utf-8",
     )
     done = run_python(script, cwd=tmp_path)
+    if not SHARED:
+        # Each hit is a copy of its own: no write has anything to check.
+        assert "CACHE-SERVED-VIEW" not in done.stderr, done.stderr
+        return
     assert done.stderr.count("CACHE-SERVED-VIEW") == 1, done.stderr
     assert "cannot tell" in done.stderr, done.stderr
 
@@ -164,5 +190,4 @@ def test_writing_from_the_array_itself_warns(tmp_path, take, write):
     by the caller: it is still the caller's reader."""
     done = _run(tmp_path, f"v = {take}\n{write}\ndf.iloc[0, 0] = 100.0\nvalue = v.ravel()[0]\n")
     assert "computed 100.0" in done.stdout, done.stdout
-    assert "served 0.0" in done.stdout, done.stdout
-    assert "CACHE-SERVED-VIEW" in done.stderr, done.stderr
+    _assert_left_behind(done)
