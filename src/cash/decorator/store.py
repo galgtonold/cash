@@ -969,10 +969,11 @@ class ResultStore:
             self._purity.check_argument_mutation(
                 func_name, *(call.checked or (call.args, call.kwargs)), call.call_args_hash, observer
             )
+        self._purity.check_bound_mutation(func_name, observer)
         self._purity.report_observed_effects(func_name, observer)
         self._files.credit_remembered_reads(func_name, tracker, call.args, call.kwargs)
         self._files.warn_unrecorded_reads(func_name, tracker)
-        auto_file_deps = snapshot_tracked_deps(tracker, spec.func.__module__)
+        auto_file_deps = snapshot_tracked_deps(tracker, getattr(spec.func, "__module__", None))
 
         if chunks.written == 0:
             # Everything fit in one chunk, so cache_if can still see the

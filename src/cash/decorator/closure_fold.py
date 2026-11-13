@@ -60,6 +60,71 @@ def is_user_callable_instance(value: Any) -> bool:
     return is_user_code_object(cls) and not is_opaque(value)
 
 
+def bound_owner(func: Any) -> tuple[bool, Any]:
+    """``(True, the object)`` *func* is bound to, ``(False, None)`` when it
+    is bound to none: the ``__self__`` of a bound method (a class for a
+    classmethod), of a C method (``d.get``) or a method-wrapper
+    (``a.__len__``), through any ``functools.partial`` around one.
+
+    The body's ``self`` that the call's arguments do not carry: the key
+    folds it (`ClosureFold.fold_bound_self`) and the in-place-change check
+    looks at it (`PurityChecks.bound_state`). A builtin function's
+    ``__self__`` is its module and binds nothing.
+    """
+    while isinstance(func, functools.partial):
+        func = func.func
+    if inspect.ismethod(func):
+        return True, func.__self__
+    if isinstance(func, (types.BuiltinMethodType, types.MethodWrapperType)):
+        owner = getattr(func, "__self__", None)
+        if owner is not None and not isinstance(owner, types.ModuleType):
+            return True, owner
+    return False, None
+
+
+def bound_values(func: Any) -> list[tuple[str, Any]]:
+    """``[(name, value)]`` of what *func* carries bound into every call: the
+    instance it is bound to (`bound_owner`), as ``'self'`` (``'cls'`` for a
+    class), or *func* itself when it is the user's callable instance, then
+    the arguments of any ``functools.partial`` around it, named by the
+    parameter they fill where the signature says."""
+    if is_user_callable_instance(func):
+        return [("self", func)]
+    found: list[tuple[str, Any]] = []
+    bound, owner = bound_owner(func)
+    if bound:
+        found.append(("cls" if isinstance(owner, type) else "self", owner))
+    partials = []
+    while isinstance(func, functools.partial):
+        partials.append(func)
+        func = func.func
+    if not partials:
+        return found
+    # The outermost partial holds every positional binding in order:
+    # ``partial(partial(f, a), b)`` is flattened to ``partial(f, a, b)``
+    # by functools; one that is not still names them by position.
+    try:
+        params = [
+            p.name
+            for p in inspect.signature(func).parameters.values()
+            if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+        ]
+    except (TypeError, ValueError):
+        params = []
+    seen = set()
+    for part in partials:
+        for i, value in enumerate(part.args):
+            name = params[i] if i < len(params) else f"partial args[{i}]"
+            if name not in seen:
+                seen.add(name)
+                found.append((name, value))
+        for name, value in (part.keywords or {}).items():
+            if name not in seen:
+                seen.add(name)
+                found.append((name, value))
+    return found
+
+
 def unsafe_uses_of(
     tree: ast.AST,
     names: set[str],
@@ -1236,10 +1301,13 @@ class ClosureFold:
             if parts:
                 payload = ":".join(f"{n}={h}" for n, h in sorted(parts))
                 state_hash = hashlib.sha256(f"{state_hash}:classes:{payload}".encode("utf-8")).hexdigest()
-        elif inspect.ismethod(func):
-            owner = func.__self__
         else:
-            return state_hash
+            # A bound method, a C method (``{1: "a"}.get``) or a
+            # method-wrapper, also under a ``functools.partial``: keyed on
+            # its function alone, ``{1: "b"}.get`` was served ``"a"``.
+            bound, owner = bound_owner(func)
+            if not bound:
+                return state_hash
         try:
             self_hash = self._args.hash_payload((owner,), {})
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError) as e:
