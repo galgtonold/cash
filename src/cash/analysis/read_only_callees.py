@@ -16,6 +16,7 @@ from functools import lru_cache
 
 __all__ = [
     "ESTIMATOR_READING_METHODS",
+    "ESTIMATOR_READ_ARGUMENTS",
     "NOT_A_LITERAL",
     "estimator_reads_its_arguments",
     "reads_its_arguments_only",
@@ -184,11 +185,17 @@ def reads_its_arguments_only(
 #: Methods of a scikit-learn estimator that leave what they are handed (``X``,
 #: ``y``, ``sample_weight``) as it was. An assumption about one popular
 #: library, stated here once: cash does not read sklearn's source to prove
-#: it. It does not hold when the estimator is asked to work in place: a
+#: it, and a check of nine common estimators on four input layouts (sklearn
+#: 1.9.1) only supports it. Matched by the estimator's class, as the
+#: functions above are by identity: classes defined in ``sklearn``'s own
+#: modules only, never a subclass of the user's, nor a ``Pipeline`` or a
+#: search holding one. The estimator itself still counts as changed by its
+#: ``fit``. It does not hold when the estimator is asked to work in place: a
 #: ``copy=False`` scaler (``StandardScaler``, ``MinMaxScaler``,
-#: ``Normalizer``, ``Binarizer``) scales ``X`` itself, and a linear model
-#: with ``copy_X=False`` may centre it in place, so any such parameter set to
-#: ``False``, on the estimator or on one it holds, voids the rule
+#: ``Normalizer``, ``Binarizer``) scales ``X`` itself, a linear model with
+#: ``copy_X=False`` may centre it in place, and so does ``KMeans`` with
+#: ``copy_x=False``, so any such parameter set to ``False``, on the
+#: estimator or on one it holds, voids the rule
 #: (`estimator_reads_its_arguments`).
 ESTIMATOR_READING_METHODS = frozenset(
     {
@@ -204,8 +211,15 @@ ESTIMATOR_READING_METHODS = frozenset(
     }
 )
 
-#: The parameters through which an estimator is asked to work in place.
-_IN_PLACE_PARAMETERS = frozenset({"copy", "copy_X"})
+#: The parameters through which an estimator is asked to work in place, as
+#: ``inplace=`` asks a pandas method to: ``KMeans(copy_x=False)`` centres
+#: ``X`` itself.
+_IN_PLACE_PARAMETERS = frozenset({"copy", "copy_X", "copy_x"})
+
+#: The arguments `ESTIMATOR_READING_METHODS` leave as they were: the first two
+#: positions (``X``, ``y``) and these keywords. Another (``partial_fit``'s
+#: ``classes``, a fit parameter routed on) is not covered.
+ESTIMATOR_READ_ARGUMENTS = frozenset({"X", "y", "sample_weight"})
 
 #: Modules whose objects an estimator may hold without running code of
 #: anyone else's on what it is handed (a ``RandomState``, a scoring
@@ -268,7 +282,7 @@ def estimator_reads_its_arguments(estimator, method: str) -> bool:
     by the one assumption cash makes about scikit-learn
     (`ESTIMATOR_READING_METHODS`): *estimator* is scikit-learn's own (not a
     subclass of the user's), *method* is one of those methods, and no
-    ``copy`` or ``copy_X`` parameter is ``False``, on it or on any estimator
+    ``copy``, ``copy_X`` or ``copy_x`` parameter is ``False``, on it or on any estimator
     it holds (a ``Pipeline``'s steps, a ``GridSearchCV``'s estimator), read
     from ``get_params(deep=True)`` now. Everything an estimator holds must
     be known (`_held_value_is_known`); one that is not, or parameters that

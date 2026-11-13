@@ -231,6 +231,30 @@ def test_the_sklearn_rule_reads_the_parameters_of_every_estimator_held():
     assert not estimator_reads_its_arguments(GridSearchCV(LinearRegression(copy_X=False), {}), "fit")
     assert not estimator_reads_its_arguments(FunctionTransformer(own), "transform")
     assert not estimator_reads_its_arguments(LogisticRegression(), "set_params")
+    from sklearn.cluster import KMeans
+
+    assert estimator_reads_its_arguments(KMeans(n_clusters=2), "fit")
+    assert not estimator_reads_its_arguments(KMeans(n_clusters=2, copy_x=False), "fit")
+
+    class Mine(LogisticRegression):
+        pass
+
+    assert not estimator_reads_its_arguments(Mine(), "fit")
+    assert not estimator_reads_its_arguments(make_pipeline(StandardScaler(), Mine()), "fit")
+
+
+def test_the_sklearn_rule_covers_x_y_and_sample_weight_only():
+    pytest.importorskip("sklearn")
+    import ast
+
+    from sklearn.linear_model import SGDClassifier
+
+    from cash.analysis.namespace_effects import proven_unchanged
+
+    namespace = {"m": SGDClassifier(), "X": [[0.0]], "y": [0], "w": [1.0], "c": [0, 1]}
+    names = {"X", "y", "w", "c"}
+    assert proven_unchanged(ast.parse("m.fit(X, y, sample_weight=w)"), names, namespace, None) == {"X", "y", "w"}
+    assert proven_unchanged(ast.parse("m.partial_fit(X, y, c)"), names, namespace, None) == {"X", "y"}
 
 
 def test_only_a_name_every_read_of_which_is_a_proven_call_is_proven(fitlib):

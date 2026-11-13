@@ -60,6 +60,7 @@ from .file_effects import (
 from .handed_callables import handed_callable_values, iteration_bindings
 from .mutations import MUTATING_METHODS, RECEIVER_READONLY_WRITE_METHODS, chain_is_pure
 from .read_only_callees import (
+    ESTIMATOR_READ_ARGUMENTS,
     NOT_A_LITERAL,
     estimator_reads_its_arguments,
     reads_its_arguments_only,
@@ -2770,8 +2771,15 @@ def _read_by_a_proven_call(
         receivers = _receiver_values(func.value.id, tree, user_ns)
         if not receivers:
             return False
+        # X, y and sample_weight only (`ESTIMATOR_READ_ARGUMENTS`).
+        read_slot = node in call.args[:2] or any(
+            kw.value is node and kw.arg in ESTIMATOR_READ_ARGUMENTS for kw in call.keywords
+        )
+        if read_slot and any(isinstance(arg, ast.Starred) for arg in call.args[:2]):
+            read_slot = False
         return all(
-            estimator_reads_its_arguments(obj, func.attr) or _method_leaves(obj, func.attr, call, node.id, user_ns)
+            (read_slot and estimator_reads_its_arguments(obj, func.attr))
+            or _method_leaves(obj, func.attr, call, node.id, user_ns)
             for obj in receivers
         )
     if isinstance(func, ast.Name) and func.id in user_ns:
