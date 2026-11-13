@@ -92,7 +92,7 @@ def _cells(fit_full: bool) -> list[str]:
 
 @pytest.fixture
 def fakelearn(tmp_path, monkeypatch):
-    (tmp_path / "fakelearn.py").write_text(LIBRARY)
+    (tmp_path / "fakelearn.py").write_text(LIBRARY, encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.delitem(sys.modules, "fakelearn", raising=False)
     log = tmp_path / "ran.log"
@@ -101,7 +101,7 @@ def fakelearn(tmp_path, monkeypatch):
 
 
 def _ran(log) -> list[str]:
-    return log.read_text().splitlines() if log.exists() else []
+    return log.read_text(encoding="utf-8").splitlines() if log.exists() else []
 
 
 def _run_all_plainly(cells: list[str]) -> dict:
@@ -132,7 +132,7 @@ def _rebuild_full(cash_magics, fit_full: bool, log) -> list[str]:
     cells = _cells(fit_full)
     for cell in cells:
         run_cash_cell(cash_magics, cell, cells=cells)
-    log.write_text("")
+    log.write_text("", encoding="utf-8")
     run_cash_cell(cash_magics, cells[6], cells=cells)
     return _ran(log)
 
