@@ -549,7 +549,8 @@ def source_identity_digest(source: str) -> str:
 
 @functools.lru_cache(maxsize=NOTEBOOK_STATEMENTS)
 def exact_source_digest(source: str) -> str:
-    """Digest *source* exactly as given, as the key of a session ledger.
+    """Digest *source* as the key of a session ledger: its exact text, but
+    for what IPython changes before a cell runs.
 
     The notebook's in-memory ledgers are written where a cell or statement
     runs and read where another part of cash (the upstream simulation, the
@@ -561,10 +562,19 @@ def exact_source_digest(source: str) -> str:
     writer and reader keys them through here, so a change to how the text
     is spelled reaches both sides at once.
 
+    What IPython changes, and the text in the notebook keeps: CRLF line
+    ends, a line of only spaces or tabs (the indent an editor leaves on an
+    empty line in a loop), and an indent every line shares (its
+    ``leading_indent`` is a ``textwrap.dedent``). A run files its record
+    under the text it ran and the upstream check reads it under the
+    notebook's; digested apart, a cell that raised counted as run through,
+    and a repair ran the statements its run never reached.
+
     Memoised by the text, which alone decides it: the upstream check digests
     every cell above the one it checks, twice, on every cell run.
     """
-    return hashlib.sha256(source.encode("utf-8")).hexdigest()
+    text = textwrap.dedent(source.replace("\r\n", "\n"))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 _CO_OPTIMIZED = 0x0001
