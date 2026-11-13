@@ -244,6 +244,8 @@ class StatementReplay:
         notebook_cells: list[str] | None = None,
         exec_sources: dict[str, str] | None = None,
         before_statement: Callable[[int], None] | None = None,
+        should_run: Callable[[str], bool] | None = None,
+        skipped: list[str] | None = None,
     ) -> list[ProcessResult]:
         """Re-execute a list of statements and return their metrics.
 
@@ -253,6 +255,8 @@ class StatementReplay:
         (see :meth:`statement_exec_sources`). *before_statement* is called
         with each statement's index just before it runs (the random streams
         put where a run has them there, ``RngRewind.before_statement``).
+        A statement *should_run* answers False for is left out, and added to
+        *skipped*.
         """
         executed_metrics: list[ProcessResult] = []
         try:
@@ -296,6 +300,11 @@ class StatementReplay:
         total_upstream_steps = len(statements)
 
         for stmt_idx, stmt_code in enumerate(statements):
+            if should_run is not None and not should_run(stmt_code):
+                logger.debug("[UPSTREAM] Not re-running, nothing it draws from moves as it is read: %.40s", stmt_code)
+                if skipped is not None:
+                    skipped.append(stmt_code)
+                continue
             # The badge's "Upstream" section is what tells the user; this line
             # is for ``%cash_debug`` (and the integration tests that read it).
             if logger.isEnabledFor(logging.DEBUG):

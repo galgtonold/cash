@@ -49,12 +49,13 @@ import types
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from cash import _weak
 from cash._user_attrs import attribute_or, has_attribute, instance_of
 
 from ..analysis.ast_util import walk_tree
 from ..analysis.mutation_effects import captured_call_receivers
 from ..analysis.mutations import NON_CONSUMING_FUNCS, consumed_input_names
-from .read_handles import reaches_read_handle
+from .read_handles import is_read_handle, reaches_read_handle
 
 logger = logging.getLogger(__name__)
 
@@ -221,7 +222,12 @@ def consumable_state(obj: Any) -> Any | None:
     if has_attribute(obj, "tell") and has_attribute(obj, "read"):
         try:
             return ("tell", obj.tell(), bool(attribute_or(obj, "closed", False)))
-        except (OSError, ValueError, AttributeError):
+        except OSError:
+            # A text file read by ``next(f)`` or ``for line in f`` refuses
+            # ``tell()`` until it reaches its end. Where it stands is not
+            # known, which object it is still is.
+            return UntoldPosition(obj) if is_read_handle(obj) else None
+        except (ValueError, AttributeError):
             return None
     # ``itertools.count`` renders its next value (``count(5)``); the other
     # itertools iterators keep their cursor entirely in C with no observable
@@ -232,6 +238,27 @@ def consumable_state(obj: Any) -> Any | None:
         except Exception:  # noqa: BLE001 - repr of a foreign object
             return None
     return None
+
+
+class UntoldPosition:
+    """The `consumable_state` of a file open for reading whose position
+    cannot be read (``tell()`` is refused while it is iterated): which file
+    object it is, and nothing about where it stands."""
+
+    __slots__ = ("_ref",)
+
+    def __init__(self, obj: Any) -> None:
+        try:
+            self._ref: Any = _weak.ref(obj)
+        except TypeError:
+            self._ref = None
+
+    def refers_to(self, obj: Any) -> bool:
+        """Whether this was taken of *obj* itself."""
+        return self._ref is not None and self._ref() is obj
+
+    def __repr__(self) -> str:
+        return "UntoldPosition()"
 
 
 def has_diverged(obj: Any, baseline: Any, *, had_baseline: bool) -> bool:
@@ -256,6 +283,17 @@ def has_diverged(obj: Any, baseline: Any, *, had_baseline: bool) -> bool:
         # First run of this cell (or the base was cleared): nothing to compare
         # against, so there is no evidence of staleness. Self-disables.
         return False
+    if isinstance(baseline, UntoldPosition):
+        # Where the file stood at the cell's entry is not known. Another file
+        # object is one its producer made since (a Run All); the same one,
+        # read by the cell's own run, is taken for moved: a file the cell
+        # draws from does move, and re-running its producer is what a run
+        # from the top does.
+        return baseline.refers_to(obj)
+    if isinstance(token, UntoldPosition):
+        # It stood at a known place at the cell's entry and has been read by
+        # ``next()`` since.
+        return True
     return token != baseline
 
 

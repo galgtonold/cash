@@ -34,6 +34,7 @@ from ..string_lookups import cell_reads_names_unseen
 from ..tracking_state import TrackingState
 from .changed_below import warn_changed_below
 from .notebook_vetting import NotebookVetter
+from .reexecution_planner import redraw_check, with_conditional_draws
 from .replay import StatementReplay, UpstreamRepairGap, statement_cells
 from .rng_rewind import RngRewind
 from .simulator import NotebookSimulator
@@ -1149,14 +1150,21 @@ class UpstreamChecker:
                 len(statements_to_reexecute),
                 len(restored_info),
             )
-            statements_to_reexecute, rng_rerun = self.rng.with_rng_chain(
+            # The draws run only if what they draw from turns out a stream
+            # stay out of the random-stream plan, which takes every statement
+            # it is handed for one that runs, and go back in at their places.
+            planned = statements_to_reexecute
+            draws_if_stream = self.simulator.planner.draws_if_stream
+            chained, rng_rerun = self.rng.with_rng_chain(
                 cell_code,
                 notebook_cells,
                 current_cell_idx,
-                statements_to_reexecute,
+                [code for code in planned if code not in draws_if_stream],
                 trace=self.simulator.last_trace,
                 restored_states=self.simulator.restorer.restored_rng_states,
             )
+            draws_if_stream = {code: v for code, v in draws_if_stream.items() if code not in set(chained)}
+            statements_to_reexecute, rng_positions = with_conditional_draws(planned, chained, draws_if_stream)
             rebuilt = self._rebuilt_names(statements_to_reexecute, restored_info)
             self._refuse_to_undo(unsaved, rebuilt)
 
@@ -1166,9 +1174,11 @@ class UpstreamChecker:
             written: list[tuple[int, Any]] = []
 
             def before_statement(index: int) -> None:
-                self.rng.before_statement(index)
+                if rng_positions[index] is not None:
+                    self.rng.before_statement(rng_positions[index])
                 written.append((index, self.tracking_state.lineage.watch()))
 
+            skipped: list[str] = []
             if statements_to_reexecute:
                 try:
                     executed_metrics = self.replay.reexecute(
@@ -1182,6 +1192,8 @@ class UpstreamChecker:
                         exec_sources=self.replay.statement_exec_sources(notebook_cells),
                         notebook_cells=notebook_cells,
                         before_statement=before_statement,
+                        should_run=redraw_check(draws_if_stream, self.shell.user_ns) if draws_if_stream else None,
+                        skipped=skipped,
                     )
                 except UpstreamRepairGap:
                     self._put_back(bindings_before, lineages_before)
@@ -1201,6 +1213,8 @@ class UpstreamChecker:
                     cache.entries, cache.cell_hashes = seen_before
                     raise
             written_in = self._written_in(statements_to_reexecute, written, notebook_cells)
+            if skipped:
+                statements_to_reexecute = [code for code in statements_to_reexecute if code not in skipped]
             written.clear()
             self._keep_live_bindings(
                 self._repair_cells(statements_to_reexecute, restored_info, notebook_cells, current_cell_idx),
