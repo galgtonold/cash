@@ -1854,6 +1854,102 @@ static PyObject *py_reduce_dict_apart(PyObject *self, PyObject *const *args, Py_
     return apart;
 }
 
+/* State keys mapped through names (kept_state._names_apart): a new dict,
+ * NULL with no error set when a key is not in names (the Python apart then
+ * decides), NULL with an error set on a failure. */
+static PyObject *state_keys_apart(PyObject *state, PyObject *names) {
+    PyObject *out = PyDict_New();
+    if (!out) return NULL;
+    Py_ssize_t pos = 0;
+    PyObject *key, *value;
+    while (PyDict_Next(state, &pos, &key, &value)) {
+        PyObject *own = PyDict_GetItemWithError(names, key);
+        if (!own) {
+            Py_DECREF(out);
+            if (PyErr_Occurred()) {
+                if (!PyErr_ExceptionMatches(PyExc_TypeError)) return NULL;
+                PyErr_Clear();
+            }
+            return NULL;
+        }
+        if (PyDict_SetItem(out, own, value) < 0) {
+            Py_DECREF(out);
+            return NULL;
+        }
+    }
+    return out;
+}
+
+/* reduce_apart(apart, names, protocol, obj): kept_state's reducer of a type
+ * reduced by its own __reduce_ex__ under `_names_apart`, answer for answer:
+ * obj.__reduce_ex__(protocol) with the keys of its state -- a dict, or the
+ * (dict, slots) pair of a class with __slots__ -- this pickle's own objects
+ * for them (names). A key names does not hold yet, or one that is not a
+ * string, goes to apart(reduced), which adds it. A store pickle asks it of
+ * every object of a class of the user's: a trie of 250,000 slotted nodes
+ * took a Python call and two dict comprehensions each, 1.2 s of a 1.7 s
+ * store. */
+static PyObject *py_reduce_apart(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs != 4 || !PyDict_CheckExact(args[1])) {
+        PyErr_SetString(PyExc_TypeError, "reduce_apart(apart, names, protocol, obj)");
+        return NULL;
+    }
+    if (!str_reduce_ex && !(str_reduce_ex = PyUnicode_InternFromString("__reduce_ex__"))) return NULL;
+    PyObject *names = args[1];
+    PyObject *reduced = PyObject_CallMethodOneArg(args[3], str_reduce_ex, args[2]);
+    if (!reduced || !PyTuple_CheckExact(reduced) || PyTuple_GET_SIZE(reduced) < 3) return reduced;
+    PyObject *state = PyTuple_GET_ITEM(reduced, 2);
+    PyObject *parted = NULL;
+    if (PyDict_CheckExact(state)) {
+        parted = state_keys_apart(state, names);
+    } else if (PyTuple_CheckExact(state) && PyTuple_GET_SIZE(state) == 2) {
+        PyObject *parts[2];
+        for (int i = 0; i < 2; i++) {
+            PyObject *part = PyTuple_GET_ITEM(state, i);
+            if (part != Py_None && !PyDict_CheckExact(part)) return reduced;  /* not a state apart changes */
+        }
+        int missing = 0;
+        for (int i = 0; i < 2; i++) {
+            PyObject *part = PyTuple_GET_ITEM(state, i);
+            parts[i] = NULL;
+            if (missing) continue;
+            if (part == Py_None) {
+                parts[i] = Py_NewRef(Py_None);
+                continue;
+            }
+            parts[i] = state_keys_apart(part, names);
+            if (!parts[i]) missing = 1;
+        }
+        if (!missing) {
+            parted = PyTuple_Pack(2, parts[0], parts[1]);
+        }
+        Py_XDECREF(parts[0]);
+        Py_XDECREF(parts[1]);
+    } else {
+        return reduced;
+    }
+    if (!parted) {
+        if (PyErr_Occurred()) {
+            Py_DECREF(reduced);
+            return NULL;
+        }
+        PyObject *apart = PyObject_CallOneArg(args[0], reduced);
+        Py_DECREF(reduced);
+        return apart;
+    }
+    Py_ssize_t n = PyTuple_GET_SIZE(reduced);
+    PyObject *out = PyTuple_New(n);
+    if (!out) {
+        Py_DECREF(parted);
+        Py_DECREF(reduced);
+        return NULL;
+    }
+    for (Py_ssize_t i = 0; i < n; i++)
+        PyTuple_SET_ITEM(out, i, i == 2 ? parted : Py_NewRef(PyTuple_GET_ITEM(reduced, i)));
+    Py_DECREF(reduced);
+    return out;
+}
+
 /*
  * values_in_tuples(items, exact, levels) -> bool | NotImplemented
  *
@@ -2364,6 +2460,8 @@ static PyMethodDef cwalk_methods[] = {
      "dated_records(items, probe, levels) -> bytes | None | NotImplemented"},
     {"reduce_dict_apart", (PyCFunction)(void (*)(void))py_reduce_dict_apart, METH_FASTCALL,
      "reduce_dict_apart(full, apart, protocol, obj) -> reduce value"},
+    {"reduce_apart", (PyCFunction)(void (*)(void))py_reduce_apart, METH_FASTCALL,
+     "reduce_apart(apart, names, protocol, obj) -> reduce value"},
     {NULL, NULL, 0, NULL}};
 
 int cwalk_add_functions(PyObject *m) { return PyModule_AddFunctions(m, cwalk_methods); }

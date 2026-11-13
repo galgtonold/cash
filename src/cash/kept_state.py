@@ -1509,7 +1509,29 @@ def _names_apart(reducer: Any, names: dict[str, str]) -> Callable[[Any], Any]:
         # The same answers at C speed: a key pickle asks it of every pandas
         # Timestamp it writes.
         return functools.partial(kernel, reduce, apart, protocol)
+    kernel = getattr(_native.kernels, "reduce_apart", None)
+    protocol = _reduce_ex_protocol(reducer)
+    if kernel is not None and protocol is not None:
+        # The same answers at C speed for an object reduced by its own
+        # ``__reduce_ex__``: a store pickle asks it of every object of a
+        # class of the user's (a trie of 250,000 slotted nodes: 1.2 s of a
+        # 1.7 s store, where pickle alone took 0.45 s).
+        return functools.partial(kernel, apart, names, protocol)
     return reduce
+
+
+def _reduce_ex_protocol(reducer: Any) -> int | None:
+    """The protocol of *reducer* when it is exactly
+    ``operator.methodcaller("__reduce_ex__", protocol)``; else None."""
+    if type(reducer) is not operator.methodcaller:
+        return None
+    try:
+        _kind, (name, *args) = reducer.__reduce__()[:2]
+    except (TypeError, ValueError):
+        return None
+    if name != "__reduce_ex__" or len(args) != 1 or type(args[0]) is not int:
+        return None
+    return args[0]
 
 
 def _names_apart_of(names: dict[str, str]) -> Callable[[Any], Any]:
@@ -1524,8 +1546,16 @@ def _names_apart_of(names: dict[str, str]) -> Callable[[Any], Any]:
                 parted = {names[key]: value for key, value in state.items()}
             except (KeyError, TypeError):
                 parted = _state_apart(state, names)
-        elif type(state) is tuple and len(state) == 2 and all(part is None or type(part) is dict for part in state):
-            parted = tuple(None if part is None else _state_apart(part, names) for part in state)
+        elif type(state) is tuple and len(state) == 2:
+            # ``(dict, slots)``: a slotted object's state, one per object of
+            # a trie of them, so without a generator per object.
+            attrs, slots = state
+            if (attrs is not None and type(attrs) is not dict) or (slots is not None and type(slots) is not dict):
+                return reduced
+            parted = (
+                None if attrs is None else _state_apart(attrs, names),
+                None if slots is None else _state_apart(slots, names),
+            )
         else:
             return reduced
         return (reduced[0], reduced[1], parted, *reduced[3:])
