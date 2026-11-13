@@ -10,6 +10,7 @@ Only a thread that runs code of the user's counts now; one does still.
 
 from __future__ import annotations
 
+import sys
 import threading
 
 import pytest
@@ -27,12 +28,29 @@ def _scaled(x):
     return x * RATE
 
 
+def _outermost_package(frame) -> str | None:
+    while frame.f_back is not None:
+        frame = frame.f_back
+    name = frame.f_globals.get("__name__")
+    return name.partition(".")[0] if isinstance(name, str) else None
+
+
 @pytest.fixture(autouse=True)
-def runner_threads_left_out():
-    """The test runner's own threads (a plugin's server) are the host's,
-    as a kernel's are in a notebook: left out, so only what a test starts
+def runner_threads_left_out(monkeypatch):
+    """The test runner's own threads (a plugin's server, an xdist worker's
+    execnet receiver, which `threading` does not list) are the host's, as a
+    kernel's are in a notebook: left out, so only what a test starts
     counts."""
     host = [t for t in threading.enumerate() if t is not threading.current_thread() and not t.name.startswith("cash-")]
+    listed = {t.ident for t in threading.enumerate()}
+    frames = sys._current_frames()
+    try:
+        unlisted = {_outermost_package(f) for ident, f in frames.items() if ident not in listed}
+    finally:
+        frames.clear()
+    unlisted.discard(None)
+    unlisted.discard("cash")
+    monkeypatch.setattr(trace_recorder, "HOST_PACKAGES", trace_recorder.HOST_PACKAGES | unlisted)
     trace_recorder.HOST_THREADS.update(host)
     yield
     for t in host:
