@@ -26,19 +26,34 @@ from dataclasses import dataclass
 from typing import Any
 
 from cash._user_attrs import attribute_or
-from cash.decorator.arg_hashing import object_blocks
 from cash.notebook.statement.derivation_edges import shared_object_partners
 
 
-def column_owners(value: Any) -> frozenset[int]:
-    """The ids of the arrays owning *value*'s object columns, when it is a
-    pandas DataFrame; empty for anything else."""
+def column_owners(value: Any) -> frozenset[tuple[Any, int]]:
+    """``(column, id of the array owning its memory)`` for each of *value*'s
+    object columns, when it is a pandas DataFrame; empty for anything else.
+
+    By column, not by array alone: pandas 2 keeps the frame's object columns
+    in one two-dimensional block, and ``df['actions'] = 0`` takes the column
+    out of it while the column beside it stays a view of the same array."""
     if (attribute_or(type(value), "__module__", None) or "").partition(".")[0] != "pandas":
         return frozenset()
-    if attribute_or(value, "_mgr", None) is None:
+    mgr = attribute_or(value, "_mgr", None)
+    if mgr is None:
         return frozenset()
     try:
-        return frozenset(object_blocks(value))
+        import numpy as np
+
+        columns = value.columns
+        owners = set()
+        for block in mgr.blocks:
+            values = block.values
+            if type(values) is not np.ndarray or values.dtype != object:
+                continue
+            while type(values.base) is np.ndarray:
+                values = values.base
+            owners.update((columns[i], id(values)) for i in block.mgr_locs.as_array)
+        return frozenset(owners)
     except Exception:  # noqa: BLE001 - not a frame's block manager after all
         return frozenset()
 
@@ -49,7 +64,7 @@ class _GaveUp:
     of each holder the search up found; the lineages once settled."""
 
     value: int
-    columns: frozenset[int]
+    columns: frozenset[tuple[Any, int]]
     holders: dict[str, int]
     lineage: dict[str, Any] | None = None
 
