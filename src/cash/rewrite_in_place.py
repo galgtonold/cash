@@ -266,6 +266,10 @@ class Columns(NamedTuple):
         mgr = frame._mgr
         blocks, blknos, blklocs = mgr.blocks, mgr.blknos, mgr.blklocs
         tokens, shared, held = [], [], []
+        # Without copy-on-write (pandas 2 by default) pandas writes into a
+        # block whoever else holds it: a reference, a column Series in the
+        # frame's item cache among them, decides no copy, so none is told.
+        cow = _copy_on_write()
         for position in range(frame.shape[1]):
             block = blocks[blknos[position]]
             values = block.values
@@ -276,9 +280,22 @@ class Columns(NamedTuple):
                 owners: list = []
                 tokens.append((id(values), _memory_of(values, owners)))
                 held.append((_weak(values), tuple(_weak(_root(owner)) for owner in owners)))
+            if not cow:
+                shared.append(False)
+                continue
             refs = attribute_or(block, "refs", None)
             shared.append(bool(refs.has_reference()) if refs is not None else None)
         return cls(tuple(tokens), tuple(shared), tuple(held), _held_by_cash(frame))
+
+
+def _copy_on_write() -> bool:
+    """Does pandas copy a block another object holds before writing it:
+    pandas 3, or pandas 2 with ``mode.copy_on_write`` set (not "warn")?"""
+    pd = sys.modules["pandas"]
+    try:
+        return int(pd.__version__.split(".", 1)[0]) >= 3 or pd.options.mode.copy_on_write is True
+    except Exception:  # noqa: BLE001 - an unknown pandas: as with copy-on-write, which refuses more
+        return True
 
 
 def _memory_of(values: Any, owners: list) -> frozenset:
