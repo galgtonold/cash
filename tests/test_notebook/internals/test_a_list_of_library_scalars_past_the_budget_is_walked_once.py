@@ -77,6 +77,9 @@ def test_the_statement_is_refused_with_a_warning_after_one_check(cash_magics, ca
     from cash.notebook.statement import processor
 
     monkeypatch.setattr(processor, "share_check_budget", lambda cost: 600.0)
+    # The share check's time spent by the first `_MAX_SEEN` objects: within
+    # it, the walk would go on and read the list whole.
+    monkeypatch.setattr(identity_holders, "walk_time_left", lambda: False)
     counted = _Counted(monkeypatch)
     monkeypatch.setattr(processor, "unrestorable_output_reason", output_refusals.unrestorable_output_reason)
     with warnings.catch_warnings(record=True) as caught:
