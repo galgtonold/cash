@@ -272,6 +272,8 @@ class StatementReplay:
                 notebook_cells,
                 exec_sources,
                 before_statement,
+                should_run,
+                skipped,
             )
         except UpstreamStateError as failure:
             # What ran before the failure, and the statement that failed, is
@@ -294,6 +296,8 @@ class StatementReplay:
         notebook_cells: list[str] | None,
         exec_sources: dict[str, str] | None,
         before_statement: Callable[[int], None] | None,
+        should_run: Callable[[str], bool] | None,
+        skipped: list[str] | None,
     ) -> list[ProcessResult]:
         """:meth:`reexecute`, its rows gathered into *executed_metrics* as
         each statement runs."""
