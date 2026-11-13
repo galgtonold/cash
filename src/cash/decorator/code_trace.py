@@ -896,6 +896,14 @@ class _Build:
                 # A module imported, a class body: what they bound is read
                 # through the items of the code that uses it.
                 continue
+            # A later process may not have imported the module yet (``import
+            # helpers`` inside the body): the check imports it, as the call
+            # would, when its file is the same; without the item, its code
+            # is not found there and the entry is never served. A module
+            # whose file cannot be read is left to its code items.
+            loaded_from = _import_digest(module)
+            if loaded_from is not None:
+                self.add(("import", module), loaded_from, "")
             self._code(code, g, module, ran)
             recv = unit.receivers.get(code)
             if recv is not None and _user_class(recv):
