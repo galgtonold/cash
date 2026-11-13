@@ -471,21 +471,7 @@ HOLDER = (
 
 @pytest.mark.parametrize(
     ("kind", "bound"),
-    [
-        pytest.param(
-            kind,
-            bound,
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason="no anchor: X is stored with the model as an object they share, and the class's "
-                "pickling or rebuild copies it; served after a restart",
-            )
-            if bound == "reshape" and kind not in ("torch", "ckdtree", "reduce_hands_it_and_a_copy")
-            else (),
-        )
-        for kind in sorted(KEEPS_MEMORY)
-        for bound in ("slice", "reshape")
-    ],
+    [(kind, bound) for kind in sorted(KEEPS_MEMORY) for bound in ("slice", "reshape")],
 )
 def test_a_model_keeping_the_memory_where_cash_cannot_see_runs_every_time(cash_magics, clean_backend, kind, bound):
     """The model keeps the array it is fitted on, a view (a slice of ``X``,

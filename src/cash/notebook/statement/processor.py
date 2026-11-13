@@ -4161,6 +4161,8 @@ class StatementProcessor:
                     found = dict(holders)
                     run.share_owners = frozenset(owners & run.outputs)
                     reason = self._take_holders(run, captured_vars, holders)
+                    if reason is None:
+                        reason = self._holder_memory_apart(captured_vars, run.outputs, holders)
                 if reason is None and anchors:
                     user_ns = self.shell.user_ns
                     anchor_holds = {
@@ -5459,6 +5461,31 @@ class StatementProcessor:
         values = {name: captured_vars[name] for name in run.outputs if name in captured_vars}
         values.update(holders)
         name = array_memory_held_apart(values, anchors, homes=[name for name in anchors if name in run.inputs])
+        if name is None:
+            return None
+        return (
+            f"Live-alias object: an output holds the memory of '{name}' in a part a restore would copy "
+            "or could not rebuild around it; re-derived from live base, not cached."
+        )
+
+    @staticmethod
+    def _holder_memory_apart(
+        captured_vars: dict[str, Any], outputs: Iterable[str], holders: Mapping[str, Any]
+    ) -> str | None:
+        """The refusal when a numpy array a variable holds, stored with the
+        outputs as their holder (`_take_holders`), has its memory held in a
+        part of them a pickle round trip copies or cash cannot read: as
+        for an anchor (`_anchor_memory_apart`). ``model = M().fit(X)``
+        keeping ``X`` and a ``cKDTree(X)`` over it: restored together,
+        ``model.X_`` is ``X`` again, but the tree sits on a copy, and a
+        write to ``X`` no longer reaches it. (Where the tree holds a view
+        of ``X``, ``X`` is an anchor and asked so; where it holds ``X``
+        itself, as some SciPy builds do, ``X`` was a holder, and served.)"""
+        arrays = {name: obj for name, obj in holders.items() if type(obj).__name__ == "ndarray"}
+        if not arrays:
+            return None
+        values = {name: captured_vars[name] for name in outputs if name in captured_vars}
+        name = array_memory_held_apart(values, arrays)
         if name is None:
             return None
         return (
