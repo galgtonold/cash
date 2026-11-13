@@ -39,6 +39,7 @@ from .._location import per_user_cache_root
 from .._user_attrs import importable_attr
 from ..backends.cache_dir import LIBRARY_MAP_FILENAME, LIBRARY_RECORDS_FILENAME
 from ..install_paths import in_own_package, is_cash_path, is_user_path, top_package
+from ..jit_functions import jit_python_function
 from ..tracking import io_watch
 from ..tracking.tracker_context import untracked
 
@@ -527,6 +528,9 @@ def _defining_module(value: Any) -> types.ModuleType | None:
     if issubclass(type(value), types.ModuleType):
         return value
     if isinstance(value, type) or callable(value):
+        # A numba-compiled function is defined where the function it
+        # compiles is: a ``@stencil`` answers ``__module__`` with numba's.
+        value = jit_python_function(value) or value
         name = getattr(value, "__module__", None)
         return sys.modules.get(name) if isinstance(name, str) else None
     return None
