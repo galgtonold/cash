@@ -24,10 +24,17 @@ from .._clock import perf_counter as _perf_counter
 from ..analysis.handed_callables import hands_a_state_changing_callable
 from ..analysis.purity_report import PurityReport
 from ..backends._base import ttl_expired, written_at
+from ..code_swaps import FOLDED_CODE, FoldedCode, note_owner
 from ..dependency_state import STATE_LEDGER, ledger_note
-from ..exceptions import CashCacheIneffectiveWarning, CashImpureFunctionError, CashImpurityWarning
+from ..exceptions import (
+    CashCacheIneffectiveWarning,
+    CashCacheStoreFailedWarning,
+    CashImpureFunctionError,
+    CashImpurityWarning,
+)
 from ..handed_digests import Stored
 from ..handed_digests import claim as claim_handed_digests
+from ..loaded_code import code_objects_of
 from ..mutation_fingerprint import mutation_fingerprint
 from ..tracking import process_registries
 from ..tracking.env_reads import environment_digests, environment_unchanged, note_reads
@@ -482,6 +489,8 @@ class KeyBuilder:
         ledger_token = STATE_LEDGER.set(ledger)
         watch: dict = {}
         watch_token = CAPTURE_WATCH.set(watch)
+        folded = FoldedCode()
+        folded_token = FOLDED_CODE.set(folded)
         try:
             if refused is not None:
                 raise refused
@@ -502,8 +511,10 @@ class KeyBuilder:
             self._args.warn_key_build_failed(func_name, args, kwargs, e)
             return Unkeyable(_KEY_FAILED), watch, ledger
         finally:
+            FOLDED_CODE.reset(folded_token)
             CAPTURE_WATCH.reset(watch_token)
             STATE_LEDGER.reset(ledger_token)
+        built = built._replace(folded_code=folded)
         if ledger:
             slot = (func_name, built.state_hash)
             if not self._misses.has_ledger(slot):
@@ -528,6 +539,7 @@ class KeyBuilder:
         Raises `UnhashableDefault` when a default cannot be hashed.
         """
         func, func_name = spec.func, spec.name
+        note_owner(func, code_objects_of(func))
         state_hash = self._state_hasher.compute(
             func_name,
             own_source_override=self._pins.pin_own_source(func),
@@ -997,6 +1009,9 @@ class CallRunner:
         #: ``function name -> the registries`` a call of it changed
         #: (`_refuse_registries`).
         self._registry_writers: dict[str, str] = {}
+        #: func_name -> how many calls in a row ran code other than their
+        #: key folded (`_code_swapped`).
+        self._code_swaps: dict[str, int] = {}
 
     def _run_uncached(self, spec: CachedFunction, call: Call, why: MissReason) -> Any:
         """Run a call that has no key, log it as a miss, and hand back its result."""
@@ -1333,6 +1348,7 @@ class CallRunner:
             return call
         call.cache_key, call.state_hash, call.args_hash = built.cache_key, built.state_hash, built.args_hash
         call.traced, call.needs_trace = built.traced, built.needs_trace
+        call.folded_code = built.folded_code
         if built.reached_ttl is not None:
             # A cached function the key reached as a value, not by a graph
             # edge: its ttl is per call, not per function.
@@ -1877,6 +1893,9 @@ class CallRunner:
         # The stream comparison above, read for a draw no seed stands behind:
         # one the source scan could not see (a library a helper calls).
         self._rng.warn_observed_draw(func_name, run.rng_drew, res)
+        # Before the check that the state the key read held still: a
+        # function whose code was replaced moved that state too.
+        swapped = self._code_swapped(spec, call)
         refusal = self._store.refusal(
             func,
             func_name,
@@ -1886,9 +1905,11 @@ class CallRunner:
             run.tracker,
             call.capture_watch,
             observer=run.observer,
-            inputs_moved=self._inputs_moved_check(spec, call),
+            inputs_moved=None if swapped else self._inputs_moved_check(spec, call),
             cost=execution_time,
         )
+        if refusal is None:
+            refusal = swapped
         if refusal is None:
             refusal = self._refuse_registries(spec, run)
         if refusal is None and args_left and shared:
@@ -1998,6 +2019,39 @@ class CallRunner:
                 reports.append(report)
             names.extend(self._registry.graph.get_dependencies(name))
         return code_trace.build(unit, code_trace.static_codes(functions, reports), strict=call.needs_trace)
+
+    def _code_swapped(self, spec: CachedFunction, call: Call) -> str | None:
+        """Why a call is not stored when code its key folded was replaced
+        while it ran (`cash.code_swaps`), or None.
+
+        A library that compiles a function on its first call (networkx's
+        ``argmap``) swaps a stub's ``__code__`` for the code that runs the
+        body: the key folded the stub, and an entry stored under it would be
+        found by every later process that starts with the same stub, however
+        the body changed. Once is expected and said only in the miss reason:
+        the next call keys the code that is there now. A function whose code
+        is replaced on every call never gets an entry, and the warning says
+        why.
+        """
+        folded = call.folded_code
+        owner = folded.swapped() if folded is not None else None
+        if owner is None:
+            self._code_swaps.pop(spec.name, None)
+            return None
+        what = getattr(owner, "__qualname__", None) or type(owner).__qualname__
+        times = self._code_swaps[spec.name] = self._code_swaps.get(spec.name, 0) + 1
+        if times > 1:
+            self._notices.warn_once(
+                CashCacheStoreFailedWarning,
+                spec.name,
+                "code_swapped",
+                f"@cash.cache on {spec.name}: the code of {what} is replaced while every call runs "
+                f"(its __code__ is set anew), so the key, built before the call, never describes the "
+                f"code that ran. The result was returned but not cached.",
+                code="STORE-CODE-SWAPPED",
+                fix="set the function's code once, before the first cached call, or pass it in as an argument.",
+            )
+        return f"the code of {what} was replaced while it ran, so its key described the code from before"
 
     def _refuse_registries(self, spec: CachedFunction, run: BodyRun) -> str | None:
         """Why a call that set a registry the process keeps is not stored:

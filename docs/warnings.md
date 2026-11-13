@@ -3052,6 +3052,7 @@ The call succeeded, but its result was not written. Every code here starts `STOR
 |---|---|---|
 | [STORE-CHUNK-FAILED](#store-chunk-failed) | decorator | one chunk of an iterator failed to write |
 | [STORE-CODE-CHANGED](#store-code-changed) | decorator | code changed on disk during the call; not stored |
+| [STORE-CODE-SWAPPED](#store-code-swapped) | decorator | a function's code is replaced in memory during every call; not stored |
 | [STORE-DEFAULT-CHANGED](#store-default-changed) | notebook | a call changed its callee's default (a memo default); not stored |
 | [STORE-FAILED](#store-failed) | both | the backend refused the write |
 | [STORE-INPUT-CHANGED](#store-input-changed) | decorator | an input file changed during the call; not stored |
@@ -3099,6 +3100,32 @@ result may mix old and new code. Storing it could serve a wrong result later.
 something is replacing files under a running job, such as a deploy.
 
 **When it is safe to ignore.** Once, while you edit a helper during a run.
+
+### STORE-CODE-SWAPPED {#store-code-swapped}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
+
+<!-- claim: cash/decorator/runtime.py:CallRunner._code_swapped @02ee1f6c, cash/code_swaps.py:FoldedCode.swapped @ad14a04b -->
+**What happened.** The `__code__` of a function the key folded was set anew
+while the call ran, on this call and the one before it. The key is built
+before the body runs, so it described the code from before. The result was
+returned but not stored.
+
+Some decorators do this once: networkx's `argmap` starts each function it
+decorates as a stub and puts the real code in place on its first call. That
+first call is not stored, and its miss reason says so; the next call keys the
+code that is there now and is stored. The warning comes only when the code is
+replaced on every call, so no call is ever stored.
+
+**Why it matters.** An entry stored under a key of the old code is found by
+every later process that starts with that code, however the code that
+actually ran has changed since.
+
+**What to do.** Set the function's code once, before the first cached call,
+or pass the function in as an argument.
+
+**When it is safe to ignore.** When the function is cheap enough to run on
+every call.
 
 ### STORE-DEFAULT-CHANGED {#store-default-changed}
 

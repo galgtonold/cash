@@ -69,6 +69,9 @@ class BuiltKey(NamedTuple):
     #: The call picks code by a run-time name: without a trace it is not
     #: stored, and an entry without one is not served.
     needs_trace: bool = False
+    #: The code the key folded (`cash.code_swaps.FoldedCode`), compared
+    #: again after the body; None for a key not built for a call.
+    folded_code: Any = None
 
 
 class Call:
@@ -100,6 +103,7 @@ class Call:
         "needs_trace",
         "trace_unit",
         "ran_unit",
+        "folded_code",
     )
 
     def __init__(self, args: tuple, kwargs: dict) -> None:
@@ -135,6 +139,8 @@ class Call:
         #: That record once the trace is built from it, for what the code
         #: that ran reads (`argument_sharing.reads_of`).
         self.ran_unit: Any = None
+        #: The key's `BuiltKey.folded_code`.
+        self.folded_code: Any = None
 
 
 class BodyRun:

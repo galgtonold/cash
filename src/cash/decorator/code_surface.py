@@ -7,6 +7,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import logging
+import operator
 import pickle
 import re
 import sys
@@ -16,7 +17,9 @@ from typing import TYPE_CHECKING, Any
 from .._memo import CODE_OBJECTS, LruMemo
 from ..analysis.helper_code import renamed
 from ..code_digest import source_digest, unwrap_partials
+from ..code_swaps import note_owner, settable
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
+from ..loaded_code import code_objects_of
 from ..source_norm import code_consts_without_docstring
 from . import walk_scope
 from .arg_hashing import is_opaque
@@ -58,6 +61,20 @@ def _defaults_pin(functions: list[Any]) -> tuple | None:
     return tuple(pin)
 
 
+def _codes_now(owners: list[Any]) -> tuple:
+    """The code objects *owners* run now (`code_objects_of`), in one tuple:
+    what a memo entry per object holds against a ``__code__`` set in place
+    (`cash.code_swaps.settable`). Each owner's code is noted as folded by
+    the key being built."""
+    found: list = []
+    for owner in owners:
+        if settable(owner):
+            codes = code_objects_of(owner)
+            note_owner(owner, codes)
+            found.extend(codes)
+    return tuple(found)
+
+
 #: A memory address in a repr (``<object object at 0x7f...>``).
 _ADDRESS_REPR = re.compile(r"\bat 0x[0-9a-fA-F]+")
 
@@ -76,7 +93,7 @@ class CodeSurface:
         # user class or function -> code-surface digest (bytecode-based, class-
         # aware); see `code_surface_hash`. Keyed on the object itself, not
         # id(), so a redefinition (a new object) is a distinct memo entry.
-        self._code_surface_cache: LruMemo[Any, tuple[tuple | None, list, str]] = LruMemo(CODE_OBJECTS)
+        self._code_surface_cache: LruMemo[Any, tuple[tuple | None, list, str, tuple]] = LruMemo(CODE_OBJECTS)
         self._refs = CodeRefs()
 
     def _code_identity(self, fn: Any) -> tuple:
@@ -273,8 +290,13 @@ class CodeSurface:
             cached = self._code_surface_cache.get(obj)
         except TypeError:
             cached = None
+        # Its code too: a library that sets a function's ``__code__`` on
+        # the first call (networkx's ``argmap``) keeps the object, and the
+        # entry described the stub it replaced.
         if cached is not None and cached[0] == _defaults_pin(cached[1]):
-            return cached[2]
+            codes = _codes_now(cached[1] or [obj])
+            if len(codes) == len(cached[3]) and all(map(operator.is_, codes, cached[3])):
+                return cached[2]
         # A function can reach itself through its own defaults: networkx's
         # argmap stores every function it wraps in that function's
         # ``__kwdefaults__``. Digesting it again would recurse forever, so a
@@ -315,6 +337,8 @@ class CodeSurface:
             frame = stack.pop()
         if digest is None:
             return None
+        # What the call is checked against after its body (`code_swaps`).
+        codes = _codes_now(layers or [obj])
         if build is not None and record is not None:
             build[item] = (obj, digest, record)
         # An object on a cycle is not memoized: its digest depends on where
@@ -339,7 +363,7 @@ class CodeSurface:
         pin = _defaults_pin(layers)
         if pin is not None:
             try:
-                self._code_surface_cache[obj] = (pin, layers, digest)
+                self._code_surface_cache[obj] = (pin, layers, digest, codes)
             except TypeError:
                 pass  # unhashable object - skip the memo, keep the answer
         return digest
