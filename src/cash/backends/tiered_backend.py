@@ -371,7 +371,8 @@ class TieredBackend(CacheBackend):
                     if imported:
                         restore_s, imported = again, again == float("inf") or len(sys.modules) != modules
                     else:
-                        restore_s, imported = min(restore_s, again), len(sys.modules) != modules
+                        restore_s = min(restore_s, again)
+                        imported = again == float("inf") or len(sys.modules) != modules
                 if not imported and memory_backend.restored_no_faster(value, metadata, restore_s):
                     # It proved no faster than computing it again: not
                     # restored from here again. Handed out this once.
