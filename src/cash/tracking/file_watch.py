@@ -208,10 +208,39 @@ class FileWatch:
                         st = None
                     if st is not None and _ident(st) == d.ident:
                         folder_stats[d.path] = st
+                        self._vouch_again(d, st)
                     else:
                         self._kill(d)
                 self.folder_stats = folder_stats
             self.confirmed_at = at
+
+    def _vouch_again(self, own: _Dir, st: os.stat_result) -> None:
+        """With the lock held, in a `drain` that took *st*, the stat of
+        *own*'s folder now: keep the stat its own watch holds as the
+        folder's stat again, in its parent's records, when the parent's
+        change dropped it there and *st* finds the folder as kept.
+
+        Windows reports a folder changed when its entry for a folder below
+        is brought up to date, which NTFS does when that folder is first
+        opened: the first look at 40 folders reported their parent changed
+        once, and each was looked at again (an ``lstat``, and `record`'s
+        own) before the next cell. Any other change beside them did the
+        same. A change of the folder itself moved its times, size or
+        attributes, which *st* shows; one inside it is reported by its own
+        watch, which then holds no stat."""
+        path = own.path
+        kept = own.records.get(path)
+        if kept is None or self._self.get(path) is not own:
+            return
+        d = self._home.get(path)
+        if d is None or not d.alive or d is own or path in d.records or path in d.missing:
+            return
+        if self._dirs.get(d.path) is not d or os.path.dirname(path) != d.path:
+            return
+        if not _same(st, kept) or getattr(st, "st_file_attributes", 0) != getattr(kept, "st_file_attributes", 0):
+            return
+        d.records[path] = kept
+        d.listed.discard(path)
 
     def _invalidate(self, d: _Dir) -> None:
         if d.records or d.listed or d.missing:
