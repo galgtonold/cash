@@ -71,7 +71,12 @@ def _restart(magics, lib) -> None:
     simulator.cache.reset()
     simulator.probe.reset()
     user_ns = magics.shell.user_ns
-    for name in [n for n in user_ns if not n.startswith("_") and n not in ("get_ipython", "exit", "quit")]:
+    # The module's own name starts with ``_`` and is not IPython's: left
+    # bound, the kernel held the configured module object while
+    # ``sys.modules`` was emptied, which no restart leaves.
+    for name in [
+        n for n in user_ns if (not n.startswith("_") or n.startswith(lib)) and n not in ("get_ipython", "exit", "quit")
+    ]:
         user_ns.pop(name, None)
     sys.modules.pop(lib, None)
     sys.modules.pop(f"{lib}_outer", None)
