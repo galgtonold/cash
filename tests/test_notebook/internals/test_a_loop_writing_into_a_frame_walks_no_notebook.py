@@ -23,7 +23,14 @@ MAKE = (
     "import time\nimport pandas as pd\nheld = [(i, str(i)) for i in range(50_000)]\n"
     "df = pd.DataFrame({'a': range(3000), 'b': 0.0})"
 )
-LOOP = f"for i in range(3000):\n    time.sleep({ABOVE_PERSISTENCE_FLOOR_S / 3000})\n    df.loc[i, 'b'] = df.loc[i, 'a'] * 2"
+#: Slept once, not a little each pass: below Python 3.11 a sleep on Windows
+#: lasts at least a clock tick (15.6 ms), and 3,000 of them ran past the
+#: test's timeout.
+LOOP = (
+    "for i in range(3000):\n"
+    f"    if i == 0:\n        time.sleep({ABOVE_PERSISTENCE_FLOOR_S})\n"
+    "    df.loc[i, 'b'] = df.loc[i, 'a'] * 2"
+)
 CELLS = [MAKE, LOOP]
 
 
