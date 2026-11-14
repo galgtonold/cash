@@ -524,7 +524,7 @@ def _held_by_the_notebook(parts: set[int], refs: list[Any], namespace: Mapping[s
         return _WEAK
     ref_ids = {id(ref) for ref in refs}
     # ``hex(id(p.seen))`` or ``str(id(p.seen))``: an id() as text.
-    texts = {spell(part) for part in parts for spell in (str, hex)}
+    texts = _Texts(parts)
     budget = [_MAX_SEEN]
     seen: set[int] = set()
     ids = _Ids(parts)
@@ -556,7 +556,7 @@ class _TooMany(str):
 def _held_below(
     root: Any,
     parts: set[int],
-    texts: set[str],
+    texts: _Texts,
     ref_ids: set[int],
     ids: _Ids,
     seen: set[int],
@@ -566,7 +566,7 @@ def _held_below(
     *seen* and *budget* are shared across the variables."""
     level = [root]
     while level:
-        if ref_ids and any(id(v) in ref_ids for v in level):
+        if ref_ids and not ref_ids.isdisjoint(map(id, level)):
             return _WEAK
         nxt: list[Any] = []
         for value in level:
@@ -635,19 +635,83 @@ def _written_in_python(klass: type) -> bool:
 _GC_READS: weakref.WeakKeyDictionary[type, bool] = _weak.WeakKeyDictionary()
 
 
-def _holds_one_of(held: list[Any], parts: set[int], texts: set[str]) -> bool:
+def _holds_one_of(held: list[Any], parts: set[int], texts: _Texts) -> bool:
     """Whether a number or a text among *held* is one of *parts* or *texts*."""
     try:
-        return not parts.isdisjoint(held) or not texts.isdisjoint(held)
+        return not parts.isdisjoint(held) or texts.among(held)
     except TypeError:  # an unhashable item: the leaves alone
         leaves = [item for item in held if type(item) in _LEAVES]
         try:
-            return not parts.isdisjoint(leaves) or not texts.isdisjoint(leaves)
+            return not parts.isdisjoint(leaves) or texts.among(leaves)
         except TypeError:  # an unhashable leaf (a signalling NaN): one at a time
-            return any(type(item) in (int, str) and (item in parts or item in texts) for item in leaves)
+            spelled = texts.all()
+            return any(type(item) in (int, str) and (item in parts or item in spelled) for item in leaves)
 
 
-def _read_in_bulk(held: list[Any], parts: set[int], texts: set[str]) -> list[Any] | str:
+class _Texts:
+    """The ``id()``s of *parts* as text, ``str`` and ``hex``
+    (``hex(id(p.seen))``), spelled only when a text of their length is met:
+    spelling the 170,000 ids of a list of frames cost each refusal 0.1 s,
+    for dicts whose keys are short names."""
+
+    def __init__(self, parts: set[int]) -> None:
+        self.parts = parts
+        self._spelled: set[str] | None = None
+        self._lengths: set[int] | None = None
+        self._plain: dict[type, bool] = {}
+
+    def all(self) -> set[str]:
+        """Every text looked for."""
+        if self._spelled is None:
+            self._spelled = {*map(str, self.parts), *map(hex, self.parts)}
+        return self._spelled
+
+    def among(self, items: list[Any]) -> bool:
+        """Whether one of *items*, all hashable, is one of the texts: what
+        ``not self.all().isdisjoint(items)`` gives. Only a ``str`` can equal
+        one, unless its class compares in its own way; a ``str`` only when
+        its length is one of theirs."""
+        if self._spelled is not None:
+            return not self._spelled.isdisjoint(items)
+        kinds = set(map(type, items))
+        odd = [kind for kind in kinds if kind is not str and not self._never_a_text(kind)]
+        if odd:
+            return not self.all().isdisjoint(items)
+        if str not in kinds:
+            return False
+        if self._lengths is None:
+            self._lengths = _text_lengths(self.parts)
+        lengths = self._lengths
+        words = list(compress(items, map(str.__instancecheck__, items)))
+        near = list(compress(words, map(lengths.__contains__, map(len, words))))
+        return bool(near) and not self.all().isdisjoint(near)
+
+    def _never_a_text(self, kind: type) -> bool:
+        found = self._plain.get(kind)
+        if found is None:
+            found = kind in _NEVER_TEXT or (
+                not issubclass(kind, str) and attribute_or(kind, "__eq__", None) is _OBJECTS_EQ
+            )
+            self._plain[kind] = found
+        return found
+
+
+#: Never equal to a ``str``: the other leaves, and builtin containers.
+_NEVER_TEXT = frozenset(IMMUTABLE_LEAF_TYPES) - {str} | {tuple, frozenset}
+_OBJECTS_EQ = object.__eq__
+
+
+def _text_lengths(parts: set[int]) -> set[int]:
+    """The lengths of the ``str`` and ``hex`` of every number of *parts*."""
+    if not parts:
+        return set()
+    low, high = min(parts), max(parts)
+    lengths = set(range(len(str(low)), len(str(high)) + 1))
+    lengths.update(range(len(hex(low)), len(hex(high)) + 1))
+    return lengths
+
+
+def _read_in_bulk(held: list[Any], parts: set[int], texts: _Texts) -> list[Any] | str:
     """What the items of *held*, a container too big to walk one item at a
     time, hold, read a level at a time at C speed: `_BY_ID` when a number
     or text among them is one of *parts* or *texts*; else the few objects
@@ -704,6 +768,10 @@ def _read_in_bulk(held: list[Any], parts: set[int], texts: set[str]) -> list[Any
     return _TOO_MANY
 
 
+#: An integer array this small is read as Python numbers (`_Ids.in_array`).
+_FEW_NUMBERS = 64
+
+
 class _Ids:
     """The ``id()``s `_held_by_the_notebook` looks for, as a sorted NumPy
     array and its bounds, made once for every integer array it meets: a dict
@@ -714,7 +782,11 @@ class _Ids:
         self._sorted: Any = None
 
     def in_array(self, value: Any) -> bool:
-        """Whether the integer NumPy array *value* holds one of them."""
+        """Whether the integer NumPy array *value* holds one of them. A
+        few signed numbers are looked up one by one: the sorted search cost
+        a small frame's column a dozen NumPy calls."""
+        if value.size <= _FEW_NUMBERS and value.dtype.kind == "i":
+            return not self.parts.isdisjoint(value.ravel().tolist())
         numpy = sys.modules["numpy"]
         if self._sorted is None:
             self._sorted = numpy.sort(numpy.fromiter(self.parts, dtype=numpy.int64, count=len(self.parts)))
@@ -875,30 +947,53 @@ def _reaches(
 ) -> bool | None:
     """Whether *target* is among *roots* or what they hold; None past `_MAX_SEEN`.
     *seen* gets the ``id()`` of each object looked at, and *weakly* each one
-    a weak reference points at."""
+    a weak reference points at.
+
+    How an object is read is settled once per class (`_reach_mode`): a list
+    of 3,000 small frames is 42,000 objects, and asking each of them whether
+    it is a stream, a function or a pandas object cost a loop growing it
+    most of its 0.35 s refusal."""
     module_dicts = {id(vars(m)) for m in list(sys.modules.values()) if isinstance(m, types.ModuleType)}
     if seen is None:
         seen = set()
-    level = [item for item in roots if type(item) not in IMMUTABLE_LEAF_TYPES]
+    leaves = _LEAVES
+    level = [item for item in roots if type(item) not in leaves]
     cells = [_MAX_CELLS]
+    modes: dict[type, int] = {}
+    streams = (type(sys.__stdout__), type(sys.__stderr__))
+    pandas = sys.modules.get("pandas")
+    weakcount = weakref.getweakrefcount
+    add = seen.add
     while level:
         nxt: list[Any] = []
+        extend = nxt.extend
         for item in level:
             if item is target:
                 return True
             key = id(item)
-            if key in seen or key in module_dicts or isinstance(item, _OPAQUE) or is_live_stream(item):
+            if key in seen:
+                continue
+            kind = type(item)
+            mode = modes.get(kind)
+            if mode is None:
+                mode = modes[kind] = _reach_mode(kind, streams, pandas)
+            if mode == _SKIP or key in module_dicts:
+                continue
+            if mode == _ASK and (isinstance(item, _OPAQUE) or is_live_stream(item)):
                 # A standard stream comes back as itself (`live_state`).
                 continue
-            seen.add(key)
-            if weakly is not None and weakref.getweakrefcount(item):
+            add(key)
+            if weakly is not None and weakcount(item):
                 weakly.append(item)
             if len(seen) > _MAX_SEEN:
                 return None
-            held = _typed_referents(item, cells)
-            if held is None:
-                return None
-            nxt.extend(ref for ref in held if type(ref) not in IMMUTABLE_LEAF_TYPES)
+            if mode == _GC:
+                held = get_referents(item)
+            else:
+                held = _typed_referents(item, cells, None if mode == _ASK else mode)
+                if held is None:
+                    return None
+            extend([ref for ref in held if type(ref) not in leaves])
         level = nxt
     return False
 
@@ -911,15 +1006,18 @@ _MAX_CELLS = 2_000_000
 _PANDAS_NOT_HELD = frozenset({"_mgr", "_item_cache", "_flags", "_cache", "_references", "_id"})
 
 
-def _typed_referents(item: Any, cells: list[int]) -> list[Any] | None:
+def _typed_referents(item: Any, cells: list[int], mode: int | None = None) -> list[Any] | None:
     """What *item* holds, for `_reaches`: ``get_referents``, except for a
     NumPy array and a pandas object, read by type. An array of objects is
     not tracked by the collector, so ``get_referents`` gave ``[]`` for a
     column holding the list that held its frame, and that list was restored
     into a copy holding a copy of itself. None past `_MAX_CELLS` cells,
-    counted in *cells*."""
+    counted in *cells*. *mode* is how its class is read (`_reach_mode`),
+    worked out here when not given."""
     kind = type(item)
-    if kind.__name__ == "ndarray" and from_family(kind, "numpy"):
+    if mode is None:
+        mode = _read_mode(kind, item)
+    if mode == _ARRAY:
         base = [] if item.base is None else [item.base]
         if not item.dtype.hasobject:
             return base
@@ -930,21 +1028,77 @@ def _typed_referents(item: Any, cells: list[int]) -> list[Any] | None:
         if item.dtype.names:  # records: a tuple of fields each
             values = [field for record in values for field in record]
         return values + base
-    framed = from_family(kind, "pandas") and kind.__name__ in ("DataFrame", "Series")
-    if framed or _pandas_index(item):
+    if mode in _PANDAS_MODES:
         # Its attributes (``attrs`` among them), its labels and its column
         # arrays, the last read by the array rule above.
         state = own_dict(item) or {}
         held = [value for name, value in state.items() if name not in _PANDAS_NOT_HELD]
         try:
-            if kind.__name__ == "DataFrame":
+            if mode == _FRAME:
                 held += [item.index, item.columns, *item._mgr.arrays]
-            elif framed:
+            elif mode == _SERIES:
                 held += [item.index, item._values]
         except Exception:  # noqa: BLE001 - a pandas of another shape: as the collector sees it
             return get_referents(item)
         return held
     return get_referents(item)
+
+
+#: How `_reaches` reads an object of a class (`_reach_mode`): passed over,
+#: asked one object at a time as `_typed_referents` always did, through the
+#: collector, or as a NumPy array, a frame, a series or an index.
+_SKIP, _ASK, _GC, _ARRAY, _FRAME, _SERIES, _INDEX = range(7)
+_PANDAS_MODES = frozenset({_FRAME, _SERIES, _INDEX})
+#: Builtin classes whose attribute lookup is Python's own: ``__class__`` on
+#: one of them, or on a class of Python code below one, is its type.
+_PLAIN_LOOKUP = frozenset({object, dict, list, tuple, set, frozenset, bytearray})
+_OBJECTS_CLASS = object.__dict__["__class__"]
+
+
+def _read_mode(kind: type, item: Any = None, pandas: Any = None) -> int:
+    """How `_typed_referents` reads an object of *kind*: as an array, a
+    frame, a series, an index (*item* tested with ``isinstance`` when
+    given, *kind* with ``issubclass`` when not), or through the collector."""
+    if kind.__name__ == "ndarray" and from_family(kind, "numpy"):
+        return _ARRAY
+    if from_family(kind, "pandas") and kind.__name__ in ("DataFrame", "Series"):
+        return _FRAME if kind.__name__ == "DataFrame" else _SERIES
+    if item is not None:
+        return _INDEX if _pandas_index(item) else _GC
+    return _INDEX if pandas is not None and issubclass(kind, pandas.Index) else _GC
+
+
+def _reach_mode(kind: type, streams: tuple[type, ...], pandas: Any) -> int:
+    """How `_reaches` reads every object of *kind*, worked out once.
+    ``isinstance`` answers by the object's ``__class__``, which a proxy or a
+    class of the user's may change: such a class is asked one object at a
+    time (`_ASK`), as is one whose objects may be a standard stream."""
+    if issubclass(kind, _OPAQUE):
+        return _SKIP
+    try:
+        lookup = next(klass for klass in kind.__mro__ if "__getattribute__" in vars(klass))
+        plain = lookup in _PLAIN_LOOKUP and _static_class(kind) is _OBJECTS_CLASS
+        if plain and (
+            kind in streams
+            or (kind.__name__ == "OutStream" and str(kind.__module__).startswith("ipykernel."))
+            or getattr(kind, "_cash_wrapped_stream", None) is not None
+        ):
+            plain = False
+    except Exception:  # noqa: BLE001 - a class that will not say: one object at a time
+        return _ASK
+    if not plain:
+        return _ASK
+    return _read_mode(kind, pandas=pandas)
+
+
+def _static_class(kind: type) -> Any:
+    """What ``__class__`` resolves to on *kind*'s objects, read off the MRO
+    without running a descriptor."""
+    for klass in kind.__mro__:
+        found = vars(klass).get("__class__")
+        if found is not None:
+            return found
+    return None
 
 
 def _pandas_index(item: Any) -> bool:
