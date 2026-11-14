@@ -321,16 +321,16 @@ def _plan(frame: Any) -> list[tuple[tuple, tuple, list[tuple]]]:
 
     plan = []
     try:
-        dtypes = frame.dtypes
         for block in frame._mgr.blocks:
             layout = block_layout(block.values)
             if layout is None:
                 continue
             positions = tuple(int(pos) for pos in block.mgr_locs.as_array)
-            memory = [
-                column_memory_key(frame, pos, pandas_value_route(dtypes.iloc[pos], pd), dtypes.iloc[pos])
-                for pos in positions
-            ]
+            # A block's columns share its dtype: ``frame.dtypes``, a Series
+            # built per call, took a fifth of storing a small table.
+            dtype = block.dtype
+            route = pandas_value_route(dtype, pd)
+            memory = [column_memory_key(frame, pos, route, dtype) for pos in positions]
             if all(key is not None for key in memory):
                 plan.append((positions, layout, memory))
     except Exception:  # pandas internals changed: copy it all
