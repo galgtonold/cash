@@ -22,11 +22,16 @@
  * slots, with the same dummies -- so every lookup probes as it did there.
  * Two elements with one hash share a probe path, and may trade places.
  *
- * Only exact lists, tuples, dicts, sets and frozensets are walked, depth
- * first, each object once (an object only one reference holds is met once
- * anyway, and is not looked up). Each set is recorded with its path from the
- * value: the index of each step in a list or tuple, 2k or 2k+1 for the k-th
- * key or value of a dict, k for a set's k-th element in slot order. A hit
+ * Lists, tuples, dicts, sets and frozensets are walked, with the subclasses
+ * and the objects' attributes a copy rebuilds in the order a walk reads them
+ * (see `type_kind`), depth first, each object once (an object only one
+ * reference holds is met once anyway, and is not looked up). Each set is
+ * recorded with its path from the value: the index of each step in a list or
+ * tuple, 2k or 2k+1 for the k-th key or value of a dict or of an object's
+ * __dict__, SLOT_STEP plus its offset for a __slots__ attribute, k for a
+ * set's k-th element in slot order. A path that leads elsewhere in the copy
+ * (a class that copies itself its own way after all) ends at a set whose
+ * hashes are not the recorded ones, or at none, and is left alone. A hit
  * follows the paths, not the whole value, and a set is laid out before the
  * paths through it are followed. Nothing in Python runs while a walk reads or
  * writes: the garbage collector is paused, and only C memory is allocated
@@ -51,7 +56,9 @@
 #ifndef Py_GIL_DISABLED
 
 #define MIN_USED 2
-#define MAGIC 0x324c5343u /* "CSL2" */
+/* Instances one walk goes into at most. */
+#define MAX_OBJS 1000000
+#define MAGIC 0x334c5343u /* "CSL3" */
 #define SET_BYTES (4 + 8 + 4 + 8)
 /* CPython's set probing (Objects/setobject.c, 3.12 to 3.14). */
 #define LINEAR_PROBES 9
@@ -292,61 +299,224 @@ static Item *read_table(PySetObject *so, PyObject *dummy, size_t *n, uint32_t **
     return items;
 }
 
-static int is_set(PyObject *o) { return PySet_CheckExact(o) || PyFrozenSet_CheckExact(o); }
+/* What a walk goes into, by the object's type. Exact lists, tuples, dicts,
+ * sets and frozensets; their subclasses when a copy or pickle of one rebuilds
+ * it from its items in the order a walk reads them -- the base's iteration,
+ * and none of the hooks that let a class hand back some other object (see
+ * `plain`); and an instance of a class that keeps its attributes in a
+ * __dict__ or in __slots__ and reads them the default way, with the same
+ * hooks left alone. Pickle and copy rebuild such an instance's __dict__ from
+ * the original's, key by key in its order, and set the same slots. */
+enum { K_NONE = 0, K_SEQ, K_DICT, K_ODICT, K_SET, K_OBJ };
 
-static int walked(PyObject *o) {
-    return PyList_CheckExact(o) || PyTuple_CheckExact(o) || PyDict_CheckExact(o) || is_set(o);
+/* A slot step is the slot's offset in the object, with this bit: dict
+ * steps stay below it (MAX_STEPS). */
+#define SLOT_STEP 0x80000000u
+
+/* The hooks that let a class build its copy otherwise than from its items or
+ * attributes -- or hand back an object that is not a copy at all. */
+static const char *const HOOKS[] = {"__reduce__", "__reduce_ex__", "__getstate__", "__setstate__",
+                                    "__copy__", "__deepcopy__"};
+#define NHOOKS (sizeof HOOKS / sizeof *HOOKS)
+static PyObject *hook_names[NHOOKS];
+
+/* 1 when no class *t* comes from defines one of HOOKS in Python; the
+ * builtin classes' own, in C, copy the items (static types are not looked
+ * in at all). */
+static int plain(PyTypeObject *t) {
+    if (!hook_names[0]) {
+        for (size_t i = 0; i < NHOOKS; i++) {
+            PyObject *s = PyUnicode_InternFromString(HOOKS[i]);
+            if (!s) {
+                PyErr_Clear();
+                return 0;
+            }
+            hook_names[i] = s; /* kept for the life of the process */
+        }
+    }
+    PyObject *mro = t->tp_mro;
+    if (!mro || !PyTuple_Check(mro)) return 0;
+    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); i++) {
+        PyTypeObject *b = (PyTypeObject *)PyTuple_GET_ITEM(mro, i);
+        if (!(b->tp_flags & Py_TPFLAGS_HEAPTYPE)) continue;
+        PyObject *d = b->tp_dict;
+        if (!d || !PyDict_Check(d)) return 0;
+        for (size_t k = 0; k < NHOOKS; k++) {
+            PyObject *v = PyDict_GetItemWithError(d, hook_names[k]);
+            /* One written in C (defaultdict's __reduce__) copies the items:
+             * only one written in Python is a class's own way. */
+            if (v && !Py_IS_TYPE(v, &PyMethodDescr_Type) && !Py_IS_TYPE(v, &PyWrapperDescr_Type)) return 0;
+            if (PyErr_Occurred()) {
+                PyErr_Clear();
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+static int has_dict(PyTypeObject *t) {
+    return t->tp_dictoffset != 0 || (t->tp_flags & Py_TPFLAGS_MANAGED_DICT) != 0;
+}
+
+/* Whether *m* is a __slots__ attribute: an object slot, writable. */
+static int slot_member(const PyMemberDef *m) {
+    return m->type == Py_T_OBJECT_EX && !(m->flags & Py_READONLY) && m->offset > 0 &&
+           (uint64_t)m->offset < SLOT_STEP;
+}
+
+/* Whether a class *t* comes from that is defined in Python has a __slots__
+ * attribute at *offset* (any one, for offset 0). */
+static int has_slot(PyTypeObject *t, Py_ssize_t offset) {
+    PyObject *mro = t->tp_mro;
+    if (!mro || !PyTuple_Check(mro)) return 0;
+    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); i++) {
+        PyTypeObject *b = (PyTypeObject *)PyTuple_GET_ITEM(mro, i);
+        if (!(b->tp_flags & Py_TPFLAGS_HEAPTYPE)) continue;
+        for (PyMemberDef *m = b->tp_members; m && m->name; m++)
+            if (slot_member(m) && (!offset || m->offset == offset)) return 1;
+    }
+    return 0;
+}
+
+static int type_kind(PyTypeObject *t) {
+    if (t == &PyList_Type || t == &PyTuple_Type) return K_SEQ;
+    if (t == &PyDict_Type) return K_DICT;
+    if (t == &PySet_Type || t == &PyFrozenSet_Type) return K_SET;
+    unsigned long f = t->tp_flags;
+    if (f & Py_TPFLAGS_LIST_SUBCLASS)
+        return t->tp_iter == PyList_Type.tp_iter && plain(t) ? K_SEQ : K_NONE;
+    if (f & Py_TPFLAGS_TUPLE_SUBCLASS)
+        return t->tp_iter == PyTuple_Type.tp_iter && plain(t) ? K_SEQ : K_NONE;
+    if (f & Py_TPFLAGS_DICT_SUBCLASS) {
+        if (!plain(t)) return K_NONE;
+        if (t->tp_iter == PyDict_Type.tp_iter) return K_DICT;
+        if (PyType_IsSubtype(t, &PyODict_Type) && t->tp_iter == PyODict_Type.tp_iter) return K_ODICT;
+        return K_NONE;
+    }
+    if (PyType_IsSubtype(t, &PySet_Type) || PyType_IsSubtype(t, &PyFrozenSet_Type))
+        return plain(t) ? K_SET : K_NONE;
+    if (!(f & Py_TPFLAGS_HEAPTYPE) || t->tp_getattro != PyObject_GenericGetAttr) return K_NONE;
+    if (!has_dict(t) && !has_slot(t, 0)) return K_NONE;
+    return plain(t) ? K_OBJ : K_NONE;
+}
+
+/* The kinds of the types one walk met, by type: a type's kind is looked up
+ * in its classes once, not once an object. A slot holds one type, the last
+ * one that landed there. */
+#define KIND_SLOTS 256
+typedef struct {
+    PyTypeObject *t[KIND_SLOTS];
+    unsigned char k[KIND_SLOTS];
+} Kinds;
+
+static int kind_of(Kinds *ks, PyObject *o) {
+    PyTypeObject *t = Py_TYPE(o);
+    if (t == &PyList_Type || t == &PyTuple_Type) return K_SEQ;
+    if (t == &PyDict_Type) return K_DICT;
+    if (t == &PySet_Type || t == &PyFrozenSet_Type) return K_SET;
+    /* The common leaves, without a look in the table. */
+    if (t == &PyLong_Type || t == &PyUnicode_Type || t == &PyFloat_Type || t == &PyBool_Type ||
+        t == &PyBytes_Type || o == Py_None)
+        return K_NONE;
+    size_t j = (size_t)(mix64((uintptr_t)t) & (KIND_SLOTS - 1));
+    if (ks->t[j] != t) {
+        ks->k[j] = (unsigned char)type_kind(t);
+        ks->t[j] = t;
+    }
+    return ks->k[j];
 }
 
 /* Whether walking *o* can meet a set: a tuple of numbers and strings (a
  * million of them in a dict's values, say) is passed over without a look in
  * the table of objects seen. */
-static int worth(PyObject *o) {
-    if (!PyTuple_CheckExact(o)) return walked(o);
+static int worth(Kinds *ks, PyObject *o) {
+    int k = kind_of(ks, o);
+    if (k != K_SEQ || !PyTuple_Check(o)) return k != K_NONE;
     for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(o); i++)
-        if (walked(PyTuple_GET_ITEM(o, i))) return 1;
+        if (kind_of(ks, PyTuple_GET_ITEM(o, i)) != K_NONE) return 1;
     return 0;
+}
+
+/* Whether an OrderedDict iterates in the order of the dict under it, which
+ * a walk reads -- not so after a move_to_end -- and so its copy, built in
+ * its order, does too. Only for keys of str and int, whose hashes and
+ * comparisons run no Python as its iterator looks them up. */
+static int odict_in_dict_order(PyObject *o) {
+    Py_ssize_t pos = 0;
+    PyObject *k, *v;
+    while (PyDict_Next(o, &pos, &k, &v))
+        if (!PyUnicode_CheckExact(k) && !PyLong_CheckExact(k)) return 0;
+    PyObject *it = PyObject_GetIter(o);
+    if (!it) {
+        PyErr_Clear();
+        return 0;
+    }
+    int ok = 1;
+    pos = 0;
+    while (ok && PyDict_Next(o, &pos, &k, &v)) {
+        PyObject *x = PyIter_Next(it);
+        ok = x == k;
+        Py_XDECREF(x);
+    }
+    if (ok) {
+        PyObject *x = PyIter_Next(it);
+        ok = x == NULL;
+        Py_XDECREF(x);
+    }
+    if (PyErr_Occurred()) {
+        PyErr_Clear();
+        ok = 0;
+    }
+    Py_DECREF(it);
+    return ok;
 }
 
 /* A path step is a u32: containers too big for one are not walked into. */
 #define MAX_STEPS ((Py_ssize_t)(UINT32_MAX / 2))
 
+/* Push dict *o*'s keys and values that can hold a set, last first: the
+ * k-th key with step 2k, its value with 2k+1. */
+static int push_entries(Stack *st, Kinds *ks, PyObject *o, uint32_t d) {
+    Py_ssize_t n = PyDict_GET_SIZE(o), pos = 0, i = 0;
+    if (n > MAX_STEPS / 2) return 0;
+    /* A row of a few fields needs no allocation. */
+    Frame local[64], *pairs = (size_t)n * 2 <= 64 ? local : PyMem_Malloc((size_t)n * 2 * sizeof *pairs);
+    if (!pairs) return -1;
+    PyObject *k, *v;
+    uint32_t entry = 0;
+    /* At most 2n go in: a dict that grows while read cannot overrun it. */
+    while (PyDict_Next(o, &pos, &k, &v) && entry < (uint32_t)n) {
+        if (worth(ks, k)) {
+            pairs[i].o = k;
+            pairs[i++].idx = 2 * entry;
+        }
+        if (worth(ks, v)) {
+            pairs[i].o = v;
+            pairs[i++].idx = 2 * entry + 1;
+        }
+        entry++;
+    }
+    int bad = 0;
+    for (Py_ssize_t j = i - 1; j >= 0 && !bad; j--) bad = stack_push(st, pairs[j].o, d, pairs[j].idx) < 0;
+    if (pairs != local) PyMem_Free(pairs);
+    return bad ? -1 : 0;
+}
+
 /* Push *o*'s children that can hold a set, last first, so they are walked
  * in order; each with its step from *o* (see the top of this file). */
-static int push_children(Stack *st, PyObject *o, uint32_t depth) {
+static int push_children(Stack *st, Kinds *ks, PyObject *o, int kind, uint32_t depth) {
     uint32_t d = depth + 1;
     if (d == UINT32_MAX) return 0;
-    if (PyList_CheckExact(o) || PyTuple_CheckExact(o)) {
+    if (kind == K_SEQ) {
         Py_ssize_t n = PySequence_Fast_GET_SIZE(o);
         if (n > MAX_STEPS) return 0;
         PyObject **items = PySequence_Fast_ITEMS(o);
         for (Py_ssize_t i = n - 1; i >= 0; i--)
-            if (worth(items[i]) && stack_push(st, items[i], d, (uint32_t)i) < 0) return -1;
-    } else if (PyDict_CheckExact(o)) {
-        Py_ssize_t n = PyDict_GET_SIZE(o), pos = 0, i = 0;
-        if (n > MAX_STEPS / 2) return 0;
-        /* A row of a few fields needs no allocation. */
-        Frame local[64], *pairs = (size_t)n * 2 <= 64 ? local : PyMem_Malloc((size_t)n * 2 * sizeof *pairs);
-        if (!pairs) return -1;
-        PyObject *k, *v;
-        uint32_t entry = 0;
-        /* At most 2n go in: a dict that grows while read cannot overrun it. */
-        while (PyDict_Next(o, &pos, &k, &v) && entry < (uint32_t)n) {
-            if (worth(k)) {
-                pairs[i].o = k;
-                pairs[i++].idx = 2 * entry;
-            }
-            if (worth(v)) {
-                pairs[i].o = v;
-                pairs[i++].idx = 2 * entry + 1;
-            }
-            entry++;
-        }
-        int bad = 0;
-        for (Py_ssize_t j = i - 1; j >= 0 && !bad; j--) bad = stack_push(st, pairs[j].o, d, pairs[j].idx) < 0;
-        if (pairs != local) PyMem_Free(pairs);
-        if (bad) return -1;
-    } else if (is_set(o)) {
+            if (worth(ks, items[i]) && stack_push(st, items[i], d, (uint32_t)i) < 0) return -1;
+    } else if (kind == K_DICT || (kind == K_ODICT && odict_in_dict_order(o))) {
+        return push_entries(st, ks, o, d);
+    } else if (kind == K_SET) {
         PySetObject *so = (PySetObject *)o;
         PyObject *dummy = cwatch_set_dummy();
         if (so->used > MAX_STEPS) return 0;
@@ -357,7 +527,7 @@ static int push_children(Stack *st, PyObject *o, uint32_t depth) {
         for (Py_ssize_t i = 0; i <= so->mask && (Py_ssize_t)k < so->used; i++) {
             PyObject *key = so->table[i].key;
             if (!key || key == dummy) continue;
-            if (worth(key)) {
+            if (worth(ks, key)) {
                 keys[m].o = key;
                 keys[m++].idx = k;
             }
@@ -367,6 +537,30 @@ static int push_children(Stack *st, PyObject *o, uint32_t depth) {
         for (Py_ssize_t j = m - 1; j >= 0 && !bad; j--) bad = stack_push(st, keys[j].o, d, keys[j].idx) < 0;
         PyMem_Free(keys);
         if (bad) return -1;
+    } else if (kind == K_OBJ) {
+        PyTypeObject *t = Py_TYPE(o);
+        /* Slots after the __dict__'s entries: pushed first, walked last. */
+        PyObject *mro = t->tp_mro;
+        for (Py_ssize_t i = PyTuple_GET_SIZE(mro) - 1; i >= 0; i--) {
+            PyTypeObject *b = (PyTypeObject *)PyTuple_GET_ITEM(mro, i);
+            if (!(b->tp_flags & Py_TPFLAGS_HEAPTYPE)) continue;
+            for (PyMemberDef *m = b->tp_members; m && m->name; m++) {
+                if (!slot_member(m)) continue;
+                PyObject *v = *(PyObject **)((char *)o + m->offset);
+                if (v && worth(ks, v) && stack_push(st, v, d, SLOT_STEP | (uint32_t)m->offset) < 0) return -1;
+            }
+        }
+        if (has_dict(t)) {
+            PyObject *dict = PyObject_GenericGetDict(o, NULL);
+            if (!dict) { /* its sets are not laid out */
+                PyErr_Clear();
+                return 0;
+            }
+            /* The object holds it: it outlives the walk's reference. */
+            int r = PyDict_CheckExact(dict) ? push_entries(st, ks, dict, d) : 0;
+            Py_DECREF(dict);
+            if (r < 0) return -1;
+        }
     }
     return 0;
 }
@@ -384,6 +578,9 @@ static PyObject *py_set_layouts(PyObject *self, PyObject *const *args, Py_ssize_
     Stack st = {0};
     Seen seen = {0};
     Buf out = {0};
+    Kinds *ks = PyMem_Calloc(1, sizeof *ks);
+    if (!ks) return PyErr_NoMemory();
+    size_t objs = 0;
     uint32_t *path = NULL;
     size_t path_cap = 0, sets = 0;
     PyObject *result = NULL;
@@ -392,7 +589,11 @@ static PyObject *py_set_layouts(PyObject *self, PyObject *const *args, Py_ssize_
     while (!failed && st.n) {
         Frame f = st.items[--st.n];
         PyObject *o = f.o;
-        if (!walked(o)) continue;
+        int kind = kind_of(ks, o);
+        if (kind == K_NONE) continue;
+        /* Past so many instances, the rest are not walked into: the sets in
+         * plain containers are still laid out, not all given up. */
+        if (kind == K_OBJ && ++objs > MAX_OBJS) continue;
         /* One reference: only the one container holding it reaches it. */
         int fresh = Py_REFCNT(o) == 1 ? 1 : seen_add(&seen, o);
         if (fresh < 0) { failed = 1; break; }
@@ -409,7 +610,7 @@ static PyObject *py_set_layouts(PyObject *self, PyObject *const *args, Py_ssize_
             }
             path[f.depth - 1] = f.idx;
         }
-        if (is_set(o)) {
+        if (kind == K_SET) {
             PySetObject *so = (PySetObject *)o;
             if (so->used >= MIN_USED && (uint64_t)so->mask < UINT32_MAX) {
                 size_t n = 0, nd = 0;
@@ -428,7 +629,7 @@ static PyObject *py_set_layouts(PyObject *self, PyObject *const *args, Py_ssize_
                 sets++;
             }
         }
-        if (push_children(&st, o, f.depth) < 0) { failed = 1; break; }
+        if (push_children(&st, ks, o, kind, f.depth) < 0) { failed = 1; break; }
     }
     if (was) PyGC_Enable();
     if (!failed && !over && sets && put_u64(&out, blob_check((const unsigned char *)out.data, out.n)) < 0) failed = 1;
@@ -441,6 +642,7 @@ static PyObject *py_set_layouts(PyObject *self, PyObject *const *args, Py_ssize_
     } else {
         result = PyBytes_FromStringAndSize(out.data, (Py_ssize_t)out.n);
     }
+    PyMem_Free(ks);
     PyMem_Free(st.items);
     PyMem_Free(seen.slots);
     PyMem_Free(out.data);
@@ -566,25 +768,34 @@ static void cursor_start(Cursor *c, PyObject *o) {
     c->k = -1;
 }
 
+/* Step *t* into dict *o* (the k-th key for 2k, its value for 2k+1),
+ * carrying on from cursor *c*; NULL when it is not there. */
+static PyObject *dict_step(PyObject *o, uint32_t t, Cursor *c) {
+    int64_t k = t >> 1;
+    if (c->o != o || c->k > k) cursor_start(c, o);
+    while (c->k < k) {
+        if (!PyDict_Next(o, &c->pos, &c->key, &c->value)) return NULL;
+        c->k++;
+    }
+    return t & 1 ? c->value : c->key;
+}
+
 /* The object *path* leads to from *root*, or NULL: a step that is not there,
- * or one through a set left in the rebuild's order (*left*). */
+ * through an object a walk does not go into, or through a set left in the
+ * rebuild's order (*left*). Each step is read as the walk wrote it, by the
+ * kind of the object it starts from. */
 static PyObject *follow(PyObject *root, const unsigned char *path, uint32_t depth, Cursor *cur, const Seen *left) {
     PyObject *o = root, *dummy = cwatch_set_dummy();
     for (uint32_t j = 0; j < depth; j++) {
         uint32_t t = get_u32(path + 4 * (size_t)j);
         Cursor *c = &cur[j];
-        if (PyList_CheckExact(o) || PyTuple_CheckExact(o)) {
+        int kind = type_kind(Py_TYPE(o));
+        if (kind == K_SEQ) {
             if ((Py_ssize_t)t >= PySequence_Fast_GET_SIZE(o)) return NULL;
             o = PySequence_Fast_ITEMS(o)[t];
-        } else if (PyDict_CheckExact(o)) {
-            int64_t k = t >> 1;
-            if (c->o != o || c->k > k) cursor_start(c, o);
-            while (c->k < k) {
-                if (!PyDict_Next(o, &c->pos, &c->key, &c->value)) return NULL;
-                c->k++;
-            }
-            o = t & 1 ? c->value : c->key;
-        } else if (is_set(o)) {
+        } else if (kind == K_DICT || kind == K_ODICT) {
+            if (t & SLOT_STEP || !(o = dict_step(o, t, c))) return NULL;
+        } else if (kind == K_SET) {
             if (seen_has(left, o)) return NULL;
             PySetObject *so = (PySetObject *)o;
             int64_t k = t;
@@ -596,6 +807,19 @@ static PyObject *follow(PyObject *root, const unsigned char *path, uint32_t dept
                 c->k++;
             }
             o = c->key;
+        } else if (kind == K_OBJ && t & SLOT_STEP) {
+            Py_ssize_t offset = (Py_ssize_t)(t & ~SLOT_STEP);
+            if (!has_slot(Py_TYPE(o), offset)) return NULL;
+            o = *(PyObject **)((char *)o + offset);
+            if (!o) return NULL;
+        } else if (kind == K_OBJ && has_dict(Py_TYPE(o))) {
+            PyObject *dict = PyObject_GenericGetDict(o, NULL);
+            if (!dict) {
+                PyErr_Clear();
+                return NULL;
+            }
+            Py_DECREF(dict); /* the object holds it */
+            if (!PyDict_CheckExact(dict) || !(o = dict_step(dict, t, c))) return NULL;
         } else {
             return NULL;
         }
@@ -644,7 +868,8 @@ static PyObject *py_apply_set_layouts(PyObject *self, PyObject *const *args, Py_
             cur_cap = depth;
         }
         PyObject *o = follow(args[0], path, depth, cur, &left);
-        int r = o && is_set(o) ? lay_out((PySetObject *)o, used, mask, nd, check, slots) : LEFT;
+        int is_set = o && type_kind(Py_TYPE(o)) == K_SET;
+        int r = is_set ? lay_out((PySetObject *)o, used, mask, nd, check, slots) : LEFT;
         if (r < 0) { failed = 1; break; }
         if (r == LAID) {
             laid++;
@@ -656,7 +881,7 @@ static PyObject *py_apply_set_layouts(PyObject *self, PyObject *const *args, Py_
         } else {
             kept++;
             /* What lies inside it was found by slot order there: not here. */
-            if (o && is_set(o) && seen_add(&left, o) < 0) { failed = 1; break; }
+            if (is_set && seen_add(&left, o) < 0) { failed = 1; break; }
         }
     }
     if (was) PyGC_Enable();
