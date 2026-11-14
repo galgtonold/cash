@@ -12,7 +12,9 @@
  *
  * Objects every copy shares anyway are not counted: atoms (None, bool,
  * int, float, complex, str, bytes), classes, functions and modules (pickle
- * names them, so a new copy holds the same ones), and tuples and
+ * names them, so a new copy holds the same ones), builtin functions bound
+ * to nothing, a module or such a shared object (`len`, `math.sqrt`; not
+ * `items.append`, which holds `items`), and tuples and
  * frozensets holding only those. A class with `__del__` (a copy kept
  * alive would delay it), or an object of any type other than an exact
  * dict, list, set, frozenset or tuple or an instance of a class defined in
@@ -99,7 +101,14 @@ static int is_shared(PyObject *o, int depth) {
     if (t == &PyLong_Type || t == &PyBool_Type || t == &PyFloat_Type || t == &PyComplex_Type ||
         t == &PyUnicode_Type || t == &PyBytes_Type)
         return 1;
-    if (PyType_Check(o) || PyModule_CheckExact(o) || PyFunction_Check(o) || PyCFunction_Check(o)) return 1;
+    if (PyType_Check(o) || PyModule_CheckExact(o) || PyFunction_Check(o)) return 1;
+    if (PyCFunction_Check(o)) {
+        /* a builtin function, or one bound to a module or class; a bound
+           method such as `items.append` holds its `__self__`, which is part
+           of the value unless shared itself */
+        PyObject *self = PyCFunction_GET_SELF(o);
+        return !self || PyModule_Check(self) || (depth < 8 && is_shared(self, depth + 1));
+    }
     if (depth < 8 && t == &PyTuple_Type) {
         for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(o); i++)
             if (!is_shared(PyTuple_GET_ITEM(o, i), depth + 1)) return 0;
@@ -156,11 +165,10 @@ typedef struct {
     int failed;     /* 1 not provable, -1 error */
 } Visit;
 
-/* a reference to `o` from inside the value. An object with one reference
-   is met by that one alone: only one with more is remembered, to be met
-   once (a tree's objects all have one). */
-static int count_ref(PyObject *o, void *arg) {
-    Visit *V = (Visit *)arg;
+/* a reference to `o` from inside the value, `o` walked in turn when `walk`.
+   An object with one reference is met by that one alone: only one with
+   more is remembered, to be met once (a tree's objects all have one). */
+static int count_ref_as(PyObject *o, Visit *V, int walk) {
     if (V->failed) return 0;
     if (!o || is_shared(o, 0)) return 0;
     if (!walkable_type(Py_TYPE(o))) { V->failed = 1; return 0; }
@@ -175,8 +183,74 @@ static int count_ref(PyObject *o, void *arg) {
     if (Py_TYPE(o)->tp_weaklistoffset) {
         if (weakrefs_of(o, V->weak) < 0 || (V->weakable && ov_push(V->weakable, o) < 0)) { V->failed = -1; return 0; }
     }
-    if (ov_push(V->stack, o) < 0 || (V->all && ov_push(V->all, o) < 0)) { V->failed = -1; return 0; }
+    if ((walk && ov_push(V->stack, o) < 0) || (V->all && ov_push(V->all, o) < 0)) { V->failed = -1; return 0; }
     return 0;
+}
+
+static int count_ref(PyObject *o, void *arg) { return count_ref_as(o, (Visit *)arg, 1); }
+
+/* An instance's managed dict, once made (`vars(x)`, `x.__dict__`, pickle
+   setting its state), or NULL: read in place, never made here. */
+static PyObject *managed_dict(PyObject *o) {
+    char *at = (char *)o - 3 * (Py_ssize_t)sizeof(PyObject *);
+#if PY_VERSION_HEX >= 0x030D0000
+    return *(PyObject **)at;
+#else
+    uintptr_t p = *(uintptr_t *)at;   /* 3.12: the dict, or its values tagged 1 */
+    return (p & 1) ? NULL : (PyObject *)p;
+#endif
+}
+
+typedef struct {
+    Visit *V;
+    PyObject *dict;
+    int met;
+} InstVisit;
+
+static int count_inst_ref(PyObject *o, void *arg) {
+    InstVisit *I = (InstVisit *)arg;
+    if (o && o == I->dict) I->met = 1;
+    return count_ref(o, I->V);
+}
+
+static int collect_ref(PyObject *o, void *arg) {
+    return o ? ov_push((ObjVec *)arg, o) : 0;
+}
+
+static int cmp_ptr(const void *a, const void *b) {
+    uintptr_t x = (uintptr_t)*(PyObject *const *)a, y = (uintptr_t)*(PyObject *const *)b;
+    return x < y ? -1 : x > y;
+}
+
+/* Walk an instance with a managed dict. Its `tp_traverse` reaches its
+   attributes through the dict, or -- where the instance still keeps them
+   inline (3.13 and later) -- through those inline values alone, leaving the
+   dict unseen: a reference to the dict held outside (`d = vars(x)`) would
+   go uncounted, and a reused copy share `d` with the caller. So a dict the
+   traverse did not reach is counted here as the instance's reference to
+   it, once its every value is shown met already (the dict and the inline
+   values are the same attributes), and not walked again. */
+static void walk_instance(PyObject *o, traverseproc tr, Visit *V, ObjVec *scratch) {
+    InstVisit I = {V, managed_dict(o), 0};
+    if (tr(o, count_inst_ref, &I) != 0) { V->failed = 1; return; }
+    if (V->failed || !I.dict || I.met) return;
+    if (!PyDict_CheckExact(I.dict)) { V->failed = 1; return; }
+    scratch->n = 0;
+    if (tr(o, collect_ref, scratch) != 0) { V->failed = PyErr_Occurred() ? -1 : 1; return; }
+    if (scratch->n > 1) qsort(scratch->v, scratch->n, sizeof *scratch->v, cmp_ptr);
+    Py_ssize_t pos = 0;
+    PyObject *k, *v;
+    while (PyDict_Next(I.dict, &pos, &k, &v)) {
+        /* inline values have names only; anything else, or a value the
+           traverse did not reach, is not provable */
+        if (!PyUnicode_CheckExact(k)) { V->failed = 1; return; }
+        if (is_shared(v, 0)) continue;
+        if (!scratch->n || !bsearch(&v, scratch->v, scratch->n, sizeof *scratch->v, cmp_ptr)) {
+            V->failed = 1;
+            return;
+        }
+    }
+    count_ref_as(I.dict, V, 0);
 }
 
 static PyObject *as_bytes(ObjVec *v) {
@@ -206,7 +280,7 @@ static PyObject *py_held_alone(PyObject *self, PyObject *const *args, Py_ssize_t
     PyObject *weak = PyList_New(0);
     if (!weak) return NULL;
     AddrCount seen = {0};
-    ObjVec stack = {0}, all = {0}, weakable = {0};
+    ObjVec stack = {0}, all = {0}, weakable = {0}, scratch = {0};
     PyObject *result = NULL;
     Visit V = {&seen, weak, &stack, record ? &all : NULL, record ? &weakable : NULL, 0, 0, 0};
     count_ref(root, &V);   /* the holder's reference */
@@ -215,7 +289,9 @@ static PyObject *py_held_alone(PyObject *self, PyObject *const *args, Py_ssize_t
     while (stack.n && !V.failed) {
         PyObject *o = stack.v[--stack.n];
         traverseproc tr = Py_TYPE(o)->tp_traverse;
-        if (tr && tr(o, count_ref, &V) != 0) { V.failed = 1; break; }
+        if (!tr) continue;
+        if (Py_TYPE(o)->tp_flags & Py_TPFLAGS_MANAGED_DICT) walk_instance(o, tr, &V, &scratch);
+        else if (tr(o, count_ref, &V) != 0) { V.failed = 1; break; }
     }
     if (V.failed < 0) goto done;
     /* each object's count is at least the references met to it: the sums
@@ -226,7 +302,7 @@ static PyObject *py_held_alone(PyObject *self, PyObject *const *args, Py_ssize_t
     if (objs && wk) result = Py_BuildValue("(OOOn)", weak, objs, wk, (Py_ssize_t)V.counts);
     Py_XDECREF(objs); Py_XDECREF(wk);
 done:
-    free(seen.addr); free(stack.v); free(all.v); free(weakable.v);
+    free(seen.addr); free(stack.v); free(all.v); free(weakable.v); free(scratch.v);
     Py_DECREF(weak);
     return result;
 }
