@@ -67,9 +67,12 @@ def status() -> dict:
     return {"enabled": ENABLED, "verify": VERIFY, "trees": len(_TREES), **STATS}
 
 
-def parse(src: str) -> ast.Module:
+def parse(src: str, path: str | None = None) -> ast.Module:
     """``ast.parse(src)``, shared with every earlier caller that parsed the
-    same text. Raises `SyntaxError` as the parse does (not remembered)."""
+    same text. Raises `SyntaxError` as the parse does (not remembered).
+
+    *path*, the file *src* was read from, lets the facts of its functions
+    be stored across processes too (`fact_store`)."""
     if not ENABLED:
         return ast.parse(src)
     hit = _TREES.get(src)
@@ -79,10 +82,14 @@ def parse(src: str) -> ast.Module:
         if VERIFY:
             _verify("tree", dumped, ast.dump(ast.parse(src), include_attributes=True))
             _verify("tree", dumped, ast.dump(tree, include_attributes=True))
-        return tree
-    tree = ast.parse(src)
-    STATS["parsed"] += 1
-    _TREES[src] = (tree, ast.dump(tree, include_attributes=True) if VERIFY else None)
+    else:
+        tree = ast.parse(src)
+        STATS["parsed"] += 1
+        _TREES[src] = (tree, ast.dump(tree, include_attributes=True) if VERIFY else None)
+    if path:
+        from . import fact_store
+
+        fact_store.register(tree, src, path)
     return tree
 
 
@@ -96,10 +103,18 @@ def stripped_def(func_def: ast.FunctionDef | ast.AsyncFunctionDef) -> ast.Functi
     return stripped
 
 
-def fact(node: ast.AST, name: Any, compute: Callable[[ast.AST], T]) -> T:
+def fact(
+    node: ast.AST,
+    name: Any,
+    compute: Callable[[ast.AST], T],
+    stored: tuple[str, Callable[[ast.AST, T], Any], Callable[[ast.AST, Any], T]] | None = None,
+) -> T:
     """``compute(node)``, remembered under *name* for the shared tree *node*
     comes from. *compute* must read nothing but *node* (and what *name*
-    spells out): the answer is reused for every walk that meets the tree."""
+    spells out): the answer is reused for every walk that meets the tree.
+
+    *stored*, ``(key, encode, decode)``, keeps it across processes as well
+    (`fact_store.kept`): *key* spells out what *name* does, without ids."""
     if not ENABLED:
         return compute(node)
     origin = _ORIGIN.get(node)
@@ -121,7 +136,12 @@ def fact(node: ast.AST, name: Any, compute: Callable[[ast.AST], T]) -> T:
         if VERIFY:
             _verify(f"fact {name!r}", answer, compute(node))
         return answer
-    answer = compute(node)
+    if stored is None:
+        answer = compute(node)
+    else:
+        from . import fact_store
+
+        answer = fact_store.kept(origin, node, stored[0], compute, stored[1], stored[2])
     STATS["facts"] += 1
     facts[key] = answer
     return answer

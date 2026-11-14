@@ -42,7 +42,7 @@ from .._active import active_config
 from ..tracking.tracker_context import untracked
 from . import tree_memo
 
-__all__ = ["StoredScanMismatch", "load_record", "save_record", "scan", "status"]
+__all__ = ["StoredScanMismatch", "load_record", "read_json", "save_record", "scan", "status", "store_dir", "write_json"]
 
 #: Layout of a stored file; a change makes every older one a miss.
 _FORMAT = 1
@@ -150,6 +150,26 @@ def _store_dir() -> Path | None:
         return None
 
 
+def store_dir() -> Path | None:
+    """Where stored analysis goes for this Python and this cash; None when
+    the store is off or the cache dir does not exist yet."""
+    return _store_dir()
+
+
+def read_json(file: Path) -> object:
+    """The JSON in *file*, or None when it cannot be read or parsed."""
+    try:
+        with untracked():
+            return json.loads(file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def write_json(directory: Path, file: Path, data: dict) -> bool:
+    """Write *data* to *file* in *directory*: best effort and atomic. Did it?"""
+    return _write(directory, file, data, counted=False)
+
+
 def load_record(kind: str, path: str, digest: str) -> dict | None:
     """The record an earlier process stored (`save_record`) for the file at
     *path* when its text digested to *digest*, under this Python and this
@@ -189,7 +209,7 @@ def _read(file: Path, kind: str, digest: str) -> frozenset[str] | None:
     return frozenset(names)
 
 
-def _write(directory: Path, file: Path, data: dict) -> None:
+def _write(directory: Path, file: Path, data: dict, counted: bool = True) -> bool:
     """Best effort, atomic: a reader sees the old file or the new one."""
     try:
         with untracked():
@@ -206,5 +226,7 @@ def _write(directory: Path, file: Path, data: dict) -> None:
                     pass
                 raise
     except OSError:
-        return
-    STATS["stored"] += 1
+        return False
+    if counted:
+        STATS["stored"] += 1
+    return True

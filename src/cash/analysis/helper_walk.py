@@ -45,7 +45,7 @@ from ..jit_functions import jit_python_function
 from ..loaded_code import code_objects_of
 from ..purity import is_pure, is_stateful
 from ..source_reading import getsourcelines, own_source
-from . import tree_memo
+from . import fact_store, tree_memo
 from .ambient_reads import log_helper_names, log_only_ambient_reads, method_namespace
 from .annotations import assume_safe_block_lines, audited_lines
 from .ast_util import bytecode_global_refs, resolve_callee
@@ -74,7 +74,13 @@ from .helper_code import (
     qualname_of,
 )
 from .mutable_globals import mutable_global_reads
-from .purity_flow import fresh_call_candidates, fresh_flow_nodes, resolve_fresh_call_candidates
+from .purity_flow import (
+    kept_fresh_call_candidates,
+    kept_fresh_flow_nodes,
+    kept_names,
+    resolve_fresh_call_candidates,
+    returns_memo,
+)
 from .purity_report import (
     ANSWERED_AT_RUN_TIME,
     ISSUE_AMBIENT_READ,
@@ -234,6 +240,18 @@ class HelperWalk:
     # --- the walk ---
 
     def run(self) -> PurityReport:
+        # One walk binds nothing anew: a helper's `returns_fresh` answer,
+        # asked of every body that calls it, is worked out once.
+        try:
+            with returns_memo():
+                self._run()
+        finally:
+            fact_store.flush()
+        if self._layer_failures and not self._unwalkable:
+            self._unwalkable = self._layer_failures[0]
+        return self._report()
+
+    def _run(self) -> None:
         while self._stack:
             func, depth, hash_only, reported = self._stack.pop()
             reported = reported and not (is_pure(func) or is_stateful(func))
@@ -252,9 +270,6 @@ class HelperWalk:
                 self._bodies_walked.add(walk_id)
             qualname = self._claim(func, walk_id, walked_reported, reported)
             self._visit(_Entry(func, depth, hash_only, reported), qualname)
-        if self._layer_failures and not self._unwalkable:
-            self._unwalkable = self._layer_failures[0]
-        return self._report()
 
     def _start(self) -> list[_Entry]:
         """The first entries: the root function, or, for ``@cash.cache`` over
@@ -485,7 +500,7 @@ class HelperWalk:
         self._record_walked_code(func)
 
         try:
-            tree = tree_memo.parse(src)
+            tree = tree_memo.parse(src, getattr(getattr(code_fn, "__code__", None), "co_filename", None))
         except SyntaxError:
             if entry.reported:
                 self._emit("_put_opaque", qualname)
@@ -608,7 +623,9 @@ class HelperWalk:
         func_def = tree_memo.stripped_def(func_def)
         param_names = _param_names(func_def)
         namespace, local_imports = self._body_namespace(func, func_def)
-        dispatch_issues = spell_static_dispatch(func_def, namespace, qualname)
+        # A new tree when a lookup was spelled: the shared one stays what
+        # its text parses to.
+        func_def, dispatch_issues = spell_static_dispatch(func_def, namespace, qualname)
         ambient_namespace = method_namespace(func, func_def, namespace)
         visitor = PurityVisitor(
             qualname=qualname,
@@ -1147,14 +1164,13 @@ def _fresh_name_nodes(func_def: ast.AST, namespace: dict[str, Any]) -> frozenset
     *namespace* on every walk."""
     calls: frozenset[int] = frozenset()
     if namespace:
-        candidates = tree_memo.fact(func_def, "fresh_call_candidates", fresh_call_candidates)
-        calls = resolve_fresh_call_candidates(candidates, namespace)
-    return tree_memo.fact(func_def, ("fresh_flow", calls), lambda node: fresh_flow_nodes(node, calls)) | calls
+        calls = resolve_fresh_call_candidates(kept_fresh_call_candidates(func_def), namespace)
+    return kept_fresh_flow_nodes(func_def, calls) | calls
 
 
 def _scope_locals(func_def: ast.AST) -> frozenset[str]:
     """`scope_locals`, kept with the tree."""
-    return tree_memo.fact(func_def, "scope_locals", scope_locals)
+    return kept_names(func_def, "scope_locals", scope_locals)
 
 
 def _param_names(func_def: ast.FunctionDef | ast.AsyncFunctionDef) -> frozenset[str]:

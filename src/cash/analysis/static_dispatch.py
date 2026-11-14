@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import builtins
+import copy
 import operator
 import sys
 from typing import Any
@@ -80,6 +81,39 @@ class _StaticDispatchSpeller(ast.NodeTransformer):
         #: at run time, which no rewrite can follow.
         self.untracked: list[tuple[int, str, str]] = []
 
+    def generic_visit(self, node: ast.AST) -> ast.AST:
+        """Visit the children, and return *node* itself when none changed,
+        else a copy of it holding the new ones: never changed in place, as
+        the tree is shared with every walk that parsed the same text
+        (`tree_memo`), where its facts are kept and stored."""
+        changed: dict[str, Any] = {}
+        for field, old in ast.iter_fields(node):
+            if isinstance(old, list):
+                new_list = []
+                for item in old:
+                    if isinstance(item, ast.AST):
+                        new = self.visit(item)
+                        if new is None:
+                            continue
+                        if not isinstance(new, ast.AST):
+                            new_list.extend(new)
+                            continue
+                        new_list.append(new)
+                    else:
+                        new_list.append(item)
+                if len(new_list) != len(old) or any(a is not b for a, b in zip(new_list, old)):
+                    changed[field] = new_list
+            elif isinstance(old, ast.AST):
+                new = self.visit(old)
+                if new is not old:
+                    changed[field] = new
+        if not changed:
+            return node
+        node = copy.copy(node)
+        for field, value in changed.items():
+            setattr(node, field, value)
+        return node
+
     def _is(self, node: ast.AST, target: Any) -> bool:
         """Does *node* (a name or a module attribute) name *target*?"""
         if isinstance(node, ast.Name) and node.id not in self._namespace:
@@ -112,7 +146,7 @@ class _StaticDispatchSpeller(ast.NodeTransformer):
         return None
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
-        self.generic_visit(node)
+        node = self.generic_visit(node)
         if not isinstance(node.ctx, ast.Load):
             return node
         key = _const_str(node.slice)
@@ -130,7 +164,7 @@ class _StaticDispatchSpeller(ast.NodeTransformer):
         return ast.copy_location(ast.Attribute(value=owner, attr=key, ctx=ast.Load()), node)
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
-        self.generic_visit(node)
+        node = self.generic_visit(node)
         func = node.func
         # sys.modules.get("pkg.mod")
         if isinstance(func, ast.Attribute) and func.attr == "get" and self._is_sys_modules(func.value) and node.args:
@@ -186,9 +220,12 @@ class _StaticDispatchSpeller(ast.NodeTransformer):
         return node
 
 
-def spell_static_dispatch(func_def: ast.AST, namespace: dict[str, Any], qualname: str) -> list[PurityIssue]:
-    """Rewrite, in place, lookups by a CONSTANT string into what they name, and
-    report the ones whose name is computed at run time.
+def spell_static_dispatch(
+    func_def: ast.AST, namespace: dict[str, Any], qualname: str
+) -> tuple[ast.AST, list[PurityIssue]]:
+    """*func_def* with the lookups by a CONSTANT string rewritten into what
+    they name (a new tree sharing what did not change, or *func_def* itself
+    when nothing did), and the ones whose name is computed at run time.
 
     ``sys.modules["helper"].g(x)``, ``globals()["helper"].g(x)``,
     ``vars(helper)["g"](x)``, ``helper.__dict__["g"](x)``,
@@ -201,7 +238,7 @@ def spell_static_dispatch(func_def: ast.AST, namespace: dict[str, Any], qualname
     a computed name is reported like the dispatch it is.
     """
     speller = _StaticDispatchSpeller(namespace)
-    speller.visit(func_def)
-    return [
+    spelled = speller.visit(func_def)
+    return spelled, [
         PurityIssue(kind=kind, description=what, where=qualname, line=line) for line, kind, what in speller.untracked
     ]

@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import ast
 import types
+from collections.abc import Iterator
+from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any
 
@@ -35,9 +37,13 @@ __all__ = [
     "fresh_flow_nodes",
     "library_fresh_calls",
     "fresh_call_candidates",
+    "kept_fresh_call_candidates",
+    "kept_fresh_flow_nodes",
+    "kept_names",
     "resolve_fresh_call_candidates",
     "receiver_is_fresh",
     "returns_fresh",
+    "returns_memo",
     "LogOnlyFlow",
     "is_log_helper",
     "is_log_line",
@@ -565,8 +571,114 @@ def fresh_call_candidates(func_def: ast.AST) -> tuple[ast.Call, ...]:
     return tuple(found)
 
 
+def kept_fresh_call_candidates(func_def: ast.AST) -> tuple[ast.Call, ...]:
+    """`fresh_call_candidates`, kept with the tree and on disk (`fact_store`)."""
+    from . import tree_memo
+
+    return tree_memo.fact(
+        func_def,
+        "fresh_call_candidates",
+        fresh_call_candidates,
+        ("fresh_call_candidates", _nodes_encoded, _calls_decoded),
+    )
+
+
+def kept_fresh_flow_nodes(func_def: ast.AST, calls: frozenset[int]) -> frozenset[int]:
+    """`fresh_flow_nodes`, kept with the tree and on disk under which of its
+    calls *calls* names (`fact_store`)."""
+    from . import tree_memo
+
+    def key() -> str:
+        from .fact_store import indices_of
+
+        return "fresh_flow:" + ",".join(map(str, sorted(indices_of(_walk_index(func_def), calls))))
+
+    return tree_memo.fact(
+        func_def,
+        ("fresh_flow", calls),
+        lambda node: fresh_flow_nodes(node, calls),
+        (key, _id_set_encoded, _id_set_decoded),
+    )
+
+
+def kept_names(func_def: ast.AST, name: str, compute: Any) -> frozenset[str]:
+    """``compute(func_def)``, a set of names, kept with the tree and on disk."""
+    from . import fact_store, tree_memo
+
+    return tree_memo.fact(func_def, name, compute, (name, fact_store.names_encoded, fact_store.names_decoded))
+
+
+def _walk_nodes(func_def: ast.AST) -> list[ast.AST]:
+    from . import tree_memo
+
+    return tree_memo.fact(func_def, "walk_nodes", lambda node: list(ast.walk(node)))
+
+
+def _walk_index(func_def: ast.AST) -> dict[int, int]:
+    from . import fact_store, tree_memo
+
+    return tree_memo.fact(func_def, "walk_index", fact_store.node_index)
+
+
+def _nodes_encoded(func_def: ast.AST, nodes: Any) -> list[int]:
+    from .fact_store import indices_of
+
+    return indices_of(_walk_index(func_def), [id(n) for n in nodes])
+
+
+def _calls_decoded(func_def: ast.AST, value: Any) -> tuple[ast.Call, ...]:
+    from .fact_store import at_indices
+
+    return tuple(at_indices(_walk_nodes(func_def), value, ast.Call))
+
+
+def _returns_decoded(func_def: ast.AST, value: Any) -> tuple[ast.Return, ...]:
+    from .fact_store import at_indices
+
+    return tuple(at_indices(_walk_nodes(func_def), value, ast.Return))
+
+
+def _id_set_encoded(func_def: ast.AST, ids: frozenset[int]) -> list[int]:
+    from .fact_store import indices_of
+
+    return sorted(indices_of(_walk_index(func_def), ids))
+
+
+def _id_set_decoded(func_def: ast.AST, value: Any) -> frozenset[int]:
+    from .fact_store import at_indices
+
+    return frozenset(id(n) for n in at_indices(_walk_nodes(func_def), value))
+
+
 def resolve_fresh_call_candidates(candidates: tuple[ast.Call, ...], namespace: dict[str, Any]) -> frozenset[int]:
-    """The `library_fresh_calls` among *candidates*, resolved through *namespace*."""
+    """The `library_fresh_calls` among *candidates*, resolved through *namespace*.
+
+    The `returns_fresh` answers it works out are shared by everything this
+    call reaches: a library's helpers call the same few helpers, and each
+    was otherwise followed again for every caller (thousands of times for
+    one walk of nilearn). Nothing is bound anew while it runs, and an
+    answer is kept per depth, as the depth limit makes it.
+    """
+    with returns_memo():
+        return _resolve_candidates(candidates, namespace)
+
+
+@contextmanager
+def returns_memo() -> Iterator[None]:
+    """Share the `returns_fresh` answers worked out inside the block (a
+    whole helper walk): nothing may be bound anew in it. Nested, the outer
+    one is kept."""
+    if _RETURNS_MEMO.get() is not None:
+        yield
+        return
+    token = _RETURNS_MEMO.set({})
+    try:
+        yield
+    finally:
+        _RETURNS_MEMO.reset(token)
+
+
+def _resolve_candidates(candidates: tuple[ast.Call, ...], namespace: dict[str, Any]) -> frozenset[int]:
     found: set[int] = set()
     for node in candidates:
         obj = _resolve_callee(node.func, namespace)
@@ -586,6 +698,8 @@ _RETURNS_DEPTH_LIMIT = 3
 _RETURNS_DEPTH: ContextVar[int] = ContextVar("_RETURNS_DEPTH", default=0)
 #: CO_GENERATOR | CO_COROUTINE | CO_ITERABLE_COROUTINE | CO_ASYNC_GENERATOR
 _RESUMABLE_FLAGS = 0x20 | 0x80 | 0x100 | 0x200
+#: (function, depth) -> `returns_fresh`, for one `resolve_fresh_call_candidates`.
+_RETURNS_MEMO: ContextVar[dict[tuple[Any, int], bool] | None] = ContextVar("_RETURNS_MEMO", default=None)
 
 
 def returns_fresh(fn: Any) -> bool:
@@ -609,6 +723,17 @@ def returns_fresh(fn: Any) -> bool:
     depth = _RETURNS_DEPTH.get()
     if depth >= _RETURNS_DEPTH_LIMIT:
         return False
+    memo = _RETURNS_MEMO.get()
+    if memo is None:
+        return _returns_fresh(fn, code, depth)
+    key = (fn, depth)
+    answer = memo.get(key)
+    if answer is None:
+        answer = memo[key] = _returns_fresh(fn, code, depth)
+    return answer
+
+
+def _returns_fresh(fn: types.FunctionType, code: types.CodeType, depth: int) -> bool:
     func_def = _users_function_def(fn)
     if func_def is None:
         return False
@@ -617,18 +742,19 @@ def returns_fresh(fn: Any) -> bool:
     namespace: Any = fn.__globals__
     if code.co_freevars:
         namespace = {k: v for k, v in namespace.items() if k not in code.co_freevars}
+    from . import tree_memo
+
     token = _RETURNS_DEPTH.set(depth + 1)
     try:
-        from . import tree_memo
-
-        candidates = tree_memo.fact(func_def, "fresh_call_candidates", fresh_call_candidates)
-        calls = resolve_fresh_call_candidates(candidates, namespace)
-        marks = tree_memo.fact(func_def, ("fresh_flow", calls), lambda node: fresh_flow_nodes(node, calls)) | calls
+        calls = resolve_fresh_call_candidates(kept_fresh_call_candidates(func_def), namespace)
+        marks = kept_fresh_flow_nodes(func_def, calls) | calls
     finally:
         _RETURNS_DEPTH.reset(token)
-    escaped = tree_memo.fact(func_def, "escaped_names", _escaped_names)
+    escaped = kept_names(func_def, "escaped_names", _escaped_names)
     returned = False
-    for node in _own_returns(func_def):
+    for node in tree_memo.fact(
+        func_def, "own_returns", _own_returns, ("own_returns", _nodes_encoded, _returns_decoded)
+    ):
         value = node.value
         if value is None or isinstance(value, ast.Constant):
             continue
@@ -678,16 +804,22 @@ def _users_function_def(fn: types.FunctionType) -> ast.FunctionDef | ast.AsyncFu
     if not is_pseudo_filename(filename) and not is_user_path(filename):
         return None
     try:
-        tree = tree_memo.parse(textwrap.dedent(own_source(fn)))
+        tree = tree_memo.parse(textwrap.dedent(own_source(fn)), filename)
     except (*SOURCE_RETRIEVAL_ERRORS, SyntaxError):
         return None
+    func_def = tree_memo.fact(tree, "first_def", _first_def)
+    return func_def if func_def is not None and func_def.name == fn.__code__.co_name else None
+
+
+def _first_def(tree: ast.AST) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+    """The first function definition in *tree*, breadth first."""
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            return node if node.name == fn.__code__.co_name else None
+            return node
     return None
 
 
-def _own_returns(func_def: ast.AST) -> list[ast.Return]:
+def _own_returns(func_def: ast.AST) -> tuple[ast.Return, ...]:
     """The ``return`` statements of *func_def*'s own body, not of a function
     or class nested in it."""
     out: list[ast.Return] = []
@@ -699,7 +831,7 @@ def _own_returns(func_def: ast.AST) -> list[ast.Return]:
         if isinstance(node, ast.Return):
             out.append(node)
         stack.extend(ast.iter_child_nodes(node))
-    return out
+    return tuple(out)
 
 
 #: `library_fresh_calls` of the body the flow pass is walking.
