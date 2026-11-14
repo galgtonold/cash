@@ -18,6 +18,7 @@ import dataclasses
 import functools
 import importlib
 import pathlib
+import re
 import sys
 import textwrap
 import typing
@@ -148,6 +149,11 @@ def test_a_segment_over_a_fixed_stdlib_value_is_reused(c, mod, name):
     _reused(c, f)
 
 
+def _value_id(value):
+    """A collection id that is the same in every xdist worker (no address)."""
+    return re.sub(r" at 0x[0-9a-f]+", "", repr(value))
+
+
 @pytest.mark.parametrize(
     "value",
     [
@@ -166,7 +172,7 @@ def test_a_segment_over_a_fixed_stdlib_value_is_reused(c, mod, name):
         typing.Any,
         functools.lru_cache(maxsize=None)(len),
     ],
-    ids=repr,
+    ids=_value_id,
 )
 def test_the_scan_takes_each_fixed_value(value):
     scan = hit_memo._Scan("m")
