@@ -93,6 +93,7 @@ __all__ = [
     "build",
     "covers",
     "end",
+    "first_import_digest",
     "note_cached_hit",
     "static_codes",
     "verify",
@@ -970,6 +971,22 @@ def _import_digest(name: str) -> str | None:
     if not spec.origin or spec.origin in ("built-in", "frozen"):
         return "builtin:" + name
     return _file_digest(spec.origin)
+
+
+def first_import_digest(name: str, was: str | None = None) -> str | None:
+    """The file of module *name*, a module of the user's first imported
+    inside a unit (`_import_digest`). Not loaded, and its file the one *was*
+    recorded, it is imported, as the unit's own import would: the items that
+    name its code then find it."""
+    if name in sys.modules or was is None:
+        return _import_digest(name)
+    now = _import_digest(name)
+    if now == was and was != _ABSENT:
+        try:
+            importlib.import_module(name)
+        except Exception:  # noqa: BLE001 - not imported: its code items say it is gone
+            return None
+    return now
 
 
 class _Build:

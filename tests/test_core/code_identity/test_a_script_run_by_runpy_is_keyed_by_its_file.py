@@ -14,6 +14,7 @@ editing the driver's function, or the script's, recomputes. A script run as
 
 from __future__ import annotations
 
+import sys
 import textwrap
 
 import pytest
@@ -21,6 +22,14 @@ import pytest
 from tests._scripts import run_python
 
 pytestmark = [pytest.mark.core, pytest.mark.timeout(300)]
+
+#: ``run`` picks ``helper`` by a run-time name (``getattr(__main__, STEP)``):
+#: served only on what its trace recorded it ran.
+needs_trace = pytest.mark.skipif(
+    sys.version_info < (3, 12),
+    reason="what a call ran is recorded with sys.monitoring, Python 3.12+; below it a call that picks code "
+    "by a run-time name runs every time, with a warning",
+)
 
 TRAIN = textwrap.dedent("""
     import sys
@@ -66,6 +75,7 @@ def _run(tmp_path, script):
     return proc.stdout.strip().splitlines()[-1], proc.stderr
 
 
+@needs_trace
 def test_a_driver_function_that_ran_inside_hits_in_the_next_process(tmp_path):
     _write(tmp_path)
     out, err = _run(tmp_path, "driver.py")
@@ -87,9 +97,20 @@ def test_editing_the_driver_or_the_script_recomputes(tmp_path):
     assert "[RUN]" in err and out == "[LOG] 21", f"an edit to the script served the old result: {out}"
 
 
+@needs_trace
 def test_the_script_run_directly_still_hits(tmp_path):
     _write(tmp_path)
     out, err = _run(tmp_path, "train.py")
     assert out == "16" and "[RUN]" in err
     out, err = _run(tmp_path, "train.py")
     assert out == "16" and "[RUN]" not in err, err[-1500:]
+
+
+@pytest.mark.skipif(sys.version_info >= (3, 12), reason="below Python 3.12 nothing records what a call ran")
+@pytest.mark.parametrize("script", ["driver.py", "train.py"])
+def test_without_a_trace_the_call_runs_every_time_and_says_why(tmp_path, script):
+    _write(tmp_path)
+    for _ in range(2):
+        out, err = _run(tmp_path, script)
+        assert out.endswith("16") and "[RUN]" in err
+        assert "KEY-UNTRACKABLE-DEP" in err and "train.run" in err, err[-1500:]

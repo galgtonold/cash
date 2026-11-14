@@ -87,16 +87,20 @@ def _reader(depth: int) -> tuple[Any, bool]:
 
 def _reader_counts() -> bool:
     frame, one = _reader(3)
-    if frame is None or not one:
+    if frame is None:
         return False
     copy = getattr(_copying, "state", None)
     if copy is not None and copy[0] is frame:
+        # Counted down whatever the lookup (``os.environ.items()`` looks up
+        # every name through ``__iter__``): left set, the state held the
+        # reader's frame, and every frame below it, with the locals they
+        # had -- a cached call's result among them, read as held elsewhere.
         if copy[1] > 1:
             _copying.state = (frame, copy[1] - 1)
         else:
             _copying.state = None
         return False
-    return _counts(frame.f_code.co_filename)
+    return one and _counts(frame.f_code.co_filename)
 
 
 def _getitem(self, key):
@@ -161,6 +165,9 @@ def recording() -> Iterator[set[str]]:
         yield reads
     finally:
         _READS.reset(token)
+        # A copy left before its end (a loop over ``os.environ`` that
+        # breaks) holds no frame past the block: its later lookups count.
+        _copying.state = None
         if outer is not None:
             outer |= reads
 
