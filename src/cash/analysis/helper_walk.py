@@ -228,6 +228,10 @@ class HelperWalk:
         self._record: list[tuple[str, tuple]] | None = None
         #: (id(body), id(callee)) for each exec()/eval()-built callee judged.
         self._exec_built_sites: set[tuple[int, int]] = set()
+        #: ``(module, attribute prefix, dotted submodules)`` of each import
+        #: written in an audited body: what it binds depends on what is
+        #: loaded (`report_store` checks it again).
+        self._local_imports: dict[tuple[str, tuple[str, ...], tuple[str, ...]], None] = {}
         #: Walk ids walked for their body, not only for the key (hash-only).
         self._bodies_walked: set[Any] = set()
         #: Functions audited with their findings reported, in walk order.
@@ -236,6 +240,20 @@ class HelperWalk:
         #: (`PurityReport.audited_whole`).
         self.composable = True
         self._stack: list[_Entry] = self._start()
+
+    # --- what a stored report is checked against (`report_store`) ---
+
+    def visited(self) -> list[Any]:
+        """Every callable the walk visited, in walk order."""
+        return list(self._keep_alive)
+
+    def visited_names(self) -> dict[int, str]:
+        """``id`` of each visited callable -> the name its key part went under."""
+        return {id(f): self._walked_names[_walk_id(f)] for f in self._keep_alive if _walk_id(f) in self._walked_names}
+
+    def local_imports_read(self) -> list[tuple[str, tuple[str, ...], tuple[str, ...]]]:
+        """The imports written in the audited bodies (`_put_local_import`)."""
+        return list(self._local_imports)
 
     # --- the walk ---
 
@@ -455,6 +473,9 @@ class HelperWalk:
 
     def _put_site_path(self, path: BindingPath, waived: bool) -> None:
         (self._waived_paths if waived else self._unwaived_paths).add(path)
+
+    def _put_local_import(self, read: tuple[str, tuple[str, ...], tuple[str, ...]]) -> None:
+        self._local_imports.setdefault(read, None)
 
     def _put_unkeyable(self, why: str) -> None:
         self._unkeyable.append(why)
@@ -694,6 +715,7 @@ class HelperWalk:
         dotted = dotted_imports(func_def)
         self._unvouched = {}
         for local, (module_name, prefix) in local_imports.items():
+            self._emit("_put_local_import", (module_name, prefix, tuple(dotted.get(local, ()))))
             obj = resolve_local_import(module_name, prefix)
             if obj is not None:
                 namespace[local] = obj
@@ -784,7 +806,7 @@ class HelperWalk:
         class keeps, which no key holds. On 3.12+ the trace of what the call
         ran checks it (`cash.decorator.code_trace`); before, the call runs
         uncached, with the warning that says why."""
-        if not body.reported or not _untraced():
+        if not body.reported or not untraced():
             return
         decider = next(
             (
@@ -1239,7 +1261,7 @@ _CHECKS = ("isinstance", "issubclass")
 _DECIDERS = ("__instancecheck__", "__subclasscheck__")
 
 
-def _untraced() -> bool:
+def untraced() -> bool:
     """Does nothing record what a cached call ran? Before Python 3.12, or
     with ``CASH_TRACE=0`` (`cash.decorator.code_trace.on`)."""
     return sys.version_info < (3, 12) or os.environ.get("CASH_TRACE", "").strip().lower() in ("0", "off", "false", "no")

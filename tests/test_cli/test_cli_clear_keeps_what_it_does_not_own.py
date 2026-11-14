@@ -168,6 +168,10 @@ def test_a_notebook_cache_with_a_user_file_is_still_refused(tmp_path, monkeypatc
         ("old.data", False),
         ("notes.json.4242.tmp", False),
         ("raw/_rank.log", False),
+        ("analysis/ad0b4dc009028289f10b25d1cb9965ac/1d14598b6f77a0ee9b138fda.json", True),  # stored analysis
+        ("analysis/ad0b4dc009028289f10b25d1cb9965ac/.tmp-k2j3h4.json", True),
+        ("analysis/notes/1d14598b6f77a0ee9b138fda.json", False),
+        ("analysis/ad0b4dc009028289f10b25d1cb9965ac/notes.json", False),
     ],
 )
 def test_temp_files_of_cash_writes_are_cash_files(name, cash_wrote_it):
