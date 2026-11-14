@@ -37,7 +37,9 @@ ADDS = "df['k1'] = 1\ndf['k2'] = 2\ndf['k3'] = 3\ndf['k4'] = 4"
 def _count_reads(monkeypatch) -> dict[str, int]:
     """Count the reads (`_Walk._read_nested` at C speed) of the sessions
     column, a list of lists, and of ``recs``, a list of tuples: ``recs``
-    holds the column's lists too, so it is checked with ``df``."""
+    holds the column's lists too, so it is checked with ``df``. ``recs``
+    alone is plain data, proven holding no id() a level at a time
+    (`_plain_tree_without_ids`) and never read so."""
     reads = {"column": 0, "recs": 0}
     real = identity_holders._NESTED_LEAVES
 
@@ -53,9 +55,9 @@ def _count_reads(monkeypatch) -> dict[str, int]:
 def test_the_column_is_read_once_in_a_cell_of_four_statements(cash_magics, monkeypatch):
     reads = _count_reads(monkeypatch)
     run_cash_cell(cash_magics, MAKE)
-    assert reads == {"column": 1, "recs": 1}
+    assert reads == {"column": 1, "recs": 0}
     run_cash_cell(cash_magics, ADDS)
-    assert reads == {"column": 1, "recs": 1}
+    assert reads == {"column": 1, "recs": 0}
 
 
 def test_the_column_is_not_read_again_by_the_next_cells(cash_magics, monkeypatch):
@@ -63,15 +65,15 @@ def test_the_column_is_not_read_again_by_the_next_cells(cash_magics, monkeypatch
     run_cash_cell(cash_magics, MAKE)
     run_cash_cell(cash_magics, "df['k1'] = 1")
     run_cash_cell(cash_magics, "df['k2'] = 2")
-    assert reads == {"column": 1, "recs": 1}
+    assert reads == {"column": 1, "recs": 0}
 
 
 def test_a_changed_column_is_read_again(cash_magics, monkeypatch):
     reads = _count_reads(monkeypatch)
     run_cash_cell(cash_magics, MAKE)
     run_cash_cell(cash_magics, "df['k1'] = 1\nrecs[5][1].append(('b', t0))\ndf['k2'] = 2\ndf['k3'] = 3")
-    # When made, and once after the change: the list changed is in both.
-    assert reads == {"column": 2, "recs": 2}
+    # When made, and once after the change.
+    assert reads == {"column": 2, "recs": 0}
 
 
 def test_a_column_changed_in_a_later_cell_is_read_again(cash_magics, monkeypatch):
@@ -84,8 +86,10 @@ def test_a_column_changed_in_a_later_cell_is_read_again(cash_magics, monkeypatch
 
 def test_a_reading_of_many_numbers_is_kept_for_its_cell_alone():
     identity_holders.forget_flat_reads()
-    # Numbers as big as an address: each one read is kept.
-    rows = [[(identity_holders._LOWEST_ADDRESS + i, 1)] for i in range(12_000)]
+    # Numbers that could be addresses, around an object's: each one read
+    # is kept. (Plain data holding none is proven without this read.)
+    base = id(object()) // 8 * 8
+    rows = [[(base + 8 * i, 1)] for i in range(12_000)]
     identity_holders.identity_held_reason("rows", rows, {"rows": rows})
     kept = identity_holders._KEPT_SHAPE_NUMBERS
     assert any(len(numbers) > kept for numbers, _lists, _nodes in identity_holders._SHAPE_READS.values())

@@ -715,19 +715,28 @@ class ControlStructureProcessor:
                 inherited_annotation,
             )
             top = self._unit_occurrence
-            metrics = self.statement_processor.process_statement(
-                code,
-                ttl,
-                silent,
-                annotation=annotation,
-                occurrence_index=top[1] if top is not None and top[0] is node else 0,
-                stream_output=True,
-                force_outputs=force_outputs,
-                walked=walked,
-                loop_iterable=header_value,
-                header_files=header_files,
-                header_remote=header_remote,
-            )
+            statements = self.statement_processor
+            # Outside a loop's pass, the structure's share check follows the
+            # statement's, here or in the loop that handed it the rest
+            # (``update_lineage``): the statement may leave names to it.
+            follows = statements.structure_share_check_follows
+            statements.structure_share_check_follows = code if _helpers.current_loop_pass(self) is None else None
+            try:
+                metrics = statements.process_statement(
+                    code,
+                    ttl,
+                    silent,
+                    annotation=annotation,
+                    occurrence_index=top[1] if top is not None and top[0] is node else 0,
+                    stream_output=True,
+                    force_outputs=force_outputs,
+                    walked=walked,
+                    loop_iterable=header_value,
+                    header_files=header_files,
+                    header_remote=header_remote,
+                )
+            finally:
+                statements.structure_share_check_follows = follows
             return self._finalize_single_unit(node, code, metrics, update_lineage)
         except Exception as e:  # broad fallback wrapping arbitrary user code executed as a unit
             # Handed back to the cell, which raises it; logged above debug it

@@ -38,6 +38,7 @@ def test_an_error_in_the_walk_refuses_the_value(monkeypatch):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(_Walk, "run", fail)
-    held = identity_held_reason("deltas", [1, 2], {})
+    # A set: not plain data, so the walk object by object reads it.
+    held = identity_held_reason("deltas", [1, 2, {3}], {})
     assert isinstance(held, IdentityHeld) and held.name == "deltas"
     assert "could not look through 'deltas'" in held.what and "boom" in held.what

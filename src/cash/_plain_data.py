@@ -1445,9 +1445,31 @@ def _tree_walk(value: Any, leaves: frozenset):
 def tree_walk(value: Any) -> list | None:
     """The levels of JSON-like *value* over any leaf (`_tree_walk`), or None
     for anything else: walked once for both `tree_size` and `spine_copy`
-    when a value is sized and then copied, each walk a pass over every leaf."""
+    when a value is sized and then copied, each walk a pass over every leaf.
+
+    A value a `one_look` is about is walked with its `tree_facts`, which the
+    look keeps, and not at all when the look found it is no tree: the
+    identity check reads its leaves before the share check, the closure
+    check and the RAM tier ask for its facts. The levels are not kept: they
+    hold every container, and the checks in the look count references."""
     if type(value) not in TREE_NODES:
         return None
+    look = _LOOKED.get()
+    if look is not None:
+        name = _name_in(look[0], value)
+        if name is not None:
+            found, facts = _known_facts(look, value)
+            if found and facts is None:
+                return None
+            if not found:
+                walk: list | None = []
+                try:
+                    with _gc_paused():
+                        facts = _tree_facts(value, None, walk)
+                except (_NotPlain, TypeError):
+                    facts, walk = None, None
+                look[1][id(value)] = (name, facts)
+                return walk
     if _K is not None:
         got = _K.tree_facts(value, _facts_leaves(), True, 0, _picks, 3)
         if got is not NotImplemented:

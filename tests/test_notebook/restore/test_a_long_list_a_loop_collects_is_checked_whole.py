@@ -12,10 +12,13 @@ past the count while the share check it runs in has time left.
 
 Positive controls: a numpy integer that is the ``id()`` of a variable's
 object is still found among the scalars and in the records, and outside a
-share check's time the walk still stops at its count.
+share check's time the walk still stops at its count on records holding
+objects; plain records are read whole (`_plain_tree_without_ids`).
 """
 
 from __future__ import annotations
+
+import types
 
 import pytest
 
@@ -58,8 +61,15 @@ def test_records_past_the_count_are_read_whole_within_a_share_check():
         assert identity_held_reason("results", results, {"results": results}) is None
 
 
-def test_records_past_the_count_outside_a_share_check_are_given_up_on():
+def test_plain_records_past_the_count_outside_a_share_check_are_read_whole():
+    """Dicts of numbers and strings: plain data, read a level at a time
+    whatever their count."""
     results = _records(N)
+    assert identity_held_reason("results", results, {"results": results}) is None
+
+
+def test_records_of_objects_past_the_count_outside_a_share_check_are_given_up_on():
+    results = [{"line": i, "at": types.SimpleNamespace(i=i)} for i in range(N)]
     held = identity_held_reason("results", results, {"results": results})
     assert held is not None and "more objects than cash looks through" in held
 
