@@ -132,7 +132,10 @@ def test_the_memo_key_is_the_exact_type_and_the_bytes():
     ]
     keys = [_key(v) for v in values]
     assert None not in keys
-    assert len(set(keys)) == len(values)
+    # np.longlong is np.int64 itself where C long is 32 bits (Windows): the
+    # same value of the same type, which must key alike, not a collision.
+    distinct = {(type(v), v.tobytes() if isinstance(v, np.generic) else repr(v)) for v in values}
+    assert len(set(keys)) == len(distinct)
     assert _key(np.int64(3)) == _key(np.int64(3))
     assert _key(_nan(0x7FF8000000000001)) == _key(_nan(0x7FF8000000000001))
     assert _key([np.int64(1), np.float64(2)]) is not None  # in a small list too
@@ -165,3 +168,26 @@ def test_numpy_is_not_imported_to_key_without_it(monkeypatch):
     monkeypatch.delitem(sys.modules, "numpy")
     assert hit_memo.numpy_scalars_keyed() == 0
     assert "numpy" not in sys.modules
+
+
+def test_each_numpy_number_type_keys_three_apart_and_one_type_alike():
+    """Every type the extension takes, on this platform's own mapping of C
+    types (``np.longlong is np.int64`` and ``np.long`` a separate 32-bit
+    type on Windows): two keys are equal exactly when the type object and
+    the bytes are."""
+    from cash._plain_data import numpy_scalar_types
+
+    hit_memo.numpy_scalars_keyed()
+    types = numpy_scalar_types()
+    assert np.int64 in types and np.int32 in types
+    keys = {}
+    for t in types:
+        three = t(3) if t is not np.bool_ else t(True)
+        k = _key(three)
+        assert k is not None, t
+        assert _key(t(three)) == k
+        assert k not in keys, (t, keys.get(k))
+        keys[k] = t
+    assert (_key(np.longlong(3)) == _key(np.int64(3))) == (np.longlong is np.int64)
+    assert (_key(np.intc(3)) == _key(np.int32(3))) == (np.intc is np.int32)
+    assert _key(np.int64(3)) != _key(np.int64(4))
