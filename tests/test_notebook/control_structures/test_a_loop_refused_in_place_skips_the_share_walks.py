@@ -37,6 +37,10 @@ LOOP = (
     "    frames.append(new)\n"
     "    df = pd.concat([df, new])"
 )
+# On a fast machine the loop takes less than the cost model's floor, and a
+# loop measured that cheap stores nothing, so nothing would be refused
+# (`StatementProcessor._cheap_to_rerun`): kept stored whatever it takes.
+PERSISTED_LOOP = "# @cash:persist\n" + LOOP
 READ = (
     "# @cash:persist\nsummary = (len(df), len(frames), float(df['v'].sum()), float(sum(f['v'].sum() for f in frames)))"
 )
@@ -113,7 +117,7 @@ def test_a_refused_loop_walks_nothing_and_gives_what_plain_gives(cash_magics, fe
         walks["identity"].clear()
         walks["shared"].clear()
         walks["unstored"].clear()
-        run_cash_cell(cash_magics, LOOP)
+        run_cash_cell(cash_magics, PERSISTED_LOOP)
         plain.run(LOOP)
         assert any("frames (it holds too many objects" in why for why in walks["unstored"])
         # No identity walk; the statement's own share check leaves to its
