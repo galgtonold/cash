@@ -3,6 +3,7 @@ descriptions of what changed."""
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import inspect
 import os
@@ -24,6 +25,7 @@ from .cache_metadata import CacheMetadata
 from .cached_function import CachedFunction
 from .call_state import BuiltKey, KeyBuildFailed, UnhashableArgs, UnhashableDefault
 from .iterators import is_one_shot_iterator
+from .stored_keys import NOT_STORED_MARK
 
 if TYPE_CHECKING:
     from ..config.schema import CashConfig
@@ -632,6 +634,8 @@ class MissHistory:
             return MissReason(MissKind.GONE, "an earlier run stored it; it has since been evicted or cleared")
         if facts.ram_only is not None:
             why = facts.ram_only[1]
+            if facts.ram_only[2:3] == [NOT_STORED_MARK]:
+                return MissReason(MissKind.NOT_STORED, f"an earlier run computed it and did not store it: {why}")
             return MissReason(
                 MissKind.NOT_STORED,
                 f"an earlier run computed it but kept it in RAM only ({why}), so this process recomputed it",
@@ -765,8 +769,15 @@ class MissHistory:
         while len(self.outcomes) > STORE_OUTCOMES_MAX:
             self.outcomes.popitem(last=False)
 
-    def note_not_stored(self, cache_key: str, refusal: str) -> None:
+    def note_not_stored(self, cache_key: str, refusal: str, func_name: str | None = None) -> None:
+        """*cache_key*'s result was not stored, for *refusal*. Given
+        *func_name*, the record beside the cache keeps it too: the next
+        run's miss of the same key says so, where it compared the key with
+        other entries and named a change that has nothing to do with it."""
         self.remember_outcome(cache_key, {"not_stored": refusal})
+        if func_name is not None:
+            ledger = functools.partial(self.flat_ledger, func_name)
+            self._stored_keys.note_ram_only(func_name, cache_key, refusal, ledger, not_stored=True)
 
 
 def _owner_class(func: Callable[..., Any]) -> type | None:

@@ -1160,7 +1160,11 @@ class _Build:
         if rc is code and set(code.co_freevars) <= {"__class__"}:
             self.add(("code", module, qn), _code_digest(code, fn), f"{qn} has defaults that cannot be checked")
             if type(fn) is types.FunctionType:
-                self.functions.append(fn)
+                # The function that holds the code that ran: for a method a
+                # ``@cash.cache`` (or ``functools.wraps``) wrapper replaced on
+                # its class, the one it wraps, judged and accepted by that
+                # code (`build`), not the wrapper's.
+                self.functions.append(next((c for c in candidates(fn) if c.__code__ is code), fn))
             return
         if "<locals>" in qn and qn.rsplit(".<locals>.", 1)[0] in ran:
             # Made by a function that ran in this call: its closure is this
