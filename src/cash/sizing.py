@@ -144,7 +144,7 @@ def chunked_nbytes(chunked: Any) -> int:
         return known[1]
     size = _chunked_nbytes(chunked)
     try:
-        ref = weakref.ref(chunked, lambda gone, key=key: _drop_arrow_size(key, gone))
+        ref = _weak.ref(chunked, lambda gone, key=key: _drop_arrow_size(key, gone))
     except TypeError:  # an Arrow without weak references: read every time
         return size
     _ARROW_SIZES[key] = (ref, size)
