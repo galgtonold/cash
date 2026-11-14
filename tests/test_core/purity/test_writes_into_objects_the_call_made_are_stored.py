@@ -19,6 +19,7 @@ site and handed the caller's at another, through a table or a library.
 
 from __future__ import annotations
 
+import sys
 import textwrap
 
 import pytest
@@ -26,6 +27,14 @@ import pytest
 from tests._scripts import run_python
 
 pytestmark = [pytest.mark.core, pytest.mark.timeout(300)]
+
+#: ``run`` reaches its helper by a run-time name (``getattr(helpers, NAME)``),
+#: as ``modelchain_year`` did: judged on what its trace recorded it ran.
+needs_trace = pytest.mark.skipif(
+    sys.version_info < (3, 12),
+    reason="what a call ran is recorded with sys.monitoring, Python 3.12+; below it a call that picks code "
+    "by a run-time name runs every time, with a warning",
+)
 
 pytest.importorskip("numpy")
 
@@ -136,6 +145,7 @@ def project(tmp_path):
     return tmp_path
 
 
+@needs_trace
 @pytest.mark.parametrize("name", ["from_helper", "out_argument", "copies", "own_generator"])
 def test_writes_into_what_the_call_made_store_and_hit(project, name):
     first, err = _run(project, name)
@@ -145,6 +155,7 @@ def test_writes_into_what_the_call_made_store_and_hit(project, name):
     assert "[RUN]" not in err, f"{name}: the next process ran the call again:\n{err[-1500:]}"
 
 
+@needs_trace
 @pytest.mark.parametrize(
     "name, why",
     [
@@ -161,3 +172,11 @@ def test_writes_into_what_existed_before_still_run_every_time(project, name, why
     assert "[RUN]" in err and why in err, err[-1500:]
     _, err = _run(project, name)
     assert "[RUN]" in err, f"{name}: served from the cache:\n{err[-1500:]}"
+
+
+@pytest.mark.skipif(sys.version_info >= (3, 12), reason="below Python 3.12 nothing records what a call ran")
+@pytest.mark.parametrize("name", ["from_helper", "through_asarray"])
+def test_without_a_trace_the_call_runs_every_time_and_says_why(project, name):
+    for _ in range(2):
+        _, err = _run(project, name)
+        assert "[RUN]" in err and "KEY-UNTRACKABLE-DEP" in err and "main.run" in err, err[-1500:]
