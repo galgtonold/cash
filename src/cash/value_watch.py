@@ -47,6 +47,7 @@ from ._native import REASON
 from ._native import cwatch as _cw
 
 __all__ = [
+    "KIND_HANDED",
     "KIND_NO_STREAM",
     "KIND_PLAIN_KEY",
     "KIND_VALUE",
@@ -74,6 +75,7 @@ KIND_VALUE = 0  # value_hash.compute_hash
 KIND_PLAIN_KEY = 1  # the decorator's key part for plain data (arg_hashing.plain_key_part)
 KIND_WALKED = 2  # a token for an argument the decorator's key walked (`tag`)
 KIND_NO_STREAM = 3  # "holds no stream" for what a function holds (call_key.holds_a_stream)
+KIND_HANDED = 4  # a copy the memory tier handed out, unchanged since (handed_copies)
 
 
 class WatchMismatch(AssertionError):
@@ -150,13 +152,21 @@ _FORBIDDEN = frozenset(
 
 _HEAPTYPE = 1 << 9
 
+#: Metaclasses a watched class may have besides ``type``: each defines no
+#: attribute lookup, no reduction and no data descriptor of the names pickle
+#: reads off a class, so its classes pickle by name and read their
+#: attributes as plain classes do. The C walker records its version tag and
+#: ``copyreg.dispatch_table`` at it as for any class it names.
+_PLAIN_METACLASSES = (type, abc.ABCMeta)
+
 
 def classify(t: type) -> tuple[bool, tuple, bool]:
     """Do instances of *t* pickle from their ``__dict__`` and slots alone,
     by cash's pickling (`kept_state.dumps` keyed) as by ``pickle``?
     ``(ok, slot member descriptors, views)``.
 
-    Only a plain class: the ``type`` metaclass, every class of its MRO but
+    Only a plain class: the ``type`` metaclass (or ``abc.ABCMeta``,
+    `_PLAIN_METACLASSES`), every class of its MRO but
     `object` defined in Python, none of `_FORBIDDEN` defined, no reducer
     registered with ``copyreg``, nothing a library content hasher claims,
     and a name pickle can find (not defined inside a function). Its slots
@@ -175,13 +185,13 @@ def classify(t: type) -> tuple[bool, tuple, bool]:
 
 def _classify(t: type) -> tuple[bool, tuple, bool]:
     no = (False, (), False)
-    if type(t) is not type or not (t.__flags__ & _HEAPTYPE) or t.__itemsize__:
+    if type(t) not in _PLAIN_METACLASSES or not (t.__flags__ & _HEAPTYPE) or t.__itemsize__:
         return no
     mro = t.__mro__
     if mro[-1] is not object:
         return no
     for klass in mro[:-1]:
-        if type(klass) is not type or not (klass.__flags__ & _HEAPTYPE):
+        if type(klass) not in _PLAIN_METACLASSES or not (klass.__flags__ & _HEAPTYPE):
             return no
         own = klass.__dict__
         if not _FORBIDDEN.isdisjoint(own):
@@ -274,7 +284,7 @@ def _plain_view_class(t: type) -> bool:
 
 
 if _cw is not None:
-    _cw.configure(views_of=_views_of)
+    _cw.configure(views_of=_views_of, metaclasses=_PLAIN_METACLASSES[1:])
 
 
 #: Shells cash runs a notebook in (`add_namespace`), newest first, held
@@ -495,6 +505,7 @@ def reset() -> None:
             dispatch_table=copyreg.dispatch_table,
             extension_registry=getattr(copyreg, "_extension_registry", None),
             views_of=_views_of,
+            metaclasses=_PLAIN_METACLASSES[1:],
         )
 
 

@@ -23,7 +23,7 @@ from cash._referents import get_referents
 from cash._user_attrs import instance_of, own_dict
 from cash.exceptions import CacheBackendError
 
-from .. import _native, _plain_data, _weak, cost_model, held_reads, kept_state, stored_pickle
+from .. import _native, _plain_data, _weak, cost_model, handed_copies, held_reads, kept_state, stored_pickle
 from .._lazy_module import LazyModule
 from ..cost_model import GENERIC_FAMILY
 from ..sizing import memory_footprint, pickled_size_estimate, slot_values
@@ -121,7 +121,7 @@ class _Pickled:
     buffers (a read-only one, which numpy will not make writable, shared).
     """
 
-    __slots__ = ("buffers", "readonly", "served", "stream", "top_class")
+    __slots__ = ("buffers", "handed", "misses", "readonly", "served", "stream", "top_class")
 
     def __init__(self, stream: bytes, buffers: list[bytes], readonly: list[bool], top_class: str | None = None) -> None:
         self.stream = stream
@@ -132,6 +132,10 @@ class _Pickled:
         self.top_class = top_class
         #: Whether a hit has read it out yet (the first one is timed).
         self.served = False
+        #: The copy a hit handed out, kept for the next one
+        #: (`handed_copies`), and the hits in a row that could not reuse one.
+        self.handed: handed_copies.Handed | None = None
+        self.misses = 0
 
     def load(self) -> Any:
         """A new copy of the value."""
@@ -151,6 +155,24 @@ class _Pickled:
 
     def __reduce__(self) -> tuple:
         return _load_pickled, (self.stream, self.buffers, self.readonly)
+
+
+class _ReadOut:
+    """What `InMemoryBackend._read_pickled` hands `get`: the value, the
+    kept bytes it came from, how long reading it took, and whether it is
+    the copy handed out before (`handed_copies`)."""
+
+    __slots__ = ("kept", "reused", "seconds", "value")
+
+    def __init__(self, value: Any, kept: _Pickled, seconds: float, reused: bool) -> None:
+        self.value = value
+        self.kept = kept
+        self.seconds = seconds
+        self.reused = reused
+
+
+#: Most copies kept for the next hit per tier (`handed_copies`).
+_MAX_HANDED = 8
 
 
 def _load_pickled(stream: bytes, buffers: list[bytes], readonly: list[bool]) -> Any:
@@ -680,6 +702,9 @@ class InMemoryBackend(CacheBackend):
         #: disk write that follows instead of having the caller's value
         #: serialized before the store returns. Released by `release_handoff`.
         self._handoff: tuple[str, MetadataDict, Any] | None = None
+        #: Keys whose kept bytes keep the copy a hit handed out for the next
+        #: one (`handed_copies`), least recently handed first.
+        self._handed: dict[str, _Pickled] = {}
 
     #: How far the machine's memory percent must climb within one pressure
     #: episode before the tier takes a fresh share rather than holding flat.
@@ -1519,9 +1544,56 @@ class InMemoryBackend(CacheBackend):
                 if key in self._store:
                     self._drop(key)
             return None, None
+        if type(value) is _ReadOut:
+            if value.reused:
+                # Handed out before and proved untouched since: its sets are
+                # laid out already.
+                return metadata, value.value
+            set_order.restore(value.value, metadata)
+            return metadata, self._keep_handed(key, value)
         # The copy's sets iterate as the stored ones do (`set_order`).
         set_order.restore(value, metadata)
         return metadata, value
+
+    def _keep_handed(self, key: str, read: _ReadOut) -> Any:
+        """Hand out *read*'s copy, kept for the next hit of *key* when it
+        may be reused (`handed_copies.retain`). *read* holds the only
+        reference to it."""
+        kept = read.kept
+        holder = [read.value]
+        read.value = None
+        if kept.misses >= handed_copies.MAX_MISSES:
+            return holder[0]
+        with self._lock:
+            entry = self._store.get(key)
+            if entry is None or entry[1] is not kept:
+                return holder[0]
+            handed = handed_copies.retain(holder, read.seconds)
+            if handed is None:
+                kept.misses += 1
+                return holder[0]
+            self._release_handed(key)
+            kept.handed = handed
+            self._handed[key] = kept
+            self._trim_handed()
+        return holder[0]
+
+    def _release_handed(self, key: str) -> None:
+        """Stop keeping the copy handed out for *key*. Lock held."""
+        kept = self._handed.pop(key, None)
+        if kept is not None and kept.handed is not None:
+            handed_copies.release(kept.handed)
+            kept.handed = None
+
+    def _trim_handed(self) -> None:
+        """Keep at most `_MAX_HANDED` copies, and copies of at most a
+        quarter of the byte cap (256 MiB without one). Lock held."""
+        cap = self._max_size_bytes // 4 if self._max_size_bytes else 256 << 20
+        while self._handed:
+            total = sum(kept.handed.content for kept in self._handed.values() if kept.handed is not None)
+            if len(self._handed) <= _MAX_HANDED and total <= cap:
+                return
+            self._release_handed(next(iter(self._handed)))
 
     def _get_copy(self, key: str) -> tuple[MetadataDict | None, Any | None]:
         with self._lock:
@@ -1622,7 +1694,9 @@ class InMemoryBackend(CacheBackend):
             return cells
 
     def _read_pickled(self, key: str, metadata: MetadataDict, kept: _Pickled) -> tuple[MetadataDict | None, Any]:
-        """A hit of a value kept as pickle bytes: a new copy read out of them.
+        """A hit of a value kept as pickle bytes: a new copy read out of them,
+        or the copy the last hit handed out when nothing can tell the two
+        apart (`handed_copies`), as a `_ReadOut`.
 
         The first one is timed, as the store used to time its round trip:
         the reading goes on the entry (``measured_round_trip_seconds``) and
@@ -1630,6 +1704,18 @@ class InMemoryBackend(CacheBackend):
         judged on it; and a hit no faster than the compute keeps the value
         out of this tier from now on (it is handed out this once). Bytes
         that no longer load (a class gone) are a miss, as on disk."""
+        if kept.handed is not None:
+            with self._lock:
+                entry = self._store.get(key)
+                handed = kept.handed
+                if handed is not None and entry is not None and entry[1] is kept:
+                    found = handed_copies.reuse(handed)
+                    if found is not handed_copies.NONE:
+                        kept.misses = 0
+                        self._handed[key] = self._handed.pop(key, kept)
+                        return metadata, _ReadOut(found, kept, 0.0, True)
+                    kept.misses += 1
+                self._release_handed(key)
         started = time.perf_counter()
         try:
             value = kept.load()
@@ -1650,7 +1736,7 @@ class InMemoryBackend(CacheBackend):
                     # not enough, so it is read again and the faster kept.
                     seconds = min(seconds, _read_seconds(kept))
                 self._learn_reading(key, metadata, kept, seconds)
-        return metadata, value
+        return metadata, _ReadOut(value, kept, time.perf_counter() - started, False)
 
     def _learn_reading(self, key: str, metadata: MetadataDict, kept: _Pickled, seconds: float) -> None:
         """Put what reading *kept* out took on its entry and its class, and
@@ -2119,6 +2205,7 @@ class InMemoryBackend(CacheBackend):
         self._checked.pop(key, None)
         self._gdsf_base.pop(key, None)
         self._seq_by_key.pop(key, None)
+        self._release_handed(key)
         entry = self._store.pop(key, None)
         if entry is not None:
             self._current_size_bytes -= entry[0].get("size", 0)
@@ -2140,6 +2227,8 @@ class InMemoryBackend(CacheBackend):
             self._checked.clear()
             self._gdsf_base.clear()
             self._seq_by_key.clear()
+            for key in list(self._handed):
+                self._release_handed(key)
             self._current_size_bytes = 0
             self._pressure_floor = None
             self._pressure_percent = None
