@@ -28,6 +28,7 @@ import pytest
 
 import cash
 from cash.analysis import scan_store, tree_memo
+from cash.notebook.write_observer import observe_writes
 
 _RUNNER = textwrap.dedent(
     """
@@ -214,6 +215,17 @@ def test_a_scan_that_gave_up_is_not_stored(tmp_path, monkeypatch):
     monkeypatch.setenv("CASH_ANALYSIS_STORE", str(tmp_path / "store"))
     assert scan_store.scan("t", "/x/m.py", "x = 1\n", lambda s: None) == frozenset()
     assert not list((tmp_path / "store").rglob("*.json"))
+
+
+def test_a_stored_scan_is_no_write_of_the_code_running(tmp_path, monkeypatch):
+    """Cash's own file: a cached call inside another stores the scans its
+    analysis made while the outer call runs, and the outer call, seen
+    writing a file, was never stored."""
+    monkeypatch.setenv("CASH_ANALYSIS_STORE", str(tmp_path / "store"))
+    with observe_writes() as written:
+        assert scan_store.scan("t", "/x/m.py", "x = 1\n", lambda s: frozenset({"x"})) == frozenset({"x"})
+    assert list((tmp_path / "store").rglob("*.json")), "nothing was stored for this to test anything"
+    assert not written
 
 
 def test_a_shared_tree_is_never_changed_by_a_walk(monkeypatch):

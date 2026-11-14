@@ -40,6 +40,7 @@ from pathlib import Path
 
 from .._active import active_config
 from ..backends.cache_dir import ANALYSIS_DIRNAME
+from ..tracking import io_watch
 from ..tracking.tracker_context import untracked
 from . import tree_memo
 
@@ -227,9 +228,13 @@ def _read(file: Path, kind: str, digest: str) -> frozenset[str] | None:
 
 
 def _write(directory: Path, file: Path, data: dict, counted: bool = True) -> bool:
-    """Best effort, atomic: a reader sees the old file or the new one."""
+    """Best effort, atomic: a reader sees the old file or the new one.
+
+    Cash's own file, as the library map's (`library_versions`): no write of
+    the code running. Stored while a cached call inside another runs, it was
+    the outer call's write (`write_observer`), which kept it from the cache."""
     try:
-        with untracked():
+        with untracked(), io_watch.own_work():
             directory.mkdir(parents=True, exist_ok=True)
             fd, tmp = tempfile.mkstemp(dir=directory, prefix=".tmp-", suffix=".json")
             try:
