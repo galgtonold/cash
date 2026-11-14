@@ -20,6 +20,7 @@ import types
 
 from .exceptions import SOURCE_RETRIEVAL_ERRORS
 from .jit_functions import jit_identity, jit_python_function
+from .pe_digest import extension_bytes_digest
 from .source_norm import bytecode_identity, module_text_identity, source_identity_digest
 from .source_reading import own_source, read_code_file, stat_has_settled
 from .tracking.tracker_context import untracked
@@ -177,6 +178,8 @@ def extension_file_digest(fn: object) -> str | None:
     per loaded module: a process cannot load a rebuilt file in place of the
     one it runs, so the first digest is the one that matches the code.
     None for a library's extension, which is fixed for an environment.
+    A Windows build is hashed without the link time MSVC stamps into it
+    (`extension_bytes_digest`), so relinking unchanged code keeps the digest.
     """
     while isinstance(fn, functools.partial):
         fn = fn.func
@@ -193,7 +196,7 @@ def extension_file_digest(fn: object) -> str | None:
         return None
     try:
         with untracked(), open(path, "rb") as fh:
-            digest = hashlib.sha256(fh.read()).hexdigest()
+            digest = extension_bytes_digest(fh.read())
     except OSError:
         return None
     _EXTENSION_DIGESTS[path] = (module, digest)
