@@ -2126,7 +2126,7 @@ class CallRunner:
             call.traced = False
             if call.needs_trace:
                 return self._untraced(spec, call, "returns an iterator, whose code runs after the call", res)
-        trace, untraced = self._trace_of(spec, call)
+        trace, untraced = self._trace_of(spec, call, run)
         if untraced and not call.needs_trace:
             # A trace is a check on top of the key: a call that does not
             # need one is stored by its key, as without the recorder.
@@ -2295,9 +2295,12 @@ class CallRunner:
         self._calls.note_effectiveness(func_name, miss_overhead, body_seconds=run.body_seconds, was_hit=False)
         return res
 
-    def _trace_of(self, spec: CachedFunction, call: Call) -> tuple[list | None, str]:
+    def _trace_of(self, spec: CachedFunction, call: Call, run: BodyRun | None = None) -> tuple[list | None, str]:
         """The trace of what the call ran (`code_trace.build`), or why there
-        is none: ``(None, "")`` for a call not recorded."""
+        is none: ``(None, "")`` for a call not recorded. An attribute the
+        code that ran bound on an instance *run* recorded (an argument, or
+        what the callable is bound to) is judged by `attribute_changes`,
+        which stores and replays it or says why not, not refused here."""
         if not call.traced:
             return None, ""
         unit, call.trace_unit = call.trace_unit, None
@@ -2323,8 +2326,17 @@ class CallRunner:
         # of an argument's class) is in the key as the function's own code
         # is: the strict check judges only code the key never saw.
         accepted = code_trace.folded_codes(call.folded_code) if call.needs_trace else None
+        owners = frozenset(
+            id(entry[1].obj)
+            for entry in (getattr(run, "args_before", None) or {}).values()
+            if type(entry[1]) is rewrite_in_place.AttrRecording
+        )
         return code_trace.build(
-            unit, code_trace.static_codes(functions, reports), strict=call.needs_trace, accepted=accepted
+            unit,
+            code_trace.static_codes(functions, reports),
+            strict=call.needs_trace,
+            accepted=accepted,
+            owners=owners,
         )
 
     def _code_swapped(self, spec: CachedFunction, call: Call) -> str | None:

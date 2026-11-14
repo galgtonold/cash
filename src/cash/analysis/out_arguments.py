@@ -40,10 +40,22 @@ from .ast_util import resolve_callee
 from .purity_flow import fresh_call_candidates, fresh_flow_nodes, receiver_is_fresh, resolve_fresh_call_candidates
 from .purity_visitor import ARGUMENT_MUTATION_NOT_STORED
 
-__all__ = ["mutated_parameter", "site_hands_own", "writes_through_parameters"]
+__all__ = [
+    "attribute_bound_parameter",
+    "binds_parameter_attributes",
+    "mutated_parameter",
+    "site_constructs",
+    "site_hands_own",
+    "writes_through_parameters",
+]
 
 _MUTATED = re.compile(
     r"changes (?:the argument|an element of the argument) '([^']+)' in place; "
+    + re.escape(ARGUMENT_MUTATION_NOT_STORED)
+)
+#: ``param.attr = ...`` on a parameter itself, not on what it holds.
+_BOUND_ATTRIBUTE = re.compile(
+    r"^(\w+)\.\w+ = \.\.\. - attribute mutation that changes the argument '\1' in place; "
     + re.escape(ARGUMENT_MUTATION_NOT_STORED)
 )
 _IMMUTABLE = (type(None), bool, int, float, complex, str, bytes, frozenset)
@@ -55,6 +67,45 @@ def mutated_parameter(issue: Any) -> str | None:
     """The parameter a finding says its function changes in place, or None."""
     found = _MUTATED.search(getattr(issue, "description", ""))
     return found.group(1) if found is not None else None
+
+
+def attribute_bound_parameter(issue: Any) -> str | None:
+    """The parameter a finding says its function binds a top-level
+    attribute of (``self.coef_ = ...``), or None."""
+    found = _BOUND_ATTRIBUTE.search(getattr(issue, "description", ""))
+    return found.group(1) if found is not None else None
+
+
+#: What loads a local onto the stack right before a store into it.
+_LOAD_LOCAL = frozenset({"LOAD_FAST", "LOAD_FAST_CHECK", "LOAD_FAST_BORROW", "LOAD_DEREF"})
+_LOAD_TWO = frozenset({"LOAD_FAST_LOAD_FAST", "LOAD_FAST_BORROW_LOAD_FAST_BORROW"})
+
+
+def binds_parameter_attributes(code: types.CodeType) -> tuple[str, ...]:
+    """The parameters *code* binds or deletes an attribute of directly
+    (``self.x = v``, ``del est.y_``), methods included: what a traced call
+    records each start of it binding them to (`TraceUnit.attr_params`).
+    Asked once per code, on its first start, so a scan of its
+    instructions."""
+    count = code.co_argcount + code.co_kwonlyargcount
+    if not count or code.co_flags & _RESUMABLE:
+        return ()
+    params = set(code.co_varnames[:count])
+    found: list[str] = []
+    previous = None
+    for ins in dis.get_instructions(code):
+        if ins.opname in ("STORE_ATTR", "DELETE_ATTR") and previous is not None:
+            if previous.opname in _LOAD_LOCAL:
+                name = previous.argval
+            elif previous.opname in _LOAD_TWO:
+                name = previous.argval[1]
+            else:
+                name = None
+            if name in params and name not in found:
+                found.append(name)
+        if ins.opname not in ("CACHE", "EXTENDED_ARG"):
+            previous = ins
+    return tuple(found)
 
 
 def writes_through_parameters(code: types.CodeType) -> bool:
@@ -89,6 +140,34 @@ def site_hands_own(fn: types.FunctionType, param: str, caller: Any, caller_code:
     calls = resolve_fresh_call_candidates(candidates, namespace)
     fresh = tree_memo.fact(func_def, ("fresh_flow", calls), lambda node: fresh_flow_nodes(node, calls)) | calls
     return param not in _shared_parameters(fn, call, fresh)
+
+
+def site_constructs(fn: types.FunctionType, caller: Any, caller_code: types.CodeType, lasti: int) -> bool:
+    """Is the call at *lasti* in *caller_code* ``Cls(...)``, which made the
+    instance *fn*, the ``__init__`` it ran, binds attributes on: a class
+    whose ``__init__`` is *fn*, made by ``object.__new__`` through
+    ``type.__call__``, so the instance is new and nothing outside the call
+    held it. A ``__new__`` or metaclass of its own may hand back an object
+    that already existed, so neither is one."""
+    if fn.__code__.co_name != "__init__" or type(caller) is not types.FunctionType:
+        return False
+    if caller.__code__ is not caller_code:
+        return False
+    func_def = _function_def(caller)
+    if func_def is None:
+        return False
+    call = _call_at(caller, caller_code, lasti, func_def)
+    if call is None:
+        return False
+    cls = resolve_callee(call.func, _namespace(caller), modules_only=False)
+    if not isinstance(cls, type) or type(cls).__call__ is not type.__call__ or cls.__new__ is not object.__new__:
+        return False
+    init = next((k.__dict__["__init__"] for k in cls.__mro__ if "__init__" in k.__dict__), None)
+    seen = 0
+    while init is not None and init is not fn and seen < 8:
+        init = getattr(init, "__wrapped__", None) if type(init) is types.FunctionType else None
+        seen += 1
+    return init is fn
 
 
 def _namespace(fn: types.FunctionType) -> dict[str, Any]:

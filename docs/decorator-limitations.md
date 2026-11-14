@@ -365,7 +365,10 @@ paths from the project root or pass absolute paths.
   `c.cache(est.fit)` whose `est` it changes so) is stored with those
   attributes, and a hit binds them on the object you hand in: it then holds
   the same attributes, in the same order, as after a plain run, and
-  `return self` hands back your object. This holds when:
+  `return self` hands back your object. The binding may happen any number
+  of calls deep (`resample(sampler, X, y)` calling `sampler.fit_resample`,
+  whose helper binds `est.sampling_strategy_`), in code the key names or
+  in code a call that picks code by name ran. This holds when:
     - the object is an instance of a class of yours or a library's written
       in Python, with no `__slots__`, no `__setattr__` or `__delattr__` of
       its own, and no property setter or other descriptor that runs code
