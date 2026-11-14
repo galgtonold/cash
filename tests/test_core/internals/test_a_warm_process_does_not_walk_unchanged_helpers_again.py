@@ -32,6 +32,11 @@ _RUNNER = textwrap.dedent(
     if sys.argv[2:] == ["rebind"]:
         app.step = app.other_step
     from cash.analysis import helper_walk, report_store
+    for arg in sys.argv[2:]:
+        if arg.startswith("fail:"):
+            def failing(*args, **kwargs):
+                raise NameError("a store that broke")
+            setattr(report_store, arg[5:], failing)
     walked = []
     plain = helper_walk.HelperWalk._walk_one
     def counted(self, entry, qualname):
@@ -165,3 +170,39 @@ def test_a_damaged_store_file_is_walked_again(code_dir):
     for file in files:
         file.write_text("\x00 not json", encoding="utf-8")
     assert _run(code_dir)["walked"]
+
+
+@pytest.mark.parametrize("broken", ["load", "_check", "save", "_object_guard"])
+def test_a_store_that_fails_walks_and_still_sees_an_edit(code_dir, broken):
+    """Whatever goes wrong reading or storing a report, the function is
+    walked: never keyed without its helpers, nor run uncached."""
+    plain = _run(code_dir, store=False)
+    if broken in ("load", "_check"):
+        _run(code_dir)  # a stored report to fail reading
+    failed = _run(code_dir, f"fail:{broken}")
+    again = _run(code_dir, f"fail:{broken}")
+    for result in (failed, again):
+        assert "lib.leaf" in result["walked"], "a store that failed stood for the walk"
+        assert result["stats"]["loaded"] == 0
+        assert (result["key"], result["issues"], result["value"]) == (plain["key"], plain["issues"], plain["value"])
+    path = code_dir / "lib.py"
+    path.write_text(path.read_text("utf-8").replace("return x * FACTOR", "return x * FACTOR + 1"), encoding="utf-8")
+    edited = _run(code_dir, f"fail:{broken}")
+    assert "lib.leaf" in edited["walked"]
+    assert edited["key"] != plain["key"]
+    _same_as_without_the_store(code_dir, edited)
+
+
+def test_a_store_file_nested_too_deep_to_read_is_walked_and_written_again(code_dir):
+    first = _run(code_dir)
+    files = [p for p in (code_dir / ".cash" / "analysis").rglob("*.json") if "purity-report" in p.read_text("utf-8")]
+    assert files
+    deep = "[" * 200_000 + "]" * 200_000
+    for file in files:
+        file.write_text(deep, encoding="utf-8")
+    again = _run(code_dir)
+    assert again["walked"]
+    assert (again["key"], again["issues"], again["value"]) == (first["key"], first["issues"], first["value"])
+    for file in files:
+        assert json.loads(file.read_text("utf-8"))["kind"] == "purity-report"
+    assert _run(code_dir)["walked"] == []
