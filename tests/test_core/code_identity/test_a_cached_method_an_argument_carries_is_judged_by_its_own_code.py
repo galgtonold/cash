@@ -10,8 +10,8 @@ kept the outer call from ever being stored (reported against
 imbalanced-learn's decorator walk, ``SMOTE._fit_resample``).
 
 The outer call is now stored and hit in a new process; an edit to the
-wrapped method still recomputes. The inner call, which changes ``self`` and
-so is never stored, misses in the next process as "not stored", not as a
+wrapped method still recomputes. The inner call, which changes a list
+``self`` holds in place and so is never stored, misses in the next process as "not stored", not as a
 change to code it never read.
 """
 
@@ -44,9 +44,10 @@ BASE = textwrap.dedent("""
     class Sampler:
         def __init__(self, kind):
             self.kind = kind
+            self.checks_ = []
 
         def _validate(self):
-            self.checked_ = True
+            self.checks_.append(True)
             return self
 
         @cash.cache

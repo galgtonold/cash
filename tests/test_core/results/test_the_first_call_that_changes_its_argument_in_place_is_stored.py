@@ -239,7 +239,11 @@ def test_a_new_process_serves_the_first_call_and_writes_the_state_back(tmp_path)
 
 
 class Box:
-    pass
+    """A hit can neither write it back nor replay its attributes: the call
+    changes the list it holds in place."""
+
+    def __init__(self):
+        self.items = []
 
 
 def _observed(func, *args):
@@ -264,7 +268,7 @@ def test_the_warning_says_what_a_hit_does_when_it_writes_the_state_back(full_war
 
     @disk_cash.cache
     def fill(box):
-        vars(box).update(n=1)
+        list.extend(vars(box)["items"], [1])
         return 1
 
     shown, logged = _observed(clip_in_place, np.array([-1.0, 0.5, 2.0]), np.array([-1.0, 0.5, 2.0]))

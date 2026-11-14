@@ -10,8 +10,9 @@ very object: the caller's other names for it, and views of an array, see the
 change as after a plain call.
 
 Only NumPy arrays, pandas frames and Series whose axes and dtypes the call
-kept, and lists, dicts and sets of plain values are written back. Anything
-else still runs every time.
+kept, and lists, dicts and sets of plain values are written back. An
+instance whose attributes the call binds is replayed instead (its own test
+file). Anything else still runs every time.
 """
 
 from __future__ import annotations
@@ -161,13 +162,16 @@ def test_a_key_function_keeps_it_running_every_time(disk_cash):
 
 
 class Box:
-    pass
+    """Its attribute lives in a slot, not in an instance ``__dict__`` a hit
+    could replay bindings on (that case: `test_a_call_that_binds_attributes_is_replayed`)."""
+
+    __slots__ = ("n",)
 
 
 @pytest.mark.parametrize(
     "make",
     [
-        pytest.param(Box, id="a class instance"),
+        pytest.param(Box, id="a class instance with slots"),
         pytest.param(lambda: [[3], [1], [2]], id="a list of lists"),
         pytest.param(lambda: np.array([1, "a", None], dtype=object), id="an array of objects"),
     ],

@@ -155,7 +155,8 @@ def test_below_312_it_runs_every_time_and_returns_out(disk_cash):
 
 
 class Buffer:
-    """An object a hit cannot write a state back into."""
+    """An object a hit cannot write a state back into: the call changes the
+    list it holds in place, which no replay of its attributes puts back."""
 
     def __init__(self):
         self.values = []
@@ -167,7 +168,7 @@ def test_any_other_out_object_still_runs_every_time(disk_cash):
     @disk_cash.cache
     def fill(n, out):
         runs.append(1)
-        out.values = list(range(n))
+        out.values.extend(range(n))
         return out
 
     for _ in range(3):

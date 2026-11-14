@@ -983,7 +983,10 @@ under `strict=True` it raises unless a `ttl=` is set.
 Two observations stop the result from being stored, because a hit could not
 reproduce them: the call changed an argument in place that cash cannot write
 back ([which ones it can](decorator-limitations.md#results-cash-refuses-to-store)),
-or it called a `unittest.mock` object.
+or it called a `unittest.mock` object. A call that only sets attributes on an
+object it was handed, as an estimator's `fit` sets `self.coef_`, is stored
+with them, and a hit sets them again on the object you pass
+([when](decorator-limitations.md#results-cash-refuses-to-store)).
 
 <!-- claim: cash/decorator/runtime.py:KeyBuilder._hands_a_state_changing_callable @1f8f919e -->
 A call that **hands the function one of your functions that changes state**
