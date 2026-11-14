@@ -10,10 +10,12 @@ import textwrap
 import weakref
 from typing import Any
 
+from cash import _weak
+
 __all__ = ["leftover_value", "set_loop_leftovers"]
 
 #: Per class: ``(size of its namespace, its data names, what was found)``.
-_FOUND: weakref.WeakKeyDictionary[type, tuple[int, tuple[str, ...], dict[str, str]]] = weakref.WeakKeyDictionary()
+_FOUND: weakref.WeakKeyDictionary[type, tuple[int, tuple[str, ...], dict[str, str]]] = _weak.WeakKeyDictionary()
 
 
 #: What a class attribute that `set_loop_leftovers` found is keyed as, with

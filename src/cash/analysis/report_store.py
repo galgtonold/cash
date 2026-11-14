@@ -168,7 +168,7 @@ def _find(path: Any) -> Any:
 def _static_str(obj: Any, name: str) -> str | None:
     try:
         value = inspect.getattr_static(obj, name, None)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - a user class's own lookup can raise anything; unknown means walk
         return None
     return value if isinstance(value, str) else None
 
