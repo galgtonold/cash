@@ -105,11 +105,12 @@ def _methods(prefix: str, count: int, step: int) -> str:
 def _write_package(root, edit: int | None = None) -> None:
     pkg = root / "nimish"
     pkg.mkdir(exist_ok=True)
-    (pkg / "__init__.py").write_text("")
-    (pkg / "helpers.py").write_text(_helpers_source(edit))
-    (pkg / "dataset.py").write_text(_DATASET.format(methods=_methods("get", 12, 5)))
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "helpers.py").write_text(_helpers_source(edit), encoding="utf-8")
+    (pkg / "dataset.py").write_text(_DATASET.format(methods=_methods("get", 12, 5)), encoding="utf-8")
     (pkg / "estimator.py").write_text(
-        _ESTIMATOR.format(base=_methods("m0", 8, 3), middle=_methods("m1", 8, 7), top=_methods("m2", 8, 13))
+        _ESTIMATOR.format(base=_methods("m0", 8, 3), middle=_methods("m1", 8, 7), top=_methods("m2", 8, 13)),
+        encoding="utf-8",
     )
 
 
@@ -351,7 +352,7 @@ def _report(fn):
 
 @pytest.fixture
 def corpus(tmp_path, monkeypatch):
-    (tmp_path / "walk_once_corpus.py").write_text(textwrap.dedent(_CORPUS))
+    (tmp_path / "walk_once_corpus.py").write_text(textwrap.dedent(_CORPUS), encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.setenv("CORPUS_MODE", "1")
     module = importlib.import_module("walk_once_corpus")
