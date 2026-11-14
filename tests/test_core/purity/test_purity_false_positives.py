@@ -14,6 +14,7 @@ import os
 import sys
 import textwrap
 import time
+import types
 import warnings
 
 import pytest
@@ -85,6 +86,11 @@ def test_mutating_what_the_function_made_is_not_flagged(fn):
 def mutates_a_parameter(df):
     df["x"] = 1
     return df
+
+
+def sets_an_attribute_of_a_parameter(obj):
+    obj.x = 1
+    return obj.x
 
 
 def mutates_a_view_of_a_parameter(arr):
@@ -191,11 +197,16 @@ def test_lines_are_file_lines_and_the_file_is_named():
 
 
 def test_the_warning_names_the_defining_file(full_warning_text, tmp_path):
+    """The source warning names the file the function is defined in.
+
+    Its subject changes an argument cash cannot write back (an attribute of
+    a plain object): a change to a dict a hit writes back is said by the
+    one IMPURE-OBSERVED-EFFECTS line instead, which names no source line."""
     c = Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
-    cached = c.cache(mutates_a_parameter)
+    cached = c.cache(sets_an_attribute_of_a_parameter)
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
-        cached({"x": 0})
+        cached(types.SimpleNamespace())
     text = "\n".join(str(w.message) for w in rec if "IMPURE-SIDE-EFFECTS" in str(w.message))
     assert os.path.basename(__file__) in text, text
     assert "No waiver changes the function's cache key" in text
