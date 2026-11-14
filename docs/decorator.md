@@ -952,17 +952,13 @@ write_report(totals(rows), "report.txt")  # first call: runs totals
 write_report(totals(rows), "report.txt")  # cache hit; written again
 ```
 
-<!-- claim: cash/analysis/purity_visitor.py:PurityVisitor._works_on_its_own_object @220ea3bf, cash/analysis/purity_visitor.py:PurityVisitor.visit_Expr @84080202 -->
+<!-- claim: cash/analysis/purity_visitor.py:PurityVisitor.visit_Expr @ddff4aea -->
 **Fitting a model.** A model the body builds and fits is local to the call,
-so `m = LinearRegression(); m.fit(X, y); return m` and
-`return LinearRegression().fit(X, y)` both cache with no warning and need
-no `assume_safe`.
-When the model comes from a helper or a factory such as `make_pipeline(...)`,
-cash cannot tell that `fit` changes only that new object, and reports the
-discarded return of `p.fit(X, y)` as
-[`IMPURE-SIDE-EFFECTS`](warnings.md#impure-side-effects). Chain the fit
-instead, as in `return make_pipeline(...).fit(X, y)`, or put
-`# @cash:assume-safe` on the fit line.
+so `m = LinearRegression(); m.fit(X, y); return m`,
+`p = make_pipeline(...); p.fit(X, y)` and
+`return LinearRegression().fit(X, y)` all cache with no warning and need
+no `assume_safe`. Dropping what a call returns is not itself reported: the
+call is judged by what it does.
 
 Logging calls are not side effects for this purpose. A special method or a
 property of an object of your class that the body reads by a global name

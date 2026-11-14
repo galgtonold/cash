@@ -6,7 +6,6 @@ import pytest
 
 from cash.analysis.purity_analyzer import PurityAnalyzer
 from cash.analysis.purity_report import (
-    ISSUE_DISCARDED_CALL,
     ISSUE_DYNAMIC_PATTERN,
     ISSUE_IMPURE_CALL,
     ISSUE_SCOPE_MUTATION,
@@ -150,25 +149,33 @@ def test_a_call_through_a_runtime_namespace_IS_flagged(analyzer):
     assert any(i.kind == ISSUE_DYNAMIC_PATTERN for i in r.issues), [i.description for i in r.issues]
 
 
-def test_discarded_call_to_unknown_flagged(analyzer):
-    def helper(_x):
-        return 1
+def test_a_dropped_return_is_not_a_finding(analyzer):
+    """A call whose return the body drops is judged by what it does: a check
+    that only raises has no effect, so nothing is reported."""
+
+    def check(x):
+        if x < 0:
+            raise ValueError("negative")
 
     def f(x):
-        helper(x)  # discarded
+        check(x)
+        len([x])
         return x * 2
 
     r = analyzer.analyze(f)
-    assert any(i.kind == ISSUE_DISCARDED_CALL and "helper" in i.description for i in r.issues)
+    assert not r.issues, [i.description for i in r.issues]
 
 
-def test_discarded_call_to_known_pure_not_flagged(analyzer):
-    def f(lst):
-        len(lst)  # discarded but len is known-pure → dead code, not impure
-        return lst
+def test_a_dropped_call_that_changes_a_global_is_still_reported(analyzer):
+    def f(x):
+        SEEN.append(x)
+        return x * 2
 
     r = analyzer.analyze(f)
-    assert not any(i.kind == ISSUE_DISCARDED_CALL for i in r.issues)
+    assert any("SEEN" in i.description for i in r.issues), [(i.kind, i.description) for i in r.issues]
+
+
+SEEN: list = []
 
 
 def test_global_flagged(analyzer):

@@ -80,13 +80,18 @@ def test_fitting_a_new_estimator_is_not_reported():
     assert _issues(fit) == []
 
 
-def fit_the_callers(model, xs):
-    model.fit(xs)
-    return model.mean
+def sort_the_callers(xs):
+    xs.sort()
+    return xs[0]
+
+
+class Printer:
+    def send_metric(self, x):
+        print(x)
 
 
 def emit(x):
-    client = Client()
+    client = Printer()
     client.send_metric(x)
     return x
 
@@ -97,7 +102,9 @@ def zip_up(path, member):
     return path
 
 
-@pytest.mark.parametrize("fn", [fit_the_callers, emit, zip_up], ids=lambda f: f.__name__)
+@pytest.mark.parametrize("fn", [sort_the_callers, emit, zip_up], ids=lambda f: f.__name__)
 def test_the_same_shapes_on_anothers_object_or_with_an_effect_still_are(fn):
-    """Controls: the caller's model, a vendor call on a new client, a write."""
+    """Controls: the caller's list sorted in place, a new client whose method
+    prints, a write. Dropping a return is not itself a finding: what the call
+    does is."""
     assert _issues(fn), fn.__name__

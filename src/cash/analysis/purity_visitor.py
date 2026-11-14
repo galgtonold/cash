@@ -6,10 +6,6 @@
   ``logging.info``, file-write methods (``to_csv``, ``write``, ...).
 * **Explicit dynamism** - ``eval``/``exec``/``compile``,
   ``getattr(obj, name)(...)`` where *name* is not a constant.
-* **Discarded-return calls** - ``f(x)`` as a statement (return
-  value thrown away). Strong syntactic signal of "I'm calling this
-  for the side effect". Skipped for callees in
-  :data:`KNOWN_PURE_BUILTINS` (where discarding is just dead code).
 * **Scope mutations** - ``global``/``nonlocal``, assignment to
   ``Attribute`` or ``Subscript`` targets, augmented-assign to same.
 * **Ambient reads** - the clock, the environment, standard input.
@@ -23,14 +19,12 @@ from __future__ import annotations
 import ast
 import inspect
 import sqlite3
-import time
 import types
 from typing import Any
 
 from ..effects import (
     ENVIRON_KEYED_METHODS,
     ENVIRON_NAMES,
-    MODULE_CALLS,
     MUTATOR_METHODS,
     NATIVE_WRITE_METHODS,
     STDIN_NAMES,
@@ -42,16 +36,14 @@ from ..effects import (
     environment_input,
     reads_argv,
 )
-from ..purity import KNOWN_PURE_BUILTINS
 from .ambient_reads import ambient_call, clock_helper_of
 from .file_effects import get_base_name, get_call_module, get_call_name
 from .helper_bindings import callee_chain
 from .mutations import NONE_RETURNING_MUTATORS, PANDAS_INPLACE_METHODS, returns_a_new_object
 from .purity_flow import is_log_line, receiver_is_fresh
-from .purity_policy import AMBIENT_KINDS, DECORATOR_POLICY, REPORTED_METHODS
+from .purity_policy import AMBIENT_KINDS, DECORATOR_POLICY
 from .purity_report import (
     ISSUE_AMBIENT_READ,
-    ISSUE_DISCARDED_CALL,
     ISSUE_DYNAMIC_PATTERN,
     ISSUE_IMPURE_CALL,
     ISSUE_NETWORK_READ,
@@ -96,68 +88,6 @@ def _opens_tracked_database(func: ast.expr, namespace: dict[str, Any] | None) ->
 _DYNAMIC_BUILTIN_NAMES = frozenset({"eval", "exec", "compile", "__import__"})
 
 
-#: Bare builtins whose discarded result is not worth a word: each is reported
-#: by another rule already (an effect, or explicit dynamic execution).
-_DISCARD_REPORTED_BUILTINS = frozenset(name for name in MODULE_CALLS if "." not in name) | {
-    "open",
-    "exec",
-    "eval",
-    "compile",
-}
-
-
-#: Methods that set up or train the object they are called on, in place,
-#: and whose return is dropped by design (sklearn's ``fit`` returns self).
-_IN_PLACE_SETUP_METHODS = frozenset(
-    {
-        "fit",
-        "partial_fit",
-        "set_params",
-        "shuffle",
-        "seed",
-        "add_argument",
-        "add_argument_group",
-        "add_mutually_exclusive_group",
-        "add_subparsers",
-        "set_defaults",
-    }
-)
-
-
-def _constructed_locals(func_def: ast.AST | None, params: frozenset[str]) -> frozenset[str]:
-    """Locals every assignment of which is a new instance of a class, named as
-    one is (``m = LinearRegression()``, ``p = argparse.ArgumentParser()``)."""
-    if func_def is None:
-        return frozenset()
-    kinds: dict[str, bool] = {}
-    for node in ast.walk(func_def):
-        if isinstance(node, ast.Assign):
-            targets, value = node.targets, node.value
-        elif isinstance(node, (ast.AnnAssign, ast.AugAssign, ast.NamedExpr)):
-            targets, value = [node.target], getattr(node, "value", None)
-        elif isinstance(node, (ast.For, ast.AsyncFor, ast.withitem, ast.comprehension)):
-            target = getattr(node, "target", None) or getattr(node, "optional_vars", None)
-            targets, value = ([target] if target is not None else []), None
-        else:
-            continue
-        for target in targets:
-            for name in ast.walk(target):
-                if isinstance(name, ast.Name):
-                    made = (
-                        target is name
-                        and isinstance(node, ast.Assign)
-                        and isinstance(value, ast.Call)
-                        and _names_a_class(value.func)
-                    )
-                    kinds[name.id] = kinds.get(name.id, True) and made
-    return frozenset(n for n, made in kinds.items() if made and n not in params)
-
-
-def _names_a_class(func: ast.AST) -> bool:
-    last = func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else ""
-    return last[:1].isupper() and not last.isupper()
-
-
 #: How a finding that the body changes an argument in place ends.
 ARGUMENT_MUTATION_NOT_STORED = (
     "a cache hit would not make that change, so a call that makes it is not stored and runs every time"
@@ -188,7 +118,6 @@ class PurityVisitor(ast.NodeVisitor):
         "_fresh_nodes",
         "_log_only",
         "_namespace",
-        "_log_helpers",
     )
 
     def __init__(
@@ -198,7 +127,6 @@ class PurityVisitor(ast.NodeVisitor):
         fresh_nodes: frozenset[int] = frozenset(),
         log_only: frozenset[int] = frozenset(),
         namespace: dict[str, Any] | None = None,
-        log_helpers: frozenset[str] = frozenset(),
         ambient_namespace: dict[str, Any] | None = None,
         func_def: ast.AST | None = None,
     ) -> None:
@@ -217,10 +145,8 @@ class PurityVisitor(ast.NodeVisitor):
         self.judged_helpers: set[Any] = set()
         #: ids of ``sys.stdin`` nodes reached as a method's receiver.
         self._stdin_attributes: set[int] = set()
-        #: The function being visited, and the locals only ever bound to a
-        #: new instance (`_constructed_locals`), worked out when first asked.
+        #: The function being visited.
         self._func_def = func_def
-        self._constructed: frozenset[str] | None = None
         self.called_callable_nodes: list[ast.AST] = []
         #: Calls reported as known I/O (``requests.get``, ``open``). Not walked,
         #: but their bindings are noted, so a mock put in their place is seen.
@@ -273,9 +199,6 @@ class PurityVisitor(ast.NodeVisitor):
         # What the body's names are bound to, so an aliased ambient read
         # (`_dt.datetime.now()`) is recognised (`ambient_call`).
         self._namespace = namespace
-        # The module's own log helpers (`log_helper_names`): a call to one is
-        # a print, not a call made for an effect a hit would skip.
-        self._log_helpers = log_helpers
         # ``os.environ`` nodes read for one named variable (a subscript, a
         # ``get``, an ``in``) or changed through a method: judged there, not
         # as a read of the whole environment (`visit_Attribute`).
@@ -891,11 +814,6 @@ class PurityVisitor(ast.NodeVisitor):
     #: users got "np.sort() - write method". A module's real writes
     #: (`np.save`, `plt.savefig`, `os.write`) keep being reported.
 
-    def _reports_effect(self, call: ast.Call) -> bool:
-        """Is *call* reported by the effect rule (`plt.plot(...)`, say)?"""
-        effect = classify_call(call, self._namespace)
-        return effect is not None and DECORATOR_POLICY[effect.kind] in (Action.WARN, Action.SUGGEST_TTL)
-
     def _is_module_function_named_like_a_mutator(self, func_node: ast.Attribute) -> bool:
         if func_node.attr not in MUTATOR_METHODS or not self._namespace:
             return False
@@ -909,70 +827,14 @@ class PurityVisitor(ast.NodeVisitor):
             obj = getattr(obj, attr, None)
         return issubclass(type(obj), types.ModuleType)
 
-    # --- discarded-call detection on Expr statements ---
-
-    def _discard_is_expected(self, func_node: ast.AST) -> bool:
-        """A discarded call whose result nobody wants and whose effect a hit
-        may skip: a log helper of the module's own, or `time.sleep` however it
-        is spelled. The quickstart's own `time.sleep(5)` was reported
-        as `discarded_call`, a label documented for calls made for an effect."""
-        if isinstance(func_node, ast.Name) and func_node.id in self._log_helpers:
-            return True
-        chain = callee_chain(func_node)
-        if not chain or not self._namespace or chain[0] not in self._namespace:
-            return False
-        obj: Any = self._namespace[chain[0]]
-        for attr in chain[1:]:
-            if not issubclass(type(obj), (types.ModuleType, type)):
-                return False
-            obj = getattr(obj, attr, None)
-        return obj is time.sleep
-
     def visit_Expr(self, node: ast.Expr) -> None:
+        # A call whose value the statement drops: what `_record_call` judges
+        # a write by (``xs.sort()`` changes ``xs``; ``sorted(xs)`` does not).
+        # Dropping a return is not itself an effect: what the call does is
+        # judged by its own rules, and a function of the user's it reaches
+        # is walked.
         if isinstance(node.value, ast.Call):
             self._discarded_calls.add(id(node.value))
-        if isinstance(node.value, ast.Call) and (self._discard_is_expected(node.value.func) or is_log_line(node.value)):
-            self.generic_visit(node)
-            return
-        if isinstance(node.value, ast.Call):
-            call = node.value
-            func_node = call.func
-            # Plain bare-name call: foo(x)
-            if isinstance(func_node, ast.Name):
-                name = func_node.id
-                # `print(...)` is already an impure_call; saying it twice, once
-                # as a discarded return, was the same line counted two ways.
-                if name not in KNOWN_PURE_BUILTINS and name not in _DISCARD_REPORTED_BUILTINS:
-                    self.issues.append(
-                        PurityIssue(
-                            kind=ISSUE_DISCARDED_CALL,
-                            description=f"discards return of {name}(...)",
-                            where=self._qualname,
-                            line=getattr(node, "lineno", 0),
-                        )
-                    )
-            elif isinstance(func_node, ast.Attribute):
-                method = func_node.attr
-                # If the method is already flagged elsewhere (write-methods,
-                # impure module calls), it's recorded by _record_call. The
-                # discarded-return flag here adds nothing useful - skip to
-                # avoid double-counting. Skip known-pure idioms too.
-                if (
-                    method not in REPORTED_METHODS
-                    and method not in PANDAS_INPLACE_METHODS
-                    and not self._reports_effect(call)
-                    and not self._works_on_its_own_object(func_node)
-                ):
-                    base = get_base_name(func_node.value)
-                    base_str = f"{base}." if base else ""
-                    self.issues.append(
-                        PurityIssue(
-                            kind=ISSUE_DISCARDED_CALL,
-                            description=f"discards return of {base_str}{method}(...)",
-                            where=self._qualname,
-                            line=getattr(node, "lineno", 0),
-                        )
-                    )
         self.generic_visit(node)
 
     # --- scope mutation detection ---
@@ -1032,22 +894,6 @@ class PurityVisitor(ast.NodeVisitor):
         for target in node.targets:
             self._maybe_flag_mutation_target(target, node.lineno)
         self.generic_visit(node)
-
-    def _works_on_its_own_object(self, func_node: ast.Attribute) -> bool:
-        """Is a discarded ``obj.method(...)`` work on an object this function
-        made? Then dropping the return is how it is written: ``d =
-        deque(xs); d.popleft()``, ``r = random.Random(k); r.shuffle(xs)``,
-        and, on a local an unknown class made, the methods that configure or
-        train it in place (``m = LinearRegression(); m.fit(X, y)``,
-        ``p = ArgumentParser(); p.add_argument("--x")``)."""
-        receiver = func_node.value
-        if self._receiver_is_fresh(receiver):
-            return True
-        if not isinstance(receiver, ast.Name) or func_node.attr not in _IN_PLACE_SETUP_METHODS:
-            return False
-        if self._constructed is None:
-            self._constructed = _constructed_locals(self._func_def, self._param_names)
-        return receiver.id in self._constructed
 
     def _receiver_is_fresh(self, value: ast.AST) -> bool:
         """True when *value* holds an object this function made -- mutating
