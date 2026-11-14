@@ -426,6 +426,16 @@ class Shadow:
             if qn == "<module>":
                 if not (module == nbn and g is nb):
                     add(("gap", module, qn), "module body")
+                    mod = sys.modules.get(module)
+                    if mod is not None and is_user_code_module(mod):
+                        # First imported inside the unit (``from .helper
+                        # import scale`` in a function's body): a later
+                        # process that has not imported it yet is checked
+                        # with it imported, as the unit's own import would,
+                        # when its file is the one that ran.
+                        from ...decorator.code_trace import first_import_digest
+
+                        add(("first_import", module), first_import_digest(module) or "unreadable")
             elif optimized and not own(module, qn):
                 self._code_items(code, g, module, add, add_class, user_class, unit.codes, inside)
             recv = unit.receivers.get(code)
@@ -620,6 +630,10 @@ class Shadow:
             now = self._attr_digest(item[1], item[2])
         elif kind == "environ":
             now = _environ_digest()
+        elif kind == "first_import":
+            from ...decorator.code_trace import first_import_digest
+
+            now = first_import_digest(item[1], item[-1]) or "unreadable"
         else:
             now = None
         memo[item[:-1]] = now
@@ -628,7 +642,9 @@ class Shadow:
     def verify(self, trace: dict, memo: dict) -> dict:
         changed = []
         opaque = gaps = 0
-        for item in trace["items"]:
+        # The modules the unit first imported before the code in them: one
+        # not loaded is imported by its check (`first_import_digest`).
+        for item in sorted(trace["items"], key=lambda item: item[0] != "first_import"):
             now = self._now(item, memo)
             if now is None:
                 gaps += 1
