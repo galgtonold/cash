@@ -67,7 +67,22 @@ def _listed_as_on_windows(monkeypatch):
         def stat(self, **kwargs):
             return self._st
 
-    class Listing(list):
+    class Listing:
+        """An iterator, as ``os.scandir`` gives: ``os.walk`` on Python 3.10
+        calls ``next`` on it (the patch reaches every ``os.scandir``)."""
+
+        def __init__(self, entries):
+            self._entries = iter(entries)
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            return next(self._entries)
+
+        def close(self):
+            return None
+
         def __enter__(self):
             return self
 
@@ -75,13 +90,13 @@ def _listed_as_on_windows(monkeypatch):
             return None
 
     def scandir(directory="."):
-        out = Listing()
+        out = []
         with real(directory) as it:
             for e in it:
                 st = e.stat()
                 extra = {f: getattr(st, f) for f in dir(st) if f.startswith("st_") and f.endswith("_ns")}
                 out.append(Entry(e, os.stat_result((*st[:3], 0, *st[4:]), extra)))
-        return out
+        return Listing(out)
 
     monkeypatch.setattr(file_dep_snapshot.os, "scandir", scandir)
     monkeypatch.setattr(run_memo, "stats_from_listings", file_dep_snapshot.listing_stats)
