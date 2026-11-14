@@ -316,7 +316,7 @@ paths from the project root or pass absolute paths.
 - A result that can't be pickled is not stored
   ([`STORE-FAILED`](warnings.md#store-failed)), unless the function is
   `frozen=True`.
-<!-- claim: cash/decorator/runtime.py:CallRunner.arguments_left @5d0fd426, cash/decorator/runtime.py:CallRunner._arguments_to_write @0895402c, cash/rewrite_in_place.py:refusal @cece1b9e -->
+<!-- claim: cash/decorator/runtime.py:CallRunner.arguments_left @5d0fd426, cash/decorator/runtime.py:CallRunner._arguments_to_write @0f1ce035, cash/rewrite_in_place.py:refusal @cece1b9e -->
 <!-- claim: cash/decorator/runtime.py:CallRunner.arguments_before @b57998e9, cash/decorator/arg_hashing.py:ContentKeyed.covers @4d5faf1a -->
 - A call that changed its argument in place is stored with the state it left
   the argument in when the argument is a NumPy array (not of objects), a
@@ -358,7 +358,7 @@ paths from the project root or pass absolute paths.
   argument (a list of lists, a frame given a new column, an object of your
   class changed other than as the next item says) are not stored, so they
   run every time. Return a modified copy instead (`rows = sorted(rows)`).
-<!-- claim: cash/decorator/attribute_replay.py:AttrVerdict.of @dd93e560, cash/rewrite_in_place.py:attribute_refusal @40074681, cash/rewrite_in_place.py:AttrState.replay @0e4c9439 -->
+<!-- claim: cash/decorator/attribute_replay.py:AttrVerdict.of @b6eb901a, cash/rewrite_in_place.py:attribute_refusal @40074681, cash/rewrite_in_place.py:AttrState.replay @0e4c9439, cash/decorator/attribute_replay.py:find @6c04b2c5 -->
 - A call that only binds, rebinds or deletes **attributes of an object it
   was handed** (`est.fit(X)` setting `self.coef_` and returning `self`, a
   resampler's `fit_resample` setting `self.sampling_strategy_`, or a
@@ -379,10 +379,17 @@ paths from the project root or pass absolute paths.
       `self.cfg["k"] = 1`), and no other argument either (an array `X`
       written in place still keeps the call from being stored);
     - each value bound is a number, string or similar, one of the call's
-      arguments or the object itself, a module global, a class or function
-      (a hit binds that very object again, never a copy), or a new object
-      the call made that nothing outside the call holds, nor anything inside
-      it: a value the object held before (`self.a = self.b`), something a
+      arguments or the object itself, a module global, a class or function,
+      the value of another top-level attribute of an object it changes so
+      that held it before the call and still holds it after, under one name
+      only (`self.a = self.b`, nibabel's
+      `img._data_cache = np.asanyarray(img._dataobj)` on an in-memory image)
+      (a hit binds that very object again, never a copy: for an attribute,
+      what your object holds under that name when the hit is served, so
+      `img._data_cache is img._dataobj` holds after it as after a plain
+      run), or a new object the call made that nothing outside the call
+      holds, nor anything inside it: a value the object held before under a
+      name the call rebinds or deletes, or under two names, something a
       module or class also holds, or a new object holding one of those, or
       holding an argument, keeps the call running every time. Two
       attributes bound to one new object, or an attribute that is also the

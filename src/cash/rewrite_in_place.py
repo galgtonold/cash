@@ -847,7 +847,9 @@ class put_back:  # a context manager, named like contextlib's
 class Relink(NamedTuple):
     """In an `AttrState`, a value a hit binds by identity instead of a copy:
     ``("argument", parameter)`` -- one of the call's arguments, or the object
-    itself -- or ``("global", module, name)``."""
+    itself --, ``("attribute", parameter, name)`` -- what that argument holds
+    as its attribute *name* on the hit, as it held it before the call --,
+    or ``("global", module, name)``."""
 
     kind: str
     where: tuple
