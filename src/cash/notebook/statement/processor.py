@@ -846,6 +846,11 @@ class StatementProcessor:
         compute_hash_fn: Function to compute variable hashes
     """
 
+    #: The text of the structure run as one statement whose own share check
+    #: (`record_structure_share_edges`) follows the statement's, set by the
+    #: control-structure processor while it runs it.
+    structure_share_check_follows: str | None = None
+
     def __init__(
         self,
         shell: ShellProtocol,
@@ -2670,30 +2675,67 @@ class StatementProcessor:
             why = "it reads a clock, draws a value or changes what its key does not name"
         self._unstore_in_place(run, f"In-place mutation on: {names} ({why}; statement re-executes)")
 
+    def _refused_in_place_early(self, run: StatementRun, captured_vars: dict[str, Any]) -> bool:
+        """Whether what *run* changed in place cannot be restored into, by
+        what the objects are alone (`_rewrite_refusal`, `in_place.refusal`):
+        then it runs every time, with the reason, and the share check of
+        its outputs (`_refuse_unrestorable_outputs`) is not walked for a
+        store that cannot happen. A loop growing a frame per session over a
+        list of 3,000 frames walked its outputs for 0.4 s, then was refused
+        here as holding too many objects."""
+        statement = not is_one_structure(run.tree)
+        for name in sorted(run.metrics["stored_in_place"]):
+            obj = captured_vars.get(name)
+            why = (self._rewrite_refusal(run, name, obj) if statement else None) or in_place.refusal(
+                obj, self.shell.user_ns
+            )
+            if why is not None:
+                self._refuse_in_place(run, name, why)
+                return True
+        return False
+
+    def _left_to_structure(self, run: StatementRun) -> set[str]:
+        """Of *run*'s outputs, those whose share check is left to its
+        structure's, which follows it before any other code runs
+        (`record_structure_share_edges`, asked of the names
+        `share_candidates` gives, a superset of these): a loop run as one
+        statement, refused before its own check (`_refused_in_place_early`),
+        and not in a pass of a loop, whose structure's check would come only
+        when that loop ends, if it does. Asked twice, the notebook was
+        walked twice. A loop target linked to its iterable without a check
+        (*static*) is still checked here, for every holder of its object."""
+        if run.code != self.structure_share_check_follows or not is_one_structure(run.tree):
+            return set()
+        from cash.notebook.control_structures.share_candidates import share_candidates
+
+        names, _static = share_candidates(run.tree.body[0], set(), self.shell.user_ns)
+        return names & run.outputs
+
     def _restorable_in_place(
         self, run: StatementRun, captured_vars: dict[str, Any], holders: dict[str, Any] | None
     ) -> None:
         """Keep what the loop changed stored only when a hit can restore it
         into the live object (`in_place`): the object keeps its identity, so
         a weak reference or an ``id()`` key still finds it. Else it runs
-        every time, with the reason."""
+        every time, with the reason. What the objects are alone was asked
+        before the share check (`_refused_in_place_early`); here, what the
+        holders it found share with them."""
         names = sorted(run.metrics["stored_in_place"])
         values = {**captured_vars, **(holders or {})}
-        statement = not is_one_structure(run.tree)
         for name in names:
             obj = captured_vars.get(name)
-            why = (
-                (self._rewrite_refusal(run, name, obj) if statement else None)
-                or in_place.refusal(obj, self.shell.user_ns)
-                or in_place.holder_refusal(name, obj, values)
-                or in_place.memory_refusal(name, obj, values)
-            )
-            if isinstance(why, IdentityHeld):
-                self._warn_identity_held(run, _pointed_into(name, why))
+            why = in_place.holder_refusal(name, obj, values) or in_place.memory_refusal(name, obj, values)
             if why is not None:
-                self._unstore_in_place(run, f"In-place mutation on: {name} ({why}; statement re-executes)")
+                self._refuse_in_place(run, name, why)
                 return
         run.restored_into = set(names)
+
+    def _refuse_in_place(self, run: StatementRun, name: str, why: str) -> None:
+        """Run *run* every time for *why*, the reason *name*'s object cannot
+        be restored into, warning when the notebook holds it by identity."""
+        if isinstance(why, IdentityHeld):
+            self._warn_identity_held(run, _pointed_into(name, why))
+        self._unstore_in_place(run, f"In-place mutation on: {name} ({why}; statement re-executes)")
 
     @staticmethod
     def _rewrite_refusal(run: StatementRun, name: str, obj: Any) -> str | None:
@@ -3938,6 +3980,12 @@ class StatementProcessor:
             # the outputs; JSON-like ones are walked once for all of them.
             with _plain_data.one_look(captured_vars):
                 holders = None
+                left_to_structure: set[str] = set()
+                if not run.skip_cache and run.metrics.get("stored_in_place"):
+                    # Before the share check: refused, the statement is not
+                    # stored, and the check's walks would be for nothing.
+                    if self._refused_in_place_early(run, captured_vars):
+                        left_to_structure = self._left_to_structure(run)
                 if not run.skip_cache:
                     # What the analyses kept of the outputs is cash's, not a
                     # holder the share check should count.
@@ -3946,7 +3994,15 @@ class StatementProcessor:
                 if not run.skip_cache and run.metrics.get("stored_in_place"):
                     self._restorable_in_place(run, captured_vars, holders)
                 with logging_edges() as shared:
-                    self._record_shared_object_edges(run, captured_vars, holders, execution.echo, execution.cost)
+                    self._record_shared_object_edges(
+                        run,
+                        {name: value for name, value in captured_vars.items() if name not in left_to_structure}
+                        if left_to_structure
+                        else captured_vars,
+                        holders,
+                        execution.echo,
+                        execution.cost,
+                    )
                     self._link_inputs_kept_by(run, execution.echo, execution.cost)
                     self._unlink_what_shares_nothing(run, execution.cost)
                 if not is_control_body(run.code):
