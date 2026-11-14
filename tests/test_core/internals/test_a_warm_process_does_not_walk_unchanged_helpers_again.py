@@ -26,7 +26,11 @@ from tests._scripts import run_python
 
 _RUNNER = textwrap.dedent(
     """
-    import json, sys
+    import json, sys, time
+    if "coarse-thread-clock" in sys.argv:
+        # Windows: `thread_time` moves in 15.6 ms ticks; a walk shorter
+        # than one reads 0 s.
+        time.thread_time = lambda: 0.0
     sys.path.insert(0, sys.argv[1])
     import cash, app
     if sys.argv[2:] == ["rebind"]:
@@ -206,3 +210,16 @@ def test_a_store_file_nested_too_deep_to_read_is_walked_and_written_again(code_d
     for file in files:
         assert json.loads(file.read_text("utf-8"))["kind"] == "purity-report"
     assert _run(code_dir)["walked"] == []
+
+
+def test_a_thread_clock_that_ticks_coarsely_still_stores_the_report(code_dir):
+    """A walk is stored when it cost more than checking its report would.
+    Timed by a thread clock that moves in 15.6 ms ticks (Windows), every
+    walk read 0 s, was judged too cheap to keep, and no process ever
+    stored one: each walked every helper again."""
+    first = _run(code_dir, "coarse-thread-clock")
+    assert "lib.leaf" in first["walked"]
+    assert first["stats"]["stored"] >= 1, first["stats"]
+    second = _run(code_dir, "coarse-thread-clock")
+    assert second["walked"] == [] and second["stats"]["loaded"] >= 1, second["stats"]
+    assert (second["key"], second["issues"], second["value"]) == (first["key"], first["issues"], first["value"])

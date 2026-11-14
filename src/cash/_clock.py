@@ -14,10 +14,12 @@ imported under a frozen clock, freezegun's own saved original is used.
 
 from __future__ import annotations
 
+import functools
 import sys
 import threading
 import time
 import types
+from collections.abc import Callable
 
 
 def _real_perf_counter():
@@ -34,6 +36,50 @@ _REAL = (_real_perf_counter(),)
 def perf_counter() -> float:
     """``time.perf_counter()``, whatever a test has done to it."""
     return _REAL[0]()
+
+
+def ticks_finely(clock: Callable[[], float]) -> bool:
+    """Whether *clock* really moves within half a millisecond of busy work.
+
+    The reported resolution is not enough: Windows reports 1e-07 for
+    `thread_time`, but GetThreadTimes moves in 15.6 ms ticks, so work timed
+    with it reads 0 s. Nor is seeing it move: one of those ticks falls in
+    the half millisecond about one time in thirty. A fine clock moves by
+    less than `_FINE_STEP_S` from one reading to the next.
+    """
+    deadline = perf_counter() + 5e-4
+    last = clock()
+    while perf_counter() < deadline:
+        now = clock()
+        if now != last:
+            if now - last <= _FINE_STEP_S:
+                return True
+            last = now  # a tick, or this thread was descheduled between readings
+    return False
+
+
+#: The most a clock `ticks_finely` takes to be fine moves between two
+#: readings of it in a busy loop.
+_FINE_STEP_S = 1e-4
+
+
+@functools.cache
+def fine_thread_clock() -> Callable[[], float]:
+    """This thread's CPU time, where it resolves a microsecond; else the
+    wall clock (`perf_counter`; Windows: `thread_time` moves in 15.6 ms
+    ticks). Asked once per process.
+
+    For timing short work by what it cost this thread: a busy machine does
+    not tip it where the CPU time is fine, and where it is not, the wall
+    clock still sees work that took a millisecond, which `thread_time`
+    reads as 0 s.
+    """
+    try:
+        if time.get_clock_info("thread_time").resolution <= 1e-6 and ticks_finely(time.thread_time):
+            return time.thread_time
+    except (AttributeError, ValueError, OSError):
+        pass
+    return perf_counter
 
 
 #: This thread's CPU time (`CpuLimit`); a name of its own, so a test can

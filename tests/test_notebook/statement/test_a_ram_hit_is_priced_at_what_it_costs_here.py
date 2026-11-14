@@ -10,12 +10,14 @@ all) at a shallow copy's cost.
 
 from __future__ import annotations
 
+import time
 from unittest.mock import MagicMock
 
 import numpy as np
 import pandas as pd
 import pytest
 
+from cash._clock import ticks_finely
 from cash.backends import frame_sharing, memory_backend
 
 
@@ -110,8 +112,8 @@ class TestACoarseThreadClock:
     and pricing a hit raised ValueError (max of an empty list)."""
 
     def test_a_clock_that_does_not_move_is_not_used(self):
-        assert not memory_backend._ticks_finely(lambda: 0.0)
-        assert memory_backend._ticks_finely(memory_backend.time.perf_counter)
+        assert not ticks_finely(lambda: 0.0)
+        assert ticks_finely(time.perf_counter)
 
     def test_a_tick_of_a_coarse_clock_is_not_taken_for_a_fine_one(self):
         """One 15.6 ms tick falling inside the check made `thread_time` the
@@ -121,7 +123,7 @@ class TestACoarseThreadClock:
         def coarse() -> float:
             return next(readings, 0.0156)
 
-        assert not memory_backend._ticks_finely(coarse)
+        assert not ticks_finely(coarse)
 
     def test_a_probe_the_clock_cannot_see_is_timed_by_the_wall_clock(self, copy_speed, monkeypatch):
         memory_backend._COPY_SPEED.clear()
