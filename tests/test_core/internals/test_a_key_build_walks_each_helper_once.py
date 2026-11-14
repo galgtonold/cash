@@ -148,6 +148,7 @@ def _run(tmp_path, mode: str, cache: str = "cache", trace: str = "1") -> tuple[s
     return key, int(walks), int(result), int(hits)
 
 
+@pytest.mark.timeout(120)
 @pytest.mark.parametrize("trace", ["1", "0"])
 def test_the_key_is_the_one_walking_every_helper_again_gives(tmp_path, trace):
     _write_package(tmp_path)
@@ -161,6 +162,11 @@ def test_the_key_is_the_one_walking_every_helper_again_gives(tmp_path, trace):
 # A helper reached only through a method of ``self`` (``H.h3`` in
 # ``Base.m0_1``): with a trace (3.12+) the call's trace names it; without one
 # (before 3.12, ``CASH_TRACE=0``) the methods' helpers are in the key.
+#
+# Four fresh interpreters, each importing cash: about 13 s on Linux, past
+# the 30 s default on a Windows runner, where pytest-timeout ends the whole
+# worker ("node down: Not properly terminated", no traceback).
+@pytest.mark.timeout(120)
 @pytest.mark.parametrize("trace", ["1", "0"])
 @pytest.mark.parametrize("edit", [3, 17, -1], ids=["shared-helper", "deep-helper", "only-through-a-cycle"])
 def test_an_edit_to_a_walked_helper_misses(tmp_path, edit, trace):
@@ -168,11 +174,11 @@ def test_an_edit_to_a_walked_helper_misses(tmp_path, edit, trace):
     _, _, before, _ = _run(tmp_path, "new", trace=trace)
     assert _run(tmp_path, "new", trace=trace)[3] == 1, "an unchanged estimator was not served from the cache"
     _write_package(tmp_path, edit=edit)
-    fresh = _run(tmp_path, "old", "fresh", trace=trace)[2]
+    fresh_key, _, fresh, _ = _run(tmp_path, "old", "fresh", trace=trace)
     key, _, after, hits = _run(tmp_path, "new", trace=trace)
     assert hits == 0, f"an edit to a helper was served the result from before it ({before})"
     assert after == fresh
-    assert key == _run(tmp_path, "old", "fresh", trace=trace)[0]
+    assert key == fresh_key
 
 
 # --- the reports, shape by shape ---

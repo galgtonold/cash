@@ -29,6 +29,12 @@ from cash.notebook.statement import output_refusals, processor
 from cash.notebook.statement.share_giveups import CostlyDigests
 from tests._cell_driver import run_cash_cell
 
+# `_Walks` lifts the search from the outputs up to 60 s: in a worker that
+# ran a few hundred tests the referrer read it makes is slow, and on a
+# Windows runner it took past the 30 s default, where pytest-timeout ends
+# the whole worker. The counts are what these tests pin, not the time.
+pytestmark = pytest.mark.timeout(150)
+
 
 def _busy(seconds: float) -> None:
     end = time.thread_time() + seconds

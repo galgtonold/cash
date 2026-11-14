@@ -125,6 +125,52 @@ def test_a_fresh_process_hit_returns_an_equal_trie(tmp_path, trie_module):
 
 
 @pytest.mark.timeout(600)
+def test_a_miss_pickles_it_once_and_neither_walks_nor_copies_it(tmp_path, trie_module, monkeypatch):
+    """The work a miss does with the value, counted: what made the store
+    4.7 s was a size walk of every node, a pickle round trip to copy it and
+    a second pickle by the disk tier."""
+    from cash import kept_state
+
+    cash = Cash(cache_dir=str(tmp_path / "cache"), register_magic=False)
+    words = trie_module.words(72_000)
+
+    @cash.cache(assume_safe=True)
+    def build(n):
+        return trie_module.Trie(words[:n])
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        build(10)  # the function's first call, keyed and stored while small
+    pickles, sized, loaded = [], [], []
+    real_dumps, real_size, real_load = kept_state._dumps, memory_backend.memory_footprint, memory_backend._Pickled.load
+
+    def dumps(*args, **kwargs):
+        out = real_dumps(*args, **kwargs)
+        pickles.append(len(out))
+        return out
+
+    def size(value, *args):
+        sized.append(type(value))
+        return real_size(value, *args)
+
+    def load(self):
+        loaded.append(self.nbytes)
+        return real_load(self)
+
+    monkeypatch.setattr(kept_state, "_dumps", dumps)
+    monkeypatch.setattr(memory_backend, "memory_footprint", size)
+    monkeypatch.setattr(memory_backend._Pickled, "load", load)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        trie = build(len(words))
+    cash.shutdown()  # a write left to a background thread is counted too
+    whole = len(pickle.dumps(trie, protocol=5))
+    assert len([n for n in pickles if n > whole // 2]) == 1, (pickles, whole)
+    assert trie_module.Trie not in sized and trie_module.Node not in sized, sized
+    assert not [n for n in loaded if n > whole // 2], loaded
+
+
+@pytest.mark.timeout(600)
 def test_a_miss_stores_it_in_a_few_times_its_pickle(tmp_path, trie_module):
     cash = Cash(cache_dir=str(tmp_path / "cache"), register_magic=False)
     words = trie_module.words(72_000)
@@ -133,8 +179,15 @@ def test_a_miss_stores_it_in_a_few_times_its_pickle(tmp_path, trie_module):
     def build(n):
         return trie_module.Trie(words[:n])
 
+    # It was over 10 (4.7 s for a 0.45 s pickle). With the C extension
+    # 2.3; without it the renaming of attribute names is a Python call per
+    # node, 3.4 to 4 (on Python 3.10, whose pickle is slower, 2 to 2.7).
+    bound = 3.0 if getattr(_native.kernels, "reduce_apart", None) is not None else 5.0
+    # The best of a few misses: a loaded runner (5.2 once on Windows 3.10)
+    # slows one, not all; a store that does more work is slower in every
+    # one. The work itself is counted above.
     ratios = []
-    for n in (len(words), len(words) - 1, len(words) - 2):
+    for n in range(len(words), len(words) - 6, -1):
         started = time.perf_counter()
         plain = trie_module.Trie(words[:n])
         built = time.perf_counter() - started
@@ -148,10 +201,8 @@ def test_a_miss_stores_it_in_a_few_times_its_pickle(tmp_path, trie_module):
             build(n)
             missed = time.perf_counter() - started
         ratios.append((missed - built) / pickled)
-    # It was over 10 (4.7 s for a 0.45 s pickle). With the C extension
-    # 2.3; without it the renaming of attribute names is a Python call per
-    # node, 3.4 to 4 (on Python 3.10, whose pickle is slower, 2 to 2.7).
-    bound = 3.0 if getattr(_native.kernels, "reduce_apart", None) is not None else 5.0
+        if len(ratios) >= 3 and min(ratios) < bound:
+            break
     assert min(ratios) < bound, ratios
 
 
