@@ -5,7 +5,8 @@ Read from the source file and reduced to its canonical form
 (`cash.source_norm`), so a comment or a reformat does not move it; failing
 that from the compiled body (`bytecode_identity`), and for a callable with
 no code from its name and, for a user's compiled extension, the built
-file. A ``functools.wraps`` wrapper's digest holds both its own code and
+file -- or, for a Cython function, the Cython code it can reach
+(`cash.cython_digest`). A ``functools.wraps`` wrapper's digest holds both its own code and
 what it wraps. The extension and module digests are memoised per file.
 """
 
@@ -19,6 +20,7 @@ import sys
 import types
 
 from ._user_attrs import module_file
+from .cython_digest import cython_function_digest
 from .exceptions import SOURCE_RETRIEVAL_ERRORS
 from .jit_functions import jit_identity, jit_python_function
 from .pe_digest import extension_bytes_digest
@@ -130,7 +132,14 @@ def _compiled_identity(fn: object, walked: frozenset[int]) -> str:
             opaque = f"{opaque}:built:{built}"
         return hashlib.sha256(opaque.encode("utf-8")).hexdigest()
     if built is not None:
-        own = hashlib.sha256(f"{own}:built:{built}".encode()).hexdigest()
+        # A Cython function is keyed by the Cython code it can reach, not by
+        # the whole binary, which moves with an edit to any function in it;
+        # `cython_function_digest` is None whenever that cannot be trusted.
+        reached = cython_function_digest(fn)
+        if reached is not None:
+            own = hashlib.sha256(f"{own}:cython:{reached}".encode()).hexdigest()
+        else:
+            own = hashlib.sha256(f"{own}:built:{built}".encode()).hexdigest()
     return _with_wrapped(own, fn, walked)
 
 
