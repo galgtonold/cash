@@ -4834,9 +4834,14 @@ class StatementProcessor:
             try:
                 gave_up = GaveUp()
                 with walk_budget(budget):
-                    _found, shared = share_group(
+                    # The holders it returns are dropped at once: kept in a
+                    # local, each of their objects had one reference more,
+                    # and `by_owner` asking the check again of one owner
+                    # found it held by something no variable is and
+                    # searched the heap for it.
+                    shared = share_group(
                         names, captured_vars, user_ns, cash_held, named, foreign=foreign, gave_up=gave_up
-                    )
+                    )[1]
                 if not shared:
                     # Each name with the holders found for it, not every
                     # output with every holder: a block checks many names.
