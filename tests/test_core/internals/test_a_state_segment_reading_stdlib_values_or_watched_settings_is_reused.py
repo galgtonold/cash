@@ -150,8 +150,9 @@ def test_a_segment_over_a_fixed_stdlib_value_is_reused(c, mod, name):
 
 
 def _value_id(value):
-    """A collection id that is the same in every xdist worker (no address)."""
-    return re.sub(r" at 0x[0-9a-f]+", "", repr(value))
+    """A collection id that is the same in every xdist worker (no address).
+    Windows writes the address in capitals (``at 0x000001C7CC1BD850``)."""
+    return re.sub(r" at 0x[0-9a-fA-F]+", "", repr(value))
 
 
 @pytest.mark.parametrize(
