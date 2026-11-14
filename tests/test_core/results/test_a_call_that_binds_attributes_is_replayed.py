@@ -551,13 +551,14 @@ def test_a_second_process_replays_what_the_first_stored(tmp_path):
                 assert est.alias_ is est.coef_ and est.X_ is X and est.default_ is DEFAULT
             print("ok")
             """
-        )
+        ),
+        encoding="utf-8",
     )
     log = tmp_path / "runs.log"
     for _ in range(2):
         out = run_python(script, tmp_path / ".cash", log, cwd=tmp_path)
         assert out.stdout.strip() == "ok", out.stderr
-    assert log.read_text().count("ran") == 1
+    assert log.read_text(encoding="utf-8").count("ran") == 1
 
 
 @pytest.mark.skipif(sys.version_info >= (3, 12), reason="the fallback without dict watchers is below Python 3.12")

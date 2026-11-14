@@ -10,32 +10,32 @@ import warnings
 from tests._cell_driver import run_cash_cell
 
 
-def test_the_warning_names_the_line_in_the_cell(cash_magics, cash_instance, mock_shell):
+def test_the_warning_names_the_line_in_the_cell(cash_magics, cash_instance, mock_shell, tmp_path):
     mock_shell.user_ns["cash_instance"] = cash_instance
     run_cash_cell(
         cash_magics,
-        "class Box:\n    pass\n\n@cash_instance.cache\ndef fill(box):\n    vars(box).update(n=1)\n    return 1\n",
+        'import zipfile\n\n@cash_instance.cache\ndef fill(path):\n    with zipfile.ZipFile(path, "w") as z:\n        names = z.namelist()\n    return str(names)\n',
     )
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        run_cash_cell(cash_magics, "n = 1\nfill(Box())\n")
+        run_cash_cell(cash_magics, f"n = 1\nfill({str(tmp_path / 'a.zip')!r})\n")
     found = [w for w in caught if getattr(w.message, "code", None) == "IMPURE-OBSERVED-EFFECTS"]
     assert [(w.filename, w.lineno) for w in found] == [("<cash>", 2)], [str(w.message) for w in caught]
 
 
-def test_a_filter_on_the_notebooks_module_still_reaches_it(cash_magics, cash_instance, mock_shell):
+def test_a_filter_on_the_notebooks_module_still_reaches_it(cash_magics, cash_instance, mock_shell, tmp_path):
     """Only the name shown changed: a cell runs as ``__main__``, and a
     filter naming that module quiets the warning as it does any other."""
     mock_shell.user_ns["cash_instance"] = cash_instance
     mock_shell.user_ns["__name__"] = "__main__"
     run_cash_cell(
         cash_magics,
-        "class Box:\n    pass\n\n@cash_instance.cache\ndef fill(box):\n    vars(box).update(n=1)\n    return 1\n",
+        'import zipfile\n\n@cash_instance.cache\ndef fill(path):\n    with zipfile.ZipFile(path, "w") as z:\n        names = z.namelist()\n    return str(names)\n',
     )
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         warnings.filterwarnings("ignore", module="__main__")
-        run_cash_cell(cash_magics, "n = 1\nfill(Box())\n")
+        run_cash_cell(cash_magics, f"n = 1\nfill({str(tmp_path / 'a.zip')!r})\n")
     assert not [w for w in caught if getattr(w.message, "code", None) == "IMPURE-OBSERVED-EFFECTS"]
 
 
