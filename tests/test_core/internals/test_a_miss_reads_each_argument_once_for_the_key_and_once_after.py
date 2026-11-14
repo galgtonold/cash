@@ -102,8 +102,10 @@ def test_a_miss_digests_each_argument_for_the_key_and_after_the_body_only(c, dig
         assert 1 <= digests[id(TIMES)] <= 2, "the index was read beyond the key and the mutation check"
         assert 1 <= digests[id(albedo)] <= 2, "the array was read beyond the key and the mutation check"
         # A frame is read once; the check after the body finds it unchanged
-        # in the copy-on-write memo without reading it again.
-        assert digests[id(weather)] == 1
+        # in the copy-on-write memo without reading it again. Before pandas
+        # 3, without copy-on-write, no memo can tell the body left it alone:
+        # the check reads it again, as it reads the array.
+        assert digests[id(weather)] == (1 if arg_hashing.is_cow_pandas(weather) else 2)
         assert digests[id(result)] == 0, "storing the result digested it"
     assert f(TIMES, weather, 0.7, 3.0, albedo).equals(result)  # stored: served
 
