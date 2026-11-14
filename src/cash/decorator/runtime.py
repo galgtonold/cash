@@ -1974,6 +1974,8 @@ class CallRunner:
                     }
                 try:
                     state = state.resolved(lambda relink: attribute_replay.find(relink, bound))
+                except attribute_replay.Unresolved as exc:
+                    why = str(exc)
                 except LookupError:
                     why = "an object it bound by identity is not there"
             if why is not None:

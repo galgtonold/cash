@@ -15,8 +15,10 @@ handed in.
   else changed, in place or anywhere in them (``self.history.append(x)``,
   ``X[:] = 0``, a slot);
 * each value bound is either an immutable atom, one of the call's
-  arguments or the instance itself, a module global (bound again by
-  identity on a hit, never a copy), or a fresh object: nothing outside the
+  arguments or the instance itself, a module global, the value of another
+  attribute of a recorded instance that held it before the call and still
+  does (``img._data_cache = img._dataobj``; all bound again by identity on
+  a hit, never a copy), or a fresh object: nothing outside the
   instance, the other bound attributes and the result references it
   (counted by ``sys.getrefcount``), it is none of the values the instance
   held before, and the share check of a result finds nothing it holds that
@@ -43,7 +45,7 @@ if TYPE_CHECKING:
 
     from .call_state import BodyRun
 
-__all__ = ["AttrVerdict", "recordings"]
+__all__ = ["AttrVerdict", "Unresolved", "recordings"]
 
 #: Bound by value: copies are the same value, whatever their identity.
 _ATOMS = IMMUTABLE_LEAF_TYPES
@@ -167,6 +169,7 @@ def _classify(
     for name, value in named:
         arguments.setdefault(id(value), (value, name))
     held_before = {id(value) for change in changes.values() for value in change.before.values()}
+    kept = _kept_attributes(changes, arguments)
     fresh: dict[int, tuple[Any, int, str]] = {}
     values: dict[str, dict[str, Any]] = {}
     for param, change in changes.items():
@@ -184,6 +187,16 @@ def _classify(
             if ref is not None:
                 mine[key] = ref
                 continue
+            paths = kept.get(id(value), ())
+            if len(paths) == 1 and not isinstance(value, enum.Enum):
+                mine[key] = Relink("attribute", paths[0][:2])
+                continue
+            if len(paths) > 1:
+                held = " and ".join(path[2] for path in paths)
+                return (
+                    f"it bound {label} to an object {held} all held before the call, "
+                    "so which of them a hit should bind is ambiguous"
+                )
             if id(value) in held_before or isinstance(value, enum.Enum):
                 return f"it bound {label} to an object that was there before the call"
             seen = fresh.get(id(value))
@@ -191,6 +204,40 @@ def _classify(
             mine[key] = value
         values[param] = mine
     return values, fresh
+
+
+def _kept_attributes(
+    changes: dict[str, AttrChange], arguments: dict[int, tuple[Any, str]]
+) -> dict[int, list[tuple[str, str, str]]]:
+    """``{id: [(parameter, name, label), ...]}`` of each object a recorded instance
+    held as its top-level attribute *name* before the call and still holds
+    there after it, the call having neither rebound nor deleted that name;
+    *parameter* names the instance as a hit's arguments do (*arguments*,
+    ``{id: (value, parameter)}``). A hit finds it again at that path on the
+    caller's instance (`find`): nibabel's
+    ``img._data_cache = np.asanyarray(img._dataobj)`` aliases the array the
+    image already held, and a hit leaves that alias, not a copy."""
+    kept: dict[int, list[tuple[str, str, str]]] = {}
+    seen: set[int] = set()
+    for recorded, change in changes.items():
+        found = arguments.get(id(change.obj))
+        if found is None or found[0] is not change.obj or id(change.obj) in seen:
+            continue
+        seen.add(id(change.obj))
+        param = found[1]
+        for name, value in change.before.items():
+            if type(value) in _ATOMS or name in change.bound or change.state.get(name, _ABSENT) is not value:
+                continue
+            kept.setdefault(id(value), []).append((param, name, f"{recorded}.{name}"))
+    return kept
+
+
+_ABSENT = object()
+
+
+class Unresolved(LookupError):
+    """A `Relink` to an attribute of an argument that the argument a hit is
+    handed no longer holds as a plain attribute; says which and why."""
 
 
 def _global_ref(value: Any, func: Callable, obj: Any) -> Relink | None:
@@ -233,9 +280,29 @@ def _by_path(module: str, qualname: str) -> Any:
 
 def find(relink: Relink, named: dict[str, Any]) -> Any:
     """The object *relink* names on a hit: the argument bound to its
-    parameter (*named*), or the module global. Raises `LookupError`."""
+    parameter (*named*), the value of a top-level attribute of that argument
+    (read from its ``__dict__``, as the store read it, before the hit binds
+    anything), or the module global. Raises `LookupError` (`Unresolved`,
+    saying why, for an attribute that is not there or that a property or
+    other descriptor of its class now answers for)."""
     if relink.kind == "argument":
         return named[relink.where[0]]
+    if relink.kind == "attribute":
+        param, name = relink.where
+        obj = named[param]
+        try:
+            state = object.__getattribute__(obj, "__dict__")
+        except AttributeError:
+            state = None
+        if type(state) is not dict or name not in state:
+            raise Unresolved(f"{param}.{name}, the object it bound by identity, is not an attribute of {param} now")
+        for klass in type(obj).__mro__:
+            found = vars(klass).get(name, _ABSENT)
+            if found is not _ABSENT:
+                if hasattr(type(found), "__set__") or hasattr(type(found), "__delete__"):
+                    raise Unresolved(f"{param}.{name}, the object it bound by identity, is a property of its class now")
+                break
+        return state[name]
     module, name = relink.where
     held = _by_path(module, name)
     if held is None:
