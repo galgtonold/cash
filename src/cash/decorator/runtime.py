@@ -1144,8 +1144,9 @@ class CallRunner:
             verdict = self.entry_verdict(cache_key, metadata, ttl, needs_trace=needs_trace)
             writes: list[tuple[Any, Any]] = []
             if verdict is None and isinstance(cached_data, rewrite_in_place.ArgumentsLeft):
-                left = cached_data
-                writes, why = self._arguments_to_write(func_name, left, arguments, args_hash, content_keyed)
+                left, why = self._opened(func_name, cached_data, arguments)
+                if why is None:
+                    writes, why = self._arguments_to_write(func_name, left, arguments, args_hash, content_keyed)
                 if why is not None:
                     verdict = MissReason(MissKind.ARGS, why)
                 cached_data = left.result
@@ -1899,6 +1900,29 @@ class CallRunner:
             return list(inspect.signature(func).bind(*args, **kwargs).arguments.items())
         except (TypeError, ValueError):
             return [(None, value) for value in (*args, *kwargs.values())]
+
+    def _opened(
+        self, func_name: str, left: rewrite_in_place.ArgumentsLeft, arguments: tuple[tuple, dict] | None
+    ) -> tuple[rewrite_in_place.ArgumentsLeft, str | None]:
+        """*left* with its sealed parts unpickled onto the arguments this call
+        is handed (`rewrite_in_place.seal`), or why they cannot be."""
+        if left.sealed is None:
+            return left, None
+        if arguments is None:
+            return left, "the arguments it changes in place could not be found"
+        # Named as `CallRunner.attribute_changes` named them for the seal.
+        spec = self._registry.cached.get(func_name)
+        named = {
+            **dict(bound_values(spec.func) if spec is not None else ()),
+            **dict(self._named_args(func_name, *arguments)),
+        }
+        try:
+            return left.opened(lambda relink: attribute_replay.find(relink, named)), None
+        except LookupError:
+            return left, "an argument an object it bound holds is not there"
+        except Exception:  # not unpickled: not served
+            logger.debug("[ATTRS] %s: sealed entry not opened", func_name, exc_info=True)
+            return left, "the objects it bound could not be unpickled"
 
     def _arguments_to_write(
         self,

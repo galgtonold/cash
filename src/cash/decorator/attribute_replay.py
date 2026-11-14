@@ -35,7 +35,7 @@ import sys
 import types
 from typing import TYPE_CHECKING, Any, NamedTuple
 
-from ..rewrite_in_place import AttrChange, AttrRecording, AttrState, Relink, put_back
+from ..rewrite_in_place import AttrChange, AttrRecording, AttrState, Relink, put_back, seal
 from ..value_types import IMMUTABLE_LEAF_TYPES
 
 if TYPE_CHECKING:
@@ -124,7 +124,14 @@ class AttrVerdict(NamedTuple):
         if type(classified) is str:
             return cls(changes, None, classified, False)
         values, fresh = classified
-        why = _held_elsewhere(fresh, result, {id(value) for _, value in named} | {id(c.obj) for c in changes.values()})
+        pinned: dict[int, tuple[Any, Relink]] = {}
+        for name, value in named:
+            if type(value) not in _ATOMS:
+                pinned.setdefault(id(value), (value, Relink("argument", (name,))))
+        hidden: list[tuple[Any, str]] = []
+        why = _held_elsewhere(
+            fresh, result, {id(value) for _, value in named} | {id(c.obj) for c in changes.values()}, pinned, hidden
+        )
         objects = {id(change.obj) for change in changes.values()}
         with put_back(changes.values()):
             try:
@@ -134,7 +141,7 @@ class AttrVerdict(NamedTuple):
             if not explained:
                 return cls(changes, None, "it also changed something else in its arguments in place", False)
             if why is None:
-                why = _shared(fresh, shared_outside)
+                why = _shared(fresh, shared_outside, hidden)
             result_checked = id(result) not in objects
             result_shared = warn_shared_result(result) if result_checked else None
         if why is not None:
@@ -143,6 +150,9 @@ class AttrVerdict(NamedTuple):
             param: AttrState(type(change.obj), values[param], change.deleted, change.order)
             for param, change in changes.items()
         }
+        if pinned:
+            for state in states.values():
+                state.pinned = pinned
         return cls(changes, states, None, True, result_shared, result_checked)
 
 
@@ -319,34 +329,28 @@ def _memoryview_holds() -> int:
 
 def _walk(
     fresh: dict[int, tuple[Any, int, str]], arguments: set[int]
-) -> tuple[dict[int, int], list, dict[int, str]] | str:
-    """``(inner, nodes, labels)``: how many times the objects the values in
-    *fresh* hold are held among them (by id), those objects (each once), and
-    the attribute each was found under. Or why it cannot be told. A
-    function of its own, so no loop variable of it holds an object when the
-    references are counted."""
+) -> tuple[dict[int, int], list, dict[int, str], dict[int, str]] | str:
+    """``(inner, nodes, labels, met)``: how many times the objects the values
+    in *fresh* hold are held among them (by id), those objects (each once),
+    the attribute each was found under, and ``{id: attribute}`` of the
+    call's arguments (*arguments*) met inside them, not walked into. Or why
+    it cannot be told. A function of its own, so no loop variable of it
+    holds an object when the references are counted."""
     inner: dict[int, int] = {}
     nodes: list = []
     labels: dict[int, str] = {}
+    met: dict[int, str] = {}
     stack = [(value, label) for value, _holders, label in fresh.values()]
     visited = set(fresh)
     while stack:
         value, label = stack.pop()
-        children = _children(value)
-        module = getattr(type(value), "__module__", "")
-        buffers = {id(c) for c in _sklearn_buffers(value)} if module in _SKLEARN_TREES else ()
-        for child in children:
+        for child in _children(value):
             if _by_identity_anyway(child):
                 continue
             key = id(child)
-            if key in arguments and key in buffers:
-                # A tree built on the array handed in (``NearestNeighbors``
-                # keeps it as ``_fit_X`` too): a hit's tree holds an equal
-                # copy, since the key hashed the array; only a later write
-                # into that array would reach the run's tree and not the hit's.
-                continue
             if key in arguments:
-                return f"the object it bound to {label} holds one of the call's arguments"
+                met.setdefault(key, label)
+                continue
             inner[key] = inner.get(key, 0) + 1
             if key not in visited:
                 visited.add(key)
@@ -355,7 +359,7 @@ def _walk(
                 nodes.append(child)
                 labels[key] = label
                 stack.append((child, label))
-    return inner, nodes, labels
+    return inner, nodes, labels, met
 
 
 #: Containers whose pickle holds all they hold: the builtin ones, and the
@@ -467,7 +471,13 @@ def _not_pickled_whole(fresh: dict[int, tuple[Any, int, str]], nodes: list, labe
     return None
 
 
-def _held_elsewhere(fresh: dict[int, tuple[Any, int, str]], result: Any, arguments: set[int]) -> str | None:
+def _held_elsewhere(
+    fresh: dict[int, tuple[Any, int, str]],
+    result: Any,
+    arguments: set[int],
+    pinned: dict[int, tuple[Any, Relink]],
+    hidden: list[tuple[Any, str]],
+) -> str | None:
     """Why a value in *fresh* (`_classify`), or an object inside one, is not
     the call's own new object, or None.
 
@@ -477,17 +487,32 @@ def _held_elsewhere(fresh: dict[int, tuple[Any, int, str]], result: Any, argumen
     (once if the tuple, list or dict it is holds it; a result that is the
     value itself is left to the result's own share check). One held by more
     is held by something outside -- a module, a class, a library's cache --
-    which a hit's copy would no longer be. An argument, or the instance,
-    inside a value is refused outright: a hit would bind a copy of it."""
+    which a hit's copy would no longer be.
+
+    An argument inside a value (a tree built over the array handed in) is
+    pickled as a reference a hit resolves to the argument it is handed
+    (`rewrite_in_place.seal`): *pinned*, handed in with each argument's
+    `Relink` by id, is left with those met. One the value's pickle does not
+    reach as itself (a reducer that copies it), or the instance itself when
+    it was not handed in as an argument, is refused: a hit would bind a
+    copy of it. *hidden* is filled with ``(array, attribute)`` of each
+    array a scikit-learn tree or metric holds out of the collector's sight
+    (`_sklearn_buffers`), for `_shared`."""
+    candidates = dict(pinned)
+    pinned.clear()
     if not fresh:
         return None
     walked = _walk(fresh, arguments)
     if type(walked) is str:
         return walked
-    inner, nodes, labels = walked
+    inner, nodes, labels, met = walked
     why = _not_pickled_whole(fresh, nodes, labels)
     if why is not None:
         return why
+    if met:
+        why = _pin(fresh, met, candidates, pinned)
+        if why is not None:
+            return why
     items: list = []
     if type(result) in (tuple, list):
         items = list(result)
@@ -524,15 +549,63 @@ def _held_elsewhere(fresh: dict[int, tuple[Any, int, str]], result: Any, argumen
                 continue
             if count > expected:
                 return f"something outside the call also holds an object inside what it bound to {labels[key]}"
+    # Counted: now the arrays the scikit-learn objects hold out of the
+    # collector's sight, for `_shared`.
+    for value, label in [(value, label) for value, _holders, label in fresh.values()] + [
+        (node, labels[id(node)]) for node in nodes
+    ]:
+        module = getattr(type(value), "__module__", "")
+        if module == _SKLEARN_METRICS or module in _SKLEARN_TREES:
+            hidden.extend(
+                (held, label)
+                for held in _sklearn_buffers(value)
+                if type(held).__name__ == "ndarray" and id(held) not in arguments
+            )
     return None
 
 
-def _shared(fresh: dict[int, tuple[Any, int, str]], shared_outside: Callable[[Any], str | None]) -> str | None:
-    """Why a value in *fresh* holds an object the caller or a module also
-    holds (`PurityChecks.shared_outside`), or None. Run while the
-    attributes are put back, so the instance is as the caller handed it."""
+def _pin(
+    fresh: dict[int, tuple[Any, int, str]],
+    met: dict[int, str],
+    candidates: dict[int, tuple[Any, Relink]],
+    pinned: dict[int, tuple[Any, Relink]],
+) -> str | None:
+    """Put in *pinned* the arguments the values hold (*met*), out of every
+    argument the call was handed (*candidates*, by id), or say why one
+    cannot be pickled as a reference."""
+    for key, label in met.items():
+        if key not in candidates:
+            return f"the object it bound to {label} holds the instance it was bound on"
+        pinned[key] = candidates[key]
+    try:
+        _sealed, reached = seal([value for value, _holders, _label in fresh.values()], pinned)
+    except Exception:  # noqa: BLE001 - not pickled: nothing says a hit could rebuild it
+        pinned.clear()
+        return "the objects it bound could not be pickled"
+    for key, label in met.items():
+        if key not in reached:
+            pinned.clear()
+            return f"the object it bound to {label} holds one of the call's arguments, which its pickle copies"
+    return None
+
+
+def _shared(
+    fresh: dict[int, tuple[Any, int, str]],
+    shared_outside: Callable[[Any], str | None],
+    hidden: list[tuple[Any, str]] = (),  # type: ignore[assignment]
+) -> str | None:
+    """Why a value in *fresh*, or an array a scikit-learn tree in one holds
+    (*hidden*: a tree over ``X[10:]`` views the argument), holds an object
+    the caller or a module also holds (`PurityChecks.shared_outside`), or
+    None. An argument itself, which the entry holds as a reference
+    (`_pin`), is not among them. Run while the attributes are put back, so
+    the instance is as the caller handed it."""
     for value, _holders, label in fresh.values():
         why = shared_outside(value)
         if why is not None:
             return f"the object it bound to {label} {why}"
+    for value, label in hidden:
+        why = shared_outside(value)
+        if why is not None:
+            return f"an array inside the object it bound to {label} {why}"
     return None

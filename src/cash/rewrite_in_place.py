@@ -32,6 +32,8 @@ object itself or a module global, named so a hit binds that very object.
 
 from __future__ import annotations
 
+import io
+import pickle
 import sys
 import types
 from collections.abc import Callable, Iterable
@@ -526,18 +528,75 @@ class ArgumentsLeft:
     that argument is in the state *before* names. *result* is a
     `ResultIsArgument` when the result was one of those arguments."""
 
-    __slots__ = ("reads", "result", "states")
+    __slots__ = ("reads", "result", "sealed", "states")
 
-    def __init__(self, result: Any, states: dict[str, tuple[str, Any]], reads: tuple | None = None) -> None:
+    def __init__(
+        self, result: Any, states: dict[str, tuple[str, Any]], reads: tuple | None = None, sealed: bytes | None = None
+    ) -> None:
         self.result = result
         self.states = states
         #: What the code the call ran reads outside its arguments
         #: (`argument_sharing.reads_of`): a hit checks the arguments it
         #: writes share nothing with it. None: not known, so not served.
         self.reads = reads
+        #: *result* and *states* pickled with the call's arguments inside
+        #: them as references (`seal`), when an attribute bound holds one:
+        #: `opened` unpickles them onto the arguments a hit is handed. Then
+        #: *result* and *states* are None until opened.
+        self.sealed = sealed
 
     def __reduce__(self) -> tuple:
+        if self.sealed is not None:
+            return (ArgumentsLeft, (None, None, self.reads, self.sealed))
+        pinned: dict[int, tuple[Any, Relink]] = {}
+        for _before, state in self.states.values():
+            if isinstance(state, AttrState) and state.pinned:
+                pinned.update(state.pinned)
+        if pinned:
+            sealed, _hits = seal((self.result, self.states), pinned)
+            return (ArgumentsLeft, (None, None, self.reads, sealed))
         return (ArgumentsLeft, (self.result, self.states, self.reads))
+
+    def opened(self, find: Callable[[Relink], Any]) -> ArgumentsLeft:
+        """This entry with its sealed parts unpickled, each argument inside
+        them the object *find* gives for its `Relink` (it raises
+        `LookupError` for one it cannot find)."""
+        if self.sealed is None:
+            return self
+        result, states = unseal(self.sealed, find)
+        return ArgumentsLeft(result, states, self.reads)
+
+
+def seal(value: Any, pinned: dict[int, tuple[Any, Relink]]) -> tuple[bytes, set[int]]:
+    """``(bytes, ids)``: *value*'s store pickle with each object *pinned*
+    names (``{id: (object, relink)}``) written as its `Relink`, and the ids
+    of those it met. A hit unpickles it onto the objects it is handed
+    (`unseal`), so what held an argument holds the caller's own object, as
+    a plain run's does: a tree built over an array handed in is built over
+    the array the caller hands in, and sees a later write into it."""
+    from . import kept_state
+    from .backends.serialization import stored_reducers
+
+    met: set[int] = set()
+
+    def persistent_id(obj: Any) -> tuple | None:
+        entry = pinned.get(id(obj))
+        if entry is None or entry[0] is not obj:
+            return None
+        met.add(id(obj))
+        return tuple(entry[1])
+
+    return kept_state.dumps(value, 5, extra=stored_reducers(), persistent_id=persistent_id), met
+
+
+def unseal(sealed: bytes, find: Callable[[Relink], Any]) -> Any:
+    """What `seal` pickled, each `Relink` in it the object *find* gives."""
+
+    class _Unpickler(pickle.Unpickler):
+        def persistent_load(self, pid: Any) -> Any:
+            return find(Relink(*pid))
+
+    return _Unpickler(io.BytesIO(sealed)).load()
 
 
 # ---------------------------------------------------------------- attributes
@@ -801,13 +860,17 @@ class AttrState:
     deletes them on the instance handed in (`replay`), whose ``__dict__``
     then holds what a plain run leaves, in the same order."""
 
-    __slots__ = ("deleted", "kind", "order", "values")
+    __slots__ = ("deleted", "kind", "order", "pinned", "values")
 
     def __init__(self, kind: type, values: dict, deleted: tuple, order: tuple) -> None:
         self.kind = kind
         self.values = values
         self.deleted = deleted
         self.order = order
+        #: ``{id: (argument, relink)}`` of the call's arguments an object in
+        #: *values* holds, which the entry pickles as references
+        #: (`ArgumentsLeft.__reduce__`); not stored itself.
+        self.pinned: dict[int, tuple[Any, Relink]] | None = None
 
     def __reduce__(self) -> tuple:
         return (AttrState, (self.kind, self.values, self.deleted, self.order))

@@ -7,9 +7,11 @@ The fitted estimator holds a scikit-learn ``KDTree`` or ``BallTree``, which
 holds a ``DistanceMetric``: Cython classes with a ``__reduce__`` of their
 own, whose pickle carries all they hold. They hold their arrays through
 Cython memoryviews the garbage collector does not visit, so the share check
-reads those arrays from their state instead. A float32 tree on the
-Euclidean metric loses its Euclidean flag in its pickle and still runs
-every time.
+reads those arrays from their state instead. A tree built over the array
+handed in is stored with a reference to it, and a hit builds it over the
+array the caller hands in: a later write into that array reaches the tree
+as in a plain run. A float32 tree on the Euclidean metric loses its
+Euclidean flag in its pickle and still runs every time.
 """
 
 from __future__ import annotations
@@ -88,6 +90,29 @@ def test_a_nearest_neighbors_fit_is_replayed(disk_cash, algorithm):
     assert not [w for w in caught if "in place" in str(w.message)], [str(w.message) for w in caught]
 
 
+@pytest.mark.parametrize("algorithm", ["kd_tree", "ball_tree"])
+def test_a_hits_tree_is_built_over_the_callers_array(disk_cash, algorithm):
+    """After a hit the tree views the array handed in, as a plain fit's
+    does: a write into it afterwards gives the plain run's neighbours."""
+
+    @disk_cash.cache
+    def fit(nn, X):
+        return nn.fit(X)
+
+    X = _data()
+    fit(NearestNeighbors(n_neighbors=4, algorithm=algorithm), X.copy())
+    plain_X, hit_X = X.copy(), X.copy()
+    plain = NearestNeighbors(n_neighbors=4, algorithm=algorithm).fit(plain_X)
+    nn = NearestNeighbors(n_neighbors=4, algorithm=algorithm)
+    assert fit(nn, hit_X) is nn
+    assert fit.cache_info()["hits"] == 1
+    assert nn._fit_X is hit_X
+    assert nn._tree.data.base is hit_X
+    for written in (plain_X, hit_X):
+        written[:20] += 5.0
+    _same_neighbours(nn, plain, X)
+
+
 def test_a_smote_fit_resample_is_replayed(disk_cash):
     over_sampling = pytest.importorskip("imblearn.over_sampling")
     runs = []
@@ -137,6 +162,26 @@ def test_a_tree_whose_array_something_else_holds_runs_every_time(disk_cash):
     finally:
         KEPT.clear()
     assert len(runs) == 2
+
+
+def test_a_tree_over_a_view_of_the_argument_runs_every_time(disk_cash):
+    """``KDTree(X[10:])`` views the argument through a memoryview the
+    collector does not visit: a hit's tree would hold a copy, which a later
+    write into ``X`` would not reach."""
+    runs = []
+
+    @disk_cash.cache
+    def build(holder, X):
+        runs.append(1)
+        holder.tree_ = KDTree(X[10:])
+        return 1
+
+    for _ in range(2):
+        holder, X = Holder(), _data(30)
+        build(holder, X)
+        assert np.shares_memory(holder.tree_.data.base, X)
+    assert len(runs) == 2
+    assert "shares memory with the argument 'X'" in build.explain(Holder(), _data(30)).details["why"]
 
 
 def test_a_float32_tree_on_the_euclidean_metric_runs_every_time(disk_cash):
@@ -189,6 +234,17 @@ def test_a_second_process_replays_the_fitted_estimator(tmp_path):
                 assert list(vars(nn)) == list(vars(plain)), vars(nn)
                 for a, b in zip(nn.kneighbors(X[:7]), plain.kneighbors(X[:7])):
                     assert np.array_equal(a, b)
+            # A new array, equal to the first process's: the hit's tree views it.
+            X = np.random.default_rng(0).random((200, 3))
+            nn = NearestNeighbors(n_neighbors=4)
+            assert fit(nn, X) is nn
+            assert nn._fit_X is X and nn._tree.data.base is X
+            X[:20] += 5.0
+            plain_X = np.random.default_rng(0).random((200, 3))
+            plain = NearestNeighbors(n_neighbors=4).fit(plain_X)
+            plain_X[:20] += 5.0
+            for a, b in zip(nn.kneighbors(X[:7]), plain.kneighbors(X[:7])):
+                assert np.array_equal(a, b)
             print("ok")
             """
         ),
