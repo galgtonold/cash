@@ -18,6 +18,7 @@ import os
 import sys
 import types
 
+from ._user_attrs import module_file
 from .exceptions import SOURCE_RETRIEVAL_ERRORS
 from .jit_functions import jit_identity, jit_python_function
 from .pe_digest import extension_bytes_digest
@@ -184,7 +185,7 @@ def extension_file_digest(fn: object) -> str | None:
     while isinstance(fn, functools.partial):
         fn = fn.func
     module = sys.modules.get(getattr(fn, "__module__", None) or "")
-    path = getattr(module, "__file__", None)
+    path = module_file(module)
     if not isinstance(path, str) or not path.endswith(tuple(importlib.machinery.EXTENSION_SUFFIXES)):
         return None
     cached = _EXTENSION_DIGESTS.get(path)
@@ -215,7 +216,7 @@ def module_identity(module: object) -> str | None:
     `module_text_identity` for what it covers -- or ``None`` when the file
     cannot be read. *module* is a module object or the path of its file.
     Memoised on the file's stat."""
-    path = module if isinstance(module, str) else getattr(module, "__file__", None)
+    path = module if isinstance(module, str) else module_file(module)
     if not path:
         return None
     try:

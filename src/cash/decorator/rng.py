@@ -14,6 +14,7 @@ import types
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from .._user_attrs import module_file
 from ..analysis.annotations import parse_annotation_line
 from ..analysis.ast_util import walk_tree
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
@@ -146,7 +147,7 @@ def _random_state_param(callee: Any) -> tuple[int | None, inspect.Parameter | No
     from ..install_paths import is_user_path
 
     module = sys.modules.get((getattr(callee, "__module__", None) or "").split(".")[0])
-    file = getattr(module, "__file__", None)
+    file = module_file(module)
     if not file or is_user_path(file):
         return None
     try:

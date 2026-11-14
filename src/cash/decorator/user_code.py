@@ -10,6 +10,7 @@ import types
 from typing import Any
 
 from .._type_memo import per_type
+from .._user_attrs import module_file
 from ..analysis.helper_code import UnwalkableLayers, callable_layers
 from ..code_digest import unwrap_partials
 from ..install_paths import in_own_package, is_cash_path, is_user_code_module, top_package
@@ -216,7 +217,7 @@ def _built_by_library(cls: type) -> bool:
     keeps the lenient verdict.
     """
     mod = sys.modules.get(getattr(cls, "__module__", None) or "")
-    if mod is None or getattr(mod, "__file__", None) is None or is_user_code_module(mod):
+    if mod is None or module_file(mod) is None or is_user_code_module(mod):
         return False
     try:
         if any(isinstance(v, types.FunctionType) or wraps_code(v) for v in vars(cls).values()):

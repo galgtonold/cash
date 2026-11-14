@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 from .. import _plain_data, canonical_form
 from .._active import EXPLAINING as _EXPLAINING
 from .._memo import CODE_OBJECTS, LruMemo
+from .._user_attrs import module_file
 from ..analysis.purity_analyzer import get_analyzer
 from ..analysis.purity_report import ISSUE_AMBIENT_READ, ISSUE_UNTRACKABLE_DEP, UNREAD_MODULE, PurityIssue
 from ..code_digest import unwrap_partials
@@ -125,7 +126,7 @@ def defined_in_user_code(obj: Any) -> bool:
     ``__main__``, exec'd code) keeps the lenient verdict.
     """
     mod = sys.modules.get(getattr(obj, "__module__", None) or "")
-    if mod is not None and getattr(mod, "__file__", None) is not None:
+    if mod is not None and module_file(mod) is not None:
         return is_user_code_module(mod)
     return is_user_code_carrier(obj)
 

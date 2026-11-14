@@ -60,6 +60,24 @@ def importable_attr(obj: Any, name: str, default: Any = None) -> Any:
         return default
 
 
+def module_file(module: Any) -> str | None:
+    """*module*'s ``__file__``, None without a string one, read from its
+    namespace: a module's own ``__getattr__`` is never asked. A lazily
+    imported module (``optional_pkg`` not installed) raises
+    ModuleNotFoundError from it for every name it lacks, and a builtin or
+    namespace module lacks ``__file__``: asked with ``getattr``, that failed
+    the key of a cell that never touched the module. Anything but a module
+    is asked through `attribute_or`."""
+    if isinstance(module, types.ModuleType):
+        try:
+            found = object.__getattribute__(module, "__dict__").get("__file__")
+        except Exception:  # noqa: BLE001 - a module subclass's own error: no file known
+            return None
+    else:
+        found = attribute_or(module, "__file__")
+    return found if isinstance(found, str) else None
+
+
 def metadata_attribute(obj: Any, name: str, default: Any = None) -> Any:
     """`attribute_or` for a fact cash only reads about *obj* (its
     ``nbytes``, its ``shape``), never running the user's code for it.

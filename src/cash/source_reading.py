@@ -23,6 +23,7 @@ import time
 import types
 
 from ._memo import CODE_OBJECTS, LruMemo
+from ._user_attrs import module_file as _module_file
 from ._user_attrs import own_dict
 from .tracking.tracker_context import untracked
 
@@ -211,7 +212,7 @@ def _candidate_files(obj: object, code: types.CodeType) -> list[str]:
     module_file = namespace.get("__file__") if isinstance(namespace, dict) else None
     if not isinstance(module_file, str):
         module = sys.modules.get(getattr(func, "__module__", None) or "")
-        module_file = getattr(module, "__file__", None)
+        module_file = _module_file(module)
     if isinstance(module_file, str) and module_file not in paths:
         paths.append(module_file)
     return [path for path in paths if path and path.endswith((".py", ".pyw"))]
