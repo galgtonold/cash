@@ -49,17 +49,20 @@ from __future__ import annotations
 import abc
 import ast
 import builtins
+import dataclasses
 import datetime
 import decimal
 import functools
 import operator
 import os
+import pathlib
 import re
 import sys
 import textwrap
 import threading
 import time
 import types
+import typing
 import weakref
 from typing import TYPE_CHECKING, Any
 
@@ -127,6 +130,11 @@ def own_state(wrapper: Any, state: list | None) -> None:
     """Note that *wrapper*'s remembered hits live in *state*."""
     if state is not None:
         _STATE_OF[wrapper] = state
+
+
+def read_by_others(state: list | None) -> bool:
+    """Does another function's memo read *state* (a cached callee's)?"""
+    return state is not None and bool(_DEPENDENTS.get(state))
 
 
 def forget(state: list | None) -> None:
@@ -254,6 +262,36 @@ _FIXED_C = frozenset(
     }
 )
 
+#: pathlib's own path classes: a path's parts are fixed when it is made
+#: (what it caches besides is computed from them). A subclass of the
+#: user's own can carry anything, so only these exact types.
+_PATH_TYPES = frozenset(
+    {
+        pathlib.PurePath,
+        pathlib.PurePosixPath,
+        pathlib.PureWindowsPath,
+        pathlib.Path,
+        pathlib.PosixPath,
+        pathlib.WindowsPath,
+    }
+)
+
+#: The typing objects whose content is a few names fixed when they are
+#: made (``Optional``, ``Any``, ``int | None``, ``Literal["a"]``,
+#: ``list[int]``, ``TypeVar("T")``): what an alias holds besides
+#: (`_TYPING_PARTS`) is looked into as any value. Not a ``ForwardRef`` (it
+#: caches what it evaluates to) nor a ``type X = ...`` alias (its value is
+#: evaluated lazily, from the names it reads then).
+_TYPING_PARTS = ("__origin__", "__args__", "__metadata__", "__supertype__")
+_TYPING_LAZY = frozenset(t for t in (typing.ForwardRef, getattr(typing, "TypeAliasType", None)) if isinstance(t, type))
+_TYPING_C = frozenset(t for t in (getattr(types, "UnionType", None), types.GenericAlias) if isinstance(t, type))
+
+_LRU_WRAPPER = type(functools.lru_cache(maxsize=1)(len))
+
+#: ``abc``'s per-class registration record (``cls._abc_impl``): what it
+#: holds moves ``abc.get_cache_token()`` on every registration.
+_ABC_DATA = type(getattr(abc.ABC, "_abc_impl", None))
+
 _HEAPTYPE = 1 << 9
 _METACLASSES = (type, abc.ABCMeta)
 #: More objects than this in one function's world: not worth watching.
@@ -350,6 +388,10 @@ class _Scan:
         #: The library classes met, MRO included: watched, and only the
         #: attributes the scanned code names looked into (`finish`).
         self.library_classes: list[type] = []
+        #: ``(read, value)``: state no watcher sees that is watched by
+        #: reading it again (`_Family.holds`): the abc cache token, sklearn's
+        #: settings.
+        self.probes: dict[Any, Any] = {}
         self.count = 0
 
     def _first(self, key: Any, obj: Any) -> bool:
@@ -435,8 +477,59 @@ class _Scan:
             # when it is made (`_implementation` cannot be set); what it
             # runs is that function.
             self.value(v._implementation, names)
+        elif t in _PATH_TYPES:
+            return
+        elif t is _LRU_WRAPPER:
+            # ``@functools.lru_cache``: the function it calls is fixed when
+            # it is made; what it remembers is no part of any key. Its
+            # attributes (``__wrapped__``, set by ``update_wrapper``) are.
+            attrs = getattr(v, "__dict__", None)
+            if type(attrs) is not dict:
+                raise Ineligible("an lru_cache without attributes")
+            self.watch(attrs, True)
+            for item in list(attrs.values()):
+                self.value(item, names)
+        elif t in _TYPING_C or (t.__module__ == "typing" and t not in _TYPING_LAZY):
+            self._typing(v, names)
+        elif t is dataclasses.Field:
+            self._field(v, names)
+        elif t is _ABC_DATA:
+            self.probes[abc.get_cache_token] = abc.get_cache_token()
+        elif self._sklearn_config(v):
+            return
         else:
             raise Ineligible(f"a {t.__module__}.{t.__qualname__}")
+
+    def _typing(self, v: Any, names: frozenset) -> None:
+        """A typing form or alias: fixed, but for what it was built from."""
+        held = getattr(v, "__dict__", None)
+        for name in _TYPING_PARTS:
+            # From the instance itself: an alias forwards other attributes
+            # to its origin, and a type variable evaluates its bound lazily.
+            part = held.get(name) if type(held) is dict else _c_part(v, name)
+            if part is not None:
+                self.value(part, names)
+
+    def _field(self, f: dataclasses.Field, names: frozenset) -> None:
+        """A dataclass field (``__dataclass_fields__``): set while its class
+        is made and not after; what it holds is looked into as any value."""
+        for part in (f.type, f.default, f.default_factory):
+            if part is not dataclasses.MISSING:
+                self.value(part, names)
+        if f.metadata:
+            self.value(f.metadata, names)  # a mapping proxy over a dict no watcher sees
+
+    def _sklearn_config(self, v: Any) -> bool:
+        """sklearn's settings (``sklearn._config._threadlocal``, read by
+        ``get_config``): watched by reading them again."""
+        config = sys.modules.get("sklearn._config")
+        if config is None or v is not getattr(config, "_threadlocal", None):
+            return False
+        get_config = getattr(config, "get_config", None)
+        if get_config is None:
+            return False
+        self.probes[get_config] = get_config()
+        return True
 
     def module(self, mod: types.ModuleType, names: frozenset) -> None:
         md = getattr(mod, "__dict__", None)
@@ -603,8 +696,8 @@ class _Scan:
             self.shallow = shallow
 
     def _klass(self, cls: type) -> None:
-        if not (cls.__flags__ & _HEAPTYPE):
-            return  # a builtin class: nothing in it changes
+        if not (cls.__flags__ & _HEAPTYPE) or cls is typing.Any:
+            return  # a builtin class, or ``typing.Any``: nothing in it changes
         if type(cls) not in _METACLASSES:
             raise Ineligible("a class with a metaclass of its own")
         for k in cls.__mro__:
@@ -659,9 +752,9 @@ class _Scan:
         sees (`_Family`); None for none."""
         from .class_data import SUBCLASSES
 
-        if not self.classes:
+        if not self.classes and not self.probes:
             return None
-        return _Family(tuple(self.classes), SUBCLASSES in self.names)
+        return _Family(tuple(self.classes), SUBCLASSES in self.names, tuple(self.probes.items()))
 
     def commit(self) -> None:
         """Watch what was found (after the whole scan passed)."""
@@ -728,6 +821,15 @@ def cells_hold(cells: tuple) -> bool:
 
 
 _warnings = sys.modules.get("warnings")
+
+
+def _c_part(v: Any, name: str) -> Any:
+    """*name* of a C-made typing object (``int | None``, ``list[int]``)."""
+    try:
+        return getattr(v, name, None)
+    except Exception:  # noqa: BLE001 - nothing to look into
+        return None
+
 
 #: ``os.environ`` and ``os.environb``, met as attributes of ``os``.
 _OS_ENVIRON = frozenset({"environ", "environb"})
@@ -871,12 +973,15 @@ class _Family:
     edited in place is watched like any class met.
     """
 
-    __slots__ = ("below", "classes", "guard", "registrations")
+    __slots__ = ("below", "classes", "guard", "probes", "registrations")
 
-    def __init__(self, classes: tuple[type, ...], subclasses: bool) -> None:
+    def __init__(self, classes: tuple[type, ...], subclasses: bool, probes: tuple = ()) -> None:
         from .class_data import classes_below
 
         self.classes = classes
+        #: ``(read, value)``: read again on every fast hit and reuse, which
+        #: then is served in Python (`_Scan.probes`).
+        self.probes = probes
         self.guard = (abc.get_cache_token, abc.get_cache_token())
         self.registrations = self._registrations()
         self.below: tuple[tuple[weakref.ref, ...], ...] | None = None
@@ -903,9 +1008,10 @@ class _Family:
             return None
         known = {id(k) for k in older.classes}
         fresh = [i for i, k in enumerate(self.classes) if id(k) not in known]
-        if not fresh:
+        if not fresh and all(p in older.probes for p in self.probes):
             return older
         joined = _Family.__new__(_Family)
+        joined.probes = (*older.probes, *(p for p in self.probes if p not in older.probes))
         joined.classes = (*older.classes, *(self.classes[i] for i in fresh))
         joined.guard = older.guard
         joined.registrations = (*older.registrations, *(self.registrations[i] for i in fresh))
@@ -917,6 +1023,12 @@ class _Family:
     def holds(self, state: list) -> bool:
         """Is what the key read of the classes still so? Moves the guard
         on when a registration elsewhere left theirs as they were."""
+        for read, value in self.probes:
+            try:
+                if read() != value:
+                    return False
+            except Exception:  # noqa: BLE001 - cannot tell: not so
+                return False
         token = abc.get_cache_token()
         if token != self.guard[1]:
             if self._registrations() != self.registrations:
@@ -1312,7 +1424,12 @@ class HitMemo:
         h.value = stored
         h.md = md
         # fast_call serves in C only what needs nothing more than it does.
-        in_c = direct and h.deadline is None and not h.files and (self.family is None or self.family.below is None)
+        in_c = (
+            direct
+            and h.deadline is None
+            and not h.files
+            and (self.family is None or (self.family.below is None and not self.family.probes))
+        )
         saved = (metadata.saves_seconds if metadata.saves_seconds is not None else metadata.execution_time) or 0.0
         body = metadata.body_seconds
         return (

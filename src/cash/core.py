@@ -8,10 +8,12 @@ per-call events through `Cash.drain_decorator_calls`.
 from __future__ import annotations
 
 import datetime
+import functools
 import inspect
 import logging
 import os
 import sys
+import types
 import weakref
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
@@ -218,6 +220,21 @@ def _summary_at_exit(ref: weakref.ref[Cash]) -> None:
 def _in_kernel() -> bool:
     """Whether this runs inside a Jupyter kernel, where widgets can be drawn."""
     return getattr(get_ipython(), "kernel", None) is not None
+
+
+#: What `Cash._other_instance_before` never takes for an instance: each
+#: of these under one name can run different code.
+_NOT_INSTANCES = (
+    types.FunctionType,
+    types.MethodType,
+    types.BuiltinFunctionType,
+    types.BuiltinMethodType,
+    type,
+    functools.partial,
+    staticmethod,
+    classmethod,
+)
+_HEAPTYPE = 1 << 9
 
 
 def _same_options(a: Any, b: Any) -> bool:
@@ -722,9 +739,13 @@ class Cash:
         # Checked before anything is registered: a mistake raises here.
         cf.arg_key = arg_key_spec(func, cf.signature, key, ignore)
         func_name = cf.name
-        for dep in self._registry.register(cf, depends_on):
-            warn_inert_dependency(self._notices, func_name, dep)
-        self._pins.pin_own_source(func, self.source_hashes[func_name])
+        previous = self._other_instance_before(func, options)
+        if previous is not None:
+            self._rebind_instance(cf, previous)
+        else:
+            for dep in self._registry.register(cf, depends_on):
+                warn_inert_dependency(self._notices, func_name, dep)
+        self._pins.pin_own_source(func, self.source_hashes[func_name], quiet=previous is not None)
 
         # Async generators are not cached; warn once and return unwrapped.
         if inspect.isasyncgenfunction(func):
@@ -797,6 +818,66 @@ class Cash:
         ):
             return None
         return wrapper
+
+    def _other_instance_before(self, func: Callable[..., Any], options: tuple) -> CachedFunction | None:
+        """The registration an earlier ``cache(obj, ...)`` made for another
+        instance of *func*'s own class, with the same options and the same
+        code, while it is still the one registered; else None.
+
+        nilearn's ``cache(extraction_function, ...)(imgs)`` decorates a new
+        ``_ExtractionFunctor`` on every call. Each is a new function to
+        `_decorated_before` (it calls another object), and registering it
+        moved everything a remembered state segment or fast hit reads: every
+        call threw away what every cached function had remembered.
+
+        Only a callable instance of a class qualifies, never a function, a
+        method, a class or a partial: two of those under one name can call
+        different code. And only while no other cached function depends on
+        it (an edge of the graph, or a memo that reads its state): what a
+        remembered segment or fast hit reads of a registration is read
+        through those. The new instance's own key is built from its own
+        `CachedFunction`, with a memo of its own.
+        """
+        if (
+            isinstance(func, _NOT_INSTANCES)
+            or not (type(func).__flags__ & _HEAPTYPE)
+            or options[0]
+            or options[1] is not None
+            or options[2] is not None
+        ):
+            return None
+        try:
+            name = func_key(func)
+        except Exception:  # noqa: BLE001 - the ordinary path reports it
+            return None
+        held = self._decorations.get(name)
+        if held is None:
+            return None
+        from .decorator import hit_memo
+
+        cf, before, _ref = held
+        if (
+            type(cf.func) is not type(func)
+            or self._registry.cached.get(name) is not cf
+            or self._registry.graph.has_dependents(name)
+            or hit_memo.read_by_others(cf.hit_state)
+            or not _same_options(before, options)
+            or callable_identity(func) != self.source_hashes.get(name)
+        ):
+            return None
+        return cf
+
+    def _rebind_instance(self, cf: CachedFunction, previous: CachedFunction) -> None:
+        """Register *cf*, the decoration of another instance of the class
+        *previous* decorated, in its place (`_other_instance_before`): the
+        name, code, options and dependencies are what they were, so nothing
+        the registry's generation or the cash epoch stands for moved."""
+        registry = self._registry
+        cf.carry_over(previous)
+        registry.cached[cf.name] = cf
+        # A plain write: a `GenerationDict` write would move the generation
+        # for an object no remembered segment reads.
+        dict.__setitem__(registry.functions, cf.name, cf.func)
 
     def _check_key_function(self, cf: CachedFunction) -> None:
         """KEY-FUNCTION-IMPURE when reading the ``key=`` function finds it reads

@@ -348,7 +348,7 @@ class OwnSourcePins:
         # the loaded code; the first call does it once (see `pin_own_source`).
         self._own_pins_unverified: set[int] = set()
 
-    def pin_own_source(self, func: Callable, source_hash: str | None = None) -> str:
+    def pin_own_source(self, func: Callable, source_hash: str | None = None, *, quiet: bool = False) -> str:
         """Identity of *func* itself, pinned per function object.
 
         The state hash's root component must describe the function the
@@ -371,6 +371,12 @@ class OwnSourcePins:
         The first call still compares the loaded code with the file once, to
         say so. A pin not taken at decoration (the table is full) falls back to
         the same loaded-vs-disk check helpers get.
+
+        Taking a pin moves the generation a remembered state segment checks
+        (`state_memo`), unless it is the pin this very object already held,
+        or *quiet* (`Cash._rebind_instance`: a new instance of a class
+        decorated before, which no fold has read a pin of) and the object
+        held none.
         """
         key = id(func)
         owner = func
@@ -424,7 +430,9 @@ class OwnSourcePins:
         self._own_pins_unverified.discard(key)
         if key in self._own_pins or len(self._own_pins) < self.OWN_PINS_MAX:
             self._own_pins[key] = (self._pin_owner_ref(owner, key), pin)
-            _generation_moved()
+            held = entry is not None and entry[0]() is owner
+            if not ((held and entry[1] == pin) or (quiet and not held)):
+                _generation_moved()
             if at_decoration:
                 self._own_pins_unverified.add(key)
         return pin

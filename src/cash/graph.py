@@ -27,5 +27,9 @@ class DependencyGraph:
         """The immediate dependencies of *node*."""
         return self._dependencies.get(node, set())
 
+    def has_dependents(self, node: str) -> bool:
+        """Does any other node depend on *node*?"""
+        return any(node in deps for dependent, deps in self._dependencies.items() if dependent != node)
+
     def clear(self) -> None:
         self._dependencies.clear()
