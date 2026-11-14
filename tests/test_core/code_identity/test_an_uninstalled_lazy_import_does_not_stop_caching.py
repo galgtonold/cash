@@ -99,3 +99,15 @@ def test_installing_the_package_changes_the_key(tmp_path):
 
     (tmp_path / "optpkg.py").write_text("def resample(x):\n    return x[::-1]\n", encoding="utf-8")
     assert run_python("main.py", cwd=tmp_path).stdout.splitlines()[0] != "hit"
+
+
+def test_asking_an_uninstalled_lazy_module_for_its_file_raises_nothing():
+    """A notebook class's module reads reach such a module object, and
+    ``is_local_module`` asked it for ``__file__`` with ``getattr``: the
+    ModuleNotFoundError failed the key of a cell that never touched it."""
+    from cash._user_attrs import module_file
+    from cash.tracking.function_tracker import is_local_module
+
+    assert module_file(optional_pkg) is None
+    assert is_local_module(optional_pkg) is False
+    assert module_file(types) == types.__file__

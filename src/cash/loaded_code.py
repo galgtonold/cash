@@ -29,6 +29,7 @@ import types
 
 from ._memo import COMPILED_MODULES, LruMemo
 from ._paths import is_pseudo_filename
+from ._user_attrs import module_file
 from .process_start import process_start_time
 from .source_norm import bytecode_identity
 from .source_reading import (
@@ -241,7 +242,7 @@ def loaded_module_matches_disk(module: object) -> bool:
     compiled, once per file version.
     """
 
-    path = getattr(module, "__file__", None)
+    path = module_file(module)
     if not path or not path.endswith((".py", ".pyw")):
         return True
     try:

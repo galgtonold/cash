@@ -70,7 +70,7 @@ from .._own_work import inside as own_work_inside
 from .._own_work import left_out as own_work_left_out
 from .._own_work import rearm_with as own_work_rearm_with
 from .._paths import is_pseudo_filename
-from .._user_attrs import instance_of
+from .._user_attrs import instance_of, module_file
 from ..analysis.purity_report import (
     ISSUE_AMBIENT_READ,
     ISSUE_DISCARDED_CALL,
@@ -958,7 +958,7 @@ def _import_digest(name: str) -> str | None:
     would load."""
     mod = sys.modules.get(name)
     if mod is not None:
-        path = getattr(mod, "__file__", None)
+        path = module_file(mod)
         return _file_digest(path) if path else "builtin:" + name
     try:
         import importlib.util

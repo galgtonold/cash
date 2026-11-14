@@ -10,6 +10,8 @@ the records alone when numpy's RNG state sits beside them.
 
 from __future__ import annotations
 
+import pytest
+
 from cash import _plain_data
 from cash.backends import memory_backend
 from tests._cell_driver import run_cash_cell
@@ -29,7 +31,15 @@ def _ram(cash_instance):
     return backend.backends[0] if hasattr(backend, "backends") else backend
 
 
-def test_the_records_rows_are_walked_once_and_kept_as_bytes(cash_magics, mock_shell, cash_instance, monkeypatch):
+@pytest.mark.parametrize("figures", [False, True], ids=["plain", "matplotlib-loaded"])
+def test_the_records_rows_are_walked_once_and_kept_as_bytes(
+    cash_magics, mock_shell, cash_instance, monkeypatch, figures
+):
+    if figures:
+        # With matplotlib loaded the figure check looks first: the records
+        # were walked by it and then again for their ids, depending only on
+        # whether an earlier test had imported matplotlib.
+        pytest.importorskip("matplotlib.figure")
     rows_walked: list[int] = []
     real = _plain_data._keys_size
 

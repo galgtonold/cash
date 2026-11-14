@@ -11,6 +11,7 @@ import warnings
 
 import pytest
 
+from cash.notebook.statement.identity_holders import _fixed_image
 from tests._cell_driver import run_cash_cell
 
 MAKE = "import weakref\nclass Q:\n    pass\nclass P:\n    def __init__(self):\n        self.seen = []\n        self.child = Q()\np = P()"
@@ -356,7 +357,31 @@ def test_the_id_of_an_object_compiled_into_a_c_image_is_found(held):
     from cash.notebook.statement.identity_holders import identity_held_reason
 
     ok = eval(held, {"numpy": numpy})
-    assert identity_held_reason("seen", {id(ok): "ok"}, {"ok": ok}) is not None
+    fixed = _fixed_image()
+    if fixed is not None and fixed[0] <= id(ok) < fixed[1]:
+        # Compiled into an executable mapped at a fixed address: the same
+        # id() in every process, so a restored registry still finds it.
+        assert identity_held_reason("seen", {id(ok): "ok"}, {"ok": ok}) is None
+    else:
+        assert identity_held_reason("seen", {id(ok): "ok"}, {"ok": ok}) is not None
+
+
+@pytest.mark.skipif(
+    _fixed_image() is None,
+    reason="only an executable mapped at a fixed address (a non-PIE Linux build) keeps its objects' ids",
+)
+def test_numbers_meeting_the_fixed_executable_s_objects_are_no_id():
+    """A non-PIE interpreter sits near 20 MB, where a column of ordinary
+    numbers meets ``id(7)`` or an interned string's address; those objects
+    are at the same address after a restart, so such a number is no stale
+    id() and the value is stored."""
+    numpy = pytest.importorskip("numpy")
+    from cash.notebook.statement.identity_holders import identity_held_reason
+
+    seven, name = 7, "__name__"
+    arr = numpy.array([id(None), id(seven), id(name), id(int)], dtype=numpy.int64)
+    assert identity_held_reason("arr", arr, {"x": [seven, name, None, int]}) is None
+    assert identity_held_reason("d", {id(seven): 1}, {"x": [seven]}) is None
 
 
 def test_a_number_the_notebook_is_too_big_to_look_through_for_is_not_called_an_id():

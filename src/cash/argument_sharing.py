@@ -34,7 +34,7 @@ import weakref
 from collections.abc import Callable, Iterator
 from typing import Any
 
-from ._user_attrs import from_family
+from ._user_attrs import from_family, module_file
 from .value_types import IMMUTABLE_LEAF_TYPES
 
 __all__ = ["Unknown", "Targets", "memory_of", "reads_of", "read_values", "shared_in"]
@@ -360,7 +360,7 @@ def read_values(reads: tuple[tuple, ...], func: Callable) -> Iterator[tuple[str,
         for part in rest:
             if not isinstance(value, types.ModuleType):
                 break
-            if not is_user_path(getattr(value, "__file__", None)):
+            if not is_user_path(module_file(value)):
                 value = None  # a library's module: its globals are its own
                 break
             value = vars(value).get(part)

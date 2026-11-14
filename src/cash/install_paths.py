@@ -44,7 +44,7 @@ import sysconfig
 
 from ._memo import SOURCE_FILES, LruMemo
 from ._paths import is_pseudo_filename, normalize_path
-from ._user_attrs import importable_attr
+from ._user_attrs import attribute_or, importable_attr, module_file
 
 __all__ = [
     "in_own_package",
@@ -385,9 +385,9 @@ def is_user_code_module(mod: object, own_pkg: str | None = None) -> bool:
     they are what the user edits. A module built into or frozen into the
     interpreter is judged by its spec, not its name (``_io`` calls itself
     ``io``)."""
-    if getattr(mod, "__file__", None) is None and not in_own_package(getattr(mod, "__name__", None), own_pkg):
-        name = getattr(mod, "__name__", "") or ""
-        origin = getattr(getattr(mod, "__spec__", None), "origin", None)
+    if module_file(mod) is None and not in_own_package(attribute_or(mod, "__name__"), own_pkg):
+        name = attribute_or(mod, "__name__", "") or ""
+        origin = attribute_or(attribute_or(mod, "__spec__"), "origin")
         return origin not in _INTERPRETER_ORIGINS and name not in _FILELESS_NON_USER
     return is_user_module(mod, own_pkg)
 

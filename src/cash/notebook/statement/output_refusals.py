@@ -14,7 +14,7 @@ from typing import Any
 
 from cash._user_attrs import attribute_or
 
-from ...analysis.cacheability_decision import identity_coupled_reason
+from ...analysis.cacheability_decision import identity_coupled_reason, scans_containers
 from ..consumables import is_consumable_unrestorable
 from ..shared_objects import (
     GaveUp,
@@ -26,7 +26,7 @@ from ..shared_objects import (
     shared_names,
 )
 from .derivation_edges import is_uncacheable_alias
-from .identity_holders import identity_held_reason
+from .identity_holders import holds_no_ids, identity_held_reason
 from .run import MEMO_ANSWERS_NAME
 
 __all__ = ["is_history_name", "live_shared_reason", "unrestorable_output_reason"]
@@ -185,12 +185,25 @@ def _value_refusal(
     holding more objects than it looks through, the alias check need not
     walk them all again (a list of 87,000 small frames, 2 s), nor fill
     *homes* for a statement that is not stored."""
+    # Once the figure check looks inside containers, the identity check's
+    # read of plain data goes first: it walks the records with the
+    # statement's `one_look`, which keeps their facts, so the figure
+    # check's `is_tree` answers from those instead of a walk the identity
+    # check would then repeat.
+    id_free: dict[str, bool] = {}
+    if scans_containers():
+        id_free = {out: holds_no_ids(value) for out in outputs if (value := captured_vars.get(out)) is not None}
     refusals: tuple[Callable[[str, Any], str | None], ...] = (
         identity_coupled_reason,
         _consumable_refusal,
         _context_variable_refusal,
         lambda name, value: identity_held_reason(
-            name, value, user_ns, weak_holders=name not in restored_into, more=_answers_budget(name, value)
+            name,
+            value,
+            user_ns,
+            weak_holders=name not in restored_into,
+            more=_answers_budget(name, value),
+            id_free=id_free.get(name),
         ),
         lambda name, value: _alias_refusal(name, value, user_ns, cash_held, inputs, homes),
     )

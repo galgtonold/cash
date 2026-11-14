@@ -17,6 +17,8 @@ import types
 from collections.abc import Callable
 from typing import Any
 
+from cash._user_attrs import module_file
+
 from .._memo import NOTEBOOK_FUNCTIONS, LruMemo
 from ..analysis.ast_util import parse_cached, walk_tree
 from ..code_digest import callable_identity, source_digest
@@ -37,7 +39,7 @@ _UNCACHED = object()
 def is_local_module(module: types.ModuleType) -> bool:
     """Is *module* the user's own code (`cash.install_paths.is_user_module`),
     loaded from Python source -- not an extension module or bare bytecode?"""
-    file_path = getattr(module, "__file__", None)
+    file_path = module_file(module)
     if not file_path:
         return False
     if not file_path.endswith(".py") and not file_path.endswith((".pyc", ".pyo")):
@@ -431,7 +433,7 @@ class FunctionTracker:
         if module is None:
             return None
 
-        file_path = getattr(module, "__file__", None)
+        file_path = module_file(module)
         if file_path and os.path.isfile(file_path):
             try:
                 mtime = os.path.getmtime(file_path)
@@ -666,7 +668,7 @@ class FunctionTracker:
         module = sys.modules.get(module_name)
         if module is None:
             return {}
-        file_path = getattr(module, "__file__", None)
+        file_path = module_file(module)
         hashes = self.compute_symbol_hashes(file_path)
         self._module_symbol_hashes[module_name] = hashes
         return hashes
@@ -686,7 +688,7 @@ class FunctionTracker:
         module = sys.modules.get(module_name)
         if module is None:
             return None
-        file_path = getattr(module, "__file__", None)
+        file_path = module_file(module)
         new_hashes = self.compute_symbol_hashes(file_path)
 
         changed: set[str] = set()
@@ -789,7 +791,7 @@ class FunctionTracker:
             module = sys.modules.get(module_name)
             if module is None:
                 continue
-            file_path = getattr(module, "__file__", None)
+            file_path = module_file(module)
             if not file_path or not os.path.isfile(file_path):
                 continue
             try:
@@ -883,7 +885,7 @@ class FunctionTracker:
 
         # Remove compiled .pyc file if it exists, so a later fresh
         # import is not served it either. Best-effort: see below.
-        file_path = getattr(module, "__file__", None)
+        file_path = module_file(module)
         if file_path:
             with contextlib.suppress(OSError, ValueError):
                 cache_file = importlib.util.cache_from_source(file_path)
@@ -916,7 +918,7 @@ class FunctionTracker:
         the source digests of its functions, whose code the reload may have
         swapped in place. Returns the module's file, or None."""
         module = sys.modules.get(module_name)
-        file_path = getattr(module, "__file__", None) if module is not None else None
+        file_path = module_file(module) if module is not None else None
         if not file_path or not os.path.isfile(file_path):
             return None
         if module_name not in self.tracked_modules:

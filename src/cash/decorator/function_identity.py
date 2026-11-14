@@ -20,6 +20,7 @@ from typing import Any
 from .. import _weak
 from .._memo import CODE_OBJECTS, LruMemo
 from .._paths import MAIN_MODULE_NAMES, is_pseudo_filename, resolve_main_module
+from .._user_attrs import module_file
 from ..canonical_form import stable_key_repr
 from ..code_digest import callable_identity, compiled_identity, own_source_digest, source_digest, unwrap_partials
 from ..content_hashers import BUILTIN_CONTENT
@@ -102,7 +103,7 @@ def warn_source_changed_since_load(fn: Callable) -> None:
     name = getattr(fn, "__qualname__", None) or getattr(fn, "__name__", "a function")
     module = sys.modules.get(getattr(fn, "__module__", None) or "")
     try:
-        if module is not None and getattr(module, "__file__", None) == path and not loaded_module_matches_disk(module):
+        if module is not None and module_file(module) == path and not loaded_module_matches_disk(module):
             # Not an edit after the import: Python loaded bytecode compiled
             # from an earlier save, and will again in every restart.
             warn_diagnostic(

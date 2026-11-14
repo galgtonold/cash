@@ -133,6 +133,13 @@ def _coupled_classes_loaded() -> bool:
     return any(name in sys.modules for name in _COUPLED_MODULES)
 
 
+def scans_containers() -> bool:
+    """Whether `identity_coupled_reason` looks inside a container (it asks
+    `_plain_data.is_tree` of one first): only once a module defining an
+    identity-coupled class is imported."""
+    return _coupled_classes_loaded()
+
+
 def _coupled_kind(value: Any) -> str | None:
     """Return the friendly name if *value* is itself identity-coupled, else None."""
     return mro_kind(value, _IDENTITY_COUPLED_BASES, ("matplotlib",))
