@@ -1000,6 +1000,11 @@ class _Build:
             for kind, target, _name in unit.lookups.values()
             if kind == "getattr" and issubclass(type(target), types.ModuleType)
         ]
+        for code, (g, _module) in list(unit.codes.items()):
+            if code.co_flags & 0x1:
+                # Keyed or not: a module the key could not read before it
+                # was loaded hands the call what it binds through these.
+                self._imported(code, g)
         for code, (g, module) in list(unit.codes.items()):
             if code in self.static:
                 continue
@@ -1008,11 +1013,12 @@ class _Build:
                 raise _Untraceable(f"it ran {qn} of {module}, a module sys.modules does not hold")
             if qn == "<module>" or not code.co_flags & 0x1:
                 # A module imported, a class body: what they bound is read
-                # through the items of the code that uses it. A module of the
-                # user's first imported inside the call (``from ._tags import
-                # X`` in a method) is checked by its file too: a name its top
-                # level binds may reach the result through a local, which no
-                # item reads.
+                # through the items of the code that uses it, and what a
+                # function takes from a module it imports by the value it
+                # takes (`_imported`). A module of the user's first imported
+                # inside the call (``from ._tags import X`` in a method) is
+                # checked by its file too, so the check imports it when a
+                # later process has not.
                 if qn == "<module>" and _user_module(sys.modules.get(module)):
                     self.add(
                         ("first_import", module),
@@ -1058,6 +1064,44 @@ class _Build:
             tuple(x) for x in unit.extra if not (x[0] == "cached" and unit.cached_codes.get(x[1]) in self.static)
         )
         return list(dict.fromkeys(out))
+
+    def _imported(self, code: types.CodeType, g: Mapping[str, Any]) -> None:
+        """What *code* takes from a user module it imports, by value:
+        ``from m import X`` and ``m.X``, as a global read is. Its top level
+        may have computed it from outside its source (the environment, a
+        file, another module's value), which the module's file does not
+        show. A module the code hands on whole is checked by every name it
+        binds."""
+        for imported, module, chain in import_reads(code, g):
+            if not _user_module(sys.modules.get(module)):
+                continue
+            # Loaded before the call, a later process may not have it yet:
+            # the check imports it, as the call would, when its file is the
+            # one recorded.
+            # ``from pkg import sub`` loads ``pkg.sub``, read through ``pkg``.
+            subs = [f"{module}.{'.'.join(chain[: n + 1])}" for n in range(len(chain))]
+            for name in [imported, *(n for n in subs if n in sys.modules)]:
+                loaded_from = _import_digest(name)
+                if loaded_from is not None:
+                    self.add(("import", name), loaded_from, "")
+            target = _chain_target(module, chain)
+            if chain and not issubclass(type(target), types.ModuleType):
+                path = ".".join(chain)
+                self.add(
+                    ("attr", module, path),
+                    _chain_digest(module, path),
+                    f"{code.co_qualname} takes {module}.{path}, whose value cannot be checked",
+                )
+                continue
+            # The module itself: what it holds, name by name.
+            name = getattr(target, "__name__", None)
+            if not isinstance(name, str) or not _user_module(target):
+                continue
+            self.add(
+                ("lookup", name, "", "*"),
+                _lookup_digest(name, "", "*"),
+                f"{code.co_qualname} hands on the module {name}, which cash cannot check name by name",
+            )
 
     def _hidden(self, code: types.CodeType, g: Mapping[str, Any], module: str) -> None:
         """Code whose globals are not those of the module its ``__name__``
@@ -1173,6 +1217,88 @@ class _Untraceable(Exception):
 
 
 _MISSING = object()
+
+
+def _chain_target(module: str, chain: tuple[str, ...]) -> Any:
+    """What *chain* reaches from module *module* through modules, as
+    `_chain_digest` follows it: the first value that is not a module, or the
+    module it ends on; None when a part is unbound."""
+    from ..tracking.trace_items import inspect_getattr
+
+    obj = sys.modules.get(module)
+    for p in chain:
+        if not issubclass(type(obj), types.ModuleType):
+            break
+        try:
+            obj = inspect_getattr(obj, p)
+        except AttributeError:
+            return None
+    return obj
+
+
+#: Instructions that read a local of the function's own.
+_LOAD_LOCAL = frozenset({"LOAD_FAST", "LOAD_FAST_CHECK", "LOAD_FAST_BORROW"})
+#: The same for two locals at once (3.13+).
+_LOAD_TWO_LOCALS = frozenset({"LOAD_FAST_LOAD_FAST", "LOAD_FAST_BORROW_LOAD_FAST_BORROW"})
+
+
+def import_reads(code: types.CodeType, g: Mapping[str, Any]) -> list[tuple[str, str, tuple[str, ...]]]:
+    """What *code*'s own imports take, read from its bytecode: ``(imported,
+    module, chain)`` for each ``from module import name`` used (chain
+    ``(name,)``) and each ``module.a.b`` read through a local an import
+    bound; chain ``()`` for a module the code uses otherwise (hands on,
+    stores). *imported* is the module the import loads (``import a.b``
+    loads ``a.b`` and binds ``a``). Only the code's own instructions: a
+    nested function's are its own code."""
+    try:
+        ins = list(dis.get_instructions(code))
+    except Exception:  # noqa: BLE001 - code dis cannot read takes nothing cash can name
+        return []
+    package = g.get("__package__") or ""
+    bound: dict[str, tuple[str, str, tuple[str, ...]]] = {}
+    out: list[tuple[str, str, tuple[str, ...]]] = []
+
+    def bind(store: Any, ref: tuple[str, str, tuple[str, ...]]) -> None:
+        if store.opname == "STORE_FAST":
+            bound[store.argval] = ref
+        else:
+            # A cell a nested function reads, a global, a name of a class
+            # body: read where these instructions do not show.
+            out.append(ref)
+
+    for i, op in enumerate(ins):
+        name = op.opname
+        if name == "IMPORT_NAME" and i >= 2:
+            level, fromlist = ins[i - 2].argval, ins[i - 1].argval
+            module = op.argval
+            try:
+                if isinstance(level, int) and level > 0:
+                    module = importlib.util.resolve_name("." * level + module, package or None)
+            except (ImportError, ValueError):
+                continue
+            j = i + 1
+            if fromlist:
+                while j + 1 < len(ins) and ins[j].opname == "IMPORT_FROM":
+                    bind(ins[j + 1], (module, module, (ins[j].argval,)))
+                    j += 2
+                continue
+            # ``import a.b as c`` reads ``a.b`` through IMPORT_FROM; ``import
+            # a.b`` binds ``a``.
+            whole = j < len(ins) and ins[j].opname == "IMPORT_FROM"
+            while j < len(ins) and ins[j].opname in ("IMPORT_FROM", "SWAP", "POP_TOP"):
+                j += 1
+            if j < len(ins) and ins[j].opname.startswith("STORE_"):
+                bind(ins[j], (module, module if whole else module.split(".")[0], ()))
+        elif name in _LOAD_LOCAL and op.argval in bound:
+            imported, module, chain = bound[op.argval]
+            j = i + 1
+            while j < len(ins) and ins[j].opname == "LOAD_ATTR":
+                chain = (*chain, ins[j].argval)
+                j += 1
+            out.append((imported, module, chain))
+        elif name in _LOAD_TWO_LOCALS:
+            out.extend(bound[v] for v in op.argval if v in bound)
+    return list(dict.fromkeys(out))
 
 
 def _chain_digest(module: str, chain: str) -> str | None:

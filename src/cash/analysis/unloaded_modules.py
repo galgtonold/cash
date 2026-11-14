@@ -177,16 +177,63 @@ def source_digest(module_name: str, root_module: str | None) -> str | None:
     if kept is not None and all(
         (name is None or _origin(name) == origin) and _stat(origin) == st for name, origin, st in kept[1]
     ):
-        return kept[0]
-    digest, looked = _source_digest(module_name, own_pkg)
+        return _with_live_values(kept[0], kept[2])
+    digest, looked, taken = _source_digest(module_name, own_pkg)
     if len(_DIGESTS) > 1024:
         _DIGESTS.clear()
-    _DIGESTS[slot] = (digest, looked)
-    return digest
+    _DIGESTS[slot] = (digest, looked, taken)
+    return _with_live_values(digest, taken)
 
 
-def _source_digest(module_name: str, own_pkg: str | None) -> tuple[str | None, tuple]:
+def _with_live_values(digest: str | None, taken: tuple[tuple[str, str | None], ...]) -> str | None:
+    """*digest*, the source's, with the values the source takes from a user
+    module loaded already: importing it runs no source of that module but
+    takes what it holds now, which a statement since its import may have
+    changed (``conf.BASE = 5``). ``from m import name`` takes *name*'s value;
+    ``import m`` the whole module, every name it binds. None when one cannot
+    be digested."""
+    if digest is None or not taken:
+        return digest
+    from ..tracking.trace_items import value_digest
+
+    parts = []
+    for module, name in taken:
+        mod = sys.modules.get(module)
+        ns = getattr(mod, "__dict__", None) if mod is not None else None
+        if not isinstance(ns, dict):
+            # Not loaded: importing it runs its source, read above.
+            continue
+        if name is not None:
+            value = ns.get(name, _NOT_BOUND)
+            if value is _NOT_BOUND or (isinstance(value, types.ModuleType) and value.__name__ == f"{module}.{name}"):
+                # A submodule (or nothing yet): read as a module of its own.
+                continue
+            values = [(name, value)]
+        else:
+            values = sorted((k, v) for k, v in list(ns.items()) if isinstance(k, str) and not k.startswith("__"))
+        for key, value in values:
+            if isinstance(value, types.ModuleType):
+                # A module it imported: its own values are taken by name.
+                got = "module:" + str(getattr(value, "__name__", ""))
+            else:
+                got = value_digest(value)
+                if got.startswith("opaque:"):
+                    return None
+            parts.append(f"{module}:{key}={got}")
+    if not parts:
+        return digest
+    blob = digest + "\n" + "\n".join(parts)
+    return hashlib.blake2b(blob.encode(), digest_size=16).hexdigest()
+
+
+_NOT_BOUND = object()
+
+
+def _source_digest(module_name: str, own_pkg: str | None) -> tuple[str | None, tuple, tuple]:
     files: dict[str, str] = {}
+    #: ``(module, name)`` the sources import from a user module, name None
+    #: for the module itself (`_with_live_values`).
+    taken: dict[tuple[str, str | None], None] = {}
     looked: list[tuple[str, str | None, tuple | None]] = []
     todo = [module_name]
     seen: set[str] = set()
@@ -218,12 +265,12 @@ def _source_digest(module_name: str, own_pkg: str | None) -> tuple[str | None, t
             if origin is None:
                 if prefix == module_name:
                     if _namespace_package(prefix):
-                        return None, tuple(looked)
+                        return None, tuple(looked), ()
                     # No finder knows it: the import fails. Keyed by the files
                     # that could become it (`_absent_digest`).
                     absent = _absent_digest(prefix, looked)
                     if absent is None:
-                        return None, tuple(looked)
+                        return None, tuple(looked), ()
                     files[prefix] = absent
                     continue
                 if _namespace_package(prefix):
@@ -237,24 +284,26 @@ def _source_digest(module_name: str, own_pkg: str | None) -> tuple[str | None, t
                 # A library: followed no further, as the helper walk does not.
                 break
             if not origin.endswith(".py") or len(files) >= _MAX_FILES:
-                return None, tuple(looked)
+                return None, tuple(looked), ()
             try:
                 with open(origin, "rb") as fh:
                     source = fh.read()
                 tree = ast.parse(source)
             except (OSError, SyntaxError, ValueError):
-                return None, tuple(looked)
+                return None, tuple(looked), ()
             is_package = os.path.basename(origin) == "__init__.py"
             reader = _SourceOnly(prefix if is_package else prefix.rpartition(".")[0])
             if not reader.module(tree):
-                return None, tuple(looked)
+                return None, tuple(looked), ()
             files[prefix] = hashlib.blake2b(source, digest_size=16).hexdigest()
             todo.extend(reader.imported)
+            taken.update(dict.fromkeys(reader.taken))
     if module_name not in files:
         # The module itself was not read: its source cannot stand for it.
-        return None, tuple(looked)
+        return None, tuple(looked), ()
     blob = "\n".join(f"{name}={digest}" for name, digest in sorted(files.items()))
-    return hashlib.blake2b(blob.encode(), digest_size=16).hexdigest(), tuple(looked)
+    users = [(m, n) for m, n in taken if m != module_name and is_user_code(m, own_pkg)]
+    return hashlib.blake2b(blob.encode(), digest_size=16).hexdigest(), tuple(looked), tuple(users)
 
 
 def _file_digest(path: str) -> str:
@@ -383,6 +432,9 @@ class _SourceOnly:
         self.package = package
         self.depth = depth
         self.imported: list[str] = []
+        #: ``(module, name)`` each import takes: a ``from`` import's names,
+        #: name None for a module ``import`` binds whole.
+        self.taken: list[tuple[str, str | None]] = []
         #: local name -> qualified name, from the source's imports.
         self.aliases: dict[str, str] = {}
         #: names the top level defines with ``def`` or ``class``.
@@ -429,11 +481,39 @@ class _SourceOnly:
             if isinstance(node, (ast.Import, ast.ImportFrom)):
                 self._note_import(node)
         self.module_aliases = _import_names(tree)
+        self.taken = self._taken(tree)
         self.defined = {
             n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
         }
         self.functions = {n.name: n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
         self.bound = _scope_names(tree)
+
+    def _taken(self, tree: ast.AST) -> list[tuple[str, str | None]]:
+        """What the imports that run at import take, a function body's left
+        out: ``(module, name)`` for ``from module import name``, name None
+        for a module bound whole (``import a.b`` binds ``a``, through which
+        ``a.b`` is read)."""
+        out: list[tuple[str, str | None]] = []
+        todo = list(ast.iter_child_nodes(tree))
+        while todo:
+            node = todo.pop()
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                continue
+            todo.extend(ast.iter_child_nodes(node))
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    parts = alias.name.split(".")
+                    out.extend((".".join(parts[: i + 1]), None) for i in range(len(parts)))
+            elif isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                if node.level:
+                    try:
+                        module = importlib.util.resolve_name("." * node.level + module, self.package or None)
+                    except (ImportError, ValueError):
+                        continue
+                if module:
+                    out.extend((module, None if a.name == "*" else a.name) for a in node.names)
+        return out
 
     def _reads_outside(self, node: ast.Call) -> bool:
         """Does *node* read or change something outside the source (the
