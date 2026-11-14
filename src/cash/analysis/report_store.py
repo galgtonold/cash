@@ -49,6 +49,7 @@ import json
 import sys
 import time
 import types
+import weakref
 from collections.abc import Callable
 from typing import Any
 
@@ -304,26 +305,35 @@ def _digest(value: Any) -> str:
 # a patched global or an edited file works it out again. What depends on
 # more than the object (imports, unbound names, loaded modules, library
 # versions) is worked out for every report.
+#
+# The memo holds every object only by a weak reference (`_kept`): a class
+# or function the user drops goes, and an entry whose object has gone
+# matches nothing, though another object take its id.
 
 _MISSING = object()
-#: id(object) -> (object, stamp, digest of its guard).
+#: id(object) -> (weak reference to it, kept stamp, digest of its guard).
 _OBJECT_GUARDS: LruMemo[int, tuple[Any, tuple, str]] = LruMemo(CODE_OBJECTS)
-#: code object -> the names it and the code below it read, in order.
-_CODE_NAMES: LruMemo[types.CodeType, tuple[str, ...]] = LruMemo(CODE_OBJECTS)
+#: id(code object) -> (weak reference to it, the names it and the code
+#: below it read, in order).
+_CODE_NAMES: LruMemo[int, tuple[Any, tuple[str, ...]]] = LruMemo(CODE_OBJECTS)
 
 
 def _code_names(code: types.CodeType) -> tuple[str, ...]:
-    names = _CODE_NAMES.get(code)
-    if names is None:
-        found: dict[str, None] = {}
-        for below in _codes_below(code):
-            found.update(dict.fromkeys(below.co_names))
-        names = _CODE_NAMES[code] = tuple(found)
+    kept = _CODE_NAMES.get(id(code))
+    if kept is not None and kept[0]() is code:
+        return kept[1]
+    found: dict[str, None] = {}
+    for below in _codes_below(code):
+        found.update(dict.fromkeys(below.co_names))
+    names = tuple(found)
+    _CODE_NAMES[id(code)] = (_weak.ref(code), names)
     return names
 
 
-#: Kinds whose values are kept in a stamp as themselves.
-_HELD_KINDS = frozenset({types.FunctionType, types.BuiltinFunctionType, types.ModuleType, type})
+#: Kinds whose values a stamp holds as themselves, compared by identity
+#: (and kept by a weak reference). A builtin function is held by its token:
+#: a bound one (``items.append``) holds the object it is bound to.
+_HELD_KINDS = frozenset({types.FunctionType, types.ModuleType, type})
 #: Built-in kinds with no instance dict, which no code can change: the
 #: token of each of their values is the kind's (`_token` reads only the
 #: kind and what it holds), worked out once.
@@ -335,8 +345,9 @@ _PLAIN_TOKENS: dict[type, Any] = {}
 
 def _value_stamp(value: Any) -> Any:
     """*value* as a stamp holds it: a module, function or class itself
-    (compared by identity; holding one keeps no data alive), anything else
-    by its token (held, a value would be kept alive by the memo)."""
+    (compared by identity, kept by a weak reference), anything else by its
+    token (a value the memo held could not be dropped, and many cannot be
+    referenced weakly)."""
     kind = type(value)
     if kind in _HELD_KINDS:
         return value
@@ -348,6 +359,25 @@ def _value_stamp(value: Any) -> Any:
     if issubclass(kind, types.ModuleType) or isinstance(value, type):
         return value
     return _Token(json.dumps(_token(value)))
+
+
+def _kept(stamp: tuple) -> tuple | None:
+    """*stamp* as the memo keeps it: each object in it by a weak reference.
+    None when one cannot be referenced weakly (it is then not kept)."""
+    out: list[Any] = []
+    for item in stamp:
+        kind = type(item)
+        if kind is tuple:
+            item = _kept(item)
+            if item is None:
+                return None
+        elif kind is not _Token and item is not _MISSING:
+            try:
+                item = _weak.ref(item)
+            except TypeError:
+                return None
+        out.append(item)
+    return tuple(out)
 
 
 class _Token(str):
@@ -362,6 +392,8 @@ def _stamp(obj: Any, file_digest: str | None) -> tuple:
         # A class or builtin: its token is cheap to read, its text is not.
         return (_Token(file_digest or ""), _Token(json.dumps(_token(obj))))
     code = obj.__code__
+    # Its globals need not be in the stamp: a function's ``__globals__``
+    # cannot be rebound, and what its names hold now is.
     g = obj.__globals__
     builtins = g.get("__builtins__")
     if isinstance(builtins, types.ModuleType):
@@ -385,7 +417,6 @@ def _stamp(obj: Any, file_digest: str | None) -> tuple:
     return (
         _Token(file_digest or ""),
         code,
-        g,
         _Token(obj.__module__ or ""),
         _Token(obj.__qualname__),
         _Token(repr((marks.get("_cash_pure"), marks.get("_cash_stateful"), marks.get("_cash_cached")))),
@@ -396,15 +427,22 @@ def _stamp(obj: Any, file_digest: str | None) -> tuple:
     )
 
 
-def _same_stamp(a: tuple, b: tuple) -> bool:
-    if len(a) != len(b):
+def _same_stamp(kept: tuple, now: tuple) -> bool:
+    """Is *now*, a stamp, what *kept* (`_kept`) was made from: the same
+    objects, alive, and the same tokens?"""
+    if len(kept) != len(now):
         return False
-    for x, y in zip(a, b):
-        if x is y:
+    for x, y in zip(kept, now):
+        kind = type(x)
+        if kind is weakref.ReferenceType:
+            if x() is y and y is not None:
+                continue
+        elif x is y:  # the missing mark
             continue
-        if type(x) is _Token and type(y) is _Token and x == y:
-            continue
-        if type(x) is tuple and type(y) is tuple and _same_stamp(x, y):
+        elif kind is _Token:
+            if type(y) is _Token and x == y:
+                continue
+        elif kind is tuple and type(y) is tuple and _same_stamp(x, y):
             continue
         return False
     return True
@@ -416,14 +454,17 @@ def _object_digest(obj: Any, file_digest: str | None) -> str:
     stamp = _stamp(obj, file_digest)
     key = id(obj)
     kept = _OBJECT_GUARDS.get(key)
-    if kept is not None and kept[0] is obj and _same_stamp(kept[1], stamp):
+    if kept is not None and kept[0]() is obj and _same_stamp(kept[1], stamp):
         return kept[2]
     digest = _digest(_object_guard(obj))
-    _OBJECT_GUARDS[key] = (obj, stamp, digest)
+    keep = _kept((obj, stamp))
+    if keep is not None:
+        _OBJECT_GUARDS[key] = (keep[0], keep[1], digest)
     return digest
 
 
-#: id(function) -> (function, its code, its file's digest, `callable_identity`).
+#: id(function) -> (weak references to it and to its code, its file's
+#: digest, `callable_identity`).
 _IDENTITIES: LruMemo[int, tuple[Any, types.CodeType, str, str]] = LruMemo(CODE_OBJECTS)
 
 
@@ -446,10 +487,10 @@ def _identity(live: Any, files: dict[str, str | None]) -> str:
         return callable_identity(live)
     code = live.__code__
     kept = _IDENTITIES.get(id(live))
-    if kept is not None and kept[0] is live and kept[1] is code and kept[2] == file_digest:
+    if kept is not None and kept[0]() is live and kept[1]() is code and kept[2] == file_digest:
         return kept[3]
     identity = callable_identity(live)
-    _IDENTITIES[id(live)] = (live, code, file_digest, identity)
+    _IDENTITIES[id(live)] = (_weak.ref(live), _weak.ref(code), file_digest, identity)
     return identity
 
 
