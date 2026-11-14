@@ -74,7 +74,7 @@
 
 #include "cwalk.h"
 
-#define CWATCH_API_VERSION 6
+#define CWATCH_API_VERSION 7
 #define CWATCH_VERSION "0.1.0"
 
 #if PY_VERSION_HEX < 0x030C0000
@@ -726,7 +726,132 @@ static PyObject *py_expect_clear(PyObject *self, PyObject *noargs) {
     Py_RETURN_NONE;
 }
 
-static int world_unwatchable_dict(PyObject *o) { return went_find(wds, wds_cap, (uintptr_t)o) != NULL; }
+/* ------------------------------------------------------------ key recorders
+ * record(d) -> KeyRecorder: which keys of the exact dict d change from now
+ * on, and what each held before its first change. For a call that may set
+ * attributes on an object it was handed: its instance __dict__ is recorded
+ * across the body, and only the keys named here are read afterwards
+ * (`cash.attribute_replay`). take() stops recording and answers
+ * (keys_before, {key: value before or ABSENT}, flags): keys_before is the
+ * dict's keys, in order, as they were before its first change (None when
+ * nothing changed). flags: REC_CLEARED, REC_CLONED (the dict was cleared or
+ * filled whole), REC_GONE (freed), REC_ODD (a key that is not an exact str),
+ * REC_FAILED (memory ran out recording), REC_THREAD (a change made on another
+ * thread than the one that started recording). A recorder freed without take()
+ * stops recording too. Watched with the same dict watcher as the table;
+ * a recorded dict is never unwatched under it (`world_unwatchable_dict`). */
+enum { REC_CLEARED = 1, REC_CLONED = 2, REC_GONE = 4, REC_ODD = 8, REC_FAILED = 16, REC_THREAD = 32 };
+
+typedef struct {
+    PyObject_HEAD
+    PyObject *dict;      /* strong while recording */
+    PyObject *before;    /* key -> value before its first change, or rec_absent */
+    PyObject *keys;      /* the keys before the first change: a list, or NULL */
+    PyThreadState *ts;   /* the thread that started recording */
+    int flags;
+    int active;
+} KeyRecorder;
+
+static KeyRecorder **recs = NULL; static size_t nrecs = 0, caprecs = 0;
+static PyObject *rec_absent = NULL;   /* the ABSENT marker */
+
+static int rec_iterating = 0;   /* on_dict is walking recs: stopped ones are only NULLed */
+
+static int recorded_dict(uintptr_t a) {
+    for (size_t i = 0; i < nrecs; i++) if (recs[i] && (uintptr_t)recs[i]->dict == a) return 1;
+    return 0;
+}
+
+static void rec_compact(void) {
+    if (rec_iterating) return;
+    size_t j = 0;
+    for (size_t i = 0; i < nrecs; i++) if (recs[i]) recs[j++] = recs[i];
+    nrecs = j;
+}
+
+static void rec_stop(KeyRecorder *r) {
+    if (!r->active) return;
+    r->active = 0;
+    for (size_t i = 0; i < nrecs; i++) if (recs[i] == r) recs[i] = NULL;
+    rec_compact();
+    PyObject *d = r->dict;
+    r->dict = NULL;
+    if (d) {
+        if (ht_slot((uintptr_t)d) < 0 && !world_unwatchable_dict(d) && !sight_watches((uintptr_t)d) &&
+            PyDict_Unwatch(dict_wid, d) < 0)
+            PyErr_Clear();
+        Py_DECREF(d);
+    }
+}
+
+/* an event on a recorded dict (`on_dict`): the old value of its key, once */
+static void rec_event(KeyRecorder *r, PyDict_WatchEvent ev, PyObject *d, PyObject *key) {
+    if (ev == PyDict_EVENT_DEALLOCATED) { r->flags |= REC_GONE; return; }   /* never: it holds the dict */
+    if (PyThreadState_Get() != r->ts) r->flags |= REC_THREAD;
+    if (ev == PyDict_EVENT_CLEARED) { r->flags |= REC_CLEARED; return; }
+    if (ev == PyDict_EVENT_CLONED) { r->flags |= REC_CLONED; return; }
+    if (!key || !PyUnicode_CheckExact(key)) { r->flags |= REC_ODD; return; }
+    if (!r->keys) {
+        r->keys = PyDict_Keys(d);
+        if (!r->keys) { PyErr_Clear(); r->flags |= REC_FAILED; return; }
+    }
+    int has = PyDict_Contains(r->before, key);
+    if (has < 0) { PyErr_Clear(); r->flags |= REC_FAILED; return; }
+    if (has) return;
+    PyObject *was = PyDict_GetItemWithError(d, key);   /* borrowed; str: no Python code runs */
+    if (!was && PyErr_Occurred()) { PyErr_Clear(); r->flags |= REC_FAILED; return; }
+    if (PyDict_SetItem(r->before, key, was ? was : rec_absent) < 0) { PyErr_Clear(); r->flags |= REC_FAILED; }
+}
+
+static void krec_dealloc(KeyRecorder *r) {
+    rec_stop(r);
+    Py_XDECREF(r->before);
+    Py_XDECREF(r->keys);
+    Py_TYPE(r)->tp_free((PyObject *)r);
+}
+
+/* take() -> (keys_before | None, {key: value before | ABSENT}, flags); stops recording */
+static PyObject *krec_take(KeyRecorder *r, PyObject *noargs) {
+    rec_stop(r);
+    PyObject *keys = r->keys ? r->keys : Py_None;
+    PyObject *res = Py_BuildValue("(OOi)", keys, r->before, r->flags);
+    return res;
+}
+
+static PyMethodDef krec_methods[] = {{"take", (PyCFunction)krec_take, METH_NOARGS, ""}, {NULL}};
+static PyTypeObject KeyRecorderType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name = "cash._cwatch.KeyRecorder", .tp_basicsize = sizeof(KeyRecorder), .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_dealloc = (destructor)krec_dealloc, .tp_methods = krec_methods};
+
+static int ensure_watchers(void);
+
+/* record(d) -> KeyRecorder */
+static PyObject *py_record(PyObject *self, PyObject *d) {
+    if (!PyDict_CheckExact(d)) { PyErr_SetString(PyExc_TypeError, "record: an exact dict"); return NULL; }
+    if (ensure_watchers() < 0) return NULL;
+    rec_compact();
+    if (nrecs == caprecs) {
+        size_t cap = caprecs ? caprecs * 2 : 8;
+        KeyRecorder **grown = realloc(recs, cap * sizeof *recs);
+        if (!grown) return PyErr_NoMemory();
+        recs = grown; caprecs = cap;
+    }
+    KeyRecorder *r = PyObject_New(KeyRecorder, &KeyRecorderType);
+    if (!r) return NULL;
+    r->dict = NULL; r->keys = NULL; r->flags = 0; r->active = 0; r->ts = PyThreadState_Get();
+    r->before = PyDict_New();
+    if (!r->before) { Py_DECREF(r); return NULL; }
+    if (PyDict_Watch(dict_wid, d) < 0) { Py_DECREF(r); return NULL; }
+    r->dict = Py_NewRef(d);
+    r->active = 1;
+    recs[nrecs++] = r;
+    return (PyObject *)r;
+}
+
+static int world_unwatchable_dict(PyObject *o) {
+    return went_find(wds, wds_cap, (uintptr_t)o) != NULL || (nrecs && recorded_dict((uintptr_t)o));
+}
 
 /* ------------------------------------------------------------ callbacks */
 static int str_equal(PyObject *a, PyObject *b) {
@@ -739,6 +864,13 @@ static int str_equal(PyObject *a, PyObject *b) {
 
 static int on_dict(PyDict_WatchEvent ev, PyObject *d, PyObject *key, PyObject *nv) {
     c_events++;
+    if (nrecs) {
+        rec_iterating++;
+        for (size_t i = 0; i < nrecs; i++)
+            if (recs[i] && recs[i]->dict == d) rec_event(recs[i], ev, d, key);
+        rec_iterating--;
+        rec_compact();
+    }
     if (ev == PyDict_EVENT_DEALLOCATED) sight_dict_gone((uintptr_t)d);
     if (wds_used) {
         WEnt *e = went_find(wds, wds_cap, (uintptr_t)d);
@@ -3167,6 +3299,7 @@ static PyMethodDef methods[] = {
     {"gen", py_gen, METH_O, "the arm generation of a clean tracked value, or None"},
     {"offers", py_offers, METH_O, ""},
     {"set_weak_callback", py_set_weak_callback, METH_O, "the callback of the weak references made"},
+    {"record", py_record, METH_O, "record(d) -> KeyRecorder: the keys of d that change, and what they held"},
     {NULL, NULL, 0, NULL}};
 
 static int find_set_dummy(void) {
@@ -3237,7 +3370,17 @@ static int exec_module(PyObject *m) {
         {"SIGHT_BITS", SIGHT_BITS}, {"SIGHT_WAYS", SIGHT_WAYS}};
     for (size_t i = 0; i < sizeof consts / sizeof consts[0]; i++)
         if (PyModule_AddIntConstant(m, consts[i].n, consts[i].v) < 0) return -1;
-    if (PyType_Ready(&AccType) < 0 || PyType_Ready(&TouchType) < 0) return -1;
+    if (PyType_Ready(&AccType) < 0 || PyType_Ready(&TouchType) < 0 || PyType_Ready(&KeyRecorderType) < 0) return -1;
+    if (!rec_absent) {
+        rec_absent = PyObject_CallNoArgs((PyObject *)&PyBaseObject_Type);
+        if (!rec_absent) return -1;
+    }
+    if (PyModule_AddObjectRef(m, "ABSENT", rec_absent) < 0) return -1;
+    struct { const char *n; int v; } rec_consts[] = {
+        {"REC_CLEARED", REC_CLEARED}, {"REC_CLONED", REC_CLONED}, {"REC_GONE", REC_GONE},
+        {"REC_ODD", REC_ODD}, {"REC_FAILED", REC_FAILED}, {"REC_THREAD", REC_THREAD}};
+    for (size_t i = 0; i < sizeof rec_consts / sizeof rec_consts[0]; i++)
+        if (PyModule_AddIntConstant(m, rec_consts[i].n, rec_consts[i].v) < 0) return -1;
     if (PyModule_AddObjectRef(m, "Acc", (PyObject *)&AccType) < 0) return -1;
     if (PyModule_AddObjectRef(m, "Touch", (PyObject *)&TouchType) < 0) return -1;
     if (cwalk_add_functions(m) < 0 || caudit_add_functions(m) < 0 || cfilehook_add_functions(m) < 0 ||
