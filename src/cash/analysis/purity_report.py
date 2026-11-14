@@ -28,6 +28,9 @@ ANSWERED_AT_RUN_TIME = "answered at run time by"
 #: not loaded yet, whose source cannot vouch for what it binds, ends
 #: (`HelperWalk._unvouched_import_issues`).
 UNREAD_MODULE = "a module not imported yet whose top level cash cannot read without running it"
+#: How a ``sys.modules`` lookup by a computed name in a library's own code
+#: begins (`static_dispatch.spell_static_dispatch`).
+LIBRARY_MODULE_LOOKUP = "a library's lookup of an imported module:"
 #: How an ``untrackable_dep`` finding that is a lookup by a run-time name
 #: (``getattr(obj, name)``, ``importlib.import_module(name)``,
 #: ``__import__(name)``) begins: on Python 3.12+ such a call is cached on a
@@ -35,6 +38,7 @@ UNREAD_MODULE = "a module not imported yet whose top level cash cannot read with
 #: subscripts and the rest keep running uncached.
 NAME_LOOKUP_DESCRIPTIONS = (
     "getattr(obj, name)(...) with non-constant name",
+    LIBRARY_MODULE_LOOKUP,
     "importlib.import_module(...)",
     "__import__(...)",
     "a name lookup bound to a local:",

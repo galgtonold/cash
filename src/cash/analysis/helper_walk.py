@@ -40,7 +40,7 @@ from .._annotation_refs import annotation_referents
 from ..code_digest import callable_identity, compiled_identity, extension_file_digest
 from ..effects import EffectKind
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
-from ..install_paths import top_package
+from ..install_paths import is_user_code_file, top_package
 from ..jit_functions import jit_python_function
 from ..loaded_code import code_objects_of
 from ..purity import is_pure, is_stateful
@@ -638,7 +638,7 @@ class HelperWalk:
         namespace, local_imports = self._body_namespace(func, func_def)
         # A new tree when a lookup was spelled: the shared one stays what
         # its text parses to.
-        func_def, dispatch_issues = spell_static_dispatch(func_def, namespace, qualname)
+        func_def, dispatch_issues = spell_static_dispatch(func_def, namespace, qualname, library=_library_code(func))
         ambient_namespace = method_namespace(func, func_def, namespace)
         visitor = PurityVisitor(
             qualname=qualname,
@@ -1197,6 +1197,14 @@ def _fresh_name_nodes(func_def: ast.AST, namespace: dict[str, Any]) -> frozenset
 def _scope_locals(func_def: ast.AST) -> frozenset[str]:
     """`scope_locals`, kept with the tree."""
     return kept_names(func_def, "scope_locals", scope_locals)
+
+
+def _library_code(func: Any) -> bool:
+    """Was *func*'s code compiled from a file of an installed library (not
+    the user's code: `is_user_code_file`)? False when it has no code."""
+    code = getattr(getattr(func, "__func__", func), "__code__", None)
+    filename = getattr(code, "co_filename", None)
+    return isinstance(filename, str) and bool(filename) and not is_user_code_file(filename)
 
 
 def _param_names(func_def: ast.FunctionDef | ast.AsyncFunctionDef) -> frozenset[str]:
