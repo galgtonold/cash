@@ -75,7 +75,7 @@ def retain(holder: list, seconds: float) -> Handed | None:
     if not _ON:
         return None
     try:
-        status = value_watch._arm(holder[0])
+        status = value_watch.arm_value(holder[0])
         if status != _cw.ARMED and status != _cw.ALREADY:
             return None
         token = object()
@@ -97,7 +97,7 @@ def retain(holder: list, seconds: float) -> Handed | None:
     except Exception:  # noqa: BLE001 - not kept: the next hit reads a new copy
         try:
             _cw.forget(holder[0])
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - a copy the watchers never took needs no forgetting
             pass
         return None
 
@@ -126,7 +126,7 @@ def release(handed: Handed) -> None:
     if holder:
         try:
             _cw.forget(holder[0])
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - a copy the watchers never took needs no forgetting
             pass
         holder.clear()
 

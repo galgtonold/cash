@@ -533,3 +533,7 @@ def status_line() -> str:
         f"{s['roots']} value{'s' if s['roots'] != 1 else ''} watched, "
         f"{s['hits']} hash{'es' if s['hits'] != 1 else ''} skipped" + (", verify mode" if VERIFY else "")
     )
+
+
+#: Arm the watchers on *value*, for callers outside this module.
+arm_value = _arm
