@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from .._memo import TABLES, LruMemo
+from ..analysis.check_targets import function_only_tests_against
 from ..analysis.helper_bindings import resolve_binding
 from ..analysis.helper_code import own_code_is_user, qualname_of, renamed
 from ..analysis.purity_analyzer import get_analyzer
@@ -367,7 +368,9 @@ class GlobalsFold:
         if isinstance(v, type):
             # A class's code is keyed as code; what it holds and what its
             # methods read is data (`ClassDataFold.class_parts`).
-            if is_user_class(v, fold.own_pkg):
+            # One it only tests objects against runs no code of its own
+            # (`check_targets`): its code is keyed, what it reads is not.
+            if is_user_class(v, fold.own_pkg) and not function_only_tests_against(fold.func, name, v):
                 fold.classes.append(v)
             self._code_ref_part(fold, name, v)
             return
@@ -766,6 +769,9 @@ class GlobalsFold:
             if target is None or target is func or not callable(target):
                 continue
             if isinstance(target, type):
+                if qual in report.check_only_classes:
+                    # Only tested against: no code of its runs (`check_targets`).
+                    continue
                 # A class the code constructs or calls: what it holds and what
                 # its methods -- inherited, properties, `__init__` -- read.
                 state_hash = self._classes.fold_class_parts(target, func, func_name, state_hash, owner_code, seen)
@@ -827,7 +833,8 @@ class GlobalsFold:
             target = report.helper_objects[qual]()
             target = jit_python_function(target) or target
             if isinstance(target, type):
-                state_hash = self._classes.fold_class_parts(target, func, func_name, state_hash, owner_code, seen)
+                if qual not in report.check_only_classes:
+                    state_hash = self._classes.fold_class_parts(target, func, func_name, state_hash, owner_code, seen)
                 continue
             if target is None or target is func or getattr(target, "__globals__", None) is None:
                 continue

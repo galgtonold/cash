@@ -50,6 +50,7 @@ from .ambient_reads import log_helper_names, log_only_ambient_reads, method_name
 from .annotations import assume_safe_block_lines, audited_lines
 from .ast_util import bytecode_global_refs, resolve_callee
 from .callee_effects import scope_locals, source_global_mutations
+from .check_targets import decides_checks_itself, named_only_as_check_target
 from .helper_bindings import (
     binding_path,
     build_namespace,
@@ -202,6 +203,10 @@ class HelperWalk:
         self._environment_reads: set[tuple[str, str]] = set()
         self._cached_callees: list[Any] = []
         self._cached_seen: set[int] = set()
+        #: Walk ids of the classes a body names only to test objects
+        #: against (`check_targets`), and of those reached any other way.
+        self._check_classes: set[Any] = set()
+        self._other_classes: set[Any] = set()
         #: Clock helpers judged at a call site: their own read is not reported.
         self._judged_helpers: set[Any] = set()
         #: Why `callable_layers` could not find every function one callable
@@ -406,7 +411,15 @@ class HelperWalk:
         self._audited.append(func)
 
     def _put_push(self, callee: Any, hash_only: bool, reported: bool) -> None:
+        if isinstance(callee, type):
+            self._other_classes.add(_walk_id(callee))
         self._stack.append(_Entry(callee, self._depth + 1, hash_only, reported))
+
+    def _put_check_push(self, callee: Any, reported: bool) -> None:
+        """A class a body names only to test objects against: walked for
+        its code like any class read by name (`_queue_hash_only`)."""
+        self._check_classes.add(_walk_id(callee))
+        self._stack.append(_Entry(callee, self._depth + 1, True, reported))
 
     def _put_caller_path(self, callee: Any, path: BindingPath) -> None:
         self._caller_paths.setdefault(id(callee), path)
@@ -773,7 +786,10 @@ class HelperWalk:
                 # Its code shapes the result all the same; followed for the
                 # key, not audited.
                 self._note_decided_at_run_time(body, name, value)
-                self._queue_hash_only(value, body.func, body.reported)
+                check_only = not decides_checks_itself(value) and named_only_as_check_target(
+                    body.func_def, name, body.namespace
+                )
+                self._queue_hash_only(value, body.func, body.reported, check_only=check_only)
             elif value is not None:
                 self._queue_special_functions(body, value)
 
@@ -983,7 +999,9 @@ class HelperWalk:
         ):
             self._note_binding(callee, path)
 
-    def _queue_hash_only(self, target: Any, owner: Any, reported: bool) -> None:
+    def _queue_hash_only(self, target: Any, owner: Any, reported: bool, *, check_only: bool = False) -> None:
+        """Queue *target* for its code alone. *check_only*: a class the body
+        names only to test objects against (`check_targets`)."""
         if target is None or target is owner or not callable(target):
             return
         if getattr(target, "_cash_cached", False) is True:
@@ -992,7 +1010,10 @@ class HelperWalk:
             return
         if not is_user_code(target, self._root_module):
             return
-        self._emit("_put_push", target, True, reported)
+        if check_only:
+            self._emit("_put_check_push", target, reported)
+        else:
+            self._emit("_put_push", target, True, reported)
 
     def _queue_annotation_refs(self, obj: Any, reported: bool) -> None:
         """Queue, hash-only, the user classes and functions *obj*'s
@@ -1088,6 +1109,11 @@ class HelperWalk:
             cached_callees=tuple(self._cached_callees),
             unwalkable=self._unwalkable,
             audited_whole=self._audited_whole(),
+            check_only_classes=frozenset(
+                self._walked_names[wid]
+                for wid in self._check_classes - self._other_classes
+                if wid in self._walked_names
+            ),
         )
 
     def _audited_whole(self) -> tuple[Any, ...]:

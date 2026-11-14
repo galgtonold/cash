@@ -202,6 +202,13 @@ class PurityReport:
     #: from N roots was quadratic). Empty when anything in the walk depended
     #: on where it started (`HelperWalk.composable`).
     audited_whole: tuple[Any, ...] = ()
+    #: Names (as in ``helper_resolution_paths``) of the classes the walk met
+    #: only as what objects are tested against -- ``isinstance(x, C)``,
+    #: ``except C``, a parameter defaulting to ``(C,)`` used only so
+    #: (`cash.analysis.check_targets`) -- and whose metaclass leaves the
+    #: test to ``type``. Their code is keyed; the data their methods read is
+    #: not folded (`GlobalsFold`), since no code of theirs runs for a test.
+    check_only_classes: frozenset[str] = frozenset()
 
     def covered_ids(self) -> set[int]:
         """``id()`` of each live function in `audited_whole`: a live object
