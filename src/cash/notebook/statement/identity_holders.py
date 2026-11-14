@@ -50,8 +50,8 @@ import array
 import bisect
 import functools
 import operator
-import os
 import re
+import struct
 import sys
 import types
 import weakref
@@ -152,30 +152,53 @@ def _fixed_image() -> tuple[int, int] | None:
     id() of one is still that object after a restart; and a column of
     ordinary numbers meets their addresses often (the image sits near
     20 MB: ``np.arange(8_000_000) * 12`` holds ``id(7)``). None anywhere
-    else: an image that moves leaves no address fixed."""
+    else: an image that moves leaves no address fixed.
+
+    Read from the executable's own load segments (``PT_LOAD``: their
+    addresses and sizes, its zero-filled data included), not from the
+    mappings ``/proc/self/maps`` names it in: the file mapped again later
+    (by a library reading its symbols) sits next to the heap's arenas, and
+    a span up to there took every object's address for one compiled in,
+    so no ``id()`` was looked for at all."""
     if not sys.platform.startswith("linux"):
         return None
     try:
         with open("/proc/self/exe", "rb") as image:
-            header = image.read(18)
-        if len(header) < 18 or header[:4] != b"\x7fELF":
-            return None
-        if int.from_bytes(header[16:18], "little" if header[5] == 1 else "big") != 2:  # ET_EXEC
-            return None
-        path = os.readlink("/proc/self/exe")
-        spans = []
-        with open("/proc/self/maps", encoding="utf-8", errors="replace") as maps:
-            for line in maps:
-                fields = line.split(maxsplit=5)
-                if len(fields) == 6 and fields[5].rstrip("\n") == path:
-                    low, high = fields[0].split("-", 1)
-                    spans.append((int(low, 16), int(high, 16)))
-    except (OSError, ValueError):
+            header = image.read(64)
+            if len(header) < 52 or header[:4] != b"\x7fELF" or header[4] not in (1, 2) or header[5] not in (1, 2):
+                return None
+            wide, order = header[4] == 2, "<" if header[5] == 1 else ">"
+            if struct.unpack_from(order + "H", header, 16)[0] != 2:  # ET_EXEC
+                return None
+            if wide:
+                table, size, count = (
+                    struct.unpack_from(order + "Q", header, 32)[0],
+                    *struct.unpack_from(order + "HH", header, 54),
+                )
+                entry, fields = order + "IIQQQQQQ", (0, 3, 6)  # p_type, p_vaddr, p_memsz
+            else:
+                table, size, count = (
+                    struct.unpack_from(order + "I", header, 28)[0],
+                    *struct.unpack_from(order + "HH", header, 42),
+                )
+                entry, fields = order + "IIIIIIII", (0, 2, 5)
+            if size < struct.calcsize(entry) or not 0 < count < 1 << 12:
+                return None
+            image.seek(table)
+            headers = image.read(size * count)
+    except (OSError, ValueError, struct.error):
         return None
+    spans = []
+    for at in range(0, len(headers) - size + 1, size):
+        values = struct.unpack_from(entry, headers, at)
+        kind, start, length = (values[i] for i in fields)
+        if kind == 1 and length:  # PT_LOAD
+            spans.append((start, start + length))
     if not spans:
         return None
-    # The executable's segments and its zero-filled data between them.
-    return min(low for low, _ in spans), max(high for _, high in spans)
+    low, high = min(start for start, _ in spans), max(end for _, end in spans)
+    # The objects compiled in must be in it, or this is not the image that runs.
+    return (low, high) if low <= id(None) < high else None
 
 
 #: The C kernel of `_Walk._read_nested`, None without it: a frame's column of

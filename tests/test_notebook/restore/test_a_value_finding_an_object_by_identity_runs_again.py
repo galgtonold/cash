@@ -384,6 +384,39 @@ def test_numbers_meeting_the_fixed_executable_s_objects_are_no_id():
     assert identity_held_reason("d", {id(seven): 1}, {"x": [seven]}) is None
 
 
+@pytest.mark.skipif(
+    _fixed_image() is None,
+    reason="only an executable mapped at a fixed address (a non-PIE Linux build) keeps its objects' ids",
+)
+def test_the_executable_mapped_again_still_leaves_the_heap_s_ids_looked_for():
+    """The executable's file mapped again, as a library reading its symbols
+    maps it, lies next to the heap's arenas. The image was the span of
+    every mapping of that file, so it reached up to there, every object's
+    address was taken for one compiled in, and ``reg = {id(o): 'a'}`` was
+    stored and served with a stale id, depending on what had mapped the
+    file before the first statement in the process asked."""
+    import ctypes
+    import mmap
+
+    from cash.notebook.statement.identity_holders import identity_held_reason
+
+    class Box:
+        pass
+
+    with open("/proc/self/exe", "rb") as exe, mmap.mmap(exe.fileno(), 0, access=mmap.ACCESS_COPY) as again:
+        at = ctypes.addressof(ctypes.c_char.from_buffer(again))
+        _fixed_image.cache_clear()
+        try:
+            low, high = _fixed_image()
+            o = Box()
+            assert not low <= at < high
+            assert not low <= id(o) < high
+            assert identity_held_reason("reg", {id(o): "a"}, {"o": o}) is not None
+        finally:
+            del o
+            _fixed_image.cache_clear()
+
+
 def test_a_number_the_notebook_is_too_big_to_look_through_for_is_not_called_an_id():
     """Past the walk's budget the number is not known to be an ``id()``:
     the warning says cash could not look, not that the value holds one."""
