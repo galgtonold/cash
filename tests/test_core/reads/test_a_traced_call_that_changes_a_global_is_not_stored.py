@@ -169,7 +169,10 @@ def test_calling_twice_in_one_process_changes_the_global_twice(project, method):
     assert got["state"] == plain["state"]
     assert got["results"] == plain["results"]
     assert ran == 2, "the second call was served and skipped the change"
-    assert any("modifies the module global 'checks." in r for r in got["reasons"]), got["reasons"]
+    # operator.setitem on a global is also a static scope mutation now, which
+    # refuses the call before the trace's own before/after check is reached.
+    said = ("modifies the module global 'checks.", "operator.setitem(G, ...)")
+    assert any(s in r for r in got["reasons"] for s in said), got["reasons"]
 
 
 @pytest.mark.parametrize("method", _EFFECTS)
