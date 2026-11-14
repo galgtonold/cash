@@ -52,7 +52,7 @@ from ..tracking.randomness import (
     replayable,
 )
 from ..tracking.trace_recorder import other_thread_alive
-from . import code_trace, hit_memo, state_memo, walk_scope
+from . import attribute_replay, code_trace, hit_memo, state_memo, walk_scope
 from .arg_hashing import (
     CALL_POLARS,
     CONTENT_KEYED,
@@ -82,7 +82,7 @@ from .call_state import (
     run_to_completion,
 )
 from .class_data import CLASSES_FOLDED
-from .closure_fold import EVERY_PARAMETER, bound_owner, defaults_of
+from .closure_fold import EVERY_PARAMETER, bound_owner, bound_values, defaults_of
 from .dynamic_sources import (
     Resolution,
     dynamic_sources_fresh,
@@ -1515,6 +1515,9 @@ class CallRunner:
             getattr(metadata, "result_ref", None)
             or getattr(metadata, "held_refs", None)
             or getattr(metadata, "process_local", None)
+            # Stored with the state it left its arguments in: the entry
+            # holds more than the result, and a hit writes it back.
+            or getattr(metadata, "args_left", None)
         ):
             return
         backend = self._backend_slot.backend
@@ -1596,14 +1599,21 @@ class CallRunner:
             return {}
         content = call.content_keyed
         keyed = content is not None and call.args_hash is not None
-        if not spec.changes_arguments and not (
-            keyed and any(map(rewrite_in_place.rewritable_kind, (*args, *kwargs.values())))
-        ):
+        if not spec.changes_arguments and not (keyed and any(map(_takes_state, (*args, *kwargs.values())))):
             return {}
         named = self._checked_named(spec.name, args, kwargs) or {}
         before: dict[str, tuple] = {}
         for name, value in named.items():
             if not rewrite_in_place.rewritable_kind(value):
+                if keyed and _replays_attributes(value) and content.covers(value):
+                    # An instance the key holds by all it holds: which of
+                    # its attributes the body binds is recorded, for a hit
+                    # to replay (`attribute_changes`).
+                    try:
+                        recording = rewrite_in_place.AttrRecording(value)
+                    except Exception:  # noqa: BLE001 - not recorded: a change refuses the store
+                        continue
+                    before[name] = (value, recording, rewrite_in_place.KeyedBefore(call.args_hash))
                 continue
             if keyed and content.covers(value):
                 try:
@@ -1631,8 +1641,79 @@ class CallRunner:
                 before[name] = (value, shape, fingerprint)
         return before
 
+    def attribute_changes(self, spec: CachedFunction, call: Call, run: BodyRun) -> attribute_replay.AttrVerdict | None:
+        """What the body did to the attributes of the instances it was
+        handed, and whether a hit can replay it (`attribute_replay`); None
+        when it did nothing to them."""
+        arguments = call.checked or (call.args, call.kwargs)
+        func, func_name = spec.func, spec.name
+
+        def unchanged() -> bool:
+            return self._purity.checked_arguments_hash(
+                func_name, *arguments
+            ) == call.call_args_hash and not self._purity.bound_moved(run.observer)
+
+        try:
+            return attribute_replay.AttrVerdict.of(
+                run,
+                func,
+                func_name,
+                [*self._named_args(func_name, *arguments), *bound_values(func)],
+                call.call_args_hash,
+                unchanged,
+                lambda value: self._purity.shared_outside(value, func, call.args, call.kwargs),
+                lambda obj: self._purity.held_outside(
+                    obj,
+                    func,
+                    # The instance a bound method is bound to is held by it,
+                    # as it should be.
+                    [
+                        (what, value)
+                        for what, value in self._reads_now(func, call.ran_unit)
+                        if not (value is obj and any(held is obj for _, held in bound_values(func)))
+                    ],
+                ),
+                lambda result: self._purity.warn_shared_result(func, func_name, result, call.args, call.kwargs),
+            )
+        except Exception:  # not judged: the change refuses the store, as without it
+            logger.debug("[ATTRS] %s: attribute changes not judged", func_name, exc_info=True)
+            return None
+
+    @staticmethod
+    def _reads_now(func: Callable, ran: Any) -> list[tuple[str, Any]]:
+        """``(what, value)`` of what the code a call ran read outside its
+        arguments (`argument_sharing.read_values`), or none when that was not
+        recorded."""
+        try:
+            return list(argument_sharing.read_values(argument_sharing.reads_of(ran, func), func))
+        except argument_sharing.Unknown:
+            return []
+
+    def _record_bound(self, spec: CachedFunction, call: Call, run: BodyRun) -> None:
+        """Record the attributes the body binds on the instance the cached
+        callable is bound to (``c.cache(est.fit)``), when the key holds it
+        by all it holds (`PurityChecks.bound_by_content`): a hit replays
+        them, as for an instance handed in (`arguments_before`)."""
+        if call.checked is not None or (not spec.changes_arguments and spec.leaves_arguments_alone):
+            return
+        if not any(name == "self" and _replays_attributes(value) for name, value in bound_values(spec.func)):
+            return
+        for name, value in self._purity.bound_by_content(spec.func):
+            if name in run.args_before or not _replays_attributes(value):
+                continue
+            try:
+                recording = rewrite_in_place.AttrRecording(value)
+            except Exception:  # noqa: BLE001 - not recorded: a change refuses the store
+                continue
+            run.args_before[name] = (value, recording, rewrite_in_place.BoundBefore(name))
+
     def arguments_left(
-        self, spec: CachedFunction, run: BodyRun, arguments: tuple[tuple, dict], ran: Any = None
+        self,
+        spec: CachedFunction,
+        run: BodyRun,
+        arguments: tuple[tuple, dict],
+        ran: Any = None,
+        attrs: attribute_replay.AttrVerdict | None = None,
     ) -> dict[str, tuple[Any, Any]] | None:
         """``{parameter: (before, state after)}`` when the body changed
         arguments in place and every one of them can be written back by a
@@ -1663,7 +1744,11 @@ class CallRunner:
                 # calls fingerprint it first and are.
                 named = self._checked_named(spec.name, *arguments) or {}
                 values = [named.get(name) for name in mutated]
-                if all(rewrite_in_place.rewritable_kind(v) and rewrite_in_place.refusal(v) is None for v in values):
+                if all(
+                    (rewrite_in_place.rewritable_kind(v) and rewrite_in_place.refusal(v) is None)
+                    or _replays_attributes(v)
+                    for v in values
+                ):
                     observer.stored_from_next = list(mutated)
                     observer.reword(
                         "argument mutation",
@@ -1673,7 +1758,22 @@ class CallRunner:
                     )
             return None
         left: dict[str, tuple[Any, Any]] = {}
+        replayed = [name for name in mutated if type(before[name][1]) is rewrite_in_place.AttrRecording]
+        if replayed:
+            states = attrs.states if attrs is not None else None
+            if states is None or any(name not in states for name in replayed):
+                if attrs is not None and attrs.why:
+                    observer.reword(
+                        "argument mutation",
+                        " in place -- the result was not stored",
+                        f" in place, and a hit cannot replay it: {attrs.why} -- the result was not stored",
+                    )
+                return None
+            for name in replayed:
+                left[name] = (before[name][2], states[name])
         for name in mutated:
+            if name in left:
+                continue
             value, shape, fingerprint = before[name]
             if rewrite_in_place.refusal(value) is not None or rewrite_in_place.shape_change(shape, value) is not None:
                 return None
@@ -1691,9 +1791,12 @@ class CallRunner:
                 return None
             except Exception:  # noqa: BLE001 - not copied: not stored
                 return None
+        written = [name for name in left if name not in replayed]
         try:
-            reads = argument_sharing.reads_of(ran, spec.func)
-            shared = self._shared_with(spec.func, [(name, before[name][0]) for name in left], arguments, reads)
+            # Attributes rebound share no memory a write could reach: only
+            # what is written into is looked at.
+            reads = argument_sharing.reads_of(ran, spec.func) if written else ()
+            shared = self._shared_with(spec.func, [(name, before[name][0]) for name in written], arguments, reads)
             if shared is not None:
                 shared = (
                     f", and it shares memory with {shared}, which a hit writing it back would leave as no plain "
@@ -1724,12 +1827,19 @@ class CallRunner:
         if not args_left:
             return None
         named = self._checked_named(func_name, *arguments) or {}
+        spec = self._registry.cached.get(func_name)
+        if spec is not None and any(
+            isinstance(before, rewrite_in_place.BoundBefore) for before, _ in args_left.values()
+        ):
+            named = {**dict(bound_values(spec.func)), **named}
         for name in args_left:
             if name in named and named[name] is result:
                 return name
         return None
 
-    def _unwritable_args(self, func_name: str, arguments: tuple[tuple, dict]) -> list[str]:
+    def _unwritable_args(
+        self, func_name: str, arguments: tuple[tuple, dict], content: ContentKeyed | None = None
+    ) -> list[str]:
         """The parameters whose argument no hit writes a state back into
         (`rewrite_in_place.refusal`), so a change cash may not see in it --
         an object keyed by ``__cash_key__`` or a registered hasher hashes
@@ -1741,7 +1851,8 @@ class CallRunner:
         return [
             name
             for name, value in named.items()
-            if not rewrite_in_place.rewritable_kind(value) or rewrite_in_place.refusal(value) is not None
+            if (not rewrite_in_place.rewritable_kind(value) or rewrite_in_place.refusal(value) is not None)
+            and not (content is not None and _replays_attributes(value) and content.covers(value))
         ]
 
     def _shared_with(
@@ -1808,25 +1919,49 @@ class CallRunner:
         if named is None:
             return [], "the arguments it changes in place could not be found"
         writes: list[tuple[Any, Any]] = []
+        bound: dict[str, Any] | None = None
+        spec = self._registry.cached.get(func_name)
+        if spec is not None and any(
+            isinstance(before, rewrite_in_place.BoundBefore) for before, _ in left.states.values()
+        ):
+            # The instance the callable is bound to, which the key folded.
+            named = {**dict(bound_values(spec.func)), **named}
         for name, (before, state) in left.states.items():
             if name not in named:
                 return [], f"the argument {name!r} it changes in place was not handed in"
             live = named[name]
             why = rewrite_in_place.mismatch(live, state)
             if why is None:
-                if isinstance(before, rewrite_in_place.KeyedBefore):
+                if isinstance(before, rewrite_in_place.BoundBefore):
+                    # Its whole state is in the key this hit matched.
+                    same = True
+                elif isinstance(before, rewrite_in_place.KeyedBefore):
                     same = content_keyed is not None and content_keyed.covers(live) and before.args_hash == args_hash
                 else:
                     same = mutation_fingerprint(live) == before
                 if not same:
                     why = "it is not in the state the entry was stored from"
+            if why is None and isinstance(state, rewrite_in_place.AttrState) and state.relinks():
+                if bound is None:
+                    bound = {
+                        **dict(bound_values(spec.func) if spec is not None else ()),
+                        **dict(self._named_args(func_name, *arguments)),
+                    }
+                try:
+                    state = state.resolved(lambda relink: attribute_replay.find(relink, bound))
+                except LookupError:
+                    why = "an object it bound by identity is not there"
             if why is not None:
                 return [], f"the state the call left {name!r} in cannot be written back: {why}"
             writes.append((live, state))
-        spec = self._registry.cached.get(func_name)
+        written = [
+            name for name, (_, state) in left.states.items() if not isinstance(state, rewrite_in_place.AttrState)
+        ]
+        if not written:
+            return writes, None
         if spec is None or left.reads is None:
             return [], "the entry does not say what the call it was stored from read"
-        live_named = [(name, named[name]) for name in left.states]
+        live_named = [(name, named[name]) for name in written]
         try:
             shared = self._shared_with(spec.func, live_named, arguments, left.reads)
         except argument_sharing.Unknown as why:
@@ -1891,6 +2026,7 @@ class CallRunner:
         run.arg_carriers_pre = capture_argument_carrier_states(self._named_args(func_name, args, kwargs))
         run.arg_carriers_moved = []
         run.args_before = self.arguments_before(spec, call, args, kwargs)
+        self._record_bound(spec, call, run)
         # And the registries the process keeps outside any variable: a hit
         # would not set ``np.seterr`` or a logger's level again.
         run.registries = process_registries.snapshot()
@@ -1915,6 +2051,11 @@ class CallRunner:
                 body_t1 = _perf_counter()
                 code_trace.end(call.trace_unit)
                 NESTED_CASH_SECONDS.reset(nested_token)
+                # What the body did to the attributes of an instance it was
+                # handed: recorded across the body alone.
+                for entry in run.args_before.values():
+                    if type(entry[1]) is rewrite_in_place.AttrRecording:
+                        entry[1].finish()
             # The user's own work, isolated. Everything cash does sits outside
             # this pair, which is the whole point: it is the only number that
             # can answer "did caching pay?".
@@ -1990,11 +2131,16 @@ class CallRunner:
         # (`replay_argument_carriers`), so that draw is not a mutation the
         # caller would lose: the check sees it where the call found it.
         with carriers_put_back(run.arg_carriers_pre if run.arg_carriers_moved else []), call_polars(call.polars_args):
+            attrs = self.attribute_changes(spec, call, run)
             self._purity.check_argument_mutation(
-                func_name, *(call.checked or (args, kwargs)), call.call_args_hash, run.observer
+                func_name,
+                *(call.checked or (args, kwargs)),
+                call.call_args_hash,
+                run.observer,
+                explained=attrs.names if attrs is not None and attrs.states is not None else None,
             )
         self._purity.check_bound_mutation(func_name, run.observer)
-        args_left = self.arguments_left(spec, run, call.checked or (args, kwargs), call.ran_unit)
+        args_left = self.arguments_left(spec, run, call.checked or (args, kwargs), call.ran_unit, attrs)
         self._files.credit_remembered_reads(func_name, run.tracker, args, kwargs)
         self._files.warn_unrecorded_reads(func_name, run.tracker)
         auto_file_deps = snapshot_tracked_deps(run.tracker, getattr(func, "__module__", None))
@@ -2004,7 +2150,14 @@ class CallRunner:
         # back (``stft(y, out=buf)``) is handed back as that argument by a
         # hit too, so it shares nothing a hit would hand back apart.
         result_is = self.result_argument(func_name, res, args_left, call.checked or (args, kwargs))
-        shared = None if result_is else self._purity.warn_shared_result(func, func_name, res, args, kwargs)
+        if result_is:
+            shared = None
+        elif attrs is not None and attrs.result_checked:
+            # Checked against the arguments as the caller handed them in:
+            # an attribute the call bound comes back with the result.
+            shared = attrs.result_shared
+        else:
+            shared = self._purity.warn_shared_result(func, func_name, res, args, kwargs)
         # The stream comparison above, read for a draw no seed stands behind:
         # one the source scan could not see (a library a helper calls).
         self._rng.warn_observed_draw(func_name, run.rng_drew, res)
@@ -2045,14 +2198,19 @@ class CallRunner:
             # Stored with the state it left them in: the warning says what
             # a hit does. Said after the refusals above, which a call
             # sharing its result with an argument meets.
-            for name in args_left:
-                run.observer.record(rewrite_in_place.WRITTEN_BACK, name)
+            for name, (_before, state) in args_left.items():
+                if isinstance(state, rewrite_in_place.AttrState):
+                    run.observer.replayed_args.append(name)
+                else:
+                    run.observer.record(rewrite_in_place.WRITTEN_BACK, name)
         elif args_left and run.observer is not None:
             # Changed and not stored after all: what reading the source
             # found on them stands (`PurityChecks.surface_held_mutations`).
             run.observer.mutated_args = list(args_left)
         if run.observer is not None and self._purity.holds_mutations(func_name):
-            run.observer.unwritable_args = self._unwritable_args(func_name, call.checked or (args, kwargs))
+            run.observer.unwritable_args = self._unwritable_args(
+                func_name, call.checked or (args, kwargs), call.content_keyed
+            )
         self._purity.report_observed_effects(func_name, run.observer)
         if refusal is not None:
             self._misses.note_not_stored(call.cache_key, refusal, func_name)
@@ -2302,3 +2460,15 @@ class CallRunner:
                 lock_cm.__exit__(None, None, None)
             except Exception:  # noqa: BLE001 - releasing failed; compute already done
                 logger.debug("lock release failed for %s", spec.name)
+
+
+def _replays_attributes(value: Any) -> bool:
+    """Whether a change to *value*'s attributes can be replayed by a hit
+    (`rewrite_in_place.attribute_refusal`): an instance of a plain class."""
+    return bool(getattr(type(value), "__dictoffset__", 0)) and rewrite_in_place.attribute_refusal(value) is None
+
+
+def _takes_state(value: Any) -> bool:
+    """Whether a hit could put the state a call leaves *value* in back:
+    write it into the object, or replay its attributes."""
+    return rewrite_in_place.rewritable_kind(value) or _replays_attributes(value)

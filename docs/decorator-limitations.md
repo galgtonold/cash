@@ -355,9 +355,42 @@ paths from the project root or pass absolute paths.
   `globals()["G"]` does, or the call is not recorded, as an `async`
   function's is not, nor any call before Python 3.12, which has no
   `sys.monitoring` to record it with), and any other
-  argument (an object of your class, a list of lists, a frame given a new
-  column) are not stored, so they run every time. Return a modified copy
-  instead (`rows = sorted(rows)`).
+  argument (a list of lists, a frame given a new column, an object of your
+  class changed other than as the next item says) are not stored, so they
+  run every time. Return a modified copy instead (`rows = sorted(rows)`).
+<!-- claim: cash/decorator/attribute_replay.py:AttrVerdict.of @dd93e560, cash/rewrite_in_place.py:attribute_refusal @40074681, cash/rewrite_in_place.py:AttrState.replay @0e4c9439 -->
+- A call that only binds, rebinds or deletes **attributes of an object it
+  was handed** (`est.fit(X)` setting `self.coef_` and returning `self`, a
+  resampler's `fit_resample` setting `self.sampling_strategy_`, or a
+  `c.cache(est.fit)` whose `est` it changes so) is stored with those
+  attributes, and a hit binds them on the object you hand in: it then holds
+  the same attributes, in the same order, as after a plain run, and
+  `return self` hands back your object. This holds when:
+    - the object is an instance of a class of yours or a library's written
+      in Python, with no `__slots__`, no `__setattr__` or `__delattr__` of
+      its own, and no property setter or other descriptor that runs code
+      when an attribute is set (a setter whose body only binds plain
+      attributes, `self._total = value` or `setattr(self, "_t", value)`,
+      is fine);
+    - the cache key holds the object by all it holds (not a
+      `__cash_key__`, a registered hasher or a lineage tag of its own);
+    - nothing else changed: no value the object already held was changed in
+      place (`self.history.append(x)`, `self.model.partial_fit(...)`,
+      `self.cfg["k"] = 1`), and no other argument either (an array `X`
+      written in place still keeps the call from being stored);
+    - each value bound is a number, string or similar, one of the call's
+      arguments or the object itself, a module global, a class or function
+      (a hit binds that very object again, never a copy), or a new object
+      the call made that nothing outside the call holds, nor anything inside
+      it: a value the object held before (`self.a = self.b`), something a
+      module or class also holds, or a new object holding one of those, or
+      holding an argument, keeps the call running every time. Two
+      attributes bound to one new object, or an attribute that is also the
+      result, come back as one object.
+  Anything else runs every time, as before, and the warning says why a hit
+  cannot replay it. Sharing cash cannot see stays a limit: an object
+  written in C that holds references without telling the garbage collector
+  is not looked into.
 - A set in a result comes back with the same items, but a `for` loop may
   meet them in a different order than in the call that made it: Python does
   not keep a set's order. Use `sorted(s)` where the order matters.

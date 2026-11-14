@@ -931,6 +931,11 @@ unless cash can write the argument's new state back on a hit
 When it can write back every argument the call changed, the warning is one
 line saying so instead, with nothing to fix:
 `clip_in_place changed 'a' in place; cash stores the state it leaves 'a' in, and a hit writes it back.`
+A call that only binds attributes on an object it was handed is stored with
+them and a hit binds them again, so nothing is said about it; where a hit
+cannot replay them, the line says why (`... changed 'est' in place, and a hit
+cannot replay it: it bound est.cache_ to an object that was there before the
+call -- the result was not stored ...`).
 The
 arguments are checked on every miss, whatever their size, except those
 [left out of the key with `ignore=`](decorator.md#leaving-arguments-out-of-the-key),

@@ -1,8 +1,11 @@
 """``c.cache(est.fit)``: the instance a cached callable is bound to is no
 argument of the call, but a body that changes it does what a hit would
 not. An estimator whose ``fit`` stores ``self.result_`` was stored, and a
-second, equal estimator got the hit and no ``result_``. Such a call is
-not stored, as one changing an argument in place is not.
+second, equal estimator got the hit and no ``result_``. A call that only
+binds attributes of an instance its key holds by all it holds is stored
+with them, and a hit binds them on the second estimator, as for an
+instance handed in as an argument; any other change to it is not stored,
+as one changing an argument in place is not.
 """
 
 from __future__ import annotations
@@ -42,10 +45,34 @@ def test_a_second_equal_estimator_gets_its_attribute(tmp_path):
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         assert c.cache(first.fit)([1, 2, 3]) == "fitted"
-    assert any("'self'" in str(w.message) for w in caught), [str(w.message) for w in caught]
+    assert not any("'self'" in str(w.message) for w in caught), [str(w.message) for w in caught]
     second = Estimator(2)
-    assert c.cache(second.fit)([1, 2, 3]) == "fitted"
+    cached = c.cache(second.fit)
+    assert cached([1, 2, 3]) == "fitted"
+    assert cached.cache_info()["hits"] == 1
     np.testing.assert_array_equal(second.result_, [2, 4, 6])
+    assert second.result_ is not first.result_
+
+
+class Growing(Estimator):
+    def __init__(self, k):
+        super().__init__(k)
+        self.seen = []
+
+    def fit(self, x):
+        self.seen.extend(x)
+        return "fitted"
+
+
+def test_an_instance_its_call_changes_in_place_runs_again(tmp_path):
+    c = _cash(tmp_path)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        assert c.cache(Growing(2).fit)([1, 2, 3]) == "fitted"
+    assert any("'self'" in str(w.message) for w in caught), [str(w.message) for w in caught]
+    second = Growing(2)
+    assert c.cache(second.fit)([1, 2, 3]) == "fitted"
+    assert second.seen == [1, 2, 3]
 
 
 SCORED = []

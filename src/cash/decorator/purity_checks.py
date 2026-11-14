@@ -49,12 +49,13 @@ from ..exceptions import (
 )
 from ..install_paths import is_user_code_module, is_user_module
 from ..kept_state import reduce_counted
+from ..lineage_tag import own_tag
 from ..rewrite_in_place import WRITTEN_BACK
 from ..source_reading import getsource, getsourcelines
 from ..tracking.randomness import capture_argument_carrier_states, moved_carriers, rng_carrier_kind
 from ..value_types import IMMUTABLE_VALUE_TYPES, writable_types
 from . import code_trace
-from .arg_hashing import WatchedSince, is_cow_pandas
+from .arg_hashing import CONTENT_KEYED, ContentKeyed, WatchedSince, is_cow_pandas
 from .arg_key import keyed_arguments
 from .cash_key import cash_key_method_of_type
 from .closure_fold import bound_values, capture_digest, iter_code_scopes, unsafe_uses_of
@@ -64,7 +65,7 @@ from .user_code import own_package
 
 if TYPE_CHECKING:
     from ..config.schema import CashConfig
-    from .arg_hashing import ArgHasher, ContentKeyed
+    from .arg_hashing import ArgHasher
     from .class_data import ClassDataFold
     from .frozen import FrozenResults
     from .global_reads import GlobalReads
@@ -869,6 +870,44 @@ class PurityChecks:
         self.warn_shared_on_hit(func_name, said)
         return said
 
+    def shared_outside(self, value, func, args, kwargs) -> str | None:
+        """What *value*, an object a call bound as an attribute, is, holds or
+        shares memory with that the caller or a module still holds, in the
+        words of `warn_shared_result` (``holds the argument 'X', which the
+        caller still holds``), or None. Never warns: a hit cannot replay such
+        a value, so the call keeps its refusal."""
+        try:
+            shared = self._shared_with(value, args, kwargs, func)
+        except Exception:  # noqa: BLE001 - not looked at: taken as shared
+            return "could not be checked for what it shares"
+        if shared is None:
+            return None
+        what, name, keeper = shared
+        return f"{what} '{name}', which {keeper} still holds"
+
+    def held_outside(self, obj, func, reads=()) -> str | None:
+        """What outside the call's arguments also holds *obj*, an object
+        the call bound attributes on, as the words say it (``the module
+        global 'REG'``), or None: an object the function names (a global, a
+        closure variable, a default, an attribute of a class or module of
+        the user's, `_outside_objects`) or that the code the call ran read
+        (*reads*, ``(what, value)`` of `argument_sharing.read_values`), being
+        or holding it within a few levels. The body may have reached it that
+        way (``REG.e.x = 1`` with ``REG.e`` the argument), and a hit, which
+        binds on the argument handed in, would then bind on the wrong
+        object."""
+        targets = {id(obj): obj}
+        try:
+            for what, name, _keeper, value in _outside_objects(func):
+                if value is obj or _found_in(value, targets, SHARED_RESULT_DEPTH + 1) is not None:
+                    return f"{what} '{_label(name)}'"
+            for what, value in reads:
+                if value is obj or _found_in(value, targets, SHARED_RESULT_DEPTH + 1) is not None:
+                    return what
+        except Exception:  # noqa: BLE001 - not looked at: taken as held
+            return "something cash could not look into"
+        return None
+
     def warn_shared_on_hit(self, func_name: str, said: str) -> None:
         """The warning for a result found shared (`warn_shared_result`), said
         again by the first hit of a process that never ran the call: there
@@ -1378,8 +1417,14 @@ class PurityChecks:
         kwargs: dict,
         args_hash: str | None,
         observer: EffectObserver | None,
+        explained: list[str] | None = None,
     ) -> None:
         """Did the body change the arguments it was handed?
+
+        *explained* names the arguments whose attributes the body bound or
+        deleted, when that is all it changed in them (put back, the
+        arguments hash as the key's: `attribute_replay.AttrVerdict`): they
+        are the arguments it changed, and nothing is hashed again.
 
         The static analyzer sees `rows.append(x)` written in the function, but
         not `vendor.normalize(rows)` sorting the list inside a library it does
@@ -1448,6 +1493,14 @@ class PurityChecks:
             # list the watchers prove unchanged since its key was built, or
             # a value that cannot change at all: nothing in them changed.
             return
+        if explained:
+            observer.mutated_args = list(explained)
+            observer.record(
+                "argument mutation",
+                f"the call changed {', '.join(repr(n) for n in explained)} in place -- "
+                f"the result was not stored, so this call runs every time",
+            )
+            return
         try:
             after = self.checked_arguments_hash(func_name, args, kwargs)
         except Exception:
@@ -1480,6 +1533,39 @@ class PurityChecks:
         ``est.fit`` setting ``self.result_`` was stored; a second estimator
         got the hit and no ``result_``."""
         return [(name, value, self._bound_digest(value)) for name, value in bound_values(func)]
+
+    def bound_by_content(self, func: Callable) -> list[tuple[str, Any]]:
+        """``[(name, instance)]`` of the instances *func* is bound to that
+        its key holds by all they hold (`ClosureFold.fold_bound_self` hashes
+        them as an argument is hashed): no ``__cash_key__``, registered
+        hasher or lineage tag stands for one, nor for anything in it."""
+        found = []
+        for name, value in bound_values(func):
+            if name != "self" or isinstance(value, type):
+                continue
+            if cash_key_method_of_type(type(value)) is not None or self._args.keys_by_registration_only(value):
+                continue
+            if own_tag(value) is not None:
+                continue
+            content = ContentKeyed()
+            content.armed = True
+            token = CONTENT_KEYED.set(content)
+            try:
+                self._args.hash_payload((value,), {})
+            except Exception:  # noqa: BLE001 - not hashed: not held by its content
+                continue
+            finally:
+                CONTENT_KEYED.reset(token)
+            if not content.hooked:
+                found.append((name, value))
+        return found
+
+    def bound_moved(self, observer: EffectObserver | None) -> bool:
+        """Whether what the callable binds hashes otherwise than before the
+        body (`bound_state`)."""
+        if observer is None or not observer.bound_before:
+            return False
+        return any(before is None or self._bound_digest(value) != before for _, value, before in observer.bound_before)
 
     def _bound_digest(self, value: Any) -> Any:
         """What `PurityChecks.bound_state` compares across the body: the
@@ -1590,7 +1676,7 @@ class PurityChecks:
         """
         deferred_seen = False
         if func_name in self._held_mutations and observer is not None:
-            written = [d for k, d in observer.effects if k == WRITTEN_BACK]
+            written = [d for k, d in observer.effects if k == WRITTEN_BACK] + observer.replayed_args
             deferred = observer.stored_from_next
             changed = [name for name in observer.mutated_args or () if name not in deferred]
             changed += [name for name in observer.unwritable_args if name not in changed]
