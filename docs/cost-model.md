@@ -211,10 +211,16 @@ flowchart TB
     W -->|Yes| DISK
 ```
 
+<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.refuses_store @4a1a399b, cash/backends/sampled_cost.py:_MIN_FRAMES == 500 -->
 1. **Store it at all?** cash predicts how long reading the value back from the
    first tier (memory, by default) would take, and refuses when that exceeds
    both `min_cache_fixed_budget_seconds` and 80% of the compute time. In memory
-   this almost never refuses.
+   this almost never refuses. A list of hundreds of small DataFrames is priced
+   by their count instead, from a sample of them: storing each costs a fixed
+   fraction of a millisecond whatever its size, so a loop that builds thousands
+   of them quickly is not stored when copying and writing them would take
+   longer than running the loop again. The badge says so, and the loop runs
+   again.
 2. **Write it to disk?** Only when the compute time is over
    0.1 s, reading the value back from disk beats computing it by
    `min_cache_savings_pct`, and one re-run saves more than the write takes

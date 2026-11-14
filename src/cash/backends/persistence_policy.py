@@ -19,7 +19,8 @@ A notebook statement's value, in any tier (`too_cheap_to_store`,
 * a statement that took less than ``store_floor_s`` gets no entry at all;
 * a value whose predicted restore exceeds the larger of ``restore_budget_s``
   and ``(1 - min_savings_pct)`` of its compute is not kept, only its
-  metadata.
+  metadata;
+* nor is one whose store would take longer than its compute (`refuses_store`).
 """
 
 from __future__ import annotations
@@ -146,6 +147,17 @@ class PersistencePolicy:
         """Should a notebook value that took *compute_s* and restores in
         *restore_s* be kept as metadata only, in every tier?"""
         return compute_s > 0 and restore_s > self.restore_budget(compute_s)
+
+    @staticmethod
+    def refuses_store(compute_s: float, store_s: float) -> bool:
+        """Should a notebook value that took *compute_s*, and whose store is
+        predicted to take *store_s* (copying it into the RAM tier and
+        pickling it for disk, `sampled_cost.many_frames_cost`), be kept as
+        metadata only? When the store costs more than running the statement
+        again does: it is paid on the run that makes the entry, the disk's
+        pickling in the background holding the interpreter lock, while one
+        re-run saves at most the compute."""
+        return compute_s > 0 and store_s > compute_s
 
     def restore_seconds(
         self,
