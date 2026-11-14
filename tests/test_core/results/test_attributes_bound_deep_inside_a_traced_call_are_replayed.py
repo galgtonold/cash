@@ -137,10 +137,10 @@ warnings.simplefilter("ignore")
 for _ in range(3):
     plain = samplers.Sampler(kind)
     want = plain.fit_resample(X.copy(), y.copy())
-    # Not named as the parameter: a module global of that name is read
-    # into the key.
-    handed = samplers.Sampler(kind)
-    got = resample(handed, X.copy(), y.copy())
+    # Named as the parameter: the module global it leaves is not what the
+    # body calls, and is not keyed.
+    sampler = handed = samplers.Sampler(kind)
+    got = resample(sampler, X.copy(), y.copy())
     np.testing.assert_array_equal(got[0], want[0])
     np.testing.assert_array_equal(got[1], want[1])
     assert list(vars(handed)) == list(vars(plain)), (list(vars(handed)), list(vars(plain)))
