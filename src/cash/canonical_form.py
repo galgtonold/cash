@@ -26,6 +26,7 @@ import hashlib
 import logging
 import operator
 import sys
+import threading
 import types
 import uuid
 import weakref
@@ -318,6 +319,30 @@ class _Descend:
         self.steps = steps
 
 
+#: The ids of the frames and arrays whose content digest this thread is
+#: reading (`_content_digest`).
+_DIGESTING = threading.local()
+
+
+def _content_digest(value: Any, content: ContentHashing) -> str | None:
+    """*value*'s content digest, refused for one already being read below
+    the walk: an object column holding the list that holds its frame keys
+    its cells with a walk of their own, which met the frame again and
+    started over, until Python's recursion limit and on through every
+    fallback (a hang). Such a value contains itself (`CyclicValueError`)."""
+    reading = getattr(_DIGESTING, "ids", None)
+    if reading is None:
+        reading = _DIGESTING.ids = set()
+    key = id(value)
+    if key in reading:
+        raise CyclicValueError(f"a {type(value).__qualname__} that contains itself has no stable form to key on")
+    reading.add(key)
+    try:
+        return content.digest(value)
+    finally:
+        reading.discard(key)
+
+
 #: The form of a ``weakref.proxy`` whose object is gone.
 DEAD_PROXY_FORM = ("__cash_dead_proxy__",)
 
@@ -381,7 +406,7 @@ def _enter(value: Any, walk: _Walk) -> Any:
             first = seen.get(id(value))
             if first is not None:
                 return ("__cash_alias__", first[0])
-        digest = walk.content.digest(value)
+        digest = _content_digest(value, walk.content)
         if digest is not None:
             if family in _WRITABLE_FAMILIES:
                 seen[id(value)] = (len(seen), value)

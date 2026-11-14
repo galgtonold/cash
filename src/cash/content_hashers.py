@@ -34,7 +34,7 @@ from ._memo import ARROW_VALUES, LruMemo
 from ._type_memo import per_type
 from ._user_attrs import from_family
 from .bulk_digest import DIRECT_MAX_BYTES, LEAF_BYTES, BulkHasher, fold_buffer, hashing_threads
-from .canonical_form import ContentHashing, canonical_bytes
+from .canonical_form import ContentHashing, CyclicValueError, canonical_bytes
 from .dated_records import dated_records_bytes
 from .kept_state import packed_records
 from .sizing import SPARSE_PARTS, held_values
@@ -149,6 +149,8 @@ def hash_pandas(value: Any) -> str | None:
             h.update(canonical_bytes(value.attrs, BUILTIN_CONTENT))
         _fold_pandas_values(h, value, pd)
         return h.hexdigest()
+    except CyclicValueError:
+        raise  # a cell holds the frame: no digest stands for it (`canonical_form`)
     except (ImportError, TypeError, ValueError, AttributeError, NotImplementedError, pickle.PicklingError):
         logger.debug("Failed to hash pandas %s via hash_pandas_object", type(value).__name__)
         return None
@@ -1120,6 +1122,8 @@ def hash_numpy(value: Any) -> str | None:
             data = value.tobytes()  # a dtype the buffer protocol refuses
         fold_buffer(h, data)
         return h.hexdigest()
+    except CyclicValueError:
+        raise  # an item holds the array: no digest stands for it (`canonical_form`)
     except (TypeError, ValueError, AttributeError, MemoryError, pickle.PicklingError):
         logger.debug("Failed to hash numpy ndarray")
         return None

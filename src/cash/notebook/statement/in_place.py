@@ -50,7 +50,7 @@ from typing import Any
 
 from cash import rewrite_in_place
 from cash._referents import get_referents
-from cash._user_attrs import attribute_or, builtin_base, builtin_items, own_dict
+from cash._user_attrs import attribute_or, builtin_base, builtin_items, from_family, own_dict
 from cash.closure_sharing import slot_readers
 from cash.install_paths import is_user_code_module
 from cash.live_state import is_live_stream
@@ -880,6 +880,7 @@ def _reaches(
     if seen is None:
         seen = set()
     level = [item for item in roots if type(item) not in IMMUTABLE_LEAF_TYPES]
+    cells = [_MAX_CELLS]
     while level:
         nxt: list[Any] = []
         for item in level:
@@ -894,9 +895,61 @@ def _reaches(
                 weakly.append(item)
             if len(seen) > _MAX_SEEN:
                 return None
-            nxt.extend(ref for ref in get_referents(item) if type(ref) not in IMMUTABLE_LEAF_TYPES)
+            held = _typed_referents(item, cells)
+            if held is None:
+                return None
+            nxt.extend(ref for ref in held if type(ref) not in IMMUTABLE_LEAF_TYPES)
         level = nxt
     return False
+
+
+#: Most cells of object arrays one `_reaches` reads.
+_MAX_CELLS = 2_000_000
+#: What a pandas object's ``__dict__`` keeps that is not what it holds: the
+#: block manager (its arrays are read by type below), caches of what it
+#: holds, flags, and an index's copy-on-write bookkeeping.
+_PANDAS_NOT_HELD = frozenset({"_mgr", "_item_cache", "_flags", "_cache", "_references", "_id"})
+
+
+def _typed_referents(item: Any, cells: list[int]) -> list[Any] | None:
+    """What *item* holds, for `_reaches`: ``get_referents``, except for a
+    NumPy array and a pandas object, read by type. An array of objects is
+    not tracked by the collector, so ``get_referents`` gave ``[]`` for a
+    column holding the list that held its frame, and that list was restored
+    into a copy holding a copy of itself. None past `_MAX_CELLS` cells,
+    counted in *cells*."""
+    kind = type(item)
+    if kind.__name__ == "ndarray" and from_family(kind, "numpy"):
+        base = [] if item.base is None else [item.base]
+        if not item.dtype.hasobject:
+            return base
+        cells[0] -= item.size
+        if cells[0] < 0:
+            return None
+        values = item.ravel().tolist()
+        if item.dtype.names:  # records: a tuple of fields each
+            values = [field for record in values for field in record]
+        return values + base
+    framed = from_family(kind, "pandas") and kind.__name__ in ("DataFrame", "Series")
+    if framed or _pandas_index(item):
+        # Its attributes (``attrs`` among them), its labels and its column
+        # arrays, the last read by the array rule above.
+        state = own_dict(item) or {}
+        held = [value for name, value in state.items() if name not in _PANDAS_NOT_HELD]
+        try:
+            if kind.__name__ == "DataFrame":
+                held += [item.index, item.columns, *item._mgr.arrays]
+            elif framed:
+                held += [item.index, item._values]
+        except Exception:  # noqa: BLE001 - a pandas of another shape: as the collector sees it
+            return get_referents(item)
+        return held
+    return get_referents(item)
+
+
+def _pandas_index(item: Any) -> bool:
+    pd = sys.modules.get("pandas")
+    return pd is not None and isinstance(item, pd.Index)
 
 
 def ready(restored: Mapping[str, Any], names: Iterable[str], user_ns: Mapping[str, Any]) -> bool:

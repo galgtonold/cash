@@ -69,8 +69,13 @@ def _holds_python_objects(dtype: Any) -> bool:
     return str(dtype) == "object" or getattr(dtype, "storage", None) == "python"
 
 
-def _sampled_bytes(values: Any) -> int:
+def _sampled_bytes(values: Any, seen: set[int]) -> int:
     """Pointers plus the sampled mean size of what they point at.
+
+    What a cell holds is walked with *seen*, the ids already counted by the
+    walk that reached this frame (`memory_footprint`): a list holding a frame
+    whose object column holds the list again was sized afresh at every turn,
+    forever.
 
     A random sample, seeded by the length so one value always gets one size.
     Not every k-th value: data with a period -- rows cycling through a few
@@ -90,7 +95,7 @@ def _sampled_bytes(values: Any) -> int:
         # A list, a dict or an object in a cell holds more than its own
         # header: counted through, or a column of nested records was a tenth
         # of its size.
-        sampled = sum(memory_footprint(v) for v in sample)
+        sampled = sum(memory_footprint(v, seen) for v in sample)
     return 8 * n + int(sampled / len(sample) * n)
 
 
@@ -98,22 +103,22 @@ def _sampled_bytes(values: Any) -> int:
 _FLAT_CELLS = frozenset((str, int, float, bool, type(None), bytes, complex))
 
 
-def _column_bytes(col: Any) -> int:
+def _column_bytes(col: Any, seen: set[int]) -> int:
     """One column's data, as ``memory_usage(deep=True)`` counts it."""
     values = held_values(col)
     if str(col.dtype) == "category":
         # Codes, plus the categories counted deep: they are strings held as
         # Python objects on pandas < 3.
-        return int(values.codes.nbytes) + _index_bytes(values.categories)
+        return int(values.codes.nbytes) + _index_bytes(values.categories, seen)
     if _holds_python_objects(col.dtype):
-        return _sampled_bytes(_python_objects(col, values))
+        return _sampled_bytes(_python_objects(col, values), seen)
     return int(values.nbytes)
 
 
-def _index_bytes(index: Any) -> int:
+def _index_bytes(index: Any, seen: set[int]) -> int:
     """The index's own ``nbytes``: a RangeIndex is a few numbers, not n of them."""
     if type(index).__name__ != "MultiIndex" and _holds_python_objects(index.dtype):
-        return _sampled_bytes(_python_objects(index, held_values(index)))
+        return _sampled_bytes(_python_objects(index, held_values(index)), seen)
     return int(index.nbytes)
 
 
@@ -162,19 +167,23 @@ def _arrays_bytes(obj: Any) -> int | None:
     return total
 
 
-def pandas_nbytes(obj: Any) -> int | None:
-    """The size of a DataFrame or Series, index included; None for anything else."""
+def pandas_nbytes(obj: Any, _seen: set[int] | None = None) -> int | None:
+    """The size of a DataFrame or Series, index included; None for anything else.
+
+    *_seen*: the ids a `memory_footprint` walk has counted, the objects in
+    cells among them, so a cell reaching back to the frame counts it once."""
     if not from_family(type(obj), "pandas"):
         return None
+    seen = {id(obj)} if _seen is None else _seen
     kind = type(obj).__name__
     try:
         if kind == "DataFrame":
             fast = _arrays_bytes(obj)
             if fast is not None:
-                return _index_bytes(obj.index) + fast
-            return _index_bytes(obj.index) + sum(_column_bytes(col) for _, col in obj.items())
+                return _index_bytes(obj.index, seen) + fast
+            return _index_bytes(obj.index, seen) + sum(_column_bytes(col, seen) for _, col in obj.items())
         if kind == "Series":
-            return _index_bytes(obj.index) + _column_bytes(obj)
+            return _index_bytes(obj.index, seen) + _column_bytes(obj, seen)
     except (AttributeError, TypeError, ValueError):
         return None
     return None
@@ -452,7 +461,7 @@ def _users_sizeof(kind: type) -> bool:
     return user_defines(kind, "__sizeof__")
 
 
-def _data_size(obj: Any) -> int | None:
+def _data_size(obj: Any, _seen: set[int] | None = None) -> int | None:
     """The bytes a frame, array or sparse matrix holds, or None for anything
     else -- a builtin, or an object that does not say.
 
@@ -460,7 +469,7 @@ def _data_size(obj: Any) -> int | None:
     Arrow table or a tensor reports ``nbytes``. Always a Python ``int``: the
     RAM tier writes this into entry metadata, and a ``numpy.int64`` there made
     the metadata unreadable without numpy (``%cash_on`` failed with a
-    ModuleNotFoundError).
+    ModuleNotFoundError). *_seen* as `pandas_nbytes` takes it.
     """
     kind = type(obj)
     if kind in CODELESS_PRIMS or kind in BUILTIN_CONTAINERS:
@@ -480,7 +489,7 @@ def _data_size(obj: Any) -> int | None:
                 raise
             return None
     if type_name in ("DataFrame", "Series") and from_family(kind, "pandas"):
-        size = pandas_nbytes(obj)
+        size = pandas_nbytes(obj, _seen)
         if size is not None:
             return size
         try:
@@ -674,7 +683,7 @@ def _own_footprint(obj: Any, seen: set[int], stack: list) -> int:
         if tree is not None:
             return tree
     try:
-        size = _data_size(obj)
+        size = _data_size(obj, seen)
         if size is not None:
             return size
         size = own_size(obj)
@@ -745,7 +754,9 @@ def _sampled_instances(items: Any, seen: set[int]) -> int | None:
         return None
     seq = items if isinstance(items, (list, tuple)) else list(items)
     n = len(seq)
-    if _data_size(seq[0]) is not None:
+    # On a copy of *seen*: a frame reaching back here is not walked again,
+    # and what this look counts is counted for real by the walk after it.
+    if _data_size(seq[0], set(seen)) is not None:
         return None
     picks = [seq[i] for i in dict.fromkeys(_plain_data.sample_positions(n))]
     held: dict[int, Any] = {}
