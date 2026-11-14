@@ -85,6 +85,9 @@ class _FunctionLedger:
     hit_overhead: float = 0.0
     miss_overhead: float = 0.0
     hits: int = 0
+    #: The function takes no arguments: there is no key cost to blame, and
+    #: no argument to register a hasher for.
+    no_arguments: bool = False
 
     def typical_overhead(self) -> float:
         """What one call usually costs: a hit's overhead when there are hits,
@@ -121,6 +124,7 @@ class EffectivenessLedger:
         body_seconds: float | None,
         was_hit: bool,
         culprit: tuple | None = None,
+        no_arguments: bool = False,
     ) -> tuple[str, str] | None:
         """Account for one call. Returns a ``(what, fix)`` pair, or ``None``.
 
@@ -133,6 +137,9 @@ class EffectivenessLedger:
         did around it. ``None`` means unknown -- an entry written before this
         was recorded -- and the call is then ignored entirely rather than
         guessed at, because a guess here biases the verdict.
+
+        ``no_arguments``: the function takes none, so its key hashes no
+        argument and the verdict blames the lookup itself.
         """
         if body_seconds is None:
             return None
@@ -145,6 +152,7 @@ class EffectivenessLedger:
 
         if culprit is not None:
             self._culprits[func_name] = culprit
+        led.no_arguments = no_arguments
         led.calls += 1
         led.overhead_seconds += overhead_seconds
         if was_hit:
@@ -188,6 +196,7 @@ class EffectivenessLedger:
         saved_seconds: float,
         body_seconds: float | None,
         culprit: tuple | None = None,
+        no_arguments: bool = False,
     ) -> tuple[str, str] | None:
         """Account for *hits* hits at once, as that many `record` calls
         would: the decorator's fast hit path (`cash.decorator.hit_memo`)
@@ -202,6 +211,7 @@ class EffectivenessLedger:
             led = self._ledgers[func_name] = _FunctionLedger()
         if culprit is not None:
             self._culprits[func_name] = culprit
+        led.no_arguments = no_arguments
         led.calls += hits
         led.overhead_seconds += overhead_seconds
         led.hit_overhead += overhead_seconds
@@ -314,6 +324,10 @@ def _message(
         "-- or drop the decorator here."
     )
     key_seconds = culprit[2] if culprit is not None else None
+    if key_seconds is None and led.no_arguments:
+        # No argument to hash: the key costs next to nothing, and advice to
+        # register a hasher for "that argument" names none.
+        key_seconds = 0.0
     if key_seconds is not None and key_seconds < 0.25 * led.typical_overhead():
         # Not the key: the lookup itself -- reading and rebuilding the stored
         # result. Blaming an argument sends the user after "'path' (str),
@@ -331,9 +345,13 @@ def _message(
             f"Across {led.calls} calls cash spent {led.overhead_seconds:.2f}s on "
             f"cache keys, lookups and stores to avoid at most "
             f"{best_case_saving * 1000:.0f}ms of work per call -- a net loss of "
-            f"about {waste:.1f}s so far. Almost none of it is the key (its "
-            f"costliest argument took about {key_seconds * 1000:.0f}ms to hash): "
-            f"it is {where}."
+            f"about {waste:.1f}s so far. Almost none of it is the key ("
+            + (
+                "the function takes no arguments"
+                if culprit is None
+                else f"its costliest argument took about {key_seconds * 1000:.0f}ms to hash"
+            )
+            + f"): it is {where}."
         )
         return what, (
             "a result that is slower to load than to compute is not worth "

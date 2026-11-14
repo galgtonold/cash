@@ -94,7 +94,7 @@
 #define TOMB32 0xFFFFFFFEu
 #define KBIT 0x80000000u     /* node index: keyed pool */
 #define DEADBIT 0x80000000u  /* node root field: object gone */
-#define NKINDS 4
+#define NKINDS 5
 
 /* check() answers besides a digest */
 enum { ST_FIRST = 0, ST_ARM = 1, ST_SKIP = 2, ST_BUSY = 3, ST_OFF = 4 };
@@ -1118,6 +1118,19 @@ static int push(PyObject *o) { return ovec_push(&stack_, o); }
 /* a heap class with the plain metaclass that cash's Python side accepted */
 static int type_record(Walk *W, PyTypeObject *t);
 
+/* metaclasses besides `type` that change nothing pickle or an attribute
+   read of the class sees (`configure(metaclasses=...)`: abc.ABCMeta) */
+static PyObject *plain_metas = NULL;
+
+static int plain_meta(PyTypeObject *t) {
+    PyTypeObject *m = Py_TYPE(t);
+    if (m == &PyType_Type) return 1;
+    if (!plain_metas) return 0;
+    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(plain_metas); i++)
+        if ((PyObject *)m == PyTuple_GET_ITEM(plain_metas, i)) return 1;
+    return 0;
+}
+
 /* pickle names obj (a class or a function) by module and qualified name:
    record what that lookup reads. 0 ok, 1 not provable (stop set), -1 error */
 static int global_ref(Walk *W, PyObject *obj, PyObject *modname, PyObject *qualname) {
@@ -1152,7 +1165,7 @@ static int global_ref(Walk *W, PyObject *obj, PyObject *modname, PyObject *qualn
             cur = PyDict_GetItemWithError(md, comp);
             if (!cur) { if (PyErr_Occurred()) rc = -1; else { stop(W, A_INELIGIBLE, obj); rc = 1; } break; }
         } else {
-            if (!PyType_Check(cur) || Py_TYPE(cur) != &PyType_Type ||
+            if (!PyType_Check(cur) || !plain_meta((PyTypeObject *)cur) ||
                 !(((PyTypeObject *)cur)->tp_flags & Py_TPFLAGS_HEAPTYPE)) {
                 stop(W, A_INELIGIBLE, obj); rc = 1; break;
             }
@@ -1182,8 +1195,22 @@ static int type_record(Walk *W, PyTypeObject *t) {
     int a = aset_add(&typeseen, (uintptr_t)t);
     if (a < 0) return -1;
     if (a == 0) return 0;
-    if (!(t->tp_flags & Py_TPFLAGS_HEAPTYPE) || Py_TYPE(t) != &PyType_Type) {
+    if (!(t->tp_flags & Py_TPFLAGS_HEAPTYPE) || !plain_meta(t)) {
         stop(W, A_INELIGIBLE, (PyObject *)t); return 1;
+    }
+    PyTypeObject *meta = Py_TYPE(t);
+    if (meta != &PyType_Type) {
+        /* the metaclass: its version tag (a method added to it), and
+           copyreg's reducer table at it, which pickle asks of the class */
+        int mr = type_record(W, meta);
+        if (mr) return mr;
+        if (dispatch_table) {
+            if (root_push_node(W, (uintptr_t)dispatch_table, (PyObject *)meta) < 0) return -1;
+            if (PyDict_Watch(dict_wid, dispatch_table) < 0) return -1;
+            PyObject *reg = PyDict_GetItemWithError(dispatch_table, (PyObject *)meta);
+            if (reg) { stop(W, A_INELIGIBLE, (PyObject *)t); return 1; }
+            if (PyErr_Occurred()) return -1;
+        }
     }
     if (t->tp_version_tag == 0 && !PyUnstable_Type_AssignVersionTag(t)) {
         stop(W, A_INELIGIBLE, (PyObject *)t); return 1;
@@ -1202,7 +1229,7 @@ static int type_record(Walk *W, PyTypeObject *t) {
 
 /* a class as a value (pickled by name) */
 static int class_value(Walk *W, PyTypeObject *t) {
-    if (!(t->tp_flags & Py_TPFLAGS_HEAPTYPE) || Py_TYPE(t) != &PyType_Type) {
+    if (!(t->tp_flags & Py_TPFLAGS_HEAPTYPE) || !plain_meta(t)) {
         stop(W, A_INELIGIBLE, (PyObject *)t); return 1;
     }
     int r = type_record(W, t);
@@ -2379,7 +2406,7 @@ static PyObject *py_set_type_verdict(PyObject *self, PyObject *const *args, Py_s
     Py_ssize_t ns = 0;
     Py_ssize_t *offs = NULL;
     if (ok) {
-        if (!(t->tp_flags & Py_TPFLAGS_HEAPTYPE) || Py_TYPE(t) != &PyType_Type || t->tp_itemsize != 0) ok = 0;
+        if (!(t->tp_flags & Py_TPFLAGS_HEAPTYPE) || !plain_meta(t) || t->tp_itemsize != 0) ok = 0;
     }
     if (ok) {
         if (!PyTuple_Check(slots)) { PyErr_SetString(PyExc_TypeError, "slots must be a tuple"); return NULL; }
@@ -2421,10 +2448,10 @@ static PyObject *py_type_verdict(PyObject *self, PyObject *t) {
 
 static PyObject *py_configure(PyObject *self, PyObject *args, PyObject *kw) {
     static char *names[] = {"budget", "min_bytes", "enabled", "dispatch_table", "extension_registry",
-                            "cached_property", "views_of", NULL};
+                            "cached_property", "views_of", "metaclasses", NULL};
     Py_ssize_t b = -1, mb = -1; int en = -1;
-    PyObject *dt = NULL, *er = NULL, *cp = NULL, *vo = NULL;
-    if (!PyArg_ParseTupleAndKeywords(args, kw, "|nnpOOOO", names, &b, &mb, &en, &dt, &er, &cp, &vo)) return NULL;
+    PyObject *dt = NULL, *er = NULL, *cp = NULL, *vo = NULL, *mc = NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, kw, "|nnpOOOOO", names, &b, &mb, &en, &dt, &er, &cp, &vo, &mc)) return NULL;
     if (busy) { PyErr_SetString(PyExc_RuntimeError, "cash._cwatch is busy"); return NULL; }
     if (b >= 0) budget = (size_t)b;
     if (mb >= 0) min_bytes = (size_t)mb;
@@ -2435,6 +2462,18 @@ static PyObject *py_configure(PyObject *self, PyObject *args, PyObject *kw) {
     if (vo && vo != Py_None) {
         if (!PyCallable_Check(vo)) { PyErr_SetString(PyExc_TypeError, "views_of"); return NULL; }
         Py_XSETREF(views_of, Py_NewRef(vo));
+    }
+    if (mc && mc != Py_None) {
+        if (!PyTuple_Check(mc)) { PyErr_SetString(PyExc_TypeError, "metaclasses"); return NULL; }
+        for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mc); i++) {
+            PyObject *m = PyTuple_GET_ITEM(mc, i);
+            if (!PyType_Check(m) || !PyType_IsSubtype((PyTypeObject *)m, &PyType_Type) ||
+                Py_TYPE(m) != &PyType_Type) {
+                PyErr_SetString(PyExc_TypeError, "metaclasses: subclasses of type whose own type is type");
+                return NULL;
+            }
+        }
+        Py_XSETREF(plain_metas, Py_NewRef(mc));
     }
     Py_RETURN_NONE;
 }
@@ -2490,11 +2529,11 @@ static PyObject *py_info(PyObject *self, PyObject *o) {
             Py_DECREF(x);
         }
     }
-    return Py_BuildValue("{sIsisisisisIsnsnsnsNsd}", "version", R->version, "dirty", (int)R->dirty,
+    return Py_BuildValue("{sIsisisisisIsnsnsnsNsdsI}", "version", R->version, "dirty", (int)R->dirty,
                          "gone", (int)R->gone, "anchored", (int)R->anchored, "weak", R->wref != NULL,
                          "nodes", R->nnodes, "snapshot_words", (Py_ssize_t)R->nsnap,
                          "table_bytes", (Py_ssize_t)R->bytes, "content_bytes", (Py_ssize_t)R->content,
-                         "kinds", kinds, "hash_seconds", R->hash_s);
+                         "kinds", kinds, "hash_seconds", R->hash_s, "views", R->nvown);
 }
 
 
@@ -3384,7 +3423,8 @@ static int exec_module(PyObject *m) {
     if (PyModule_AddObjectRef(m, "Acc", (PyObject *)&AccType) < 0) return -1;
     if (PyModule_AddObjectRef(m, "Touch", (PyObject *)&TouchType) < 0) return -1;
     if (cwalk_add_functions(m) < 0 || caudit_add_functions(m) < 0 || cfilehook_add_functions(m) < 0 ||
-        cviews_add_functions(m) < 0 || csets_add_functions(m) < 0 || cgc_add_functions(m) < 0)
+        cviews_add_functions(m) < 0 || csets_add_functions(m) < 0 || cgc_add_functions(m) < 0 ||
+        cprivate_add_functions(m) < 0)
         return -1;
 #else
     if (PyModule_AddObjectRef(m, "USABLE", Py_False) < 0) return -1;
