@@ -27,8 +27,10 @@ Anything else keeps the refusal, with the reason in the warning.
 
 from __future__ import annotations
 
+import collections
 import enum
 import gc
+import importlib
 import sys
 import types
 from typing import TYPE_CHECKING, Any, NamedTuple
@@ -254,13 +256,65 @@ def _children(value: Any) -> Any:
     """What *value* holds, as the garbage collector sees it (a dict's keys
     and values, a container's items, an object's ``__dict__`` or slots, what
     a C object visits), and an object array's members, which it does not
-    visit. Nothing for an object that holds no other (a number, an array of
+    visit, and the arrays a scikit-learn tree or metric holds through Cython
+    memoryviews, which it does not visit either (`_sklearn_buffers`).
+    Nothing for an object that holds no other (a number, an array of
     numbers): a C object that holds references and does not say so is not
     seen into."""
     kind = type(value)
     if kind.__name__ == "ndarray" and getattr(getattr(value, "dtype", None), "kind", None) == "O":
         return [*gc.get_referents(value), *value.flat]
+    module = getattr(kind, "__module__", "")
+    if module == _SKLEARN_METRICS or module in _SKLEARN_TREES:
+        return [*gc.get_referents(value), *_sklearn_buffers(value)]
     return gc.get_referents(value)
+
+
+def _sklearn_buffers(value: Any) -> list:
+    """The arrays a scikit-learn tree or distance metric holds through Cython
+    memoryviews, each as many times as one memoryview holds it
+    (`_memoryview_holds`), so the reference count of each adds up; and a
+    ``PyFuncDistance``'s function and keyword arguments. Its
+    ``__getstate__`` hands back a tree's arrays themselves, and a metric's
+    as new arrays over its memoryviews, whose ``base`` is the array."""
+    try:
+        state = value.__getstate__()
+    except Exception:  # noqa: BLE001 - not read: seen as the collector sees it
+        return []
+    if type(state) is not tuple:
+        return []
+    found = []
+    if type(value).__module__ == _SKLEARN_METRICS:
+        for view in state[1:3]:
+            held = getattr(getattr(getattr(view, "base", None), "obj", None), "base", None)
+            if held is not None:
+                found.append(held)
+        extra = list(state[3:5])
+    else:
+        found = [item for item in (*state[:4], state[12]) if type(item).__name__ == "ndarray"]
+        extra = []
+    holds = _memoryview_holds()
+    return [held for held in found for _ in range(holds)] + extra
+
+
+_MEMORYVIEW_HOLDS: list[int] = []
+
+
+def _memoryview_holds() -> int:
+    """How many references a Cython memoryview of scikit-learn's keeps to
+    the array it views (its ``obj`` and its buffer's), measured once on a
+    small tree."""
+    if not _MEMORYVIEW_HOLDS:
+        np = sys.modules["numpy"]
+        # Imported only when a tree or a metric is met, so scikit-learn is.
+        kd_tree = importlib.import_module("sklearn.neighbors._kd_tree")
+
+        probe = np.zeros((2, 1))
+        before = sys.getrefcount(probe)
+        tree = kd_tree.KDTree64(probe, leaf_size=1)
+        _MEMORYVIEW_HOLDS.append(sys.getrefcount(probe) - before)
+        del tree
+    return _MEMORYVIEW_HOLDS[0]
 
 
 def _walk(
@@ -278,10 +332,19 @@ def _walk(
     visited = set(fresh)
     while stack:
         value, label = stack.pop()
-        for child in _children(value):
+        children = _children(value)
+        module = getattr(type(value), "__module__", "")
+        buffers = {id(c) for c in _sklearn_buffers(value)} if module in _SKLEARN_TREES else ()
+        for child in children:
             if _by_identity_anyway(child):
                 continue
             key = id(child)
+            if key in arguments and key in buffers:
+                # A tree built on the array handed in (``NearestNeighbors``
+                # keeps it as ``_fit_X`` too): a hit's tree holds an equal
+                # copy, since the key hashed the array; only a later write
+                # into that array would reach the run's tree and not the hit's.
+                continue
             if key in arguments:
                 return f"the object it bound to {label} holds one of the call's arguments"
             inner[key] = inner.get(key, 0) + 1
@@ -295,25 +358,80 @@ def _walk(
     return inner, nodes, labels
 
 
+#: Containers whose pickle holds all they hold: the builtin ones, and the
+#: ordered, defaulting and double-ended ones of `collections` (exactly
+#: these types; a subclass of one may pickle less): an estimator's
+#: ``sampling_strategy_`` is an ``OrderedDict``.
+_EXACT_CONTAINERS = (
+    dict,
+    list,
+    tuple,
+    set,
+    frozenset,
+    collections.OrderedDict,
+    collections.defaultdict,
+    collections.deque,
+)
+
 #: Modules whose objects cash's store pickles exactly (their own reducers
 #: carry all they hold).
 _EXACT_PICKLERS = ("numpy", "pandas", "scipy")
+
+#: scikit-learn's neighbour trees by their exact module, and the class name
+#: each of its trees starts with: Cython classes whose own ``__reduce__``
+#: carries all they hold (the data, the index and node arrays, the sample
+#: weights, the counters and the distance metric). A fitted
+#: ``NearestNeighbors`` or a resampler's ``nn_k_`` holds one.
+_SKLEARN_TREES = {"sklearn.neighbors._kd_tree": "KDTree", "sklearn.neighbors._ball_tree": "BallTree"}
+#: The module of scikit-learn's distance metrics, which a tree holds: their
+#: ``__reduce__`` carries ``p``, the weight vector and matrix, and a
+#: ``PyFuncDistance``'s function and keyword arguments.
+_SKLEARN_METRICS = "sklearn.metrics._dist_metrics"
+
+
+def _sklearn_refusal(value: Any, kind: type) -> str | None | bool:
+    """False when *kind* is none of scikit-learn's trees or metrics; else
+    None, or why a stored copy of *value* would differ. A float32 tree on the
+    Euclidean metric comes back from its pickle without its Euclidean flag
+    (its ``__setstate__`` looks for the float64 metric's name): its queries
+    give the same results, through the metric instead of the inline path,
+    but it is not the object the call left."""
+    module = getattr(kind, "__module__", "") or ""
+    if module == _SKLEARN_METRICS:
+        return None if any(base.__name__ == "DistanceMetric" for base in kind.__mro__) else False
+    prefix = _SKLEARN_TREES.get(module)
+    if prefix is None or not kind.__name__.startswith(prefix):
+        return False
+    if kind.__name__.endswith("32"):
+        try:
+            metric = value.__getstate__()[11]
+        except Exception:  # noqa: BLE001 - not read: not trusted
+            return f"is a {kind.__name__}, whose state could not be read"
+        if type(metric).__name__ == "EuclideanDistance32":
+            return (
+                f"is a {kind.__name__} on the Euclidean metric, which its pickle brings back without its Euclidean flag"
+            )
+    return None
 
 
 def _pickling_refusal(value: Any) -> str | None:
     """Why a stored copy of *value* might not hold all it holds, or None.
 
-    A builtin container or a NumPy, pandas or SciPy object pickles all it
-    holds. Any other object must pickle as a plain instance does -- no
-    ``__reduce__`` or ``__reduce_ex__`` of its own -- and a ``__getstate__``
-    of its own must hand back every attribute as it is (scikit-learn's adds
-    its version and keeps the rest); one that leaves state out would come
-    back from a hit without it."""
+    A builtin container, an ``OrderedDict``, ``defaultdict`` or ``deque``
+    or a NumPy, pandas or SciPy object pickles all it holds, as do scikit-learn's neighbour trees and distance metrics
+    (`_sklearn_refusal`). Any other object must pickle as a plain instance
+    does -- no ``__reduce__`` or ``__reduce_ex__`` of its own -- and a
+    ``__getstate__`` of its own must hand back every attribute as it is
+    (scikit-learn's adds its version and keeps the rest); one that leaves
+    state out would come back from a hit without it."""
     kind = type(value)
-    if kind in (dict, list, tuple, set, frozenset) or kind in _ATOM_SET:
+    if kind in _EXACT_CONTAINERS or kind in _ATOM_SET:
         return None
     if (getattr(kind, "__module__", "") or "").split(".")[0] in _EXACT_PICKLERS:
         return None
+    sklearn = _sklearn_refusal(value, kind)
+    if sklearn is not False:
+        return sklearn
     if kind.__reduce_ex__ is not object.__reduce_ex__ or kind.__reduce__ is not object.__reduce__:
         return f"is a {kind.__name__}, which pickles through its own __reduce__"
     getstate = getattr(kind, "__getstate__", None)

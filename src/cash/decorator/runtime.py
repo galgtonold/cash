@@ -1763,6 +1763,7 @@ class CallRunner:
             states = attrs.states if attrs is not None else None
             if states is None or any(name not in states for name in replayed):
                 if attrs is not None and attrs.why:
+                    observer.unreplayable = attrs.why
                     observer.reword(
                         "argument mutation",
                         " in place -- the result was not stored",

@@ -339,8 +339,12 @@ class ResultStore:
             # storing makes every call run, which is what the code means.
             # `assume_safe=True` is the audited opt-out.
             names = ", ".join(repr(n) for n in mutated)
+            plural = "s" if len(mutated) > 1 else ""
+            why = observer.unreplayable
             refusal = (
-                f"it changed its argument{'s' if len(mutated) > 1 else ''} {names} in place, which a hit would not do"
+                f"it changed its argument{plural} {names} in place, and a hit cannot replay it: {why}"
+                if why
+                else f"it changed its argument{plural} {names} in place, which a hit would not do"
             )
         split = split_by_a_hit(res) if refusal is None else None
         if split is not None:

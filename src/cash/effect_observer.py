@@ -345,6 +345,10 @@ class EffectObserver:
         #: its entry stores and a hit replays (`attribute_replay`): not a
         #: change a hit leaves undone, so nothing is said about them.
         self.replayed_args: list[str] = []
+        #: Why a hit cannot replay the attributes the call bound on an
+        #: argument, when that is what keeps it from being stored
+        #: (`attribute_replay.AttrVerdict.why`); said in its miss reason.
+        self.unreplayable: str | None = None
 
     # -- lifecycle ---------------------------------------------------------
     def __enter__(self) -> "EffectObserver":
