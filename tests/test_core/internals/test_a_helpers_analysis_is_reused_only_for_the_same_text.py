@@ -170,6 +170,9 @@ def test_the_store_lives_in_the_cache_dir_once_that_exists(layout, tmp_path):
     first = _run(code_dir, None, home=home)
     assert first["stored"] == 0  # analysed before the cache dir existed: nothing made
     _run(code_dir, None, home=home)  # the cache dir exists now
+    # The second process read the report stored at the first one's exit
+    # (`report_store`) and scanned nothing; the verify mode walks again.
+    _run(code_dir, None, home=home, verify=True)
     third = _run(code_dir, None, home=home, verify=True)
     assert third["missed"] == 0 and third["loaded"] >= 1
     assert Path(third["dir"]).parent == code_dir / ".cash" / "analysis"

@@ -31,6 +31,7 @@ from ..diagnostics import warn_diagnostic
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
 from ..purity import is_stateful
 from ..source_reading import getsource
+from . import report_store, tree_memo
 from .helper_bindings import bindings_changed
 from .helper_code import qualname_of
 from .helper_walk import HelperWalk
@@ -91,7 +92,14 @@ class PurityAnalyzer:
             if cached is not None:
                 return cached
 
-        report = HelperWalk(func).run()
+        report = report_store.load(func) if memo_key is not None else None
+        if report is None:
+            walk = HelperWalk(func)
+            report = walk.run()
+            if memo_key is not None:
+                report_store.save(func, report, walk)
+        elif tree_memo.VERIFY:
+            report_store.verify(func, report, HelperWalk(func).run())
         if report.unwalkable:
             warn_diagnostic(
                 CashCacheIneffectiveWarning,

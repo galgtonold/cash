@@ -39,10 +39,21 @@ from collections.abc import Callable
 from pathlib import Path
 
 from .._active import active_config
+from ..backends.cache_dir import ANALYSIS_DIRNAME
 from ..tracking.tracker_context import untracked
 from . import tree_memo
 
-__all__ = ["StoredScanMismatch", "load_record", "read_json", "save_record", "scan", "status", "store_dir", "write_json"]
+__all__ = [
+    "StoredScanMismatch",
+    "enabled",
+    "load_record",
+    "read_json",
+    "save_record",
+    "scan",
+    "status",
+    "store_dir",
+    "write_json",
+]
 
 #: Layout of a stored file; a change makes every older one a miss.
 _FORMAT = 1
@@ -102,7 +113,7 @@ def _dir() -> Path | None:
         cache_dir = active_config().cache_dir
         if not cache_dir or not os.path.isdir(cache_dir):
             return None
-        base = Path(os.path.abspath(cache_dir)) / "analysis"
+        base = Path(os.path.abspath(cache_dir)) / ANALYSIS_DIRNAME
     else:
         base = Path(setting)
     return base / _cash_fingerprint()
@@ -148,6 +159,12 @@ def _store_dir() -> Path | None:
             return _dir()
     except OSError:
         return None
+
+
+def enabled() -> bool:
+    """Is the store on (``CASH_ANALYSIS_STORE`` not ``0``)? It may still
+    have no folder yet (`store_dir`)."""
+    return _setting().lower() not in ("0", "false", "no", "off", "")
 
 
 def store_dir() -> Path | None:

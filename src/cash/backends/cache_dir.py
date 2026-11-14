@@ -160,6 +160,9 @@ LIBRARY_RECORDS_FILENAME = "_library_records.json"
 KEYS_DIRNAME = ".keys"
 #: The file tier's big buffers, one file per distinct content (`chunk_store`).
 CHUNK_DIRNAME = "chunks"
+#: The stored analysis (`cash.analysis.scan_store`): one folder per Python
+#: and cash, holding a JSON file per module scan, helper file or function.
+ANALYSIS_DIRNAME = "analysis"
 CHUNK_SUFFIX = ".chunk"
 #: A file of several chunks, written by one entry (`cash.backends.chunk_store`).
 PACK_SUFFIX = ".pack"
@@ -260,11 +263,16 @@ def _is_cash_name(name: str) -> bool:
     return name in _CASH_FILE_NAMES or name.endswith(ENTRY_SUFFIX)
 
 
+def _is_hex(text: str) -> bool:
+    return bool(text) and all(c in "0123456789abcdef" for c in text)
+
+
 def is_cash_file(relpath: str) -> bool:
     """Did cash write *relpath*, a path relative to a cache directory?
 
     An entry, a chunk of the chunk store, the format stamp, the
-    ``.gitignore``, a sidecar store, a stored-key record, an SQLite database
+    ``.gitignore``, a sidecar store, a stored-key record, a stored analysis
+    file (``analysis/<fingerprint>/<slot>.json``), an SQLite database
     with its companions, or the temp
     file of a write to one of these (``create_temp_file``'s ``.tmp-*.part``
     and ``.probe-*.tmp`` included). Anything else is the user's.
@@ -277,6 +285,11 @@ def is_cash_file(relpath: str) -> bool:
         name = parts[1]
         return name.endswith((CHUNK_SUFFIX, PACK_SUFFIX, CLAIM_SUFFIX)) or (
             name.startswith(".tmp-") and name.endswith(".part")
+        )
+    if len(parts) == 3 and parts[0] == ANALYSIS_DIRNAME and _is_hex(parts[1]):
+        name = parts[2]
+        return (name.endswith(".json") and _is_hex(name[: -len(".json")])) or (
+            name.startswith(".tmp-") and name.endswith(".json")
         )
     if len(parts) != 1:
         return False

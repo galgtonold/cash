@@ -494,7 +494,14 @@ def value_digest(value: Any) -> str:
 
 #: Not what a class holds: ``__slotnames__`` is copyreg's cache, set the
 #: first time an instance is pickled; the line a class starts on and the
-#: attributes its methods assign come with its code.
+#: attributes its methods assign come with its code. On 3.14 the annotations
+#: live in ``__annotate_func__``, and the first read of them
+#: (``typing.get_type_hints``, dataclasses, pydantic) stores
+#: ``__annotations_cache__``: skipped as ``__annotations__`` is, the class
+#: read and the class not read yet were two digests, and a process that read
+#: them saw a class "changed" from the one an earlier process stored. A code
+#: read of the annotations is keyed by their value, and what they make (a
+#: dataclass's fields and methods) is in the class's other attributes.
 _CLASS_SKIP = frozenset(
     {
         "__dict__",
@@ -503,6 +510,8 @@ _CLASS_SKIP = frozenset(
         "__module__",
         "__qualname__",
         "__annotations__",
+        "__annotate_func__",
+        "__annotations_cache__",
         "__slotnames__",
         "__firstlineno__",
         "__static_attributes__",
