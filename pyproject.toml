@@ -174,8 +174,11 @@ dev = [
     # test_sdist_contents.py builds an sdist to check what it ships.
     "build",
     # test_an_in_project_extension_helper_keys_its_build.py compiles a C
-    # extension with build_ext, which finds the compiler on every OS.
-    "setuptools",
+    # extension with build_ext, which finds the compiler on every OS. 70.1
+    # builds wheels itself: the editable installs of
+    # test_an_edited_numba_helper_invalidates_every_way_it_is_reached.py
+    # need bdist_wheel, which the 65.5 python.org's 3.10 ships lacks.
+    "setuptools>=70.1",
     # Integration tests import it inside a real kernel, where no stub reaches.
     "scikit-learn",
     # A figure's fig.show() sends a bundle with no text/plain; the display
