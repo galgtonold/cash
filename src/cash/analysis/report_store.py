@@ -145,10 +145,29 @@ def _home(obj: Any) -> tuple[str, tuple[str, ...]] | None:
     return module, tuple(qualname.split("."))
 
 
+def _defining_home(obj: Any) -> tuple[str, tuple[str, ...]] | None:
+    """The module whose namespace a function was defined in, with its
+    qualified name: where it is found when its ``__module__`` was set to
+    a package that does not hold it (NumPy's ``set_module`` names
+    ``numpy._core.numerictypes.issubclass_`` as ``numpy.issubclass_``,
+    which NumPy 2 no longer exports)."""
+    base = obj.__func__ if type(obj) is types.MethodType else obj
+    if type(base) is not types.FunctionType:
+        return None
+    module = base.__globals__.get("__name__")
+    if not isinstance(module, str) or module == getattr(base, "__module__", None):
+        return None
+    qualname = base.__qualname__
+    if "<" in qualname:
+        return None
+    return module, tuple(qualname.split("."))
+
+
 def _path_of(obj: Any, *also: tuple[str, tuple[str, ...]] | None) -> list:
     """``[module, chain, steps]`` that lead back to *obj* now: its home
-    (module and qualified name), or one of *also* (where a caller names it)."""
-    for path in (_home(obj), *also):
+    (module and qualified name), one of *also* (where a caller names it),
+    or the module it was defined in."""
+    for path in (_home(obj), *also, _defining_home(obj)):
         if path is None:
             continue
         live = resolve_binding(*path)
