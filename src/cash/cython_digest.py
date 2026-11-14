@@ -38,11 +38,16 @@ not move it.
 cannot be trusted to be what the binary holds: no Cython, no ``.pyx``, a
 ``.pyx`` (or any file keyed above) newer than the binary, a function of the
 binary whose name and first line do not match a block of the parsed
-``.pyx`` (a stale or foreign build), a parse failure, ``cdef extern``
-anywhere in the module's own files (C headers it does not hash), extra
+``.pyx`` (a stale or foreign build), a parse failure, a ``cdef extern``
+in the module's own files from anything but a header of numpy's or
+Python's own include folder (which is keyed by its content), extra
 ``sources`` or compile flags in the build configuration or a
-``# distutils:`` comment, a build system it does not read (meson, CMake),
-or a ``cimport`` it cannot find.
+``# distutils:`` comment (macros are keyed text and allowed), a build
+system it does not read (meson, CMake), no ``setup.py`` /
+``pyproject.toml`` at all (``cythonize -i``, pyximport: the directives
+and flags of such a build are recorded nowhere), or a ``cimport`` it
+cannot find. Paths are compared in one spelling (``os.path.normcase``),
+so a Windows ``.pyd`` and a differently cased path match.
 """
 
 from __future__ import annotations
@@ -80,8 +85,6 @@ _FLAG_ARGUMENTS = frozenset(
     {
         "extra_compile_args",
         "extra_link_args",
-        "define_macros",
-        "undef_macros",
         "extra_objects",
         "depends",
     }
@@ -91,7 +94,10 @@ _FLAG_ARGUMENTS = frozenset(
 _CONFIG_FLAG_WORDS = tuple(sorted({w for a in _FLAG_ARGUMENTS for w in (a, a.replace("_", "-"))} | {"sources"}))
 
 #: ``# distutils:`` comment settings that do not add code or flags.
-_HARMLESS_DISTUTILS = frozenset({"language", "include_dirs"})
+#: Macros are allowed: they are part of the keyed text (the ``.pyx``
+#: header, ``setup.py``), and change only with it -- numpy's
+#: ``NPY_NO_DEPRECATED_API``, say, which hdbscan sets in every module.
+_HARMLESS_DISTUTILS = frozenset({"language", "include_dirs", "define_macros", "undef_macros"})
 
 
 class _Fallback(Exception):
@@ -145,13 +151,13 @@ def cython_function_digest(fn: object) -> str | None:
     if not is_cyfunction(fn):
         return None
     code = getattr(fn, "__code__", None)
-    if not isinstance(code, types.CodeType) or not code.co_filename.endswith(".pyx"):
+    if not isinstance(code, types.CodeType) or not code.co_filename.lower().endswith(".pyx"):
         return None
     module = sys.modules.get(getattr(fn, "__module__", None) or "")
     binary = module_file(module)
     if module is None or not isinstance(binary, str):
         return None
-    if not binary.endswith(tuple(importlib.machinery.EXTENSION_SUFFIXES)):
+    if not _is_extension(binary):
         return None
     with _LOCK:
         analysis = _analysis_of(module, binary, code.co_filename)
@@ -192,7 +198,7 @@ def cimported_binaries_digest(fn: object) -> str | None:
     with _LOCK:
         try:
             with untracked():
-                parts = sorted(_whole_cimports(module, binary, co_filename, {os.path.abspath(binary)}))
+                parts = sorted(_whole_cimports(module, binary, co_filename, {_norm(binary)}))
         except Exception:  # noqa: BLE001 - every loaded sibling build stands in
             with untracked():
                 parts = sorted(_sibling_binaries(module, binary))
@@ -275,7 +281,7 @@ def _cimported_parts(analysis: _Module, names: set[str], visited: set[str]) -> l
         module, binary = loaded
         sub = _analysis_of(module, binary, os.path.basename(pyx), pyx if os.path.isfile(pyx) else None)
         if sub is None:
-            whole = sorted(_whole_cimports(module, binary, os.path.basename(pyx), {os.path.abspath(binary)}))
+            whole = sorted(_whole_cimports(module, binary, os.path.basename(pyx), {_norm(binary)}))
             parts.append(f"{label}:built:{_binary_digest(module, binary)}:{','.join(whole)}")
             continue
         reached, sub_names = _reach(sub, (), names)
@@ -289,15 +295,14 @@ def _cimported_parts(analysis: _Module, names: set[str], visited: set[str]) -> l
 
 def _module_for_pxd(pxd: str) -> tuple[types.ModuleType, str] | None:
     """The loaded extension module built from the ``.pyx`` beside *pxd*."""
-    folder = os.path.normcase(os.path.dirname(os.path.abspath(pxd)))
-    stem = os.path.splitext(os.path.basename(pxd))[0]
-    suffixes = tuple(importlib.machinery.EXTENSION_SUFFIXES)
+    folder = os.path.dirname(_norm(pxd))
+    stem = os.path.splitext(os.path.basename(_norm(pxd)))[0]
     for module in list(sys.modules.values()):
         path = module_file(module) if isinstance(module, types.ModuleType) else None
-        if not isinstance(path, str) or not path.endswith(suffixes):
+        if not isinstance(path, str) or not _is_extension(path):
             continue
-        name = os.path.basename(path)
-        if name.split(".", 1)[0] == stem and os.path.normcase(os.path.dirname(os.path.abspath(path))) == folder:
+        full = _norm(path)
+        if os.path.basename(full).split(".", 1)[0] == stem and os.path.dirname(full) == folder:
             return module, path
     return None
 
@@ -351,7 +356,7 @@ def _whole_cimports(module: types.ModuleType, binary: str, co_filename: str, vis
         if loaded is None:
             continue
         sub, sub_binary = loaded
-        key = os.path.abspath(sub_binary)
+        key = _norm(sub_binary)
         if key in visited:
             continue
         visited.add(key)
@@ -369,11 +374,10 @@ def _sibling_binaries(module: types.ModuleType, binary: str) -> list[str]:
     for _ in range(module.__name__.count(".")):
         root = os.path.dirname(root)
     root = os.path.normcase(root) + os.sep
-    suffixes = tuple(importlib.machinery.EXTENSION_SUFFIXES)
     parts = []
     for other in list(sys.modules.values()):
         path = module_file(other) if isinstance(other, types.ModuleType) else None
-        if not isinstance(path, str) or not path.endswith(suffixes) or other is module:
+        if not isinstance(path, str) or not _is_extension(path) or other is module:
             continue
         full = os.path.abspath(path)
         if not os.path.normcase(full).startswith(root) or not is_user_path(full):
@@ -419,7 +423,7 @@ def _own_blocks(analysis: _Module, code: types.CodeType, qualname: str) -> list[
 def _code_path(analysis: _Module, code: types.CodeType) -> str | None:
     name = os.path.normcase(os.path.normpath(code.co_filename))
     for path in analysis.keyed_files:
-        if os.path.normcase(path).endswith(name) and os.path.basename(path) == os.path.basename(code.co_filename):
+        if os.path.normcase(path).endswith(name) and os.path.basename(os.path.normcase(path)) == os.path.basename(name):
             return path
     return None
 
@@ -442,7 +446,7 @@ def _analyse(module: types.ModuleType, binary: str, co_filename: str, pyx: str |
     with open(pyx, "rb") as fh:
         pyx_bytes = fh.read()
     pyx_text = pyx_bytes.decode("utf-8")
-    _refuse_distutils_settings(pyx_text)
+    distutils = _refuse_distutils_settings(pyx_text)
     tree = _parse(module.__name__, pyx)
     stats = list(_top_level(tree.body))
     files = [pyx]
@@ -455,10 +459,11 @@ def _analyse(module: types.ModuleType, binary: str, co_filename: str, pyx: str |
         with open(path, "rb") as fh:
             texts[path] = fh.read().decode("utf-8")
     tokens = {path: _tokens(path, texts[path]) for path in files}
+    headers: list[str] = []
     for path in files:
-        _refuse_extern(tokens[path], path)
+        headers.extend(_extern_headers(tokens[path], path))
     blocks = _blocks(stats, tokens)
-    header: list[str] = [repr(sorted(getattr(tree, "directive_comments", {}).items()))]
+    header: list[str] = [repr(sorted(getattr(tree, "directive_comments", {}).items())), distutils]
     header_refs: set[str] = set()
     owned = {path: _owner_map(tokens[path], [b for b in blocks if b.path == path]) for path in files}
     for path in files:
@@ -484,11 +489,11 @@ def _analyse(module: types.ModuleType, binary: str, co_filename: str, pyx: str |
         for name in block.names:
             by_name.setdefault(name, []).append(block)
     root, configs = _build_config(os.path.dirname(pyx))
-    pxds = _used_pxds(module.__name__, pyx, tree, files, root)
+    pxds = _used_pxds(module.__name__, pyx, tree, files, root, headers)
     keyed = [*files, *configs, *(p for p, local in pxds if local)]
     _refuse_newer_than(keyed, binary)
     file_parts = []
-    for path in [*configs, *(p for p, _ in pxds)]:
+    for path in [*configs, *(p for p, _ in pxds), *sorted(set(headers))]:
         with open(path, "rb") as fh:
             digest = hashlib.sha256(fh.read()).hexdigest()
         file_parts.append(f"{_label(path, root)}={digest}")
@@ -509,7 +514,7 @@ def _analyse(module: types.ModuleType, binary: str, co_filename: str, pyx: str |
 def _find_pyx(module: types.ModuleType, binary: str, co_filename: str) -> str:
     """The ``.pyx`` the binary names, found from the binary's folder up."""
     stem = module.__name__.rsplit(".", 1)[-1]
-    if os.path.splitext(os.path.basename(co_filename))[0] != stem:
+    if os.path.normcase(os.path.splitext(os.path.basename(co_filename))[0]) != os.path.normcase(stem):
         raise _Fallback("the code names another file")
     if os.path.isabs(co_filename):
         candidates = [co_filename]
@@ -525,16 +530,20 @@ def _find_pyx(module: types.ModuleType, binary: str, co_filename: str) -> str:
         candidates.append(os.path.join(os.path.dirname(os.path.abspath(binary)), os.path.basename(co_filename)))
     for candidate in candidates:
         if os.path.isfile(candidate):
-            return os.path.abspath(candidate)
+            return _norm(candidate)
     raise _Fallback("no .pyx")
 
 
-def _refuse_distutils_settings(text: str) -> None:
+def _refuse_distutils_settings(text: str) -> str:
+    """The ``# distutils:`` settings of *text*, for the header's key; refused
+    where one adds code or flags."""
     from Cython.Build.Dependencies import DistutilsInfo
 
     values = DistutilsInfo(source=text).values
-    if set(values) - _HARMLESS_DISTUTILS:
-        raise _Fallback("# distutils: settings")
+    refused = sorted(set(values) - _HARMLESS_DISTUTILS)
+    if refused:
+        raise _Fallback(f"# distutils: {', '.join(refused)}")
+    return repr(sorted(values.items()))
 
 
 def _parse(module_name: str, pyx: str) -> Any:
@@ -561,7 +570,7 @@ def _node_path(node: Any) -> str:
     path = getattr(source, "filename", None)
     if not isinstance(path, str):
         raise _Fallback("a statement from no file")
-    return os.path.abspath(path)
+    return _norm(path)
 
 
 def _tokens(path: str, text: str) -> list[tuple[str, str, int]]:
@@ -585,9 +594,67 @@ def _tokens(path: str, text: str) -> list[tuple[str, str, int]]:
     return out
 
 
-def _refuse_extern(tokens: Iterable[tuple[str, str, int]], path: str) -> None:
-    if any(text == "extern" for sy, text, _ in tokens if sy != "CHARS"):
-        raise _Fallback(f"cdef extern in {path}")
+def _extern_headers(tokens: list[tuple[str, str, int]], path: str) -> list[str]:
+    """The library headers *tokens* declare ``cdef extern from``, to key by
+    their content.
+
+    A header of the user's own C code is not followed (nor what it
+    includes), so only a header found in numpy's or Python's own include
+    folder -- fixed by that installation -- is taken; any other extern
+    (``math.h``, ``"mylib.h"``, ``extern from *`` with verbatim C) keys
+    the whole binary.
+    """
+    found = []
+    for i, (sy, text, _line) in enumerate(tokens):
+        if sy == "CHARS" or text != "extern":
+            continue
+        form = [t for t in tokens[i - 1 : i + 6]]
+        if (
+            len(form) < 7
+            or form[0][0] != "cdef"
+            or form[2][0] != "from"
+            or form[3][0] != "BEGIN_STRING"
+            or form[4][0] != "CHARS"
+            or form[5][0] != "END_STRING"
+        ):
+            raise _Fallback(f"cdef extern in {path}")
+        header = _library_header(form[4][1])
+        if header is None:
+            raise _Fallback(f"cdef extern from {form[4][1]!r} in {path}")
+        found.append(header)
+    return found
+
+
+def _library_header(name: str) -> str | None:
+    """*name* found in numpy's or Python's include folder, or None."""
+    import sysconfig
+
+    if not name or os.path.isabs(name) or ".." in name.replace("\\", "/").split("/"):
+        return None
+    folders = [sysconfig.get_paths().get("include"), sysconfig.get_paths().get("platinclude")]
+    if name.replace("\\", "/").startswith("numpy/"):
+        try:
+            import numpy
+
+            folders.insert(0, numpy.get_include())
+        except Exception:  # noqa: BLE001 - no numpy, so not its header
+            return None
+    for folder in folders:
+        if folder:
+            candidate = os.path.join(folder, *name.replace("\\", "/").split("/"))
+            if os.path.isfile(candidate):
+                return _norm(candidate)
+    return None
+
+
+def _is_extension(path: str) -> bool:
+    """Is *path* a built extension (``.so``, ``.pyd`` in any case)?"""
+    return os.path.normcase(path).endswith(tuple(os.path.normcase(s) for s in importlib.machinery.EXTENSION_SUFFIXES))
+
+
+def _norm(path: str) -> str:
+    """*path* as one spelling: absolute, and on Windows in one case."""
+    return os.path.normcase(os.path.abspath(path))
 
 
 def _logical_starts(tokens: list[tuple[str, str, int]]) -> list[tuple[int, str]]:
@@ -722,7 +789,9 @@ def _refuse_setup_flags(text: str) -> None:
                 raise _Fallback("setup.py lists other sources")
 
 
-def _used_pxds(module_name: str, pyx: str, tree: Any, files: list[str], root: str) -> list[tuple[str, bool]]:
+def _used_pxds(
+    module_name: str, pyx: str, tree: Any, files: list[str], root: str, headers: list[str]
+) -> list[tuple[str, bool]]:
     """``(path, is local)`` of every ``.pxd`` the module uses: its own, and
     what it cimports, transitively through the local ones. A cimport found
     only in Cython's own ``Includes`` is fixed by the Cython version."""
@@ -747,7 +816,7 @@ def _used_pxds(module_name: str, pyx: str, tree: Any, files: list[str], root: st
         with open(path, "rb") as fh:
             text = fh.read().decode("utf-8")
         toks = _tokens(path, text)
-        _refuse_extern(toks, path)
+        headers.extend(_extern_headers(toks, path))
         if any(sy == "include" for sy, _t, _l in toks):
             raise _Fallback(f"include in {path}")
         for name, level in _token_cimports(toks):
@@ -862,7 +931,7 @@ def _resolve_cimport(name: str, level: int, importer: str, package_root: str, in
             if os.path.isfile(candidate):
                 if os.path.normcase(os.path.abspath(candidate)).startswith(os.path.normcase(includes) + os.sep):
                     return []
-                return [os.path.abspath(candidate)]
+                return [_norm(candidate)]
     if not parts or (not level and name == "cython"):
         return []
     if len(parts) > 1 or (level and len(parts) == 1):
@@ -905,12 +974,12 @@ def _check_built_from(analysis: _Module, module: types.ModuleType) -> None:
     """Every function of the binary from this ``.pyx`` must start in the
     block its name says, at the line the binary records: a ``.pyx`` edited
     and rebuilt elsewhere, or never rebuilt, does not match."""
-    pyx_name = os.path.basename(analysis.pyx)
+    pyx_name = os.path.basename(os.path.normcase(analysis.pyx))
     for fn in _module_functions(module):
         code = getattr(fn, "__code__", None)
         if not isinstance(code, types.CodeType):
             continue
-        if os.path.basename(code.co_filename) != pyx_name and _code_path(analysis, code) is None:
+        if os.path.basename(os.path.normcase(code.co_filename)) != pyx_name and _code_path(analysis, code) is None:
             continue
         qualname = str(getattr(fn, "__qualname__", "") or "")
         if _own_blocks(analysis, code, qualname) is None:

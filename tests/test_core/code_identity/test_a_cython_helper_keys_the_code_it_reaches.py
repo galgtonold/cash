@@ -229,3 +229,24 @@ def test_an_edit_to_a_cimported_module_misses_on_the_whole_binary_key(cython_com
     assert _run(proj) == ("7", False), "the unedited run did not hit"
     _edit(proj, "return x * 3", "return x * 4", name="kernels.pyx")
     assert _run(proj) == ("9", True), "an edit to the cimported cdef function f calls was served the old result"
+
+
+def test_numpy_macros_and_headers_keep_the_per_function_key(cython_compiler, tmp_path):
+    """hdbscan's shape: every module sets numpy's API macro in a
+    ``# distutils:`` comment and declares a numpy header ``cdef extern``.
+    Both are keyed (the comment as text, the header by its content), so an
+    edit to another function still hits and a macro change misses."""
+    numpy = pytest.importorskip("numpy")
+    pyx = (
+        "# distutils: define_macros=NPY_NO_DEPRECATED_API=NPY_1_7_API_VERSION\n"
+        f"# distutils: include_dirs={numpy.get_include()}\n"
+        + PYX
+        + '\ncdef extern from "numpy/arrayobject.h":\n    ctypedef int npy_intp\n'
+    )
+    proj = _project(tmp_path, pyx=pyx)
+    assert _run(proj) == ("7", True)
+    assert _run(proj) == ("7", False), "the unedited run did not hit"
+    _edit(proj, "return x - 1", "return x - 2")
+    assert _run(proj) == ("7", False), "an edit to a function f never reaches re-ran it"
+    _edit(proj, "NPY_1_7_API_VERSION", "NPY_1_8_API_VERSION")
+    assert _run(proj) == ("7", True), "a changed macro did not re-run"
