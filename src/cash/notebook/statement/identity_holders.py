@@ -58,6 +58,7 @@ from itertools import chain, compress, repeat
 from typing import Any
 
 from cash import _native
+from cash._plain_data import tree_walk
 from cash._user_attrs import attribute_or, builtin_base, builtin_items, has_attribute, own_dict
 from cash._weak import callback_of, is_cash_ref
 from cash.closure_sharing import slot_readers
@@ -91,6 +92,7 @@ _WEAK_CONTAINERS = (weakref.WeakValueDictionary, weakref.WeakKeyDictionary, weak
 #: Hold nothing else; never the target of a registry's ``id()``.
 _LEAVES = frozenset(IMMUTABLE_LEAF_TYPES)
 _DICT = operator.attrgetter("__dict__")
+_PLAIN_NODES = frozenset({dict, list, tuple})
 
 
 def _value_kinds() -> tuple[frozenset[type], frozenset[type]]:
@@ -254,6 +256,8 @@ def identity_held_reason(
     stays the object those references find. *more*: objects the walk looks
     at beyond `_MAX_SEEN` (the answers a statement put into a helper memo,
     as many as the memo holds)."""
+    if _plain_tree_without_ids(value):
+        return None
     try:
         user_kinds: dict[type, bool] = {}
         walk = _Walk(user_kinds, targets=[] if weak_holders else None)
@@ -311,12 +315,7 @@ def _held_by_id(
                 name,
                 "a weak reference",
             )
-    candidates = {n for n in walk.numbers if _LOWEST_ADDRESS <= n < _HIGHEST_ADDRESS and not n % _ALIGNMENT}
-    if candidates:
-        # The process's mappings are read only for a number that could be
-        # an id.
-        lowest = _lowest_address()
-        candidates = _mapped({n for n in candidates if n >= lowest})
+    candidates = _candidate_ids(walk.numbers)
     # An array's are kept as arrays: a column of millions of numbers is
     # checked at C speed, never made a set.
     in_arrays = [found for found in map(_addresses_in, walk.arrays) if found.size]
@@ -378,6 +377,63 @@ def _held_by_id(
             ),
         )
     return None
+
+
+def _candidate_ids(numbers: set[int]) -> set[int]:
+    """Those of *numbers* that could be the ``id()`` of an object: aligned,
+    within the addresses a process maps, and inside a mapping of this one
+    (`_mapped`)."""
+    candidates = {n for n in numbers if _LOWEST_ADDRESS <= n < _HIGHEST_ADDRESS and not n % _ALIGNMENT}
+    if candidates:
+        # The process's mappings are read only for a number that could be
+        # an id.
+        lowest = _lowest_address()
+        candidates = _mapped({n for n in candidates if n >= lowest})
+    return candidates
+
+
+#: What `_plain_tree_without_ids` takes: exact dicts, lists and tuples over
+#: immutable leaves. None of them can be weakly referenced, and none is an
+#: object of the user's code: such a value holds no weak reference, none
+#: points at it or into it, and only its numbers and strings could find an
+#: object by its ``id()``.
+_PLAIN_TREE_TYPES = frozenset((dict, list, tuple, *IMMUTABLE_LEAF_TYPES))
+#: Of `_PLAIN_TREE_TYPES`, the leaves an ``id()`` can be read from.
+_ID_LEAVES = frozenset({int, str})
+
+
+def _plain_tree_without_ids(value: Any) -> bool:
+    """Whether *value* is JSON-like data (`_plain_data.tree_walk`) over
+    immutable leaves alone (`_PLAIN_TREE_TYPES`: no ``bytearray``, no fake
+    clock's types), none of whose ints and strings, nor its dicts' keys,
+    could be an ``id()`` (`_candidate_ids`): then it holds nothing that
+    finds another object by identity, whatever its size, and the walk
+    object by object (`_Walk`) is not needed. False otherwise, the full walk
+    then deciding: parsed sessions of a million records cost half a second
+    a statement walked one object at a time, and past `_MAX_SEEN` objects
+    the statement ran every time."""
+    if type(value) not in _PLAIN_NODES:
+        return False
+    try:
+        levels = tree_walk(value)
+        if levels is None:
+            return False
+        reader = _Walk({})
+        for level, flat, kinds, key_kinds in levels:
+            if not (kinds <= _PLAIN_TREE_TYPES and key_kinds <= _PLAIN_TREE_TYPES):
+                return False
+            if not kinds.isdisjoint(_ID_LEAVES):
+                reader._read_leaves(flat, kinds)
+            if not key_kinds.isdisjoint(_ID_LEAVES):
+                keys = list(chain.from_iterable(compress(level, map(operator.is_, map(type, level), repeat(dict)))))
+                reader._read_leaves(keys, key_kinds)
+            if reader.numbers:
+                if _candidate_ids(reader.numbers):
+                    return False
+                reader.numbers = set()
+        return True
+    except Exception:  # noqa: BLE001 - not known: the full walk decides
+        return False
 
 
 #: Every digit as ``0``: a run of seven digits is then ``"0000000"``.
