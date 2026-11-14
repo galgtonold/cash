@@ -24,6 +24,9 @@ check, since a trace cannot see a seed or a value a function holds.
     an attribute chain it reads through a module of the user's.
 ``("import", name, digest)``
     a module imported by a run-time name: its file.
+``("first_import", name, digest)``
+    a module of the user's whose top level ran inside the call (a lazy
+    ``import`` in a method): its file, loaded or not.
 ``("lookup", module, qualname, name, digest)``
     what ``getattr`` looked *name* up on: a module (*qualname* ``""``) or a
     class, by the digest of what it finds under *name*; ``"*"`` for a name
@@ -691,10 +694,26 @@ _PAIRED_LOADS = frozenset({"LOAD_FAST_LOAD_FAST", "LOAD_FAST_BORROW_LOAD_FAST_BO
 _SKIPPED = frozenset({"CACHE", "EXTENDED_ARG", "NOP"})
 
 
+def _load_plan(ins: Any, pair_slot: int) -> tuple[str, Any] | None:
+    """How to read the value instruction *ins* pushes last (*pair_slot* 1)
+    or first (0, of a paired load): a constant, a local or a global."""
+    op, val = ins.opname, ins.argval
+    if op in ("LOAD_CONST", "LOAD_SMALL_INT"):
+        return ("const", val)
+    if op in _FAST_LOADS:
+        return ("local", val)
+    if op in _PAIRED_LOADS and isinstance(val, tuple) and len(val) == 2:
+        return ("local", val[pair_slot])
+    if op in ("LOAD_GLOBAL", "LOAD_NAME"):
+        return ("global", val)
+    return None
+
+
 def _plan(code: types.CodeType, offset: int) -> tuple[str, Any] | None:
-    """How to read the last argument of the two-argument call at *offset*:
-    ``("const", value)``, ``("local", name)`` or ``("global", name)``, or
-    None when an expression computed it."""
+    """How to read the name argument of the ``getattr`` call at *offset*:
+    the last of two arguments, or the middle of three (``getattr(obj, name,
+    default)``): ``("const", value)``, ``("local", name)`` or ``("global",
+    name)``, or None when an expression computed it."""
     plans = _INSTRUCTIONS.get(code)
     if plans is None:
         if len(_INSTRUCTIONS) > 4096:
@@ -703,22 +722,22 @@ def _plan(code: types.CodeType, offset: int) -> tuple[str, Any] | None:
     if offset in plans:
         return plans[offset]
     plan = None
-    previous = None
+    previous = before = None
     for ins in dis.get_instructions(code):
         if ins.offset == offset:
-            if ins.opname == "CALL" and ins.arg == 2 and previous is not None:
-                op, val = previous.opname, previous.argval
-                if op in ("LOAD_CONST", "LOAD_SMALL_INT"):
-                    plan = ("const", val)
-                elif op in _FAST_LOADS:
-                    plan = ("local", val)
-                elif op in _PAIRED_LOADS and isinstance(val, tuple) and len(val) == 2:
-                    plan = ("local", val[1])
-                elif op in ("LOAD_GLOBAL", "LOAD_NAME"):
-                    plan = ("global", val)
+            if ins.opname == "CALL" and previous is not None:
+                if ins.arg == 2:
+                    plan = _load_plan(previous, 1)
+                elif ins.arg == 3:
+                    # The default is pushed last: by a paired load with the
+                    # name, or by a load of its own after the name's.
+                    if previous.opname in _PAIRED_LOADS:
+                        plan = _load_plan(previous, 0)
+                    elif before is not None and _load_plan(previous, 1) is not None:
+                        plan = _load_plan(before, 1)
             break
         if ins.opname not in _SKIPPED:
-            previous = ins
+            previous, before = ins, previous
     plans[offset] = plan
     return plan
 
@@ -808,6 +827,25 @@ def _user_module(mod: Any) -> bool:
     return issubclass(type(mod), types.ModuleType) and is_user_code(mod)
 
 
+def _holding_class(code: types.CodeType, g: Mapping[str, Any], module: str) -> type | None:
+    """The class of module *module* (globals *g*) that a name there holds and
+    that holds a function running *code* as an attribute of its own: a method
+    a decorator built and set on it, whose qualified name finds nothing."""
+    from ..tracking.trace_items import candidates
+
+    for value in list(g.values()):
+        if not isinstance(value, type) or value.__module__ != module or "<locals>" in value.__qualname__:
+            continue
+        try:
+            members = list(vars(value).values())
+        except TypeError:
+            continue
+        for member in members:
+            if any(c.__code__ is code for c in candidates(member)):
+                return value
+    return None
+
+
 def _user_class(cls: Any) -> bool:
     return isinstance(cls, type) and _user_module(sys.modules.get(cls.__module__ or ""))
 
@@ -842,6 +880,18 @@ def _namespace_digest(ns: Mapping[str, Any]) -> str | None:
     return h.hexdigest()
 
 
+#: The attributes a C type defines: compiled, so nothing edits them.
+_C_DESCRIPTORS = frozenset(
+    {
+        types.GetSetDescriptorType,
+        types.MemberDescriptorType,
+        types.MethodDescriptorType,
+        types.WrapperDescriptorType,
+        types.ClassMethodDescriptorType,
+    }
+)
+
+
 def _lookup_digest(module: str, qualname: str, name: str) -> str | None:
     """What a ``getattr(target, name)`` finds on the module or class the
     item names, now; None when that cannot be told."""
@@ -857,6 +907,11 @@ def _lookup_digest(module: str, qualname: str, name: str) -> str | None:
             found = inspect_getattr(target, name)
         except AttributeError:
             return _ABSENT
+        if type(found) in _C_DESCRIPTORS:
+            # A slot of a C type (``ndarray.dtype``): no edit can change
+            # it, so it stands for itself by where it is defined.
+            owner = getattr(found, "__objclass__", None)
+            return f"c:{getattr(owner, '__module__', '?')}.{getattr(owner, '__qualname__', '?')}.{name}"
         return _digest(found)
     ns = _namespace(module)
     if ns is None:
@@ -953,7 +1008,17 @@ class _Build:
                 raise _Untraceable(f"it ran {qn} of {module}, a module sys.modules does not hold")
             if qn == "<module>" or not code.co_flags & 0x1:
                 # A module imported, a class body: what they bound is read
-                # through the items of the code that uses it.
+                # through the items of the code that uses it. A module of the
+                # user's first imported inside the call (``from ._tags import
+                # X`` in a method) is checked by its file too: a name its top
+                # level binds may reach the result through a local, which no
+                # item reads.
+                if qn == "<module>" and _user_module(sys.modules.get(module)):
+                    self.add(
+                        ("first_import", module),
+                        _import_digest(module),
+                        f"the module {module} has no file to check",
+                    )
                 continue
             if _namespace(module) is not g:
                 self._hidden(code, g, module)
@@ -1040,6 +1105,11 @@ class _Build:
             # Made by a function that ran in this call: its closure is this
             # call's own work, and its code is part of that function's.
             return
+        if qn == "__create_fn__" and is_pseudo_filename(code.co_filename):
+            # ``@dataclass`` building a class's methods from its fields (a
+            # module first imported inside the call): what it builds is
+            # held by the class, whose digest a call of them checks.
+            return
         for ns in (g, *self.holders):
             for name, value in list(ns.items()):
                 if isinstance(name, str) and not name.startswith("__") and callable(value):
@@ -1051,6 +1121,13 @@ class _Build:
                             )
                             self.functions.append(c)
                             return
+        cls = _holding_class(code, g, module)
+        if cls is not None:
+            # Made for a class and set on it (``@dataclass``'s ``__init__``
+            # and ``__eq__``, built from source of its own): the class's
+            # digest holds it, by code and defaults.
+            self._class(cls, ran)
+            return
         raise _Untraceable(f"it ran {module}.{qn}, which no name of {module} holds")
 
     def _class(self, cls: type, ran: set[str]) -> None:
@@ -1252,19 +1329,28 @@ class _OutArguments:
         return False
 
 
-def build(unit: Any, static_codes: set[types.CodeType], *, strict: bool = True) -> tuple[list[tuple] | None, str]:
+def build(
+    unit: Any,
+    static_codes: set[types.CodeType],
+    *,
+    strict: bool = True,
+    accepted: set[types.CodeType] | None = None,
+) -> tuple[list[tuple] | None, str]:
     """The items of a traced call's finished *unit*, or None and why the
     call's result cannot be served from a trace. *static_codes* are the
     code the key covers, left out. *strict*: the call picks code by name,
     so code with effects a hit would skip is refused too; a call the key
-    already accepted is not second-guessed for those."""
+    already accepted is not second-guessed for those, nor is *accepted*,
+    code the key folded from the call's arguments (a method of an
+    argument's class), which a call without the lookup runs as well."""
     from ..tracking.trace_items import call_starts
 
     try:
         with call_starts(unit.cells):
             b = _Build(unit, static_codes)
             items = b.run()
-        why = _refusal_in(b.functions, unit) if strict else None
+        judged = [f for f in b.functions if f.__code__ not in accepted] if accepted else b.functions
+        why = _refusal_in(judged, unit) if strict else None
         if why is not None:
             return None, why
         return items, ""
@@ -1296,6 +1382,25 @@ def static_codes(functions: Iterable[Any], reports: Iterable[Any]) -> set[types.
     return out
 
 
+def folded_codes(folded: Any) -> set[types.CodeType] | None:
+    """The code objects a key folded (`cash.code_swaps.FoldedCode`): each
+    function's, and each class's with its user base classes' methods, which
+    its key part holds too (`CodeSurface.class_surface_parts`)."""
+    if folded is None or not folded.owners:
+        return None
+    from ..loaded_code import code_objects_of
+    from .user_code import is_user_code_object
+
+    out: set[types.CodeType] = set()
+    for owner, codes in list(folded.owners.values()):
+        out.update(codes)
+        if isinstance(owner, type):
+            for base in owner.__mro__[1:]:
+                if base is not object and is_user_code_object(base):
+                    out.update(code_objects_of(base))
+    return out
+
+
 # -- checking --------------------------------------------------------------
 def verify(items: list, cached_state: Callable[[str], str | None]) -> str | None:
     """None when every item of a stored trace still holds its digest, else
@@ -1307,7 +1412,7 @@ def verify(items: list, cached_state: Callable[[str], str | None]) -> str | None
         # functions in them. One not loaded yet is imported when its file is
         # the one recorded, as the call would have.
         for item in items:
-            if item[0] == "import" and item[1] not in sys.modules:
+            if item[0] in ("import", "first_import") and item[1] not in sys.modules:
                 # Loaded, it is what the call would get: the items below
                 # check what of it ran. Not loaded, it is imported when its
                 # file is the one recorded.
@@ -1320,7 +1425,12 @@ def verify(items: list, cached_state: Callable[[str], str | None]) -> str | None
             kind = item[0]
             if kind == "import":
                 continue
-            if kind == "code":
+            if kind == "first_import":
+                # Loaded already, by this process or the check above: its
+                # file is the one the call imported.
+                now = _import_digest(item[1])
+                what = f"the module {item[1]}"
+            elif kind == "code":
                 from ..tracking.trace_items import resolve
 
                 rc, fn, _ = resolve(item[1], item[2], {}, "\x00")

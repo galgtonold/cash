@@ -23,7 +23,7 @@ from .._active import EXPLAINING as _EXPLAINING
 from .._clock import perf_counter as _perf_counter
 from ..analysis.handed_callables import hands_a_state_changing_callable
 from ..analysis.helper_walk import shared_nodes
-from ..analysis.purity_report import PurityReport, describe_untrackable
+from ..analysis.purity_report import UNREAD_MODULE, PurityReport, describe_untrackable
 from ..backends._base import ttl_expired, written_at
 from ..canonical_form import WALKED_INDEXES
 from ..code_swaps import FOLDED_CODE, FoldedCode, note_owner
@@ -523,22 +523,9 @@ class KeyBuilder:
             CAPTURE_WATCH.reset(watch_token)
             STATE_LEDGER.reset(ledger_token)
         if lookups:
-            # Code an argument carries picks code by a run-time name, which
-            # the key cannot name (KEY-DYNAMIC-DEPENDENCY): served only on a
-            # trace of what the call ran, as the same line in the body is,
-            # or run uncached.
-            if coroutine or not code_trace.covers(lookups):
-                return (
-                    Unkeyable(
-                        MissReason(
-                            MissKind.UNTRACKABLE,
-                            f"code an argument of {func_name} carries picks code by a run-time name "
-                            f"({describe_untrackable(lookups)}), so the call ran uncached",
-                        )
-                    ),
-                    watch,
-                    ledger,
-                )
+            refusal = self._carrier_refusal(func_name, lookups, coroutine)
+            if refusal is not None:
+                return Unkeyable(refusal), watch, ledger
             needs_trace = traced = True
         built = built._replace(folded_code=folded)
         if ledger:
@@ -548,6 +535,39 @@ class KeyBuilder:
         if traced:
             built = built._replace(traced=True, needs_trace=needs_trace)
         return built, watch, ledger
+
+    @staticmethod
+    def _carrier_refusal(func_name: str, lookups: list, coroutine: bool) -> MissReason | None:
+        """Why a call whose arguments carry code that picks code by a
+        run-time name (*lookups*, KEY-DYNAMIC-DEPENDENCY) runs uncached, or
+        None when a trace of what it ran stands in for them, as for the same
+        line in the body.
+
+        A lazy import of a module not loaded yet whose top level cash cannot
+        read (UNREAD_MODULE), in a method the call may never run, needs no
+        key part when the call is traced: an import that runs is in the
+        trace (``first_import``), with the code of that module that ran and
+        the globals it read. Without a trace (Python < 3.12, ``CASH_TRACE=0``)
+        an edit to that module could not be seen, so the call runs uncached.
+        """
+        traced = code_trace.on() and not coroutine
+        rest = [i for i in lookups if UNREAD_MODULE not in i.description] if traced else lookups
+        if not rest or (not coroutine and code_trace.covers(rest)):
+            return None
+        refusing = [i for i in rest if coroutine or not code_trace.covers([i])]
+        unread = [i for i in refusing if UNREAD_MODULE in i.description]
+        picked = [i for i in refusing if UNREAD_MODULE not in i.description]
+        loads = (
+            f"imports a module cash cannot key before it is loaded ({describe_untrackable(unread)})" if unread else ""
+        )
+        if not picked:
+            return MissReason(
+                MissKind.UNREAD_MODULE, f"code an argument of {func_name} carries {loads}, so the call ran uncached"
+            )
+        what = f"picks code by a run-time name ({describe_untrackable(picked)})" + (f" and {loads}" if loads else "")
+        return MissReason(
+            MissKind.UNTRACKABLE, f"code an argument of {func_name} carries {what}, so the call ran uncached"
+        )
 
     def _code_state(self, spec: CachedFunction, chain: list[str], *, note: bool = False) -> str:
         """`_code_state_now`, or what it gave last time while nothing it
@@ -2114,7 +2134,13 @@ class CallRunner:
             if report is not None:
                 reports.append(report)
             names.extend(self._registry.graph.get_dependencies(name))
-        return code_trace.build(unit, code_trace.static_codes(functions, reports), strict=call.needs_trace)
+        # The code the key folded from the arguments and globals (a method
+        # of an argument's class) is in the key as the function's own code
+        # is: the strict check judges only code the key never saw.
+        accepted = code_trace.folded_codes(call.folded_code) if call.needs_trace else None
+        return code_trace.build(
+            unit, code_trace.static_codes(functions, reports), strict=call.needs_trace, accepted=accepted
+        )
 
     def _code_swapped(self, spec: CachedFunction, call: Call) -> str | None:
         """Why a call is not stored when code its key folded was replaced

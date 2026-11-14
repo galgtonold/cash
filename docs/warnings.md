@@ -1281,7 +1281,9 @@ lookup by name (`getattr`, `import_module`) is served only while a trace of
 what the call ran still holds; anything else, or any lookup on an older
 Python or with `CASH_TRACE=0`, runs uncached. `getattr(self, name)()` in a
 method of the argument's own class is not reported: every method of that
-class is in the key already.
+class is in the key already. Nor, on a traced call, is an `import` in a
+method of a module not loaded yet: an import that runs is in the trace, and
+an edit to that module recomputes; with no trace such a call runs uncached.
 
 **What to do.** Call the function by name where you can. Otherwise list the
 candidates with `depends_on=[...]`.

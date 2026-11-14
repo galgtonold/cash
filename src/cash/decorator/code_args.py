@@ -18,7 +18,7 @@ from .. import _plain_data, canonical_form
 from .._active import EXPLAINING as _EXPLAINING
 from .._memo import CODE_OBJECTS, LruMemo
 from ..analysis.purity_analyzer import get_analyzer
-from ..analysis.purity_report import ISSUE_AMBIENT_READ, ISSUE_UNTRACKABLE_DEP, PurityIssue
+from ..analysis.purity_report import ISSUE_AMBIENT_READ, ISSUE_UNTRACKABLE_DEP, UNREAD_MODULE, PurityIssue
 from ..code_digest import unwrap_partials
 from ..content_hashers import builtin_family_of, held_objects
 from ..dependency_state import ledger_note
@@ -178,8 +178,9 @@ class CodeArgs:
         # closure cells); see `_capturing_functions`.
         self._capturing_memo: LruMemo[type, tuple] = LruMemo(CODE_OBJECTS)
         self._installed_memo: LruMemo[tuple[int, frozenset[str]], tuple[type, tuple, tuple]] = LruMemo(CODE_OBJECTS)
-        # carrier -> (the code objects of its functions, `carrier_lookups`).
-        self._lookups_memo: LruMemo[Any, tuple[tuple, tuple]] = LruMemo(CODE_OBJECTS)
+        # carrier -> (the code objects of its functions, `carrier_lookups`,
+        # the user modules not loaded yet that their walks found imported).
+        self._lookups_memo: LruMemo[Any, tuple[tuple, tuple, frozenset[str]]] = LruMemo(CODE_OBJECTS)
 
     def carrier_lookups(self, carrier: Any) -> tuple[PurityIssue, ...]:
         """The run-time lookups by name (KEY-UNTRACKABLE-DEP findings) in the
@@ -191,7 +192,10 @@ class CodeArgs:
         out: it picks a method of the instance's class, and every one of
         those is keyed with the class (`CodeSurface.class_surface_parts`),
         as is a function the instance holds. Kept per carrier while its
-        functions run the same code.
+        functions run the same code and no module their walks found
+        imported but not loaded yet has been loaded since: once it is, the
+        walk follows it (`bindings_changed`), and a finding about it
+        (UNREAD_MODULE) may be gone or another found in its code.
         """
         functions = _carrier_functions(carrier, class_surface_functions)
         if not functions:
@@ -201,17 +205,24 @@ class CodeArgs:
             entry = self._lookups_memo.get(carrier)
         except TypeError:
             entry = None
-        if entry is not None and len(entry[0]) == len(codes) and all(map(operator.is_, entry[0], codes)):
+        if (
+            entry is not None
+            and len(entry[0]) == len(codes)
+            and all(map(operator.is_, entry[0], codes))
+            and not (entry[2] and any(name in sys.modules for name in entry[2]))
+        ):
             return entry[1]
         own = _own_methods(carrier) if isinstance(carrier, type) else {}
         found: list[PurityIssue] = []
         marks: set = set()
+        unloaded: set[str] = set()
         for fn in functions:
             try:
-                issues = get_analyzer().analyze_reached(fn).issues
+                report = get_analyzer().analyze_reached(fn)
             except Exception:  # noqa: BLE001 - never break a call
                 continue
-            for issue in issues:
+            unloaded.update(report.unloaded_modules)
+            for issue in report.issues:
                 if issue.kind != ISSUE_UNTRACKABLE_DEP:
                     continue
                 mark = (issue.filename, issue.line, issue.where, issue.description)
@@ -224,7 +235,7 @@ class CodeArgs:
                 found.append(issue)
         result = tuple(found)
         try:
-            self._lookups_memo[carrier] = (codes, result)
+            self._lookups_memo[carrier] = (codes, result, frozenset(unloaded))
         except TypeError:
             pass
         return result
@@ -243,6 +254,10 @@ class CodeArgs:
         a ``with cash.assume_safe():`` block around it, waives it, as in the
         function itself.
         """
+        if code_trace.on():
+            # A lazy import of a module not loaded yet is in the trace once
+            # it runs (`KeyBuilder._carrier_refusal`): nothing to say.
+            issues = tuple(i for i in issues if UNREAD_MODULE not in i.description)
         if _EXPLAINING.get() or not issues:
             return
         first = issues[0]
