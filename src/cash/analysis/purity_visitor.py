@@ -37,9 +37,16 @@ from ..effects import (
     reads_argv,
 )
 from .ambient_reads import ambient_call, clock_helper_of
+from .callee_effects import iterated_sources, scope_locals
 from .file_effects import get_base_name, get_call_module, get_call_name
 from .helper_bindings import callee_chain
-from .mutations import NONE_RETURNING_MUTATORS, PANDAS_INPLACE_METHODS, returns_a_new_object
+from .mutations import (
+    NONE_RETURNING_MUTATORS,
+    PANDAS_INPLACE_METHODS,
+    returns_a_new_object,
+    writer_aliases,
+    written_argument,
+)
 from .purity_flow import is_log_line, receiver_is_fresh
 from .purity_policy import AMBIENT_KINDS, DECORATOR_POLICY
 from .purity_report import (
@@ -52,6 +59,7 @@ from .purity_report import (
     PurityIssue,
 )
 from .static_dispatch import computed_namespace_lookup, namespace_spelled
+from .writer_aliases import namespace_writer_aliases
 
 #: What a `network_read` finding names as the source of the answer.
 _SOURCE: dict[EffectKind, str] = {EffectKind.NETWORK_READ: "server", EffectKind.DB_READ: "database"}
@@ -88,6 +96,10 @@ def _opens_tracked_database(func: ast.expr, namespace: dict[str, Any] | None) ->
 _DYNAMIC_BUILTIN_NAMES = frozenset({"eval", "exec", "compile", "__import__"})
 
 
+#: The part of its first argument a writer (`written_argument`) changes.
+_WRITTEN_PART = {"setattr": "attribute", "delattr": "attribute", "setitem": "subscript", "delitem": "subscript"}
+
+
 #: How a finding that the body changes an argument in place ends.
 ARGUMENT_MUTATION_NOT_STORED = (
     "a cache hit would not make that change, so a call that makes it is not stored and runs every time"
@@ -118,6 +130,7 @@ class PurityVisitor(ast.NodeVisitor):
         "_fresh_nodes",
         "_log_only",
         "_namespace",
+        "_writer_scope",
     )
 
     def __init__(
@@ -203,6 +216,10 @@ class PurityVisitor(ast.NodeVisitor):
         # ``get``, an ``in``) or changed through a method: judged there, not
         # as a read of the whole environment (`visit_Attribute`).
         self._environ_keyed: set[int] = set()
+        #: What `_written_outside` needs, worked out at the first writer
+        #: call: the names bound to a writer, the function's own names, and
+        #: what each loop or comprehension variable iterates.
+        self._writer_scope: tuple[dict[str, str | None], frozenset[str], dict[str, frozenset[str]]] | None = None
 
     # --- impure / dynamic / called-name detection on Call nodes ---
 
@@ -236,8 +253,68 @@ class PurityVisitor(ast.NodeVisitor):
             # is reported as what it is.
             if keyword.arg == "env":
                 self._environ_keyed.add(id(keyword.value))
+        self._writer_call(node)
         self._record_call(node)
         self.generic_visit(node)
+
+    def _writer_scope_of_body(self) -> tuple[dict[str, str | None], frozenset[str], dict[str, frozenset[str]]]:
+        if self._writer_scope is None:
+            tree = self._func_def
+            if tree is None:
+                self._writer_scope = ({}, self._param_names, {})
+            else:
+                aliases: dict[str, str | None] = {}
+                if self._namespace:
+                    aliases.update(namespace_writer_aliases(tree, self._namespace))
+                aliases.update(writer_aliases(tree))
+                # A module the body imports itself is shared state all the
+                # same: ``import cfg; setattr(cfg, "k", v)``.
+                imported = {
+                    (alias.asname or alias.name).split(".")[0]
+                    for sub in ast.walk(tree)
+                    if isinstance(sub, (ast.Import, ast.ImportFrom))
+                    for alias in sub.names
+                }
+                local_names = (scope_locals(tree) | self._param_names) - imported
+                self._writer_scope = (aliases, local_names, iterated_sources(tree))
+        return self._writer_scope
+
+    def _writer_call(self, node: ast.Call) -> None:
+        """``setattr(REG.e, "x", v)``, ``object.__setattr__(...)``,
+        ``operator.setitem(TABLE, k, v)`` and their kind (`written_argument`)
+        on an object a global or a closure variable holds, or on an element
+        of one a loop or comprehension iterates (``[setattr(b, "x", v) for b
+        in BOXES]``): a scope mutation however the call's value is used,
+        which a hit skips. A write into what a parameter holds is the
+        argument check's; into a local the body made, nobody else's."""
+        if not node.args or not isinstance(node.func, (ast.Name, ast.Attribute)):
+            return
+        aliases, local_names, iterated = self._writer_scope_of_body()
+        written = written_argument(node, aliases)
+        if written is None:
+            return
+        writer, target = written
+        kind = _WRITTEN_PART.get(writer)
+        if kind is None or self._receiver_is_fresh(target):
+            # ``list.append(G, x)`` is a mutator method's, judged by its
+            # own rule (`_reported_method`).
+            return
+        root: ast.AST = target
+        while isinstance(root, (ast.Attribute, ast.Subscript)):
+            root = root.value
+        if not isinstance(root, ast.Name):
+            return
+        origins = iterated.get(root.id, frozenset({root.id})) or frozenset({root.id})
+        outside = sorted(name for name in origins if name not in local_names)
+        if not outside:
+            return
+        where = "" if outside == [root.id] else f" (an element of {outside[0]})"
+        self._issue(
+            ISSUE_SCOPE_MUTATION,
+            f"{ast.unparse(node.func)}({ast.unparse(target)}, ...){where} - {kind} mutation of state "
+            f"outside the function",
+            node,
+        )
 
     def visit_Compare(self, node: ast.Compare) -> None:
         """``"DEBUG" in os.environ``: whether a variable is set, read by name."""

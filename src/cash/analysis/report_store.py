@@ -72,7 +72,7 @@ from .unloaded_modules import source_digest
 __all__ = ["STATS", "StoredReportMismatch", "flush", "load", "save", "status"]
 
 #: Layout of a stored file; a change makes every older one a miss.
-_FORMAT = 4
+_FORMAT = 5
 _KIND = "purity-report"
 #: Reports kept per function: its recent texts, and the worlds they ran in.
 _MAX_ENTRIES = 8
