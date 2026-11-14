@@ -106,9 +106,24 @@ def test_intervals_holding_a_session_stay_linked(cash_magics, tmp_path):
     lineage = cash_magics.tracking_state.variable_lineage["sessions"]
 
     change = "time_intervals[-1]['actions'][0]['at'] = 1000"
-    run_cash_cell(cash_magics, change, cells=[*cells, change])
-
+    look = "first = sessions[-1]['actions'][0]['at']"
+    notebook = [*cells, change, look]
+    run_cash_cell(cash_magics, change, cells=notebook)
     assert cash_magics.tracking_state.variable_lineage["sessions"] != lineage
+
+    # Each cell gives what Restart + Run All gives it: ``total`` sits above
+    # the change, so it sums the parse; ``look`` sits below it and sees 1000,
+    # as plain Python does.
+    ns = cash_magics.shell.user_ns
+    for code in (look, cells[4], look):
+        run_cash_cell(cash_magics, code, cells=notebook)
+        if code == cells[4]:
+            run_all: dict = {}
+            for cell in cells:
+                exec(cell.replace(repr(ABOVE_PERSISTENCE_FLOOR_S), "0"), run_all)
+            assert ns["total"] == run_all["total"]
+        else:
+            assert ns["first"] == 1000
 
 
 @pytest.mark.usefixtures("latest_check_runs_out")
