@@ -155,3 +155,53 @@ def test_the_guard_holds_no_data_value_alive(mod):
     del value
     gc.collect()
     assert ref() is None
+
+
+def test_a_function_or_class_a_kept_guard_read_can_be_dropped(mod):
+    """The memo holds what a guard read by weak references only: a class
+    or function the user drops (a notebook cell run again, a module
+    unloaded) goes, and a new object given its id is worked out anew."""
+    import gc
+    import weakref
+
+    class Dropped:
+        pass
+
+    def dropped_helper(x):
+        return x
+
+    mod.leaf = dropped_helper
+    mod.LIMIT = Dropped
+    _digest(mod.helper)
+    _digest(dropped_helper)
+    _digest(Dropped)
+    report_store._identity(dropped_helper, {})
+    refs = [weakref.ref(dropped_helper), weakref.ref(Dropped)]
+    mod.leaf = mod.other
+    mod.LIMIT = 3
+    del dropped_helper, Dropped
+    gc.collect()
+    assert [r() for r in refs] == [None, None]
+
+
+def test_a_dropped_helpers_entry_is_not_served_to_one_given_its_id(worked_out):
+    """An entry is found by id; one whose object has gone matches nothing,
+    so a new function that takes the dead one's id is worked out anew."""
+    import gc
+
+    namespace = {}
+    source = "def f(x):\n    return x\n"
+    exec(source, namespace)
+    first = namespace.pop("f")
+    _digest(first)
+    entry = report_store._OBJECT_GUARDS.get(id(first))
+    assert entry is not None
+    worked_out.clear()  # it holds the function
+    del first
+    gc.collect()
+    assert entry[0]() is None
+    exec(source, namespace)
+    again = namespace.pop("f")
+    report_store._OBJECT_GUARDS[id(again)] = entry  # as if it took the dead one's id
+    _digest(again)
+    assert worked_out == [again]
