@@ -1730,7 +1730,9 @@ def names_holding_alone(
             known_ids.add(id(container))
     container = None
     foreign: set[int] = set()
-    referrers = gc.get_referrers(*objs)
+    referrers = _referrers_by_count(objs)
+    if referrers is None:
+        referrers = gc.get_referrers(*objs)
     try:
         for referrer in referrers:
             if id(referrer) in own:
@@ -2165,7 +2167,9 @@ def referring_names(
         # Many objects: one read of the heap for them all, where
         # `gc.get_referrers` looks each referent up in *args* one by one.
         try:
-            referrers = _referrers_of(args, stop) if len(args) > _FEW_REFERRERS else _referrers(args, stop)
+            referrers = _referrers_by_count(frontier) if len(args) <= _FEW_REFERRERS else None
+            if referrers is None:
+                referrers = _referrers_of(args, stop) if len(args) > _FEW_REFERRERS else _referrers(args, stop)
         except WalkBudgetExceeded:
             return names, False
         stop.add(id(referrers))
@@ -3420,6 +3424,160 @@ def _referrers_of(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
 #: Heap objects `_referrers_of` reads in one `gc.get_referents` call.
 _REFERRERS_BLOCK = 256
 
+
+def _referrers_by_count(objs: list[Any] | tuple[Any, ...]) -> list[Any] | None:
+    """What `gc.get_referrers` gives for *objs*, told without reading the
+    heap: when every reference each one has is one this function can see,
+    the referrers are the containers among them; None when one is not, and
+    the heap is read as before.
+
+    Seen are the fast locals of the functions running on this thread's
+    stack and the items of the builtin containers (a dict's keys and
+    values, a list's or tuple's items) those locals are bound to, *objs*
+    itself among them. Their sum, plus what the reading itself takes
+    (`_COUNT_TEMPS`), must equal each object's reference count exactly: a
+    holder not seen -- a global list, a closure cell, an object's
+    attribute, a dict of another module, a suspended generator, a C
+    extension's own reference, a container gc does not track -- leaves one
+    over, and the heap is read. A loop's end read the heap four times for
+    the list it iterated, held only by cash's frames and its record of the
+    loop: 12 ms a read beside 360,000 objects.
+
+    Only where the locals can be read without copying them (3.13+, PEP 667)
+    and the referrers' answer is the whole heap's (no ``gc.freeze``). A
+    local bound to one of *objs* is counted only where every local holds a
+    reference of its own (`_STRONG_LOCALS`); elsewhere it leaves the
+    answer to the heap."""
+    if not _LOCALS_READABLE or _TRAVERSE_LOOPS or not objs or gc.get_freeze_count():
+        return None
+    counts = _count_holders(objs)
+    if counts is None:
+        return None
+    left, found = counts
+    return found if all(count == _COUNT_TEMPS for count in left) else None
+
+
+def _count_holders(objs: list[Any] | tuple[Any, ...]) -> tuple[list[int], list[Any]] | None:
+    """``(left, found)`` for `_referrers_by_count`: each of *objs*'s
+    references not counted, and the tracked containers found holding one;
+    None when a reference cannot be counted at all."""
+    # First, before any local of this function refers to one of them.
+    refs = list(map(sys.getrefcount, objs))
+    if max(refs) >= _IMMORTAL_REFS:
+        return None
+    totals = dict(zip(map(id, objs), refs))
+    counted = dict.fromkeys(totals, 0)
+    containers: dict[int, Any] = {id(objs): objs}
+    frame = sys._getframe(1)
+    local = value = None
+    try:
+        while frame is not None:
+            code = frame.f_code
+            # A generator's locals are its generator's, which
+            # `gc.get_referrers` returns: one bound to an object asked
+            # about leaves the answer to the heap.
+            owned = not code.co_flags & _GENERATOR_FLAGS
+            if code.co_flags & inspect.CO_OPTIMIZED:
+                local = frame.f_locals
+                cells = code.co_cellvars
+                for name in code.co_varnames:
+                    if cells and name in cells:
+                        # Held through its cell, which is a referrer.
+                        continue
+                    value = local.get(name)
+                    key = id(value)
+                    if key in counted:
+                        if not (owned and _STRONG_LOCALS):
+                            return None
+                        counted[key] += 1
+                    elif key not in containers and issubclass(type(value), _COUNTED_CONTAINERS):
+                        containers[key] = value
+                local = value = None
+            frame = frame.f_back
+    except Exception:  # noqa: BLE001 - a frame read differently: the heap decides
+        return None
+    finally:
+        del frame, local, value
+    found: list[Any] = []
+    budget = _COUNT_ITEMS
+    wanted = counted.keys()
+    for container in containers.values():
+        if issubclass(type(container), dict):
+            size = 2 * dict.__len__(container)
+            parts: tuple[Any, ...] = (dict.keys(container), dict.values(container))
+        else:
+            size = _base_len(container)
+            parts = (_base_iter(container),)
+        if size > _COUNT_WIDEST:
+            # Not read: what it holds of *objs* is left over.
+            continue
+        budget -= size
+        if budget < 0:
+            return None
+        held = False
+        for part in parts:
+            ids = list(map(id, part))
+            if not wanted.isdisjoint(ids):
+                held = True
+                for key in ids:
+                    if key in counted:
+                        counted[key] += 1
+        if held and gc.is_tracked(container):
+            found.append(container)
+    container = parts = part = None
+    return [totals[key] - count for key, count in counted.items()], found
+
+
+def _base_len(container: Any) -> int:
+    """The length of a list or tuple, a subclass's included, from the base
+    type's own storage."""
+    return list.__len__(container) if issubclass(type(container), list) else tuple.__len__(container)
+
+
+def _base_iter(container: Any) -> Iterator[Any]:
+    """The items of a list or tuple, a subclass's included, read from the
+    base type's own storage."""
+    return list.__iter__(container) if issubclass(type(container), list) else tuple.__iter__(container)
+
+
+#: The builtin containers whose items `_referrers_by_count` counts.
+_COUNTED_CONTAINERS = (dict, list, tuple)
+
+#: Most items `_referrers_by_count` reads before it leaves the answer to
+#: the heap, and the most items of one container (a wider one is not read).
+_COUNT_ITEMS = 300_000
+_COUNT_WIDEST = 50_000
+
+#: A count no reference held here reaches: an immortal object's (3.12+).
+_IMMORTAL_REFS = 1 << 28
+
+_GENERATOR_FLAGS = inspect.CO_GENERATOR | inspect.CO_COROUTINE | inspect.CO_ASYNC_GENERATOR
+
+#: A frame's locals read without copying them into a dict the frame keeps
+#: (PEP 667, 3.13+): the copy older Pythons make is a holder of its own.
+#: Not in a build without the GIL, which defers some counts.
+_LOCALS_READABLE = sys.version_info >= (3, 13) and attribute_or(sys, "_is_gil_enabled", lambda: True)()
+
+#: Every local holds a reference of its own. From 3.14 a local can borrow
+#: its caller's (an argument passed on from a local), which the count does
+#: not show.
+_STRONG_LOCALS = sys.version_info[:2] == (3, 13)
+
+
+def _calibrate_count_temps() -> int:
+    """What `_count_holders` leaves over for an object only one list holds:
+    the references its own reading takes."""
+    probe = [types.SimpleNamespace()]
+    counts = _count_holders(probe) if _LOCALS_READABLE else None
+    return -1 if counts is None else counts[0][0]
+
+
+#: Calibrated, not assumed: the interpreter decides how many references a
+#: call's argument and an iterator's item take. -1, never met, where the
+#: count cannot be read.
+_COUNT_TEMPS = _calibrate_count_temps()
+
+
 #: Whether the ``_asyncio`` module's own traverse can loop for ever, as it
 #: can on 3.12.0-3.12.5 once its free list of future iterators comes back on
 #: itself (``gc.get_referents(sys.modules["_asyncio"])`` never returns). The
@@ -3859,14 +4017,18 @@ def _climb_level(
     not a holder to store with the value (a default or a free variable
     holding it is the default check's to tell), but a class holding one
     (``getter = staticmethod(lambda: d)``) keeps the value as its state."""
+    seen.add(id(level))
+    # Told from the reference counts when each one is accounted for.
+    referrers = _referrers_by_count(level)
     # Passed as one tuple, which the call hands on as it is: it is a
     # referrer too.
     args = tuple(level)
-    seen.update((id(level), id(args)))
+    seen.add(id(args))
     level_ids = {id(obj) for obj in level}
-    # Not known here (`_referrers`) raises as out of time does: the
-    # caller's check of the statement gives up, and it re-runs warned.
-    referrers = _referrers(args, seen)
+    if referrers is None:
+        # Not known here (`_referrers`) raises as out of time does: the
+        # caller's check of the statement gives up, and it re-runs warned.
+        referrers = _referrers(args, seen)
     seen.add(id(referrers))
     referrers.extend(_untracked_defaults_holding(level_ids, user_ns, seen))
     classes = []
