@@ -20,7 +20,7 @@ import sys
 import types
 
 from ._user_attrs import module_file
-from .cython_digest import cython_function_digest
+from .cython_digest import cimported_binaries_digest, cython_function_digest
 from .exceptions import SOURCE_RETRIEVAL_ERRORS
 from .jit_functions import jit_identity, jit_python_function
 from .pe_digest import extension_bytes_digest
@@ -139,6 +139,11 @@ def _compiled_identity(fn: object, walked: frozenset[int]) -> str:
         if reached is not None:
             own = hashlib.sha256(f"{own}:cython:{reached}".encode()).hexdigest()
         else:
+            # A cdef function of another module it cimports runs from that
+            # module's binary, which a rebuild after an edit changes alone.
+            cimported = cimported_binaries_digest(fn)
+            if cimported is not None:
+                built = f"{built}:cimports:{cimported}"
             own = hashlib.sha256(f"{own}:built:{built}".encode()).hexdigest()
     return _with_wrapped(own, fn, walked)
 

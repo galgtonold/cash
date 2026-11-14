@@ -73,14 +73,13 @@ def _build(proj):
         text=True,
         timeout=300,
     )
-    out = proj / f"fastops{sysconfig.get_config_var('EXT_SUFFIX')}"
-    if p.returncode != 0 or not out.exists():
+    suffix = sysconfig.get_config_var("EXT_SUFFIX")
+    if p.returncode != 0 or not (proj / f"fastops{suffix}").exists():
         raise BuildFailed((p.stdout + p.stderr)[-3000:])
     now = time.time()
     for path in proj.iterdir():
-        if path != out:
-            os.utime(path, (now - 60, now - 60))
-    os.utime(out, (now - 30, now - 30))
+        past = 30 if path.name.endswith(suffix) else 60
+        os.utime(path, (now - past, now - past))
 
 
 def _run(proj):
@@ -88,13 +87,15 @@ def _run(proj):
     return p.stdout.strip(), "[RUN]" in p.stderr
 
 
-def _project(tmp_path, pyx=PYX, pxd=None):
+def _project(tmp_path, pyx=PYX, pxd=None, setup=SETUP, files=None):
     proj = tmp_path / "proj"
     proj.mkdir()
     (proj / "fastops.pyx").write_text(pyx, encoding="utf-8")
     if pxd is not None:
         (proj / "fastops.pxd").write_text(pxd, encoding="utf-8")
-    (proj / "setup.py").write_text(SETUP, encoding="utf-8")
+    for name, text in (files or {}).items():
+        (proj / name).write_text(text, encoding="utf-8")
+    (proj / "setup.py").write_text(setup, encoding="utf-8")
     (proj / "job.py").write_text(textwrap.dedent(JOB), encoding="utf-8")
     _build(proj)
     return proj
@@ -178,3 +179,53 @@ def test_a_pyx_newer_than_the_binary_keys_the_whole_binary(cython_compiler, tmp_
     _build(proj)
     pyx.write_text(PYX.replace("return x - 1", "return x - 3"), encoding="utf-8")
     assert _run(proj) == ("7", True), "a rebuilt binary under a newer .pyx must re-run"
+
+
+#: ``fastops`` calls a cdef function of a second module, ``kernels``,
+#: through ``kernels.pxd``: the call goes into the other binary.
+KERNELS_PXD = "cdef int triple(int x)\n"
+
+KERNELS_PYX = """\
+cdef int triple(int x):
+    return x * 3
+
+def unrelated(int x):
+    return x + 100
+"""
+
+CALLER_PYX = """\
+from kernels cimport triple
+
+def f(int x):
+    return triple(x) + 1
+"""
+
+TWO_MODULES_SETUP = SETUP.replace('cythonize("fastops.pyx"', 'cythonize(["fastops.pyx", "kernels.pyx"]')
+
+
+def _two_modules(tmp_path, pyx=CALLER_PYX):
+    return _project(
+        tmp_path,
+        pyx=pyx,
+        setup=TWO_MODULES_SETUP,
+        files={"kernels.pxd": KERNELS_PXD, "kernels.pyx": KERNELS_PYX},
+    )
+
+
+def test_an_edit_to_a_cimported_module_s_function_misses(cython_compiler, tmp_path):
+    proj = _two_modules(tmp_path)
+    assert _run(proj) == ("7", True)
+    assert _run(proj) == ("7", False), "the unedited run did not hit"
+    _edit(proj, "return x + 100", "return x + 200", name="kernels.pyx")
+    assert _run(proj) == ("7", False), "an edit to a function of the cimported module f never reaches re-ran it"
+    _edit(proj, "return x * 3", "return x * 4", name="kernels.pyx")
+    assert _run(proj) == ("9", True), "an edit to the cimported cdef function f calls was served the old result"
+
+
+def test_an_edit_to_a_cimported_module_misses_on_the_whole_binary_key(cython_compiler, tmp_path):
+    pyx = CALLER_PYX.replace("\ndef f", '\ncdef extern from "math.h":\n    double fabs(double)\n\ndef f')
+    proj = _two_modules(tmp_path, pyx=pyx)
+    assert _run(proj) == ("7", True)
+    assert _run(proj) == ("7", False), "the unedited run did not hit"
+    _edit(proj, "return x * 3", "return x * 4", name="kernels.pyx")
+    assert _run(proj) == ("9", True), "an edit to the cimported cdef function f calls was served the old result"

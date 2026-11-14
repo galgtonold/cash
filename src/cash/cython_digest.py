@@ -22,6 +22,13 @@ function is keyed by what it can reach in it instead
   ``cimport``, an ``include``), and the ``.pxd`` of a library it cimports;
 - the build configuration (``setup.py``, ``setup.cfg``, ``pyproject.toml``)
   next to the package.
+- for each local module it cimports (a ``cdef`` function called through
+  its ``.pxd`` runs from THAT module's binary): the blocks the names in use
+  reach in its ``.pyx``, by the same rules and through its own cimports, or
+  its whole binary where its ``.pyx`` cannot be used.
+
+The whole-binary key (`cimported_binaries_digest`) folds in the binaries of
+the modules it cimports for the same reason.
 
 Blocks and names come from Cython's own parser and tokenizer; a block is
 keyed by its token stream, so a comment, a blank line or a line shift does
@@ -55,7 +62,7 @@ from typing import Any
 from ._user_attrs import module_file
 from .tracking.tracker_context import untracked
 
-__all__ = ["cython_function_digest"]
+__all__ = ["cimported_binaries_digest", "cython_function_digest"]
 
 _CYFUNCTION_TYPES = frozenset({"cython_function_or_method", "fused_cython_function"})
 
@@ -112,12 +119,16 @@ class _Module:
     header_refs: frozenset[str]
     files_digest: str
     keyed_files: tuple[str, ...]
+    #: The local ``.pxd`` files of other modules it cimports.
+    cimported: tuple[str, ...] = ()
     digests: dict[str, str | None] = field(default_factory=dict)
 
 
 #: binary path -> (the module loaded from it, its analysis or None).
 _MODULES: dict[str, tuple[types.ModuleType, _Module | None]] = {}
-_LOCK = threading.Lock()
+#: binary path -> (the module loaded from it, its content digest).
+_BINARIES: dict[str, tuple[types.ModuleType, str]] = {}
+_LOCK = threading.RLock()
 
 
 def is_cyfunction(fn: object) -> bool:
@@ -143,34 +154,73 @@ def cython_function_digest(fn: object) -> str | None:
     if not binary.endswith(tuple(importlib.machinery.EXTENSION_SUFFIXES)):
         return None
     with _LOCK:
-        cached = _MODULES.get(binary)
-        if cached is None or cached[0] is not module:
-            try:
-                with untracked():
-                    analysis = _analyse(module, binary, code.co_filename)
-            except _Fallback:
-                analysis = None
-            except Exception:  # noqa: BLE001 - any failure keys the whole binary
-                analysis = None
-            _MODULES[binary] = (module, analysis)
-        else:
-            analysis = cached[1]
+        analysis = _analysis_of(module, binary, code.co_filename)
         if analysis is None:
             return None
         qualname = str(getattr(fn, "__qualname__", "") or "")
         key = f"{code.co_filename}:{code.co_firstlineno}:{qualname}"
         if key not in analysis.digests:
-            analysis.digests[key] = _function_digest(analysis, fn, code, qualname)
+            try:
+                with untracked():
+                    analysis.digests[key] = _function_digest(analysis, fn, code, qualname)
+            except Exception:  # noqa: BLE001 - any failure keys the whole binary
+                analysis.digests[key] = None
         return analysis.digests[key]
 
 
-def _function_digest(analysis: _Module, fn: object, code: types.CodeType, qualname: str) -> str | None:
-    own = _own_blocks(analysis, code, qualname)
-    if own is None:
+def cimported_binaries_digest(fn: object) -> str | None:
+    """For the whole-binary key of *fn*, a Cython function of a user's
+    build: the digest of every user-built module its module cimports,
+    transitively, or None for a function that is not Cython's.
+
+    A ``cdef`` function of another module, called through its ``.pxd``,
+    runs from THAT module's binary: rebuilding it after an edit leaves the
+    caller's binary byte for byte the same. The cimports are read from the
+    ``.pyx`` with Cython's tokenizer; when that cannot be done, every
+    user-built module loaded from the caller's package folder stands in.
+    Never raises.
+    """
+    fn = getattr(fn, "__func__", fn) if isinstance(fn, types.MethodType) else fn
+    if not is_cyfunction(fn):
         return None
+    module = sys.modules.get(getattr(fn, "__module__", None) or "")
+    binary = module_file(module)
+    if module is None or not isinstance(binary, str):
+        return None
+    code = getattr(fn, "__code__", None)
+    co_filename = code.co_filename if isinstance(code, types.CodeType) else ""
+    with _LOCK:
+        try:
+            with untracked():
+                parts = sorted(_whole_cimports(module, binary, co_filename, {os.path.abspath(binary)}))
+        except Exception:  # noqa: BLE001 - every loaded sibling build stands in
+            with untracked():
+                parts = sorted(_sibling_binaries(module, binary))
+    return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
+
+
+def _analysis_of(module: types.ModuleType, binary: str, co_filename: str, pyx: str | None = None) -> _Module | None:
+    """`_analyse`, memoised per loaded module; None where it falls back."""
+    cached = _MODULES.get(binary)
+    if cached is not None and cached[0] is module:
+        return cached[1]
+    try:
+        with untracked():
+            analysis = _analyse(module, binary, co_filename, pyx)
+    except _Fallback:
+        analysis = None
+    except Exception:  # noqa: BLE001 - any failure keys the whole binary
+        analysis = None
+    _MODULES[binary] = (module, analysis)
+    return analysis
+
+
+def _reach(analysis: _Module, own: Iterable[_Block], names: Iterable[str]) -> tuple[list[_Block], set[str]]:
+    """The blocks reached from *own* and *names* (and the header), and every
+    name they use."""
     reached: dict[int, _Block] = {id(b): b for b in own}
-    pending = set(analysis.header_refs)
-    for block in own:
+    pending = set(analysis.header_refs) | set(names)
+    for block in reached.values():
         pending |= block.refs
     seen: set[str] = set()
     while pending:
@@ -182,16 +232,170 @@ def _function_digest(analysis: _Module, fn: object, code: types.CodeType, qualna
             if id(block) not in reached:
                 reached[id(block)] = block
                 pending |= block.refs - seen
+    return list(reached.values()), seen
+
+
+def _function_digest(analysis: _Module, fn: object, code: types.CodeType, qualname: str) -> str | None:
+    own = _own_blocks(analysis, code, qualname)
+    if own is None:
+        return None
+    reached, names = _reach(analysis, own, ())
     parts = [
-        "cash-cython-function-v1",
+        "cash-cython-function-v2",
         type(fn).__module__,
         str(getattr(fn, "__module__", "")),
         qualname,
         analysis.header_digest,
         analysis.files_digest,
-        *sorted(b.digest for b in reached.values()),
+        *sorted(b.digest for b in reached),
+        *_cimported_parts(analysis, names, {analysis.pyx}),
     ]
     return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
+
+
+def _cimported_parts(analysis: _Module, names: set[str], visited: set[str]) -> list[str]:
+    """What the modules *analysis* cimports contribute: for each, the blocks
+    the names in use reach in its ``.pyx`` (by the same rules, through its
+    own cimports), or its whole binary where its ``.pyx`` cannot be used."""
+    parts = []
+    for pxd in analysis.cimported:
+        pyx = os.path.splitext(pxd)[0] + ".pyx"
+        if pyx in visited:
+            continue
+        visited.add(pyx)
+        loaded = _module_for_pxd(pxd)
+        label = os.path.basename(pyx)
+        if loaded is None:
+            if os.path.isfile(pyx):
+                # Not loaded, so nothing of it runs from its binary; its
+                # source still stands for it.
+                with open(pyx, "rb") as fh:
+                    parts.append(f"{label}:source:{hashlib.sha256(fh.read()).hexdigest()}")
+            continue
+        module, binary = loaded
+        sub = _analysis_of(module, binary, os.path.basename(pyx), pyx if os.path.isfile(pyx) else None)
+        if sub is None:
+            whole = sorted(_whole_cimports(module, binary, os.path.basename(pyx), {os.path.abspath(binary)}))
+            parts.append(f"{label}:built:{_binary_digest(module, binary)}:{','.join(whole)}")
+            continue
+        reached, sub_names = _reach(sub, (), names)
+        nested = _cimported_parts(sub, sub_names, visited)
+        digest = hashlib.sha256(
+            "\x1f".join([sub.header_digest, sub.files_digest, *sorted(b.digest for b in reached), *nested]).encode()
+        ).hexdigest()
+        parts.append(f"{label}:cython:{digest}")
+    return sorted(parts)
+
+
+def _module_for_pxd(pxd: str) -> tuple[types.ModuleType, str] | None:
+    """The loaded extension module built from the ``.pyx`` beside *pxd*."""
+    folder = os.path.normcase(os.path.dirname(os.path.abspath(pxd)))
+    stem = os.path.splitext(os.path.basename(pxd))[0]
+    suffixes = tuple(importlib.machinery.EXTENSION_SUFFIXES)
+    for module in list(sys.modules.values()):
+        path = module_file(module) if isinstance(module, types.ModuleType) else None
+        if not isinstance(path, str) or not path.endswith(suffixes):
+            continue
+        name = os.path.basename(path)
+        if name.split(".", 1)[0] == stem and os.path.normcase(os.path.dirname(os.path.abspath(path))) == folder:
+            return module, path
+    return None
+
+
+def _binary_digest(module: types.ModuleType, binary: str) -> str:
+    cached = _BINARIES.get(binary)
+    if cached is not None and cached[0] is module:
+        return cached[1]
+    from .pe_digest import extension_bytes_digest
+
+    with open(binary, "rb") as fh:
+        digest = extension_bytes_digest(fh.read())
+    _BINARIES[binary] = (module, digest)
+    return digest
+
+
+def _whole_cimports(module: types.ModuleType, binary: str, co_filename: str, visited: set[str]) -> list[str]:
+    """``name=digest`` of the binary of every loaded module *module*'s ``.pyx``
+    cimports, transitively, read from its tokens. Raises where the
+    cimports cannot be read."""
+    pyx = _find_pyx(module, binary, co_filename)
+    package_root = _package_root(module.__name__, pyx)
+    includes = _cython_includes()
+    texts = [pyx]
+    own = os.path.splitext(pyx)[0] + ".pxd"
+    if os.path.isfile(own):
+        texts.append(own)
+    pxds: list[str] = []
+    done: set[str] = set()
+    while texts:
+        path = texts.pop()
+        if path in done:
+            continue
+        done.add(path)
+        with open(path, "rb") as fh:
+            toks = _tokens(path, fh.read().decode("utf-8"))
+        for i, (sy, _text, _line) in enumerate(toks):
+            if sy == "include":
+                follows = [t for s_, t, _l in toks[i + 1 : i + 4] if s_ == "CHARS"]
+                if not follows:
+                    raise _Fallback("an include not understood")
+                texts.append(os.path.join(os.path.dirname(path), follows[0]))
+        for name, level in _token_cimports(toks):
+            for target in _resolve_cimport(name, level, path, package_root, includes):
+                if target != own and target not in pxds and _is_local(target, package_root):
+                    pxds.append(target)
+                    texts.append(target)
+    parts = []
+    for pxd in pxds:
+        loaded = _module_for_pxd(pxd)
+        if loaded is None:
+            continue
+        sub, sub_binary = loaded
+        key = os.path.abspath(sub_binary)
+        if key in visited:
+            continue
+        visited.add(key)
+        parts.append(f"{os.path.basename(pxd)}={_binary_digest(sub, sub_binary)}")
+        parts.extend(_whole_cimports(sub, sub_binary, os.path.basename(os.path.splitext(pxd)[0] + ".pyx"), visited))
+    return parts
+
+
+def _sibling_binaries(module: types.ModuleType, binary: str) -> list[str]:
+    """``path=digest`` of every user-built module loaded from the folder of
+    *module*'s package: what it might cimport, when that cannot be read."""
+    from .install_paths import is_user_path
+
+    root = os.path.dirname(os.path.abspath(binary))
+    for _ in range(module.__name__.count(".")):
+        root = os.path.dirname(root)
+    root = os.path.normcase(root) + os.sep
+    suffixes = tuple(importlib.machinery.EXTENSION_SUFFIXES)
+    parts = []
+    for other in list(sys.modules.values()):
+        path = module_file(other) if isinstance(other, types.ModuleType) else None
+        if not isinstance(path, str) or not path.endswith(suffixes) or other is module:
+            continue
+        full = os.path.abspath(path)
+        if not os.path.normcase(full).startswith(root) or not is_user_path(full):
+            continue
+        try:
+            parts.append(f"{os.path.relpath(full, root)}={_binary_digest(other, full)}")
+        except OSError:
+            parts.append(f"{os.path.relpath(full, root)}=unreadable")
+    return parts
+
+
+def _package_root(module_name: str, pyx: str) -> str:
+    root = os.path.dirname(pyx)
+    for _ in range(module_name.count(".")):
+        root = os.path.dirname(root)
+    return root
+
+
+def _cython_includes() -> str:
+    import Cython
+
+    return os.path.join(os.path.dirname(os.path.abspath(Cython.__file__)), "Includes")
 
 
 def _own_blocks(analysis: _Module, code: types.CodeType, qualname: str) -> list[_Block] | None:
@@ -223,17 +427,18 @@ def _code_path(analysis: _Module, code: types.CodeType) -> str | None:
 # -- building the analysis ---------------------------------------------------
 
 
-def _analyse(module: types.ModuleType, binary: str, co_filename: str) -> _Module | None:
+def _analyse(module: types.ModuleType, binary: str, co_filename: str, pyx: str | None = None) -> _Module | None:
     from .install_paths import is_user_path
 
     if not is_user_path(binary):
         raise _Fallback("not the user's build")
     try:
-        import Cython  # noqa: F401
-        from Cython.Compiler.Main import Context  # noqa: F401
+        import Cython  # noqa: F401 - only whether it imports
+        from Cython.Compiler.Main import Context  # noqa: F401 - only whether it imports
     except Exception as e:
         raise _Fallback("no Cython") from e
-    pyx = _find_pyx(module, binary, co_filename)
+    if pyx is None:
+        pyx = _find_pyx(module, binary, co_filename)
     with open(pyx, "rb") as fh:
         pyx_bytes = fh.read()
     pyx_text = pyx_bytes.decode("utf-8")
@@ -295,6 +500,7 @@ def _analyse(module: types.ModuleType, binary: str, co_filename: str) -> _Module
         header_refs=frozenset(header_refs),
         files_digest=hashlib.sha256("\x1f".join(sorted(file_parts)).encode("utf-8")).hexdigest(),
         keyed_files=tuple(files),
+        cimported=tuple(p for p, local in pxds if local and p != os.path.splitext(pyx)[0] + ".pxd"),
     )
     _check_built_from(analysis, module)
     return analysis
@@ -520,12 +726,8 @@ def _used_pxds(module_name: str, pyx: str, tree: Any, files: list[str], root: st
     """``(path, is local)`` of every ``.pxd`` the module uses: its own, and
     what it cimports, transitively through the local ones. A cimport found
     only in Cython's own ``Includes`` is fixed by the Cython version."""
-    import Cython
-
-    includes = os.path.join(os.path.dirname(os.path.abspath(Cython.__file__)), "Includes")
-    package_root = os.path.dirname(pyx)
-    for _ in range(module_name.count(".")):
-        package_root = os.path.dirname(package_root)
+    includes = _cython_includes()
+    package_root = _package_root(module_name, pyx)
     found: dict[str, bool] = {}
     own = os.path.splitext(pyx)[0] + ".pxd"
     pending: list[tuple[str, Any]] = []
