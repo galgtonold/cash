@@ -1350,19 +1350,113 @@ def _refusal_in(functions: Iterable[Any], unit: Any = None) -> str | None:
     from ..tracking.randomness.state import capture_reachable_carrier_states
 
     out = _OutArguments(unit)
+    pure = _PureCallees()
     for fn in dict.fromkeys(functions):
         report = get_analyzer().analyze_reached(fn)
         if report.unwalkable:
             return f"it ran {fn.__qualname__}, whose helpers cash could not all walk"
         idle = _helpers_not_run(report, unit)
         for issue in report.issues:
-            if issue.kind in _REFUSED_KINDS or (issue.kind == ISSUE_UNTRACKABLE_DEP and not is_name_lookup(issue)):
-                if issue.where in idle or out.excuses(issue):
+            if _refused(issue):
+                if issue.where in idle or out.excuses(issue) or pure.excuses(issue, fn, report):
                     continue
                 return f"it ran {fn.__qualname__}, which {issue.description} (line {issue.line})"
         if capture_reachable_carrier_states(fn):
             return f"it ran {fn.__qualname__}, which can draw from a random generator it holds"
     return None
+
+
+def _refused(issue: Any) -> bool:
+    """Is *issue* a finding a hit would skip or miss (`_refusal_in`)?"""
+    return issue.kind in _REFUSED_KINDS or (issue.kind == ISSUE_UNTRACKABLE_DEP and not is_name_lookup(issue))
+
+
+class _PureCallees:
+    """Which discarded calls a call's purity findings need not refuse:
+    ``check_targets(y)`` drops what it returns because it is a check,
+    which returns nothing and raises on a bad argument. A hit skips only
+    what the callee does, so a callee the purity analysis finds no effect
+    in (`PurityAnalyzer.analyze_reached`: every helper it reaches walked,
+    no finding a hit would skip, no random generator it holds) is excused.
+    One no name of the caller's resolves to a plain function (a method of
+    ``self``, a builtin, a name only the call binds) is not: what it is
+    cannot be read before it runs.
+
+    The callee stays in the key: the caller reads it as a global, whose
+    value the trace digests (`_Build.run`), and its own code is in the
+    trace when it ran, so an edit to it is a different trace; a callee
+    edited to have an effect is judged anew on the call that runs it."""
+
+    def __init__(self) -> None:
+        self._pure: dict[types.FunctionType, bool] = {}
+
+    def excuses(self, issue: Any, fn: Any, report: Any) -> bool:
+        if issue.kind != ISSUE_DISCARDED_CALL:
+            return False
+        callee = _discarded_callee(issue, fn, report)
+        return callee is not None and self.is_pure(callee)
+
+    def is_pure(self, callee: types.FunctionType) -> bool:
+        if callee not in self._pure:
+            # Not pure while it is judged: a callee that reaches itself
+            # through a discarded call is not proven so by that call.
+            self._pure[callee] = False
+            self._pure[callee] = self._judge(callee)
+        return self._pure[callee]
+
+    def _judge(self, callee: types.FunctionType) -> bool:
+        from ..analysis.purity_analyzer import get_analyzer
+        from ..tracking.randomness.state import capture_reachable_carrier_states
+
+        report = get_analyzer().analyze_reached(callee)
+        if report.unwalkable or capture_reachable_carrier_states(callee):
+            return False
+        for issue in report.issues:
+            if issue.kind == ISSUE_UNTRACKABLE_DEP:
+                # What it picks by name is not read before it runs.
+                return False
+            if _refused(issue) and not self.excuses(issue, callee, report):
+                return False
+        return True
+
+
+def _discarded_callee(issue: Any, fn: Any, report: Any) -> types.FunctionType | None:
+    """The plain function a ``discards return of name(...)`` finding of
+    *report* (on *fn* or a helper its walk read) calls, as the calling
+    function's own names resolve it now: its closure, then its globals,
+    then attributes of modules only. None when that is not one, or when
+    the name is a local of the caller's."""
+    from ..analysis.helper_code import qualname_of
+
+    text = getattr(issue, "description", "")
+    if not (text.startswith("discards return of ") and text.endswith("(...)")):
+        return None
+    head, *rest = text[len("discards return of ") : -len("(...)")].split(".")
+    caller = None
+    for candidate in (fn, *(ref() for ref, _codes in getattr(report, "walked_code", ()) or ())):
+        if type(candidate) is types.FunctionType and qualname_of(candidate) == issue.where:
+            caller = candidate
+            break
+    if caller is None or not head.isidentifier():
+        return None
+    code = caller.__code__
+    if head in code.co_varnames or head in code.co_cellvars:
+        # A local of the caller's: bound by the call, not readable before.
+        return None
+    if head in code.co_freevars:
+        try:
+            value = (caller.__closure__ or ())[code.co_freevars.index(head)].cell_contents
+        except (IndexError, ValueError):
+            return None
+    elif head in caller.__globals__:
+        value = caller.__globals__[head]
+    else:
+        return None
+    for attr in rest:
+        if not issubclass(type(value), types.ModuleType):
+            return None
+        value = value.__dict__.get(attr, _MISSING)
+    return value if type(value) is types.FunctionType else None
 
 
 def _helpers_not_run(report: Any, unit: Any) -> set[str]:
