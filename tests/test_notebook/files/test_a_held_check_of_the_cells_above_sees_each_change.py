@@ -179,7 +179,9 @@ def test_an_edit_to_a_linked_files_target_is_seen(recorded, tmp_path):
     deps = dict(recorded)
     deps[str(link)] = stat_key(os.stat(link))
     assert _ask(deps) and _ask(deps)
-    real.write_text("REAL ONE", encoding="utf-8")
+    # Not a bare rewrite to the same size: on Windows one in the clock tick
+    # that wrote the file keeps its mtime too, and no stat can see it.
+    _same_size_edit(real)
     assert not _ask(deps)
 
 

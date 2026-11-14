@@ -24,6 +24,7 @@ from cash._user_attrs import instance_of, own_dict
 from cash.exceptions import CacheBackendError
 
 from .. import _native, _plain_data, _weak, cost_model, handed_copies, held_reads, kept_state, stored_pickle
+from .._clock import fine_thread_clock
 from .._lazy_module import LazyModule
 from ..cost_model import GENERIC_FAMILY
 from ..sizing import memory_footprint, pickled_size_estimate, slot_values
@@ -2943,48 +2944,11 @@ _TIMED_COPY_BYTES = 1 << 20
 _COPY_SPEED: list[float] = []
 
 
-def _fine_thread_clock() -> Any:
-    """The clock a copy is timed with: this thread's CPU time, where it
-    resolves a microsecond; else the wall clock (Windows: 15.6 ms ticks).
-
-    CPU time, because a copy that waited for a core says nothing about the
-    copy: the wall time of the cell it would replace waited too.
-    """
-    try:
-        if time.get_clock_info("thread_time").resolution <= 1e-6 and _ticks_finely(time.thread_time):
-            return time.thread_time
-    except (AttributeError, ValueError, OSError):
-        pass
-    return time.perf_counter
-
-
-def _ticks_finely(clock: Any) -> bool:
-    """Whether *clock* really moves within half a millisecond of busy work.
-
-    The reported resolution is not enough: Windows reports 1e-07 for
-    `thread_time`, but GetThreadTimes moves in 15.6 ms ticks, so a copy timed
-    with it reads 0 s. Nor is seeing it move: one of those ticks falls in
-    the half millisecond about one time in thirty, and the process then
-    timed every copy with it. A fine clock moves by less than
-    `_FINE_STEP_S` from one reading to the next.
-    """
-    deadline = time.perf_counter() + 5e-4
-    last = clock()
-    while time.perf_counter() < deadline:
-        now = clock()
-        if now != last:
-            if now - last <= _FINE_STEP_S:
-                return True
-            last = now  # a tick, or this thread was descheduled between readings
-    return False
-
-
-#: The most a clock `_ticks_finely` takes to be fine moves between two
-#: readings of it in a busy loop.
-_FINE_STEP_S = 1e-4
-
-
-_copy_clock = _fine_thread_clock()
+#: Timed with this thread's CPU time where it resolves a microsecond, else
+#: the wall clock (`fine_thread_clock`): a copy that waited for a core says
+#: nothing about the copy, as the wall time of the cell it would replace
+#: waited too.
+_copy_clock = fine_thread_clock()
 
 #: How many readings `copy_seconds` takes the fastest of. The fastest, not
 #: the mean: one copy caught behind other work says little about the next,

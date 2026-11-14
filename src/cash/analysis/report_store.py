@@ -47,13 +47,13 @@ import hashlib
 import inspect
 import json
 import sys
-import time
 import types
 import weakref
 from collections.abc import Callable
 from typing import Any
 
 from .. import _weak
+from .._clock import fine_thread_clock
 from .._memo import CODE_OBJECTS, LruMemo
 from .._paths import is_pseudo_filename
 from ..code_digest import callable_identity
@@ -859,13 +859,16 @@ _FLUSH_EVERY = 64
 #: A walk that took less CPU time than working out its guards (which
 #: reading the report back does again) and reading its file is not stored:
 #: walking it again costs less than checking it would. CPU time of this
-#: thread, so a busy machine does not tip it.
+#: thread, so a busy machine does not tip it -- where that clock is fine:
+#: on Windows it moves in 15.6 ms ticks, read every walk as 0 s and so as
+#: too cheap to store, and nothing was ever stored (`fine_thread_clock`).
 _READ_COST = 0.0005
 
 
 def save(func: Callable[..., Any], report: PurityReport, walk: Any, seconds: float | None = None) -> None:
     """Keep *report*, just walked from *func* by *walk* in *seconds* (CPU
-    time of this thread, `time.thread_time`), for later processes. Worked
+    time of this thread where that clock is fine, `fine_thread_clock`), for
+    later processes. Worked
     out now, written in batches and at exit (`flush`), once the cache dir
     exists."""
     root = _root_path(func)
@@ -874,13 +877,14 @@ def save(func: Callable[..., Any], report: PurityReport, walk: Any, seconds: flo
     text = _text(func)
     if text is None:
         return
-    start = time.thread_time()
+    clock = fine_thread_clock()
+    start = clock()
     try:
         entry = _entry(func, report, walk, text)
     except Exception:  # noqa: BLE001 - a report that cannot be spelled is not stored; the walk stands
         STATS["refused"] += 1
         return
-    if seconds is not None and seconds < time.thread_time() - start + _READ_COST:
+    if seconds is not None and seconds < clock() - start + _READ_COST:
         STATS["cheap"] += 1
         return
     _PENDING.append((root, entry))

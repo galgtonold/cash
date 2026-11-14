@@ -20,13 +20,13 @@ import inspect
 import linecache
 import logging
 import threading
-import time
 import types
 import weakref
 from collections.abc import Callable
 from typing import Any
 
 from .. import _weak
+from .._clock import fine_thread_clock
 from .._memo import PURITY_REPORTS, LruMemo
 from .._paths import is_pseudo_filename
 from ..diagnostics import warn_diagnostic
@@ -99,10 +99,11 @@ class PurityAnalyzer:
         report = _stored_report(func) if memo_key is not None else None
         if report is None:
             walk = HelperWalk(func)
-            start = time.thread_time()
+            clock = fine_thread_clock()
+            start = clock()
             report = walk.run()
             if memo_key is not None:
-                _store_report(func, report, walk, time.thread_time() - start)
+                _store_report(func, report, walk, clock() - start)
         elif tree_memo.VERIFY:
             report_store.verify(func, report, HelperWalk(func).run())
         if report.unwalkable:
