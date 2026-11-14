@@ -43,7 +43,6 @@ NAME_LOOKUP_DESCRIPTIONS = (
     "__import__(...)",
     "a name lookup bound to a local:",
 )
-ISSUE_DISCARDED_CALL = "discarded_call"
 ISSUE_SCOPE_MUTATION = "scope_mutation"
 ISSUE_MUTABLE_GLOBAL = "mutable_global"
 # Reading ambient state -- the clock, the environment, the working directory, a
@@ -69,10 +68,10 @@ class PurityIssue:
 
     Attributes:
         kind: One of ``impure_call``, ``dynamic_pattern``,
-            ``untrackable_dep``, ``discarded_call``, ``scope_mutation``,
+            ``untrackable_dep``, ``scope_mutation``,
             ``mutable_global``, ``ambient_read``, ``network_read``.
         description: Human-readable summary (e.g. ``"requests.post()"``,
-            ``"global X"``, ``"discards return of helper(...)``).
+            ``"global X"``).
         where: Qualified name + line of the function containing the
             issue. For helpers, this is the helper's qualname so the
             user can fix the source of the problem, not just the

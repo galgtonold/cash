@@ -42,8 +42,7 @@ AMBIENT_KINDS = frozenset({EffectKind.CLOCK, EffectKind.ENVIRONMENT})
 
 
 #: Method names the decorator reports on any receiver: a mutator, or a verb
-#: whose kind it warns about. The discarded-call rule skips these (the call is
-#: already reported), and "does this change a global?" reads them.
+#: whose kind it warns about: "does this change a global?" reads them.
 REPORTED_METHODS: frozenset[str] = MUTATOR_METHODS | frozenset(
     name for name, kind in METHOD_VERBS.items() if DECORATOR_POLICY[kind] is Action.WARN
 )

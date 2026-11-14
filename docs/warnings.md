@@ -1008,7 +1008,6 @@ Each finding has a line number and a label:
 |---|---|---|
 | `impure_call` | A call made for its effect: `print` to stdout, `open(..., "w")`, `os.remove`, `subprocess.run`, `requests.post`, a write method such as `df.to_csv` on an object the function did not create, an in-place method such as `rows.sort()` on one (a `sort` whose result is used, as polars' `df.sort("ts")` is, returns a new object and is not reported), or a `@stateful` function; also reading the keyboard or standard input (`input()`, `sys.stdin.read()`, `for line in sys.stdin`) | this code |
 | `scope_mutation` | `global` / `nonlocal`, or assigning to another object's attribute or item. An object the function made is its own: a literal, a copy, or what a numpy, pandas or polars function returns (`load = np.bincount(...); load[c] -= d`, `counts = pd.crosstab(...); counts.columns = [...]`), except a view of an argument (`np.reshape`, `np.asarray`, `out=`) | this code |
-| `discarded_call` | A call whose return value is thrown away, except on an object the function made itself (`d = deque(xs); d.popleft()`, `m = LinearRegression(); m.fit(X, y)`) | this code |
 | `mutable_global` | A module global that other code in the module reassigns, and that the key does not fold | this code |
 | `dynamic_pattern` | A callable picked at run time from a runtime namespace: `globals()[name]` or `vars(mod)[name]` called through (`globals()[name].fit(x)`), a local bound to one (`ns = globals(); ns[name]()`), or a table holding `eval` / `exec` | this code |
 | `ambient_read` | The clock, a fresh UUID, an environment variable named at run time | [KEY-AMBIENT-READ](#key-ambient-read) |
@@ -1031,7 +1030,7 @@ whose name is written out
 (`sys.modules["helper"].g`, `getattr(helper, "g")`, `attrgetter("g")(helper)`):
 cash follows the code it names.
 
-**Why it matters.** `impure_call`, `scope_mutation` and `discarded_call` mean
+**Why it matters.** `impure_call` and `scope_mutation` mean
 a hit will not repeat the effect. `mutable_global` and `dynamic_pattern` are
 worse: something the result depends on is not in the key, so editing it does
 not invalidate the entry.
@@ -1843,8 +1842,9 @@ On Python 3.12 and newer, a lookup by name (`getattr(module, name)`,
 records the code the call ran and what each lookup found, and serves a later
 call only while all of it is unchanged. This warning then comes only when that
 record cannot be checked again, and says why: the call ran a function that has
-side effects or reads the clock, a function no name finds, a value too big to
-digest, or it left a thread running.
+side effects or reads the clock, changed a global that code reads in place
+(`heapq.heappush(HEAP, x)`: a hit would not change it again), a function no
+name finds, a value too big to digest, or it left a thread running.
 
 <!-- claim: cash/analysis/helper_walk.py:HelperWalk._note_decided_at_run_time @1454635c -->
 Before Python 3.12 (or with `CASH_TRACE=0`) the same warning names an

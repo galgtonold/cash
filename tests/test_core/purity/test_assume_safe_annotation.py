@@ -37,11 +37,6 @@ from . import audited_helper
 REGISTRY: dict = {}
 
 
-def sink(payload):
-    """Stands in for a client method whose name says it writes."""
-    return payload
-
-
 def _writes_through_a_module(fd, data):
     """Never called. It exists so this MODULE contains a write-named call on a
     module global (``os.write``), which is the exact condition that produced
@@ -79,7 +74,7 @@ def test_the_blanket_flag_hides_a_later_addition(tmp_path):
     """
 
     def audited_then_extended(uid):
-        sink({"unaudited": uid})  # added long after the audit
+        print({"unaudited": uid})  # added long after the audit
         return uid
 
     assert _kinds(audited_then_extended), "control: the analyzer must see this call at all"
@@ -89,7 +84,7 @@ def test_the_blanket_flag_hides_a_later_addition(tmp_path):
 # ------------------------------------------------------------- the annotation
 def test_an_annotated_statement_is_waived(tmp_path):
     def audited(uid):
-        sink({"audited": uid})  # @cash:assume-safe
+        print({"audited": uid})  # @cash:assume-safe
         return uid
 
     assert _kinds(audited) == []
@@ -101,7 +96,7 @@ def test_an_annotation_on_the_line_above_also_waives(tmp_path):
 
     def audited(uid):
         # @cash:assume-safe
-        sink({"audited": uid})
+        print({"audited": uid})
         return uid
 
     assert _kinds(audited) == []
@@ -111,8 +106,8 @@ def test_a_statement_added_later_is_reported_again(tmp_path):
     """The whole point: the waiver covers what it was written for, not more."""
 
     def audited_then_extended(uid):
-        sink({"audited": uid})  # @cash:assume-safe
-        sink({"added": uid})  # no annotation -- new, unaudited
+        print({"audited": uid})  # @cash:assume-safe
+        print({"added": uid})  # no annotation -- new, unaudited
         return uid
 
     issues = PurityAnalyzer().analyze(audited_then_extended).issues
@@ -139,13 +134,13 @@ def test_the_def_line_waives_function_scoped_findings_only(tmp_path):
 
 class _Plain:
     def run(self, uid):
-        sink({"not audited": uid})
+        print({"not audited": uid})
         return uid
 
 
 class _Audited:
     def run(self, uid):
-        sink({"not audited": uid})  # @cash:assume-safe
+        print({"not audited": uid})  # @cash:assume-safe
         return uid
 
 
@@ -164,11 +159,11 @@ def test_two_methods_alike_but_for_the_waiver_are_analyzed_apart():
 
 def test_strict_mode_honours_the_annotation(tmp_path):
     def audited(uid):
-        sink({"audited": uid})  # @cash:assume-safe
+        print({"audited": uid})  # @cash:assume-safe
         return uid
 
     def not_audited(uid):
-        sink({"nope": uid})
+        print({"nope": uid})
         return uid
 
     assert _run(audited, 1, strict=True, tmp_path=tmp_path) == ""
@@ -198,21 +193,19 @@ def test_a_multiline_call_is_waived_from_its_OPENING_line(tmp_path):
     """
 
     def opening(uid):
-        sink(  # @cash:assume-safe
+        print(  # @cash:assume-safe
             {"audited": uid},
         )
         return uid
 
     def closing(uid):
-        sink(
+        print(
             {"audited": uid},
         )  # @cash:assume-safe
         return uid
 
-    # Bare statements, not `return sink(...)`: a call whose value is USED is
-    # not a finding at all, so the first version of this test passed for the
-    # wrong reason -- both arms were clean because neither had anything to
-    # waive.
+    # Both arms have a finding to waive (a print), so a clean result is the
+    # waiver's doing.
     assert _kinds(opening) == []
     assert _kinds(closing), "the closing line is not where the finding lives"
 
@@ -221,7 +214,7 @@ def test_an_unrelated_comment_does_not_waive(tmp_path):
     """Only the directive counts -- a passing mention must not silence."""
 
     def looks_similar(uid):
-        sink({"x": uid})  # assume this is safe, cash
+        print({"x": uid})  # assume this is safe, cash
         return uid
 
     assert _kinds(looks_similar), "a passing mention must not act as a waiver"

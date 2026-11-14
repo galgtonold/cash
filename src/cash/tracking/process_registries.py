@@ -20,11 +20,12 @@ with two thousand modules loaded, and whose writes cash already sees in
 the statement's text and the functions it calls, as it does for the
 seeds of ``random`` and NumPy, which it puts back with the entry.
 
-Two registries have no way to be read, so their calls are counted
-instead: ``codecs.register`` (wrapped here, from the first snapshot on)
-and ``sys.addaudithook`` (the ``sys.addaudithook`` audit event, which
+Three registries have no way to be read, so their calls are counted
+instead: ``codecs.register`` (wrapped here, from the first snapshot on),
+``sys.addaudithook`` (the ``sys.addaudithook`` audit event, which
 Python raises to the hooks already installed: cash's own is,
-`io_watch`).
+`io_watch`) and the environment ``os.putenv`` and ``os.unsetenv`` change
+outside ``os.environ`` (their audit events).
 """
 
 from __future__ import annotations
@@ -79,6 +80,9 @@ def unregister_atexit(fn: Callable[..., object]) -> None:
 #: Calls of ``codecs.register`` and audit hooks added, by anyone but cash.
 _CODECS = [0]
 _AUDIT_HOOKS = [0]
+#: Calls of ``os.putenv`` and ``os.unsetenv``: they change the environment
+#: a child process and C code read, and not ``os.environ``.
+_NATIVE_ENVIRONMENT = [0]
 _counting = False
 #: ``callback -> times registered`` through ``atexit.register`` since
 #: counting began, and how many of those ``atexit.unregister`` took back
@@ -181,6 +185,12 @@ def _count_calls() -> None:
 
     io_watch.subscribe_always("sys.addaudithook", added)
 
+    def set_natively(_args: tuple) -> None:
+        _NATIVE_ENVIRONMENT[0] += 1
+
+    io_watch.subscribe_always("os.putenv", set_natively)
+    io_watch.subscribe_always("os.unsetenv", set_natively)
+
 
 _SIGNALS: tuple[int, ...] | None = None
 
@@ -275,9 +285,12 @@ def _same_loggers(before: Any, after: Any) -> bool:
 _MISSING = object()
 
 
-def _environment() -> dict[Any, Any]:
+def _environment() -> tuple[dict[Any, Any], int]:
+    """``os.environ``, and how many times ``os.putenv`` or ``os.unsetenv``
+    was called (the audit events: also when imported by name), which
+    change the process's environment and leave ``os.environ`` alone."""
     data = attribute_or(os.environ, "_data", None)
-    return dict(data) if isinstance(data, dict) else dict(os.environ)
+    return (dict(data) if isinstance(data, dict) else dict(os.environ)), _NATIVE_ENVIRONMENT[0]
 
 
 def _matplotlib() -> dict[str, Any] | None:
@@ -355,7 +368,7 @@ _REGISTRIES: tuple[tuple[str, Callable[[], Any], Callable[[Any, Any], bool] | No
     ("the codec search functions (codecs.register)", lambda: _CODECS[0], None),
     ("the audit hooks (sys.addaudithook)", lambda: _AUDIT_HOOKS[0], None),
     ("where imports are found (sys.path, sys.meta_path, sys.path_hooks)", _imports, None),
-    ("the environment (os.environ)", _environment, None),
+    ("the environment (os.environ, os.putenv, os.unsetenv)", _environment, None),
     ("the working directory (os.chdir)", os.getcwd, None),
     ("matplotlib's rcParams", _matplotlib, None),
     ("NumPy's error handling or print options (np.seterr, np.set_printoptions)", _numpy, None),

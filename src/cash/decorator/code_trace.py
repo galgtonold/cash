@@ -40,8 +40,10 @@ not in the trace. A call whose trace could not be checked again is not
 stored, and runs again next time as before (`build` says why): a function no
 name finds, a value too big to digest, a lookup on a library object by a name
 the recorder could not read, a thread, worker process or generator the call
-left behind, or a function it ran that has side effects, reads the clock,
-draws from a generator of its own or runs ``eval``.
+left behind, a function it ran that has side effects, reads the clock,
+draws from a generator of its own or runs ``eval``, or a global the code it
+ran reads that the call changed in place (``heapq.heappush(HEAP, x)``): its
+item holds the state the call left, and a hit would not change it again.
 
 Threads: user code that starts while any traced call runs, on any thread, is
 added to every traced call in progress, so the work of a pool a call waits on
@@ -73,7 +75,6 @@ from .._paths import is_pseudo_filename
 from .._user_attrs import instance_of, module_file
 from ..analysis.purity_report import (
     ISSUE_AMBIENT_READ,
-    ISSUE_DISCARDED_CALL,
     ISSUE_IMPURE_CALL,
     ISSUE_NETWORK_READ,
     ISSUE_SCOPE_MUTATION,
@@ -149,9 +150,7 @@ _UNUSABLE = {
     "trace_failed": "cash could not read code it saw run",
 }
 #: Findings in a function the call ran that a hit would skip or miss.
-_REFUSED_KINDS = frozenset(
-    {ISSUE_IMPURE_CALL, ISSUE_SCOPE_MUTATION, ISSUE_AMBIENT_READ, ISSUE_NETWORK_READ, ISSUE_DISCARDED_CALL}
-)
+_REFUSED_KINDS = frozenset({ISSUE_IMPURE_CALL, ISSUE_SCOPE_MUTATION, ISSUE_AMBIENT_READ, ISSUE_NETWORK_READ})
 #: Global names a function reads that are where cash put itself.
 _SKIP_GLOBALS = frozenset({"__builtins__", "__name__", "__file__", "__spec__", "__loader__", "__package__"})
 #: Namespaces bigger than this are not digested whole (an unread name on one).
@@ -174,7 +173,7 @@ def _unit_class() -> type:
         """What one traced call saw: `Unit`'s fields, its lookups by name
         and the items of what was served inside it."""
 
-        __slots__ = ("cached_codes", "callees", "lookups", "lookups_followed", "sites")
+        __slots__ = ("cached_codes", "callees", "global_starts", "lookups", "lookups_followed", "sites")
 
         def __init__(self, kind: str) -> None:
             super().__init__(kind)
@@ -193,6 +192,11 @@ def _unit_class() -> type:
             #: parameters -> ``(caller code, offset of the call)`` for each
             #: start of it (`_Recorder.site_codes`, `cash.analysis.out_arguments`).
             self.sites: dict[types.CodeType, set[tuple[types.CodeType, int]]] = {}
+            #: A strict traced call's (`begin`): ``(module, name)`` of a
+            #: global or ``(module, "mod.a.b")`` of an attribute chain the
+            #: code that ran reads -> ``(digest, qualname)`` as the first
+            #: code reading it started; None when not watched.
+            self.global_starts: dict[tuple[str, str], tuple[str, str]] | None = None
 
         def absorb(self, inner: Any) -> None:
             super().absorb(inner)
@@ -417,8 +421,10 @@ def _recorder_class() -> type:
             self._kinds.clear()
             sys.monitoring.restart_events()
 
-        def begin(self, kind: str) -> Any:
+        def begin(self, kind: str, *, watch_globals: bool = False) -> Any:
             unit = TraceUnit(kind)
+            if watch_globals:
+                unit.global_starts = {}
             if not self._intact():
                 unit.markers.add("tool_conflict")
                 mon = sys.monitoring
@@ -540,6 +546,14 @@ def _recorder_class() -> type:
                         cells = start_cells(frame, code)
                 finally:
                     self._in_callback = False
+            watching = [u for u in self.active if u.global_starts is not None and code not in u.codes]
+            if watching and not self._in_callback:
+                self._in_callback = True
+                try:
+                    with untracked():
+                        _note_global_starts(watching, code, g, module)
+                finally:
+                    self._in_callback = False
             inside_collection = collecting()
             for unit in units:
                 rec.note_collected(unit, code, inside_collection)
@@ -655,10 +669,13 @@ def recorder_or_reason() -> Any:
     return _RECORDER
 
 
-def begin() -> Any:
-    """Start recording a traced call's body; None when it cannot be."""
+def begin(*, watch_globals: bool = False) -> Any:
+    """Start recording a traced call's body; None when it cannot be.
+    *watch_globals*: the call picks code by name, so the globals the code
+    it runs reads are digested as that code starts (`_note_global_starts`)
+    and `build` refuses a call that changed one."""
     rec = _recorder() if TRACEABLE else None
-    return rec.begin("decorator") if rec is not None else None
+    return rec.begin("decorator", watch_globals=watch_globals) if rec is not None else None
 
 
 def end(unit: Any) -> None:
@@ -1322,6 +1339,75 @@ def import_reads(code: types.CodeType, g: Mapping[str, Any]) -> list[tuple[str, 
     return list(dict.fromkeys(out))
 
 
+#: Globals not digested as code starts: what they hold is code, keyed by
+#: its own items, not data a call changes in place.
+_CODE_TYPES = (types.ModuleType, type, types.FunctionType, types.BuiltinFunctionType, types.MethodType)
+
+
+def _note_global_starts(units: list[Any], code: types.CodeType, g: Mapping[str, Any], module: str) -> None:
+    """Digest the globals *code* reads (and the attribute chains it reads
+    through a module of the user's) as it starts, for each of *units* that
+    has not seen them yet. A hit serves the entry without running the call,
+    and the trace's items are digested once it ended: a global the call
+    changed in place (``heapq.heappush(HEAP, x)``, ``np.copyto(ARR, x)``)
+    is checked by the state the call left it in, and a hit would not
+    change it again (`build`)."""
+    from ..tracking.trace_items import name_table
+
+    table = name_table(code)
+    qn = code.co_qualname
+    for name in table.reads:
+        if not isinstance(name, str) or name in _SKIP_GLOBALS or name.startswith("__cash"):
+            continue
+        key = (module, name)
+        todo = [u for u in units if key not in u.global_starts]
+        if not todo:
+            continue
+        value = g.get(name, _MISSING)
+        if value is _MISSING:
+            continue
+        if issubclass(type(value), types.ModuleType):
+            if _user_module(value):
+                for chain in table.chains:
+                    head, _, rest = chain.partition(".")
+                    if head == name and rest:
+                        ckey = (module, chain)
+                        cunits = [u for u in units if ckey not in u.global_starts]
+                        if cunits:
+                            digest = _chain_digest(module, chain)
+                            if digest is not None:
+                                for u in cunits:
+                                    u.global_starts[ckey] = (digest, qn)
+            continue
+        if issubclass(type(value), _CODE_TYPES):
+            continue
+        digest = _digest(value)
+        if digest is None:
+            continue
+        for u in todo:
+            u.global_starts[key] = (digest, qn)
+
+
+def _changed_global(items: list[tuple], starts: Mapping[tuple[str, str], tuple[str, str]] | None) -> str | None:
+    """Why a strict traced call changed a global its code read, by the
+    items `_Build` digested after it against the digests as that code
+    started (`_note_global_starts`); None when none moved."""
+    if not starts:
+        return None
+    for item in items:
+        if item[0] not in ("global", "attr"):
+            continue
+        start = starts.get((item[1], item[2]))
+        if start is None or start[0] == item[-1]:
+            continue
+        what = f"{item[1]}.{item[2]}" if item[0] == "global" else item[2]
+        return (
+            f"it ran {start[1]}, and calling it modifies the module global '{what}' "
+            "in place, which a cache hit would not repeat"
+        )
+    return None
+
+
 def _chain_digest(module: str, chain: str) -> str | None:
     from ..tracking.trace_items import inspect_getattr
 
@@ -1429,8 +1515,6 @@ class _OutArguments:
         param = mutated_parameter(issue)
         if param is not None:
             return self._excused(issue.where, param)
-        if issue.kind == ISSUE_DISCARDED_CALL:
-            return self._discard_excused(issue)
         return False
 
     def _excused(self, where: str, param: str) -> bool:
@@ -1454,27 +1538,6 @@ class _OutArguments:
                 return False
         return True
 
-    def _discard_excused(self, issue: Any) -> bool:
-        """``fill(x, buf)`` drops what ``fill`` returns: what such a call is
-        for is its effect. Excused when that function's every finding on a
-        parameter is excused; any other finding of its own is reported as
-        itself."""
-        from ..analysis.out_arguments import mutated_parameter
-        from ..analysis.purity_analyzer import get_analyzer
-
-        text = getattr(issue, "description", "")
-        if not (text.startswith("discards return of ") and text.endswith("(...)")):
-            return False
-        name = text[len("discards return of ") : -len("(...)")]
-        for qualname, fn in self._functions().items():
-            if fn.__name__ != name:
-                continue
-            own = [i for i in get_analyzer().analyze_reached(fn).issues if i.where == qualname]
-            params = [mutated_parameter(i) for i in own]
-            if params and all(p is not None and self._excused(qualname, p) for p in params):
-                return True
-        return False
-
 
 def build(
     unit: Any,
@@ -1497,7 +1560,7 @@ def build(
             b = _Build(unit, static_codes)
             items = b.run()
         judged = [f for f in b.functions if f.__code__ not in accepted] if accepted else b.functions
-        why = _refusal_in(judged, unit) if strict else None
+        why = (_refusal_in(judged, unit) or _changed_global(items, unit.global_starts)) if strict else None
         if why is not None:
             return None, why
         return items, ""

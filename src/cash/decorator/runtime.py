@@ -1899,7 +1899,7 @@ class CallRunner:
             # What a call that picks code by name ran, for its trace. Begun
             # and ended outside the body's time: setting the recorder up
             # (installing it, on a process's first call) is cash's cost.
-            call.trace_unit = code_trace.begin() if call.traced else None
+            call.trace_unit = code_trace.begin(watch_globals=call.needs_trace) if call.traced else None
             body_t0 = _perf_counter()
             nested = [0.0]
             nested_token = NESTED_CASH_SECONDS.set(nested)

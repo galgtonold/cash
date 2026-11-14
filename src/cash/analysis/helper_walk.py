@@ -46,7 +46,7 @@ from ..loaded_code import code_objects_of
 from ..purity import is_pure, is_stateful
 from ..source_reading import getsourcelines, own_source
 from . import fact_store, tree_memo
-from .ambient_reads import log_helper_names, log_only_ambient_reads, method_namespace
+from .ambient_reads import log_only_ambient_reads, method_namespace
 from .annotations import assume_safe_block_lines, audited_lines
 from .ast_util import bytecode_global_refs, resolve_callee
 from .callee_effects import scope_locals, source_global_mutations
@@ -667,7 +667,6 @@ class HelperWalk:
             fresh_nodes=_fresh_name_nodes(func_def, namespace),
             log_only=log_only_ambient_reads(func_def, func, ambient_namespace),
             namespace=namespace,
-            log_helpers=log_helper_names(func_def, func),
             ambient_namespace=ambient_namespace,
             func_def=func_def,
         )
