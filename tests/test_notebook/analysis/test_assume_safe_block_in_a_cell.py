@@ -117,14 +117,8 @@ def cell_runner(mock_shell, tmp_path):
 
 
 def test_a_function_defined_in_a_cell_honours_the_block(cell_runner):
-    cell = (
-        "import os\n"
-        "@c.cache\n"
-        "def audited(n):\n"
-        "    with cash.assume_safe():\n"
-        "        os.getpid()\n"
-        "    return n * 2\n"
-        "audited(1)\n"
-    )
+    """``print`` is an effect the source reading reports. (A dropped return
+    alone, ``os.getpid()``, is not: the call is judged by what it does.)"""
+    cell = "@c.cache\ndef audited(n):\n    with cash.assume_safe():\n        print(n)\n    return n * 2\naudited(1)\n"
     assert cell_runner(cell) == 0
     assert cell_runner(cell.replace("audited", "plain").replace("    with cash.assume_safe():\n    ", "")) == 1
