@@ -174,12 +174,18 @@ def store_dir() -> Path | None:
     return _store_dir()
 
 
+#: A stored file that cannot be read back: gone, unreadable, not JSON, or
+#: nested deeper than the parser recurses (or too big to hold). Each is a
+#: miss, which the next store overwrites.
+_UNREADABLE = (OSError, ValueError, RecursionError, MemoryError)
+
+
 def read_json(file: Path) -> object:
     """The JSON in *file*, or None when it cannot be read or parsed."""
     try:
         with untracked():
             return json.loads(file.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except _UNREADABLE:
         return None
 
 
@@ -210,7 +216,7 @@ def _load(file: Path, kind: str, digest: str) -> dict | None:
     try:
         with untracked():
             data = json.loads(file.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except _UNREADABLE:
         return None
     if not isinstance(data, dict) or data.get("kind") != kind or data.get("digest") != digest:
         return None
@@ -239,7 +245,9 @@ def _write(directory: Path, file: Path, data: dict, counted: bool = True) -> boo
             fd, tmp = tempfile.mkstemp(dir=directory, prefix=".tmp-", suffix=".json")
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    json.dump(data, f)
+                    # One string, one write: ``json.dump`` writes a chunk
+                    # per token, several times slower for a large record.
+                    f.write(json.dumps(data))
                 os.replace(tmp, file)
             except BaseException:
                 try:

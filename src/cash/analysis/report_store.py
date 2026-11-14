@@ -45,12 +45,15 @@ import atexit
 import functools
 import hashlib
 import inspect
+import json
 import sys
+import time
 import types
 from collections.abc import Callable
 from typing import Any
 
 from .. import _weak
+from .._memo import CODE_OBJECTS, LruMemo
 from .._paths import is_pseudo_filename
 from ..code_digest import callable_identity
 from ..effects import EffectKind
@@ -68,7 +71,7 @@ from .unloaded_modules import source_digest
 __all__ = ["STATS", "StoredReportMismatch", "flush", "load", "save", "status"]
 
 #: Layout of a stored file; a change makes every older one a miss.
-_FORMAT = 2
+_FORMAT = 3
 _KIND = "purity-report"
 #: Reports kept per function: its recent texts, and the worlds they ran in.
 _MAX_ENTRIES = 8
@@ -76,7 +79,7 @@ _MAX_ENTRIES = 8
 #: holds a callable to the one the walk visited.
 _MAX_STEPS = 8
 
-STATS = {"loaded": 0, "stored": 0, "missed": 0, "stale": 0, "refused": 0, "verified": 0}
+STATS = {"loaded": 0, "stored": 0, "missed": 0, "stale": 0, "refused": 0, "cheap": 0, "failed": 0, "verified": 0}
 
 
 class StoredReportMismatch(AssertionError):
@@ -281,6 +284,175 @@ def _object_guard(obj: Any) -> list:
     return [_token(obj), _raw_digest(obj), names]
 
 
+def _digest(value: Any) -> str:
+    """A short digest of *value*, a JSON-able guard: what a report keeps of
+    it (tuples digest as lists, as they read back)."""
+    text = json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.blake2b(text.encode("utf-8", "surrogatepass"), digest_size=16).hexdigest()
+
+
+# --- one object's guard, shared by every report that visits it ---
+#
+# A library's cached functions reach the same helpers: forty roots of one
+# package visit a few hundred functions some five thousand times. Each
+# object's guard (`_object_guard`) is worked out once per process and kept
+# with what it was worked out from (`_stamp`): the object, its code, its
+# marks, the digest of its file's text, and for each name, cell and default
+# the module, function or class it holds (by identity, as `bindings_changed`
+# holds an in-process report) or the token of any other value. It is served
+# again only while all of that is the same, so a rebind, a new code object,
+# a patched global or an edited file works it out again. What depends on
+# more than the object (imports, unbound names, loaded modules, library
+# versions) is worked out for every report.
+
+_MISSING = object()
+#: id(object) -> (object, stamp, digest of its guard).
+_OBJECT_GUARDS: LruMemo[int, tuple[Any, tuple, str]] = LruMemo(CODE_OBJECTS)
+#: code object -> the names it and the code below it read, in order.
+_CODE_NAMES: LruMemo[types.CodeType, tuple[str, ...]] = LruMemo(CODE_OBJECTS)
+
+
+def _code_names(code: types.CodeType) -> tuple[str, ...]:
+    names = _CODE_NAMES.get(code)
+    if names is None:
+        found: dict[str, None] = {}
+        for below in _codes_below(code):
+            found.update(dict.fromkeys(below.co_names))
+        names = _CODE_NAMES[code] = tuple(found)
+    return names
+
+
+#: Kinds whose values are kept in a stamp as themselves.
+_HELD_KINDS = frozenset({types.FunctionType, types.BuiltinFunctionType, types.ModuleType, type})
+#: Built-in kinds with no instance dict, which no code can change: the
+#: token of each of their values is the kind's (`_token` reads only the
+#: kind and what it holds), worked out once.
+_PLAIN_KINDS = frozenset(
+    {int, float, complex, str, bytes, bool, type(None), tuple, frozenset, list, dict, set, bytearray, range, slice}
+)
+_PLAIN_TOKENS: dict[type, Any] = {}
+
+
+def _value_stamp(value: Any) -> Any:
+    """*value* as a stamp holds it: a module, function or class itself
+    (compared by identity; holding one keeps no data alive), anything else
+    by its token (held, a value would be kept alive by the memo)."""
+    kind = type(value)
+    if kind in _HELD_KINDS:
+        return value
+    if kind in _PLAIN_KINDS:
+        token = _PLAIN_TOKENS.get(kind)
+        if token is None:
+            token = _PLAIN_TOKENS[kind] = _Token(json.dumps(_token(value)))
+        return token
+    if issubclass(kind, types.ModuleType) or isinstance(value, type):
+        return value
+    return _Token(json.dumps(_token(value)))
+
+
+class _Token(str):
+    """A token spelled as text in a stamp: compared by equality."""
+
+    __slots__ = ()
+
+
+def _stamp(obj: Any, file_digest: str | None) -> tuple:
+    """What *obj*'s guard is worked out from (see above)."""
+    if type(obj) is not types.FunctionType:
+        # A class or builtin: its token is cheap to read, its text is not.
+        return (_Token(file_digest or ""), _Token(json.dumps(_token(obj))))
+    code = obj.__code__
+    g = obj.__globals__
+    builtins = g.get("__builtins__")
+    if isinstance(builtins, types.ModuleType):
+        builtins = vars(builtins)
+    if not isinstance(builtins, dict):
+        builtins = {}
+    reads: list[Any] = []
+    for name in _code_names(code):
+        value = g.get(name, _MISSING)
+        if value is _MISSING:
+            reads.append(_MISSING)  # read from the builtins, or absent
+            value = builtins.get(name, _MISSING)
+        reads.append(_MISSING if value is _MISSING else _value_stamp(value))
+    cells: list[Any] = []
+    for cell in obj.__closure__ or ():
+        try:
+            cells.append(_value_stamp(cell.cell_contents))
+        except ValueError:  # an empty cell
+            cells.append(_MISSING)
+    marks = obj.__dict__
+    return (
+        _Token(file_digest or ""),
+        code,
+        g,
+        _Token(obj.__module__ or ""),
+        _Token(obj.__qualname__),
+        _Token(repr((marks.get("_cash_pure"), marks.get("_cash_stateful"), marks.get("_cash_cached")))),
+        tuple(reads),
+        tuple(cells),
+        tuple(_value_stamp(v) for v in obj.__defaults__ or ()),
+        tuple((_Token(k), _value_stamp(v)) for k, v in sorted((obj.__kwdefaults__ or {}).items())),
+    )
+
+
+def _same_stamp(a: tuple, b: tuple) -> bool:
+    if len(a) != len(b):
+        return False
+    for x, y in zip(a, b):
+        if x is y:
+            continue
+        if type(x) is _Token and type(y) is _Token and x == y:
+            continue
+        if type(x) is tuple and type(y) is tuple and _same_stamp(x, y):
+            continue
+        return False
+    return True
+
+
+def _object_digest(obj: Any, file_digest: str | None) -> str:
+    """The digest of `_object_guard` (*obj*), worked out again only when
+    what it rests on is not the same objects (see above)."""
+    stamp = _stamp(obj, file_digest)
+    key = id(obj)
+    kept = _OBJECT_GUARDS.get(key)
+    if kept is not None and kept[0] is obj and _same_stamp(kept[1], stamp):
+        return kept[2]
+    digest = _digest(_object_guard(obj))
+    _OBJECT_GUARDS[key] = (obj, stamp, digest)
+    return digest
+
+
+#: id(function) -> (function, its code, its file's digest, `callable_identity`).
+_IDENTITIES: LruMemo[int, tuple[Any, types.CodeType, str, str]] = LruMemo(CODE_OBJECTS)
+
+
+def _identity(live: Any, files: dict[str, str | None]) -> str:
+    """`callable_identity` (*live*), the key digest a report keeps for each
+    helper, kept per process for a plain function while its code and the
+    text of its file (digested in *files*, the file digests of this check)
+    are the same: its own source text is what it digests, or failing that
+    its code. A wrapper (``__wrapped__``), anything else, or a function
+    without a file is digested anew."""
+    if type(live) is not types.FunctionType or "__wrapped__" in live.__dict__:
+        return callable_identity(live)
+    filename = _file_of(live)
+    if filename is None:
+        return callable_identity(live)
+    if filename not in files:
+        files[filename] = _file_digest(filename)
+    file_digest = files[filename]
+    if file_digest is None:
+        return callable_identity(live)
+    code = live.__code__
+    kept = _IDENTITIES.get(id(live))
+    if kept is not None and kept[0] is live and kept[1] is code and kept[2] == file_digest:
+        return kept[3]
+    identity = callable_identity(live)
+    _IDENTITIES[id(live)] = (live, code, file_digest, identity)
+    return identity
+
+
 # --- the guards: what a report was worked out from ---
 
 
@@ -292,14 +464,21 @@ def _guards(
     unbound: tuple[tuple[str, str], ...],
     unloaded: tuple[str, ...],
     root_module: str | None,
+    files: dict[str, str | None],
 ) -> dict:
+    """What the report was worked out from, now. *files* (filled here) maps
+    each file read to the digest of its text, for the helper digests."""
     from ..decorator.library_versions import library_versions
 
-    files: dict[str, str | None] = {}
+    digests = []
+    visited_files = set()
     for obj in objects:
         filename = _file_of(obj)
-        if filename is not None and filename not in files:
-            files[filename] = _file_digest(filename)
+        if filename is not None:
+            visited_files.add(filename)
+            if filename not in files:
+                files[filename] = _file_digest(filename)
+        digests.append(_object_digest(obj, None if filename is None else files[filename]))
     imports = []
     for module_name, prefix, dotted in local_imports:
         found = unloaded_local_imports(module_name, prefix, dotted, root_module)
@@ -317,10 +496,10 @@ def _guards(
 
     functions = [o for o in objects if type(o) is types.FunctionType]
     return {
-        "objects": [_object_guard(o) for o in objects],
+        "objects": digests,
         "bindings": [None if b is UNRESOLVED else _token(b) for b in bindings],
         "cached": [None if c is UNRESOLVED else _token(c) for c in cached],
-        "files": sorted(files.items()),
+        "files": sorted((f, d) for f, d in files.items() if f in visited_files),
         "imports": imports,
         "unbound": [[m, n, m in sys.modules and n in vars(sys.modules[m])] for m, n in unbound],
         "unloaded": [[n, n in sys.modules] for n in unloaded],
@@ -359,7 +538,7 @@ def _read_issue(spelled: list) -> PurityIssue:
     )
 
 
-def _spell(report: PurityReport, objects: list[Any], paths: list[list]) -> dict:
+def _spell(report: PurityReport, objects: list[Any], paths: list[list], files: dict[str, str | None]) -> dict:
     """*report* as JSON: each live object it holds as the index of its path
     in *paths* (*objects* are the visited ones, found at those paths)."""
     if report.unwalkable or report.unkeyable:
@@ -415,7 +594,7 @@ def _spell(report: PurityReport, objects: list[Any], paths: list[list]) -> dict:
             live = resolve_binding(*path)
         else:
             live = found.get(qualname, objects[0])  # the root has no path
-        if live is UNRESOLVED or callable_identity(live) != digest:
+        if live is UNRESOLVED or _identity(live, files) != digest:
             raise _Unstorable(f"helper {qualname} is not found again by its path")
     return {
         "issues": [_spell_issue(i) for i in report.issues],
@@ -553,7 +732,7 @@ def load(func: Callable[..., Any]) -> PurityReport | None:
     for entry in reversed(entries):
         try:
             report = _check(entry, func)
-        except (_Unstorable, ValueError, TypeError, LookupError, AttributeError):
+        except Exception:  # noqa: BLE001 - an entry that cannot be checked is stale: walk, and store anew
             report = None
         if report is not None:
             STATS["loaded"] += 1
@@ -572,10 +751,10 @@ def _check(entry: dict, func: Any) -> PurityReport | None:
     if not objects or objects[0] is not func:
         return None
     spelled = entry["report"]
-    guard = entry["guards"]
     bindings = [resolve_binding(m, tuple(c)) for m, c in spelled["bindings"]]
     cached = [_find(p) for p in spelled["cached"]]
-    imports = [(m, tuple(p), tuple(d)) for m, p, d, _token_, _found in guard["imports"]]
+    imports = [(m, tuple(p), tuple(d)) for m, p, d in entry["imports"]]
+    files: dict[str, str | None] = {}
     now = _guards(
         objects,
         bindings,
@@ -584,8 +763,9 @@ def _check(entry: dict, func: Any) -> PurityReport | None:
         tuple(tuple(u) for u in spelled["unbound"]),
         tuple(spelled["unloaded"]),
         func.__module__,
+        files,
     )
-    if _as_json(now) != guard:
+    if _digest(now) != entry["guards"]:
         return None
     # Each helper as the decorator finds it on every call: through the
     # name its caller uses, which may not be its home.
@@ -594,7 +774,7 @@ def _check(entry: dict, func: Any) -> PurityReport | None:
     for qualname, digest in spelled["hashes"]:
         path = paths.get(qualname)
         live = held.get(qualname, func) if path is None else resolve_binding(*path)  # the root has no path
-        if live is UNRESOLVED or callable_identity(live) != digest:
+        if live is UNRESOLVED or _identity(live, files) != digest:
             return None
     return _read(spelled, objects)
 
@@ -608,30 +788,45 @@ def _as_json(value: Any) -> Any:
     return value
 
 
-#: Records waiting for the cache dir: a process that never makes one keeps
-#: only the most recent.
+#: Records waiting to be written: a process that never makes a cache dir
+#: keeps only the most recent.
 _MAX_PENDING = 256
 #: Records worked out in this process and not written yet: (root, entry).
 _PENDING: list[tuple[tuple[str, tuple[str, ...], str], dict]] = []
+#: Records worked out before they are written together (and the rest at
+#: exit): a file written per report cost more than the walks it spared.
+_FLUSH_EVERY = 64
+#: A walk that took less CPU time than working out its guards (which
+#: reading the report back does again) and reading its file is not stored:
+#: walking it again costs less than checking it would. CPU time of this
+#: thread, so a busy machine does not tip it.
+_READ_COST = 0.0005
 
 
-def save(func: Callable[..., Any], report: PurityReport, walk: Any) -> None:
-    """Keep *report*, just walked from *func* by *walk*, for later processes.
-    Worked out now, written when the cache dir exists (`flush`)."""
+def save(func: Callable[..., Any], report: PurityReport, walk: Any, seconds: float | None = None) -> None:
+    """Keep *report*, just walked from *func* by *walk* in *seconds* (CPU
+    time of this thread, `time.thread_time`), for later processes. Worked
+    out now, written in batches and at exit (`flush`), once the cache dir
+    exists."""
     root = _root_path(func)
     if root is None or not scan_store.enabled():
         return
     text = _text(func)
     if text is None:
         return
+    start = time.thread_time()
     try:
         entry = _entry(func, report, walk, text)
-    except (_Unstorable, ValueError, TypeError, LookupError, AttributeError, RecursionError):
+    except Exception:  # noqa: BLE001 - a report that cannot be spelled is not stored; the walk stands
         STATS["refused"] += 1
+        return
+    if seconds is not None and seconds < time.thread_time() - start + _READ_COST:
+        STATS["cheap"] += 1
         return
     _PENDING.append((root, entry))
     del _PENDING[:-_MAX_PENDING]
-    flush()
+    if len(_PENDING) >= _FLUSH_EVERY:
+        flush()
 
 
 def _entry(func: Any, report: PurityReport, walk: Any, text: str) -> dict:
@@ -649,26 +844,40 @@ def _entry(func: Any, report: PurityReport, walk: Any, text: str) -> dict:
         qualname = names.get(id(obj))
         objects.append(base)
         paths.append(_path_of(base, report.helper_resolution_paths.get(qualname) if qualname else None))
-    spelled = _spell(report, objects, paths)
+    files: dict[str, str | None] = {}
+    spelled = _spell(report, objects, paths, files)
     bindings = [resolve_binding(m, tuple(c)) for m, c in spelled["bindings"]]
     cached = [_find(p) for p in spelled["cached"]]
+    imports = walk.local_imports_read()
     guards = _guards(
         objects,
         bindings,
         cached,
-        walk.local_imports_read(),
+        imports,
         report.unbound_names,
         report.unloaded_modules,
         func.__module__,
+        files,
     )
-    return {"text": text, "paths": paths, "report": spelled, "guards": _as_json(guards)}
+    return {
+        "text": text,
+        "paths": paths,
+        "report": spelled,
+        "imports": [[m, list(p), list(d)] for m, p, d in imports],
+        # Only the digest of the guards: they are worked out again to check.
+        "guards": _digest(guards),
+    }
 
 
 def flush() -> None:
     """Write the records worked out so far, once the cache dir exists."""
     if not _PENDING:
         return
-    if scan_store.store_dir() is None:
+    try:
+        directory = scan_store.store_dir()
+    except Exception:  # noqa: BLE001 - at exit: a store that cannot be found keeps nothing
+        return
+    if directory is None:
         return
     pending = list(_PENDING)
     _PENDING.clear()
@@ -694,10 +903,10 @@ def verify(func: Any, loaded: PurityReport, walked: PurityReport) -> None:
     try:
         objects: list[Any] = [func]
         paths: list[list] = [_path_of(func)]
-        want = _spell(walked, objects, paths)
+        want = _spell(walked, objects, paths, {})
         objects2: list[Any] = [func]
         paths2: list[list] = [_path_of(func)]
-        got = _spell(loaded, objects2, paths2)
+        got = _spell(loaded, objects2, paths2, {})
     except _Unstorable as e:
         raise StoredReportMismatch(f"stored report of {func.__qualname__}: {e}") from None
     if _as_json(want) != _as_json(got) or paths != paths2:

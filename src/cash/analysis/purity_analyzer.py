@@ -18,7 +18,9 @@ import dataclasses
 import hashlib
 import inspect
 import linecache
+import logging
 import threading
+import time
 import types
 import weakref
 from collections.abc import Callable
@@ -36,6 +38,8 @@ from .helper_bindings import bindings_changed
 from .helper_code import qualname_of
 from .helper_walk import HelperWalk
 from .purity_report import ISSUE_IMPURE_CALL, PurityIssue, PurityReport
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["PurityAnalyzer"]
 
@@ -92,12 +96,13 @@ class PurityAnalyzer:
             if cached is not None:
                 return cached
 
-        report = report_store.load(func) if memo_key is not None else None
+        report = _stored_report(func) if memo_key is not None else None
         if report is None:
             walk = HelperWalk(func)
+            start = time.thread_time()
             report = walk.run()
             if memo_key is not None:
-                report_store.save(func, report, walk)
+                _store_report(func, report, walk, time.thread_time() - start)
         elif tree_memo.VERIFY:
             report_store.verify(func, report, HelperWalk(func).run())
         if report.unwalkable:
@@ -147,6 +152,29 @@ class PurityAnalyzer:
         if bindings_changed(cached):
             return None
         return cached
+
+
+def _stored_report(func: Callable[..., Any]) -> PurityReport | None:
+    """The report an earlier process stored for *func*, or None to walk it.
+
+    Anything going wrong in the store walks: a failure here must never
+    stand for a function with no helpers (`registry` takes an error out of
+    `analyze` as a function it cannot key at all)."""
+    try:
+        return report_store.load(func)
+    except Exception:
+        logger.debug("reading the stored purity report of %r failed", func, exc_info=True)
+        report_store.STATS["failed"] += 1
+        return None
+
+
+def _store_report(func: Callable[..., Any], report: PurityReport, walk: HelperWalk, seconds: float) -> None:
+    """Keep *report* for later processes; a store that fails keeps nothing."""
+    try:
+        report_store.save(func, report, walk, seconds)
+    except Exception:
+        logger.debug("storing the purity report of %r failed", func, exc_info=True)
+        report_store.STATS["failed"] += 1
 
 
 _global_analyzer: PurityAnalyzer | None = None
