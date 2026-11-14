@@ -1011,11 +1011,26 @@ def _alive(proxy: Any) -> bool:
     return True
 
 
+#: The bits an ``id()`` leaves clear, both powers of two: those at and above
+#: `_HIGHEST_ADDRESS` (the sign's too) and those below `_ALIGNMENT`.
+_NO_ADDRESS_BITS = -_HIGHEST_ADDRESS | (_ALIGNMENT - 1)
+
+
 def _addresses_in(array: Any) -> Any:
     """The numbers of an integer NumPy *array* that could be an ``id()``,
-    as an array, read at C speed."""
-    flat = array.ravel()
-    return flat[(flat >= _LOWEST_ADDRESS) & (flat < _HIGHEST_ADDRESS) & (flat % _ALIGNMENT == 0)]
+    as an ``int64`` array, read at C speed.
+
+    The share check has `share_check_budget` for this: a column of 8
+    million numbers took 0.1 s of it read with ``%`` and a boolean index,
+    the floor of a budget the 60 ms statement that made it is given, so
+    whether it was stored came down to a few milliseconds. One mask of the
+    bits an address leaves clear and `numpy.compress` take ~0.04 s."""
+    numpy = sys.modules["numpy"]
+    # An unsigned number past the sign bit reads negative: no address.
+    flat = array.ravel().astype(numpy.int64, copy=False)
+    keep = numpy.bitwise_and(flat, _NO_ADDRESS_BITS) == 0
+    numpy.logical_and(keep, flat >= _LOWEST_ADDRESS, out=keep)
+    return numpy.compress(keep, flat)
 
 
 def _any_held(in_arrays: list[Any], held: _Walk) -> bool:
@@ -1039,7 +1054,9 @@ def _any_held(in_arrays: list[Any], held: _Walk) -> bool:
         return False
     low, high = ids.min(), ids.max()
     for found in in_arrays:
-        found = found[(found >= low) & (found <= high)]
+        keep = found >= low
+        numpy.logical_and(keep, found <= high, out=keep)
+        found = numpy.compress(keep, found)
         if found.size and numpy.isin(found, ids).any():
             return True
     return False
