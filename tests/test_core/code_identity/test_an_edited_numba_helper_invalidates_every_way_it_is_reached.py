@@ -8,18 +8,27 @@ Each variant is a package of the user's (``mypkg``) beside a script that calls
 one cached function: run, hit in a second process, edit the helper's body,
 and the third process must run again and return the new value. Every variant
 runs with the call trace on and with ``CASH_TRACE=0``.
+
+The package is also installed editable into a venv of its own, both ways
+setuptools does it: a ``.pth`` that puts its folder on the path, and an
+``__editable__`` finder that a ``.pth`` installs as an import hook.
 """
 
 from __future__ import annotations
 
 import os
 import shutil
+import site
+import subprocess
+import sys
+import sysconfig
 import textwrap
+import zipfile
 from pathlib import Path
 
 import pytest
 
-from tests._scripts import child_env, run_python
+from tests._scripts import child_env, run_python, run_tied
 
 pytest.importorskip("numba")
 
@@ -150,11 +159,26 @@ def _project(tmp_path: Path, main: str) -> Path:
     return project
 
 
-def _run(project: Path, trace: str, package_dir: Path | None = None) -> tuple[bool, str, str]:
+def _run(
+    project: Path, trace: str, package_dir: Path | None = None, python: Path | None = None
+) -> tuple[bool, str, str]:
     env = {"CASH_TRACE": trace}
-    if package_dir is not None:
+    if package_dir is not None and python is None:
         env["PYTHONPATH"] = os.pathsep.join([child_env()["PYTHONPATH"], str(package_dir)])
-    out = run_python("main.py", cwd=project, env=env, timeout=240)
+    if python is None:
+        out = run_python("main.py", cwd=project, env=env, timeout=240)
+    else:
+        out = subprocess.run(
+            [str(python), "main.py"],
+            cwd=project,
+            env=child_env(project, env=env),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=240,
+        )
+        assert out.returncode == 0, out.stdout[-3000:] + out.stderr[-3000:]
     output = out.stdout + out.stderr
     result = next((line.split()[1] for line in out.stdout.splitlines() if line.startswith("RESULT")), None)
     assert result is not None, output
@@ -172,15 +196,17 @@ def _edit(package_dir: Path, function: str) -> None:
     path.write_text(head + sep + body.replace("2.0", "3.0") + nxt + tail, encoding="utf-8")
 
 
-def _check(project: Path, function: str, trace: str, package_dir: Path | None = None) -> None:
+def _check(
+    project: Path, function: str, trace: str, package_dir: Path | None = None, python: Path | None = None
+) -> None:
     # sum(0..4) = 10, doubled; after the edit tripled
-    ran, first, output = _run(project, trace, package_dir)
+    ran, first, output = _run(project, trace, package_dir, python)
     assert ran and first == "20.0", output
-    ran, again, output = _run(project, trace, package_dir)
+    ran, again, output = _run(project, trace, package_dir, python)
     assert not ran, f"the second process ran again instead of hitting:\n{output}"
     assert again == "20.0", output
     _edit(package_dir or project, function)
-    ran, after, output = _run(project, trace, package_dir)
+    ran, after, output = _run(project, trace, package_dir, python)
     assert ran, f"an edit to {function} was served the old result:\n{output}"
     assert after == "30.0", output
 
@@ -213,3 +239,83 @@ def test_an_edited_numba_helper_invalidates_a_package_checked_out_beside_the_pro
     checkout.mkdir()
     shutil.move(str(project / "mypkg"), str(checkout / "mypkg"))
     _check(project, "nb_helper", "1", package_dir=checkout)
+
+
+PYPROJECT = """
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mypkg"
+version = "0.1"
+
+[tool.setuptools]
+packages = ["mypkg"]
+"""
+
+BUILD_EDITABLE = """
+import sys
+from setuptools import build_meta
+
+config = {"editable_mode": sys.argv[2]} if sys.argv[2] else None
+print(build_meta.build_editable(sys.argv[1], config))
+"""
+
+#: setuptools' editable modes: ``compat`` writes a ``.pth`` path entry, its
+#: default (``lenient``) an ``__editable__`` finder installed by a ``.pth``.
+EDITABLE_MODES = {"pth_path": "compat", "editable_finder": ""}
+
+
+def _editable_install(tmp_path: Path, project: Path, mode: str) -> tuple[Path, Path]:
+    """Move ``mypkg`` out of *project* into a repository of its own, install
+    it editable into a new venv, and return (the venv's python, the
+    repository). The venv sees this interpreter's packages (numba, numpy,
+    cash's dependencies) through a ``.pth``; the wheel is built by setuptools
+    directly and unpacked, as an installer would, so no network is needed."""
+    pytest.importorskip("setuptools")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    shutil.move(str(project / "mypkg"), str(repo / "mypkg"))
+    (repo / "pyproject.toml").write_text(textwrap.dedent(PYPROJECT).lstrip(), encoding="utf-8")
+    wheels = tmp_path / "wheels"
+    wheels.mkdir()
+    built = run_tied([sys.executable, "-c", BUILD_EDITABLE, str(wheels), EDITABLE_MODES[mode]], cwd=repo, timeout=240)
+    assert built.returncode == 0, built.stdout + built.stderr
+    venv = tmp_path / "venv"
+    made = run_tied([sys.executable, "-m", "venv", "--without-pip", str(venv)], timeout=240)
+    assert made.returncode == 0, made.stdout + made.stderr
+    python = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    purelib = subprocess.run(
+        [str(python), "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
+    ).stdout.strip()
+    ours = dict.fromkeys([*site.getsitepackages(), sysconfig.get_path("purelib")])
+    (Path(purelib) / "zz_parent_packages.pth").write_text("\n".join(ours) + "\n", encoding="utf-8")
+    (wheel,) = wheels.glob("*.whl")
+    with zipfile.ZipFile(wheel) as archive:
+        archive.extractall(purelib)
+    names = os.listdir(purelib)
+    assert any(name.endswith("_finder.py") for name in names) == (mode == "editable_finder"), names
+    return python, repo
+
+
+@pytest.mark.slow
+@pytest.mark.timeout(600)
+@pytest.mark.skipif(sys.platform == "win32", reason="the venv layout is built for POSIX paths")
+@pytest.mark.parametrize("mode", sorted(EDITABLE_MODES))
+@pytest.mark.parametrize("trace", ["1", "0"], ids=["traced", "untraced"])
+@pytest.mark.parametrize("variant", [*sorted(VARIANTS), "bound_method"])
+def test_an_edited_numba_helper_in_an_editable_install_invalidates(tmp_path, variant, trace, mode):
+    """The package is installed editable, as a commit walk installs the
+    repository under test, and the script runs outside its folder."""
+    if variant == "bound_method":
+        project, function = _project(tmp_path, BOUND_MAIN), "nb_helper"
+    else:
+        param, arg, body, function = VARIANTS[variant]
+        project = _project(tmp_path, MAIN.format(param=param, arg=arg, body=body))
+    python, repo = _editable_install(tmp_path, project, mode)
+    _check(project, function, trace, package_dir=repo, python=python)
