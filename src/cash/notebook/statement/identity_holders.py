@@ -284,7 +284,12 @@ class IdentityHeld(str):
 
 
 def identity_held_reason(
-    name: str, value: Any, user_ns: dict[str, Any], weak_holders: bool = True, more: int = 0
+    name: str,
+    value: Any,
+    user_ns: dict[str, Any],
+    weak_holders: bool = True,
+    more: int = 0,
+    id_free: bool | None = None,
 ) -> IdentityHeld | None:
     """Why *value*, bound to *name*, cannot be restored apart from what it
     points at by identity (see the module docstring), or with *weak_holders*,
@@ -292,8 +297,11 @@ def identity_held_reason(
     can. Not *weak_holders* for a loop's object a hit restores into: it
     stays the object those references find. *more*: objects the walk looks
     at beyond `_MAX_SEEN` (the answers a statement put into a helper memo,
-    as many as the memo holds)."""
-    if _plain_tree_without_ids(value):
+    as many as the memo holds). *id_free*: what `holds_no_ids` already
+    answered for *value*, so its leaves are not read again; None to ask."""
+    if id_free is None:
+        id_free = _plain_tree_without_ids(value)
+    if id_free:
         return None
     try:
         user_kinds: dict[type, bool] = {}
@@ -440,6 +448,13 @@ def _candidate_ids(numbers: set[int]) -> set[int]:
 _PLAIN_TREE_TYPES = frozenset((dict, list, tuple, *IMMUTABLE_LEAF_TYPES))
 #: Of `_PLAIN_TREE_TYPES`, the leaves an ``id()`` can be read from.
 _ID_LEAVES = frozenset({int, str})
+
+
+def holds_no_ids(value: Any) -> bool:
+    """Whether *value* is plain data that holds nothing finding another
+    object by identity (`_plain_tree_without_ids`): `identity_held_reason`
+    answers None for it without a walk."""
+    return _plain_tree_without_ids(value)
 
 
 def _plain_tree_without_ids(value: Any) -> bool:
