@@ -17,6 +17,7 @@ IPython or lineage: a caller that needs context passes it in.
 
 from __future__ import annotations
 
+import contextvars
 import copyreg
 import datetime
 import decimal
@@ -369,6 +370,9 @@ def _enter(value: Any, walk: _Walk) -> Any:
         digest = hash_pandas_index(value)
         if digest is not None:
             seen[id(value)] = (len(seen), value)
+            noted = WALKED_INDEXES.get()
+            if noted is not None:
+                noted[id(value)] = (value, digest)
             return ("__cash_index__", digest)
     family = walk.content.family(type(value))
     if family is not None:
@@ -422,6 +426,22 @@ def _pint_steps(value: Any, kind: str, digest: str, magnitude: Any, units: tuple
     t = type(value)
     form = magnitude if type(magnitude) in _IMMUTABLE_PRIMS else (yield magnitude)
     return ("__cash_pint__", kind, f"{t.__module__}.{t.__qualname__}", digest, form, units)
+
+
+#: ``{id(index): (index, digest)}`` of the pandas indexes a walk read, while
+#: one is set: the decorator's key build keeps them so a missed call need not
+#: read an index argument again before its body (`index_digest`).
+WALKED_INDEXES: contextvars.ContextVar[dict | None] = contextvars.ContextVar("cash_walked_indexes", default=None)
+
+
+def index_digest(value: Any) -> str | None:
+    """The digest a walk keys the pandas index *value* by, or None for any
+    other value."""
+    if not _pandas_index(type(value)):
+        return None
+    from .content_hashers import hash_pandas_index
+
+    return hash_pandas_index(value)
 
 
 def _pandas_index(type_: type) -> bool:

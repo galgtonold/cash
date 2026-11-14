@@ -32,6 +32,7 @@ from ..canonical_form import (
     canonical_call_bytes,
     canonical_marker_bytes,
     field_rows_only,
+    index_digest,
     stable_key_repr,
 )
 from ..content_hashers import (
@@ -1107,7 +1108,7 @@ class ContentKeyed:
     a registered hasher, a lineage tag, a frozen result's digest or code's
     stand-in is not one: its key part is not what it holds."""
 
-    __slots__ = ("armed", "digested", "hooked", "walked")
+    __slots__ = ("armed", "digested", "hooked", "indexes", "parts", "walked")
 
     def __init__(self) -> None:
         #: Set while the key hashes the call's arguments, and only then:
@@ -1115,6 +1116,12 @@ class ContentKeyed:
         self.armed = False
         #: ``{id(argument): argument}`` keyed by a content digest of its own.
         self.digested: dict[int, Any] = {}
+        #: ``{id(argument): that digest}``, for the snapshot a miss takes
+        #: before its body (`ArgHasher.argument_digest`).
+        self.parts: dict[int, Any] = {}
+        #: ``{id(index): (index, digest)}`` of the pandas indexes the payload
+        #: walk read (`canonical_form.WALKED_INDEXES`), for the same snapshot.
+        self.indexes: dict[int, tuple] = {}
         #: ``{id(argument): argument}`` walked into the payload as it is.
         self.walked: dict[int, Any] = {}
         #: The walk keyed something by a hook (`ArgHasher._nested_hasher`):
@@ -2323,12 +2330,40 @@ class ArgHasher:
         ARG_COST.last = cost.costliest
         return hashlib.sha256(args_bytes).hexdigest()
 
+    def argument_digest(self, value: Any, content: ContentKeyed | None = None) -> str:
+        """A digest of the argument *value* alone, for telling which argument
+        a call changed (`PurityChecks.argument_snapshot`): compared only with
+        another this gives for the same parameter.
+
+        A value the key holds by a content digest of its own, or a pandas
+        index, is named by that digest: taken from *content*, the call's key
+        build, when it is this very object, instead of reading it once more
+        before the body (a year of minutes as a ``DatetimeIndex`` was read
+        three times per miss: the key, here, and the check after the body).
+        Anything else is `hash_payload` of it alone.
+        """
+        if content is not None and content.digested.get(id(value)) is value:
+            part = content.parts.get(id(value))
+            if isinstance(part, str):
+                return "digest:" + part
+        walked = content.indexes.get(id(value)) if content is not None else None
+        if walked is not None and walked[0] is value:
+            return "index:" + walked[1]
+        digest = index_digest(value)
+        if digest is not None:
+            return "index:" + digest
+        part, kind = self.key_part(value)
+        if kind == _DIGESTED and isinstance(part, str):
+            return "digest:" + part
+        return self.hash_payload((value,), {})
+
     def _noted_arg_hash(self, content: ContentKeyed, arg: Any) -> Any:
         """`arg_hash` of *arg*, noting in *content* when it stands for all
         *arg* holds."""
         part, kind = self.key_part(arg)
         if kind == _DIGESTED:
             content.digested[id(arg)] = arg
+            content.parts[id(arg)] = part
         elif kind == _WALKED:
             content.walked[id(arg)] = arg
         return part

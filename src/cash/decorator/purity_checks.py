@@ -64,7 +64,7 @@ from .user_code import own_package
 
 if TYPE_CHECKING:
     from ..config.schema import CashConfig
-    from .arg_hashing import ArgHasher
+    from .arg_hashing import ArgHasher, ContentKeyed
     from .class_data import ClassDataFold
     from .frozen import FrozenResults
     from .global_reads import GlobalReads
@@ -1226,7 +1226,9 @@ class PurityChecks:
             return self._args.serialize_args(func_name, args, kwargs)
         return self._args.hash_call_payload(*self._checked_arguments(func_name, args, kwargs))
 
-    def argument_snapshot(self, func_name: str, args: tuple, kwargs: dict) -> dict[str, str] | None:
+    def argument_snapshot(
+        self, func_name: str, args: tuple, kwargs: dict, content: ContentKeyed | None = None
+    ) -> dict[str, str] | None:
         """``{parameter: hash}`` of the arguments that CAN change, before the body.
 
         An int, a str, a tuple of them: rebinding one inside the body (``n -=
@@ -1265,7 +1267,8 @@ class PurityChecks:
             return {candidates[0][0]: ""}
         for name, value in candidates:
             try:
-                snapshot[name] = self._args.hash_payload((value,), {})
+                # Before the body, *content* holds what the key just read.
+                snapshot[name] = self._args.argument_digest(value, content)
             except Exception:  # noqa: BLE001 - unhashable: the whole-args check still runs
                 continue
         if _perf_counter() - started > MUTATION_CHECK_BUDGET_S:

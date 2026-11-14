@@ -25,6 +25,7 @@ from ..analysis.handed_callables import hands_a_state_changing_callable
 from ..analysis.helper_walk import shared_nodes
 from ..analysis.purity_report import PurityReport, describe_untrackable
 from ..backends._base import ttl_expired, written_at
+from ..canonical_form import WALKED_INDEXES
 from ..code_swaps import FOLDED_CODE, FoldedCode, note_owner
 from ..dependency_state import STATE_LEDGER, ledger_note
 from ..exceptions import (
@@ -839,8 +840,10 @@ class KeyBuilder:
             # Which arguments it keys by all they hold, noted while it hashes
             # them and only then (`ContentKeyed`).
             content = CONTENT_KEYED.get()
+            indexes_token = None
             if content is not None:
                 content.armed = True
+                indexes_token = WALKED_INDEXES.set(content.indexes)
             try:
                 if keyed is normalized_args:
                     args_hash = self._args.serialize_args(
@@ -851,6 +854,8 @@ class KeyBuilder:
             finally:
                 if content is not None:
                     content.armed = False
+                if indexes_token is not None:
+                    WALKED_INDEXES.reset(indexes_token)
             self._args.note_arg_cost(func_name)
         finally:
             PINT_DIGESTS.reset(pint_token)
@@ -1847,7 +1852,7 @@ class CallRunner:
         # (missing) path: a hit runs no body, so there is nothing to observe
         # and nothing to pay for.
         run.observer = self._purity.make_effect_observer()
-        run.observer.arg_snapshot = self._purity.argument_snapshot(func_name, args, kwargs)
+        run.observer.arg_snapshot = self._purity.argument_snapshot(func_name, args, kwargs, call.content_keyed)
         run.observer.arg_identities, run.observer.arg_identities_cover_all = self._purity.argument_identities(
             func_name, args, kwargs, call.keyed_parts
         )
