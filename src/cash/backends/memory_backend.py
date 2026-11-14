@@ -476,7 +476,7 @@ class _TableWithBytes:
                 return None
             is_series = getattr(frame, "ndim", 2) == 1
             positions = (
-                (0,) if is_series else tuple(i for i, dtype in enumerate(frame.dtypes) if str(dtype) == "object")
+                (0,) if is_series else tuple(i for i, dtype in enumerate(column_dtypes(frame)) if _object_dtype(dtype))
             )
             lists = (
                 [frame.to_numpy().tolist()] if is_series else [frame.iloc[:, i].to_numpy().tolist() for i in positions]
@@ -1248,7 +1248,9 @@ class InMemoryBackend(CacheBackend):
             if _mutable_labels(frame):
                 return None  # only the pickle round trip copies those
             is_series = getattr(frame, "ndim", 2) == 1
-            positions = [0] if is_series else [i for i, dtype in enumerate(frame.dtypes) if str(dtype) == "object"]
+            positions = (
+                [0] if is_series else [i for i, dtype in enumerate(column_dtypes(frame)) if _object_dtype(dtype)]
+            )
             columns = [frame] if is_series else [frame.iloc[:, i] for i in positions]
             cells = [column.tolist() for column in columns]
             writable = [
@@ -3500,16 +3502,43 @@ def _holds_mutable_cells(frame: Any) -> bool:
     its cells.
     """
     try:
+        dtypes = column_dtypes(frame)
         if getattr(frame, "ndim", 2) == 1:
-            columns = [frame] if str(frame.dtype) == "object" else []
+            columns = [frame] if _object_dtype(frame.dtype) else []
         else:
-            columns = [frame.iloc[:, i] for i, dtype in enumerate(frame.dtypes) if str(dtype) == "object"]
-        return any(not immutable_cells(column) for column in columns) or (_mutable_labels(frame))
+            columns = [frame.iloc[:, i] for i, dtype in enumerate(dtypes) if _object_dtype(dtype)]
+        return any(not immutable_cells(column) for column in columns) or (_mutable_labels(frame, dtypes))
     except Exception:  # noqa: BLE001 - cannot tell: the plain deep copy
         return False
 
 
-def _mutable_labels(frame: Any) -> bool:
+def column_dtypes(frame: Any) -> list:
+    """``list(frame.dtypes)`` for a DataFrame (``[frame.dtype]`` for a
+    Series), read off its blocks: the Series ``frame.dtypes`` builds took
+    10 us a frame, a third of what storing a list of 6,000 three-row frames
+    spent on them."""
+    if getattr(frame, "ndim", 2) == 1:
+        return [frame.dtype]
+    try:
+        return list(frame._mgr.get_dtypes())
+    except Exception:  # noqa: BLE001 - pandas internals changed: its public answer
+        return list(frame.dtypes)
+
+
+def _object_dtype(dtype: Any) -> bool:
+    """``str(dtype) == "object"``, without making the string for a numpy
+    dtype (whose name is "object" exactly when its kind is "O")."""
+    if _numpy_dtype(dtype):
+        return dtype.kind == "O"
+    return str(dtype) == "object"
+
+
+def _numpy_dtype(dtype: Any) -> bool:
+    numpy = sys.modules.get("numpy")
+    return numpy is not None and isinstance(dtype, numpy.dtype)
+
+
+def _mutable_labels(frame: Any, dtypes: list | None = None) -> bool:
     """Does a frame's index, column index or a categorical's categories hold
     a Python object that can be changed in place?
 
@@ -3518,10 +3547,10 @@ def _mutable_labels(frame: Any) -> bool:
     its calibration) stayed one object shared by the entry and every hit.
     """
     indexes = [frame.index] if getattr(frame, "ndim", 2) == 1 else [frame.index, frame.columns]
-    dtypes = [frame.dtype] if getattr(frame, "ndim", 2) == 1 else list(frame.dtypes)
+    dtypes = list(dtypes) if dtypes is not None else column_dtypes(frame)
     arrays = []
     for index in indexes:
         arrays.extend(getattr(index, "levels", None) or [index])
     dtypes += [array.dtype for array in arrays]
-    arrays += [dtype.categories for dtype in dtypes if str(dtype) == "category"]
-    return any(str(array.dtype) == "object" and not immutable_cells(array) for array in arrays)
+    arrays += [dtype.categories for dtype in dtypes if not _numpy_dtype(dtype) and str(dtype) == "category"]
+    return any(_object_dtype(array.dtype) and not immutable_cells(array) for array in arrays)

@@ -25,6 +25,7 @@ from cash._memo import PRODUCER_SNAPSHOTS, LruMemo
 from cash._user_attrs import attribute_or, instance_of
 from cash.backends import memory_backend
 from cash.backends.persistence_policy import PersistencePolicy, restore_kind
+from cash.backends.sampled_cost import many_frames_cost
 from cash.backends.store_notices import DECORATED_CALLS_FIELD
 from cash.closure_sharing import closure_check_budget, closures_sharing
 from cash.diagnostics import log_diagnostic, warn_diagnostic
@@ -872,7 +873,44 @@ class StatementStore:
             reason, skip_prediction = skip_decision
             return True, reason, skip_prediction
 
+        stored = {name: value for name, value in captured_vars.items() if name not in exempt}
+        reason = self._store_dearer_than_compute(stored, execution_time, policy)
+        if reason is not None:
+            return True, reason, largest_prediction
         return False, None, largest_prediction
+
+    def _store_dearer_than_compute(
+        self, values: dict[str, Any], execution_time: float, policy: PersistencePolicy
+    ) -> str | None:
+        """Why *values* are kept as metadata only because storing them costs
+        more than computing them did (`PersistencePolicy.refuses_store`), or
+        None to go on.
+
+        Priced, before anything is copied, only for lists of many small
+        pandas tables (`many_frames_cost`), whose cost is their count, not
+        their bytes: a loop building 6,000 three-row frames in 1.2 s was
+        copied into the RAM tier for 1.1 s and pickled for 1.15 s more,
+        that pickling holding the interpreter lock while the next cell ran.
+        The copy counts when the first tier keeps values in RAM, the
+        pickling when a tier writes them out."""
+        backend = attribute_or(self.cash_instance, "backend", None)
+        tiers = list(attribute_or(backend, "backends", None) or [backend])
+        in_ram = restore_kind(backend) == "ram"
+        written = len(tiers) > 1 or not in_ram
+        if backend is None or not values:
+            return None
+        sampled = many_frames_cost(values)
+        if sampled is None:
+            return None
+        store = (sampled.copy if in_ram else 0.0) + (sampled.dump if written else 0.0)
+        if not policy.refuses_store(execution_time, store):
+            return None
+        reason = (
+            f"Storing its {sampled.items:,} tables would take ~{store:.2f}s vs {execution_time:.2f}s compute "
+            f"— use @cash:persist to force"
+        )
+        logger.debug("[SIZE_AWARE] %s", reason)
+        return reason
 
     def _check_var_restore_budget(
         self,
