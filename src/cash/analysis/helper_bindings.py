@@ -165,6 +165,21 @@ def resolve_callee_chain(namespace: dict[str, Any], chain: tuple[str, ...]) -> A
     return obj
 
 
+def unpatched(obj: Any) -> Any:
+    """*obj*, or what cash's own reader wrapper of it wraps.
+
+    A missed call runs under cash's wrappers (``os.path.isdir`` and the
+    rest, `reader_patches`), so a cached call nested in another one's body
+    built its key with the module global holding cash's wrapper, and the
+    outer call's next key build, after the wrappers came out, saw the
+    original: a binding "changed" and walked the helpers again on every
+    call. A binding to cash's wrapper of X is a binding to X. A wrapper
+    the user put in is no tracker patch and still counts."""
+    while type(obj) is not types.MethodType and attribute_or(obj, "_is_file_tracker_patch", False) is True:
+        obj = obj._original_func
+    return obj
+
+
 def held_ref(obj: Any) -> Callable[[], Any]:
     """A weak reference where the object allows one, a strong one otherwise.
 
@@ -172,7 +187,9 @@ def held_ref(obj: Any) -> Callable[[], Any]:
     class) is made anew on every attribute read, so a weak reference to the
     one the walk met died at once: `bindings_changed` saw ``None`` against
     the live method and walked the function again on every call. It is held
-    by what it binds (`_MethodRef`) instead."""
+    by what it binds (`_MethodRef`) instead. Cash's own reader wrapper is
+    held as what it wraps (`unpatched`)."""
+    obj = unpatched(obj)
     if type(obj) is types.MethodType:
         return _MethodRef(obj)
     try:
@@ -205,7 +222,9 @@ class _MethodRef:
 
 def same_binding(live: Any, ref: Callable[[], Any]) -> bool:
     """Does the binding *ref* holds (`held_ref`) still hold *live*?
-    Identity, and for a bound method the identity of what it binds."""
+    Identity, and for a bound method the identity of what it binds; cash's
+    own reader wrapper of an object is that object (`unpatched`)."""
+    live = unpatched(live)
     if type(ref) is _MethodRef:
         return ref.binds(live)
     return live is ref()
