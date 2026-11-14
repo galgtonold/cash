@@ -204,6 +204,11 @@ class StatementRun:
     #: execution read (`DigestHandoff.take_settled`), for the outputs'
     #: lineage and session hash, with no user code run since.
     settled_digests: dict[int, tuple[Any, str]] = field(default_factory=dict)
+    #: ``(name, id(result), digest)``: the output ``name = call(...)``
+    #: bound to the call's result, and the digest its store took
+    #: (`CallRouting.watch_returned`), held by name: the checks after
+    #: execution count the result's references.
+    watched_return: tuple[str, int, str] | None = None
     #: Modules a ``set_*`` call is assumed to change until a name it is
     #: handed is seen changing (``ReceiverClasses.provisional``), and the
     #: reason they were skip-cached with.

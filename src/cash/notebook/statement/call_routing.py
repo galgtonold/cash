@@ -15,6 +15,7 @@ from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from cash import _plain_data, value_watch
 from cash._user_attrs import attribute_or
 from cash.analysis.code_analyzer import CodeAnalyzer
 from cash.control_markers import strip_markers
@@ -26,11 +27,15 @@ from cash.notebook.call_unit import CallCache, call_cost_floor_s, call_site_is_c
 from cash.notebook.callee_reach import library_streams_read
 from cash.tracking.file_tracker import tracking_seconds
 from cash.value_hash import digest_via_pickle
+from cash.value_types import IMMUTABLE_LEAF_TYPES
 
 if TYPE_CHECKING:
     from cash.notebook._protocols import ShellProtocol
     from cash.notebook.tracking_state import TrackingState
     from cash.tracking.function_tracker import FunctionTracker
+
+#: What `CallRouting.watch_returned` takes a result to be made of.
+_PLAIN_RESULT_TYPES = frozenset((*_plain_data.TREE_NODES, *IMMUTABLE_LEAF_TYPES))
 
 logger = logging.getLogger(__name__)
 
@@ -722,6 +727,25 @@ class CallRouting:
         if digest.startswith(UNHASHED_PREFIX) or not digest_via_pickle(result):
             return None
         return result, digest
+
+    def watch_returned(self, result: Any, digest: str) -> None:
+        """Have the watchers keep *digest*, which `returned_digest` gave
+        for *result*, as its `compute_hash` (`value_watch.adopt`): the
+        next statement's digest of it (a loop's fingerprint before it runs)
+        is handed back while nothing changed it, instead of pickling it
+        again. Only for JSON-like data over immutable leaves
+        (`_plain_data.tree_facts`): its digest is its keyed pickle's
+        whichever way it is taken (`value_hash.digest_via_pickle`), and it
+        holds nothing pickled by reference, which `compute_hash` notes as
+        it reads a value (`value_hash._note_held_by_reference`)."""
+        if not value_watch.WATCHING or type(result) not in _plain_data.TREE_NODES:
+            return
+        try:
+            facts = _plain_data.tree_facts(result)
+            if facts is not None and facts.types <= _PLAIN_RESULT_TYPES:
+                value_watch.adopt(result, digest)
+        except Exception:  # not watched: hashed again when asked
+            logger.debug("could not watch a call's result", exc_info=True)
 
     def referred_result(self, code: str) -> int | None:
         """``id`` of the result the statement's entry refers to its call's

@@ -31,6 +31,7 @@ the watch table fits its budget (``CASH_CWATCH_BUDGET``, 2% of RAM).
 from __future__ import annotations
 
 import abc
+import contextlib
 import copyreg
 import itertools
 import os
@@ -51,6 +52,8 @@ __all__ = [
     "KIND_VALUE",
     "KIND_WALKED",
     "add_namespace",
+    "adopt",
+    "arm_at_first_sight",
     "shells",
     "WatchMismatch",
     "classify",
@@ -338,6 +341,36 @@ def _arm(value: Any) -> int:
     return -1
 
 
+#: The ids of the values `digest` arms at their first sight
+#: (`arm_at_first_sight`), each with how many of its blocks are open.
+_ARM_FIRST: dict[int, int] = {}
+
+
+@contextlib.contextmanager
+def arm_at_first_sight(value: Any):
+    """Inside it, `digest` arms *value* the first time it sees it, where it
+    otherwise only notes the sighting and arms it at the second: for a
+    value certain to be digested again soon, unchanged or not (a loop's
+    candidate, fingerprinted before the loop and after it). The digest is
+    the same; the one after it is then handed back while the watchers prove
+    the value unchanged. Only *value* itself, never what it holds: the
+    caller keeps it alive while the block lasts, so its id names no other
+    object."""
+    if _cw is None:
+        yield
+        return
+    key = id(value)
+    _ARM_FIRST[key] = _ARM_FIRST.get(key, 0) + 1
+    try:
+        yield
+    finally:
+        left = _ARM_FIRST[key] - 1
+        if left:
+            _ARM_FIRST[key] = left
+        else:
+            del _ARM_FIRST[key]
+
+
 def digest(
     value: Any,
     compute: Callable[[Any], Any],
@@ -355,12 +388,12 @@ def digest(
         if VERIFY:
             _verify(value, compute, found)
         return found
-    if found == _FIRST:
+    if found == _FIRST and id(value) not in _ARM_FIRST:
         t0 = perf_counter()
         result = compute(value)
         cw.seen(value, perf_counter() - t0)
         return result
-    if found != _ARM:
+    if found != _ARM and found != _FIRST:
         return compute(value)
     status = _arm(value)
     if status == _KEPT:
@@ -380,6 +413,22 @@ def digest(
     if keep is None or keep(value, result):
         cw.commit(value, kind, result, seconds)
     return result
+
+
+def adopt(value: Any, found: Any, kind: int = KIND_VALUE) -> bool:
+    """Arm *value* now and keep *found* as its digest of *kind*, as
+    `digest` keeps one it computed: *found* must be the very digest that
+    kind's ``compute`` gives *value* as it is now, worked out by the caller
+    from the same bytes (a call's store digested its result, and only the
+    binding of a name ran since). The next `digest` of *value* is handed
+    back while the watchers prove it unchanged. True when kept."""
+    cw = _cw
+    if cw is None:
+        return False
+    status = _arm(value)
+    if status != _ARMED and status != _ALREADY and status != _KEPT:
+        return False
+    return bool(cw.commit(value, kind, found, 0.0))
 
 
 #: Tokens `tag` hands out, each once in this process.

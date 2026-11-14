@@ -3879,6 +3879,14 @@ class StatementProcessor:
             # ``x = f(...)``: the digest the call's store took of its result
             # is the one the statement would take of ``x`` now.
             run.settled_digests = {**run.settled_digests, id(returned[0]): returned}
+            run.watched_return = next(
+                (
+                    (name, id(returned[0]), returned[1])
+                    for name in run.outputs
+                    if self.shell.user_ns.get(name) is returned[0]
+                ),
+                None,
+            )
         del returned
         # Before the outputs are recorded as this statement's: an input it
         # also binds (``n += len(f.read())``) inherits its files as the entry
@@ -3991,6 +3999,16 @@ class StatementProcessor:
                     if not inputs_moved:
                         # What the statements below inherit from its outputs.
                         self._store.note_ran(run, execution)
+                if run.watched_return is not None:
+                    # Here, where the look knows the result's facts
+                    # (`_plain_data.tree_facts`), and no check counts its
+                    # references any more.
+                    name, result_id, digest = run.watched_return
+                    run.watched_return = None
+                    result = captured_vars.get(name)
+                    if id(result) == result_id:
+                        self._calls.watch_returned(result, digest)
+                    del result
         self._compare_partner_digests(run)
         moved = self._move_holders(run, saved_metadata)
         # After the save: the entry records each input's lineage as the

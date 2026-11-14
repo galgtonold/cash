@@ -20,6 +20,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from cash import value_watch
 from cash._user_attrs import attribute_or
 
 from ..analysis.mutation_effects import loop_watch_candidates, statement_watch_candidates
@@ -136,9 +137,9 @@ class LoopWatch:
         known = frozenset(verdict) if verdict is not None else None
         watch = cls(loop_watch_hash(code), candidates, known)
         if known is None:
-            watch.before = {name: _fingerprint(namespace.get(name)) for name in candidates}
+            watch.before = _before(namespace, candidates)
         elif rewatch:
-            watch.before = {name: _fingerprint(namespace.get(name)) for name in candidates - known}
+            watch.before = _before(namespace, candidates - known)
         return watch
 
     @property
@@ -170,6 +171,20 @@ class LoopWatch:
         if self.verdict is not None:
             return self.verdict
         return self.candidates
+
+
+def _before(namespace: Mapping[str, Any], names: Iterable[str]) -> dict[str, str | None]:
+    """The fingerprints of *names* before the loop runs, each value armed
+    as its digest is taken (`value_watch.arm_at_first_sight`): it is
+    fingerprinted again after the loop, and its digest is wanted in the
+    loop's steps, which the watchers then hand back for one the loop left
+    alone instead of reading it again."""
+    before: dict[str, str | None] = {}
+    for name in names:
+        value = namespace.get(name)
+        with value_watch.arm_at_first_sight(value):
+            before[name] = _fingerprint(value)
+    return before
 
 
 def _fingerprint(value: Any) -> str | None:
