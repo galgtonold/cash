@@ -50,6 +50,7 @@ import array
 import bisect
 import functools
 import operator
+import os
 import re
 import sys
 import types
@@ -139,6 +140,42 @@ _HIGHEST_ADDRESS = 1 << 48
 #: keeps only 8: ``np.True_`` (which ``(arr >= 0).all()`` returns), ``()``,
 #: and the builtin types on a clang build.
 _ALIGNMENT = 8 if sys.maxsize > 1 << 32 else 4
+
+
+@functools.cache
+def _fixed_image() -> tuple[int, int] | None:
+    """Where the interpreter's executable is mapped, ``(start, end)``, when
+    it is mapped at a fixed address: a Linux build that is not position
+    independent (an ELF ``ET_EXEC``). The objects compiled into it (the
+    small ints, the one-character and interned strings, ``None``, the
+    builtin types) are then at the same address in every process, so an
+    id() of one is still that object after a restart; and a column of
+    ordinary numbers meets their addresses often (the image sits near
+    20 MB: ``np.arange(8_000_000) * 12`` holds ``id(7)``). None anywhere
+    else: an image that moves leaves no address fixed."""
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        with open("/proc/self/exe", "rb") as image:
+            header = image.read(18)
+        if len(header) < 18 or header[:4] != b"\x7fELF":
+            return None
+        if int.from_bytes(header[16:18], "little" if header[5] == 1 else "big") != 2:  # ET_EXEC
+            return None
+        path = os.readlink("/proc/self/exe")
+        spans = []
+        with open("/proc/self/maps", encoding="utf-8", errors="replace") as maps:
+            for line in maps:
+                fields = line.split(maxsplit=5)
+                if len(fields) == 6 and fields[5].rstrip("\n") == path:
+                    low, high = fields[0].split("-", 1)
+                    spans.append((int(low, 16), int(high, 16)))
+    except (OSError, ValueError):
+        return None
+    if not spans:
+        return None
+    # The executable's segments and its zero-filled data between them.
+    return min(low for low, _ in spans), max(high for _, high in spans)
 
 
 #: The C kernel of `_Walk._read_nested`, None without it: a frame's column of
@@ -384,6 +421,9 @@ def _candidate_ids(numbers: set[int]) -> set[int]:
     within the addresses a process maps, and inside a mapping of this one
     (`_mapped`)."""
     candidates = {n for n in numbers if _LOWEST_ADDRESS <= n < _HIGHEST_ADDRESS and not n % _ALIGNMENT}
+    fixed = _fixed_image()
+    if fixed is not None:
+        candidates = {n for n in candidates if not fixed[0] <= n < fixed[1]}
     if candidates:
         # The process's mappings are read only for a number that could be
         # an id.
@@ -975,6 +1015,11 @@ def _any_held(in_arrays: list[Any], held: _Walk) -> bool:
             *(held.id_arrays or ()),
         ]
     )
+    fixed = _fixed_image()
+    if fixed is not None and ids.size:
+        # An object compiled into the executable keeps its id() across a
+        # restart.
+        ids = ids[(ids < fixed[0]) | (ids >= fixed[1])]
     if not ids.size:
         return False
     low, high = ids.min(), ids.max()
