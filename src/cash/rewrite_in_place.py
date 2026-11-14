@@ -21,11 +21,19 @@ frame or Series with the same index, columns, dtypes and names (a column the
 computation added cannot be put back into the frame in place). Everything
 is checked before anything is written, so a refused hit leaves the object as
 it was and the computation runs on it.
+
+An instance of a plain class is not written into this way: a call that only
+binds, rebinds or deletes its attributes (``est.fit(X)`` setting
+``self.coef_``) leaves an `AttrState` instead, which a hit replays on the
+object handed in (`AttrRecording`, `attribute_refusal`). Each value bound is
+stored with the result, or, when it was one of the call's arguments, the
+object itself or a module global, named so a hit binds that very object.
 """
 
 from __future__ import annotations
 
 import sys
+import types
 from collections.abc import Callable, Iterable
 from typing import Any, NamedTuple
 
@@ -33,10 +41,18 @@ from cash._user_attrs import attribute_or
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
 from . import _weak as cash_weak
+from ._native import cwatch
 
 __all__ = [
+    "ABSENT",
     "WRITTEN_BACK",
     "ArgumentsLeft",
+    "AttrRecording",
+    "BoundBefore",
+    "AttrState",
+    "Relink",
+    "attribute_refusal",
+    "put_back",
     "FrameState",
     "HeldByCash",
     "KeyedBefore",
@@ -381,6 +397,8 @@ def shape_change(before: Shape, after: Any) -> str | None:
 def mismatch(live: Any, stored: Any) -> str | None:
     """Why *stored* cannot be written into *live*, or None when `rewrite`
     can write it without failing halfway, and as the call wrote it."""
+    if isinstance(stored, AttrState):
+        return stored.mismatch(live)
     if isinstance(stored, FrameState):
         if _pandas_kind(live) == "frame":
             release_frame(live)
@@ -408,6 +426,9 @@ def mismatch(live: Any, stored: Any) -> str | None:
 
 def rewrite(live: Any, stored: Any) -> None:
     """Write the state of *stored* into *live* (`mismatch` said it fits)."""
+    if isinstance(stored, AttrState):
+        stored.replay(live)
+        return
     kind = type(live)
     if kind is list:
         live[:] = stored
@@ -478,6 +499,15 @@ class KeyedBefore(NamedTuple):
     args_hash: str
 
 
+class BoundBefore(NamedTuple):
+    """The state the instance a cached callable is bound to was in before
+    the call (``c.cache(est.fit)``'s ``est``), as the key held it: by all
+    it holds (`PurityChecks.bound_by_content`). A hit's key match says the
+    bound instance is in that state. *name* is how the call names it."""
+
+    name: str
+
+
 class ResultIsArgument(NamedTuple):
     """Stored in place of a result that IS an argument the call changed in
     place (``stft(y, out=buf)`` filling and returning ``buf``): the entry
@@ -508,3 +538,311 @@ class ArgumentsLeft:
 
     def __reduce__(self) -> tuple:
         return (ArgumentsLeft, (self.result, self.states, self.reads))
+
+
+# ---------------------------------------------------------------- attributes
+
+#: What a recorded key held before the call when it was not there.
+ABSENT: Any = cwatch.ABSENT if cwatch is not None else object()
+
+_HEAPTYPE = 1 << 9
+_OWN_SLOTS = frozenset({"__dict__", "__weakref__"})
+
+
+def attribute_refusal(obj: Any) -> str | None:
+    """Why a change to *obj*'s attributes cannot be replayed by a hit, or
+    None: *obj* is an instance of a plain class -- classes of Python code
+    all the way up to ``object``, no ``__slots__``, no ``__setattr__`` or
+    ``__delattr__`` of its own -- whose whole state is its instance
+    ``__dict__``, an exact dict."""
+    kind = type(obj)
+    if isinstance(obj, (type, types.ModuleType, types.FunctionType, types.MethodType)):
+        return f"a {kind.__name__} is not an instance whose attributes are replayed"
+    if kind.__setattr__ is not object.__setattr__ or kind.__delattr__ is not object.__delattr__:
+        return f"{kind.__name__} sets or deletes its attributes through its own code"
+    for klass in kind.__mro__[:-1]:
+        if not klass.__flags__ & _HEAPTYPE:
+            return f"{kind.__name__} keeps state outside its __dict__ (it derives from {klass.__name__})"
+        for name, held in vars(klass).items():
+            if _setter(held) and name not in _OWN_SLOTS:
+                return f"{kind.__name__}.{name} runs code when it is set"
+        slots = vars(klass).get("__slots__")
+        if slots is not None:
+            names = (slots,) if isinstance(slots, str) else tuple(slots)
+            if any(name not in _OWN_SLOTS for name in names):
+                return f"{kind.__name__} keeps attributes in __slots__"
+    if not kind.__dictoffset__:
+        return f"{kind.__name__} has no instance __dict__"
+    try:
+        state = object.__getattribute__(obj, "__dict__")
+    except AttributeError:
+        return f"the {kind.__name__} has no instance __dict__"
+    if type(state) is not dict:
+        return f"the {kind.__name__}'s __dict__ is not a plain dict"
+    return None
+
+
+def _setter(held: Any) -> bool:
+    """Whether *held*, found on a class, runs code when an attribute of
+    its name is set or deleted: a property with a setter or deleter, or any
+    other descriptor with ``__set__`` or ``__delete__`` but a read-only
+    property."""
+    if isinstance(held, property):
+        if held.fdel is not None:
+            return True
+        return held.fset is not None and not (type(held) is property and _stores_only(held.fset))
+    if isinstance(held, (types.GetSetDescriptorType, types.MemberDescriptorType)):
+        return False
+    kind = type(held)
+    return hasattr(kind, "__set__") or hasattr(kind, "__delete__")
+
+
+_PLAIN_LOADS = frozenset({"LOAD_FAST", "LOAD_FAST_BORROW", "LOAD_FAST_CHECK"})
+_PAIR_LOADS = frozenset({"LOAD_FAST_LOAD_FAST", "LOAD_FAST_BORROW_LOAD_FAST_BORROW"})
+_SKIPPED = frozenset({"RESUME", "NOP", "CACHE", "PUSH_NULL"})
+
+
+def _stores_only(fset: Any) -> bool:
+    """Whether the property setter *fset* provably does nothing but bind
+    its value in the instance's ``__dict__``: its body is only
+    ``self.<name> = value`` or ``setattr(self, "<name>", value)``
+    statements. Such a setter changes nothing a recording of the instance
+    ``__dict__`` misses, so a class that has one still replays."""
+    import builtins
+    import dis
+
+    code = getattr(fset, "__code__", None)
+    if (
+        type(fset) is not types.FunctionType
+        or code is None
+        or code.co_argcount != 2
+        or code.co_kwonlyargcount
+        or code.co_flags & (0x04 | 0x08 | 0x20 | 0x80 | 0x100 | 0x200)
+        or code.co_freevars
+        or code.co_cellvars
+    ):
+        return False
+    me, value = code.co_varnames[:2]
+    steps: list[tuple[str, Any]] = []
+    try:
+        for ins in dis.get_instructions(code):
+            if ins.opname in _SKIPPED:
+                continue
+            if ins.opname in _PLAIN_LOADS:
+                steps.append(("load", ins.argval))
+            elif ins.opname in _PAIR_LOADS:
+                steps.extend(("load", name) for name in ins.argval)
+            else:
+                steps.append((ins.opname, ins.argval))
+    except Exception:  # noqa: BLE001 -- unknown bytecode: not provable
+        return False
+    if steps[-1:] == [("RETURN_CONST", None)]:
+        steps = steps[:-1]
+    elif steps[-2:] == [("LOAD_CONST", None), ("RETURN_VALUE", None)]:
+        steps = steps[:-2]
+    else:
+        return False
+    plain_setattr = fset.__globals__.get("setattr", ABSENT) is ABSENT and (
+        fset.__builtins__.get("setattr") is builtins.setattr
+    )
+    at = 0
+    while at < len(steps):
+        if steps[at : at + 2] == [("load", value), ("load", me)] and (
+            at + 2 < len(steps) and steps[at + 2][0] == "STORE_ATTR"
+        ):
+            at += 3
+            continue
+        call = steps[at : at + 6]
+        if (
+            plain_setattr
+            and len(call) == 6
+            and call[0] == ("LOAD_GLOBAL", "setattr")
+            and call[1] == ("load", me)
+            and call[2][0] == "LOAD_CONST"
+            and type(call[2][1]) is str
+            and call[3] == ("load", value)
+            and call[4] in (("CALL", 3), ("CALL_FUNCTION", 3))
+            and call[5][0] == "POP_TOP"
+        ):
+            at += 6
+            continue
+        return False
+    return True
+
+
+def _data_descriptor(kind: type, name: str) -> bool:
+    """Whether *kind* has a data descriptor (a property, a slot) named *name*."""
+    for klass in kind.__mro__:
+        found = vars(klass).get(name, ABSENT)
+        if found is not ABSENT:
+            held = type(found)
+            return hasattr(held, "__set__") or hasattr(held, "__delete__")
+    return False
+
+
+class AttrChange(NamedTuple):
+    """What a call did to an object's attributes (`AttrRecording.finish`):
+    the object, its ``__dict__``, that dict as it was before the call
+    (*before*, in its order), the attributes it bound to a value not there
+    before (*bound*, in the dict's order now) and those it deleted."""
+
+    obj: Any
+    state: dict
+    before: dict
+    bound: dict
+    deleted: tuple
+    #: The keys of its ``__dict__`` after the call, in order.
+    order: tuple
+
+
+class AttrRecording:
+    """Which attributes of *obj* a call binds or deletes, recorded across
+    the body: by the C dict watcher, which names the keys that changed and
+    what each held before (`cash._cwatch.record`), or, without it, by a
+    shallow copy of the ``__dict__`` compared after the call. `finish`
+    stops it and says what changed."""
+
+    __slots__ = ("change", "copy", "kind", "obj", "recorder", "state", "why")
+
+    def __init__(self, obj: Any) -> None:
+        self.obj = obj
+        self.kind = type(obj)
+        self.state = object.__getattribute__(obj, "__dict__")
+        self.recorder = cwatch.record(self.state) if cwatch is not None else None
+        self.copy = None if self.recorder is not None else dict(self.state)
+        #: Set by `finish`: the change, None when there is none, and why
+        #: it cannot be replayed (*why*) when it cannot.
+        self.change: AttrChange | None = None
+        self.why: str | None = None
+
+    def finish(self) -> None:
+        """Stop recording and keep what changed (`change`, `why`)."""
+        recorder, self.recorder = self.recorder, None
+        state = self.state
+        if recorder is not None:
+            keys, held, flags = recorder.take()
+            if flags & cwatch.REC_THREAD:
+                self.why = "another thread changed its attributes while the call ran"
+                return
+            if flags:
+                self.why = "its __dict__ was cleared or replaced whole, or given a key that is not a str"
+                return
+            if keys is None:
+                return
+            before = {key: held[key] if key in held else state[key] for key in keys}
+            touched = held
+        else:
+            before, self.copy = self.copy, None
+            touched = {key: before.get(key, ABSENT) for key in (*before, *state)}
+        if type(self.obj) is not self.kind or object.__getattribute__(self.obj, "__dict__") is not state:
+            self.why = "the call replaced its class or its __dict__"
+            return
+        deleted: list = []
+        for key, was in touched.items():
+            now = state.get(key, ABSENT)
+            if now is was:
+                continue
+            if type(key) is not str:
+                self.why = "a key of its __dict__ is not a str"
+                return
+            if _data_descriptor(self.kind, key):
+                self.why = f"{self.kind.__name__}.{key} is a property or descriptor, not a plain attribute"
+                return
+            if now is ABSENT:
+                deleted.append(key)
+        if not touched:
+            return
+        bound = {key: value for key, value in state.items() if touched.get(key, value) is not value}
+        if not bound and not deleted:
+            return
+        self.change = AttrChange(self.obj, state, before, bound, tuple(deleted), tuple(state))
+
+
+class put_back:  # a context manager, named like contextlib's
+    """While open, each object of *changes* (`AttrChange`) holds the
+    attributes it had before its call, in their order; on the way out, those
+    it holds now. For a check that must see the arguments as the key saw
+    them (`CallRunner.attribute_changes`)."""
+
+    __slots__ = ("changes", "saved")
+
+    def __init__(self, changes: Iterable[AttrChange]) -> None:
+        self.changes = list(changes)
+        self.saved: list[tuple[dict, dict]] = []
+
+    def __enter__(self) -> put_back:
+        for change in self.changes:
+            now = dict(change.state)
+            change.state.clear()
+            self.saved.append((change.state, now))
+            change.state.update(change.before)
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        for state, now in self.saved:
+            state.clear()
+            state.update(now)
+        self.saved = []
+
+
+class Relink(NamedTuple):
+    """In an `AttrState`, a value a hit binds by identity instead of a copy:
+    ``("argument", parameter)`` -- one of the call's arguments, or the object
+    itself -- or ``("global", module, name)``."""
+
+    kind: str
+    where: tuple
+
+
+class AttrState:
+    """The attributes a call bound on an instance it was handed (*values*,
+    a stored value or a `Relink` each), those it deleted, the type the
+    instance was and the order its ``__dict__`` was left in. A hit binds and
+    deletes them on the instance handed in (`replay`), whose ``__dict__``
+    then holds what a plain run leaves, in the same order."""
+
+    __slots__ = ("deleted", "kind", "order", "values")
+
+    def __init__(self, kind: type, values: dict, deleted: tuple, order: tuple) -> None:
+        self.kind = kind
+        self.values = values
+        self.deleted = deleted
+        self.order = order
+
+    def __reduce__(self) -> tuple:
+        return (AttrState, (self.kind, self.values, self.deleted, self.order))
+
+    def relinks(self) -> list[Relink]:
+        return [value for value in self.values.values() if type(value) is Relink]
+
+    def resolved(self, find: Callable[[Relink], Any]) -> AttrState:
+        """This state with each `Relink` replaced by the object *find*
+        gives for it (it raises `LookupError` for one it cannot find)."""
+        values = {key: find(value) if type(value) is Relink else value for key, value in self.values.items()}
+        return AttrState(self.kind, values, self.deleted, self.order)
+
+    def mismatch(self, live: Any) -> str | None:
+        """Why the attributes cannot be replayed on *live*, or None."""
+        if type(live) is not self.kind:
+            return f"it is a {type(live).__name__}, not a {self.kind.__name__}"
+        why = attribute_refusal(live)
+        if why is not None:
+            return why
+        if any(_data_descriptor(self.kind, key) for key in (*self.values, *self.deleted)):
+            return "an attribute it binds is a property or descriptor of its class now"
+        state = object.__getattribute__(live, "__dict__")
+        if any(key not in state for key in self.deleted):
+            return "an attribute the call deleted is not there"
+        return None
+
+    def replay(self, live: Any) -> None:
+        """Bind and delete the attributes on *live* (`mismatch` said it fits)."""
+        state = object.__getattribute__(live, "__dict__")
+        for key in self.deleted:
+            del state[key]
+        state.update(self.values)
+        if tuple(state) != self.order and set(state) == set(self.order):
+            # Rebound in place, or deleted and bound again: put each key
+            # where the plain run left it.
+            for key in self.order:
+                state[key] = state.pop(key)

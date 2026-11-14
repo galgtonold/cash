@@ -341,6 +341,10 @@ class EffectObserver:
         #: did to them (`CallRunner._unwritable_args`): a finding that the
         #: body changes one stands, seen or not.
         self.unwritable_args: list[str] = []
+        #: The arguments whose attributes the call bound or deleted, which
+        #: its entry stores and a hit replays (`attribute_replay`): not a
+        #: change a hit leaves undone, so nothing is said about them.
+        self.replayed_args: list[str] = []
 
     # -- lifecycle ---------------------------------------------------------
     def __enter__(self) -> "EffectObserver":
