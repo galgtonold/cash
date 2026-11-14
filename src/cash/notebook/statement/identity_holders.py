@@ -639,24 +639,66 @@ def _arrow_text_numbers(values: Any) -> list[Any] | None:
         # it took 6 s after one `merge` (p18). The patterns are matched on
         # those values alone, and the prefix as two plain ones: matched
         # ignoring case, Arrow ran a regular expression over every value.
-        length = compute.binary_length(chunked)
-        fits = compute.and_(compute.greater_equal(length, 7), compute.less_equal(length, 18))
         parts: list[Any] = []
-        candidates = compute.filter(chunked, fits)
-        decimal = compute.filter(candidates, compute.ascii_is_decimal(candidates))
-        if len(decimal):
-            parts.append(compute.cast(decimal, pyarrow.int64()).to_numpy(zero_copy_only=False))
-        prefixed = compute.filter(
-            candidates,
-            compute.or_(compute.starts_with(candidates, "0x"), compute.starts_with(candidates, "0X")),
-        )
-        if len(prefixed):
-            hexadecimal = compute.filter(prefixed, compute.match_substring_regex(prefixed, _HEX_TEXT))
-            parts.extend(int(text, 16) for text in hexadecimal.to_pylist() if text is not None)
+        for piece in _joined_runs(pyarrow, chunked):
+            _spelled_numbers(pyarrow, compute, piece, parts)
         _ARROW_READS[id(chunked)] = (chunked, parts)
         return parts
     except Exception:  # noqa: BLE001 - read as before, through NumPy
         return None
+
+
+#: A column of chunks this many rows long on average, or shorter, is read
+#: by `_joined_runs` a run of chunks at a time.
+_SMALL_CHUNK_ROWS = 1024
+#: The rows of one run.
+_RUN_ROWS = 1 << 16
+
+
+def _joined_runs(pyarrow: Any, chunked: Any) -> list[Any]:
+    """*chunked* as runs of its chunks joined into one Array each, when
+    its chunks are many and small; else *chunked* itself, alone.
+
+    Each of Arrow's kernels costs a few microseconds per chunk: a text
+    column of 6,000 chunks of five rows, which ``df = pd.concat([df,
+    new])`` in a loop grows, took 28 ms to read, against 6 ms for joining
+    its chunks and reading the one array. A run ends once it reaches
+    `_RUN_ROWS` rows, so about that much is copied at once; a run Arrow
+    cannot join (text past 2 GiB) fails the read, which then goes through
+    NumPy as before."""
+    chunks = chunked.num_chunks
+    if chunks < 2 * _FEW_TEXTS or len(chunked) > chunks * _SMALL_CHUNK_ROWS:
+        return [chunked]
+    runs: list[Any] = []
+    run: list[Any] = []
+    rows = 0
+    for chunk in chunked.iterchunks():
+        run.append(chunk)
+        rows += len(chunk)
+        if rows >= _RUN_ROWS:
+            runs.append(pyarrow.concat_arrays(run))
+            run, rows = [], 0
+    if run:
+        runs.append(pyarrow.concat_arrays(run))
+    return runs
+
+
+def _spelled_numbers(pyarrow: Any, compute: Any, chunked: Any, parts: list[Any]) -> None:
+    """Append to *parts* the numbers the text of *chunked* (an Array or a
+    ChunkedArray) spells, as `_arrow_text_numbers` reads them."""
+    length = compute.binary_length(chunked)
+    fits = compute.and_(compute.greater_equal(length, 7), compute.less_equal(length, 18))
+    candidates = compute.filter(chunked, fits)
+    decimal = compute.filter(candidates, compute.ascii_is_decimal(candidates))
+    if len(decimal):
+        parts.append(compute.cast(decimal, pyarrow.int64()).to_numpy(zero_copy_only=False))
+    prefixed = compute.filter(
+        candidates,
+        compute.or_(compute.starts_with(candidates, "0x"), compute.starts_with(candidates, "0X")),
+    )
+    if len(prefixed):
+        hexadecimal = compute.filter(prefixed, compute.match_substring_regex(prefixed, _HEX_TEXT))
+        parts.extend(int(text, 16) for text in hexadecimal.to_pylist() if text is not None)
 
 
 #: What `_arrow_text_spelling_numbers` found this cell, by the Arrow array
