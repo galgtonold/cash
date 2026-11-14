@@ -28,6 +28,7 @@ from .code_refs import CodeRefs
 from .function_identity import hash_callable_source
 from .global_values import KEY_BUILD_DIGESTS
 from .key_values import SYNC_TYPES, is_immutable_capture, iter_contained
+from .loop_leftovers import leftover_value, set_loop_leftovers
 from .user_code import cash_wrapped, is_cash_wrapper, is_user_class, is_user_code_object, user_layers
 
 if TYPE_CHECKING:
@@ -535,7 +536,14 @@ class CodeSurface:
                 continue
             if not is_user_code_object(base):
                 continue
-            for name, member in sorted(vars(base).items(), key=lambda kv: kv[0]):
+            namespace = vars(base)
+            data = tuple(n for n, m in namespace.items() if isinstance(n, str) and not callable(m))
+            leftovers = set_loop_leftovers(base, data)
+            for name, member in sorted(namespace.items(), key=lambda kv: kv[0]):
+                if name in leftovers:
+                    # What a class-body loop over a set left: which set, not
+                    # which element its iteration order ended on.
+                    member = leftover_value(namespace, name, leftovers)
                 parts.extend(self._member_parts(cls, base, name, member, _path))
         parts.extend(self._field_factory_parts(cls))
         # Its metaclass's code runs too: `cls()` calls the metaclass's

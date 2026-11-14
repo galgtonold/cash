@@ -513,6 +513,8 @@ _CLASS_SKIP = frozenset(
 def class_digest(cls: type, within: _Digester | None = None) -> str:
     """A digest of what *cls* holds: its attributes (methods by code, data
     by value) and the names of its bases."""
+    from ..decorator.loop_leftovers import leftover_value, set_loop_leftovers
+
     h = hashlib.blake2b(digest_size=12)
     d = _Digester(h)
     if within is not None:
@@ -523,8 +525,13 @@ def class_digest(cls: type, within: _Digester | None = None) -> str:
         attrs = sorted((k, v) for k, v in vars(cls).items() if k not in _CLASS_SKIP)
     except TypeError:
         attrs = [(k, v) for k, v in vars(cls).items() if k not in _CLASS_SKIP]
+    leftovers = set_loop_leftovers(cls, tuple(k for k, v in attrs if isinstance(k, str) and not callable(v)))
     for name, value in attrs:
         h.update(b"\x00" + str(name).encode())
+        if name in leftovers:
+            # What a class-body loop over a set left: which set, not which
+            # element its iteration order ended on.
+            value = leftover_value(vars(cls), name, leftovers)
         try:
             d.feed(value)
         except _Opaque:

@@ -24,6 +24,7 @@ from .closure_fold import iter_code_scopes
 from .global_reads import DOCSTRING_READS, MACHINERY_DUNDERS, bytecode_written_attrs
 from .global_values import UNHASHABLE_GLOBAL_FIX
 from .key_values import SYNC_TYPES, is_immutable_capture, plain_data_kind, stabilize_for_global_hash
+from .loop_leftovers import leftover_value, set_loop_leftovers
 from .user_code import is_cash_wrapper, is_user_class, is_user_code_object, own_package, wraps_code
 
 if TYPE_CHECKING:
@@ -695,7 +696,7 @@ class ClassDataFold:
     def _docstring_parts(self, cls: type, label: str) -> list[tuple[str, str]]:
         """Key parts for the docstrings of *cls* and its user bases."""
         parts: list[tuple[str, str]] = []
-        for base, _, _ in self._class_layout(cls):
+        for base, _, _, _ in self._class_layout(cls):
             doc = vars(base).get("__doc__")
             if isinstance(doc, str):
                 parts.append((f"{label}:{base.__qualname__}.__doc__", hashlib.sha256(doc.encode("utf-8")).hexdigest()))
@@ -761,25 +762,26 @@ class ClassDataFold:
         self._class_code_cache[cls] = result
         return result
 
-    def _class_layout(self, cls: type) -> tuple[tuple[type, int, tuple[str, ...] | None], ...]:
-        """``(base, size of its namespace, its data names)`` per user base of
-        *cls* (`class_data_items`; None for an Enum), per class.
+    def _class_layout(self, cls: type) -> tuple[tuple[type, int, tuple[str, ...] | None, dict[str, str]], ...]:
+        """``(base, size of its namespace, its data names, its set-loop
+        leftovers)`` per user base of *cls* (`class_data_items`; None for an
+        Enum; `set_loop_leftovers`), per class.
 
         Finding the bases and telling data from code costs far more than
         reading the values, and changes only when a name is added to or
         removed from a class, which the namespace sizes stand guard for.
         """
         cached = self._class_layout_cache.get(cls)
-        if cached is not None and all(len(vars(base)) == size for base, size, _ in cached):
+        if cached is not None and all(len(vars(base)) == size for base, size, _, _ in cached):
             return cached
         skip = self._class_code(cls)[3]
         layout = []
         for base in _user_bases(cls):
             if isinstance(base, enum.EnumMeta):
-                layout.append((base, len(vars(base)), None))
+                layout.append((base, len(vars(base)), None, {}))
                 continue
             names = tuple(label.split(".")[-1] for label, _ in class_data_items(base, skip, bases=[base]))
-            layout.append((base, len(vars(base)), names))
+            layout.append((base, len(vars(base)), names, set_loop_leftovers(base, names)))
         result = tuple(layout)
         self._class_layout_cache[cls] = result
         return result
@@ -787,7 +789,7 @@ class ClassDataFold:
     def _class_data_items(self, cls: type) -> list[tuple[str, Any]]:
         """`class_data_items` of *cls*, read through its memoized layout."""
         items: list[tuple[str, Any]] = []
-        for base, _, names in self._class_layout(cls):
+        for base, _, names, leftovers in self._class_layout(cls):
             prefix = base.__qualname__
             if names is None:
                 members = [(name, member._value_) for name, member in base.__members__.items()]
@@ -796,7 +798,8 @@ class ClassDataFold:
             namespace = vars(base)
             for name in names:
                 if name in namespace:
-                    items.append((f"{prefix}.{name}", _data_value(namespace[name])))
+                    value = leftover_value(namespace, name, leftovers)
+                    items.append((f"{prefix}.{name}", _data_value(value)))
         return items
 
     def class_data_digest(self, cls: type, only: str | None = None) -> tuple[str | None, list[str]]:
