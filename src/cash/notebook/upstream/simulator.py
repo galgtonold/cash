@@ -22,7 +22,7 @@ import types
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from cash._user_attrs import attribute_or
+from cash._user_attrs import attribute_or, instance_of
 from cash.control_markers import strip_markers
 
 from ...analysis.ast_util import parse_cached, resolve_callee, walk_tree
@@ -38,6 +38,7 @@ from ..consumables import is_write_stream
 from ..lineage_store import LineageWatch
 from ..magic_effects import magic_cell_of
 from ..run_memo import forget_file_state_this_run
+from ..statement.derivation_edges import shared_object_partners
 from ..tracking_state import TrackingState
 from ._types import CellCheck, ClassificationResult, ReexecutionPlan, SimulationCache, SimulationResult, latest_producer
 from .cache_probe import CacheProbe
@@ -469,6 +470,17 @@ class NotebookSimulator:
             broken_vars -= left
             result.failed_run_vars |= left
         result.failed_run_vars |= {v for v in required_inputs or () if v in sim.vars_left_by_failed_runs}
+
+        # Nor is a name sharing an object a statement above put into a module
+        # (``holder.items.append(sessions[1])``), or the module: rebuilt, the
+        # name would be a new object and the module, the one ``sys.modules``
+        # holds, would keep the old, so a change through the module
+        # (``holder.items[0]['at'] = 7``) missed what the name reads. The
+        # cell runs on the live objects, as plain Python runs it.
+        in_modules = _held_by_modules(broken_vars, self.tracking_state.derivation_edges, self.shell.user_ns, sim.trace)
+        if in_modules:
+            broken_vars -= in_modules
+            logger.debug("[UPSTREAM_DEBUG] %s share an object put into a module. Kept live.", sorted(in_modules))
 
         if broken_vars:
             # A current-cell statement that is a cache hit restores what it
@@ -1067,3 +1079,32 @@ def _plan_makes_each_name(trace: list, broken: set[str], run: set[int], restored
             continue
         return False
     return True
+
+
+def _held_by_modules(
+    broken: set[str], edges: Mapping[str, set[str]], user_ns: Mapping[str, Any], trace: list
+) -> set[str]:
+    """The names of *broken* whose group of names sharing an object
+    (*edges*) holds a module a statement of *trace* wrote with another of
+    the group as its input: the module holds one of the group's objects,
+    and no rebuild makes it hold a new one."""
+    if not broken or not edges:
+        return set()
+    out: set[str] = set()
+    for root in sorted(broken):
+        if root in out:
+            continue
+        group = {root}
+        todo = [root]
+        while todo:
+            for partner in shared_object_partners(edges, todo.pop()):
+                if partner not in group and partner in user_ns:
+                    group.add(partner)
+                    todo.append(partner)
+        modules = {name for name in group if instance_of(user_ns.get(name), types.ModuleType)}
+        if modules and any(
+            entry.outputs & modules and (set(entry.inputs or ()) | set(entry.input_hashes or ())) & (group - modules)
+            for entry in trace
+        ):
+            out |= group & broken
+    return out
