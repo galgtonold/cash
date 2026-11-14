@@ -32,13 +32,17 @@ from .call_state import PROCESS_STARTED
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["StoredKeyRecord"]
+__all__ = ["NOT_STORED_MARK", "StoredKeyRecord"]
 
 #: The kinds a record holds. ``keys``: ``{cache_key: [stored_at, ttl]}`` for
 #: results that reached disk. ``ram_only``: ``{cache_key: [computed_at, why]}``
 #: for results kept in RAM only. ``states``: ``{state: flat ledger}``.
 #: ``warned``: ``{digest: shown_at}`` of warnings already shown.
 _KINDS = ("keys", "ram_only", "states", "warned")
+
+#: The third item of a ``ram_only`` value for a result that was not kept at
+#: all (``[computed_at, why, NOT_STORED_MARK]``): a call refused storing.
+NOT_STORED_MARK = "not_stored"
 
 Doc = dict[str, dict[str, Any]]
 
@@ -91,7 +95,8 @@ class MissFacts(NamedTuple):
 
     #: ``[stored_at, ttl]`` when an earlier run stored this key, else None.
     stored: list | None
-    #: ``[computed_at, why]`` when a run kept it in RAM only, else None.
+    #: ``[computed_at, why]`` when a run kept it in RAM only, else None;
+    #: ``[computed_at, why, NOT_STORED_MARK]`` when a run did not keep it.
     ram_only: list | None
     #: The newest key with the same dynamic and argument parts under another
     #: state (results kept in RAM only first, as the record is read newest
@@ -423,13 +428,21 @@ class StoredKeyRecord:
             self._schedule(path)
 
     def note_ram_only(
-        self, func_name: str, cache_key: str, why: str, flat_ledger: Callable[[str], dict | None]
+        self,
+        func_name: str,
+        cache_key: str,
+        why: str,
+        flat_ledger: Callable[[str], dict | None],
+        *,
+        not_stored: bool = False,
     ) -> None:
         """A result kept in RAM only, so the next run does not call it "new
         arguments". Written with the record's next write, or at `flush`: a
         result kept in RAM is a quick one, and a write per miss would cost
-        more than the body."""
-        self._note(func_name, cache_key, "ram_only", [time.time(), why], flat_ledger)
+        more than the body. *not_stored*: not kept at all, for *why*
+        (`NOT_STORED_MARK`)."""
+        value = [time.time(), why, NOT_STORED_MARK] if not_stored else [time.time(), why]
+        self._note(func_name, cache_key, "ram_only", value, flat_ledger)
 
     def note_warning_shown(self, func_name: str, digest: str) -> None:
         """A warning was shown. Written with the record's next write, never

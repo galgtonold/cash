@@ -792,7 +792,7 @@ class ResultStore:
             # on this thread, and pickle raises AttributeError for a local
             # object and whatever a __reduce__ raises. The body has run; its
             # result goes back to the caller whatever happens here.
-            self._misses.note_not_stored(cache_key, "the backend refused the write")
+            self._misses.note_not_stored(cache_key, "the backend refused the write", func_name)
             backend_name = type(self._backend_slot.backend).__name__
             self._notices.warn_once(
                 CashCacheStoreFailedWarning,
@@ -1001,7 +1001,7 @@ class ResultStore:
                 cost=chunks.produced_seconds,
             )
             if refusal is not None:
-                self._misses.note_not_stored(call.cache_key, refusal)
+                self._misses.note_not_stored(call.cache_key, refusal, func_name)
                 return
             if chunks.buffer:
                 chunks.not_persisted = self._write_one_chunk(

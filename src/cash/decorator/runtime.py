@@ -2055,7 +2055,7 @@ class CallRunner:
             run.observer.unwritable_args = self._unwritable_args(func_name, call.checked or (args, kwargs))
         self._purity.report_observed_effects(func_name, run.observer)
         if refusal is not None:
-            self._misses.note_not_stored(call.cache_key, refusal)
+            self._misses.note_not_stored(call.cache_key, refusal, func_name)
         else:
             # Attach lineage only when the value is actually stored: a lineage
             # hash points downstream at THIS cache entry, so a cache_if-rejected
@@ -2220,7 +2220,7 @@ class CallRunner:
 
     def _untraced(self, spec: CachedFunction, call: Call, why: str, res: Any) -> Any:
         """Hand back *res* of a traced call that cannot be stored."""
-        self._misses.note_not_stored(call.cache_key, self._refuse_untraced(spec, why))
+        self._misses.note_not_stored(call.cache_key, self._refuse_untraced(spec, why), spec.name)
         self._calls.log(
             spec.name,
             cache_hit=False,
