@@ -58,12 +58,12 @@ ANNOTATED = (
     "import os\n"
     "@c.cache\n"
     "def audited(n):\n"
-    "    os.getpid()  # @cash:assume-safe - deliberate, this is the test\n"
+    "    print(n)  # @cash:assume-safe - deliberate, this is the test\n"
     "    return n * 2\n"
     "audited(1)\n"
 )
 
-PLAIN = "import os\n@c.cache\ndef unaudited(n):\n    os.getpid()\n    return n * 2\nunaudited(1)\n"
+PLAIN = "import os\n@c.cache\ndef unaudited(n):\n    print(n)\n    return n * 2\nunaudited(1)\n"
 
 
 def test_an_annotated_line_is_waived_in_a_notebook_cell(cell_runner):
@@ -144,14 +144,14 @@ ANNOTATED_ASYNC = (
     "import os\n"
     "@c.cache\n"
     "def audited(n):\n"
-    "    os.getpid()  # @cash:assume-safe - deliberate, this is the test\n"
+    "    print(n)  # @cash:assume-safe - deliberate, this is the test\n"
     "    return n * 2\n"
     "audited(1)\n"
     "_ = await _tick(1)\n"
 )
 
 PLAIN_ASYNC = (
-    "import os\n@c.cache\ndef unaudited(n):\n    os.getpid()\n    return n * 2\nunaudited(1)\n_ = await _tick(1)\n"
+    "import os\n@c.cache\ndef unaudited(n):\n    print(n)\n    return n * 2\nunaudited(1)\n_ = await _tick(1)\n"
 )
 
 
@@ -182,7 +182,7 @@ AWAIT_DECORATED_ASYNC = (
     "    return c.cache\n"
     "@await get_deco()\n"
     "def audited(n):\n"
-    "    os.getpid()  # @cash:assume-safe - deliberate, this is the test\n"
+    "    print(n)  # @cash:assume-safe - deliberate, this is the test\n"
     "    return n * 2\n"
     "audited(1)\n"
 )
