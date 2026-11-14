@@ -1081,7 +1081,7 @@ def _reach_mode(kind: type, streams: tuple[type, ...], pandas: Any) -> int:
         if plain and (
             kind in streams
             or (kind.__name__ == "OutStream" and str(kind.__module__).startswith("ipykernel."))
-            or getattr(kind, "_cash_wrapped_stream", None) is not None
+            or attribute_or(kind, "_cash_wrapped_stream") is not None
         ):
             plain = False
     except Exception:  # noqa: BLE001 - a class that will not say: one object at a time
