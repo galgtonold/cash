@@ -40,6 +40,7 @@ from ..cache_status import CacheStatus
 from ..lineage_store import statement_tag
 from ..loop_split import loop_source_hash, split_nodes
 from ..restored_var import identity_digest
+from ..statement.run import NO_LOOP_ITERABLE
 from . import helpers as _helpers
 from . import single_unit_policy
 from .common import (
@@ -601,9 +602,6 @@ class ForLoopHandler:
         unit evaluates the header itself (``runs_whole_unevaluated``).
         *walked* are names whose items it changes, stored as its outputs
         (`_walked_whole`)."""
-        handed = {}
-        if header is not None:
-            handed = {"header_value": header.value, "header_files": header.files, "header_remote": header.remote}
         force_outputs = self._single_unit_outputs(node, prior_nodes)
         if walked:
             force_outputs = (force_outputs or set()) | set(walked)
@@ -615,7 +613,13 @@ class ForLoopHandler:
             inherited_annotation,
             force_outputs=force_outputs,
             walked=walked,
-            **handed,
+            # Passed one by one, not as a dict: a dict of them, built for
+            # the call, holds the header's value where the share check at
+            # the unit's end cannot count it, and it read the heap for what
+            # holds the value (`shared_objects._referrers_by_count`).
+            header_value=NO_LOOP_ITERABLE if header is None else header.value,
+            header_files=frozenset() if header is None else header.files,
+            header_remote=frozenset() if header is None else header.remote,
         )
         if result.success and n_iterations and len(result.metrics) == 1:
             metric = result.metrics[0]
