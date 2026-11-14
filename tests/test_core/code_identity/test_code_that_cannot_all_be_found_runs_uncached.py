@@ -180,3 +180,44 @@ def test_a_class_whose_annotations_cannot_be_followed_runs_uncached():
         assert any("not a forward reference" in m for m in seen["warnings"]), seen
     finally:
         sys.modules.pop(name, None)
+
+
+def _doubled(x):
+    return x * 2
+
+
+def _step(x):
+    return _doubled(x) + 1
+
+
+STEPS = {"step": _step}
+
+
+def _run_step(name, x):
+    return STEPS[name](x)
+
+
+def test_a_function_held_as_data_whose_helpers_cannot_be_found_runs_uncached(tmp_path, monkeypatch):
+    """A function in a global table is keyed by its code and its helpers'
+    (`GlobalValues.data_callable_identity`). When its helper analysis fails
+    the call runs uncached with KEY-HELPERS-UNWALKABLE: keyed by the
+    function's own code alone, an edit to ``_doubled`` would serve the old
+    result."""
+    import cash.decorator.global_values as global_values
+    from cash.analysis.purity_analyzer import get_analyzer
+
+    real = get_analyzer()
+
+    class _BrokenForStep:
+        def analyze_reached(self, func):
+            if getattr(func, "__name__", "") == "_step":
+                raise NameError("a store that broke")
+            return real.analyze_reached(func)
+
+        def __getattr__(self, name):
+            return getattr(real, name)
+
+    monkeypatch.setattr(global_values, "get_analyzer", lambda: _BrokenForStep())
+    c = Cash(cache_dir=str(tmp_path / "cache"), register_magic=False)
+    seen = _uncached_twice(c.cache(_run_step), "step", 3)
+    assert any("KEY-HELPERS-UNWALKABLE" in m and "a store that broke" in m for m in seen["warnings"]), seen

@@ -21,6 +21,7 @@ from ..dependency_state import SysModulesHelperResolver
 from ..exceptions import CashImpurityWarning
 from ..jit_functions import jit_identity, jit_options, jit_python_function
 from . import walk_scope
+from .call_state import KeyBuildFailed
 from .code_tables import CodeTable
 from .function_identity import hash_callable_source
 from .key_values import (
@@ -139,10 +140,7 @@ class GlobalValues:
 
         if not own_code_is_user(fn, getattr(fn, "__module__", None)):
             return own
-        try:
-            report = get_analyzer().analyze_reached(fn)
-        except (OSError, TypeError, SyntaxError, RecursionError):
-            return own
+        report = _walked_or_refused(fn)
         if not report.helper_source_hashes:
             return own
         live = self._data_helper_resolver.current_hashes(report)
@@ -166,10 +164,7 @@ class GlobalValues:
         for fn in functions:
             if not own_code_is_user(fn, getattr(fn, "__module__", None)):
                 continue
-            try:
-                report = get_analyzer().analyze_reached(fn)
-            except Exception:  # noqa: BLE001 - the reads fold refuses what cannot be walked
-                continue
+            report = _walked_or_refused(fn)
             for qual, digest in report.helper_source_hashes.items():
                 if qual in own or qual in found:
                     continue
@@ -368,6 +363,8 @@ class GlobalValues:
         try:
             stabilized = stabilize_for_global_hash(payload, self.data_callable_identity)
             return self._args.hash_payload((stabilized,), {})
+        except KeyBuildFailed:
+            raise  # a function it holds cannot be keyed: the call runs uncached
         except Exception:  # noqa: BLE001 - never break a call over this
             return None
 
@@ -456,6 +453,8 @@ class GlobalValues:
                 payload = ("wrapped partials", held_partials(value))
             stabilized = stabilize_for_global_hash(payload, self.data_callable_identity)
             return self._args.hash_payload((stabilized,), {})
+        except KeyBuildFailed:
+            raise  # a function it holds cannot be keyed: the call runs uncached
         except Exception:  # noqa: BLE001 - unkeyable before, never break a call over it
             self._note_carrier_verdict(value, False)
             return None
@@ -485,3 +484,25 @@ class GlobalValues:
                 fix=UNHASHABLE_GLOBAL_FIX,
             )
             return None
+
+
+def _walked_or_refused(fn: Any) -> Any:
+    """*fn*'s purity report, for the helpers its digest folds in; raises
+    `KeyBuildFailed` when the walk failed or could not finish.
+
+    Without the report the helpers *fn* calls are in no key: an edit to one
+    would serve the old result. So the call runs uncached with a warning,
+    as `GlobalsFold.fold_passed_helper_reads` does, never keyed without them."""
+    try:
+        report = get_analyzer().analyze_reached(fn)
+    except Exception as e:  # noqa: BLE001 - no report means no key, not a partial one
+        reason = f"cash could not find the helpers it calls ({type(e).__name__}: {e})"
+    else:
+        if not report.unwalkable:
+            return report
+        reason = report.unwalkable
+    raise KeyBuildFailed(
+        "KEY-HELPERS-UNWALKABLE",
+        f"@cash.cache: {qualname_of(fn)} reaches the call as data, and {reason}, so the call ran uncached.",
+        "If the function itself runs fine, this is a bug in cash: report it with the error.",
+    )
