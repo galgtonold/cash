@@ -1667,25 +1667,100 @@ def held_only_by_names(name: str, user_ns: Mapping[str, Any], known: Iterable[An
     Such a value shares an object only with the names bound to it: a
     change through it reaches nothing else, and nothing else reaches it.
     """
-    value = user_ns.get(name)
-    if value is None or not _holds_no_object(value):
-        return None
-    known_ids = {id(user_ns), *map(id, known)}
-    # No closure over *value* below: a cell holding it would be one more
-    # referrer.
-    counted = 0
-    referrers = gc.get_referrers(value)
+    return names_holding_alone([name], user_ns, known).get(name)
+
+
+def names_holding_alone(
+    names: Iterable[str], user_ns: Mapping[str, Any], known: Iterable[Any] = ()
+) -> dict[str, frozenset[str]]:
+    """`held_only_by_names` of each of *names*, for those it shows: one
+    read of the heap's referrers for all of them (`gc.get_referrers` reads
+    the whole heap each time it is called; a loop end asking it of each
+    value it read took 30-50 ms)."""
+    candidates: dict[int, list[str]] = {}
+    objs_list: list[Any] = []
+    for name in dict.fromkeys(names):
+        value = user_ns.get(name)
+        if value is None or not _holds_no_object(value):
+            continue
+        if id(value) not in candidates:
+            candidates[id(value)] = []
+            objs_list.append(value)
+        candidates[id(value)].append(name)
+    if not objs_list:
+        return {}
+    objs = tuple(objs_list)
+    del objs_list
+    value = None
+    # Cash's own containers are counted here, item by item, whether or not
+    # the collector tracks them: it stops tracking a dict or a tuple that
+    # holds nothing it tracks (a numpy array, numbers), and ``trans_count``,
+    # in ``{'trans_count': ..., 'i': 3}`` (the loop's outputs) and in an
+    # ``id -> (value, digest)`` mapping's tuple, showed references its
+    # referrers did not, and was linked to the sessions the loop read. So
+    # are *objs*, which holds each value once, and *user_ns*, though not
+    # the tuples it holds: ``pair = (counts, 1)`` holds ``counts``. No closure over a value below:
+    # a cell holding it would be one more referrer.
+    counted = dict.fromkeys(candidates, 0)
+    own: set[int] = set()
+    known_ids: set[int] = set()
+
+    def count(items: Iterable[Any]) -> None:
+        for ref in map(id, items):
+            if ref in counted:
+                counted[ref] += 1
+
+    for container in [objs, user_ns, *known]:
+        if id(container) in own:
+            continue
+        kind = type(container)
+        if kind is dict:
+            own.add(id(container))
+            count(container)
+            count(container.values())
+            for item in container.values() if container is not user_ns else ():
+                if type(item) is tuple and id(item) not in own:
+                    own.add(id(item))
+                    count(item)
+            item = None
+        elif kind in (tuple, list):
+            own.add(id(container))
+            count(container)
+        else:
+            known_ids.add(id(container))
+    container = None
+    foreign: set[int] = set()
+    referrers = gc.get_referrers(*objs)
     try:
         for referrer in referrers:
+            if id(referrer) in own:
+                continue
+            refs = [ref for ref in map(id, gc.get_referents(referrer)) if ref in counted]
             if id(referrer) not in known_ids:
-                return None
-            counted += list(map(id, gc.get_referents(referrer))).count(id(value))
+                foreign.update(refs)
+                continue
+            for ref in refs:
+                counted[ref] += 1
     finally:
         del referrers
-    if sys.getrefcount(value) - counted != _OWN_LOOK_REFS:
-        return None
-    key = id(value)
-    return frozenset(other for other, bound in list(user_ns.items()) if id(bound) == key)
+    found: dict[str, frozenset[str]] = {}
+    bound: dict[int, list[str]] = {}
+    held = None
+    for other, held in list(user_ns.items()):
+        if id(held) in candidates:
+            bound.setdefault(id(held), []).append(other)
+    del held
+    for value in objs:
+        key = id(value)
+        # Beyond the referrers counted: *value* itself here and the
+        # argument of ``sys.getrefcount`` (`_OWN_LOOK_REFS`).
+        if key in foreign or sys.getrefcount(value) - counted[key] != _OWN_LOOK_REFS:
+            continue
+        holders = frozenset(bound.get(key, ()))
+        for name in candidates[key]:
+            found[name] = holders
+    value = None
+    return found
 
 
 def _holds_no_object(value: Any) -> bool:

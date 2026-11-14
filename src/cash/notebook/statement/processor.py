@@ -235,12 +235,12 @@ from ..shared_objects import (
     children_of,
     forget_heap_unreadable,
     heap_unreadable,
-    held_only_by_names,
     history_names,
     holds_part_of,
     is_value,
     library_exact_values,
     library_value_types,
+    names_holding_alone,
     names_reaching,
     note_raw_attribute_writes,
     output_history,
@@ -4769,12 +4769,15 @@ class StatementProcessor:
             # the names bound to it (`held_only_by_names`): the counts a loop
             # fills (``trans_count[i, j] += 1``) hold no part of the sessions
             # it read, and linked to them, each run of the loop moved the
-            # sessions on and the cell below rebuilt them.
-            alone = {}
-            for name in names:
-                bound = held_only_by_names(name, user_ns, [captured_vars, *cash_held])
-                if bound is not None:
-                    alone[name] = bound
+            # sessions on and the cell below rebuilt them. A value it read
+            # shown so holds no part of an output either, unless an output
+            # is bound to it: ``time_intervals``, a list of tuples of numbers
+            # a loop over the sessions read and checked as a group of its
+            # own, was linked to the loop's ``actions``, and its next
+            # ``append`` moved the sessions on. One read of the heap for all.
+            proven = names_holding_alone([*names, *sorted(read)], user_ns, [captured_vars, *cash_held])
+            read = {other for other in read if other not in proven or not proven[other].isdisjoint(outputs)}
+            alone = {name: proven[name] for name in names if name in proven}
             if not alone:
                 return [*links, (outputs, read)]
             kept = [(frozenset(owners) - set(alone), holders) for owners, holders in links]
