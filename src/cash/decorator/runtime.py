@@ -1431,6 +1431,7 @@ class CallRunner:
             if copies is not None:
                 args, kwargs = copies.body_arguments(args, kwargs)
                 call.args, call.kwargs = args, kwargs
+        call.watch_identities = self._purity.watched_identities(spec.func, call.capture_watch)
         if handed is not None:
             handed.ran_body = True  # until the call is seen to be a plain hit
             call.handed = handed
@@ -2202,6 +2203,7 @@ class CallRunner:
             observer=run.observer,
             inputs_moved=None if swapped else self._inputs_moved_check(spec, call),
             cost=execution_time,
+            watch_identities=call.watch_identities,
         )
         if refusal is None:
             refusal = swapped

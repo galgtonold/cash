@@ -15,7 +15,7 @@ import re
 import sys
 import textwrap
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from typing import TYPE_CHECKING, Any
 
 from .. import _plain_data, identity_refs, value_watch
@@ -832,6 +832,12 @@ class PurityChecks:
         #: first call's warning until its body has run
         #: (`PurityChecks._hold_argument_mutations`).
         self._held_mutations: dict[str, tuple[list, bool]] = {}
+        #: Per cached function's code, the module globals a call was seen to
+        #: rebind an attribute of to an equal new object: ``{name: globals}``.
+        #: The drift guard stops watching a global it learned is moved, and
+        #: the value digest of one rebound to an equal object never moves, so
+        #: these are snapshotted on every later call (`watched_identities`).
+        self._identity_written: dict[Any, dict[str, dict]] = {}
         #: The parameters reading a function's source found its body
         #: changing in place (`_hold_argument_mutations`), kept after the
         #: findings are said or dropped (`reads_as_changing`).
@@ -1052,7 +1058,72 @@ class PurityChecks:
                 return f"shares memory with {what}", _label(name), keeper
         return None
 
-    def learn_mutating_captures(self, func: Callable, func_name: str, watched: dict[str, tuple[str, str]]) -> bool:
+    def watched_identities(self, func: Callable, watched: dict | None) -> dict[str, tuple]:
+        """``{name: (object, its bound members, its module globals, its
+        digest)}`` for each watched module
+        global (`CAPTURE_WATCH`) that holds an object with attributes or a
+        dict, and each one an earlier call rebound an attribute of, taken
+        just before the body runs. The members are held, so an id cannot be
+        reused while the call runs (`identity_moved`)."""
+        own_globals = getattr(func, "__globals__", None)
+        sources: dict[str, tuple[Any, str | None]] = {
+            name: (g, None) for name, g in self._identity_written.get(getattr(func, "__code__", None), {}).items()
+        }
+        for name, entry in (watched or {}).items():
+            try:
+                before, scope, owner = entry[0], entry[1], entry[2]
+            except (TypeError, IndexError):
+                continue
+            if scope == "global":
+                sources[name] = (owner if isinstance(owner, dict) else own_globals, before)
+        found: dict[str, tuple] = {}
+        for name, (g, before) in sources.items():
+            if not isinstance(g, dict) or name not in g:
+                continue
+            value = g[name]
+            members = _bound_members(value)
+            if members is None:
+                continue
+            if before is None:
+                try:
+                    before = self._values.global_value_digest(value, plain_data_kind(value))
+                except Exception:  # noqa: BLE001 - unhashable: its value cannot be compared
+                    continue
+            found[name] = (value, members, g, before)
+        return found
+
+    def rebound_globals(self, func: Callable, identities: dict[str, tuple] | None) -> list[str]:
+        """The globals of *identities* (`watched_identities`) whose
+        attributes or entries the call bound to an equal new object, by name:
+        a change no value digest sees. Each is snapshotted on every later call, as the
+        drift guard no longer watches a global it learned the call moves.
+
+        Plain Python leaves ``HELD.last = [n]`` holding a new list; a hit
+        leaves the old one, so a call that does this is not stored."""
+        found: list[str] = []
+        code = getattr(func, "__code__", None)
+        for name, snapshot in (identities or {}).items():
+            g = snapshot[2]
+            if name not in g or not identity_moved(snapshot, g[name]):
+                continue
+            try:
+                same = self._values.global_value_digest(g[name], plain_data_kind(g[name])) == snapshot[3]
+            except Exception:  # noqa: BLE001 - unhashable now: the drift guard's to judge
+                continue
+            if not same:
+                continue  # a change of value: the drift guard's (`learn_mutating_captures`)
+            found.append(name)
+            if code is not None:
+                self._identity_written.setdefault(code, {})[name] = g
+        return sorted(found)
+
+    def learn_mutating_captures(
+        self,
+        func: Callable,
+        func_name: str,
+        watched: dict[str, tuple[str, str]],
+        rebound: Collection[str] = (),
+    ) -> bool:
         """Demote any provisional global this call was OBSERVED to mutate.
 
         A global merely *passed to a call* (`sum(G)`, `model.predict(G)`) might
@@ -1074,6 +1145,9 @@ class PurityChecks:
         * A change *between* calls (`G = [...]` anywhere) is invisible to this
           window by construction, which is correct: that is precisely what
           folding is for, and it needs no detection.
+        * A rebinding to an EQUAL new object is a change too: plain Python
+          leaves ``HELD.last = [n]`` a new list, a hit leaves the old one.
+          *rebound* names the globals `rebound_globals` saw that happen to.
 
         Only runs on a miss -- the body has to execute for there to be anything
         to observe -- so the cost is one hash on the path that just paid for a
@@ -1134,7 +1208,7 @@ class PurityChecks:
                     after = self._values.global_value_digest(value, plain_data_kind(value))
             except Exception:  # noqa: BLE001 - unhashable NOW; treat as unchanged
                 continue
-            if after == before:
+            if after == before and not (scope == "global" and name in rebound):
                 continue
             if scope in ("carrier", "global") and rng_carrier_kind(value) is not None:
                 # A random generator the body drew from: a hit moves it on
@@ -2171,3 +2245,46 @@ def _warning_slot(kind: str, findings: str, per_report: bool) -> str:
     if not per_report:
         return kind
     return f"{kind}:{hashlib.sha256(findings.encode('utf-8')).hexdigest()[:16]}"
+
+
+#: Past this many attributes or entries, a watched object's bindings are
+#: not snapshotted: its value digest alone says whether the call moved it.
+_IDENTITY_MEMBERS_MAX = 4096
+
+
+def _bound_members(value: Any) -> tuple | None:
+    """What *value*'s attributes (or a dict's keys) are bound to, as
+    ``(name, object)`` pairs holding each object, or None for a value whose
+    bindings are not looked at: plain data, a module, class or function."""
+    if value is None or isinstance(value, (type, types.ModuleType, *IMMUTABLE_VALUE_TYPES)) or is_routine(value):
+        return None
+    if type(value) is dict:
+        state = value
+    else:
+        try:
+            state = object.__getattribute__(value, "__dict__")
+        except Exception:  # noqa: BLE001 - no instance dict: nothing to snapshot
+            return None
+        if type(state) is not dict:
+            return None
+    if len(state) > _IDENTITY_MEMBERS_MAX:
+        return None
+    try:
+        return tuple(state.items())
+    except RuntimeError:  # changed size while read (another thread)
+        return None
+
+
+def identity_moved(snapshot: tuple | None, value: Any) -> bool:
+    """Did the call rebind an attribute (or a dict entry) of a watched
+    global to another object, an equal one included? *snapshot* is
+    `watched_identities`'s for that global, *value* what it holds now."""
+    if snapshot is None:
+        return False
+    before_value, before = snapshot[0], snapshot[1]
+    if value is not before_value:
+        return True
+    now = _bound_members(value)
+    if now is None or len(now) != len(before):
+        return now is not None or bool(before)
+    return any(k1 != k2 or v1 is not v2 for (k1, v1), (k2, v2) in zip(before, now))

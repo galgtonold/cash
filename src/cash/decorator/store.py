@@ -246,6 +246,7 @@ class ResultStore:
         observer: EffectObserver | None = None,
         inputs_moved: Callable[[], bool] | None = None,
         cost: float = 0.0,
+        watch_identities: dict | None = None,
     ) -> str | None:
         """Why *res* must not be stored, or ``None`` to store it.
 
@@ -279,8 +280,11 @@ class ResultStore:
         # After the body ran, before deciding to store: a provisional global
         # this call moved must stop being folded.
         watched_moved = False
+        rebound = self._purity.rebound_globals(func, watch_identities) if watch_identities else []
         if capture_watch is not NO_WATCH:
-            watched_moved = self._purity.learn_mutating_captures(func, func_name, capture_watch)
+            watched_moved = self._purity.learn_mutating_captures(func, func_name, capture_watch, rebound)
+        if refusal is None and rebound:
+            refusal = f"it bound an attribute of the global {rebound[0]!r} to a new object, which a hit would not do"
         if refusal is None and self._purity.refuses_identity_coupled(func_name, res):
             refusal = "the result is tied to the identity of an object in memory"
         if refusal is None and self._files.work_outlived_call(func_name, tracker):

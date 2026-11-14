@@ -85,6 +85,7 @@ class Call:
         "ttl",
         "recompute",
         "capture_watch",
+        "watch_identities",
         "cache_key",
         "state_hash",
         "ledger",
@@ -117,6 +118,9 @@ class Call:
         self.checked: tuple[tuple, dict] | None = None
         #: What the key's state segment was made of, by name (`STATE_LEDGER`).
         self.ledger: dict | None = None
+        #: What the watched globals' attributes were bound to just before the
+        #: body ran (`purity_checks.watched_identities`).
+        self.watch_identities: dict | None = None
         self.cash_overhead = 0.0
         self.outcome: Any = CACHE_MISS
         #: The notebook statement's hand-off this call claimed (`cash.handed_digests`).
