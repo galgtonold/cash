@@ -144,6 +144,10 @@ class StatementRun:
     #: Why this run leaves no entry a later run under its key could be
     #: served from, when nothing in its metrics says so (`LastRuns`).
     unkept_why: str | None = None
+    #: Why its value is kept as metadata only, priced before the walks that
+    #: decide whether it can be stored (`StatementStore.priced_refusal`):
+    #: those walks are left out, and its store copies nothing.
+    store_refused: str | None = None
     #: `reducer_writes.runs_now` when the statement began: the reducers of
     #: the user's cash's pickles run from then on are this statement's.
     reducer_mark: int = 0

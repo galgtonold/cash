@@ -3981,17 +3981,25 @@ class StatementProcessor:
             with _plain_data.one_look(captured_vars):
                 holders = None
                 left_to_structure: set[str] = set()
-                if not run.skip_cache and run.metrics.get("stored_in_place"):
+                if not run.skip_cache:
+                    # Priced first: a store dearer than a hit saves is refused
+                    # whatever the checks below find, which only decide
+                    # whether it can be stored. The statement runs again next
+                    # time; the share edges below are recorded as for any
+                    # statement not stored.
+                    run.store_refused = self._store.priced_refusal(run, execution, captured_vars)
+                walks = not run.skip_cache and run.store_refused is None
+                if walks and run.metrics.get("stored_in_place"):
                     # Before the share check: refused, the statement is not
                     # stored, and the check's walks would be for nothing.
                     if self._refused_in_place_early(run, captured_vars):
                         left_to_structure = self._left_to_structure(run)
-                if not run.skip_cache:
+                if walks and not run.skip_cache:
                     # What the analyses kept of the outputs is cash's, not a
                     # holder the share check should count.
                     forget_held_answers()
                     holders = self._refuse_unrestorable_outputs(run, captured_vars, execution.echo, execution.cost)
-                if not run.skip_cache and run.metrics.get("stored_in_place"):
+                if walks and not run.skip_cache and run.metrics.get("stored_in_place"):
                     self._restorable_in_place(run, captured_vars, holders)
                 with logging_edges() as shared:
                     self._record_shared_object_edges(

@@ -4,7 +4,7 @@ A loop appending 6,000 three-row frames to a list in 1.2 s had them copied
 into the RAM tier and pickled for disk, 2.3 s in all, the pickling holding
 the interpreter lock while the next statement ran. The store is priced
 before anything is copied (`many_frames_cost`) and refused when it costs
-more than the loop: the loop runs again, with the reason in its badge, and
+more than a hit of the loop saves: the loop runs again, with the reason in its badge, and
 what it built is the same. Under ``@cash:persist``, the control, it is
 stored and restored however dear its store.
 

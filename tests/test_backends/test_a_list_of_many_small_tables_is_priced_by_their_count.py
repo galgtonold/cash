@@ -5,7 +5,7 @@ RAM tier and to pickle, whatever its bytes: a loop building 6,000
 three-row frames in 1.2 s cost 1.1 s to copy and 1.15 s to pickle, which
 the byte model read as free. `many_frames_cost` measures a sample of the
 tables and scales by their count; the notebook keeps such a value as
-metadata only when storing it costs more than computing it
+metadata only when storing it costs more than a hit of it saves
 (`PersistencePolicy.refuses_store`).
 """
 
@@ -56,6 +56,34 @@ def test_a_mixed_list_is_left_to_the_byte_model():
 def test_a_store_dearer_than_the_compute_is_refused():
     policy = PersistencePolicy()
 
-    assert policy.refuses_store(1.2, 2.25)
-    assert not policy.refuses_store(3.0, 2.25)
-    assert not policy.refuses_store(0.0, 2.25)
+    assert policy.refuses_store(1.2, copy_s=1.1, dump_s=1.15, restore_s=0.0)
+    assert not policy.refuses_store(5.0, copy_s=1.1, dump_s=1.15, restore_s=0.0)
+    assert not policy.refuses_store(0.0, copy_s=1.1, dump_s=1.15, restore_s=0.0)
+
+
+def test_the_pickling_counts_twice_and_the_restore_against_the_saving():
+    """Copying (0.55 s) and pickling (0.36 s) cost less than the compute
+    (1.38 s), but the pickling holds the interpreter lock while the next
+    statement runs, which waits as long again, and a hit from RAM copies
+    every table again: 0.55 + 2 * 0.36 > 1.38 - 0.55, so it is refused."""
+    policy = PersistencePolicy()
+
+    assert policy.refuses_store(1.38, copy_s=0.55, dump_s=0.36, restore_s=0.55)
+
+
+def test_the_pickling_alone_can_decide():
+    """0.3 + 0.4 is under the 1.0 s compute; with the next statement's wait
+    for the lock, 0.3 + 2 * 0.4 is over it."""
+    policy = PersistencePolicy()
+
+    assert policy.refuses_store(1.0, copy_s=0.3, dump_s=0.4, restore_s=0.0)
+    assert not policy.refuses_store(1.0, copy_s=0.3, dump_s=0.3, restore_s=0.0)
+
+
+def test_the_restore_alone_can_decide():
+    """A store of 0.5 s against a 1.0 s compute is worth it unless a hit
+    gives back less than that: restoring in 0.6 s, it saves 0.4 s."""
+    policy = PersistencePolicy()
+
+    assert policy.refuses_store(1.0, copy_s=0.3, dump_s=0.1, restore_s=0.6)
+    assert not policy.refuses_store(1.0, copy_s=0.3, dump_s=0.1, restore_s=0.4)

@@ -52,7 +52,7 @@ for all of them. Only a storage tier's size cap still applies.
 
 ### A statement around a cached call { #a-statement-around-a-cached-call }
 
-<!-- claim: cash/notebook/statement/store.py:StatementStore._store @480bc467, cash/notebook/call_unit.py:CallUnit._count_cached @48acf47c, cash/notebook/call_unit.py:CallUnit._cached @bf14dba3 -->
+<!-- claim: cash/notebook/statement/store.py:StatementStore._store @84f7c41a, cash/notebook/call_unit.py:CallUnit._count_cached @48acf47c, cash/notebook/call_unit.py:CallUnit._cached @bf14dba3 -->
 cash also caches the slow calls inside a statement on their own (see
 [`no-cache-calls`](annotations.md#call-level-caching-default-and-cashno-cache-calls)).
 The call's result is kept in the call's entry, so a statement around it is
@@ -211,16 +211,18 @@ flowchart TB
     W -->|Yes| DISK
 ```
 
-<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.refuses_store @4a1a399b, cash/backends/sampled_cost.py:_MIN_FRAMES == 500 -->
+<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.refuses_store @d4b6402c, cash/backends/sampled_cost.py:_MIN_FRAMES == 500 -->
 1. **Store it at all?** cash predicts how long reading the value back from the
    first tier (memory, by default) would take, and refuses when that exceeds
    both `min_cache_fixed_budget_seconds` and 80% of the compute time. In memory
    this almost never refuses. A list of hundreds of small DataFrames is priced
    by their count instead, from a sample of them: storing each costs a fixed
    fraction of a millisecond whatever its size, so a loop that builds thousands
-   of them quickly is not stored when copying and writing them would take
-   longer than running the loop again. The badge says so, and the loop runs
-   again.
+   of them quickly is not stored when storing them costs more than a hit
+   saves: copying them, plus writing them twice over (the write holds the
+   interpreter while the next statement runs, which waits as long), against
+   running the loop again less restoring them (memory copies each table
+   back). The badge says so, and the loop runs again.
 2. **Write it to disk?** Only when the compute time is over
    0.1 s, reading the value back from disk beats computing it by
    `min_cache_savings_pct`, and one re-run saves more than the write takes

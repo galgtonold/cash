@@ -25,7 +25,7 @@ from cash._memo import PRODUCER_SNAPSHOTS, LruMemo
 from cash._user_attrs import attribute_or, instance_of
 from cash.backends import memory_backend
 from cash.backends.persistence_policy import PersistencePolicy, restore_kind
-from cash.backends.sampled_cost import many_frames_cost
+from cash.backends.sampled_cost import SampledCost, many_frames_cost
 from cash.backends.store_notices import DECORATED_CALLS_FIELD
 from cash.closure_sharing import closure_check_budget, closures_sharing
 from cash.diagnostics import log_diagnostic, warn_diagnostic
@@ -486,6 +486,10 @@ class StatementStore:
         self._calls = calls
         #: Whether the last `save` ran the user's pickling and sizing hooks.
         self._ran_hooks = False
+        #: The statement being priced or stored, and what `_frames_cost`
+        #: measured for it: ``(run, (name, id) of each value, cost)``.
+        self._pricing: StatementRun | None = None
+        self._priced: tuple[StatementRun, tuple, SampledCost | None] | None = None
         #: Names a later top-level statement of the running cell writes
         #: (:meth:`set_written_later_in_cell`).
         self.written_later_in_cell: frozenset[str] = frozenset()
@@ -559,6 +563,7 @@ class StatementStore:
         all_file_deps, inherited = self._inherit(run, execution)
         as_run = self._note_as_run(run, execution, all_file_deps, inherited)
         self._ran_hooks = False
+        self._pricing = run
         try:
             return self._store(
                 run,
@@ -571,6 +576,8 @@ class StatementStore:
                 as_run=as_run,
             )
         finally:
+            self._pricing = None
+            self._priced = None
             if self._ran_hooks:
                 # They may have changed a value read before or while they ran.
                 value_hash.forget_reads()
@@ -588,6 +595,8 @@ class StatementStore:
         the input it would follow back (`_records_through_inputs`), found
         no records and took a stat of each of the 19,000 files again."""
         self.tracking_state.records_as_run.pop(run.cache_key, None)
+        # Not stored: what `priced_refusal` measured for it is not asked again.
+        self._priced = None
         if not (execution.accessed_files or execution.accessed_remote or execution.probes or self._inherits(run)):
             return
         all_file_deps, inherited = self._inherit(run, execution)
@@ -879,34 +888,104 @@ class StatementStore:
             return True, reason, largest_prediction
         return False, None, largest_prediction
 
+    def priced_refusal(
+        self, run: StatementRun, execution: StatementExecution, captured_vars: dict[str, Any]
+    ) -> str | None:
+        """Why *run*'s value is kept as metadata only because storing it
+        costs more than a hit of it saves (`_store_dearer_than_compute`),
+        asked before the walks that only decide whether it can be stored:
+        the in-place check (`in_place.refusal`) and the share check of its
+        outputs. A loop building 6,000 small frames walked them for 0.9 s
+        before the store refused it. Refused, the statement runs again next
+        time, so nothing those walks would find matters; the walks that
+        move lineage run all the same.
+
+        None when nothing is priced or the price lets the value through;
+        the store asks again of the values as it stores them. Not under
+        ``@cash:persist``, nor for a statement that reads files itself
+        (`should_skip_large_object_caching`'s exemptions), nor when an
+        output is a call result the entry may refer to rather than hold."""
+        if run.force_persist or not captured_vars:
+            return None
+        if self._reads_files(execution, set(execution.accessed_files or ())):
+            return None
+        held = {id(entry[0]) for entry in self._calls.held_call_results()}
+        if any(id(value) in held for value in captured_vars.values()):
+            return None
+        decorated = None if run.offered_as is None else handed_digests.stored_result(run.offered_as)
+        if decorated is not None and any(decorated.holds(value) for value in captured_vars.values()):
+            return None
+        rebuild = self._rebuild_cost.final_rebuild_seconds(
+            run.inputs,
+            run.outputs,
+            execution.store_cost,
+            in_loop=self._calls.in_loop,
+            written_later=self.written_later_in_cell,
+        )
+        self._pricing = run
+        refused = None
+        try:
+            refused = self._store_dearer_than_compute(captured_vars, rebuild, self.policy())
+            return refused
+        finally:
+            self._pricing = None
+            if self._priced is not None and self._priced[0] is run and self._priced[2] is not None:
+                # The sample was pickled, which may run a reducer of the
+                # user's: what a digest read before stands no more.
+                value_hash.forget_reads()
+            if refused is not None:
+                # Kept for its `save` alone, which a refusal makes copy nothing.
+                self._priced = None
+
+    def _frames_cost(self, values: dict[str, Any]) -> SampledCost | None:
+        """`many_frames_cost` of *values*, measured once for the same
+        objects of the same statement: asked before its walks
+        (`priced_refusal`) and again by its store, which holds them alive
+        in between, so an ``id`` is still theirs."""
+        run = self._pricing
+        if run is None:
+            return many_frames_cost(values)
+        ids = tuple(sorted((name, id(value)) for name, value in values.items()))
+        priced = self._priced
+        if priced is not None and priced[0] is run and priced[1] == ids:
+            return priced[2]
+        sampled = many_frames_cost(values)
+        self._priced = (run, ids, sampled)
+        return sampled
+
     def _store_dearer_than_compute(
         self, values: dict[str, Any], execution_time: float, policy: PersistencePolicy
     ) -> str | None:
         """Why *values* are kept as metadata only because storing them costs
-        more than computing them did (`PersistencePolicy.refuses_store`), or
+        more than a hit of them saves (`PersistencePolicy.refuses_store`), or
         None to go on.
 
         Priced, before anything is copied, only for lists of many small
         pandas tables (`many_frames_cost`), whose cost is their count, not
-        their bytes: a loop building 6,000 three-row frames in 1.2 s was
-        copied into the RAM tier for 1.1 s and pickled for 1.15 s more,
-        that pickling holding the interpreter lock while the next cell ran.
-        The copy counts when the first tier keeps values in RAM, the
-        pickling when a tier writes them out."""
+        their bytes: a loop building 6,000 small frames in 1.38 s was
+        copied into the RAM tier for 0.55 s and pickled for 0.36 s more,
+        that pickling holding the interpreter lock while the next cell ran,
+        which took 1.1 s for its 0.34 s. The copy counts when the first tier
+        keeps values in RAM, the pickling when a tier writes them out, and
+        the restore is the first tier's: a RAM hit copies every table again,
+        a disk hit loads them."""
         backend = attribute_or(self.cash_instance, "backend", None)
+        if backend is None or not values:
+            return None
         tiers = list(attribute_or(backend, "backends", None) or [backend])
         in_ram = restore_kind(backend) == "ram"
         written = len(tiers) > 1 or not in_ram
-        if backend is None or not values:
-            return None
-        sampled = many_frames_cost(values)
+        sampled = self._frames_cost(values)
         if sampled is None:
             return None
-        store = (sampled.copy if in_ram else 0.0) + (sampled.dump if written else 0.0)
-        if not policy.refuses_store(execution_time, store):
+        copy = sampled.copy if in_ram else 0.0
+        dump = sampled.dump if written else 0.0
+        restore = sampled.copy if in_ram else sampled.load
+        if not policy.refuses_store(execution_time, copy_s=copy, dump_s=dump, restore_s=restore):
             return None
         reason = (
-            f"Storing its {sampled.items:,} tables would take ~{store:.2f}s vs {execution_time:.2f}s compute "
+            f"Storing its {sampled.items:,} tables would take ~{copy + 2 * dump:.2f}s with the next "
+            f"statement's wait, and a hit ~{restore:.2f}s, vs {execution_time:.2f}s compute "
             f"— use @cash:persist to force"
         )
         logger.debug("[SIZE_AWARE] %s", reason)
@@ -1031,6 +1110,10 @@ class StatementStore:
                 # What it showed is kept for a cell run that skips it.
                 return self._store_metadata_only(run, execution, None, {})
             return None
+        if run.store_refused is not None:
+            # Priced before the walks that decide whether it can be stored
+            # (`priced_refusal`), and refused: nothing is copied for it.
+            return self._store_metadata_only(run, execution, run.store_refused, {})
         # From here the user's pickling and sizing hooks run: what a digest
         # read before them stands no more (`value_hash.forget_reads`).
         self._ran_hooks = True
