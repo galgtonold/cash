@@ -109,7 +109,7 @@ def _stored_names(store: Path, code_dir: Path) -> list[str]:
     """The names the store now holds for *code_dir*'s ``mod.py``."""
     digest = hashlib.blake2b((code_dir / "mod.py").read_text(encoding="utf-8").encode(), digest_size=20).hexdigest()
     found = [json.loads(p.read_text(encoding="utf-8")) for p in store.rglob("*.json")]
-    (entry,) = [e for e in found if e["digest"] == digest and "names" in e]
+    (entry,) = [e for e in found if e.get("digest") == digest and "names" in e]
     return entry["names"]
 
 
