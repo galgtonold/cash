@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import ast
 import builtins
+import contextvars
 import functools
 import hashlib
 import os
@@ -59,12 +60,14 @@ __all__ = [
     "classify_call",
     "dotted_name",
     "environ_membership",
+    "ENVIRONMENT_FOLDED",
     "ENVIRONMENT_READS",
     "environment_component",
     "environment_digests",
     "environment_entry_digest",
     "environment_parts_component",
     "environment_input",
+    "environment_value_now",
     "is_open_write_mode",
     "reads_argv",
     "writes_to_console",
@@ -852,16 +855,24 @@ def _environment_value(kind: str, name: str) -> str | None:
 ENVIRONMENT_READS = [0]
 
 
-def _environment_digest(entry: EnvironmentInput) -> str:
-    ENVIRONMENT_READS[0] += 1
+def environment_value_now(entry: EnvironmentInput) -> str | None:
+    """What the read *entry* answers now (None: unset, or no answer)."""
     kind, name = entry
     try:
-        value = _environment_value(kind, name)
+        return _environment_value(kind, name)
     except (OSError, KeyError, ImportError):  # a removed cwd; no login name
-        value = None
+        return None
+
+
+def _value_digest(value: str | None) -> str:
     # A digest, never the value: an environment variable is where secrets live,
     # and a key component can end up in a log line or an explain() report.
     return "unset" if value is None else hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()[:16]
+
+
+def _environment_digest(entry: EnvironmentInput) -> str:
+    ENVIRONMENT_READS[0] += 1
+    return _value_digest(environment_value_now(entry))
 
 
 def environment_digests(entries: Iterable[EnvironmentInput]) -> list[tuple[str, str]]:
@@ -889,6 +900,15 @@ def environment_parts_component(parts: Iterable[tuple[str, str]]) -> str:
 #: (`cash.decorator.state_memo`).
 ENVIRONMENT_READS_FOLDED = [0]
 
+#: While a state segment is built (`cash.decorator.state_memo`): each
+#: environment read a key component folded, with the value it answered,
+#: and how many components folded one. A segment is then remembered with
+#: those reads and served again only while each answers the same: a write
+#: to a variable no component read leaves it standing. None outside a build.
+ENVIRONMENT_FOLDED: contextvars.ContextVar[list | None] = contextvars.ContextVar(
+    "_cash_environment_folded", default=None
+)
+
 
 def environment_component(entries: Iterable[EnvironmentInput], note: Callable[[str, str], None] | None = None) -> str:
     """The key component for the environment reads *entries*: their current
@@ -897,10 +917,20 @@ def environment_component(entries: Iterable[EnvironmentInput], note: Callable[[s
     digest, for the account of why a key changed."""
     parts = []
     entries = sorted(set(entries))
+    folded = ENVIRONMENT_FOLDED.get() if entries else None
     if entries:
         ENVIRONMENT_READS_FOLDED[0] += 1
+        if folded is not None:
+            folded[0] += 1
     for entry in entries:
-        digest = _environment_digest(entry)
+        ENVIRONMENT_READS[0] += 1
+        value = environment_value_now(entry)
+        if folded is not None:
+            # A read answering two values in one build cannot be kept.
+            folded[1].setdefault(entry, value)
+            if folded[1][entry] != value:
+                folded[0] = -(1 << 30)
+        digest = _value_digest(value)
         if note is not None:
             note(environment_label(entry), digest)
         parts.append((f"{entry[0]}:{entry[1]}", digest))

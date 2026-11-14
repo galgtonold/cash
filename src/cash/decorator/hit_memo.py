@@ -447,6 +447,12 @@ class _Scan:
         try:
             for name in names:
                 if name in md:
+                    if mod is os and name in _OS_ENVIRON:
+                        # ``os.environ.get("X")``: a key folds the variables
+                        # read by name, never the mapping read through ``os``
+                        # (`ModuleAttrs`: a library's object is no data). A
+                        # write to another variable moves nothing it reads.
+                        continue
                     self.value(md[name], names)
         finally:
             self.in_module = in_module
@@ -551,6 +557,8 @@ class _Scan:
             self.watch(b, False)
         for name in names:
             if name in g:
+                if g is _OS_GLOBALS and name in _OS_ENVIRON:
+                    continue  # ``os.getenv``'s ``environ``: as in `module`
                 self.value(g[name], names)
             elif type(b) is dict and name in b:
                 self.value(b[name], names)
@@ -721,6 +729,10 @@ def cells_hold(cells: tuple) -> bool:
 
 _warnings = sys.modules.get("warnings")
 
+#: ``os.environ`` and ``os.environb``, met as attributes of ``os``.
+_OS_ENVIRON = frozenset({"environ", "environb"})
+_OS_GLOBALS = os.__dict__
+
 #: What ``warnings.catch_warnings(record=True)`` sets and puts back: the
 #: display hooks, swapped for a recorder's ``list.append`` and back. pandas
 #: does it around every ``align`` (``rewrite_warning``), so a pvlib body
@@ -755,11 +767,15 @@ def _resolve(mod_name: str, chain: tuple) -> Any:
     return obj
 
 
-def scan(spec: CachedFunction, registry: Any) -> tuple[tuple, tuple, list, _Family | None]:
+def scan(
+    spec: CachedFunction, registry: Any, *, environment_ok: bool = False
+) -> tuple[tuple, tuple, list, _Family | None]:
     """Watch the world of *spec*'s key. Returns the cells and the class
     tags a fast hit compares, the states of the cached functions it
     reaches, and the classes whose family it checks (`_Scan.family`);
-    raises `Ineligible`."""
+    raises `Ineligible`. With *environment_ok* (the state memo, which checks
+    each variable a segment read before serving it) an analysis that keys
+    an environment read does not make it ineligible."""
     func, name = spec.func, spec.name
     s = _Scan(getattr(func, "__module__", None), func)
     s.value(func, frozenset())
@@ -771,7 +787,7 @@ def scan(spec: CachedFunction, registry: Any) -> tuple[tuple, tuple, list, _Fami
             raise Ineligible("a data source")
         report = registry.report_for(func, name) if node == name else registry.purity_reports.get(node)
         if report is not None:
-            if report.unwalkable or report.unkeyable or report.environment_reads:
+            if report.unwalkable or report.unkeyable or (report.environment_reads and not environment_ok):
                 raise Ineligible("its analysis keys an environment read or could not finish")
             for mod_name, chain in report.helper_resolution_paths.values():
                 s.value(_resolve(mod_name, chain), frozenset(chain))

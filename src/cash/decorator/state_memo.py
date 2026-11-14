@@ -34,7 +34,15 @@ The fold is remembered per function and served again while three things hold:
 
 A fold whose output does not come from the world alone is never remembered:
 one that folded a random stream's epoch (its position moves with every
-draw), an environment variable or a file's content.
+draw) or a file's content. An environment variable the fold read by name
+(``os.environ.get("X")``, ``os.getenv("X")``, ``os.environ["X"]``) is the
+exception: the capture keeps what each such read answered
+(`effects.ENVIRONMENT_FOLDED`) and is served only while every one of them
+answers the same, so a write to another variable -- numba's or a thread
+pool's at import or call time -- leaves it standing, and a write to one it
+read builds the segment again. The environment read as a whole is no such
+read: the key folds the mapping's content as a value, which no watcher
+covers, and the segment is not remembered.
 
 What a fold leaves behind besides its digest -- the stages of the state
 chain, the ledger that names each part for a miss's explanation, what the
@@ -65,7 +73,7 @@ from .. import _native
 from .._active import ACTIVE_CONFIG, EXPLAINING
 from ..code_swaps import FOLDED_CODE, FoldedCode
 from ..dependency_state import OUTSIDE_READS_FOLDED, STATE_LEDGER
-from ..effects import ENVIRONMENT_READS_FOLDED
+from ..effects import ENVIRONMENT_FOLDED, ENVIRONMENT_READS, ENVIRONMENT_READS_FOLDED, environment_value_now
 from . import hit_memo, walk_scope
 from .call_state import CAPTURE_WATCH, CARRIER_LOOKUPS, REACHED_TTLS
 from .class_data import CLASSES_FOLDED
@@ -179,7 +187,33 @@ def folded_outside_world() -> None:
 
 
 def _outside() -> int:
-    return OUTSIDE[0] + ENVIRONMENT_READS_FOLDED[0] + OUTSIDE_READS_FOLDED[0]
+    """Folds no watcher sees, the environment reads by name aside (they
+    are checked on every reuse, `_Capture.env`)."""
+    return OUTSIDE[0] + OUTSIDE_READS_FOLDED[0]
+
+
+def _env_holds(env: tuple) -> bool:
+    """Does every environment read *env* holds still answer the same?"""
+    for entry, value in env:
+        if environment_value_now(entry) != value:
+            return False
+    return True
+
+
+def _env_replay(env: tuple) -> None:
+    """What folding *env* again leaves behind: the counters moved, and the
+    reads handed to a build running around this one."""
+    if not env:
+        return
+    ENVIRONMENT_READS[0] += len(env)
+    ENVIRONMENT_READS_FOLDED[0] += 1
+    outer = ENVIRONMENT_FOLDED.get()
+    if outer is not None:
+        outer[0] += 1
+        for entry, value in env:
+            outer[1].setdefault(entry, value)
+            if outer[1][entry] != value:
+                outer[0] = -(1 << 30)
 
 
 def status() -> dict:
@@ -210,6 +244,12 @@ class _Capture:
     low: int
     members: frozenset
     lookups: tuple
+    #: The environment variables the fold read by name, with what each
+    #: answered: served again only while each answers the same.
+    env: tuple = ()
+    #: Did every environment fold go through `ENVIRONMENT_FOLDED`? (False
+    #: when one ran in another thread, or a read answered twice.)
+    env_complete: bool = True
 
 
 def _mode(name: str, note: bool) -> tuple | None:
@@ -299,12 +339,26 @@ def _sandboxed(build: Callable[[list], str]) -> _Capture:
     )
     frames = walk_scope.stack()
     chain: list = []
+    env_folded: list = [0, {}]
+    env_token = ENVIRONMENT_FOLDED.set(env_folded)
+    env_before = ENVIRONMENT_READS_FOLDED[0]
     try:
         with walk_scope.apart(frames[0].item if frames else None) as own:
             state = build(chain)
     finally:
+        ENVIRONMENT_FOLDED.reset(env_token)
         for var, token in reversed(tokens):
             var.reset(token)
+    env = tuple(sorted(env_folded[1].items()))
+    env_complete = env_folded[0] == ENVIRONMENT_READS_FOLDED[0] - env_before
+    outer = ENVIRONMENT_FOLDED.get()
+    if outer is not None and env_folded[0]:
+        # A build around this one folded these reads too.
+        outer[0] = outer[0] + env_folded[0] if env_complete else -(1 << 30)
+        for entry, value in env:
+            outer[1].setdefault(entry, value)
+            if outer[1][entry] != value:
+                outer[0] = -(1 << 30)
     return _Capture(
         state,
         tuple(chain),
@@ -320,6 +374,8 @@ def _sandboxed(build: Callable[[list], str]) -> _Capture:
         own.low if own is not None else sys.maxsize,
         frozenset(own.members) if own is not None else frozenset(),
         tuple(new_lookups),
+        env,
+        env_complete,
     )
 
 
@@ -377,7 +433,19 @@ def _same(a: Any, b: Any, depth: int = 0) -> bool:
 def _differences(kept: _Capture, built: _Capture) -> list[str]:
     out = [
         name
-        for name in ("state", "chain", "ledger", "watch", "ttls", "classes", "touched", "low", "members", "lookups")
+        for name in (
+            "state",
+            "chain",
+            "ledger",
+            "watch",
+            "ttls",
+            "classes",
+            "touched",
+            "low",
+            "members",
+            "lookups",
+            "env",
+        )
         if not _same(getattr(kept, name), getattr(built, name))
     ]
     for name in ("owners", "reports", "digests", "reads"):
@@ -430,7 +498,7 @@ class StateMemo:
         self.entries = {}
         STATS["scans"] += 1
         try:
-            cells, tags, _callees, family = hit_memo.scan(self.spec, registry)
+            cells, tags, _callees, family = hit_memo.scan(self.spec, registry, environment_ok=True)
         except Exception:  # noqa: BLE001 - Ineligible, or a scan that broke: the ordinary path
             STATS["scans_failed"] += 1
             return False
@@ -459,8 +527,14 @@ class StateMemo:
                 self.world = -1
                 return build_now(spec, chain, note=note)
             cap = self.entries.get(mode)
+            if cap is not None and cap.env and not _env_holds(cap.env):
+                # A variable the segment read now answers otherwise: built
+                # again below, and remembered with the new answer.
+                WHY["why_environment"] += 1
+                cap = None
             if cap is not None:
                 _apply(cap, chain)
+                _env_replay(cap.env)
                 STATS["reused"] += 1
                 self.reused_since_scan += 1
                 if VERIFY:
@@ -477,6 +551,8 @@ class StateMemo:
             _world_epoch() == world
             and GEN[0] == gen
             and _outside() == outside
+            and cap.env_complete
+            and _env_holds(cap.env)
             and self.world == world
             and len(cap.chain) >= 7
             and cap.chain[5] == cap.chain[4]
