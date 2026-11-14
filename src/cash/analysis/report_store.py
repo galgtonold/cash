@@ -68,7 +68,7 @@ from .unloaded_modules import source_digest
 __all__ = ["STATS", "StoredReportMismatch", "flush", "load", "save", "status"]
 
 #: Layout of a stored file; a change makes every older one a miss.
-_FORMAT = 1
+_FORMAT = 2
 _KIND = "purity-report"
 #: Reports kept per function: its recent texts, and the worlds they ran in.
 _MAX_ENTRIES = 8
@@ -431,6 +431,9 @@ def _spell(report: PurityReport, objects: list[Any], paths: list[list]) -> dict:
         "environment": sorted(list(e) for e in report.environment_reads),
         "cached": cached,
         "whole": whole,
+        # Which classes are only tested against: without it a report read
+        # back folds what their methods read again (`check_targets`).
+        "check_only": sorted(report.check_only_classes),
     }
 
 
@@ -482,6 +485,7 @@ def _read(spelled: dict, objects: list[Any]) -> PurityReport:
         cached_callees=tuple(cached),
         unwalkable="",
         audited_whole=tuple(_weak.ref(objects[i]) for i in spelled["whole"]),
+        check_only_classes=frozenset(spelled["check_only"]),
     )
 
 
