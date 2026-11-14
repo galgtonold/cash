@@ -567,6 +567,26 @@ def candidates(obj: Any) -> Iterable[types.FunctionType]:
             jitted = jit_python_function(o)
             if jitted is not None:
                 stack.append(jitted)
+            else:
+                stack.extend(_held_functions(o))
+
+
+#: Where a descriptor or wrapper of a library's keeps the function it stands
+#: for (sklearn's ``available_if`` keeps ``fn``).
+_HELD_FUNCTION_ATTRS = ("fn", "func", "__wrapped__", "fget")
+
+
+def _held_functions(obj: Any) -> list[types.FunctionType]:
+    """The plain functions *obj* keeps in its own ``__dict__`` under one of
+    `_HELD_FUNCTION_ATTRS`: read from the instance dict, so no ``__getattr__``
+    or property of its class runs."""
+    try:
+        d = object.__getattribute__(obj, "__dict__")
+    except Exception:  # noqa: BLE001 - an object with no dict of its own holds none
+        return []
+    if type(d) is not dict:
+        return []
+    return [f for f in (d.get(a) for a in _HELD_FUNCTION_ATTRS) if type(f) is types.FunctionType]
 
 
 def _code_of(obj: Any, qualname: str) -> types.CodeType | None:

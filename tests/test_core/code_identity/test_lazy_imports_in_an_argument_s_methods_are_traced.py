@@ -211,3 +211,74 @@ def test_once_the_module_is_loaded_the_argument_is_looked_at_again(tmp_path, tra
     proc = run_python("main.py", cwd=tmp_path, env={"CASH_TRACE": trace})
     assert proc.stdout.split() == ["[1]", "[2]", "[2]"]
     assert proc.stderr.count("[RUN]") == 2, proc.stderr
+
+
+# Reported next, on the same walk: ``Pipeline.predict`` sits behind sklearn's
+# ``available_if``, a descriptor that keeps the function as ``fn``, and
+# ``getattr(y, "dtype", None)`` finds a slot of a C type. Neither could be
+# checked again, so the call was not stored.
+AVAILABLE = textwrap.dedent("""
+    class _AvailableIf:
+        def __init__(self, fn, check):
+            self.fn = fn
+            self.check = check
+
+        def __get__(self, obj, owner=None):
+            if obj is None:
+                return self
+            self.check(obj)
+            return self.fn.__get__(obj, owner)
+
+
+    def available_if(check):
+        return lambda fn: _AvailableIf(fn, check)
+""")
+
+PIPELINE = textwrap.dedent("""
+    from . import ops
+    from ._available import available_if
+
+
+    def _has_kind(pipe):
+        return bool(pipe.kind)
+
+
+    class Pipeline:
+        def __init__(self, kind):
+            self.kind = kind
+
+        @available_if(_has_kind)
+        def predict(self, xs):
+            imag = getattr(float(xs[0]), "imag", None)
+            return [v + imag for v in getattr(ops, self.kind)(xs)]
+""")
+
+PIPELINE_MAIN = textwrap.dedent("""
+    import sys
+    import cash
+    from imbpkg.pipeline import Pipeline
+
+    @cash.cache
+    def predict(pipe, xs):
+        print("[RUN]", file=sys.stderr)  # @cash:assume-safe
+        return pipe.predict(xs)
+
+    print(predict(Pipeline("double"), [1, 2]))
+""")
+
+
+@pytest.mark.skipif(not TRACED, reason="a trace of what a call ran needs sys.monitoring (Python 3.12+)")
+def test_a_method_behind_a_descriptor_and_a_c_slot_lookup_hit_on_the_trace(tmp_path):
+    _write(tmp_path)
+    (tmp_path / "imbpkg" / "_available.py").write_text(AVAILABLE, encoding="utf-8")
+    (tmp_path / "imbpkg" / "pipeline.py").write_text(PIPELINE, encoding="utf-8")
+    (tmp_path / "main.py").write_text(PIPELINE_MAIN, encoding="utf-8")
+    out, err = _run(tmp_path)
+    assert out == "[2.0, 4.0]" and "[RUN]" in err
+    out, err = _run(tmp_path)
+    assert out == "[2.0, 4.0]"
+    assert "[RUN]" not in err, f"an unedited run must hit:\n{err}"
+    _write(tmp_path, double=20)
+    (tmp_path / "main.py").write_text(PIPELINE_MAIN, encoding="utf-8")
+    out, _ = _run(tmp_path)
+    assert out == "[20.0, 40.0]", f"served the result from before the edit: {out}"

@@ -880,6 +880,18 @@ def _namespace_digest(ns: Mapping[str, Any]) -> str | None:
     return h.hexdigest()
 
 
+#: The attributes a C type defines: compiled, so nothing edits them.
+_C_DESCRIPTORS = frozenset(
+    {
+        types.GetSetDescriptorType,
+        types.MemberDescriptorType,
+        types.MethodDescriptorType,
+        types.WrapperDescriptorType,
+        types.ClassMethodDescriptorType,
+    }
+)
+
+
 def _lookup_digest(module: str, qualname: str, name: str) -> str | None:
     """What a ``getattr(target, name)`` finds on the module or class the
     item names, now; None when that cannot be told."""
@@ -895,6 +907,11 @@ def _lookup_digest(module: str, qualname: str, name: str) -> str | None:
             found = inspect_getattr(target, name)
         except AttributeError:
             return _ABSENT
+        if type(found) in _C_DESCRIPTORS:
+            # A slot of a C type (``ndarray.dtype``): no edit can change
+            # it, so it stands for itself by where it is defined.
+            owner = getattr(found, "__objclass__", None)
+            return f"c:{getattr(owner, '__module__', '?')}.{getattr(owner, '__qualname__', '?')}.{name}"
         return _digest(found)
     ns = _namespace(module)
     if ns is None:
