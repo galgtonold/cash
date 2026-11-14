@@ -487,7 +487,8 @@ static int view_add(uint32_t r, uintptr_t d, PyObject *key) {
  *   - a world dict (module globals, builtins, sys.modules, os.environ, a
  *     plain dict the code reads): any event, except a rebinding of a str
  *     key that no scanned code names (not in `world_names`) where neither
- *     the old nor the new value is callable or a module. A loop variable
+ *     the old nor the new value is callable or a module (or the name is
+ *     quiet: `world_quiet`), and a key set to the object it holds. A loop variable
  *     of a script's top level is rebound on every iteration; the code a
  *     key reads is not. A dict marked UNKEYED counts every event.
  *   - a world type: any type watcher event (tags are assigned when it is
@@ -559,6 +560,24 @@ static int went_add(WEnt **tabp, size_t *capp, size_t *usedp, size_t *tombp, uin
     (*tabp)[i].addr = a; (*tabp)[i].flags = flags;
     (*tabp)[i].name = (*tabp)[i].qualname = (*tabp)[i].bases = (*tabp)[i].mro = (*tabp)[i].meta = NULL; (*usedp)++;
     return 0;
+}
+
+/* ``id(dict) -> set of str``: names of a world dict that hold a callable
+ * no key finds by name (`world_quiet`): the warnings module's display hooks,
+ * which pandas swaps for a recorder and back around every `align`. Still a
+ * change when scanned code names them (`world_names`). */
+static PyObject *world_quiet = NULL;
+
+static int world_quiet_name(PyObject *d, PyObject *key) {
+    if (world_quiet == NULL) return 0;
+    PyObject *at = PyLong_FromVoidPtr(d);
+    if (!at) { PyErr_Clear(); return 0; }
+    PyObject *names = PyDict_GetItemWithError(world_quiet, at);   /* borrowed; int key: no Python code */
+    Py_DECREF(at);
+    if (!names) { PyErr_Clear(); return 0; }
+    int r = PySet_Contains(names, key);   /* str: no Python code */
+    if (r < 0) { PyErr_Clear(); return 0; }
+    return r;
 }
 
 static inline void world_bump(void) { world_epoch++; c_world_bumps++; }
@@ -649,7 +668,22 @@ static void world_dict_event(WEnt *e, PyDict_WatchEvent ev, PyObject *d, PyObjec
          * the cells a memo starts from are held by it). A function or
          * lambda made and dropped per call would stop every memo here. */
         e->addr = WTOMB; wds_used--; wds_tomb++;
+        if (world_quiet != NULL) {   /* its address may be a new dict's next */
+            PyObject *at = PyLong_FromVoidPtr(d);
+            if (at && PyDict_DelItem(world_quiet, at) < 0) PyErr_Clear();
+            Py_XDECREF(at);
+            if (!at) PyErr_Clear();
+        }
         return;
+    }
+    if (ev == PyDict_EVENT_MODIFIED && key != NULL && nv != NULL && PyUnicode_CheckExact(key)) {
+        /* A key set to the very object it holds (the callback runs before
+         * the write) changes nothing a key reads: `warnings.catch_warnings`
+         * puts `showwarning` back so on every exit, which pvlib does inside
+         * its functions, and each miss then built the state segment again. */
+        PyObject *old = PyDict_GetItemWithError(d, key);   /* borrowed; a str key runs no Python code */
+        if (old == NULL && PyErr_Occurred()) PyErr_Clear();
+        else if (old == nv) { c_world_ignored++; return; }
     }
     if ((e->flags & WD_UNKEYED) == 0 && key != NULL && PyUnicode_CheckExact(key) && world_names != NULL &&
         (ev == PyDict_EVENT_ADDED || ev == PyDict_EVENT_MODIFIED || ev == PyDict_EVENT_DELETED)) {
@@ -659,6 +693,7 @@ static void world_dict_event(WEnt *e, PyDict_WatchEvent ev, PyObject *d, PyObjec
         if (!named) {
             PyObject *old = ev == PyDict_EVENT_ADDED ? NULL : PyDict_GetItem(d, key);  /* borrowed */
             if (!codeish(old) && !codeish(nv)) { c_world_ignored++; return; }
+            if (world_quiet_name(d, key)) { c_world_ignored++; return; }
         }
     }
     if (expected_write(ev, d, key, nv)) { c_world_ignored++; return; }
@@ -2348,6 +2383,20 @@ static PyObject *py_world_watch_dict(PyObject *self, PyObject *const *args, Py_s
     Py_RETURN_NONE;
 }
 
+/* world_quiet(d, names): see `world_quiet`; d must be watched too */
+static PyObject *py_world_quiet(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs != 2 || !PyDict_Check(args[0])) { PyErr_SetString(PyExc_TypeError, "world_quiet(dict, names)"); return NULL; }
+    if (!world_quiet) { world_quiet = PyDict_New(); if (!world_quiet) return NULL; }
+    PyObject *names = PyFrozenSet_New(args[1]);
+    if (!names) return NULL;
+    PyObject *at = PyLong_FromVoidPtr(args[0]);
+    if (!at) { Py_DECREF(names); return NULL; }
+    int rc = PyDict_SetItem(world_quiet, at, names);
+    Py_DECREF(at); Py_DECREF(names);
+    if (rc < 0) return NULL;
+    Py_RETURN_NONE;
+}
+
 /* world_watch_type(t) -> its version tag now (not checked: see WEnt), or None for a static type */
 static PyObject *py_world_watch_type(PyObject *self, PyObject *t) {
     if (!PyType_Check(t)) { PyErr_SetString(PyExc_TypeError, "world_watch_type(type)"); return NULL; }
@@ -3101,6 +3150,7 @@ static PyMethodDef methods[] = {
     {"world_watch_dict", (PyCFunction)(void (*)(void))py_world_watch_dict, METH_FASTCALL, ""},
     {"world_watch_type", py_world_watch_type, METH_O, ""},
     {"world_add_names", py_world_add_names, METH_O, ""},
+    {"world_quiet", (PyCFunction)(void (*)(void))py_world_quiet, METH_FASTCALL, ""},
     {"world_info", py_world_info, METH_NOARGS, ""},
     {"set_scalar_types", py_set_scalar_types, METH_O, "the numpy number types keyed by their bytes"},
     {"memo_key", (PyCFunction)(void (*)(void))py_memo_key, METH_FASTCALL, ""},

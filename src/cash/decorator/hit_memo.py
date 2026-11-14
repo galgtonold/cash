@@ -719,6 +719,17 @@ def cells_hold(cells: tuple) -> bool:
     return True
 
 
+_warnings = sys.modules.get("warnings")
+
+#: What ``warnings.catch_warnings(record=True)`` sets and puts back: the
+#: display hooks, swapped for a recorder's ``list.append`` and back. pandas
+#: does it around every ``align`` (``rewrite_warning``), so a pvlib body
+#: that clips a series moved the world on each call, and every miss built
+#: its state segment again (`state_memo`). No key reads them unless scanned
+#: code names them (``world_names``), and then a change still counts.
+_WARNING_HOOKS = ("showwarning", "_showwarnmsg_impl")
+
+
 def _watch_modules() -> None:
     """Watch every module's namespace (keyed) and ``sys.modules`` (every
     change): a helper cash finds by name can live in any of them."""
@@ -730,6 +741,8 @@ def _watch_modules() -> None:
             if type(md) is dict and id(md) not in _WATCHED_MODULES:
                 _cw.world_watch_dict(md, False)
                 _WATCHED_MODULES.add(id(md))
+                if mod is _warnings and hasattr(_cw, "world_quiet"):
+                    _cw.world_quiet(md, _WARNING_HOOKS)
         _cw.world_watch_dict(builtins.__dict__, False)
 
 
