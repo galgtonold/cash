@@ -445,6 +445,7 @@ class CallLog:
                 saved_seconds=saved_seconds,
                 body_seconds=body_seconds,
                 culprit=culprit,
+                no_arguments=_takes_no_arguments(cf),
             )
         except Exception:  # noqa: BLE001 - accounting must never break a call
             return
@@ -584,6 +585,7 @@ class CallLog:
                 body_seconds=body_seconds,
                 was_hit=was_hit,
                 culprit=culprit,
+                no_arguments=_takes_no_arguments(cf),
             )
         except Exception:  # noqa: BLE001 - accounting must never break a call
             return
@@ -600,3 +602,15 @@ class CallLog:
                 what,
                 fix,
             )
+
+
+def _takes_no_arguments(cf: Any) -> bool:
+    """Does the cached function *cf* take no arguments at all (so no key
+    cost can be an argument's)?"""
+    if cf is None:
+        return False
+    try:
+        signature = cf.signature
+    except Exception:  # noqa: BLE001 - unknown: as one that takes some
+        return False
+    return signature is not None and not signature.parameters
