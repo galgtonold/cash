@@ -779,6 +779,82 @@ static PyObject *py_copy_fixed_chunks(PyObject *self, PyObject *const *args, Py_
     Py_RETURN_NONE;
 }
 
+/* pool_buffers_unproven(lists, buffer_type, cpp, data, pool) -> [index]
+ *
+ * The indices of the lists (each a list of pyarrow Buffers or None, one
+ * Arrow array's buffers) holding a buffer not proven to be a memory pool's:
+ * an object of exactly *buffer_type* whose C++ Buffer, the pointer at byte
+ * *cpp* of the Python object, holds the buffer's address and size at byte
+ * *data* and has the vtable *pool*. The same words
+ * `frame_sharing._vtable` reads with ctypes, for every chunk of a column in
+ * one call: 6,000 chunks took 38 ms read one buffer at a time from Python.
+ * A list that is not proven here is checked by the Python code, which also
+ * follows a slice to its parent. */
+static PyObject *py_pool_buffers_unproven(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    (void)self;
+    if (nargs != 5 || !PyList_Check(args[0]) || !PyType_Check(args[1])) {
+        PyErr_SetString(PyExc_TypeError, "pool_buffers_unproven takes lists, a type and three offsets");
+        return NULL;
+    }
+    Py_ssize_t cpp = PyLong_AsSsize_t(args[2]);
+    Py_ssize_t data = PyLong_AsSsize_t(args[3]);
+    size_t pool = PyLong_AsSize_t(args[4]);
+    if (PyErr_Occurred()) return NULL;
+    PyTypeObject *buffer_type = (PyTypeObject *)args[1];
+    if (cpp < (Py_ssize_t)sizeof(PyObject) || cpp + (Py_ssize_t)sizeof(size_t) > buffer_type->tp_basicsize || data < 0 ||
+        data > 4096 || !pool) {
+        PyErr_SetString(PyExc_ValueError, "pool_buffers_unproven: offsets outside the objects");
+        return NULL;
+    }
+    PyObject *lists = args[0];
+    PyObject *out = PyList_New(0);
+    if (!out) return NULL;
+    for (Py_ssize_t i = 0; i < PyList_GET_SIZE(lists); i++) {
+        PyObject *buffers = PyList_GET_ITEM(lists, i);
+        int proven = PyList_Check(buffers);
+        for (Py_ssize_t j = 0; proven && j < PyList_GET_SIZE(buffers); j++) {
+            PyObject *buffer = PyList_GET_ITEM(buffers, j);
+            if (buffer == Py_None) continue;
+            if (Py_TYPE(buffer) != buffer_type) {
+                proven = 0;
+                break;
+            }
+            size_t pointer;
+            memcpy(&pointer, (const char *)buffer + cpp, sizeof pointer);
+            if (!pointer) {
+                proven = 0;
+                break;
+            }
+            PyObject *address_obj = PyObject_GetAttrString(buffer, "address");
+            if (!address_obj) goto fail;
+            size_t address = PyLong_AsSize_t(address_obj);
+            Py_DECREF(address_obj);
+            PyObject *size_obj = PyObject_GetAttrString(buffer, "size");
+            if (!size_obj) goto fail;
+            size_t size = PyLong_AsSize_t(size_obj);
+            Py_DECREF(size_obj);
+            if (PyErr_Occurred()) goto fail;
+            size_t held_address, held_size, vtable;
+            memcpy(&held_address, (const char *)pointer + data, sizeof held_address);
+            memcpy(&held_size, (const char *)pointer + data + sizeof(size_t), sizeof held_size);
+            memcpy(&vtable, (const char *)pointer, sizeof vtable);
+            if (held_address != address || held_size != size || vtable != pool) proven = 0;
+        }
+        if (!proven) {
+            PyObject *index = PyLong_FromSsize_t(i);
+            if (!index || PyList_Append(out, index) < 0) {
+                Py_XDECREF(index);
+                goto fail;
+            }
+            Py_DECREF(index);
+        }
+    }
+    return out;
+fail:
+    Py_DECREF(out);
+    return NULL;
+}
+
 static PyMethodDef cviews_methods[] = {
     {"view_lengths", (PyCFunction)(void (*)(void))py_view_lengths, METH_FASTCALL,
      "view_lengths(views, validity, start, stop, out) -> rows written"},
@@ -796,6 +872,8 @@ static PyMethodDef cviews_methods[] = {
      "view_lengths_many(pieces, index, row, out) -> (index, row, written)"},
     {"view_values_many", (PyCFunction)(void (*)(void))py_view_values_many, METH_FASTCALL,
      "view_values_many(pieces, index, row, skip, out) -> (index, row, skip, written)"},
+    {"pool_buffers_unproven", (PyCFunction)(void (*)(void))py_pool_buffers_unproven, METH_FASTCALL,
+     "pool_buffers_unproven(lists, buffer_type, cpp, data, pool) -> [index]"},
     {NULL, NULL, 0, NULL}};
 
 int cviews_add_functions(PyObject *m) { return PyModule_AddFunctions(m, cviews_methods); }

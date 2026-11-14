@@ -69,6 +69,7 @@ from typing import Any
 
 from .. import _weak
 from .._user_attrs import from_family
+from ..sizing import array_nbytes
 from . import heap_blocks
 
 logger = logging.getLogger(__name__)
@@ -1082,7 +1083,7 @@ def _total_bytes(frame: Any) -> int:
     `_share_checked` counts. A frame of unknown shape counts as big, so it
     goes through the checks as before."""
     try:
-        return sum(block.values.nbytes for block in frame._mgr.blocks)
+        return sum(array_nbytes(block.values) for block in frame._mgr.blocks)
     except Exception:  # noqa: BLE001 - not a pandas frame as known here
         return CHECKED_MIN_BYTES
 
@@ -1517,7 +1518,7 @@ def _owned_arrow(chunked: Any) -> Any:
     import pyarrow as pa
 
     chunks = chunked.chunks
-    todo = [i for i, chunk in enumerate(chunks) if not _chunk_owned(chunk)]
+    todo = _unowned_chunks(chunked.type, chunks)
     if not todo:
         return chunked
     owned = list(chunks)
@@ -1877,6 +1878,40 @@ def _chunk_owned(chunk: Any) -> bool:
     return _buffers_owned(chunk.buffers())
 
 
+#: From this many chunks the pool's buffers are told apart in one call to
+#: the C extension (`_unowned_chunks`).
+_MANY_CHUNKS = 16
+
+
+def _unowned_chunks(arrow_type: Any, chunks: list[Any]) -> list[int]:
+    """The positions of the *chunks* (Arrays of *arrow_type*) not
+    `_chunk_owned`, with the same verdict for each.
+
+    A column of many chunks has every buffer read by the C extension
+    (``pool_buffers_unproven``), the words `_vtable` reads; only a chunk it
+    cannot prove a pool's -- a slice, someone else's memory -- is looked at
+    here. One at a time from Python, the 12,000 chunks of the two text
+    columns of a frame grown by ``df = pd.concat([df, new])`` took 80 ms
+    of every store of it."""
+    import pyarrow as pa
+
+    from .._native import kernels
+
+    layout = _arrow_layout()
+    if layout is None:
+        return list(range(len(chunks)))
+    many = getattr(kernels, "pool_buffers_unproven", None)
+    if (
+        many is None
+        or len(chunks) < _MANY_CHUNKS
+        or pa.types.is_dictionary(arrow_type)
+        or _holds_dictionary(arrow_type)
+    ):
+        return [i for i, chunk in enumerate(chunks) if not _chunk_owned(chunk)]
+    unproven = many([chunk.buffers() for chunk in chunks], pa.Buffer, layout.cpp, layout.data, layout.pool)
+    return [i for i in unproven if not _chunk_owned(chunks[i])]
+
+
 def _buffers_owned(buffers: list[Any]) -> bool:
     return all(buffer is None or arrow_owned(buffer) for buffer in buffers)
 
@@ -1892,7 +1927,7 @@ def arrow_data_owned(data: Any) -> bool:
     if isinstance(data, pa.Array):
         return _chunk_owned(data)
     if isinstance(data, pa.ChunkedArray):
-        return all(_chunk_owned(chunk) for chunk in data.chunks)
+        return not _unowned_chunks(data.type, data.chunks)
     if isinstance(data, (pa.Table, pa.RecordBatch)):
         return all(arrow_data_owned(column) for column in data.columns)
     return False

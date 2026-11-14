@@ -103,6 +103,82 @@ def _sampled_bytes(values: Any, seen: set[int]) -> int:
 _FLAT_CELLS = frozenset((str, int, float, bool, type(None), bytes, complex))
 
 
+#: An Arrow column of at least this many chunks has its size remembered
+#: (`array_nbytes`); below it reading the size costs less than the memo.
+_ARROW_MEMO_MIN_CHUNKS = 32
+
+#: `pa.ChunkedArray.nbytes` already read, by the array's ``id``: its weak
+#: reference and the size. An Arrow array never changes (a write into a
+#: pandas column replaces its ``_pa_array``, it does not alter the old one),
+#: so its size cannot either; the entry goes when the array does.
+_ARROW_SIZES: dict[int, tuple[Any, int]] = {}
+
+
+def _drop_arrow_size(key: int, ref: Any) -> None:
+    known = _ARROW_SIZES.get(key)
+    if known is not None and known[0] is ref:
+        _ARROW_SIZES.pop(key, None)
+
+
+def _chunked_nbytes(chunked: Any) -> int:
+    """Arrow's own count: the bytes of the buffers *chunked* uses, a buffer
+    shared by chunks once, a sliced chunk by the rows it shows."""
+    return int(chunked.nbytes)
+
+
+def chunked_nbytes(chunked: Any) -> int:
+    """``chunked.nbytes`` of the ``pa.ChunkedArray`` *chunked*, read once
+    per array when it has many chunks.
+
+    Arrow works it out afresh at every read, a set of every buffer to count
+    shared ones once: 13 ms for a text column of 6,000 chunks, which a loop
+    of ``df = pd.concat([df, new])`` makes. A statement sized such a frame
+    up to eight times (the frame memo's threshold, the store's budget and
+    RAM-tier checks, the copy's), most of a statement's overhead. The size
+    is exactly Arrow's: only how often it is read changes."""
+    if chunked.num_chunks < _ARROW_MEMO_MIN_CHUNKS:
+        return _chunked_nbytes(chunked)
+    key = id(chunked)
+    known = _ARROW_SIZES.get(key)
+    if known is not None and known[0]() is chunked:
+        return known[1]
+    size = _chunked_nbytes(chunked)
+    try:
+        ref = weakref.ref(chunked, lambda gone, key=key: _drop_arrow_size(key, gone))
+    except TypeError:  # an Arrow without weak references: read every time
+        return size
+    _ARROW_SIZES[key] = (ref, size)
+    return size
+
+
+def array_nbytes(values: Any) -> int:
+    """``values.nbytes`` of a pandas or NumPy array, an Arrow-backed pandas
+    array's read through `chunked_nbytes` (pandas' ``nbytes`` is its
+    ``_pa_array.nbytes``, pandas 2 and 3 alike)."""
+    chunked = _arrow_backing(values)
+    if chunked is not None:
+        return chunked_nbytes(chunked)
+    return int(values.nbytes)
+
+
+def _arrow_backing(values: Any) -> Any:
+    """The ``pa.ChunkedArray`` a pandas Arrow-backed array (``ArrowDtype``,
+    ``string[pyarrow]``) keeps its values in; None for any other array, or
+    a subclass with an ``nbytes`` of its own."""
+    arrow = sys.modules.get("pandas.core.arrays.arrow.array")
+    pa = sys.modules.get("pyarrow")
+    base = getattr(arrow, "ArrowExtensionArray", None)
+    if base is None or pa is None or not isinstance(values, base):
+        return None
+    for kind in type(values).__mro__:
+        if kind is base:
+            break
+        if "nbytes" in kind.__dict__:
+            return None
+    chunked = getattr(values, "_pa_array", None)
+    return chunked if type(chunked) is pa.ChunkedArray else None
+
+
 def _column_bytes(col: Any, seen: set[int]) -> int:
     """One column's data, as ``memory_usage(deep=True)`` counts it."""
     values = held_values(col)
@@ -112,7 +188,7 @@ def _column_bytes(col: Any, seen: set[int]) -> int:
         return int(values.codes.nbytes) + _index_bytes(values.categories, seen)
     if _holds_python_objects(col.dtype):
         return _sampled_bytes(_python_objects(col, values), seen)
-    return int(values.nbytes)
+    return array_nbytes(values)
 
 
 def _index_bytes(index: Any, seen: set[int]) -> int:
@@ -160,7 +236,8 @@ def _arrays_bytes(obj: Any) -> int | None:
         dtype = getattr(arr, "dtype", None)
         if dtype is None or _holds_python_objects(dtype) or str(dtype) == "category":
             return None
-        nbytes = getattr(arr, "nbytes", None)
+        chunked = _arrow_backing(arr)
+        nbytes = chunked_nbytes(chunked) if chunked is not None else getattr(arr, "nbytes", None)
         if not isinstance(nbytes, int):
             return None
         total += nbytes
@@ -265,7 +342,10 @@ def _array_estimate(arr: Any, seen: set[int]) -> int:
         if type(held).__name__ != "ndarray" or held.dtype.kind != "O":
             held = arr.to_numpy(dtype=object)
         return _objects_estimate(held, seen)
-    nbytes = getattr(arr, "nbytes", None)  # Arrow and other extension arrays
+    chunked = _arrow_backing(arr)
+    if chunked is not None:
+        return chunked_nbytes(chunked)
+    nbytes = getattr(arr, "nbytes", None)  # other extension arrays
     return int(nbytes) if isinstance(nbytes, int) else 0
 
 
@@ -501,6 +581,8 @@ def _data_size(obj: Any, _seen: set[int] | None = None) -> int | None:
         return _est_sparse_csr_csc(obj)
     if type_name in _SPARSE_COO_TYPES and from_family(kind, "scipy.sparse"):
         return _est_sparse_coo(obj)
+    if type_name == "ChunkedArray" and kind is getattr(sys.modules.get("pyarrow"), "ChunkedArray", None):
+        return chunked_nbytes(obj)
     # Through Python's generic lookup where the class has a lookup of its
     # own: a ``__getattribute__`` of the user's was run for every value a
     # store sized. Any failure means "does not say".
