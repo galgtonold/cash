@@ -6,6 +6,7 @@ from __future__ import annotations
 import abc
 import contextvars
 import enum
+import functools
 import hashlib
 import pickle
 import threading
@@ -184,8 +185,7 @@ def class_data_items(
     for base in _user_bases(cls) if bases is None else bases:
         prefix = base.__qualname__
         if isinstance(base, enum.EnumMeta):
-            members = [(name, member._value_) for name, member in base.__members__.items()]
-            items.append((f"{prefix}.__members__", members))
+            items.append((f"{prefix}.__members__", enum_members(base)))
             continue
         for name, value in list(vars(base).items()):
             if _is_class_machinery(name) or name in skip:
@@ -201,6 +201,30 @@ def class_data_items(
                     continue
             items.append((f"{prefix}.{name}", value))
     return items
+
+
+#: What every Enum member holds for the enum machinery.
+_ENUM_MEMBER_MACHINERY = frozenset({"_value_", "_name_", "__objclass__", "_sort_order_"})
+
+
+def enum_members(cls: type) -> list[tuple[str, Any, list[tuple[str, Any]]]]:
+    """Each member of the Enum *cls*: its name, value and the attributes
+    it holds besides (``Planet.EARTH.mass`` set by its ``__init__``, or
+    ``Color.RED.extra = 1`` set later). A member pickles by name, so
+    neither its value nor what it holds is seen otherwise. What a
+    ``cached_property`` of the class stored on it is left out: its getter's
+    code stands for it, and the first read fills it."""
+    filled = {k for base in cls.__mro__ for k, v in vars(base).items() if type(v) is functools.cached_property}
+    out = []
+    for name, member in cls.__members__.items():
+        held = getattr(member, "__dict__", None)
+        extra = (
+            sorted((k, v) for k, v in held.items() if k not in _ENUM_MEMBER_MACHINERY and k not in filled)
+            if type(held) is dict
+            else []
+        )
+        out.append((name, member._value_, extra))
+    return out
 
 
 #: The name a class's code reads to list its subclasses.
@@ -792,8 +816,7 @@ class ClassDataFold:
         for base, _, names, leftovers in self._class_layout(cls):
             prefix = base.__qualname__
             if names is None:
-                members = [(name, member._value_) for name, member in base.__members__.items()]
-                items.append((f"{prefix}.__members__", members))
+                items.append((f"{prefix}.__members__", enum_members(base)))
                 continue
             namespace = vars(base)
             for name in names:
