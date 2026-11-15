@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import abc
 import collections
+import functools
 import operator
 import sys
 import types
@@ -443,3 +444,46 @@ def builtin_items(value: Any) -> list[Any] | None:
     if base is dict:
         return [*dict.keys(value), *dict.values(value)]
     return list(base.__iter__(value))
+
+
+#: `held_attribute`'s answer for an attribute reading would compute.
+NOT_HELD: Any = object()
+_TUPLE_GETTER = type(collections.namedtuple("_Probe", "a").__dict__["a"])
+
+
+def held_attribute(obj: Any, name: str) -> Any:
+    """*obj*'s attribute *name* when reading it runs no code: a value in
+    its ``__dict__`` no descriptor of its class overrides, a slot, a
+    ``NamedTuple`` field. `NOT_HELD` for anything else: a property, a
+    ``cached_property`` (filled or not) or other descriptor, a class
+    attribute the instance does not shadow, a class with its own
+    ``__getattribute__``, a missing attribute (``__getattr__``'s)."""
+    cls = type(obj)
+    if cls.__getattribute__ is not object.__getattribute__ and not isinstance(obj, tuple):
+        return NOT_HELD
+    found = NOT_HELD
+    for klass in cls.__mro__:
+        found = klass.__dict__.get(name, NOT_HELD)
+        if found is not NOT_HELD:
+            break
+    if isinstance(found, functools.cached_property):
+        # Filled or not depends on what ran before: read before a call and
+        # after it, one chain would stop at two places. The object it is
+        # cached on is keyed whole, the same either way.
+        return NOT_HELD
+    if found is not NOT_HELD and hasattr(type(found), "__set__"):
+        # A data descriptor wins over the instance: only a slot and a
+        # NamedTuple field are plain.
+        if type(found) is types.MemberDescriptorType or (type(found) is _TUPLE_GETTER and isinstance(obj, tuple)):
+            try:
+                return found.__get__(obj, cls)
+            except (AttributeError, IndexError):
+                return NOT_HELD
+        return NOT_HELD
+    try:
+        state = object.__getattribute__(obj, "__dict__")
+    except (AttributeError, TypeError):
+        return NOT_HELD
+    if type(state) is dict and name in state:
+        return state[name]
+    return NOT_HELD

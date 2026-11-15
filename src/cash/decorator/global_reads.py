@@ -6,7 +6,9 @@ Analysis only, memoized per code object; the folds hash what it names."""
 from __future__ import annotations
 
 import ast
+import builtins
 import contextlib
+import dis
 import sys
 import textwrap
 import threading
@@ -117,6 +119,78 @@ def bytecode_mutated_globals(scopes: tuple, names: set[str]) -> set[str]:
             elif len(after) == 2 and first in _OPERAND_LOADS and after[1][0] in ("STORE_SUBSCR", "DELETE_SUBSCR"):
                 found.add(argval)
     return found
+
+
+#: What may follow an attribute chain read off a global without it being
+#: written or called through: a store or delete of an attribute or item of
+#: the value the chain reached, a copy for an augmented assignment.
+_CHAIN_END_WRITES = frozenset(
+    {"STORE_ATTR", "DELETE_ATTR", "STORE_SUBSCR", "DELETE_SUBSCR", "COPY", "DUP_TOP", "SWAP", "ROT_TWO"}
+)
+_CALLS = frozenset({"CALL", "CALL_FUNCTION", "PRECALL"})
+
+
+def _method_load(ins: dis.Instruction) -> bool:
+    """Is *ins* a load of a method to call (``obj.m(...)``)?"""
+    if ins.opname == "LOAD_METHOD":
+        return True
+    return ins.opname == "LOAD_ATTR" and sys.version_info >= (3, 12) and bool((ins.arg or 0) & 1)
+
+
+def global_attr_chains(scopes: tuple, name: str, getattr_is_builtin: bool) -> tuple[tuple[str, ...], ...] | None:
+    """The attribute chains *scopes* read off the global *name*, when every
+    load of it heads one: ``name.a.b`` (``LOAD_ATTR`` after ``LOAD_GLOBAL``)
+    or ``getattr(name, "a")`` with a constant name. None when any load of
+    it is anything else -- the global handed on, stored, compared,
+    returned, iterated, subscripted, a method called on it or on a link
+    of the chain, an attribute of a link stored or deleted -- or it is
+    read by a name only a class body or ``exec`` looks up."""
+    chains: set[tuple[str, ...]] = set()
+    for scope in scopes:
+        try:
+            ins = [i for i in dis.get_instructions(scope) if i.opname not in ("CACHE", "EXTENDED_ARG", "NOP")]
+        except Exception:  # noqa: BLE001 - code dis cannot read: keyed whole
+            return None
+        for k, op in enumerate(ins):
+            if op.argval != name:
+                continue
+            if op.opname in ("LOAD_NAME", "LOAD_FROM_DICT_OR_GLOBALS", "LOAD_DEREF", "LOAD_CLASSDEREF"):
+                return None
+            if op.opname != "LOAD_GLOBAL":
+                continue
+            if sys.version_info >= (3, 11) and (op.arg or 0) & 1:
+                return None  # `name(...)`: called
+            chain: tuple[str, ...] = ()
+            j = k + 1
+            prev = ins[k - 1] if k else None
+            if (
+                getattr_is_builtin
+                and prev is not None
+                and prev.opname == "LOAD_GLOBAL"
+                and prev.argval == "getattr"
+                and j < len(ins)
+                and ins[j].opname in ("LOAD_CONST", "LOAD_SMALL_INT")
+                and isinstance(ins[j].argval, str)
+                and ins[j].argval.isidentifier()
+            ):
+                c = j + 1
+                while c < len(ins) and ins[c].opname == "PRECALL":
+                    c += 1
+                if c < len(ins) and ins[c].opname in _CALLS and ins[c].arg == 2:
+                    chain, j = (ins[j].argval,), c + 1
+            while j < len(ins) and ins[j].opname in ("LOAD_ATTR", "LOAD_METHOD"):
+                if _method_load(ins[j]):
+                    return None
+                chain = (*chain, ins[j].argval)
+                j += 1
+            if not chain:
+                return None
+            if j < len(ins) and ins[j].opname in _CHAIN_END_WRITES:
+                return None
+            if j + 1 < len(ins) and ins[j + 1].opname in ("STORE_ATTR", "DELETE_ATTR", "STORE_SUBSCR", "DELETE_SUBSCR"):
+                return None
+            chains.add(chain)
+    return tuple(sorted(chains)) or None
 
 
 #: A miss in `GlobalReads._local_binding_cache`, whose entries may be None.
@@ -269,6 +343,8 @@ class GlobalReads:
         # code object -> whether folding its globals can find anything; see
         # `may_read_data`.
         self._reads_anything: LruMemo[Any, bool] = LruMemo(CODE_OBJECTS)
+        #: code -> {(global name, getattr is the builtin): `global_attr_chains`}.
+        self._attr_chains: LruMemo[Any, dict] = LruMemo(CODE_OBJECTS)
 
     def provisional_names(self, code: Any) -> frozenset | None:
         """The names `read_global_data_names` folds only provisionally for
@@ -408,6 +484,27 @@ class GlobalReads:
         # name", which costs an extra hash per miss and is the safe direction.
         self._global_read_cache[code] = (names, provisional, tuple(sorted(pending)))
         return names
+
+    def attr_chains(self, func: Callable, name: str) -> tuple[tuple[str, ...], ...] | None:
+        """`global_attr_chains` of *func*'s code and every scope nested in
+        it, for its global *name*; None when it is not read only that way,
+        or its code can reach the namespace by a string. Cached per code
+        object and name."""
+        code = getattr(func, "__code__", None)
+        if code is None:
+            return None
+        g = getattr(func, "__globals__", None) or {}
+        per_code = self._attr_chains.get(code)
+        if per_code is None:
+            per_code = self._attr_chains[code] = {}
+        getattr_is_builtin = g.get("getattr", builtins.getattr) is builtins.getattr
+        slot = (name, getattr_is_builtin)
+        if slot not in per_code:
+            scopes = tuple(iter_code_scopes(code))
+            per_code[slot] = (
+                None if reaches_namespace_by_name(scopes, g) else global_attr_chains(scopes, name, getattr_is_builtin)
+            )
+        return per_code[slot]
 
     def reads_docstrings(self, code: Any) -> bool:
         """Does *code* read a docstring at run time (``f.__doc__``,

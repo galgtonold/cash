@@ -74,7 +74,7 @@ from .._own_work import inside as own_work_inside
 from .._own_work import left_out as own_work_left_out
 from .._own_work import rearm_with as own_work_rearm_with
 from .._paths import is_pseudo_filename
-from .._user_attrs import instance_of, module_file
+from .._user_attrs import NOT_HELD, held_attribute, instance_of, module_file
 from ..analysis.purity_report import (
     ISSUE_AMBIENT_READ,
     ISSUE_IMPURE_CALL,
@@ -1668,8 +1668,8 @@ def _chain_digest(module: str, chain: str) -> str | None:
             # the object holds (``settings.preset.leiden.flavor``): that
             # is all the read took. Anything a getter would compute stops
             # the walk, and the object is digested whole, as before.
-            held = _held_data(obj, p)
-            if held is _MISSING:
+            held = held_attribute(obj, p)
+            if held is NOT_HELD:
                 break
             obj = held
             continue
@@ -1678,36 +1678,6 @@ def _chain_digest(module: str, chain: str) -> str | None:
         except AttributeError:
             return _ABSENT
     return _digest(obj)
-
-
-def _held_data(obj: Any, name: str) -> Any:
-    """*obj*'s attribute *name* when reading it runs no code of a getter:
-    a value in its ``__dict__`` no data descriptor of its class overrides
-    (a ``cached_property`` already filled), a slot, a ``NamedTuple``
-    field; `_MISSING` otherwise."""
-    cls = type(obj)
-    found = _MISSING
-    for klass in cls.__mro__:
-        found = klass.__dict__.get(name, _MISSING)
-        if found is not _MISSING:
-            break
-    if found is not _MISSING and hasattr(type(found), "__set__"):
-        # A data descriptor wins over the instance: only a slot is plain.
-        if type(found) is not types.MemberDescriptorType:
-            return _MISSING
-        try:
-            return found.__get__(obj, cls)
-        except AttributeError:
-            return _MISSING
-    try:
-        state = object.__getattribute__(obj, "__dict__")
-    except (AttributeError, TypeError):
-        state = None
-    if isinstance(state, dict) and name in state:
-        return state[name]
-    if found is not _MISSING and isinstance(obj, tuple) and type(found).__name__ == "_tuplegetter":
-        return found.__get__(obj, cls)
-    return _MISSING
 
 
 def _refusal_in(functions: Iterable[Any], unit: Any = None, owners: frozenset[int] = frozenset()) -> str | None:

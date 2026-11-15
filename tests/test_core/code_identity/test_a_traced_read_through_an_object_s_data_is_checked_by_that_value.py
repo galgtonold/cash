@@ -6,7 +6,7 @@ Reported against scanpy checked out as the user's code: ``leiden``'s
 on a trace of what it ran, and the trace checked such a read by the whole
 object past the module, which holds a logger and so could not be checked:
 the call was never stored. The attributes the code read, where the object
-holds them as data (its ``__dict__``, a filled ``cached_property``, a
+holds them as data (its ``__dict__``, a slot, a
 ``NamedTuple`` field), are what the read took, and are what is checked.
 """
 

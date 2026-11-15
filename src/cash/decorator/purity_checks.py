@@ -1076,6 +1076,8 @@ class PurityChecks:
                 continue
             if scope == "global":
                 sources[name] = (owner if isinstance(owner, dict) else own_globals, before)
+            elif scope == "chains" and isinstance(owner, dict):
+                sources[name] = (owner, None)
         found: dict[str, tuple] = {}
         for name, (g, before) in sources.items():
             if not isinstance(g, dict) or name not in g:
@@ -1198,6 +1200,14 @@ class PurityChecks:
                     after = self._values.data_digest(mapping[key])
                 elif scope == "classdata":
                     after = self._classes.class_data_digest(*owner)[0]
+                elif scope == "chains":
+                    # A global keyed by the attribute chains its readers
+                    # read (`GlobalsFold._fold_chains`): the same chains.
+                    if name not in owner:
+                        continue
+                    value = owner[name]
+                    after = self._values.chain_digests(value, tuple(before))
+                    scope = "global"
                 else:
                     # The mapping the BEFORE hash came from -- a helper's
                     # module, when this entry was folded on a helper's behalf.

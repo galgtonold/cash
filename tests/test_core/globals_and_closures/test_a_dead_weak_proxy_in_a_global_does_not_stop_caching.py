@@ -40,6 +40,11 @@ def reads_record(x):
     return x + record.n
 
 
+def reads_record_whole(x):
+    # Handed on whole (``vars``): keyed by everything ``record`` holds.
+    return x + vars(record)["n"]
+
+
 def reads_options(x):
     return x * options.scale
 
@@ -63,11 +68,11 @@ def test_a_dead_proxy_in_a_library_object_is_keyed(disk_cash):
 
 def test_a_live_proxy_still_keys_on_what_it_refers_to(disk_cash, monkeypatch):
     """The positive control: a live proxy keys as its object, so a change
-    to that object reaches the key."""
+    to that object reaches the key of a function keying ``record`` whole."""
     owner = _Owner()
     owner.n = 1
     monkeypatch.setattr(record, "back", weakref.proxy(owner))
-    f = disk_cash.cache(reads_record)
+    f = disk_cash.cache(reads_record_whole)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         before = f.explain(2).cache_key
