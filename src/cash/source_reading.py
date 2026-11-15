@@ -5,9 +5,11 @@ version.
 `getsource` and `getsourcelines` are ``inspect``'s, read once per object and
 file version; `own_source` does not follow a wrapper's ``__wrapped__``.
 `read_code_file` reads a module's bytes for cash's own use, untracked.
-Every memo here is keyed on a file's ``(mtime, size)`` and only once the file
-has settled (`stat_has_settled`): a same-size edit inside one mtime tick
-keeps that stat.
+Every memo here is keyed on a file's version (`file_version`: mtime, size,
+change time, inode) and only once the file has settled (`stat_has_settled`):
+a same-size edit inside one mtime tick keeps that stat. ``linecache``, which
+``inspect`` reads source from, compares the mtime and size alone, so its
+entry for a file is checked against that version too (`refresh_linecache`).
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ import sys
 import time
 import types
 
-from ._memo import CODE_OBJECTS, LruMemo
+from ._memo import CODE_OBJECTS, MODULE_ANALYSES, LruMemo
 from ._user_attrs import module_file as _module_file
 from ._user_attrs import own_dict
 from .tracking.tracker_context import untracked
@@ -32,11 +34,13 @@ __all__ = [
     "block_defines",
     "code_is_where_it_says",
     "defining_file",
+    "file_version",
     "getsource",
     "getsourcelines",
     "own_source",
     "read_code_file",
     "read_code_text",
+    "refresh_linecache",
     "relocated_source_lines",
     "settled_source_version",
     "source_version_unchanged",
@@ -45,8 +49,27 @@ __all__ = [
 ]
 
 #: How long a file must have been left alone before something read from it is
-#: memoised on its ``(mtime, size)``. See `stat_has_settled`.
+#: memoised on its version (`file_version`). See `stat_has_settled`.
 SETTLED_SECONDS = 2.0
+
+#: Does ``st_ctime`` move with every write and ``utime``? Not on Windows,
+#: where it is the creation time.
+_HAS_CHANGE_TIME = os.name != "nt"
+
+
+def file_version(st: os.stat_result) -> tuple[int, int, int, int]:
+    """``(mtime_ns, size, ctime_ns, inode)``: what a memo of something read
+    from a file compares with the file now.
+
+    The mtime and size alone do not move with every save: ``os.utime``,
+    ``cp -p``, ``tar`` and ``rsync -t`` put the mtime back, and a same-size
+    edit (``x * 1`` -> ``x * 2``) restored that way kept both -- a module
+    reloaded in the same process ran the new code while its source, digest
+    and analysis were the memoised old text's, and a cached call in it was
+    served the old code's result. On POSIX the change time moves with every
+    write and every ``utime``; a save by rename moves the inode.
+    """
+    return (st.st_mtime_ns, st.st_size, st.st_ctime_ns, st.st_ino)
 
 
 def stat_has_settled(st: object) -> bool:
@@ -68,7 +91,63 @@ def stat_has_settled(st: object) -> bool:
     each save. (``file_dep_snapshot`` holds its input digests to the same
     rule, over a longer window.)
     """
-    return time.time() - st.st_mtime > SETTLED_SECONDS
+    now = time.time()
+    if now - st.st_mtime <= SETTLED_SECONDS:
+        return False
+    # A save that put the mtime back still moved the change time, now: the
+    # same tick holds for it.
+    return not _HAS_CHANGE_TIME or now - st.st_ctime > SETTLED_SECONDS
+
+
+#: ``path -> (the linecache entry, file_version)`` for a file whose
+#: ``linecache`` entry was found to hold its text (or was absent, so the next
+#: read loads it) while the file had settled: until the version moves, the
+#: entry is the file's. See `refresh_linecache`.
+_LINECACHE_CHECKED: LruMemo[str, tuple[tuple | None, tuple[int, int, int, int]]] = LruMemo(MODULE_ANALYSES)
+
+
+def refresh_linecache(path: str, st: os.stat_result | None = None) -> None:
+    """Drop ``linecache``'s entry for the file at *path* unless it is known to
+    hold the file's text as it is now.
+
+    ``linecache.checkcache`` (which ``inspect`` asks before reading source)
+    keeps an entry while the file's mtime and size are unchanged, so a
+    same-size edit that put the mtime back -- or landed in the mtime's tick --
+    kept the old lines: plain ``inspect.getsource`` of a reloaded function
+    answers the previous save, and cash keyed the new code by that text, the
+    old code's key, and served its result. The racy-git rule again: an entry
+    seen once the file had settled (`stat_has_settled`) holds until the
+    file's version (`file_version`) moves; an entry for a file that has not
+    settled, or not seen at that version before, is dropped, so the next
+    read loads the file as it is now. One stat per call; a read of the file
+    once per process, and once per call for two seconds after a save.
+    Entries ``linecache`` holds in memory (a notebook cell, ``exec`` source,
+    a loader's lazy entry) are left alone.
+    """
+    entry = linecache.cache.get(path)
+    if entry is not None and (len(entry) != 4 or entry[1] is None):
+        return
+    if st is None:
+        try:
+            with untracked():
+                st = os.stat(path)
+        except OSError:
+            return
+    version = file_version(st)
+    seen = _LINECACHE_CHECKED.get(path)
+    if seen is not None and seen[1] == version:
+        if seen[0] is entry:
+            return
+        if seen[0] is None:
+            # Absent at this version, so loaded at it since: the file's text.
+            _LINECACHE_CHECKED[path] = (entry, version)
+            return
+    if entry is not None:
+        linecache.cache.pop(path, None)
+    if stat_has_settled(st):
+        _LINECACHE_CHECKED[path] = (None, version)
+    else:
+        _LINECACHE_CHECKED.pop(path, None)
 
 
 def read_code_file(path: str) -> bytes:
@@ -92,15 +171,15 @@ def read_code_text(path: str) -> str:
     return read_code_file(path).decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
 
 
-#: `getsourcelines` answers: (path, mtime_ns, size, what) -> (lines, first line).
+#: `getsourcelines` answers: (path, *file_version, what) -> (lines, first line).
 _SOURCE_LINES: LruMemo[tuple, tuple[tuple[str, ...], int]] = LruMemo(CODE_OBJECTS)
 #: The same for code whose source ``linecache`` holds in memory (a notebook
 #: cell): (path, what) -> (the linecache entry read, lines, first line).
 _HELD_LINES: LruMemo[tuple, tuple[tuple, tuple[str, ...], int]] = LruMemo(CODE_OBJECTS)
 #: Where each class in a file starts, from one parse per file version:
-#: (path, mtime_ns, size) -> {qualname: 0-based line}. Few entries: one is
+#: (path, *file_version) -> {qualname: 0-based line}. Few entries: one is
 #: needed while a file's classes are read, and each holds a whole file's map.
-_CLASS_STARTS: LruMemo[tuple[str, int, int], dict[str, int]] = LruMemo(64)
+_CLASS_STARTS: LruMemo[tuple[str, int, int, int, int], dict[str, int]] = LruMemo(64)
 #: ``inspect.findsource`` finds a class by parsing its whole file (before
 #: 3.13, where it reads ``__firstlineno__``): a 3000-line module took ~50 ms
 #: per call, and the analysis asks about a class several times.
@@ -136,7 +215,7 @@ def getsourcelines(obj: object) -> tuple[list[str], int]:
 
     The analysis and the key read the same functions' source many times in a
     cold process, and each read re-checked the file and re-tokenised the
-    block. Memoised on the file's ``(mtime, size)`` once the file has settled
+    block. Memoised on the file's version (`file_version`) once it has settled
     (`stat_has_settled`), for files ``linecache`` reads from disk only; any
     other case asks ``inspect`` every time. Raises what it raises.
 
@@ -315,6 +394,10 @@ def _getsourcelines(obj: object) -> tuple[list[str], int]:
         # A dataclass's generated method, read on every watch of its class
         # (`class_memo`): the same answer, without ``inspect`` looking.
         raise OSError("could not get source code")
+    elif inspect.ismodule(obj):
+        path = _module_file(obj)
+        if isinstance(path, str) and path.endswith((".py", ".pyw")):
+            refresh_linecache(path)
     return inspect.getsourcelines(obj)  # type: ignore[arg-type]
 
 
@@ -346,8 +429,11 @@ def _code_source_lines_on_disk(code: types.CodeType) -> tuple[list[str], int] | 
     filename = code.co_filename
     if not filename.endswith(".py") or not os.path.isabs(filename):
         return None
-    if not os.path.exists(filename):
+    try:
+        st = os.stat(filename)
+    except OSError:
         return None
+    refresh_linecache(filename, st)
     linecache.checkcache(filename)
     lines = linecache.getlines(filename)
     lnum = code.co_firstlineno - 1
@@ -390,11 +476,13 @@ def _held_source_lines(obj: object, target: tuple) -> tuple[list[str], int] | No
     return lines, first
 
 
-def settled_source_version(obj: object) -> tuple[str, int, int] | None:
-    """``(path, mtime_ns, size)`` of the file *obj*'s source is read from, when
+def settled_source_version(obj: object) -> tuple[str, int, int, int, int] | None:
+    """``(path, *file_version)`` of the file *obj*'s source is read from, when
     what is read from it may be memoised on that: the file is on disk, has
     settled (`stat_has_settled`), and ``linecache`` reads it from disk. None
     otherwise. Check `source_version_unchanged` after reading, before storing.
+    Whenever the file is found, its ``linecache`` entry is checked against it
+    (`refresh_linecache`), so what ``inspect`` reads next is its text now.
     """
     # Untracked: ``getsourcefile`` asks ``os.path.exists`` of the name the
     # code was compiled under, and networkx numbers its decorators' names by
@@ -413,12 +501,13 @@ def settled_source_version(obj: object) -> tuple[str, int, int] | None:
             st = os.stat(path)
         except OSError:
             return None
+    refresh_linecache(path, st)
     if not stat_has_settled(st) or not _disk_backed(path):
         return None
-    return (path, st.st_mtime_ns, st.st_size)
+    return (path, *file_version(st))
 
 
-def source_version_unchanged(version: tuple[str, int, int]) -> bool:
+def source_version_unchanged(version: tuple[str, int, int, int, int]) -> bool:
     """Is the file still at *version*? A memo stores what it read only then."""
     path = version[0]
     try:
@@ -426,7 +515,7 @@ def source_version_unchanged(version: tuple[str, int, int]) -> bool:
             st = os.stat(path)
     except OSError:
         return False
-    return (path, st.st_mtime_ns, st.st_size) == version and _disk_backed(path)
+    return (path, *file_version(st)) == version and _disk_backed(path)
 
 
 def getsource(obj: object) -> str:
@@ -434,7 +523,7 @@ def getsource(obj: object) -> str:
     return "".join(getsourcelines(obj)[0])
 
 
-def _class_source_lines(cls: object, version: tuple[str, int, int]) -> tuple[list[str], int]:
+def _class_source_lines(cls: object, version: tuple[str, int, int, int, int]) -> tuple[list[str], int]:
     """``inspect.getsourcelines`` for a class, with the file parsed once per
     version for all its classes rather than once per question."""
     path = version[0]

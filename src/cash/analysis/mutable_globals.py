@@ -66,8 +66,8 @@ def module_modified_globals(module: Any) -> frozenset[str]:
     return modified
 
 
-#: `module_modified_globals` per module file version: (path, mtime_ns, size).
-_MODULE_MUTATIONS: LruMemo[tuple[str, int, int], frozenset[str]] = LruMemo(MODULE_ANALYSES)
+#: `module_modified_globals` per module file version: (path, *file_version).
+_MODULE_MUTATIONS: LruMemo[tuple[str, int, int, int, int], frozenset[str]] = LruMemo(MODULE_ANALYSES)
 
 
 @functools.lru_cache(maxsize=256)

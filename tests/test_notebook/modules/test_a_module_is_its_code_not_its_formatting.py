@@ -19,10 +19,12 @@ What must still count is the part nobody should have to think about twice:
 """
 
 import os
+import time
+import types
 
 import pytest
 
-from cash import code_digest
+from cash import code_digest, source_reading
 from cash.notebook.lineage_formula import read_module_source_hash
 from cash.source_norm import module_text_identity
 
@@ -172,12 +174,15 @@ class TestTheMemo:
             "was still being written must not be trusted"
         )
 
-    def test_a_file_that_has_settled_is_memoised(self, tmp_path):
-        """The other half: the rule above must not turn the memo off."""
+    def test_a_file_that_has_settled_is_memoised(self, tmp_path, monkeypatch):
+        """The other half: the rule above must not turn the memo off. The
+        change time of a file just written is now, so the memo's clock is run
+        a minute forward."""
         path = tmp_path / "settled_lib.py"
         path.write_text(BASE, encoding="utf-8")
         old = os.stat(path).st_mtime_ns - 60 * 10**9
         os.utime(path, ns=(old, old))
+        monkeypatch.setattr(source_reading, "time", types.SimpleNamespace(time=lambda: time.time() + 60))
 
         read_module_source_hash(str(path))
         assert str(path) in code_digest._MODULE_IDENTITY_CACHE

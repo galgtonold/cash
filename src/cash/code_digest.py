@@ -25,7 +25,7 @@ from .exceptions import SOURCE_RETRIEVAL_ERRORS
 from .jit_functions import jit_identity, jit_python_function
 from .pe_digest import extension_bytes_digest
 from .source_norm import bytecode_identity, module_text_identity, source_identity_digest
-from .source_reading import own_source, read_code_file, stat_has_settled
+from .source_reading import file_version, own_source, read_code_file, stat_has_settled
 from .tracking.tracker_context import untracked
 
 __all__ = [
@@ -230,11 +230,11 @@ def loaded_extension_digest(module: types.ModuleType, path: str) -> str:
     return digest
 
 
-#: ``{path: (mtime_ns, size, identity_digest)}`` for `module_identity`. One
+#: ``{path: (file_version, identity_digest)}`` for `module_identity`. One
 #: entry per file, replaced when it moves. The identity below parses the file, which is far too much to
 #: repeat per statement -- and even the plain read it replaces was one file
 #: read per statement per module.
-_MODULE_IDENTITY_CACHE: dict[str, tuple[int, int, str]] = {}
+_MODULE_IDENTITY_CACHE: dict[str, tuple[tuple[int, int, int, int], str]] = {}
 
 
 def module_identity(module: object) -> str | None:
@@ -250,8 +250,9 @@ def module_identity(module: object) -> str | None:
     except OSError:
         return None
     cached = _MODULE_IDENTITY_CACHE.get(path)
-    if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
-        return cached[2]
+    version = file_version(st)
+    if cached is not None and cached[0] == version:
+        return cached[1]
     settled = stat_has_settled(st)
     try:
         raw = read_code_file(path)
@@ -263,5 +264,5 @@ def module_identity(module: object) -> str | None:
     # since a same-size save inside one mtime tick keeps that stat too.
     digest = hashlib.sha256(module_text_identity(raw)).hexdigest()
     if settled:
-        _MODULE_IDENTITY_CACHE[path] = (st.st_mtime_ns, st.st_size, digest)
+        _MODULE_IDENTITY_CACHE[path] = (version, digest)
     return digest

@@ -36,6 +36,7 @@ from .source_norm import bytecode_identity
 from .source_reading import (
     SETTLED_SECONDS,
     code_is_where_it_says,
+    file_version,
     read_code_file,
     relocated_source_lines,
     stat_has_settled,
@@ -50,16 +51,16 @@ __all__ = [
     "relocated_definition",
 ]
 
-#: path -> (mtime_ns, size, digest of the text, its compiled code, its lines).
-#: The stat is -1 for a text read before it had settled: only its digest
+#: path -> (file_version, digest of the text, its compiled code, its lines).
+#: The version is None for a text read before it had settled: only its digest
 #: (`_compiled_text`) finds it then.
-_MODULE_CODE_CACHE: LruMemo[str, tuple[int, int, str, types.CodeType | None, tuple[str, ...]]] = LruMemo(
+_MODULE_CODE_CACHE: LruMemo[str, tuple[tuple | None, str, types.CodeType | None, tuple[str, ...]]] = LruMemo(
     COMPILED_MODULES
 )
 
 
 def _compiled_module(path: str) -> types.CodeType | None:
-    """The whole file at *path*, compiled, cached per (path, mtime, size)."""
+    """The whole file at *path*, compiled, cached per path and `file_version`."""
     return _compiled_module_and_lines(path)[0]
 
 
@@ -71,15 +72,16 @@ def _compiled_module_and_lines(path: str) -> tuple[types.CodeType | None, tuple[
     except OSError:
         return None, ()
     cached = _MODULE_CODE_CACHE.get(path)
-    if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
-        return cached[3], cached[4]
+    version = file_version(st)
+    if cached is not None and cached[0] == version:
+        return cached[2], cached[3]
     settled = stat_has_settled(st)
     text = _read_text(path)
     if text is None:
         return None, ()
     code, lines = _compiled_text(path, text)
     if settled:
-        _MODULE_CODE_CACHE[path] = (st.st_mtime_ns, st.st_size, text[1], code, lines)
+        _MODULE_CODE_CACHE[path] = (version, text[1], code, lines)
     return code, lines
 
 
@@ -97,8 +99,8 @@ def _compiled_text(path: str, text: tuple[bytes, str]) -> tuple[types.CodeType |
     kept per path and found again by the text's digest."""
     source, digest = text
     cached = _MODULE_CODE_CACHE.get(path)
-    if cached is not None and cached[2] == digest:
-        return cached[3], cached[4]
+    if cached is not None and cached[1] == digest:
+        return cached[2], cached[3]
     lines: tuple[str, ...] = ()
     try:
         code: types.CodeType | None = compile(source, path, "exec", dont_inherit=True)
@@ -106,7 +108,7 @@ def _compiled_text(path: str, text: tuple[bytes, str]) -> tuple[types.CodeType |
         lines = tuple(io.StringIO(importlib.util.decode_source(source)).readlines())
     except (SyntaxError, ValueError):
         code = None
-    _MODULE_CODE_CACHE[path] = (-1, -1, digest, code, lines)
+    _MODULE_CODE_CACHE[path] = (None, digest, code, lines)
     return code, lines
 
 
