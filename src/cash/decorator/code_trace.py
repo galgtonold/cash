@@ -286,6 +286,9 @@ def _recorder_class() -> type:
         def __init__(self) -> None:
             super().__init__()
             self.active: list[Any] = []
+            #: Is a strict traced call among `active` (`_strict_active`):
+            #: kept as `active` changes, read on every start.
+            self.strict = False
             self._in_callback = False
             self._lock = threading.Lock()
             self._import_module = importlib.import_module
@@ -525,6 +528,7 @@ def _recorder_class() -> type:
                 return unit
             with self._lock:
                 self.active = [*self.active, unit]
+                self.strict = any(u.global_starts is not None for u in self.active)
             return unit
 
         def _rearm(self) -> None:
@@ -607,6 +611,7 @@ def _recorder_class() -> type:
                 return super().end(unit)
             with self._lock:
                 self.active = [u for u in self.active if u is not unit]
+                self.strict = any(u.global_starts is not None for u in self.active)
             if not self._intact():
                 unit.markers.add("tool_conflict")
             for t in threading.enumerate():
@@ -652,7 +657,7 @@ def _recorder_class() -> type:
         def _strict_active(self) -> bool:
             """Is a strict traced call (`begin` with *watch_globals*) in
             progress: only its check reads `TraceUnit.attr_params`."""
-            return any(unit.global_starts is not None for unit in self.active)
+            return self.strict
 
         def _note_bound(self, code: types.CodeType, frame: Any, params: tuple[str, ...]) -> None:
             """What this start of *code* was handed for *params*, whose
@@ -721,7 +726,13 @@ def _recorder_class() -> type:
                 except Exception:  # noqa: BLE001 - a frame whose locals cannot be read has no receiver
                     recv = None
             cells = None
-            if code.co_freevars and not self._in_callback:
+            # A generator expression's cells are left out: what they held is
+            # read only when `build` digests a function of this code
+            # (`trace_items.call_starts`), and no function of a generator
+            # expression's code outlives the expression that made it; its
+            # cells hold the frame's locals (a ``self``), which cost the most
+            # to digest.
+            if code.co_freevars and not self._in_callback and not _is_genexpr(code):
                 self._in_callback = True
                 try:
                     from ..tracking.trace_items import start_cells
@@ -901,6 +912,16 @@ def note_cached_hit(func_name: str, code: types.CodeType | None, state: str | No
 #: code -> does it call ``getattr`` with a name that is not a constant, or
 #: import by a name (`looks_up_by_name`).
 _BY_NAME: dict[types.CodeType, bool] = {}
+
+
+#: ``CO_GENERATOR``: a generator expression's code is a generator's.
+_CO_GENERATOR = 0x20
+
+
+def _is_genexpr(code: types.CodeType) -> bool:
+    """Is *code* a generator expression's? Its function is made and called
+    at once, never bound to a name or stored."""
+    return code.co_name == "<genexpr>" and bool(code.co_flags & _CO_GENERATOR)
 
 
 def looks_up_by_name(code: types.CodeType) -> bool:
