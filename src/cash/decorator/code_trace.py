@@ -59,6 +59,7 @@ import dis
 import functools
 import hashlib
 import importlib
+import logging
 import os
 import sys
 import threading
@@ -1366,6 +1367,11 @@ class _Build:
                     self.add(("import", name), loaded_from, "")
             target = _chain_target(module, chain)
             if chain and not issubclass(type(target), types.ModuleType):
+                if _log_call_chain(module, chain):
+                    # A logger's method, called for a log line: a hit
+                    # skipping it is what caching means (`is_log_line`),
+                    # whichever logger the chain finds then.
+                    continue
                 path = ".".join(chain)
                 self.add(
                     ("attr", module, path),
@@ -1652,6 +1658,33 @@ def _changed_global(items: list[tuple], starts: Mapping[tuple[str, str], tuple[s
             "in place, which a cache hit would not repeat"
         )
     return None
+
+
+def _log_call_chain(module: str, chain: tuple[str, ...]) -> bool:
+    """Is *chain*, read from *module*, a logger's log method
+    (``settings._root_logger.info``): named as `is_log_line` names one,
+    and, as far as held data reaches, a method of a ``logging.Logger``?"""
+    from ..analysis.purity_flow import LOG_METHODS
+
+    if len(chain) < 2 or chain[-1] not in LOG_METHODS or "log" not in chain[-2].lower():
+        return False
+    obj: Any = sys.modules.get(module)
+    from ..tracking.trace_items import inspect_getattr
+
+    for depth, name in enumerate(chain[:-1]):
+        if issubclass(type(obj), types.ModuleType):
+            try:
+                obj = inspect_getattr(obj, name)
+            except AttributeError:
+                return False
+            continue
+        held = held_attribute(obj, name)
+        if held is NOT_HELD:
+            # Past what reads as data (a ``__getattr__``): by its names
+            # alone, as the log line in the body is.
+            return depth > 0
+        obj = held
+    return isinstance(obj, logging.Logger)
 
 
 def _chain_digest(module: str, chain: str) -> str | None:

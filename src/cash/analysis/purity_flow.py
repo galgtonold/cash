@@ -1287,6 +1287,8 @@ def fresh_flow_nodes(func_def: ast.AST, calls: frozenset[int]) -> frozenset[int]
 # -- ambient reads that only reach a log line --------------------------------
 
 _LOG_METHODS = frozenset({"debug", "info", "warning", "warn", "error", "exception", "critical", "log"})
+#: The method names of a log line (`is_log_line`).
+LOG_METHODS = _LOG_METHODS
 
 #: Expression nodes a value passes through on its way to wherever it ends up.
 #: A dict / list / set literal too: ``logger.info(json.dumps({"ts": now}))``
