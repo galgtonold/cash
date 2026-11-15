@@ -81,6 +81,7 @@ from ..analysis.purity_report import (
     ISSUE_NETWORK_READ,
     ISSUE_SCOPE_MUTATION,
     ISSUE_UNTRACKABLE_DEP,
+    UNREAD_MODULE,
     PurityIssue,
     is_name_lookup,
 )
@@ -166,9 +167,21 @@ _LINE_STATUS: weakref.WeakKeyDictionary[types.CodeType, bool] = _weak.WeakKeyDic
 
 def covers(issues: Iterable[PurityIssue]) -> bool:
     """Can a trace stand in for *issues*, the run-time lookups of a call's
-    tree: all of them lookups by name (`is_name_lookup`), on 3.12+?"""
+    tree: all of them lookups by name (`is_name_lookup`), on 3.12+?
+
+    A lazy import of a module not loaded yet (UNREAD_MODULE) beside them
+    is covered too while the trace is on: the lookups trace the call
+    anyway, and an import that runs is in that trace (``first_import``),
+    with the code of the module that ran and the globals it read, as for
+    the same import in an argument's code (`CallRunner._carrier_refusal`).
+    Alone, with no lookup to trace the call, it still refuses."""
     issues = list(issues)
-    return TRACEABLE and bool(issues) and all(is_name_lookup(i) for i in issues)
+    if not TRACEABLE or not issues:
+        return False
+    lookups = sum(1 for i in issues if is_name_lookup(i))
+    if lookups == len(issues):
+        return True
+    return bool(lookups) and on() and all(is_name_lookup(i) or UNREAD_MODULE in i.description for i in issues)
 
 
 # -- recording -------------------------------------------------------------
