@@ -95,6 +95,7 @@ __all__ = [
     "VERIFY",
     "StateMemoMismatch",
     "folded_outside_world",
+    "fresh_context",
     "memo_for",
     "moved",
     "status",
@@ -416,6 +417,27 @@ def _apply(cap: _Capture, chain: list) -> None:
         frame.touched |= cap.touched
         frame.low = min(frame.low, cap.low)
         frame.members |= cap.members
+
+
+def fresh_context(build: Callable[[list], str], chain: list) -> str:
+    """Run *build* (a fold into the chain list it is given) on empty
+    containers of its own, then leave behind in the caller's what it left
+    in them, as `StateMemo.code_state` does around a fold it remembers.
+
+    For a cached callee's state built inside another key build
+    (`KeyBuilder.callee_state`): the caller's containers hold the caller's
+    own folds (and the callee's TTL, added before its build), so the
+    callee's memo would see a context it cannot capture in (`_mode`) and
+    fold the whole segment again on every call. Built apart, the callee's
+    memo serves it, and the caller's containers end up holding what
+    building in place would have left. What a container holds before the
+    build changes no digest a fold computes: the ledger, the watch, the
+    folded code and the lookups only collect, the TTLs only append, and a
+    key build's digests are served only where computing again gives the
+    same digest (`walk_scope`)."""
+    cap = _sandboxed(build)
+    _apply(cap, chain)
+    return cap.state
 
 
 def _same(a: Any, b: Any, depth: int = 0) -> bool:
