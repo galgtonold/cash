@@ -656,13 +656,6 @@ class KeyBuilder:
         chain.append(state_hash)
         state_hash = self._environment.fold_environment(func, func_name, state_hash)
         chain.append(state_hash)
-        # What a warning raised by any code the call reaches does: the
-        # filters that make it an exception and the display hooks a program
-        # rebound (`warning_state`). Nothing while both are plain Python's.
-        warned = warning_state.fingerprint()
-        if warned is not None:
-            ledger_note(("warnings", "filters and display hooks"), warned)
-            state_hash = hashlib.sha256(f"{state_hash}:warnings:{warned}".encode()).hexdigest()
         if spec.arg_key is not None:
             # What decides the argument part is code too: a caller that
             # reaches this function keys it as well (`callee_state`).
@@ -1315,6 +1308,11 @@ class CallRunner:
             )
         if metadata.env_reads and not environment_unchanged(metadata.env_reads):
             return MissReason(MissKind.ENVIRONMENT, "an environment variable an installed package read changed")
+        if metadata.warned_under is not None and not warning_state.holds(metadata.warned_under):
+            return MissReason(
+                MissKind.WARNINGS,
+                "the run warned, and the warnings filters or a display hook of the user's changed since",
+            )
         if not self._chunks_are_intact(cache_key, metadata):
             return MissReason(MissKind.INCOMPLETE, "a chunk of the stored result is missing")
         if metadata.code_trace is not None:
@@ -1329,6 +1327,8 @@ class CallRunner:
         if metadata.env_reads:
             # Served inside another body being recorded: what it read counts there.
             note_reads(metadata.env_reads)
+        if metadata.warned_under is not None:
+            warning_state.note_warned()
         return None
 
     def _cached_state(self, func_name: str) -> str | None:
@@ -2302,7 +2302,7 @@ class CallRunner:
             try:
                 self._files.track_declared_files(run.tracker, spec)
                 self._files.track_scanned_files(run.tracker, args, kwargs)
-                with recording_env_reads() as run.env_reads:
+                with recording_env_reads() as run.env_reads, warning_state.recording() as run.warned:
                     yield run
             except Exception as exc:  # the user's body can raise anything; logged, then re-raised
                 self._calls.log_raised(func_name, exc, call.call_start)
@@ -2513,6 +2513,9 @@ class CallRunner:
                     # What the environment variables an installed package
                     # read held: a lookup checks them again (`env_reads`).
                     env_reads=environment_digests(run.env_reads) if run.env_reads else None,
+                    # The warnings state, when the body warned: a lookup
+                    # checks it again (`warning_state`).
+                    warned_under=warning_state.stamp(run.warned) if run.warned else None,
                     shared_result=shared,
                     args_left=args_left,
                     args_reads=run.args_reads,

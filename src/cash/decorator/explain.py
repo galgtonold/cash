@@ -156,6 +156,7 @@ class MissKind(str, Enum):
     RAN = "code the call ran changed"
     UNREAD_MODULE = "imports a module cash cannot read before it is loaded"
     ENVIRONMENT = "environment variable changed"
+    WARNINGS = "warnings setting changed"
     RAISED = "raised"
 
     __str__ = str.__str__

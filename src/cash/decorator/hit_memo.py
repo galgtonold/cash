@@ -1757,7 +1757,7 @@ VERIFIED = [0]
 #: the call reaches, which `library_versions` reads once per process (the
 #: library itself is reached by a global name the scan watches).
 _LEDGER_KINDS = frozenset(
-    {"calls", "helper", "globals", "captures and defaults of cached function", "installed library", "warnings"}
+    {"calls", "helper", "globals", "captures and defaults of cached function", "installed library"}
 )
 
 #: Results a hit hands back as the very object the RAM tier holds.

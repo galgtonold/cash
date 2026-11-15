@@ -1,4 +1,4 @@
-"""What a ``warnings.warn`` does is part of a cached call's key.
+"""What a ``warnings.warn`` does is checked before serving a call that warned.
 
 ``warnings`` is library code, so no key held any of it, yet the filters and
 the display hooks a program rebinds decide what a warning does at the time
@@ -6,19 +6,28 @@ of the call: ``simplefilter("error")`` makes it an exception, and a user
 function installed as ``warnings.showwarning`` or ``warnings.formatwarning``
 runs and may raise or write what the call returns. A cached ``f(1)`` that
 warned under one setting was served under another, where plain Python
-raised or returned something else.
+raised or returned something else. A run that warned now keeps the part
+of the warnings state a result can see, and a lookup serves it only while
+that stands (`warning_state`); a run that did not warn is served whatever
+the state, in a script and a notebook alike.
 
 Each scenario changes one of them between calls of one function and checks
 every call returns (or raises) what plain Python does, on the ordinary
 path, through the remembered state segment (`state_memo`) and on the fast
 hit path (`hit_memo`), where it first checks the call IS served from the
-fast path. What only decides whether a line is printed -- a filter behind
-the last ``"error"`` one, ``catch_warnings`` in the body -- moves no key
-and leaves the fast path serving.
+fast path. What only decides whether or how a line is printed -- a filter
+behind the last ``"error"`` one, ``catch_warnings`` in the body, a
+library's display hook -- leaves the entry served, the fast path too.
 """
 
 from __future__ import annotations
 
+import ast
+import contextlib
+import inspect
+import io
+import sys
+import time
 import warnings
 
 import pytest
@@ -72,10 +81,10 @@ def uncaught(x):
 
 def printed(x):
     # The line ``warnings`` shows it as, which a rebound ``formatwarning`` writes.
-    with warnings.catch_warnings(record=True) as seen:
-        warnings.simplefilter("always")
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
         warnings.warn("w-key")
-    return (x, warnings._formatwarnmsg(seen[0]).splitlines()[0])
+    return (x, buf.getvalue().splitlines()[0] if buf.getvalue() else "")
 
 
 def quiet(x):
@@ -135,13 +144,22 @@ def _same(cached, fn, *args):
 
 def _settle(cached, fn, path, *args):
     """Call until a call is served without running the body; on the fast
-    path, until it is served from the memo, and check that it is."""
-    for _ in range(6):
+    path, until it is served from the memo, and check that it is. Another
+    test's leftovers in the process (xdist) can move the world now and
+    then, and the memo then waits before it looks again
+    (`HitMemo.RESCAN_AFTER_S`): it is given a few of those."""
+    for _ in range(3):
         _same(cached, fn, *args)
-    if path == "fast":
+    if path != "fast":
+        return
+    deadline = time.monotonic() + 5 * hit_memo.HitMemo.RESCAN_AFTER_S + 1.0
+    while True:
         before = hit_memo.status()["fast_hits"]
         _same(cached, fn, *args)
-        assert hit_memo.status()["fast_hits"] > before, "not served from the fast path: the test proves nothing"
+        if hit_memo.status()["fast_hits"] > before:
+            return
+        assert time.monotonic() < deadline, "not served from the fast path: the test proves nothing"
+        time.sleep(0.01)
 
 
 def test_a_showwarning_hook_rebound_moves_the_key(c, path):
@@ -183,7 +201,25 @@ def test_a_filter_that_raises_moves_the_key(c, path):
     assert _same(f, caught, 1) == ("returned", (1, "passed"))
 
 
-def test_a_formatwarning_hook_rebound_moves_the_key(c, path):
+def _stdlib_show():
+    """``warnings._showwarnmsg_impl`` as the standard library defines it,
+    which pytest's recorder replaced: the one that writes to ``sys.stderr``."""
+    home = sys.modules.get("_py_warnings")
+    if home is not None and hasattr(home, "_showwarnmsg_impl"):
+        return home._showwarnmsg_impl
+    tree = ast.parse(inspect.getsource(warnings))
+    node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_showwarnmsg_impl")
+    space = {}
+    exec(compile(ast.Module([node], []), warnings.__file__, "exec"), warnings.__dict__, space)
+    return space["_showwarnmsg_impl"]
+
+
+@pytest.fixture
+def stdlib_display(monkeypatch):
+    monkeypatch.setattr(warnings, "_showwarnmsg_impl", _stdlib_show())
+
+
+def test_a_formatwarning_hook_rebound_moves_the_key(c, path, stdlib_display):
     f = c.cache(printed)
     _settle(f, printed, path, 1)
     warnings.formatwarning = custom_format
@@ -251,3 +287,79 @@ def test_the_fast_path_goes_through_the_warnings_check(c):
     finally:
         warning_state.watch(cw)
     assert _same(f, caught, 1) == ("returned", (1, "raised"))
+
+
+def silent(x):
+    return x * 3
+
+
+def test_a_run_that_did_not_warn_is_served_under_any_filters(c, path):
+    f = c.cache(silent)
+    _settle(f, silent, path, 2)
+    misses = f.cache_info()["misses"]
+    warnings.simplefilter("error")
+    warnings.showwarning = raising_hook
+    _settle(f, silent, path, 2)
+    assert f.cache_info()["misses"] == misses
+
+
+def test_a_library_display_hook_shares_entries(c, path):
+    # ``logging.captureWarnings`` shows warnings through a logger: how a
+    # line is shown, as IPython's hook does, is no part of what is served.
+    import logging
+
+    f = c.cache(caught)
+    _settle(f, caught, path, 1)
+    misses = f.cache_info()["misses"]
+    logging.captureWarnings(True)
+    try:
+        assert warning_state.fingerprint() is None
+        _settle(f, caught, path, 1)
+    finally:
+        logging.captureWarnings(False)
+    assert f.cache_info()["misses"] == misses
+
+
+CHILD = """
+import sys, warnings
+from cash import Cash
+
+c = Cash(cache_dir=sys.argv[1], register_magic=False)
+
+
+@c.cache
+def checked(x):
+    try:
+        warnings.warn("w-key")
+    except UserWarning:
+        return (x, "raised")
+    return (x, "passed")
+
+
+@c.cache
+def plain(x):
+    return x + 1
+
+
+print(checked(1), plain(1), checked.cache_info()["misses"], plain.cache_info()["misses"])
+"""
+
+
+def test_an_entry_of_a_run_that_warned_is_checked_in_another_process(tmp_path):
+    import subprocess
+
+    script = tmp_path / "child.py"
+    script.write_text(CHILD, encoding="utf-8")
+    store = str(tmp_path / ".cash")
+
+    def run(*flags):
+        out = subprocess.run(
+            [sys.executable, *flags, str(script), store], capture_output=True, text=True, check=True, cwd=tmp_path
+        )
+        return out.stdout.strip()
+
+    assert run("-W", "always") == "(1, 'passed') 2 1 1"
+    assert run("-W", "always") == "(1, 'passed') 2 0 0"
+    # Raising now: the run that warned is not served; the one that did not is.
+    assert run("-W", "error::UserWarning") == "(1, 'raised') 2 1 0"
+    assert run("-W", "error::UserWarning") == "(1, 'raised') 2 0 0"
