@@ -13,6 +13,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from .._memo import CODE_OBJECTS, TABLES, LruMemo
+from .._user_attrs import NOT_HELD, held_attribute
 from ..analysis.helper_bindings import UNRESOLVED, resolve_binding
 from ..analysis.helper_code import callable_layers, is_mock, own_code_is_user, qualname_of
 from ..analysis.purity_analyzer import get_analyzer
@@ -29,6 +30,7 @@ from .key_values import (
     carried_payload,
     code_ref,
     held_partials,
+    plain_data_kind,
     reduced_state,
     stabilize_for_global_hash,
 )
@@ -76,6 +78,19 @@ LOG_METHOD_NAMES = frozenset(
 #: and the check after the call -- hashes the value as it is then. The value
 #: is held, so its id is not reused while the entry stands.
 KEY_BUILD_DIGESTS: contextvars.ContextVar[dict | None] = contextvars.ContextVar("_cash_key_build_digests", default=None)
+
+
+def chain_end(value: Any, chain: tuple[str, ...]) -> tuple[int, Any]:
+    """How many links of *chain* `held_attribute` follows from *value*,
+    and the object it reaches: the last value, or the first object whose
+    next attribute reading would compute (a property, ``__getattr__``, a
+    class attribute)."""
+    for depth, name in enumerate(chain):
+        held = held_attribute(value, name)
+        if held is NOT_HELD:
+            return depth, value
+        value = held
+    return len(chain), value
 
 
 class GlobalValues:
@@ -221,6 +236,18 @@ class GlobalValues:
         if build is not None:
             build[("plain", id(value))] = (value, digest)
         return digest
+
+    def chain_digests(self, value: Any, chains: tuple[tuple[str, ...], ...]) -> dict[tuple[str, ...], str]:
+        """The digest of what each attribute chain read off the global
+        *value* reaches (`chain_end`): ``settings.preset.flavor`` is keyed
+        by the flavor, not by the timestamps ``settings`` also holds. A
+        chain that meets an attribute reading would compute stops at that
+        object, which is keyed whole; how far it got is in the digest."""
+        out: dict[tuple[str, ...], str] = {}
+        for chain in chains:
+            depth, end = chain_end(value, chain)
+            out[chain] = f"{depth}:{self.global_value_digest(end, plain_data_kind(end))}"
+        return out
 
     def data_digest(self, value: Any) -> str:
         """The digest of a data value that may hold code: each function in it

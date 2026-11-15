@@ -17,15 +17,17 @@ from ..analysis.helper_bindings import resolve_binding
 from ..analysis.helper_code import own_code_is_user, qualname_of, renamed
 from ..analysis.purity_analyzer import get_analyzer
 from ..analysis.purity_report import PurityReport
+from ..content_hashers import builtin_family_of
 from ..dependency_state import STATE_LEDGER, ledger_note
 from ..effects import environment_component
 from ..exceptions import CashImpurityWarning
 from ..jit_functions import jit_python_function
+from ..tracking.randomness import rng_carrier_kind
 from . import walk_scope
 from .call_state import CAPTURE_WATCH, CARRIER_LOOKUPS, KeyBuildFailed
 from .code_tables import CodeTable
 from .global_reads import reach_pass
-from .global_values import UNHASHABLE_GLOBAL_FIX
+from .global_values import UNHASHABLE_GLOBAL_FIX, chain_end
 from .helper_fold_memo import HelperFoldMemo, LoggedSeen
 from .key_values import (
     carried_payload,
@@ -281,7 +283,12 @@ class GlobalsFold:
         if not isinstance(g, dict):
             return []
         gid = id(g)
-        pairs: list[tuple] = [(gid, n) for n in (*self._reads.read_global_data_names(func), *extra_names) if n in g]
+        pairs: list[tuple] = []
+        for n in (*self._reads.read_global_data_names(func), *extra_names):
+            if n not in g:
+                continue
+            chains = self.chains_read(func, n, g[n])
+            pairs.extend([(gid, n)] if chains is None else [(gid, n, c) for c in chains])
         pairs.extend(("default", id(default)) for default in self._reads.function_defaults(func))
         return pairs
 
@@ -350,11 +357,20 @@ class GlobalsFold:
         g = fold.g
         if name not in g:
             return
+        chains = self.chains_read(fold.func, name, g[name])
         if fold.seen is not None:
             pair = (id(g), name)
             if pair in fold.seen:
                 return
-            fold.seen.add(pair)
+            if chains is None:
+                fold.seen.add(pair)
+            else:
+                # Keyed by what each reader reads of it: a chain another
+                # reader folded is in already, its own are added.
+                chains = tuple(c for c in chains if (id(g), name, c) not in fold.seen)
+                if not chains:
+                    return
+                fold.seen.update((id(g), name, c) for c in chains)
         if name in fold.learned:
             # Observed to drift as a result of calling this function. Folding
             # it would key the entry on the function's own output and miss
@@ -394,6 +410,9 @@ class GlobalsFold:
                 self._code_ref_part(fold, name, v)
                 return
         plain = plain_data_kind(v)
+        if chains is not None:
+            self._fold_chains(fold, name, v, chains)
+            return
         if not self._fold_value(fold, name, v, plain):
             if plain is None:
                 # Warned: its own state is not keyed. The code it carries
@@ -407,6 +426,51 @@ class GlobalsFold:
             # instance and no code anywhere inside for the walks below.
             return
         fold.parts.extend(self._held_code_parts(fold, name, v))
+
+    def chains_read(self, func: Callable, name: str, v: Any) -> tuple[tuple[str, ...], ...] | None:
+        """The attribute chains *func*'s code reads off its global *name*
+        holding *v*, when it is keyed by them instead of whole: *v* an
+        object (not a class, module, callable, builtin container, array or
+        frame, random generator) and every load of the name in *func*'s
+        code the head of such a chain (`global_attr_chains`). None keys it
+        whole."""
+        if v is None or isinstance(v, (type, types.ModuleType, dict, list, set, frozenset)) or callable(v):
+            return None
+        if type(v) is tuple or plain_data_kind(v) is not None:
+            return None
+        if builtin_family_of(type(v)) is not None or rng_carrier_kind(v) is not None:
+            return None
+        return self._reads.attr_chains(func, name)
+
+    def _fold_chains(self, fold: _ReadsFold, name: str, v: Any, chains: tuple[tuple[str, ...], ...]) -> None:
+        """Key the global *name* by what each chain read off it reaches
+        (`GlobalValues.chain_digests`), with the code that holds, watched
+        by the drift guard chain by chain."""
+        try:
+            digests = self._values.chain_digests(v, chains)
+        except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
+            self._notices.warn_once(
+                CashImpurityWarning,
+                fold.func_name,
+                name,
+                f"@cash.cache on {fold.func_name}: reads module global '{name}' whose "
+                f"value could not be hashed, so changes to it will NOT "
+                f"invalidate the cache.",
+                code="KEY-UNHASHABLE-GLOBAL",
+                fix=UNHASHABLE_GLOBAL_FIX,
+            )
+            return
+        for chain, digest in digests.items():
+            label = f"{name}#.{'.'.join(chain)}"
+            fold.parts.append((label, digest))
+            end = chain_end(v, chain)[1]
+            if plain_data_kind(end) is None:
+                fold.parts.extend(self._held_code_parts(fold, label, end))
+        if fold.provisional is None or name in fold.provisional:
+            entry = fold.watch.get(name)
+            if entry is not None and entry[1] == "chains" and entry[2] is fold.g:
+                digests = {**entry[0], **digests}
+            fold.watch[name] = (digests, "chains", fold.g, fold.func)
 
     def _code_ref_part(self, fold: _ReadsFold, name: str, v: Any) -> None:
         """Key the class or callable global *name* by what it names

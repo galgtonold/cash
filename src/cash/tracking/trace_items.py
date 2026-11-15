@@ -38,6 +38,7 @@ import dataclasses
 import dis
 import functools
 import hashlib
+import inspect
 import pickle
 import struct
 import sys
@@ -268,6 +269,8 @@ class _Digester:
         #: (`_shared_codes`): which of them started with the cells a call
         #: saw (`start_cells`) is not known, so each goes by its own.
         self.shared: frozenset[types.CodeType] = frozenset()
+        #: The classes being digested now, around this point (`class_digest`).
+        self.open: set[int] = set()
 
     def feed(self, v: Any) -> None:
         self.nodes += 1
@@ -324,6 +327,27 @@ class _Digester:
             for k, x in v.items():
                 self.feed(k)
                 self.feed(x)
+            return
+        if t is types.MappingProxyType:
+            # A read-only view of a dict (a ``mappingproxy({})`` default):
+            # by what it shows, as the dict is; pickle refuses it.
+            h.update(b"mp" + struct.pack("<q", len(v)))
+            for k, x in v.items():
+                self.feed(k)
+                self.feed(x)
+            return
+        if t is inspect.Signature:
+            # Pickled, its parameters' defaults go through pickle, which
+            # refuses a read-only mapping among them: field by field.
+            h.update(b"sig")
+            self.feed(v.return_annotation)
+            for p in v.parameters.values():
+                self.feed(p)
+            return
+        if t is inspect.Parameter:
+            h.update(b"par" + f"{int(v.kind)}:{v.name}".encode())
+            self.feed(v.default)
+            self.feed(v.annotation)
             return
         if t is set or t is frozenset:
             if len(v) > _NODES:
@@ -405,7 +429,14 @@ class _Digester:
             self.feed(fn.__kwdefaults__)
         starts = getattr(_STARTS, "cells", None)
         cells = starts.get(fn.__code__) if starts and fn.__code__ not in self.shared else None
-        if cells is None or len(cells) != len(fn.__closure__ or ()):
+        if (
+            cells is None
+            or len(cells) != len(fn.__closure__ or ())
+            or getattr(cells, "held", None) != _held_identities(_cell_values(fn.__closure__ or ()))
+        ):
+            # No start seen, or the one seen was another function of the
+            # same code (stacked wrappers one decorator made, getters one
+            # factory made): what its cells held was not this one's.
             cells = _cell_digests(fn.__closure__ or (), self)
         elif _AS_IT_IS in cells:
             now = _cell_digests(fn.__closure__ or (), self)
@@ -437,17 +468,24 @@ def _cell_digests(closure: Iterable[Any], within: _Digester | None) -> tuple[str
         except ValueError:
             out.append("empty")
             continue
-        out.append(_sub_digest(contents, within))
+        # Each cell whole, the classes it holds included even where the
+        # digest around it went through them already: so is a cell digested
+        # as its function starts (`start_cells`), and the two must agree.
+        out.append(_sub_digest(contents, within, own_types=True))
     return tuple(out)
 
 
-def _sub_digest(v: Any, within: _Digester | None) -> str | None:
+def _sub_digest(v: Any, within: _Digester | None, *, own_types: bool = False) -> str | None:
     """*v*'s digest inside another's, sharing its count of what was read
-    (a closure that holds itself ends there); None when opaque."""
+    (a closure that holds itself ends there); None when opaque. With
+    *own_types*, the classes the other went through are gone through again."""
     h = hashlib.blake2b(digest_size=12)
     d = _Digester(h)
     if within is not None:
-        d.nodes, d.active, d.types, d.shared = within.nodes, within.active, within.types, within.shared
+        d.nodes, d.active, d.open = within.nodes, within.active, within.open
+        # Own types: the classes digested already are gone through again,
+        # but not one being digested around this point, where it ends.
+        d.types, d.shared = (set(within.open), frozenset()) if own_types else (within.types, within.shared)
     try:
         d.feed(v)
     except _Opaque:
@@ -469,7 +507,45 @@ def start_cells(frame: Any, code: types.CodeType) -> tuple[str | None, ...] | No
         values = [local.get(name, _EMPTY) for name in code.co_freevars]
     except Exception:  # noqa: BLE001 - cells that cannot be read are digested afterwards
         return None
-    return tuple("empty" if v is _EMPTY else _AS_IT_IS if isinstance(v, type) else _sub_digest(v, None) for v in values)
+    return _StartCells(
+        ("empty" if v is _EMPTY else _AS_IT_IS if isinstance(v, type) else _sub_digest(v, None) for v in values),
+        _held_identities(values),
+    )
+
+
+class _StartCells(tuple):
+    """A start's cell digests, and which objects the cells held
+    (`_held_identities`): the function that started, among those sharing
+    its code."""
+
+    held: tuple[int | None, ...]
+
+    def __new__(cls, digests: Iterable[str | None], held: tuple[int | None, ...]) -> _StartCells:
+        self = super().__new__(cls, digests)
+        self.held = held
+        return self
+
+
+#: Values a closure may rebind as it runs (``nonlocal n; n += 1``), left
+#: out of `_held_identities`.
+_REBOUND_TYPES = frozenset({int, float, complex, bool, str, bytes, type(None), tuple, frozenset})
+
+
+def _held_identities(values: Iterable[Any]) -> tuple[int | None, ...]:
+    """The ids of the objects cells hold, numbers, strings and tuples left
+    out: a function's own cells keep them through its run (a counter it
+    bumps aside), while another function of the same code holds others."""
+    return tuple(None if v is _EMPTY or type(v) in _REBOUND_TYPES else id(v) for v in values)
+
+
+def _cell_values(closure: Iterable[Any]) -> list[Any]:
+    out: list[Any] = []
+    for cell in closure:
+        try:
+            out.append(cell.cell_contents)
+        except ValueError:
+            out.append(_EMPTY)
+    return out
 
 
 _EMPTY = object()
@@ -506,7 +582,8 @@ def value_digest(value: Any) -> str:
 
 
 #: Not what a class holds: ``__slotnames__`` is copyreg's cache, set the
-#: first time an instance is pickled; the line a class starts on and the
+#: first time an instance is pickled (pydantic's setter memo likewise, on
+#: the first assignment); the line a class starts on and the
 #: attributes its methods assign come with its code. On 3.14 the annotations
 #: live in ``__annotate_func__``, and the first read of them
 #: (``typing.get_type_hints``, dataclasses, pydantic) stores
@@ -526,6 +603,9 @@ _CLASS_SKIP = frozenset(
         "__annotate_func__",
         "__annotations_cache__",
         "__slotnames__",
+        # pydantic's memo of each field's setter, filled by the first
+        # assignment to that field: made from the fields, not held apart.
+        "__pydantic_setattr_handlers__",
         "__firstlineno__",
         "__static_attributes__",
     }
@@ -535,14 +615,25 @@ _CLASS_SKIP = frozenset(
 def class_digest(cls: type, within: _Digester | None = None) -> str:
     """A digest of what *cls* holds: its attributes (methods by code, data
     by value) and the names of its bases."""
-    from ..decorator.loop_leftovers import leftover_value, set_loop_leftovers
-
     h = hashlib.blake2b(digest_size=12)
     d = _Digester(h)
     if within is not None:
         d.types = within.types
         d.types.add(id(cls))
         d.shared = within.shared
+        d.open = within.open
+    opened = id(cls) not in d.open
+    d.open.add(id(cls))
+    try:
+        return _class_digest(cls, h, d)
+    finally:
+        if opened:
+            d.open.discard(id(cls))
+
+
+def _class_digest(cls: type, h: Any, d: _Digester) -> str:
+    from ..decorator.loop_leftovers import leftover_value, set_loop_leftovers
+
     h.update(",".join(f"{c.__module__}.{c.__qualname__}" for c in cls.__mro__).encode())
     try:
         attrs = sorted((k, v) for k, v in vars(cls).items() if k not in _CLASS_SKIP)
@@ -556,12 +647,12 @@ def class_digest(cls: type, within: _Digester | None = None) -> str:
             # What a class-body loop over a set left: which set, not which
             # element its iteration order ended on.
             value = leftover_value(vars(cls), name, leftovers)
-        try:
-            d.feed(value)
-        except _Opaque:
-            h.update(b"opaque:" + type(value).__qualname__.encode())
-        except Exception:  # noqa: BLE001 - a value that cannot be digested is opaque
-            h.update(b"opaque")
+        # Each by a digest of its own: one that turns out opaque part way
+        # through left what it had written so far, and a dict filled in a
+        # different order in another process (from a set) made a class
+        # that had not changed read as changed every time.
+        got = _sub_digest(value, d)
+        h.update(b"opaque:" + type(value).__qualname__.encode() if got is None else got.encode())
     return h.hexdigest()
 
 
@@ -585,7 +676,8 @@ def _shared_codes(attrs: list) -> frozenset[types.CodeType]:
 
 def candidates(obj: Any) -> Iterable[types.FunctionType]:
     """The functions *obj* may stand for: itself, what a staticmethod,
-    classmethod, bound method, property, partial or JIT dispatcher holds,
+    classmethod, bound method, property, ``cached_property``, partial or JIT
+    dispatcher holds,
     and what a ``functools.wraps`` wrapper wraps. Read off known types
     only: no attribute lookup runs on an object of the user's."""
     from ..jit_functions import jit_python_function
@@ -604,6 +696,10 @@ def candidates(obj: Any) -> Iterable[types.FunctionType]:
             stack.append(o.__func__)
         elif isinstance(o, property):
             stack.extend(f for f in (o.fget, o.fset, o.fdel) if f is not None)
+        elif type(o) is functools.cached_property:
+            # A getter a factory made in a closure and set on a class: found
+            # through the class that holds the property.
+            stack.append(o.func)
         elif isinstance(o, functools.partial):
             stack.append(o.func)
         elif issubclass(type(o), functools._lru_cache_wrapper):

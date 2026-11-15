@@ -16,6 +16,9 @@ check, since a trace cannot see a seed or a value a function holds.
 ``("held", module, name, qualname, digest)``
     code no qualified name finds (a lambda, a closure made outside the call),
     found through the global *name* holding it: its code and closure.
+``("alias", module, name, digest)``
+    a ``type name = ...`` alias whose value was built in the call: what it
+    stands for.
 ``("class", module, qualname, digest)``
     a class of the user's a method that ran was called on.
 ``("global", module, name, digest)``
@@ -60,6 +63,7 @@ import dis
 import functools
 import hashlib
 import importlib
+import logging
 import os
 import sys
 import threading
@@ -75,13 +79,15 @@ from .._own_work import inside as own_work_inside
 from .._own_work import left_out as own_work_left_out
 from .._own_work import rearm_with as own_work_rearm_with
 from .._paths import is_pseudo_filename
-from .._user_attrs import instance_of, module_file
+from .._user_attrs import NOT_HELD, held_attribute, instance_of, module_file
+from ..analysis.purity_flow import LOG_METHODS as _LOG_METHOD_NAMES
 from ..analysis.purity_report import (
     ISSUE_AMBIENT_READ,
     ISSUE_IMPURE_CALL,
     ISSUE_NETWORK_READ,
     ISSUE_SCOPE_MUTATION,
     ISSUE_UNTRACKABLE_DEP,
+    UNREAD_MODULE,
     PurityIssue,
     is_name_lookup,
 )
@@ -167,9 +173,21 @@ _LINE_STATUS: weakref.WeakKeyDictionary[types.CodeType, bool] = _weak.WeakKeyDic
 
 def covers(issues: Iterable[PurityIssue]) -> bool:
     """Can a trace stand in for *issues*, the run-time lookups of a call's
-    tree: all of them lookups by name (`is_name_lookup`), on 3.12+?"""
+    tree: all of them lookups by name (`is_name_lookup`), on 3.12+?
+
+    A lazy import of a module not loaded yet (UNREAD_MODULE) beside them
+    is covered too while the trace is on: the lookups trace the call
+    anyway, and an import that runs is in that trace (``first_import``),
+    with the code of the module that ran and the globals it read, as for
+    the same import in an argument's code (`CallRunner._carrier_refusal`).
+    Alone, with no lookup to trace the call, it still refuses."""
     issues = list(issues)
-    return TRACEABLE and bool(issues) and all(is_name_lookup(i) for i in issues)
+    if not TRACEABLE or not issues:
+        return False
+    lookups = sum(1 for i in issues if is_name_lookup(i))
+    if lookups == len(issues):
+        return True
+    return bool(lookups) and on() and all(is_name_lookup(i) or UNREAD_MODULE in i.description for i in issues)
 
 
 # -- recording -------------------------------------------------------------
@@ -445,7 +463,10 @@ def _recorder_class() -> type:
                 events |= mon.events.CALL
             self.user_codes[code] = events
             mon.set_local_events(self.tool, code, events | self._line_events(code))
-            if not pool and writes_through_parameters(code):
+            if not pool and (writes_through_parameters(code) or code.co_name in _LOG_METHOD_NAMES):
+                # A log method's sites too: what its callers do with what it
+                # returns decides whether a clock read in it is an input
+                # (`_LogClock`).
                 self.site_codes.add(code)
                 if self.active:
                     self._note_site(code, frame)
@@ -1026,6 +1047,26 @@ def _digest(value: Any) -> str | None:
     return None if got.startswith("opaque:") else got
 
 
+def _type_alias(ns: Mapping[str, Any] | None, module: str, name: str) -> Any:
+    """The ``type`` statement's alias *ns* holds under *name*, made in
+    *module*, else None."""
+    alias = None if ns is None else ns.get(name)
+    if (
+        type(alias).__name__ == "TypeAliasType"
+        and type(alias).__module__ == "typing"
+        and getattr(alias, "__name__", None) == name
+        and getattr(alias, "__module__", None) == module
+    ):
+        return alias
+    return None
+
+
+def _alias_digest(ns: Mapping[str, Any] | None, module: str, name: str) -> str | None:
+    """The digest of what the alias *name* stands for (its ``__value__``)."""
+    alias = _type_alias(ns, module, name)
+    return None if alias is None else _digest(alias.__value__)
+
+
 def _code_digest(code: types.CodeType, fn: Any) -> str | None:
     from ..tracking.trace_items import code_digest
 
@@ -1086,7 +1127,11 @@ def _holding_class(code: types.CodeType, g: Mapping[str, Any], module: str) -> t
     from ..tracking.trace_items import candidates
 
     for value in list(g.values()):
-        if not isinstance(value, type) or value.__module__ != module or "<locals>" in value.__qualname__:
+        if not isinstance(value, type) or "<locals>" in value.__qualname__:
+            continue
+        if value.__module__ != module and _find(value.__module__, value.__qualname__) is not value:
+            # Defined here and renamed to where it is exported from
+            # (``@set_module("pkg")``): kept only where that name finds it.
             continue
         try:
             members = list(vars(value).values())
@@ -1374,6 +1419,11 @@ class _Build:
                     self.add(("import", name), loaded_from, "")
             target = _chain_target(module, chain)
             if chain and not issubclass(type(target), types.ModuleType):
+                if _log_call_chain(module, chain):
+                    # A logger's method, called for a log line: a hit
+                    # skipping it is what caching means (`is_log_line`),
+                    # whichever logger the chain finds then.
+                    continue
                 path = ".".join(chain)
                 self.add(
                     ("attr", module, path),
@@ -1457,6 +1507,12 @@ class _Build:
                             )
                             self.functions.append(c)
                             return
+        if qn == code.co_name and _type_alias(g, module, qn) is not None:
+            # A ``type X = ...`` statement's value, built on its first read:
+            # all the code does is build ``X.__value__``, so that value
+            # stands for it.
+            self.add(("alias", module, qn), _alias_digest(g, module, qn), f"the type alias {qn} cannot be checked")
+            return
         cls = _holding_class(code, g, module)
         if cls is not None:
             # Made for a class and set on it (``@dataclass``'s ``__init__``
@@ -1667,6 +1723,33 @@ def _changed_global(items: list[tuple], starts: Mapping[tuple[str, str], tuple[s
     return None
 
 
+def _log_call_chain(module: str, chain: tuple[str, ...]) -> bool:
+    """Is *chain*, read from *module*, a logger's log method
+    (``settings._root_logger.info``): named as `is_log_line` names one,
+    and, as far as held data reaches, a method of a ``logging.Logger``?"""
+    from ..analysis.purity_flow import LOG_METHODS
+
+    if len(chain) < 2 or chain[-1] not in LOG_METHODS or "log" not in chain[-2].lower():
+        return False
+    obj: Any = sys.modules.get(module)
+    from ..tracking.trace_items import inspect_getattr
+
+    for depth, name in enumerate(chain[:-1]):
+        if issubclass(type(obj), types.ModuleType):
+            try:
+                obj = inspect_getattr(obj, name)
+            except AttributeError:
+                return False
+            continue
+        held = held_attribute(obj, name)
+        if held is NOT_HELD:
+            # Past what reads as data (a ``__getattr__``): by its names
+            # alone, as the log line in the body is.
+            return depth > 0
+        obj = held
+    return isinstance(obj, logging.Logger)
+
+
 def _chain_digest(module: str, chain: str) -> str | None:
     from ..tracking.trace_items import inspect_getattr
 
@@ -1677,7 +1760,15 @@ def _chain_digest(module: str, chain: str) -> str | None:
     obj = ns[parts[0]]
     for p in parts[1:]:
         if not issubclass(type(obj), types.ModuleType):
-            break
+            # Past a module, the attribute the code read where it is data
+            # the object holds (``settings.preset.leiden.flavor``): that
+            # is all the read took. Anything a getter would compute stops
+            # the walk, and the object is digested whole, as before.
+            held = held_attribute(obj, p)
+            if held is NOT_HELD:
+                break
+            obj = held
+            continue
         try:
             obj = inspect_getattr(obj, p)
         except AttributeError:
@@ -1702,6 +1793,7 @@ def _refusal_in(functions: Iterable[Any], unit: Any = None, owners: frozenset[in
     from ..tracking.randomness.state import capture_reachable_carrier_states
 
     out = _OutArguments(unit, owners)
+    log_clock = _LogClock(out)
     for fn in dict.fromkeys(functions):
         report = get_analyzer().analyze_reached(fn)
         if report.unwalkable:
@@ -1714,7 +1806,12 @@ def _refusal_in(functions: Iterable[Any], unit: Any = None, owners: frozenset[in
         ]
         families = _families(report, {issue.where for issue in refused})
         for issue in refused:
-            if issue.where in idle or out.excuses(issue) or _line_unrun(issue, families, unit):
+            if (
+                issue.where in idle
+                or out.excuses(issue)
+                or log_clock.excuses(issue)
+                or _line_unrun(issue, families, unit)
+            ):
                 continue
             return f"it ran {fn.__qualname__}, which {issue.description} (line {issue.line})"
         if capture_reachable_carrier_states(fn):
@@ -1936,6 +2033,50 @@ class _OutArguments:
         return True
 
 
+class _LogClock:
+    """Which clock reads the call sites a traced call ran excuse: one in a
+    log method (``Logger.log`` returning the time it logged at) whose every
+    start in the call was a log line whose value was dropped, reached only
+    other log lines (``start = logg.info(...)``, then ``logg.info("done",
+    time=start)``), or was returned by a log method whose own starts are
+    the same (`out_arguments.log_site_use`). The time then reaches nothing
+    but log output, which a hit skipping is what caching means. Anything
+    else, a start no site was recorded for included, keeps the finding."""
+
+    def __init__(self, out: _OutArguments) -> None:
+        self.out = out
+
+    def excuses(self, issue: Any) -> bool:
+        from ..analysis.out_arguments import clock_read_on
+
+        if issue.kind != ISSUE_AMBIENT_READ or self.out.unit is None:
+            return False
+        fn = self.out._functions().get(issue.where)
+        if fn is None or fn.__code__.co_name not in _LOG_METHOD_NAMES or not clock_read_on(fn, issue.line):
+            return False
+        return self._only_logged(fn, set())
+
+    def _only_logged(self, fn: types.FunctionType, seen: set[types.CodeType]) -> bool:
+        from ..analysis.out_arguments import RETURNED, log_site_use
+
+        if fn.__code__ in seen:
+            return True  # already being followed up the chain
+        seen.add(fn.__code__)
+        sites = self.out.unit.sites.get(fn.__code__)
+        if not sites:
+            return False
+        for caller_code, lasti in sites:
+            caller = self.out._function_of(caller_code) if caller_code is not None else None
+            use = log_site_use(caller, caller_code, lasti) if caller is not None else None
+            if use is None:
+                return False
+            if use == RETURNED and (
+                caller_code.co_name not in _LOG_METHOD_NAMES or not self._only_logged(caller, seen)
+            ):
+                return False
+        return True
+
+
 def build(
     unit: Any,
     static_codes: set[types.CodeType],
@@ -2071,6 +2212,9 @@ def verify(items: list, cached_state: Callable[[str], str | None]) -> str | None
                 ns = _namespace(item[1])
                 now = None if ns is None else (_digest(ns[item[2]]) if item[2] in ns else _ABSENT)
                 what = f"{item[1]}.{item[2]}"
+            elif kind == "alias":
+                now = _alias_digest(_namespace(item[1]), item[1], item[2])
+                what = f"the type alias {item[1]}.{item[2]}"
             elif kind == "class":
                 from ..tracking.trace_items import class_digest
 
