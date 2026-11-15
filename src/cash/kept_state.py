@@ -2063,7 +2063,20 @@ def _watched(reducer: Any, t: type, registered: Any, watch: list) -> Any:
         reducer = _watched_by_reference(_watched_views(reducer, t, registered, watch), watch)
     else:
         reducer = _watched_views(reducer, t, registered, watch)
+    if registered is None and library_chooses_its_state(t):
+        reducer = functools.partial(_watched_names_sorted, reducer=reducer, watch=watch)
     return reducer
+
+
+def _watched_names_sorted(obj: Any, reducer: Any, watch: list) -> Any:
+    """*reducer*'s reduce of *obj*, a library's class that says what pickle
+    stores, noting in *watch* a state a key puts in name order
+    (`_reduce_names_sorted`): its key bytes are not the stored ones."""
+    reduced = reducer(obj)
+    if not isinstance(reduced, str) and len(reduced) > 2 and reduced[2] is not None:
+        if names_sorted(reduced[2]) is not reduced[2]:
+            watch.append(True)
+    return reduced
 
 
 def _watched_by_reference(reducer: Any, watch: list) -> Callable[[Any], Any]:
