@@ -50,7 +50,7 @@ from collections.abc import Iterator
 from typing import Any
 
 from ..code_digest import callable_identity
-from ..install_paths import is_user_code_file
+from ..install_paths import is_cash_path, is_user_code_file
 
 __all__ = ["fingerprint", "filters_now", "holds", "note_warned", "recording", "stamp", "watch"]
 
@@ -82,15 +82,35 @@ def filters_now() -> Any:
 class _Probe:
     """The message pattern of the filter `recording` puts first: asked
     about every warning that reaches the process's filters, it notes it for
-    every body being recorded and matches none."""
+    every body being recorded and matches none.
+
+    It reads as a pattern that matches nothing (``pattern``, ``flags``) for
+    code that copies the filters elsewhere (scikit-learn hands them to its
+    workers as ``filterwarnings(message=f.pattern)``). A warning cash itself
+    issues, or a filter lookup cash makes (`diagnostics`), is not the
+    body's: not noted."""
 
     __slots__ = ()
 
-    def match(self, text: Any) -> bool:
-        with _lock:
-            for flag in _ACTIVE:
-                flag[0] = True
-        return False
+    #: What the filter reads as when copied: a pattern no text matches.
+    pattern = "(?!)"
+    #: Told apart by `process_registries`, which compares the filters
+    #: around a call: cash's, not a change the call made.
+    cash_probe = True
+    flags = 0
+
+    def match(self, text: Any, *args: Any) -> None:
+        if _ACTIVE and not _asked_by_cash():
+            with _lock:
+                for flag in _ACTIVE:
+                    flag[0] = True
+        return None
+
+    def search(self, text: Any, *args: Any) -> None:
+        return None
+
+    def fullmatch(self, text: Any, *args: Any) -> None:
+        return None
 
     def __repr__(self) -> str:
         return "<cash: notes the warnings a cached call issues>"
@@ -103,6 +123,28 @@ class _Probe:
 
     def __deepcopy__(self, memo: Any) -> _Probe:
         return self
+
+
+#: Modules whose frames lie between a warning's issuer and the probe.
+_WARNINGS_MODULES = frozenset({"warnings", "_py_warnings"})
+#: code file -> is it cash's own.
+_CASH_FILES: dict[str, bool] = {}
+
+
+def _asked_by_cash() -> bool:
+    """Is the warning the probe is asked about cash's own (issued by, or
+    looked up from, a frame of cash's)? ``warnings.warn`` is C: the frame
+    below the probe is the issuer's, past any of a pure-Python ``warnings``."""
+    frame = sys._getframe(2)
+    while frame is not None and frame.f_globals.get("__name__") in _WARNINGS_MODULES:
+        frame = frame.f_back
+    if frame is None:
+        return False
+    name = frame.f_code.co_filename
+    own = _CASH_FILES.get(name)
+    if own is None:
+        own = _CASH_FILES[name] = is_cash_path(name)
+    return own
 
 
 def _the_probe() -> _Probe:

@@ -324,9 +324,15 @@ def _decimal() -> tuple[Any, ...] | None:
 
 #: Each registry: what the warning calls it, how it is read, and how two
 #: reads are told the same (``==`` when None).
+def _not_cash(item: Any) -> bool:
+    # The filter cash puts first while a cached body runs, on any thread
+    # (`warning_state.recording`): not the call's.
+    return not (type(item) is tuple and len(item) > 1 and getattr(item[1], "cash_probe", False) is True)
+
+
 def _warning_filters() -> tuple[Any, ...]:
     # ``defaultaction`` too: the action of a warning no filter matches.
-    return warnings.filters, tuple(warnings.filters), warnings.defaultaction
+    return warnings.filters, tuple(filter(_not_cash, warnings.filters)), warnings.defaultaction
 
 
 def _same_filters(old: tuple[Any, ...], new: tuple[Any, ...]) -> bool:

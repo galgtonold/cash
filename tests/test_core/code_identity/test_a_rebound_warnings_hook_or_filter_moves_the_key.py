@@ -377,3 +377,33 @@ def test_a_nested_run_that_warned_counts_for_the_outer_one(c, path):
     assert _same(f, outer, 1) == ("returned", ((1, "raised"), 1))
     warnings.simplefilter("always")
     assert _same(f, outer, 1) == ("returned", ((1, "passed"), 1))
+
+
+def test_concurrent_bodies_do_not_see_each_other_change_the_filters(c):
+    # The filter one body's run puts first is not a change another body
+    # made to the warnings filters (`process_registries`): all four cache.
+    from concurrent.futures import ThreadPoolExecutor
+
+    def slow(x):
+        time.sleep(0.1)  # the others start while the first still runs
+        return x * x
+
+    f = c.cache(slow)
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        assert list(ex.map(f, [1, 2, 3, 4])) == [1, 4, 9, 16]
+    assert [f(x) for x in (1, 2, 3, 4)] == [1, 4, 9, 16]
+    assert f.cache_info()["misses"] == 4
+
+
+def copied_filters(x):
+    # As scikit-learn hands the filters to its workers: a pattern by its text.
+    import re
+
+    texts = [m.pattern for _a, m, _c, _m, _l in warnings.filters if m is not None and not isinstance(m, str)]
+    return (x, [re.compile(t).match("w-key") is not None for t in texts])
+
+
+def test_the_filter_a_run_puts_first_reads_as_a_pattern_that_matches_nothing(c):
+    f = c.cache(copied_filters)
+    x, matched = f(1)
+    assert x == 1 and matched and not any(matched)
