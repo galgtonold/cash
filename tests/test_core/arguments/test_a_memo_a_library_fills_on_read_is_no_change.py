@@ -15,11 +15,14 @@ it in place runs every time, as plain Python does.
 
 from __future__ import annotations
 
+import pickle
+import sys
+
 import numpy as np
 import pandas as pd
 import pytest
 
-from cash.value_hash import compute_hash
+from cash.value_hash import compute_hash, is_identity_fallback_hash
 
 
 class Frame(pd.DataFrame):
@@ -31,6 +34,11 @@ class Frame(pd.DataFrame):
     @property
     def _constructor(self):
         return Frame
+
+
+#: This module, as imported with `Frame` in it. A frame of the class is
+#: keyed by its pickle, which names the class by module and name.
+_THIS_MODULE = sys.modules[__name__]
 
 
 def _frame() -> Frame:
@@ -71,13 +79,32 @@ def test_a_frame_subclass_changed_in_place_runs_every_time(disk_cash):
     assert _hits(bump) == 0
 
 
-def test_a_value_put_in_the_memo_by_other_code_is_keyed():
+def _content_digest(frame: Frame) -> str:
+    """`compute_hash` of *frame*, which must be its content's: a frame that
+    does not pickle gets the identity tier, the same digest before and after
+    any change, and the checks below would say nothing."""
+    digest = compute_hash(frame)
+    if is_identity_fallback_hash(frame, digest):
+        try:
+            pickle.dumps(frame)
+        except Exception as exc:
+            pytest.fail(f"the frame does not pickle in this process, so it has no content digest: {exc!r}")
+        pytest.fail("the frame pickles, yet compute_hash gave its identity digest")
+    return digest
+
+
+def test_a_value_put_in_the_memo_by_other_code_is_keyed(monkeypatch):
+    # Pickle finds `Frame` by name in ``sys.modules``: where another test in
+    # the worker dropped or replaced this module's entry, pickle imported a
+    # second copy whose ``Frame`` is another class, the frame did not pickle,
+    # and its digest was the identity tier's -- equal before and after.
+    monkeypatch.setitem(sys.modules, __name__, _THIS_MODULE)
     frame = _frame()
-    before = compute_hash(frame)
+    before = _content_digest(frame)
     frame[frame.a > 1]
-    assert compute_hash(frame) == before
+    assert _content_digest(frame) == before
     frame._mgr.blocks[0]._cache["not_a_property"] = 1
-    assert compute_hash(frame) != before
+    assert _content_digest(frame) != before
 
 
 def _array(xr, offset: float = 0.0):
