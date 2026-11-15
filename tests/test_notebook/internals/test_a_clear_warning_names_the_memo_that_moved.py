@@ -171,7 +171,9 @@ def test_a_memo_defined_again_where_the_last_one_was_freed_is_watched():
         ns.clear()
         ns.update(_three_alone())
         before = helper_memos.watched(ns)
-        assert [where[-1] for where, *_ in before or ()] == ["third"]
+        # The memos of modules cash takes for the user's (a test module
+        # loaded before this one) are watched too; the namespace's own:
+        assert [where for where, *_ in before or () if where[0] == "ns"] == [["ns", "third"]]
         exec("third.cache_clear(); third(1); third(2)", ns)
         verdict = helper_memos.used(before, clears=True, ns=ns, site=("third.cache_clear()", None))
         assert isinstance(verdict, tuple), verdict
