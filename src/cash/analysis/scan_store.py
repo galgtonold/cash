@@ -22,7 +22,11 @@ one file per (fingerprint, file path) holding the digest it answers for;
 an edit overwrites it.
 
 It lives in the active cache dir, beside the results (``<cache
-dir>/analysis``), and only once that dir exists. ``CASH_ANALYSIS_STORE=0``
+dir>/analysis``), and only once that dir exists: what a process works out
+before then (its first call, a miss, runs before the result that makes the
+dir is stored) is held (`_PENDING`) and written once the dir is there, at
+the latest when the process exits, so the second process does not pay for
+it again. ``CASH_ANALYSIS_STORE=0``
 turns it off, ``CASH_ANALYSIS_STORE=<dir>`` moves it. With
 ``CASH_ANALYSIS_MEMO_VERIFY=1`` every stored answer used is worked out again
 and `StoredScanMismatch` raised when it differs.
@@ -30,6 +34,7 @@ and `StoredScanMismatch` raised when it differs.
 
 from __future__ import annotations
 
+import atexit
 import hashlib
 import json
 import os
@@ -128,9 +133,13 @@ def scan(kind: str, path: str, source: str, compute: Callable[[str], frozenset[s
     for a reason outside the text (a recursion limit): the answer is then
     empty and not stored."""
     directory = _store_dir()
-    if directory is None:
-        return compute(source) or frozenset()
     digest = hashlib.blake2b(source.encode("utf-8", "surrogatepass"), digest_size=20).hexdigest()
+    if directory is None:
+        answer = compute(source)
+        if answer is None:
+            return frozenset()
+        _save(kind, path, {"kind": kind, "digest": digest, "names": sorted(answer)})
+        return answer
     file = _slot_file(directory, kind, path)
     stored = _read(file, kind, digest)
     if stored is not None:
@@ -207,9 +216,45 @@ def load_record(kind: str, path: str, digest: str) -> dict | None:
 def save_record(kind: str, path: str, digest: str, data: dict) -> None:
     """Store *data* (JSON) as what the text of *path* digested to *digest*
     gives; it replaces the record of any other text of that file. Best effort."""
+    _save(kind, path, {**data, "kind": kind, "digest": digest})
+
+
+#: ``(kind, path)`` -> the record worked out while the cache dir did not
+#: exist yet, written by `flush`.
+_PENDING: dict[tuple[str, str], dict] = {}
+#: More records than any one process should hold for a cache dir to come.
+_MAX_PENDING = 4096
+
+
+def _save(kind: str, path: str, record: dict) -> None:
     directory = _store_dir()
-    if directory is not None:
-        _write(directory, _slot_file(directory, kind, path), {**data, "kind": kind, "digest": digest})
+    if directory is None:
+        if enabled() and (len(_PENDING) < _MAX_PENDING or (kind, path) in _PENDING):
+            _PENDING[(kind, path)] = record
+        return
+    if _PENDING:
+        flush()
+    _write(directory, _slot_file(directory, kind, path), record)
+
+
+def flush() -> None:
+    """Write the records held for a cache dir that did not exist yet, once
+    it does; nothing before then."""
+    if not _PENDING:
+        return
+    try:
+        directory = _store_dir()
+    except Exception:  # noqa: BLE001 - at exit: a store that cannot be found keeps nothing
+        return
+    if directory is None:
+        return
+    pending = dict(_PENDING)
+    _PENDING.clear()
+    for (kind, path), record in pending.items():
+        _write(directory, _slot_file(directory, kind, path), record)
+
+
+atexit.register(flush)
 
 
 def _load(file: Path, kind: str, digest: str) -> dict | None:
