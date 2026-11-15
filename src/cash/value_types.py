@@ -117,6 +117,40 @@ def library_scalar_types() -> tuple[type, ...]:
     return _library_scalar_types(sys.modules.get("numpy"), sys.modules.get("pandas"))
 
 
+@functools.lru_cache(maxsize=4)
+def _shapely_geometry_types(shapely: Any) -> frozenset:
+    if shapely is None:
+        return frozenset()
+    geometry = sys.modules.get("shapely.geometry")
+    names = (
+        "Point",
+        "LineString",
+        "LinearRing",
+        "Polygon",
+        "MultiPoint",
+        "MultiLineString",
+        "MultiPolygon",
+        "GeometryCollection",
+    )
+    try:
+        found = frozenset(getattr(geometry, name) for name in names)
+    except AttributeError:  # shapely still importing, or before 2.0
+        return frozenset()
+    # Before shapely 2.0 a geometry was a mutable Python object over a
+    # GEOS pointer, which took attributes: not a leaf.
+    if any("__dict__" in klass.__dict__ for kind in found for klass in kind.__mro__ if klass is not object):
+        return frozenset()
+    return found
+
+
+def shapely_geometry_types() -> frozenset:
+    """The exact classes of shapely's geometries (2.0 and later), of the
+    module loaded (never imported here): immutable, no attribute of their
+    own, pickled as their WKB, so a geometry holds no object and keys,
+    copies and restores as its value alone."""
+    return _shapely_geometry_types(sys.modules.get("shapely"))
+
+
 #: Every name a statement can use without binding it: the builtins, and the
 #: two IPython puts in every namespace. One set for the runtime, the
 #: simulation and the decorator's analyzer, which disagreed while each kept

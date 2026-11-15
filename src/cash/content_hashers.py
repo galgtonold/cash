@@ -61,6 +61,8 @@ def builtin_hash_family(type_: type) -> str | None:
     type_name = type_.__name__
     if type_name in ("DataFrame", "Series") and from_family(type_, "pandas"):
         return "pandas"
+    if type_name in ("GeoDataFrame", "GeoSeries") and from_family(type_, "geopandas"):
+        return "geopandas"
     if type_name == "ndarray" and from_family(type_, "numpy"):
         return "numpy"
     for family in ("polars", "pyarrow", "modin", "dask"):
@@ -90,6 +92,8 @@ def builtin_hash(value: Any) -> str | None:
     family = builtin_family_of(type(value))
     if family == "pandas":
         return hash_pandas(value)
+    if family == "geopandas":
+        return hash_geopandas(value)
     if family == "numpy":
         return hash_numpy(value)
     if family == "polars":
@@ -108,6 +112,27 @@ def builtin_hash(value: Any) -> str | None:
 #: How a key walk reads a frame, array or table with no memo in front:
 #: every byte, through `builtin_hash`.
 BUILTIN_CONTENT = ContentHashing(builtin_family_of, builtin_hash, plain_arrays=lambda: None)
+
+
+def hash_geopandas(value: Any) -> str | None:
+    """Hash a geopandas GeoDataFrame or GeoSeries: `hash_pandas` of it,
+    which keys each geometry column by its CRS and its geometries' WKB
+    (`_fold_geometries`), after the name of a frame's active geometry
+    column. Pickled whole instead, a frame of 200,000 points took a
+    geometry at a time through ``to_wkb``, and a frame restored from the
+    cache pickled its column labels' state in another order than the frame
+    it was stored from: the next cached function missed on every run."""
+    digest = hash_pandas(value)
+    if digest is None:
+        return None
+    active = getattr(value, "_geometry_column_name", None) if _is_frame(value) else None
+    return hashlib.sha256(f"geopandas:{type(value).__name__}:{active!r}:{digest}".encode()).hexdigest()
+
+
+def _is_frame(value: Any) -> bool:
+    """Is *value*, a pandas or geopandas value `builtin_hash` claims, a
+    table (not a series)?"""
+    return type(value).__name__ in ("DataFrame", "GeoDataFrame")
 
 
 def hash_pandas(value: Any) -> str | None:
@@ -139,7 +164,7 @@ def hash_pandas(value: Any) -> str | None:
         # columns after it), an index's ``freq`` (``shift(freq=...)``,
         # ``asfreq``) and ``attrs``.
         axes = f"{list(index.names)!r}:{index_dtypes!r}:{getattr(index, 'freq', None)!r}:"
-        if type(value).__name__ == "DataFrame":
+        if _is_frame(value):
             dtypes = _pandas_dtype_keys(value.dtypes)
             schema = f"{list(value.columns)!r}:{list(value.columns.names)!r}:{dtypes!r}:{axes}"
         else:  # Series
@@ -175,7 +200,7 @@ def _fold_pandas_values(h: Any, value: Any, pd: Any) -> None:
     periods, intervals, sparse columns -- keeps ``hash_pandas_object``'s
     per-value hash.
     """
-    if type(value).__name__ == "DataFrame":
+    if _is_frame(value):
         rest = []
         column_buffer = _column_buffers(value)
         routes: dict[Any, str | None] = {}
@@ -214,7 +239,7 @@ def _fold_pandas_values(h: Any, value: Any, pd: Any) -> None:
     else:
         _fold_pandas_array(h, value, pd)
     _fold_pandas_index(h, value.index, pd)
-    if type(value).__name__ == "DataFrame":
+    if _is_frame(value):
         # The schema keys the column labels by ``repr``, which for an object
         # of the user's own is its address: fold the objects themselves.
         columns = value.columns
@@ -389,6 +414,8 @@ def pandas_value_route(dtype: Any, pd: Any) -> str | None:
         return "arrow"
     if type(dtype).__name__ in _MASKED_DTYPES:
         return "masked"
+    if type(dtype).__name__ == "GeometryDtype" and from_family(type(dtype), "geopandas"):
+        return "geometry"
     return None
 
 
@@ -433,6 +460,8 @@ def _fold_pandas_array(h: Any, values: Any, pd: Any) -> None:
             fold_buffer(h, raw_view(mask))
             return
         route = None
+    if route == "geometry" and _fold_geometries(h, held_values(values)):
+        return
     if route == "codes":
         fold_buffer(h, _np_array(values.codes if isinstance(values, pd.Index) else values.cat.codes))
     elif route == "objects":
@@ -896,6 +925,100 @@ def _np_bytes(values: Any) -> bytes:
 _TYPED_ITEMS = {float: "<f8", bool: "?", int: "<i8"}
 
 
+def _fold_geometries(h: Any, array: Any) -> bool:
+    """Fold a geopandas ``GeometryArray`` into *h*: its CRS (as WKT, which
+    two spellings of one CRS share) and each geometry's WKB with its SRID
+    and every dimension it has (Z, M), which is all a shapely geometry
+    holds -- its type, its parts and rings and their coordinates -- with
+    which rows are missing. Written by shapely for the whole array at once,
+    and for a big array remembered (`_GeometryPieces`) while it holds the
+    same geometries. False, folding nothing, for an array of another kind."""
+    import shapely
+
+    data = getattr(array, "_data", None)
+    if type(data) is not _numpy().ndarray or data.dtype != object or data.ndim != 1:
+        return False
+    crs = getattr(array, "crs", None)
+    h.update(f"|geometry|{None if crs is None else crs.to_wkt()!r}|{len(data)}|".encode())
+    piece = GEOMETRY_PIECES.find(data)
+    if piece is None:
+        into = _PieceRecorder(h)
+        wkb = shapely.to_wkb(data, hex=False, include_srid=True)
+        missing = shapely.is_missing(data)
+        if missing.any():
+            into.update(b"|missing|")
+            fold_buffer(into, missing)
+            wkb = wkb[~missing]
+        # WKB is self-delimiting: its type and counts say where it ends.
+        fold_buffer(into, b"".join(wkb))
+        if into.piece is not None:
+            GEOMETRY_PIECES.note(data, into.piece)
+    else:
+        h.update(piece)
+    return True
+
+
+class _GeometryPieces:
+    """What `_fold_geometries` folded for a big array of shapely geometries,
+    by the array: ``id -> (weak reference, a copy of it, piece)``.
+
+    A shapely geometry (2.0 and later) cannot change, and the copy keeps
+    each one alive, so while the array holds the very objects the copy
+    holds -- its pointers, compared as one buffer -- the piece holds: a
+    frame of 14,400 polygons handed to a cached function again was turned
+    to WKB anew on every call, 0.15 s of a 0.16 s hit. A row written since
+    holds another object, and the array is read again."""
+
+    #: Rows below which an array is read every time: cheap to read.
+    MIN_ROWS = 4096
+
+    def __init__(self, maxsize: int) -> None:
+        self._entries: LruMemo[int, tuple] = LruMemo(maxsize)
+
+    def find(self, data: Any) -> bytes | None:
+        if len(data) < self.MIN_ROWS:
+            return None
+        entry = self._entries.get(id(data))
+        if entry is None:
+            return None
+        ref, held, piece = entry
+        if ref() is not data or held.shape != data.shape:
+            return None
+        now, then = _addresses(data), _addresses(held)
+        if now is None or then is None or not _numpy().array_equal(now, then):
+            return None
+        return piece
+
+    def note(self, data: Any, piece: bytes) -> None:
+        if len(data) < self.MIN_ROWS or _addresses(data) is None:
+            return
+        try:
+            ref = weakref.ref(data)
+        except TypeError:
+            return
+        self._entries[id(data)] = (ref, data.copy(), piece)
+
+    def clear(self) -> None:
+        self._entries.clear()
+
+
+def _addresses(data: Any) -> Any:
+    """The object pointers a contiguous 1-d object array holds, as a
+    ``uintp`` array over its own memory (numpy refuses such a view), or
+    None for one that is not contiguous."""
+    np = _numpy()
+    if not data.flags.c_contiguous:
+        return None
+    import ctypes
+
+    memory = (ctypes.c_char * data.nbytes).from_address(data.ctypes.data)
+    return np.frombuffer(memory, dtype=np.uintp)
+
+
+#: The process's `_GeometryPieces`.
+GEOMETRY_PIECES = _GeometryPieces(64)
+
+
 def _fold_object_items(h: Any, array: Any) -> None:
     """Fold a 1-d object array's items into *h*: as a typed buffer when
     every item is a ``float``, every one a ``bool`` or every one an ``int``
@@ -1014,6 +1137,10 @@ def _pandas_dtype_key(dtype: Any) -> str:
     """
     categories = getattr(dtype, "categories", None)
     if categories is None or getattr(dtype, "name", None) != "category":
+        if type(dtype).__name__ == "GeometryDtype" and from_family(type(dtype), "geopandas"):
+            # Its ``repr`` is its address; its CRS is keyed with the values
+            # (`_fold_geometries`).
+            return "geopandas:geometry"
         return repr(dtype)
     listed = hashlib.sha256(_object_items_bytes(categories.tolist())).hexdigest()
     return f"category:{dtype.ordered!r}:{_pandas_dtype_key(categories.dtype)}:{listed}"
