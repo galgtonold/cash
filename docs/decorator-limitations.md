@@ -437,6 +437,17 @@ stores a pointer to the function's entry, not a second copy of the value.
 [Moving to a module](tutorials/feature-guides/production-transition.md) covers
 the notebook side.
 
+## Weak references to a result you dropped
+
+Within one process, a hit may hand back the same object an earlier hit
+returned, when nothing else holds any part of it and nothing in it changed
+since; you cannot tell it from a fresh copy by its values. cash keeps that
+object alive until the next hit of the same call, or until it evicts the entry.
+So a `weakref.finalize` callback, a weak reference's callback, or a
+`WeakValueDictionary` entry you attach to such a result fires when cash lets
+it go, not at the moment you drop your last reference as in plain Python.
+Classes with `__del__` are never kept this way.
+
 ## Related
 
 - [The `@cash.cache` guide](decorator.md): where results go, what invalidates
