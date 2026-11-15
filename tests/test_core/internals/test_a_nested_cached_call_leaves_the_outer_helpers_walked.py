@@ -138,7 +138,7 @@ print(json.dumps({"result": r, "walks": len(WALKS) - n, "hit": outer.cache_info(
 def test_a_user_rebinding_the_global_still_misses(tmp_path, how):
     (tmp_path / "bfhelpers.py").write_text(textwrap.dedent(_HELPERS), encoding="utf-8")
     script = tmp_path / "main.py"
-    script.write_text(textwrap.dedent(_PRELUDE) + textwrap.dedent(_REBOUND))
+    script.write_text(textwrap.dedent(_PRELUDE) + textwrap.dedent(_REBOUND), encoding="utf-8")
     out = run_python(script.name, how, cwd=tmp_path).stdout
     got = json.loads(out.strip().splitlines()[-1])
     # Both helpers now see a directory: 1 + 1 + (2 + 1), run, not served.
