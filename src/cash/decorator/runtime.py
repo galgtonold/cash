@@ -2373,7 +2373,7 @@ class CallRunner:
             # them (`library_reads`).
             unit = call.trace_unit
             run.lib_reads = (
-                library_reads.build(code_trace.library_codes(unit), unit.lib_items, unit.lib_cells)
+                library_reads.build(code_trace.library_codes(unit), unit.lib_items, unit.lib_cells, unit.lib_keys)
                 if unit is not None
                 else (None, None)
             )

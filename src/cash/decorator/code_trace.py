@@ -213,6 +213,7 @@ def _unit_class() -> type:
             "lib_cells",
             "lib_codes",
             "lib_items",
+            "lib_keys",
             "sites",
         )
 
@@ -233,6 +234,10 @@ def _unit_class() -> type:
             #: and the items of the entries served inside it (`library_reads`).
             self.lib_codes: dict[types.CodeType, dict] = {}
             self.lib_items: list[tuple] = []
+            #: A library's code that reads one settings entry by a key it is
+            #: handed (`library_reads.KEYED_READERS`) -> the keys its starts
+            #: read (None for a start whose key could not be read).
+            self.lib_keys: dict[types.CodeType, set[str | None]] = {}
             #: User code -> the library modules its closure holds under the
             #: names a chain it reads starts from (`library_reads.deref_roots`).
             self.lib_cells: dict[types.CodeType, dict[str, Any]] = {}
@@ -279,10 +284,12 @@ def _recorder_class() -> type:
     from ..analysis.out_arguments import binds_parameter_attributes, writes_through_parameters
     from ..install_paths import is_user_path, known_user_path
     from ..tracking import trace_recorder as rec
+    from .library_reads import KEYED_NAMES as library_keyed_names
     from .library_reads import QUIET as library_quiet
     from .library_reads import CodeSet as LibraryCodes
     from .library_reads import counts_file
     from .library_reads import deref_roots as library_deref_roots
+    from .library_reads import keyed_argument as library_keyed_argument
 
     DISABLE = sys.monitoring.DISABLE
     _POOL_QUALNAMES = frozenset(qualname for _, qualname in rec.POOL_STARTS)
@@ -354,6 +361,9 @@ def _recorder_class() -> type:
             #: A library's code, armed so each traced call sees it run
             #: (`_arm_library`); its events are in `user_codes` too.
             self.lib_codes = LibraryCodes()
+            #: The library's code of `library_reads.KEYED_READERS` seen ->
+            #: the argument naming the entry it reads.
+            self.keyed_codes: _weak.WeakKeyDictionary[types.CodeType, str] = _weak.WeakKeyDictionary()
             #: LINE callbacks run, for the tests of what watching lines costs.
             self.line_events = 0
             free = [tool for tool in self.tool_ids if mon.get_tool(tool) is None]
@@ -515,14 +525,36 @@ def _recorder_class() -> type:
             if code in library_quiet:
                 # Seen again after a restart: it reads no setting.
                 return
+            frame = sys._getframe(rec.WATCHED_FRAME + 1)
             if code not in self.lib_codes:
                 mon = sys.monitoring
                 events = mon.events.PY_START | mon.events.PY_RESUME
                 self.user_codes[code] = events
                 self.lib_codes.add(code)
+                if code.co_qualname in library_keyed_names:
+                    arg = library_keyed_argument(code, frame.f_globals)
+                    if arg is not None:
+                        self.keyed_codes[code] = arg
                 mon.set_local_events(self.tool, code, events | self._line_events(code))
             if self.active:
-                self._seen_library(code, sys._getframe(rec.WATCHED_FRAME + 1).f_globals)
+                self._seen_library(code, frame.f_globals)
+                if code in self.keyed_codes:
+                    self._note_key(code, frame)
+
+        def _note_key(self, code: types.CodeType, frame: Any) -> None:
+            """A start of a library's code that reads the settings entry its
+            caller names (`library_reads.KEYED_READERS`): which one, for
+            each call in progress."""
+            if own_work_inside():
+                return
+            try:
+                key = frame.f_locals.get(self.keyed_codes[code])
+            except Exception:  # noqa: BLE001 - unreadable: the whole dict is checked
+                key = None
+            if not isinstance(key, str):
+                key = None
+            for unit in self.active:
+                unit.lib_keys.setdefault(code, set()).add(key)
 
         def _seen_library(self, code: types.CodeType, g: dict) -> None:
             if own_work_inside():
@@ -538,7 +570,13 @@ def _recorder_class() -> type:
             if not collecting():
                 self.rearm.add(code)
             if self.active:
-                self._seen_library(code, sys._getframe(rec.WATCHED_FRAME + 1).f_globals)
+                frame = sys._getframe(rec.WATCHED_FRAME + 1)
+                self._seen_library(code, frame.f_globals)
+                if code in self.keyed_codes:
+                    # Each start reads its own entry: left armed while a
+                    # call is in progress.
+                    self._note_key(code, frame)
+                    return None
             return DISABLE
 
         def _arm_pyplot(self, code: types.CodeType) -> Any:
