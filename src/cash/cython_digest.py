@@ -48,6 +48,21 @@ system it does not read (meson, CMake), no ``setup.py`` /
 and flags of such a build are recorded nowhere), or a ``cimport`` it
 cannot find. Paths are compared in one spelling (``os.path.normcase``),
 so a Windows ``.pyd`` and a differently cased path match.
+
+Parsing a module with Cython costs about a second (importing the compiler
+alone a fifth of one), which every fresh process paid for every module it
+reached. So a module's analysis is stored on disk (`cash.analysis.scan_store`,
+one record per built file) with everything it was worked out from: the
+binary's content digest, the Cython version, the Python and its
+``sys.path``; the content digest of every file it read (the ``.pyx``, its
+``.pxd`` / ``.pxi`` files, the cimported ``.pxd`` files, the headers, the
+build configuration); and the answer of every check for a file that may or
+may not be there (a cimport's candidates, a ``meson.build``). A later process
+uses the record only when all of them are the same now -- each file is read
+and digested again, never trusted by its timestamp -- and then never imports
+the Cython compiler. The checks that do not depend on content (a keyed
+file newer than the binary, every function of the binary where the
+analysis places it) run every time.
 """
 
 from __future__ import annotations
@@ -56,6 +71,7 @@ import ast
 import bisect
 import hashlib
 import importlib.machinery
+import json
 import os
 import sys
 import threading
@@ -127,7 +143,49 @@ class _Module:
     keyed_files: tuple[str, ...]
     #: The local ``.pxd`` files of other modules it cimports.
     cimported: tuple[str, ...] = ()
+    #: The files that must not be newer than the binary.
+    newer_keyed: tuple[str, ...] = ()
     digests: dict[str, str | None] = field(default_factory=dict)
+
+
+#: The layout of a stored analysis; a change makes every older one a miss.
+_STORE_FORMAT = 1
+_STORE_KIND = f"cython-module-v{_STORE_FORMAT}"
+
+
+class _Inputs:
+    """What an analysis read: each file's content digest, and the answer of
+    each check for whether a file or folder is there."""
+
+    def __init__(self) -> None:
+        self.files: dict[str, str] = {}
+        self.probes: dict[tuple[str, str], bool] = {}
+
+
+#: The inputs of the analysis running now (under `_LOCK`), if any.
+_RECORDING: list[_Inputs] = []
+
+
+def _isfile(path: str) -> bool:
+    found = os.path.isfile(path)
+    if _RECORDING:
+        _RECORDING[-1].probes[("f", path)] = found
+    return found
+
+
+def _isdir(path: str) -> bool:
+    found = os.path.isdir(path)
+    if _RECORDING:
+        _RECORDING[-1].probes[("d", path)] = found
+    return found
+
+
+def _read(path: str) -> bytes:
+    with open(path, "rb") as fh:
+        data = fh.read()
+    if _RECORDING:
+        _RECORDING[-1].files[path] = hashlib.sha256(data).hexdigest()
+    return data
 
 
 #: binary path -> (the module loaded from it, its analysis or None).
@@ -212,13 +270,166 @@ def _analysis_of(module: types.ModuleType, binary: str, co_filename: str, pyx: s
         return cached[1]
     try:
         with untracked():
-            analysis = _analyse(module, binary, co_filename, pyx)
+            analysis = _stored_or_analysed(module, binary, co_filename, pyx)
+            if analysis is not None:
+                # What a stored record cannot say: the timestamps of today's
+                # files against the binary, and that the loaded binary's
+                # functions are where the analysis places them.
+                _refuse_newer_than(analysis.newer_keyed, binary)
+                _check_built_from(analysis, module)
     except _Fallback:
         analysis = None
     except Exception:  # noqa: BLE001 - any failure keys the whole binary
         analysis = None
     _MODULES[binary] = (module, analysis)
     return analysis
+
+
+def _stored_or_analysed(module: types.ModuleType, binary: str, co_filename: str, pyx: str | None) -> _Module | None:
+    """`_analyse`, or the analysis an earlier process stored for the same
+    inputs (see the module docstring); None where it falls back."""
+    from .analysis import scan_store, tree_memo
+    from .install_paths import is_user_path
+
+    if not is_user_path(binary):
+        raise _Fallback("not the user's build")
+    try:
+        import Cython
+    except Exception as e:
+        raise _Fallback("no Cython") from e
+    key = hashlib.sha256(
+        json.dumps(
+            [
+                _STORE_KIND,
+                _binary_digest(module, binary),
+                module.__name__,
+                co_filename,
+                pyx,
+                str(getattr(Cython, "__version__", "")),
+                os.path.abspath(str(getattr(Cython, "__file__", ""))),
+                sys.prefix,
+                sys.exec_prefix,
+                list(sys.path),
+            ]
+        ).encode("utf-8")
+    ).hexdigest()
+    slot = f"{_norm(binary)}\0{co_filename}\0{pyx}"
+    stored = scan_store.load_record(_STORE_KIND, slot, key)
+    if stored is not None and _inputs_unchanged(stored):
+        try:
+            analysis = _module_from_json(stored["analysis"])
+        except (KeyError, TypeError, ValueError):
+            analysis = None
+        else:
+            if tree_memo.VERIFY:
+                fresh, _inputs = _analyse_recorded(module, binary, co_filename, pyx)
+                if _module_to_json(fresh) != _module_to_json(analysis):
+                    raise scan_store.StoredScanMismatch(f"stored Cython analysis of {binary} differs from a new one")
+            return analysis
+    analysis, inputs = _analyse_recorded(module, binary, co_filename, pyx)
+    scan_store.save_record(
+        _STORE_KIND,
+        slot,
+        key,
+        {
+            "files": sorted(inputs.files.items()),
+            "probes": sorted([kind, path, found] for (kind, path), found in inputs.probes.items()),
+            "analysis": _module_to_json(analysis),
+        },
+    )
+    return analysis
+
+
+def _analyse_recorded(
+    module: types.ModuleType, binary: str, co_filename: str, pyx: str | None
+) -> tuple[_Module | None, _Inputs]:
+    """`_analyse` and what it read. A `_Fallback` is an answer (None) of
+    the inputs it read; any other failure is raised, never stored."""
+    inputs = _Inputs()
+    _RECORDING.append(inputs)
+    try:
+        analysis = _analyse(module, binary, co_filename, pyx)
+    except _Fallback:
+        analysis = None
+    finally:
+        _RECORDING.pop()
+    return analysis, inputs
+
+
+def _inputs_unchanged(stored: dict) -> bool:
+    """Is every file a stored analysis read the same now, by content, and
+    every file check answered the same?"""
+    try:
+        for path, digest in stored["files"]:
+            try:
+                with open(path, "rb") as fh:
+                    if hashlib.sha256(fh.read()).hexdigest() != digest:
+                        return False
+            except OSError:
+                return False
+        for kind, path, found in stored["probes"]:
+            check = os.path.isfile if kind == "f" else os.path.isdir
+            if check(path) != found:
+                return False
+    except (KeyError, TypeError, ValueError):
+        return False
+    return True
+
+
+def _module_to_json(analysis: _Module | None) -> dict | None:
+    if analysis is None:
+        return None
+    return {
+        "pyx": analysis.pyx,
+        "blocks": [
+            {
+                "names": sorted(b.names),
+                "path": b.path,
+                "start": b.start,
+                "end": None if b.end == float("inf") else b.end,
+                "digest": b.digest,
+                "refs": sorted(b.refs),
+            }
+            for b in analysis.blocks
+        ],
+        "header_digest": analysis.header_digest,
+        "header_refs": sorted(analysis.header_refs),
+        "files_digest": analysis.files_digest,
+        "keyed_files": list(analysis.keyed_files),
+        "cimported": list(analysis.cimported),
+        "newer_keyed": list(analysis.newer_keyed),
+    }
+
+
+def _module_from_json(data: dict | None) -> _Module | None:
+    if data is None:
+        return None
+    blocks = [
+        _Block(
+            names=frozenset(b["names"]),
+            path=str(b["path"]),
+            start=int(b["start"]),
+            end=float("inf") if b["end"] is None else b["end"],
+            digest=str(b["digest"]),
+            refs=frozenset(b["refs"]),
+        )
+        for b in data["blocks"]
+    ]
+    by_name: dict[str, list[_Block]] = {}
+    for block in blocks:
+        for name in block.names:
+            by_name.setdefault(name, []).append(block)
+    return _Module(
+        pyx=str(data["pyx"]),
+        blocks=blocks,
+        by_name=by_name,
+        header_digest=str(data["header_digest"]),
+        header_refs=frozenset(data["header_refs"]),
+        files_digest=str(data["files_digest"]),
+        keyed_files=tuple(data["keyed_files"]),
+        cimported=tuple(data["cimported"]),
+        newer_keyed=tuple(data["newer_keyed"]),
+    )
 
 
 def _reach(analysis: _Module, own: Iterable[_Block], names: Iterable[str]) -> tuple[list[_Block], set[str]]:
@@ -431,11 +642,12 @@ def _code_path(analysis: _Module, code: types.CodeType) -> str | None:
 # -- building the analysis ---------------------------------------------------
 
 
-def _analyse(module: types.ModuleType, binary: str, co_filename: str, pyx: str | None = None) -> _Module | None:
-    from .install_paths import is_user_path
-
-    if not is_user_path(binary):
-        raise _Fallback("not the user's build")
+def _analyse(module: types.ModuleType, binary: str, co_filename: str, pyx: str | None = None) -> _Module:
+    """What *module*'s ``.pyx`` says (`_Module`). Raises `_Fallback` where
+    the per-function key cannot be trusted. It reads files only through
+    `_read`, `_isfile` and `_isdir`, which record them for the stored
+    analysis; the timestamps and the binary's functions are checked by
+    the caller, every time."""
     try:
         import Cython  # noqa: F401 - only whether it imports
         from Cython.Compiler.Main import Context  # noqa: F401 - only whether it imports
@@ -443,9 +655,7 @@ def _analyse(module: types.ModuleType, binary: str, co_filename: str, pyx: str |
         raise _Fallback("no Cython") from e
     if pyx is None:
         pyx = _find_pyx(module, binary, co_filename)
-    with open(pyx, "rb") as fh:
-        pyx_bytes = fh.read()
-    pyx_text = pyx_bytes.decode("utf-8")
+    pyx_text = _read(pyx).decode("utf-8")
     distutils = _refuse_distutils_settings(pyx_text)
     tree = _parse(module.__name__, pyx)
     stats = list(_top_level(tree.body))
@@ -456,8 +666,7 @@ def _analyse(module: types.ModuleType, binary: str, co_filename: str, pyx: str |
             files.append(path)
     texts = {pyx: pyx_text}
     for path in files[1:]:
-        with open(path, "rb") as fh:
-            texts[path] = fh.read().decode("utf-8")
+        texts[path] = _read(path).decode("utf-8")
     tokens = {path: _tokens(path, texts[path]) for path in files}
     headers: list[str] = []
     for path in files:
@@ -491,11 +700,9 @@ def _analyse(module: types.ModuleType, binary: str, co_filename: str, pyx: str |
     root, configs = _build_config(os.path.dirname(pyx))
     pxds = _used_pxds(module.__name__, pyx, tree, files, root, headers)
     keyed = [*files, *configs, *(p for p, local in pxds if local)]
-    _refuse_newer_than(keyed, binary)
     file_parts = []
     for path in [*configs, *(p for p, _ in pxds), *sorted(set(headers))]:
-        with open(path, "rb") as fh:
-            digest = hashlib.sha256(fh.read()).hexdigest()
+        digest = hashlib.sha256(_read(path)).hexdigest()
         file_parts.append(f"{_label(path, root)}={digest}")
     analysis = _Module(
         pyx=pyx,
@@ -506,8 +713,8 @@ def _analyse(module: types.ModuleType, binary: str, co_filename: str, pyx: str |
         files_digest=hashlib.sha256("\x1f".join(sorted(file_parts)).encode("utf-8")).hexdigest(),
         keyed_files=tuple(files),
         cimported=tuple(p for p, local in pxds if local and p != os.path.splitext(pyx)[0] + ".pxd"),
+        newer_keyed=tuple(keyed),
     )
-    _check_built_from(analysis, module)
     return analysis
 
 
@@ -529,7 +736,7 @@ def _find_pyx(module: types.ModuleType, binary: str, co_filename: str) -> str:
             folder = parent
         candidates.append(os.path.join(os.path.dirname(os.path.abspath(binary)), os.path.basename(co_filename)))
     for candidate in candidates:
-        if os.path.isfile(candidate):
+        if _isfile(candidate):
             return _norm(candidate)
     raise _Fallback("no .pyx")
 
@@ -642,7 +849,7 @@ def _library_header(name: str) -> str | None:
     for folder in folders:
         if folder:
             candidate = os.path.join(folder, *name.replace("\\", "/").split("/"))
-            if os.path.isfile(candidate):
+            if _isfile(candidate):
                 return _norm(candidate)
     return None
 
@@ -743,9 +950,9 @@ def _build_config(folder: str) -> tuple[str, list[str]]:
     configs = []
     while True:
         for name in _UNREAD_BUILD_FILES:
-            if os.path.isfile(os.path.join(folder, name)):
+            if _isfile(os.path.join(folder, name)):
                 raise _Fallback(f"built by {name}")
-        found = [os.path.join(folder, n) for n in _CONFIG_FILES if os.path.isfile(os.path.join(folder, n))]
+        found = [os.path.join(folder, n) for n in _CONFIG_FILES if _isfile(os.path.join(folder, n))]
         configs.extend(found)
         if any(os.path.basename(p) in ("setup.py", "pyproject.toml") for p in found):
             break
@@ -754,8 +961,7 @@ def _build_config(folder: str) -> tuple[str, list[str]]:
             raise _Fallback("no build configuration")
         folder = parent
     for path in configs:
-        with open(path, "rb") as fh:
-            text = fh.read().decode("utf-8", "replace")
+        text = _read(path).decode("utf-8", "replace")
         if path.endswith("setup.py"):
             _refuse_setup_flags(text)
         elif any(word in text for word in _CONFIG_FLAG_WORDS):
@@ -800,7 +1006,7 @@ def _used_pxds(
     found: dict[str, bool] = {}
     own = os.path.splitext(pyx)[0] + ".pxd"
     pending: list[tuple[str, Any]] = []
-    if os.path.isfile(own):
+    if _isfile(own):
         found[own] = True
         pending.append((own, None))
     for name, level in _cimports(tree):
@@ -813,9 +1019,7 @@ def _used_pxds(
         found[path] = local
         if not local:
             continue
-        with open(path, "rb") as fh:
-            text = fh.read().decode("utf-8")
-        toks = _tokens(path, text)
+        toks = _tokens(path, _read(path).decode("utf-8"))
         headers.extend(_extern_headers(toks, path))
         if any(sy == "include" for sy, _t, _l in toks):
             raise _Fallback(f"include in {path}")
@@ -921,14 +1125,14 @@ def _resolve_cimport(name: str, level: int, importer: str, package_root: str, in
             base = os.path.dirname(base)
         roots = [base]
     else:
-        roots = [package_root, os.path.dirname(importer), *(p for p in sys.path if p and os.path.isdir(p))]
+        roots = [package_root, os.path.dirname(importer), *(p for p in sys.path if p and _isdir(p))]
         roots.append(includes)
     for root in roots:
         for candidate in (
             os.path.join(root, *parts) + ".pxd",
             os.path.join(root, *parts, "__init__.pxd"),
         ):
-            if os.path.isfile(candidate):
+            if _isfile(candidate):
                 if os.path.normcase(os.path.abspath(candidate)).startswith(os.path.normcase(includes) + os.sep):
                     return []
                 return [_norm(candidate)]
