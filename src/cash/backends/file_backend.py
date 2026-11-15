@@ -22,7 +22,7 @@ from cash._location import announce_new_cache_dir
 from cash._paths import replace_with_retry
 from cash.exceptions import CacheBackendError
 
-from .. import _weak
+from .. import _weak, phase_times
 from ..config.schema import CashConfig
 from ..tracking.read_classification import register_cache_dir
 from ..tracking.tracker_context import untracked
@@ -669,6 +669,7 @@ class FileBackend(CacheBackend):
             self._read_keys.add(key)
             self.evictor.note_read(key)
 
+            phase = phase_times.sub_begin(phase_times.READ_DECODE) if phase_times.ON else None
             codec = metadata.get("compressed", False)
             if codec:
                 try:
@@ -684,6 +685,8 @@ class FileBackend(CacheBackend):
                 value = rebuild(PickleSerializer().deserialize_split, payload.stream, payload.buffers)
             else:
                 value = restore_value(metadata, payload)
+            if phase is not None:
+                phase_times.sub_end(phase)
 
             metadata.setdefault("source", self.source_label)
             return metadata, value

@@ -19,6 +19,7 @@ from collections.abc import Callable, Collection, Iterator
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from .. import _weak, argument_sharing, rewrite_in_place
+from .. import phase_times as _phases
 from .._active import EXPLAINING as _EXPLAINING
 from .._clock import perf_counter as _perf_counter
 from ..analysis.handed_callables import hands_a_state_changing_callable
@@ -617,9 +618,12 @@ class KeyBuilder:
         state_hash = self._closures.fold_bound_self(func, func_name, state_hash)
         state_hash = self._closures.fold_bound_partial(func, func_name, state_hash)
         chain.append(state_hash)
+        phase = _phases.sub_begin(_phases.KEY_GLOBALS) if _phases.ON else None
         state_hash = self._globals.fold_read_globals(func, func_name, state_hash)
         state_hash = self._globals.fold_helper_read_globals(func, func_name, state_hash)
         state_hash = self._globals.fold_dependency_read_globals(func, func_name, state_hash, covered)
+        if phase is not None:
+            _phases.sub_end(phase)
         chain.append(state_hash)
         state_hash = self._rng.fold_rng_epoch(func_name, state_hash)
         chain.append(state_hash)
@@ -798,8 +802,11 @@ class KeyBuilder:
             # that changed (`describe_state_change`).
             chain: list[str] = []
             ledger_note("@chain", chain)
+            phase = _phases.sub_begin(_phases.KEY_CODE) if _phases.ON else None
             state_hash = self._code_state(spec, chain, note=True)
             state_hash = self._method_deps.fold_method_class_deps(func, args, state_hash)
+            if phase is not None:
+                _phases.sub_end(phase)
             chain.append(state_hash)
             # ONE canonicalisation, fed to both the code channel and the value
             # channel. `CodeArgs.fold_code_args` on the RAW arguments saw a class
@@ -831,6 +838,7 @@ class KeyBuilder:
             bound, owner = bound_owner(func)
             if bound:
                 carriers.append(((owner,), {}))
+            phase = _phases.sub_begin(_phases.KEY_ARG_CODE) if _phases.ON else None
             for carrier_args in carriers:
                 state_hash = self._code_args.fold_code_args(
                     *carrier_args,
@@ -840,6 +848,8 @@ class KeyBuilder:
                     func=func,
                     report=self._registry.report_for(func, func_name),
                 )
+            if phase is not None:
+                _phases.sub_end(phase)
             chain.append(state_hash)
             dynamic_sources: list = []
             try:
@@ -864,6 +874,7 @@ class KeyBuilder:
             if content is not None:
                 content.armed = True
                 indexes_token = WALKED_INDEXES.set(content.indexes)
+            phase = _phases.sub_begin(_phases.KEY_ARGS) if _phases.ON else None
             try:
                 if keyed is normalized_args:
                     args_hash = self._args.serialize_args(
@@ -876,6 +887,8 @@ class KeyBuilder:
                     content.armed = False
                 if indexes_token is not None:
                     WALKED_INDEXES.reset(indexes_token)
+                if phase is not None:
+                    _phases.sub_end(phase)
             self._args.note_arg_cost(func_name)
         finally:
             PINT_DIGESTS.reset(pint_token)
@@ -1100,7 +1113,12 @@ class CallRunner:
         # Nothing is stored, so nothing is written back: findings of an
         # argument changed in place stand as they are.
         self._purity.surface_held_mutations(spec.name)
+        pt = _phases.CURRENT.get() if _phases.ON else None
+        if pt is not None:
+            _phases.mark(pt, _phases.REPLAY)  # what an uncached call paid before its body
         result = spec.func(*call.args, **call.kwargs)
+        if pt is not None:
+            _phases.mark(pt, _phases.BODY)
         self._calls.log(
             spec.name,
             cache_hit=False,
@@ -1373,6 +1391,10 @@ class CallRunner:
         func, func_name = spec.func, spec.name
         call = Call(args, kwargs)
         call.call_start = _perf_counter()
+        # Where this call's time goes, when asked for (`cash.phase_times`).
+        pt = _phases.CURRENT.get() if _phases.ON else None
+        if pt is not None:
+            _phases.mark(pt, _phases.WRAPPER)
         if self._registry.needs_surfacing(func, func_name):
             # Double-checked under a per-function lock: the key is built
             # from what this populates, so two threads must not race it.
@@ -1402,6 +1424,9 @@ class CallRunner:
         # cheapest possible cached call, so this is not gated behind a
         # heuristic.
         overhead_t0 = _perf_counter()
+        if pt is not None:
+            _phases.mark(pt, _phases.SETUP)
+            window = _phases.open_window(pt, _phases.KEY_OTHER)
         # Outside the key build, which turns any exception into "no key": an
         # exception from the body of an uncached call must propagate, not run
         # the body a second time.
@@ -1435,6 +1460,8 @@ class CallRunner:
                 args, kwargs = copies.body_arguments(args, kwargs)
                 call.args, call.kwargs = args, kwargs
         call.watch_identities = self._purity.watched_identities(spec.func, call.capture_watch)
+        if pt is not None:
+            _phases.close_window(pt, window)
         if handed is not None:
             handed.ran_body = True  # until the call is seen to be a plain hit
             call.handed = handed
@@ -1449,8 +1476,12 @@ class CallRunner:
             # edge: its ttl is per call, not per function.
             call.ttl = built.reached_ttl if call.ttl is None else min(call.ttl, built.reached_ttl)
 
+        if pt is not None:
+            window = _phases.open_window(pt, _phases.READ_FETCH)
         raw_metadata, cached_data = self._backend_slot.read(call.cache_key)
         call.metadata = CacheMetadata.from_dict(raw_metadata) if raw_metadata is not None else None
+        if pt is not None:
+            _phases.close_window(pt, window)
         hit = self._try_get_cached(
             call.cache_key,
             call.metadata,
@@ -1464,6 +1495,8 @@ class CallRunner:
             call.content_keyed,
         )
         call.cash_overhead = _perf_counter() - overhead_t0
+        if pt is not None:
+            _phases.mark(pt, _phases.CHECKS)
         if hit is not CACHE_MISS:
             if code_trace.active():
                 # Served inside a traced call: its body did not run, so what
@@ -1504,6 +1537,8 @@ class CallRunner:
                     call.checked = copies.checked_arguments(args, kwargs)
                     call.call_args_hash = self._keys.checked_arguments_hash(spec, *call.checked)
             call.polars_args.sign()
+        if pt is not None:
+            _phases.mark(pt, _phases.REPLAY)
         return call
 
     def _hand_back_entry(self, call: Call, value: Any, metadata: Any, storage: list[str] | None) -> None:
@@ -2031,6 +2066,7 @@ class CallRunner:
         # file reads (pandas/numpy/joblib/open/...) are recorded as implicit
         # cache dependencies - a later content change forces a recompute.
         func, func_name, args, kwargs = spec.func, spec.name, call.args, call.kwargs
+        pt = _phases.CURRENT.get() if _phases.ON else None
         run = BodyRun()
         run.tracker = FileAccessTracker(getattr(func, "__globals__", None), propagate_to_parent=True, hash_on_read=True)
         # Watch for side effects the STATIC analyzer cannot see, which is
@@ -2067,6 +2103,8 @@ class CallRunner:
             # and ended outside the body's time: setting the recorder up
             # (installing it, on a process's first call) is cash's cost.
             call.trace_unit = code_trace.begin(watch_globals=call.needs_trace) if call.traced else None
+            if pt is not None:
+                _phases.mark(pt, _phases.BODY_SETUP)
             body_t0 = _perf_counter()
             nested = [0.0]
             nested_token = NESTED_CASH_SECONDS.set(nested)
@@ -2080,6 +2118,8 @@ class CallRunner:
                 raise
             finally:
                 body_t1 = _perf_counter()
+                if pt is not None:
+                    _phases.mark(pt, _phases.BODY)
                 code_trace.end(call.trace_unit)
                 NESTED_CASH_SECONDS.reset(nested_token)
                 # What the body did to the attributes of an instance it was
@@ -2244,6 +2284,9 @@ class CallRunner:
                 func_name, call.checked or (args, kwargs), call.content_keyed
             )
         self._purity.report_observed_effects(func_name, run.observer)
+        pt = _phases.CURRENT.get() if _phases.ON else None
+        if pt is not None:
+            _phases.mark(pt, _phases.POST)
         if refusal is not None:
             self._misses.note_not_stored(call.cache_key, refusal, func_name)
         else:
@@ -2282,6 +2325,8 @@ class CallRunner:
             )
             if call.stored_in is not None:
                 self._hand_back_entry(call, res, None, call.stored_in)
+        if pt is not None:
+            _phases.mark(pt, _phases.STORE)
         # A result the disk cap had evicted, computed again: say what that cost.
         if self._misses.pending_eviction(call.cache_key) is not None:
             self._notices.evicted_recompute(func_name, run.body_seconds)

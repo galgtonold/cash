@@ -296,6 +296,8 @@ class CachedFunction:
     #: Its remembered state segments (`state_memo.StateMemo`), made on the
     #: first call; False when it cannot take one.
     state_memo: Any = field(default=None, repr=False)
+    #: Its calls' time by phase (`cash.phase_times.PhaseRecord`), made with its wrapper.
+    phase_record: Any = field(default=None, repr=False)
     _signature: Any = field(default=_UNREAD, repr=False)
 
     @property

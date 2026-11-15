@@ -257,6 +257,41 @@ or cache a larger step that calls it.
 [`CACHE-NET-LOSS`](warnings.md#cache-net-loss) warns when such losses add up
 to more than two seconds.
 
+**Where cash's time went, by phase.** `CASH_PHASE_TIMES=1` times every
+cached call phase by phase: building the key (split into the code and helpers,
+the globals read, the code the arguments carry, and hashing the argument
+values), reading the entry (finding it, then unpickling or copying it), the
+checks before a hit is served, the body, the checks after it and the store.
+It costs a few microseconds a call, so it is off by default.
+`f.cache_info()["phase_times"]` then holds, per `"<outcome>.<phase>"`, the
+`count`, `total`, `median` and `max` seconds. The outcomes are `hit`,
+`fast_hit` (served by the remembered-hit path, timed as a whole), `miss`
+(ran and stored), `not_stored` (ran, then refused storing), `uncached` (no
+key: what it paid before running is in its `setup` and `key.*` phases) and
+`raised`. Each outcome also has `total` (the whole call) and `cash`
+(`total` minus `body`). The phases of a call add up to its `total`; `body` is
+wall time, including any cached calls it makes.
+
+To collect this across many processes, set `CASH_PHASE_TIMES_FILE` to a file
+(each process appends one JSON line at exit) or to a directory ending in `/`
+(one file per process), then add them up:
+
+```bash
+CASH_PHASE_TIMES_FILE=times/ python model.py
+python tools/phase_report.py times/   # --phases: every phase
+```
+
+```text title="Output"
+function            calls   hits  miss refus     body cash hit cash rest overhead   %body hit med  top phases (share of cash time)
+model.load_prices      12     10     2     0   89.4ms  194.0ms   114.0ms  308.0ms  344.7%  15.1ms  hit.read.fetch 95.3ms (31%), miss.setup 73.4ms (24%), hit.read.decode 53.3ms (17%)
+```
+
+*refus* counts calls that ran without storing. *overhead* is all of cash's
+time (hits and the rest) and *%body* sets it against the time the bodies that
+ran took. A `setup` that dominates is the one-time analysis of a function on
+its first call; `read.fetch` on a large result is the disk read; `post` is the
+purity, in-place-change and trace checks after a body.
+
 <!-- claim: cash/_log.py:_StandDownWhenTheAppLogs.filter @1f08254a -->
 If your program configures `logging`, these lines go to your handlers in your
 format instead of stderr.

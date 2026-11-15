@@ -38,6 +38,12 @@ def perf_counter() -> float:
     return _REAL[0]()
 
 
+def real_perf_counter() -> Callable[[], float]:
+    """The function `perf_counter` calls, for a caller that reads the clock
+    so often that the extra call shows (`cash.phase_times`)."""
+    return _REAL[0]
+
+
 def ticks_finely(clock: Callable[[], float]) -> bool:
     """Whether *clock* really moves within half a millisecond of busy work.
 

@@ -92,6 +92,10 @@ _ENV_ALLOWLIST: frozenset[str] = frozenset(
         # Turns the check of each hit against what its call ran off
         # (cash.decorator.code_trace); read per call, not a setting.
         "CASH_TRACE",
+        # Time each cached call by phase, and where to write the times at
+        # exit (cash.phase_times); read once at import, so not a setting.
+        "CASH_PHASE_TIMES",
+        "CASH_PHASE_TIMES_FILE",
     }
 )
 
