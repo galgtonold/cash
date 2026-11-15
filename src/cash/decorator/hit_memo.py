@@ -650,9 +650,18 @@ class _Scan:
                 return False
         held = getattr(v, "__dict__", None)
         if held is not None:
-            if type(held) is not dict or held:
+            if type(held) is not dict:
                 return False
-            self.probes[ContentProbe(v, _attribute_count)] = 0
+            if not held:
+                self.probes[ContentProbe(v, _attribute_count)] = 0
+            else:
+                # Attributes set on it (scverse's ``Deprecation``, a ``str``
+                # carrying the version it was deprecated in): watched as an
+                # instance's (`_library_instance`).
+                self.watch(held, True)
+                for item in list(held.values()):
+                    self.value(item, names)
+                self._keeps_class_and_dict(v)
         self.value(t, names)
         if isinstance(v, tuple):
             for item in tuple.__iter__(v):
@@ -674,7 +683,7 @@ class _Scan:
         ``py_func`` or ``targetoptions`` moves the world, and the options'
         own dicts are watched as any dict met. Its class is watched as a
         library class (an attribute added to it is a type event), and a
-        probe checks the instance keeps its class. Only a dispatcher whose
+        probe checks the instance keeps its class and ``__dict__``. Only a dispatcher whose
         class reads attributes as ``object`` does: no ``__getattr__`` or
         ``__getattribute__`` of its own, none of those names a class
         attribute. numba's other wrappers (``DUFunc``, ``GUFunc``,
@@ -698,7 +707,7 @@ class _Scan:
                 continue  # ``__code__``: fixed, and ``py_func``'s is what a key reads
             if name in _JIT_READS or name == "py_func" or _is_dunder(name):
                 self.value(item, names)
-        self.probes[ContentProbe(v, type)] = t
+        self._keeps_class_and_dict(v)
         return True
 
     def _fixed_value(self, v: Any, t: type, names: frozenset) -> bool:
@@ -749,7 +758,7 @@ class _Scan:
         world -- a property's setter (``settings.n_jobs = 4`` storing
         ``_n_jobs``) as an assignment -- and every value it holds is
         looked into as any value met. Its classes are watched as library
-        classes and a probe checks it keeps its class.
+        classes and a probe checks it keeps its class and its ``__dict__``.
 
         Taken only when that is all there is to it: a class of a library,
         made by ``type``, ``abc.ABCMeta`` or a library's metaclass that
@@ -798,8 +807,15 @@ class _Scan:
         self.watch(held, True)
         for item in list(held.values()):
             self.value(item, names)
-        self.probes[ContentProbe(v, type)] = t
+        self._keeps_class_and_dict(v)
         return True
+
+    def _keeps_class_and_dict(self, v: Any) -> None:
+        """Check before each reuse that *v* keeps its class and its
+        ``__dict__``: assigning either (``obj.__dict__ = {...}``) moves no
+        watcher, and the dict watched would no longer be its."""
+        probe = ContentProbe(v, _class_and_dict)
+        self.probes[probe] = probe.digest
 
     def _typing(self, v: Any, names: frozenset) -> None:
         """A typing form or alias: fixed, but for what it was built from."""
@@ -1407,6 +1423,11 @@ class ContentProbe:
 
 
 _NOTHING: Any = object()
+
+
+def _class_and_dict(v: Any) -> _Items:
+    """*v*'s class and ``__dict__``, compared by identity."""
+    return _Items((type(v), object.__getattribute__(v, "__dict__")))
 
 
 def _context_value(var: contextvars.ContextVar) -> _Items:

@@ -230,7 +230,13 @@ def _setter_used(mod):
     mod.settings.n_jobs = 4
 
 
-@pytest.mark.parametrize("change", [_attribute_set, _setter_used], ids=["attribute_set", "setter_used"])
+def _dict_replaced(mod):
+    mod.settings.__dict__ = {"_n_jobs": 1, "rate": 5.0}
+
+
+@pytest.mark.parametrize(
+    "change", [_attribute_set, _setter_used, _dict_replaced], ids=["attribute_set", "setter_used", "dict_replaced"]
+)
 def test_a_settings_object_changed(mod, c, memo_kind, change):
     f = c.cache(mod.configured)
     old = _warm(c, f, 3)

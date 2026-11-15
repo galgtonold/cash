@@ -8,7 +8,8 @@ which folded the whole segment again (`state_memo`) each time:
   ``[Interval(...), StrOptions(...)]``): which items it holds is read again
   before each reuse, by identity, and each item is looked into;
 * a named tuple (a ``tuple`` subclass without attributes of its own): its
-  items looked into as any value;
+  items looked into as any value; a ``str`` subclass with attributes
+  (scverse's ``Deprecation``): its ``__dict__`` watched, and kept;
 * values fixed once made: a numpy scalar, pandas' ``NaT`` and axis
   descriptors, a dataclass's ``__dataclass_params__``;
 * a ``ContextVar``: what it holds in the call's context is read again;
@@ -60,6 +61,14 @@ LIBRARY = textwrap.dedent("""
 
 
     Pair = collections.namedtuple("Pair", "items scale")
+
+
+    class Note(str):
+        pass
+
+
+    NOTE = Note("deprecated")
+    NOTE.version = "1.0"
 """)
 
 USER = textwrap.dedent("""
@@ -70,7 +79,7 @@ USER = textwrap.dedent("""
     import numpy as np
     import pandas as pd
 
-    from {lib} import Interval, Pair
+    from {lib} import NOTE, Interval, Pair
 
     CONSTRAINTS = [Interval(0, 1), "auto"]
     PAIR = Pair([1, 2], 3)
@@ -94,6 +103,9 @@ USER = textwrap.dedent("""
 
     def fixed(x):
         return (x * float(SCALE), bool(FLAG), MISSING is pd.NaT, INDEX is not None, PARAMS.frozen)
+
+    def noted(x):
+        return (x, str(NOTE), NOTE.version)
 
     def contextual(x):
         return x + VAR.get()
@@ -188,6 +200,20 @@ def test_a_named_tuple_holding_a_list_changed(mod, c, memo_kind):
     old = _warm(c, f, 2)
     mod.PAIR.items.append(10)
     _check(c, f, memo_kind, old, 2)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [lambda note: setattr(note, "version", "2.0"), lambda note: setattr(note, "__dict__", {"version": "3.0"})],
+    ids=["attribute_set", "dict_replaced"],
+)
+def test_a_string_carrying_attributes_changed(mod, c, memo_kind, change):
+    """A ``str`` subclass with attributes of its own (scverse's
+    ``Deprecation``): its ``__dict__`` watched, and kept."""
+    f = c.cache(mod.noted)
+    old = _warm(c, f, 1)
+    change(mod.NOTE)
+    _check(c, f, memo_kind, old, 1)
 
 
 @pytest.mark.parametrize("name", ["fixed", "contextual", "logged"])
