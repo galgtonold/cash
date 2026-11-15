@@ -342,6 +342,238 @@ static PyObject *py_held_still(PyObject *self, PyObject *const *args, Py_ssize_t
     return weak;
 }
 
+/* ------------------------------------------------------------ clone_held
+ *
+ * `clone_held(holder, index)` builds a new copy of `holder[index]`, a copy
+ * the memory tier handed out before and the watchers prove unchanged since
+ * it was read out of its pickle bytes (`handed_copies.reuse`), for a hit
+ * while someone still holds that copy: the same objects pickle would make
+ * again, without reading the bytes. Objects every copy shares (`is_shared`)
+ * are the same objects; every other one is new: exact dicts (their keys
+ * atoms, or tuples of them), lists and tuples, and instances of a class
+ * defined in Python whose copy pickle makes by calling `object.__new__` and
+ * setting its slots and its __dict__ (none of the hooks that let a class
+ * make its copy otherwise, nor a `__new__` or `__setattr__` of its own).
+ * Anything else -- a set, a subclass of a builtin, an instance keeping its
+ * attributes inline with no __dict__ made -- answers None, and the hit
+ * reads the bytes as before. Runs no Python code: keys are atoms, and the
+ * cyclic collector is held off while the copy is half made. */
+
+typedef struct {
+    uintptr_t *key;
+    PyObject **val;
+    size_t cap, n;
+} CloneMemo;
+
+static PyObject *cm_get(CloneMemo *m, PyObject *o) {
+    if (!m->cap) return NULL;
+    size_t j = ac_hash((uintptr_t)o) & (m->cap - 1);
+    while (m->key[j]) {
+        if (m->key[j] == (uintptr_t)o) return m->val[j];
+        j = (j + 1) & (m->cap - 1);
+    }
+    return NULL;
+}
+
+static int cm_put(CloneMemo *m, PyObject *o, PyObject *copy) {
+    if ((m->n + 1) * 2 > m->cap) {
+        size_t nc = m->cap ? m->cap * 2 : 1024;
+        uintptr_t *nk = calloc(nc, sizeof *nk);
+        PyObject **nv = calloc(nc, sizeof *nv);
+        if (!nk || !nv) { free(nk); free(nv); PyErr_NoMemory(); return -1; }
+        for (size_t i = 0; i < m->cap; i++) {
+            if (!m->key[i]) continue;
+            size_t j = ac_hash(m->key[i]) & (nc - 1);
+            while (nk[j]) j = (j + 1) & (nc - 1);
+            nk[j] = m->key[i]; nv[j] = m->val[i];
+        }
+        free(m->key); free(m->val);
+        m->key = nk; m->val = nv; m->cap = nc;
+    }
+    size_t j = ac_hash((uintptr_t)o) & (m->cap - 1);
+    while (m->key[j]) j = (j + 1) & (m->cap - 1);
+    m->key[j] = (uintptr_t)o; m->val[j] = copy; m->n++;
+    return 0;
+}
+
+/* A dict key a new dict takes without running Python code: an atom whose
+   hash is C's own, or a tuple of them. */
+static int atom_key(PyObject *k, int depth) {
+    PyTypeObject *t = Py_TYPE(k);
+    if (k == Py_None || t == &PyUnicode_Type || t == &PyLong_Type || t == &PyBool_Type || t == &PyFloat_Type ||
+        t == &PyBytes_Type || t == &PyComplex_Type)
+        return 1;
+    if (t == &PyTuple_Type && depth < 8) {
+        for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(k); i++)
+            if (!atom_key(PyTuple_GET_ITEM(k, i), depth + 1)) return 0;
+        return 1;
+    }
+    return 0;
+}
+
+/* The hooks that let a class make its pickled copy otherwise than from its
+   slots and __dict__, or run code of its own while pickle sets them. */
+static const char *const CLONE_HOOKS[] = {"__reduce__", "__reduce_ex__", "__getstate__", "__setstate__",
+                                          "__getnewargs__", "__getnewargs_ex__"};
+#define NCLONE_HOOKS (sizeof CLONE_HOOKS / sizeof *CLONE_HOOKS)
+static PyObject *clone_hook_names[NCLONE_HOOKS];
+
+/* 1 when pickle's copy of an instance of `t` is `object.__new__(t)` with
+   the original's slots and __dict__ set the default way, 0 otherwise. */
+static int clonable_type(PyTypeObject *t) {
+    if (!walkable_type(t) || t->tp_itemsize != 0) return 0;
+    if (t->tp_new != PyBaseObject_Type.tp_new || t->tp_alloc != PyType_GenericAlloc) return 0;
+    if (t->tp_setattro != PyObject_GenericSetAttr || t->tp_getattro != PyObject_GenericGetAttr) return 0;
+    if (t->tp_dictoffset != 0 && !(t->tp_flags & Py_TPFLAGS_MANAGED_DICT)) return 0;
+    if (!clone_hook_names[0]) {
+        for (size_t i = 0; i < NCLONE_HOOKS; i++) {
+            PyObject *s = PyUnicode_InternFromString(CLONE_HOOKS[i]);
+            if (!s) { PyErr_Clear(); return 0; }
+            clone_hook_names[i] = s; /* kept for the life of the process */
+        }
+    }
+    PyObject *mro = t->tp_mro;
+    Py_ssize_t n = PyTuple_GET_SIZE(mro);
+    for (Py_ssize_t i = 0; i < n - 1; i++) {   /* the last is object */
+        PyObject *d = ((PyTypeObject *)PyTuple_GET_ITEM(mro, i))->tp_dict;
+        if (!d || !PyDict_CheckExact(d)) return 0;
+        for (size_t k = 0; k < NCLONE_HOOKS; k++) {
+            /* a hook written in C (a method descriptor) is object's own */
+            PyObject *v = PyDict_GetItemWithError(d, clone_hook_names[k]);
+            if (PyErr_Occurred()) { PyErr_Clear(); return 0; }
+            if (v) return 0;
+        }
+    }
+    return 1;
+}
+
+static int is_slot(const PyMemberDef *m) {
+    return m->type == Py_T_OBJECT_EX && !(m->flags & Py_READONLY) && m->offset > 0;
+}
+
+typedef struct {
+    CloneMemo memo;
+    ObjVec todo;   /* pairs: an original, then its new copy still to fill */
+    int failed;    /* 1 not clonable, -1 error */
+} Clone;
+
+/* The copy of `o`, a new reference: `o` itself when shared, the copy made
+   already when `o` was met before, else a new empty copy, filled later
+   (`clone_fill`). NULL with C->failed set. */
+static PyObject *clone_shell(PyObject *o, Clone *C) {
+    if (is_shared(o, 0)) return Py_NewRef(o);
+    int many = Py_REFCNT(o) > 1;
+    if (many) {
+        PyObject *made = cm_get(&C->memo, o);
+        if (made) return Py_NewRef(made);
+    }
+    PyTypeObject *t = Py_TYPE(o);
+    PyObject *copy;
+    if (t == &PyDict_Type) copy = PyDict_New();
+    else if (t == &PyList_Type) copy = PyList_New(PyList_GET_SIZE(o));
+    else if (t == &PyTuple_Type) copy = PyTuple_New(PyTuple_GET_SIZE(o));
+    else if (clonable_type(t)) copy = t->tp_alloc(t, 0);
+    else { C->failed = 1; return NULL; }
+    if (!copy) { C->failed = -1; return NULL; }
+    if ((many && cm_put(&C->memo, o, copy) < 0) || ov_push(&C->todo, o) < 0 || ov_push(&C->todo, copy) < 0) {
+        Py_DECREF(copy);
+        C->failed = -1;
+        return NULL;
+    }
+    return copy;
+}
+
+/* Fill `copy`, made empty for `o` by `clone_shell`: 0, or -1 with C->failed set. */
+static int clone_fill(PyObject *o, PyObject *copy, Clone *C) {
+    PyTypeObject *t = Py_TYPE(o);
+    if (t == &PyDict_Type) {
+        Py_ssize_t pos = 0;
+        PyObject *k, *v;
+        while (PyDict_Next(o, &pos, &k, &v)) {
+            if (!atom_key(k, 0)) { C->failed = 1; return -1; }
+            PyObject *nv = clone_shell(v, C);
+            if (!nv) return -1;
+            int r = PyDict_SetItem(copy, k, nv);
+            Py_DECREF(nv);
+            if (r < 0) { C->failed = -1; return -1; }
+        }
+        return 0;
+    }
+    if (t == &PyList_Type || t == &PyTuple_Type) {
+        int list = t == &PyList_Type;
+        Py_ssize_t n = list ? PyList_GET_SIZE(o) : PyTuple_GET_SIZE(o);
+        for (Py_ssize_t i = 0; i < n; i++) {
+            PyObject *nv = clone_shell(list ? PyList_GET_ITEM(o, i) : PyTuple_GET_ITEM(o, i), C);
+            if (!nv) return -1;
+            if (list) PyList_SET_ITEM(copy, i, nv);
+            else PyTuple_SET_ITEM(copy, i, nv);
+        }
+        return 0;
+    }
+    PyObject *mro = t->tp_mro;
+    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(mro); i++) {
+        PyTypeObject *k = (PyTypeObject *)PyTuple_GET_ITEM(mro, i);
+        if (!(k->tp_flags & Py_TPFLAGS_HEAPTYPE)) continue;
+        for (PyMemberDef *m = k->tp_members; m && m->name; m++) {
+            if (!is_slot(m)) continue;
+            PyObject *v = *(PyObject **)((char *)o + m->offset);
+            if (!v) continue;
+            PyObject *nv = clone_shell(v, C);
+            if (!nv) return -1;
+            Py_XSETREF(*(PyObject **)((char *)copy + m->offset), nv);
+        }
+    }
+    if (t->tp_flags & Py_TPFLAGS_MANAGED_DICT) {
+        PyObject *d = managed_dict(o);
+        /* attributes kept inline with no dict made: not read here */
+        if (!d) { C->failed = 1; return -1; }
+        /* a dict held elsewhere too (`d = vars(x)`) is not read here */
+        if (!PyDict_CheckExact(d) || Py_REFCNT(d) != 1) { C->failed = 1; return -1; }
+        /* filled the way pickle fills it: the copy's own __dict__, made
+           by Python, its items set one by one */
+        PyObject *nd = PyObject_GenericGetDict(copy, NULL);
+        if (!nd) { C->failed = -1; return -1; }
+        int r = clone_fill(d, nd, C);
+        Py_DECREF(nd);
+        if (r < 0) return -1;
+    }
+    return 0;
+}
+
+static PyObject *py_clone_held(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    (void)self;
+    if (nargs != 2 || !PyList_CheckExact(args[0])) {
+        PyErr_SetString(PyExc_TypeError, "clone_held(holder: list, index)");
+        return NULL;
+    }
+    Py_ssize_t index = PyLong_AsSsize_t(args[1]);
+    if (index == -1 && PyErr_Occurred()) return NULL;
+    if (index < 0 || index >= PyList_GET_SIZE(args[0])) {
+        PyErr_SetString(PyExc_IndexError, "clone_held: index out of range");
+        return NULL;
+    }
+    PyObject *root = PyList_GET_ITEM(args[0], index);   /* borrowed: the holder keeps it */
+    if (is_shared(root, 0)) Py_RETURN_NONE;
+    int gc_was_on = PyGC_Disable();
+    Clone C = {{0}, {0}, 0};
+    PyObject *copy = clone_shell(root, &C);
+    /* depth first, as `held_alone` walks */
+    while (copy && !C.failed && C.todo.n) {
+        PyObject *made = C.todo.v[--C.todo.n];
+        PyObject *o = C.todo.v[--C.todo.n];
+        if (clone_fill(o, made, &C) < 0) break;
+    }
+    free(C.memo.key); free(C.memo.val); free(C.todo.v);
+    if (C.failed) {
+        Py_XDECREF(copy);
+        copy = NULL;
+    }
+    if (gc_was_on) PyGC_Enable();
+    if (C.failed < 0) return NULL;
+    if (!copy) Py_RETURN_NONE;
+    return copy;
+}
+
 static PyMethodDef cprivate_methods[] = {
     {"held_alone", (PyCFunction)(void (*)(void))py_held_alone, METH_FASTCALL,
      "held_alone(holder, index) -> the weak references to holder[index]'s objects, or None when anything "
@@ -349,6 +581,9 @@ static PyMethodDef cprivate_methods[] = {
     {"held_still", (PyCFunction)(void (*)(void))py_held_still, METH_FASTCALL,
      "held_still(holder, index, objects, weakable, count) -> held_alone's answer again, for a value the "
      "watchers prove unchanged since held_alone(record=True) recorded it"},
+    {"clone_held", (PyCFunction)(void (*)(void))py_clone_held, METH_FASTCALL,
+     "clone_held(holder, index) -> a new copy of holder[index] as pickle would make it, or None when it "
+     "holds an object that cannot be copied so"},
     {NULL, NULL, 0, NULL}};
 
 int cprivate_add_functions(PyObject *m) { return PyModule_AddFunctions(m, cprivate_methods); }

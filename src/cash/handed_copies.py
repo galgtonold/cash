@@ -22,6 +22,12 @@ tell it from a new copy:
    and instance attributes by their recorded pointers, its classes by
    their version tags.
 
+When the watchers prove the copy unchanged but something outside still
+holds it (a tokenizer kept the trie), the hit gets a new copy made from it
+in C (``cash._cwatch.clone_held``): the objects pickle would make out of
+the bytes, at a fraction of the cost of reading them, and the kept copy
+stays kept for the hits after.
+
 Whenever one of these cannot be shown -- no C extension, a value the
 watchers cannot follow, a class with cached views, a copy someone still
 holds or changed -- the hit unpickles a new copy as before. After a few of
@@ -44,6 +50,7 @@ MAX_MISSES = 3
 
 _HELD_ALONE = getattr(_cw, "held_alone", None)
 _HELD_STILL = getattr(_cw, "held_still", None)
+_CLONE_HELD = getattr(_cw, "clone_held", None)
 _ON = _cw is not None and _HELD_ALONE is not None and _HELD_STILL is not None
 
 
@@ -103,21 +110,25 @@ def retain(holder: list, seconds: float) -> Handed | None:
 
 
 def reuse(handed: Handed) -> Any:
-    """The copy *handed* keeps, when nothing can tell it from a new one
-    (see the module); else `_NONE`. The caller holds the tier's lock and
-    hands the copy out at once."""
+    """``(copy, True)``: the copy *handed* keeps, when nothing can tell it
+    from a new one (see the module); ``(new, False)``: a new copy made from
+    it, when it is unchanged but held outside; else `NONE`. The caller
+    holds the tier's lock and hands the copy out at once."""
     holder = handed.holder
     try:
         # Watchers first: only a value proved unchanged holds the very
-        # objects `held_still` reads.
+        # objects `held_still` reads, and is what pickle made of the bytes.
         if _cw.peek(holder[0], value_watch.KIND_HANDED) is not handed.token:
             return NONE
         refs = _HELD_STILL(holder, 0, handed.objects, handed.weakable, handed.count)
-        if refs is None or not _all_cash_refs(refs):
+        if refs is not None and _all_cash_refs(refs):
+            return holder[0], True
+        if _CLONE_HELD is None:
             return NONE
+        made = _CLONE_HELD(holder, 0)
     except Exception:  # noqa: BLE001 - not provable: a new copy
         return NONE
-    return holder[0]
+    return NONE if made is None else (made, False)
 
 
 def release(handed: Handed) -> None:
