@@ -1516,9 +1516,10 @@ class CallRunner:
     @staticmethod
     def _attribute_changes_seen(observer: Any, attrs: attribute_replay.AttrVerdict | None) -> None:
         """Name the arguments whose attributes the body was recorded binding
-        or deleting as changed, when the hash after the body did not: one
-        the key holds by its statement tag hashes by that tag alone if it
-        cannot be hashed by its content (`CallRunner._content_args_hash`)."""
+        or deleting as changed, when the hash after the body did not, for a
+        call whose key holds an argument by its statement tag and which
+        could not hash its arguments by content (`_content_args_hash`):
+        the tag alone does not move when the body changes it."""
         if observer is None or attrs is None or not attrs.changes or observer.mutated_args:
             return
         observer.mutated_args = attrs.names
@@ -2208,7 +2209,8 @@ class CallRunner:
                     run.observer,
                     explained=attrs.names if attrs is not None and attrs.states is not None else None,
                 )
-        self._attribute_changes_seen(run.observer, attrs)
+        if call.content_keyed is not None and call.content_keyed.tagged and not call.by_content:
+            self._attribute_changes_seen(run.observer, attrs)
         self._purity.check_bound_mutation(func_name, run.observer)
         args_left = self.arguments_left(spec, run, call.checked or (args, kwargs), call.ran_unit, attrs)
         self._files.credit_remembered_reads(func_name, run.tracker, args, kwargs)
