@@ -38,6 +38,7 @@ from typing import Any, NamedTuple
 from . import _native, _plain_data, _weak, kept_state
 from ._memo import SORTED_SETS, LruMemo
 from ._type_memo import TypeMemo, type_key
+from ._user_attrs import from_family
 from .pint_values import is_registry_class, pint_kind, quantity_parts, registry_digest
 from .sizing import SPARSE_PARTS, pandas_nbytes
 from .value_types import (
@@ -746,7 +747,7 @@ def holds_content_data(value: Any, content: ContentHashing) -> bool:
     """
     state = getattr(value, "__dict__", None)
     if type(state) is not dict:
-        return False
+        return _xarray_holds_content_data(value, content)
     family = content.family
     for v in state.values():
         t = type(v)
@@ -763,6 +764,39 @@ def holds_content_data(value: Any, content: ContentHashing) -> bool:
         if any(family(type(x)) is not None and _worth_opening(x, content) for x in items):
             return True
     return False
+
+
+def _xarray_holds_content_data(value: Any, content: ContentHashing) -> bool:
+    """`holds_content_data` for xarray's own ``Variable``, ``DataArray`` and
+    ``Dataset``, which keep their parts in slots: does a variable among them
+    hold an array worth keying on its own? Pickled whole, a 23 MB
+    ``DataArray`` argument was copied into the key's pickle and hashed on
+    one thread, 60 ms a hit; opened up, its array goes through the content
+    hasher like an array argument of its own."""
+    t = type(value)
+    name = t.__name__
+    if name not in _XARRAY_HOLDERS or not from_family(t, "xarray"):
+        return False
+    try:
+        if name == "DataArray":
+            variables = [value._variable, *value._coords.values()]
+        elif name == "Dataset":
+            variables = list(value._variables.values())
+        else:
+            variables = [value]
+        for variable in variables:
+            if type(variable).__name__ not in ("Variable", "IndexVariable"):
+                continue
+            data = variable._data
+            if content.family(type(data)) is not None and _worth_opening(data, content):
+                return True
+    except AttributeError:  # another xarray's layout: pickled whole
+        return False
+    return False
+
+
+#: The xarray classes `_xarray_holds_content_data` looks inside.
+_XARRAY_HOLDERS = frozenset({"Variable", "IndexVariable", "DataArray", "Dataset"})
 
 
 def _worth_opening(value: Any, content: ContentHashing) -> bool:
@@ -1467,6 +1501,8 @@ def _pickled_state(value: Any) -> Any:
         rest[0] = {k: v for k, v in rest[0].items() if k not in views}
     if rest and isinstance(rest[0], dict):
         rest[0] = kept_state.without_filled_caches(value, rest[0])
+    if rest:
+        rest[0] = kept_state.without_lazy_dicts(t, rest[0])
     parts: list = [tuple("__cash_self_type__" if a is t else a for a in args or ())]
     for i, part in enumerate(rest):
         # State, then the iterators of list items and dict items.

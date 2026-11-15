@@ -38,7 +38,7 @@ from typing import Any
 
 from . import _native, _weak
 from ._own_work import own_work
-from ._user_attrs import instance_of
+from ._user_attrs import from_family, instance_of
 from .live_state import is_live_stream, live_reduce
 from .unnamed_code import library_code_override, refused_unnamed
 from .value_types import WEAK_PROXY_TYPES, is_dead_proxy
@@ -1596,6 +1596,8 @@ class _KeepDict(dict):
             reducer = functools.partial(_reduce_rng_for_key, reducer=reducer)
         if self._keyed and t.__name__ == "vectorize" and t is getattr(sys.modules.get("numpy"), "vectorize", None):
             reducer = functools.partial(_reduce_vectorize_for_key, reducer=reducer)
+        if self._keyed and _pandas_index(t) and from_family(t, "pandas"):
+            reducer = functools.partial(_reduce_index_for_key, reducer=reducer)
         return reducer
 
     def _store_reducer(self, t: type, registered: Any) -> Any:
@@ -2544,6 +2546,14 @@ def _reduce_without_memos(obj: Any, reducer: Any) -> Any:
     return (reduced[0], reduced[1], state, *reduced[3:])
 
 
+def without_lazy_dicts(t: type, state: Any) -> Any:
+    """The state of an object of class *t* with each dict xarray made on
+    first read (`_xarray_lazy_dicts`) as the None it stood for: *state*
+    itself when there is none."""
+    lazy = _xarray_lazy_dicts(t)
+    return _lazy_dicts_as_none(state, lazy) if lazy else state
+
+
 def _lazy_dicts_as_none(state: Any, names: tuple[str, ...]) -> Any:
     """*state*, a ``__dict__`` or a ``(dict, slots)`` pair, with each of
     *names* that holds an empty dict holding None instead."""
@@ -2889,6 +2899,30 @@ def _reduce_by_reference_for_key(obj: Any, reducer: Any) -> Any:
     if isinstance(reduced, str):
         return _by_name_reduce(obj, reduced, attrs)
     return (reduced[0], reduced[1], attrs, *reduced[3:])
+
+
+def _reduce_index_for_key(index: Any, reducer: Any) -> Any:
+    """A pandas index of pandas' own class, for a key, by its labels and
+    schema (`content_hashers.hash_pandas_index`), as the key walk keys one
+    it meets: its pickle holds its values' array, whose instance dict
+    pandas fills in another order (and with a ``_cache``) when it unpickles
+    one than when it builds one. An xarray coordinate or a geopandas frame
+    pickled whole for a key keyed apart from the very value it was restored
+    from, and the next cached call missed on every run."""
+    from .content_hashers import hash_pandas_index
+
+    try:
+        digest = hash_pandas_index(index)
+    except Exception:  # noqa: BLE001 - pickled as it is
+        digest = None
+    if digest is None:
+        return reducer(index)
+    return _keyed_index, (digest,)
+
+
+def _keyed_index(digest: str) -> Any:
+    """What `_reduce_index_for_key` names (key bytes are never loaded)."""
+    raise TypeError("a key's stand-in for a pandas index is never loaded")
 
 
 def _pandas_index(t: type) -> bool:
