@@ -337,6 +337,11 @@ class EffectObserver:
         #: it was the first seen changing them: the next call takes their
         #: state before the body and is stored (`CallRunner.arguments_left`).
         self.stored_from_next: list[str] = []
+        #: Whether the next such call may be stored where this one was not
+        #: (`stored_from_next`, or a frame cash's own memo held): False after
+        #: a first change no later call can write back either, so the
+        #: refusal stands for every call (`CallRunner._settle_verdict`).
+        self.next_may_store = False
         #: The parameters no hit writes a state back into, whatever the call
         #: did to them (`CallRunner._unwritable_args`): a finding that the
         #: body changes one stands, seen or not.

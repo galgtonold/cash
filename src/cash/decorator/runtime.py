@@ -1661,8 +1661,10 @@ class CallRunner:
             self._notices.recorded_warnings(func_name)
             call.refusal_probe = False
 
-    def _settle_verdict(self, spec: CachedFunction, call: Call, refusal: str | None) -> None:
-        """Keep or drop the verdict of a checked call (`_known_refusal`)."""
+    def _settle_verdict(self, spec: CachedFunction, call: Call, refusal: str | None, observer: Any = None) -> None:
+        """Keep or drop the verdict of a checked call (`_known_refusal`).
+        *observer* is the call's `EffectObserver`, which says whether a
+        later call may be stored (`arguments_left`)."""
         if not call.refusal_probe or self._verdicts is None:
             return
         func_name = spec.name
@@ -1673,11 +1675,14 @@ class CallRunner:
                 self._verdicts.drop(func_name, call.refusal_key)
             return
         earlier = self._first_refusal_warnings.pop(func_name, [])
-        if not (refusal.unreplayable or call.args_fingerprinted):
+        final = observer is not None and bool(observer.mutated_args) and not observer.next_may_store
+        if not (refusal.unreplayable or call.args_fingerprinted or final):
             # The first change seen, on an argument nothing was taken of
             # before the body: the next call fingerprints it and may be
             # stored (`arguments_left`), so it says nothing yet. What it
-            # warned goes with the verdict that call may leave.
+            # warned goes with the verdict that call may leave. Not when
+            # no later call can write the argument back either (*final*):
+            # the next is refused too, and would build its key for nothing.
             self._first_refusal_warnings[func_name] = warnings
             return
         # Made from what the body changed: the types it was handed stay,
@@ -1958,6 +1963,7 @@ class CallRunner:
                     for v in values
                 ):
                     observer.stored_from_next = list(mutated)
+                    observer.next_may_store = True
                     observer.reword(
                         "argument mutation",
                         "so this call runs every time",
@@ -1991,6 +1997,7 @@ class CallRunner:
             except rewrite_in_place.HeldByCash:
                 # Its first change seen, under the memo's hold: the next
                 # call lets go of the frame first and is stored.
+                observer.next_may_store = True
                 observer.reword(
                     "argument mutation",
                     "so this call runs every time",
@@ -2464,7 +2471,7 @@ class CallRunner:
         pt = _phases.CURRENT.get() if _phases.ON else None
         if pt is not None:
             _phases.mark(pt, _phases.POST)
-        self._settle_verdict(spec, call, refusal)
+        self._settle_verdict(spec, call, refusal, run.observer)
         if refusal is not None:
             self._misses.note_not_stored(call.cache_key, refusal, func_name)
         else:
