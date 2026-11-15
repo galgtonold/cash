@@ -50,6 +50,7 @@ import abc
 import ast
 import builtins
 import collections
+import contextvars
 import dataclasses
 import datetime
 import decimal
@@ -397,6 +398,11 @@ _OWN_ACCESS = frozenset(
     }
 )
 
+#: Modules whose objects change as the collector runs (a
+#: ``WeakValueDictionary`` loses entries, a ``WeakSet`` too): watched, each
+#: change would move the world for every memo.
+_VOLATILE_MODULES = frozenset({"weakref", "_weakrefset"})
+
 #: Library classes whose own reduction pickles the instance's ``__dict__``
 #: as ``object``'s does (numba's types: ``Type.__reduce__`` wraps it).
 _PLAIN_REDUCE = frozenset({("numba.core.types.abstract", "Type")})
@@ -588,16 +594,26 @@ class _Scan:
             return
         elif self.content and self._jit_dispatcher(v, t, names):
             return
+        elif self.content and self._fixed_value(v, t, names):
+            return
         elif self.content and (probe := ContentProbe.of(v)) is not None:
             self.probes[probe] = probe.digest
         elif self.content and self._library_instance(v, t, names):
             return
+        elif self.content and t is list:
+            # A list of what is watched otherwise (sklearn's parameter
+            # constraints): which items it holds is read again before each
+            # reuse, by identity; each item is looked into as any value.
+            probe = ContentProbe(v, _Items.of)
+            for item in list(v):
+                self.value(item, names)
+            self.probes[probe] = probe.digest
         else:
             raise Ineligible(f"a {t.__module__}.{t.__qualname__}")
 
     def _fixed_kind(self, v: Any, t: type, names: frozenset) -> bool:
-        """The state memo's scan: a member of an enum, or a number, string
-        or bytes of a subclass without attributes of its own. True when *v*
+        """The state memo's scan: a member of an enum, or a number, string,
+        bytes or tuple of a subclass without attributes of its own. True when *v*
         is one and is watched now.
 
         An enum member is its class's (`_klass` watches the class, the
@@ -605,8 +621,9 @@ class _Scan:
         ``__dict__`` (``_value_``, ``_name_``), a plain dict watched like
         a function's attributes: setting anything on it moves the world.
 
-        A subclass of ``int``, ``float``, ``str`` or ``bytes`` holds a value
-        fixed when it is made; what else a key can read of it is its class,
+        A subclass of ``int``, ``float``, ``str``, ``bytes`` or ``tuple`` (a
+        named tuple) holds a value fixed when it is made, a tuple's items
+        looked into as any value; what else a key can read of it is its class,
         scanned as any class, and attributes set on the instance, which no
         watcher sees: only one with none is taken, and a probe
         (`_attribute_count`) checks before every reuse that it still has
@@ -623,7 +640,7 @@ class _Scan:
             for item in list(held.values()):
                 self.value(item, names)
             return True
-        if not issubclass(t, (int, float, str, bytes)) or issubclass(t, enum.Enum):
+        if not issubclass(t, (int, float, str, bytes, tuple)) or issubclass(t, enum.Enum):
             return False
         for k in t.__mro__:
             slots = vars(k).get("__slots__")
@@ -637,6 +654,9 @@ class _Scan:
                 return False
             self.probes[ContentProbe(v, _attribute_count)] = 0
         self.value(t, names)
+        if isinstance(v, tuple):
+            for item in tuple.__iter__(v):
+                self.value(item, names)
         return True
 
     def _jit_dispatcher(self, v: Any, t: type, names: frozenset) -> bool:
@@ -681,6 +701,41 @@ class _Scan:
         self.probes[ContentProbe(v, type)] = t
         return True
 
+    def _fixed_value(self, v: Any, t: type, names: frozenset) -> bool:
+        """The state memo's scan: a value of a library that cannot change
+        once made, or a context variable. True when *v* is one and is
+        watched now.
+
+        * a numpy scalar of numpy's own type (``np.float64(1.5)``,
+          ``np.bool_(True)``), not a ``void`` (a view into a structured
+          array) or an ``object_``;
+        * pandas' ``NaT`` and its axis descriptors (``DataFrame.index``,
+          an ``AxisProperty``: which axis, fixed);
+        * a dataclass's parameters (``__dataclass_params__``: the flags
+          the class was made with);
+        * a ``ContextVar``: its name and default are fixed; what it holds
+          in the context of a call is read again before each reuse, by
+          identity, and looked into as any value."""
+        if t is contextvars.ContextVar:
+            probe = ContentProbe(v, _context_value)
+            held = probe.digest.items[0]
+            if held is not _NOTHING:
+                self.value(held, names)
+            self.probes[probe] = probe.digest
+            return True
+        if t is getattr(dataclasses, "_DataclassParams", None):
+            return True
+        module = t.__module__
+        if module == "pandas._libs.properties" and t.__name__ == "AxisProperty":
+            return True
+        pd = sys.modules.get("pandas")
+        if pd is not None and v is getattr(pd, "NaT", None):
+            return True
+        if module == "numpy" and not t.__flags__ & _HEAPTYPE:
+            np = sys.modules.get("numpy")
+            return np is not None and isinstance(v, np.generic) and not isinstance(v, (np.void, np.object_))
+        return False
+
     def _library_instance(self, v: Any, t: type, names: frozenset) -> bool:
         """The state memo's scan: an instance of a library's class whose
         whole state is its ``__dict__`` -- a library's settings object.
@@ -705,8 +760,9 @@ class _Scan:
         reduction of its own (``__reduce__``, ``__getstate__``: a pickle of
         it is its ``__dict__``), and every property or other descriptor the
         scanned code names a getter that only reads attributes off the
-        object (`_plain_getter`), or a method."""
-        if not t.__flags__ & _HEAPTYPE or is_user_code_object(t):
+        object (`_plain_getter`), or a method. Not a weak mapping or set
+        (`_VOLATILE_MODULES`), which the collector changes."""
+        if not t.__flags__ & _HEAPTYPE or is_user_code_object(t) or t.__module__ in _VOLATILE_MODULES:
             return False
         if type(t) not in _METACLASSES and not self._metaclass_ok(t):
             return False
@@ -781,6 +837,7 @@ class _Scan:
         if type(md) is not dict:
             raise Ineligible("a module without a plain namespace")
         self.watch(md, False)
+        library = self.content and self._library_module(mod)
         in_module, self.in_module = self.in_module, self.shallow
         try:
             for name in names:
@@ -791,9 +848,28 @@ class _Scan:
                         # (`ModuleAttrs`: a library's object is no data). A
                         # write to another variable moves nothing it reads.
                         continue
+                    if library and _unread_object(md[name]):
+                        # ``logging._handlers``: read through a library's
+                        # module, an object of the library's is no data a
+                        # key folds (`module_attrs._library_attr_parts`),
+                        # whatever it holds; rebinding the name moves the
+                        # module's watched namespace.
+                        continue
                     self.value(md[name], names)
         finally:
             self.in_module = in_module
+
+    def _library_module(self, mod: types.ModuleType) -> bool:
+        """Is *mod* a library's module for every reader the key can have:
+        not the user's, and not in the package of the cached function (a
+        library's own function decorated reads its package as its own)."""
+        from ..install_paths import is_user_code_module
+
+        root_pkg = (self.root_module or "").partition(".")[0]
+        name = getattr(mod, "__name__", None)
+        if not isinstance(name, str) or (root_pkg and name.partition(".")[0] == root_pkg):
+            return False
+        return not is_user_code_module(mod)
 
     def _one_level(self, f: types.FunctionType) -> None:
         """The globals *f*'s code names, at the depth a helper's own are."""
@@ -1328,6 +1404,52 @@ class ContentProbe:
             except Exception:  # noqa: BLE001 - cannot be read whole: not probed
                 return None
         return None
+
+
+_NOTHING: Any = object()
+
+
+def _context_value(var: contextvars.ContextVar) -> _Items:
+    """What *var* holds in the current context, compared by identity."""
+    return _Items((var.get(_NOTHING),))
+
+
+def _unread_object(v: Any) -> bool:
+    """Is *v* an object a key never folds when read as a library module's
+    attribute: not plain data (`key_values.plain_data_kind`, which
+    looks only into exact builtin containers and leaves, so no change to
+    *v* makes it plain), and not a module, class or callable, whose name a
+    key reads."""
+    from .key_values import _PLAIN_LEAVES
+
+    t = type(v)
+    if t in _PLAIN_LEAVES or t in (tuple, frozenset, list, set, dict):
+        return False
+    return not (isinstance(v, (type, types.ModuleType)) or callable(v))
+
+
+class _Items:
+    """The items of a list, compared by identity: equal while it holds the
+    very same objects in the same order (`_Scan._inside`)."""
+
+    __slots__ = ("items",)
+
+    def __init__(self, items: tuple) -> None:
+        self.items = items
+
+    @classmethod
+    def of(cls, v: list) -> _Items:
+        return cls(tuple(v))
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, _Items) or len(self.items) != len(other.items):
+            return False
+        return all(a is b for a, b in zip(self.items, other.items))
+
+    def __ne__(self, other: object) -> bool:
+        return not self == other
+
+    __hash__ = None  # type: ignore[assignment]
 
 
 def _plain_content(v: Any) -> bytes:
