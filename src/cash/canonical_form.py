@@ -133,7 +133,7 @@ def _typed(value: Any, canon: Any, walk: _Walk) -> Generator[Any, Any, tuple]:
         return ("__cash_type__", tag, canon)
     state: Any = ()
     factory = getattr(value, "default_factory", None)
-    own = {k: v for k, v in object_state(value).items() if not k.startswith("__")}
+    own = {k: v for k, v in _held_state(value, t).items() if not k.startswith("__")}
     if factory is not None:
         state += (("default_factory", getattr(factory, "__qualname__", repr(factory))),)
     if own:
@@ -143,6 +143,23 @@ def _typed(value: Any, canon: Any, walk: _Walk) -> Generator[Any, Any, tuple]:
         state += tuple(sorted(walked))
     tag = f"{t.__module__}.{t.__qualname__}"
     return ("__cash_type__", tag, canon, state) if state else ("__cash_type__", tag, canon)
+
+
+def _held_state(value: Any, t: type) -> dict:
+    """The state a container subclass holds beside its items: its instance
+    state, or, for a library's class that says what pickle stores
+    (`kept_state.library_chooses_its_state`), the state its reduce gives."""
+    if not kept_state.library_chooses_its_state(t):
+        return object_state(value)
+    try:
+        reduced = kept_state.reduce_counted(value, 4)
+    except Exception:  # noqa: BLE001 - a library reduce that refuses: its instance state, as before
+        return object_state(value)
+    state = reduced[2] if not isinstance(reduced, str) and len(reduced) > 2 else None
+    if state is None:
+        return {}
+    state = kept_state.names_sorted(state)
+    return state if isinstance(state, dict) else {"__cash_state__": state}
 
 
 def stable_key_repr(
@@ -887,8 +904,15 @@ def _object_steps(value: Any, walk: _Walk) -> Generator[Any, Any, Any]:
             if by_fields is not None:
                 return by_fields
         if contains_set(value, walk.holds_set, walk.clean):
-            return ("__cash_obj__", f"{t.__module__}.{t.__qualname__}", (yield _pickled_state(value)))
-        if holds_content_data(value, walk.content):
+            # Opened so each set is keyed by its items sorted. One whose
+            # parts loop back to it (lmfit's ``Parameters`` holds an
+            # asteval interpreter whose symbol table holds it again) is left
+            # to the key pickle, which keeps the loop and sorts the sets.
+            try:
+                return ("__cash_obj__", f"{t.__module__}.{t.__qualname__}", (yield _pickled_state(value)))
+            except CyclicValueError:
+                pass
+        elif holds_content_data(value, walk.content):
             # Pickled whole, every frame inside was serialised and hashed on each
             # call. Opened up, each goes through the caller's content hasher
             # (``walk.content``, the decorator's memo), so an unchanged frame is
@@ -1463,6 +1487,8 @@ def _pickled_state(value: Any) -> Any:
         rest[0] = {k: v for k, v in rest[0].items() if k not in views}
     if rest and isinstance(rest[0], dict):
         rest[0] = kept_state.without_filled_caches(value, rest[0])
+    if rest and kept_state.library_chooses_its_state(t):
+        rest[0] = kept_state.names_sorted(rest[0])
     parts: list = [tuple("__cash_self_type__" if a is t else a for a in args or ())]
     for i, part in enumerate(rest):
         # State, then the iterators of list items and dict items.

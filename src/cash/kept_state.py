@@ -1596,6 +1596,8 @@ class _KeepDict(dict):
             reducer = functools.partial(_reduce_rng_for_key, reducer=reducer)
         if self._keyed and t.__name__ == "vectorize" and t is getattr(sys.modules.get("numpy"), "vectorize", None):
             reducer = functools.partial(_reduce_vectorize_for_key, reducer=reducer)
+        if self._keyed and registered is None and library_chooses_its_state(t):
+            reducer = functools.partial(_reduce_names_sorted, reducer=reducer)
         return reducer
 
     def _store_reducer(self, t: type, registered: Any) -> Any:
@@ -1934,6 +1936,53 @@ def without_filled_caches(value: Any, state: dict) -> dict:
     if state.get("_ufunc") is not None and type(value) is getattr(sys.modules.get("numpy"), "vectorize", None):
         return {k: v for k, v in state.items() if k != "_ufunc"}
     return state
+
+
+def names_sorted(state: Any, depth: int = 4) -> Any:
+    """*state*, a library's own reduce state, with each plain dict keyed by
+    names put in name order. Such a dict is what its ``__setstate__`` reads
+    by name, and is often built from a set (lmfit's ``Parameters`` saves
+    ``{key: ... for key in interpreter.user_defined_symbols()}``), in an
+    order PYTHONHASHSEED picks: keyed in that order, each process keyed it
+    apart. Short plain lists and tuples are looked into; nothing else is.
+    What needs no change is handed back as it is, so pickle's memo still
+    sees one object held twice."""
+    if depth <= 0:
+        return state
+    t = type(state)
+    if t is dict:
+        items = [(k, names_sorted(v, depth - 1)) for k, v in state.items()]
+        changed = any(v is not state[k] for k, v in items)
+        if len(items) > 1 and all(type(k) is str for k, _ in items):
+            ordered = sorted(items, key=_first_of)
+            if any(a[0] != b[0] for a, b in zip(ordered, items)):
+                items, changed = ordered, True
+        return dict(items) if changed else state
+    if (t is list or t is tuple) and len(state) <= _NAMES_SORTED_ITEMS:
+        parts = [names_sorted(v, depth - 1) for v in state]
+        if any(a is not b for a, b in zip(parts, state)):
+            return t(parts)
+    return state
+
+
+#: The longest list or tuple `names_sorted` looks into.
+_NAMES_SORTED_ITEMS = 64
+
+
+def _first_of(item: tuple) -> Any:
+    return item[0]
+
+
+def _reduce_names_sorted(obj: Any, reducer: Any) -> Any:
+    """*reducer*'s reduce of *obj*, a library's class that says what pickle
+    stores, its state's dicts keyed by names put in name order
+    (`names_sorted`). uncertainties' ``AffineScalarFunc.__getstate__``
+    fills its dict from a set of slot names: a fit result holding one keyed
+    apart in each process. Only hashed, never loaded."""
+    reduced = reducer(obj)
+    if isinstance(reduced, str) or len(reduced) < 3 or reduced[2] is None:
+        return reduced
+    return (reduced[0], reduced[1], names_sorted(reduced[2]), *reduced[3:])
 
 
 def _reduce_vectorize_for_key(obj: Any, reducer: Any) -> Any:
@@ -2746,6 +2795,38 @@ def _decide_chooses_state(t: type) -> bool:
 
 
 _STATE_METHODS = ("__getstate__", "__reduce__", "__reduce_ex__")
+
+
+def library_chooses_its_state(t: type) -> bool:
+    """Is *t* a library's class whose own Python ``__getstate__``,
+    ``__reduce__`` or ``__reduce_ex__`` decides what pickle stores? What
+    it leaves out is the library's to leave: lmfit's ``Parameters``
+    rebuilds its asteval interpreter, a symbol table of thousands of
+    numpy functions, rather than store it. Remembered per type."""
+    try:
+        return _LIBRARY_CHOOSES_STATE[t]
+    except KeyError:
+        pass
+    except TypeError:  # a class whose metaclass makes it unhashable
+        return _decide_library_chooses_state(t)
+    found = _LIBRARY_CHOOSES_STATE[t] = _decide_library_chooses_state(t)
+    return found
+
+
+def _decide_library_chooses_state(t: type) -> bool:
+    for klass in t.__mro__:
+        if klass is object:
+            return False
+        own = klass.__dict__
+        if any(isinstance(own.get(name), _PYTHON_METHODS) for name in _STATE_METHODS):
+            from .install_paths import is_user_code_module
+
+            module = sys.modules.get(klass.__module__)
+            return module is not None and not is_user_code_module(module)
+    return False
+
+
+_LIBRARY_CHOOSES_STATE: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()
 
 _CHOOSES_STATE: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()
 
