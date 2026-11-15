@@ -179,7 +179,8 @@ That state is stored with the result, and a hit writes it into the argument
 you hand in, so the call is cached like any other:
 `clip_in_place changed 'a' in place; cash stores the state it leaves 'a' in, and a hit writes it back.`
 [Which arguments](decorator-limitations.md#results-cash-refuses-to-store)
-can be written back.
+can be written back; before Python 3.12 none is, and such a call runs every
+time.
 
 **Why it matters.** Nothing is lost: after a hit the argument holds what the
 call would have left in it. The note is there so the write-back does not
