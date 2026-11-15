@@ -27,6 +27,7 @@ pytestmark = [pytest.mark.core]
 @pytest.fixture(autouse=True, params=[False, True], ids=["pickled", "walked first"])
 def _flat_first(request, monkeypatch):
     monkeypatch.setattr(kept_state, "FLAT_FIRST", request.param)
+    monkeypatch.setattr(kept_state, "BIG_STACK_BYTES", 0)  # the walk, where no large stack is had
 
 
 class Zone(datetime.tzinfo):

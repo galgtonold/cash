@@ -238,6 +238,7 @@ class TestWhereThePicklerRunsOutOfStackFirst:
     @pytest.fixture(autouse=True)
     def flat_first(self, monkeypatch):
         monkeypatch.setattr(kept_state, "FLAT_FIRST", True)
+        monkeypatch.setattr(kept_state, "BIG_STACK_BYTES", 0)  # the walk, where no large stack is had
 
     def test_a_wide_shallow_value_is_pickled_without_flattening_it(self, monkeypatch):
         def no_flatten(*_args, **_kwargs):
@@ -308,3 +309,92 @@ class TestWhereThePicklerRunsOutOfStackFirst:
         for _ in range(300):
             value = [("list", value)]
         assert kept_state.dumps(value, keyed=True)
+
+
+class TestOnALargeStack:
+    """On Python 3.10 on Windows a value is pickled on a thread whose stack
+    is large enough for the recursion limit to stop the pickler first
+    (`kept_state._on_big_stack`), as on every other Python, where it was
+    walked a Python step per object first: 3.6 s of a 4.1 s store of a
+    trie of 250,000 nodes."""
+
+    @pytest.fixture(autouse=True)
+    def flat_first(self, monkeypatch):
+        monkeypatch.setattr(kept_state, "FLAT_FIRST", True)
+
+    @pytest.fixture
+    def no_walk(self, monkeypatch):
+        def walked(*_args, **_kwargs):
+            raise AssertionError("walked first on a large stack")
+
+        monkeypatch.setattr(kept_state, "_at_most_deep", walked)
+
+    def test_a_graph_of_objects_is_pickled_on_another_thread_without_a_walk(self, no_walk):
+        import threading
+
+        threads = []
+        real = Counted.__reduce_ex__
+
+        def reduce_ex(self, protocol):
+            threads.append(threading.get_ident())
+            return real(self, protocol)
+
+        REDUCES.clear()
+        value = {"a": Counted(1), "b": [Counted(2)]}
+        Counted.__reduce_ex__ = reduce_ex
+        try:
+            stream, also_keyed = kept_state.dumps_also_keyed(value, protocol=5)
+        finally:
+            Counted.__reduce_ex__ = real
+        assert also_keyed
+        assert len(REDUCES) == 2 and threading.get_ident() not in threads
+        back = pickle.loads(stream)
+        assert back["a"].v == 1 and back["b"][0].v == 2
+
+    def test_a_chain_deeper_than_the_recursion_limit_is_stored_flat_and_refused_for_a_key(self, no_walk):
+        head = _chain(200_000)
+        assert _values(pickle.loads(kept_state.dumps(head))) == _values(head)
+        stream, also_keyed = kept_state.dumps_also_keyed(head, protocol=5)
+        assert not also_keyed
+        assert _values(pickle.loads(stream)) == _values(head)
+        with pytest.raises(RecursionError):
+            kept_state.dumps(head, keyed=True)
+
+    def test_what_the_pickle_raises_reaches_the_caller(self, no_walk):
+        class Refused:
+            def __reduce__(self):
+                raise TypeError("not this one")
+
+        with pytest.raises(TypeError, match="not this one"):
+            kept_state.dumps([Refused(), [1, 2]])
+
+    def test_the_pickle_sees_the_callers_context(self, no_walk):
+        import contextvars
+
+        var: contextvars.ContextVar[str] = contextvars.ContextVar("test_big_stack_var", default="unset")
+        seen = []
+
+        class Reads:
+            def __reduce__(self):
+                seen.append(var.get())
+                return (str, ("x",))
+
+        token = var.set("caller's")
+        try:
+            kept_state.dumps([Reads(), Reads()])
+        finally:
+            var.reset(token)
+        assert seen == ["caller's", "caller's"]
+
+    def test_a_recursion_limit_too_high_for_the_stack_walks_first(self, monkeypatch):
+        walks = []
+        real = kept_state._at_most_deep
+        monkeypatch.setattr(kept_state, "_at_most_deep", lambda *a, **k: walks.append(1) or real(*a, **k))
+        limit = sys.getrecursionlimit()
+        sys.setrecursionlimit(kept_state.BIG_STACK_BYTES // kept_state._STACK_PER_LEVEL + 1)
+        try:
+            head = _chain(kept_state._SAFE_DEPTH * 2)
+            assert _values(pickle.loads(kept_state.dumps(head))) == _values(head)
+        finally:
+            sys.setrecursionlimit(limit)
+        assert walks

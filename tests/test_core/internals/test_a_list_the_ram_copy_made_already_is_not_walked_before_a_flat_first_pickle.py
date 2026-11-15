@@ -50,6 +50,7 @@ def _hook_calls(run) -> int:
 @pytest.mark.parametrize("flat_first", [False, True])
 def test_the_log_is_not_walked_on_a_store_or_a_hit(monkeypatch, flat_first):
     monkeypatch.setattr(kept_state, "FLAT_FIRST", flat_first)
+    monkeypatch.setattr(kept_state, "BIG_STACK_BYTES", 0)  # the walk, where no large stack is had
     data = _log()
     entry = {"variables": {"uid": data[-1][0], "actions": data[-1][1], "data": data}, "stdout": ""}
     backend = InMemoryBackend()
@@ -60,6 +61,7 @@ def test_the_log_is_not_walked_on_a_store_or_a_hit(monkeypatch, flat_first):
 
 def test_the_copy_still_shares_the_list_two_names_hold(monkeypatch):
     monkeypatch.setattr(kept_state, "FLAT_FIRST", True)
+    monkeypatch.setattr(kept_state, "BIG_STACK_BYTES", 0)  # the walk, where no large stack is had
     data = _log()
     backend = InMemoryBackend()
     backend.set("k", {"variables": {"actions": data[-1][1], "data": data}, "stdout": ""}, {"execution_time": 0.05})
@@ -73,6 +75,7 @@ def test_a_value_deeper_than_the_pickler_may_follow_is_still_pickled_flat(monkey
     """The positive control: a chain the copy has not made is walked, found
     deep, and pickled flat, and comes back whole."""
     monkeypatch.setattr(kept_state, "FLAT_FIRST", True)
+    monkeypatch.setattr(kept_state, "BIG_STACK_BYTES", 0)  # the walk, where no large stack is had
     chain: list = []
     for _ in range(500):
         chain = [chain]
