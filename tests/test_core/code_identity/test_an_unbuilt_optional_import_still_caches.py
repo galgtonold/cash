@@ -168,7 +168,10 @@ def test_a_finder_installed_during_the_call_does_not_serve_a_stale_result(tmp_pa
     assert _run(tmp_path, "c")[0].split()[:1] == ["21"], "served the result of the .pyx before the edit"
 
 
-def test_a_module_cash_cannot_read_is_named_as_such_in_explain(tmp_path):
+def test_a_call_that_does_not_import_a_module_cash_cannot_read_is_stored(tmp_path):
+    """None of a module not loaded yet can run until it is imported: a call
+    that does not import it is stored by its key. One that does is not
+    stored; the next is keyed with the module's code, and the one after hits."""
     _write(tmp_path, "envmod.py", "import os\nK = int(os.environ.get('K', '1'))\n")
     _write(
         tmp_path,
@@ -188,8 +191,10 @@ def test_a_module_cash_cannot_read_is_named_as_such_in_explain(tmp_path):
 
         f(1, False)
         print(f.explain(1, False))
+        print([f(2, True) for _ in range(3)], f.cache_info()["hits"])
         """,
     )
     out = run_python("job.py", cwd=tmp_path).stdout
-    assert "imports a module cash cannot read before it is loaded" in out
+    assert "[HIT]" in out.splitlines()[0], out
+    assert out.splitlines()[-1] == "[2, 2, 2] 1", out
     assert "run-time name" not in out

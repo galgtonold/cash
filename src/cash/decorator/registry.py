@@ -17,7 +17,7 @@ from .. import _weak
 from ..analysis.code_analyzer import CodeAnalyzer
 from ..analysis.helper_bindings import bindings_changed, resolve_binding
 from ..analysis.purity_analyzer import get_analyzer
-from ..analysis.purity_report import UNREAD_MODULE, PurityReport, describe_untrackable
+from ..analysis.purity_report import UNREAD_MODULE, PurityReport, describe_untrackable, unread_module
 from ..code_digest import callable_identity, compiled_identity, extension_file_digest
 from ..data_source import DataSource, state_token_of
 from ..diagnostics import warn_diagnostic
@@ -228,6 +228,10 @@ class FunctionRegistry:
         #: ``__getattr__`` to code the key cannot name (`populate`): on 3.12+
         #: served on a trace of what they reached, before that uncached.
         self.unresolved_calls: dict[str, list[str]] = {}
+        #: func_name -> the modules not loaded yet its tree imports, whose
+        #: top level cash cannot read before they are (UNREAD_MODULE), as
+        #: its last `refresh_helper_bindings` found them.
+        self.unread_imports: dict[str, frozenset[str]] = {}
         #: Functions already warned KEY-UNRESOLVED-CALL about (`populate`).
         self._unresolved_warned: set[str] = set()
 
@@ -545,6 +549,7 @@ class FunctionRegistry:
         try:
             reason: MissReason | None = None
             lookups: list = []
+            unread: set[str] = set()
             unresolved: list[str] = []
             stack: list[tuple[Callable[..., Any], str]] = [(func, func_name)]
             seen: set[str] = set()
@@ -579,14 +584,16 @@ class FunctionRegistry:
                         # lookup by name is cached on a trace on 3.12+.
                         if code_trace.covers(report.untrackable):
                             lookups.extend(report.untrackable)
+                            unread.update(filter(None, map(unread_module, report.untrackable)))
                         elif all(UNREAD_MODULE in i.description for i in report.untrackable):
                             # An import of a module not loaded yet whose top
-                            # level cash cannot read without running it.
-                            reason = MissReason(
-                                MissKind.UNREAD_MODULE,
-                                f"{name} imports a module cash cannot key before it is loaded "
-                                f"({describe_untrackable(report.untrackable)}), so the call ran uncached",
-                            )
+                            # level cash cannot read without running it. Not
+                            # loaded, none of its code can run in the call
+                            # until the import does: keyed as any call, and
+                            # not stored when the module is loaded by the
+                            # time the call ends (`CallRunner._loaded_unread`).
+                            # The next call walks it, loaded.
+                            unread.update(filter(None, map(unread_module, report.untrackable)))
                         else:
                             reason = MissReason(
                                 MissKind.UNTRACKABLE,
@@ -606,6 +613,10 @@ class FunctionRegistry:
                     dep_func = self.functions.get(dep)
                     if dep_func is not None:
                         stack.append((dep_func, dep))
+            if unread:
+                self.unread_imports[func_name] = frozenset(unread)
+            else:
+                self.unread_imports.pop(func_name, None)
             if reason is None and (lookups or unresolved):
                 # Keyed as any call, and served only while the trace of what
                 # it ran holds (`code_trace`).

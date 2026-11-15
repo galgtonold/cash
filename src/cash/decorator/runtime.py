@@ -13,6 +13,7 @@ import logging
 import operator
 import os
 import pickle
+import sys
 import threading
 import time
 from collections.abc import Callable, Collection, Iterator
@@ -25,7 +26,7 @@ from .._clock import perf_counter as _perf_counter
 from ..analysis.handed_callables import hands_a_state_changing_callable
 from ..analysis.helper_walk import shared_nodes
 from ..analysis.out_arguments import attribute_bound_parameter, mutated_parameter
-from ..analysis.purity_report import UNREAD_MODULE, PurityReport, describe_untrackable
+from ..analysis.purity_report import UNREAD_MODULE, PurityReport, describe_untrackable, unread_module
 from ..backends._base import ttl_expired, written_at
 from ..canonical_form import WALKED_INDEXES
 from ..code_swaps import FOLDED_CODE, FoldedCode, note_owner
@@ -482,6 +483,7 @@ class KeyBuilder:
         """
         func, func_name = spec.func, spec.name
         unkeyable = self._registry.refresh_helper_bindings(func, func_name)
+        unread = self._registry.unread_imports.get(func_name, frozenset())
         # Every call's body is recorded and its entry served only while what
         # ran is unchanged (`code_trace`); one that picks code by a run-time
         # name is keyed as any call and needs that trace. Not a coroutine,
@@ -528,11 +530,16 @@ class KeyBuilder:
             CAPTURE_WATCH.reset(watch_token)
             STATE_LEDGER.reset(ledger_token)
         if lookups:
+            # An import of a module not loaded yet alone needs no trace: the
+            # call is not stored when it loads the module (`_loaded_unread`).
+            unread = unread | frozenset(filter(None, map(unread_module, lookups)))
+            lookups = [i for i in lookups if UNREAD_MODULE not in i.description]
+        if lookups:
             refusal = self._carrier_refusal(func_name, lookups, coroutine)
             if refusal is not None:
                 return Unkeyable(refusal), watch, ledger
             needs_trace = traced = True
-        built = built._replace(folded_code=folded)
+        built = built._replace(folded_code=folded, unread=unread)
         if ledger:
             slot = (func_name, built.state_hash)
             if not self._misses.has_ledger(slot):
@@ -546,32 +553,17 @@ class KeyBuilder:
         """Why a call whose arguments carry code that picks code by a
         run-time name (*lookups*, KEY-DYNAMIC-DEPENDENCY) runs uncached, or
         None when a trace of what it ran stands in for them, as for the same
-        line in the body.
-
-        A lazy import of a module not loaded yet whose top level cash cannot
-        read (UNREAD_MODULE), in a method the call may never run, needs no
-        key part when the call is traced: an import that runs is in the
-        trace (``first_import``), with the code of that module that ran and
-        the globals it read. Without a trace (Python < 3.12, ``CASH_TRACE=0``)
-        an edit to that module could not be seen, so the call runs uncached.
-        """
-        traced = code_trace.on() and not coroutine
-        rest = [i for i in lookups if UNREAD_MODULE not in i.description] if traced else lookups
-        if not rest or (not coroutine and code_trace.covers(rest)):
+        line in the body. A lazy import of a module not loaded yet whose top
+        level cash cannot read (UNREAD_MODULE) is not among them: until it
+        is loaded none of its code can run, and a call that loads it is not
+        stored (`CallRunner._loaded_unread`)."""
+        if not coroutine and code_trace.covers(lookups):
             return None
-        refusing = [i for i in rest if coroutine or not code_trace.covers([i])]
-        unread = [i for i in refusing if UNREAD_MODULE in i.description]
-        picked = [i for i in refusing if UNREAD_MODULE not in i.description]
-        loads = (
-            f"imports a module cash cannot key before it is loaded ({describe_untrackable(unread)})" if unread else ""
-        )
-        if not picked:
-            return MissReason(
-                MissKind.UNREAD_MODULE, f"code an argument of {func_name} carries {loads}, so the call ran uncached"
-            )
-        what = f"picks code by a run-time name ({describe_untrackable(picked)})" + (f" and {loads}" if loads else "")
+        picked = [i for i in lookups if coroutine or not code_trace.covers([i])]
         return MissReason(
-            MissKind.UNTRACKABLE, f"code an argument of {func_name} carries {what}, so the call ran uncached"
+            MissKind.UNTRACKABLE,
+            f"code an argument of {func_name} carries picks code by a run-time name "
+            f"({describe_untrackable(picked)}), so the call ran uncached",
         )
 
     def _code_state(self, spec: CachedFunction, chain: list[str], *, note: bool = False) -> str:
@@ -1489,6 +1481,7 @@ class CallRunner:
         call.cache_key, call.state_hash, call.args_hash = built.cache_key, built.state_hash, built.args_hash
         call.traced, call.needs_trace = built.traced, built.needs_trace
         call.folded_code = built.folded_code
+        call.unread = built.unread
         if built.reached_ttl is not None:
             # A cached function the key reached as a value, not by a graph
             # edge: its ttl is per call, not per function.
@@ -2435,6 +2428,8 @@ class CallRunner:
         if refusal is None:
             refusal = swapped
         if refusal is None:
+            refusal = self._loaded_unread(call)
+        if refusal is None:
             refusal = self._refuse_registries(spec, run)
         if refusal is None and args_left and shared:
             # A hit writes the arguments back and hands the result back as a
@@ -2607,6 +2602,32 @@ class CallRunner:
                 fix="set the function's code once, before the first cached call, or pass it in as an argument.",
             )
         return f"the code of {what} was replaced while it ran, so its key described the code from before"
+
+    def _loaded_unread(self, call: Call) -> str | None:
+        """Why a call is not stored when a module its tree imports, which
+        was not loaded when its key was built and whose top level cash
+        cannot read without running it (UNREAD_MODULE), is loaded now: the
+        call may have run its code, which the key does not hold. The next
+        call's key walks it, loaded (`FunctionRegistry.refresh_helper_bindings`).
+        Until then nothing of such a module can run, so a call that leaves
+        it unloaded is stored by its key."""
+        unread = call.unread
+        if not unread or (call.needs_trace and code_trace.on()):
+            # A call served on its trace has an import that ran in it, with
+            # the code of that module that ran (``first_import``).
+            return None
+        loaded = sorted(name for name in unread if name in sys.modules)
+        if not loaded:
+            return None
+        if len(loaded) == 1:
+            return (
+                f"it imported {loaded[0]}, which was not loaded when its key was built and whose top level "
+                "cash cannot read before it is; the next call keys its code"
+            )
+        return (
+            f"it imported {', '.join(loaded)}, which were not loaded when its key was built and whose top "
+            "levels cash cannot read before they are; the next call keys their code"
+        )
 
     def _refuse_registries(self, spec: CachedFunction, run: BodyRun) -> str | None:
         """Why a call that set a registry the process keeps is not stored:

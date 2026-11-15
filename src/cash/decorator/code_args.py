@@ -271,10 +271,9 @@ class CodeArgs:
         a ``with cash.assume_safe():`` block around it, waives it, as in the
         function itself.
         """
-        if code_trace.on():
-            # A lazy import of a module not loaded yet is in the trace once
-            # it runs (`KeyBuilder._carrier_refusal`): nothing to say.
-            issues = tuple(i for i in issues if UNREAD_MODULE not in i.description)
+        # A lazy import of a module not loaded yet: a call that loads it is
+        # not stored (`CallRunner._loaded_unread`), nothing to say here.
+        issues = tuple(i for i in issues if UNREAD_MODULE not in i.description)
         if _EXPLAINING.get() or not issues:
             return
         first = issues[0]
