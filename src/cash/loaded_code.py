@@ -453,13 +453,14 @@ def class_functions(cls: type) -> list[types.FunctionType]:
     return found
 
 
-def code_objects_of(owner: object) -> tuple:
+def code_objects_of(owner: object, *, follow_wrapped: bool = True) -> tuple:
     """The code objects *owner* runs as itself, in a fixed order: each method a
-    class defines (as `class_functions` finds them), or a function's code and
-    the code down its ``__wrapped__`` chain. What a digest memoised per object
+    class defines (as `class_functions` finds them) and the code down its
+    ``__wrapped__`` chain, or a function's code and the code down its. What a digest memoised per object
     (not per code object) must still match: IPython's ``%autoreload`` keeps
     the class and the function objects and swaps each one's ``__code__`` (and
-    a wrapper's ``__dict__``) in place.
+    a wrapper's ``__dict__``) in place. *follow_wrapped* False: a class's
+    methods a library's decorator wrapped give the wrapper's code alone.
 
     Asked per helper on every call, so written for speed: about 0.2 us for a
     plain function, 1-2 us for a class of a few methods."""
@@ -484,11 +485,25 @@ def code_objects_of(owner: object) -> tuple:
                     func = getattr(value, "__func__", value)
                 if type(func) is types.FunctionType:
                     attrs = func.__dict__
-                    if attrs and attrs.get("_cash_cached", False):
-                        func = attrs.get("__wrapped__", func)
-                        if type(func) is not types.FunctionType:
-                            continue
-                    found.append(func.__code__)
+                    if not attrs or "__wrapped__" not in attrs:
+                        found.append(func.__code__)
+                        continue
+                    if attrs.get("_cash_cached", False):
+                        # Cash's own wrapper is not the class's code: the
+                        # user's function inside is.
+                        func = attrs["__wrapped__"]
+                    elif not follow_wrapped:
+                        found.append(func.__code__)
+                        continue
+                    # A method a library's decorator wrapped (sklearn's
+                    # ``@_fit_context``): the wrapper's code and the method's
+                    # below it, as for a function, so a ``__code__`` set in
+                    # place on the method is seen too.
+                    seen: set[int] = set()
+                    while type(func) is types.FunctionType and id(func) not in seen:
+                        seen.add(id(func))
+                        found.append(func.__code__)
+                        func = func.__dict__.get("__wrapped__")
         except (AttributeError, TypeError):
             return ()
         return tuple(found)
