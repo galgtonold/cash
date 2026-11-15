@@ -101,13 +101,22 @@ def name_table(code: types.CodeType) -> NameTable:
     derefs: set[str] = set()
     chains: set[str] = set()
     chain: list[str] | None = None
+    # ``getattr(mod.a, "b")`` reads ``mod.a.b``, as the attribute read does:
+    # the name ``getattr`` loaded just before a global's chain.
+    by_getattr = False
     for ins in dis.get_instructions(code):
         op = ins.opname
         if op in _SKIP_OPS:
             continue
         if op in _GLOBAL_LOADS:
             reads.add(ins.argval)
+            by_getattr = chain == ["getattr"]
             chain = [ins.argval]
+            continue
+        if op == "LOAD_CONST" and by_getattr and chain is not None and isinstance(ins.argval, str):
+            chains.add(".".join((*chain, ins.argval)))
+            by_getattr = False
+            chain = None
             continue
         if op in _GLOBAL_STORES:
             stores.add(ins.argval)
