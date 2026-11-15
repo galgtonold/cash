@@ -4,8 +4,9 @@ The analysis and the key ask for the same source many times on a cached
 function's first call. On Python before 3.13 each ``inspect.getsource`` of a
 class parses its whole module: in a 3000-line module three of them cost about
 150 ms. The whole-module scan for mutated globals re-read and re-hashed the
-module for every helper it met. Both are now memoised on the file's
-``(mtime, size)``, once the file has settled -- so an edit is always read.
+module for every helper it met. Both are now memoised on the file's version
+(mtime, size, change time, inode), once the file has settled -- so an edit is
+always read.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import linecache
 import os
 import sys
 import time
+import types
 
 import pytest
 
@@ -73,6 +75,9 @@ def factory():
 
 
 def _load(tmp_path, monkeypatch, step: int = 1, age: float = 60.0):
+    """The module, imported from a file saved *age* seconds ago: its mtime
+    put back, and the memos' clock (`stat_has_settled`) run forward that far,
+    since the change time of a file just written is now."""
     monkeypatch.syspath_prepend(str(tmp_path))
     name = f"_source_memo_{tmp_path.name}"
     monkeypatch.delitem(sys.modules, name, raising=False)
@@ -80,6 +85,7 @@ def _load(tmp_path, monkeypatch, step: int = 1, age: float = 60.0):
     path.write_text(MODULE.format(step=step), encoding="utf-8")
     settled = time.time() - age
     os.utime(path, (settled, settled))
+    monkeypatch.setattr(source_reading, "time", types.SimpleNamespace(time=lambda: time.time() + age))
     monkeypatch.setattr(sys, "dont_write_bytecode", True)
     return importlib.import_module(name), path
 

@@ -48,7 +48,7 @@ from dataclasses import dataclass
 
 from .._memo import MODULE_ANALYSES, MODULE_READ_DIGESTS, LruMemo
 from ..source_norm import unparse_without_docstrings
-from ..source_reading import read_code_text, stat_has_settled
+from ..source_reading import file_version, read_code_text, stat_has_settled
 
 __all__ = ["closure_digest", "registered_on", "static_attribute_reads"]
 
@@ -299,8 +299,8 @@ def _analyse(source: str) -> _Analysis | None:
     )
 
 
-#: ``{path: (mtime_ns, size, analysis)}``, one entry per file.
-_ANALYSES: LruMemo[str, tuple[int, int, _Analysis | None]] = LruMemo(MODULE_ANALYSES)
+#: ``{path: (file_version, analysis)}``, one entry per file.
+_ANALYSES: LruMemo[str, tuple[tuple[int, int, int, int], _Analysis | None]] = LruMemo(MODULE_ANALYSES)
 
 
 def analysis_for(path: str) -> _Analysis | None:
@@ -309,15 +309,16 @@ def analysis_for(path: str) -> _Analysis | None:
     except OSError:
         return None
     cached = _ANALYSES.get(path)
-    if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
-        return cached[2]
+    version = file_version(st)
+    if cached is not None and cached[0] == version:
+        return cached[1]
     settled = stat_has_settled(st)
     try:
         analysis = _analyse(read_code_text(path))
     except (OSError, UnicodeDecodeError):
         analysis = None
     if settled:
-        _ANALYSES[path] = (st.st_mtime_ns, st.st_size, analysis)
+        _ANALYSES[path] = (version, analysis)
     return analysis
 
 
@@ -327,10 +328,12 @@ def closure_digest_of_source(source: str, names: Iterable[str]) -> str | None:
     return _digest(analysis, names) if analysis is not None else None
 
 
-#: ``{(path, names): (mtime_ns, size, digest)}``. Keys are computed for every
+#: ``{(path, names): (file_version, digest)}``. Keys are computed for every
 #: statement by both the runtime and the simulation, so the walk and the
 #: re-rendering of the closure must not repeat while the file stands still.
-_DIGESTS: LruMemo[tuple[str, frozenset[str]], tuple[int, int, str | None]] = LruMemo(MODULE_READ_DIGESTS)
+_DIGESTS: LruMemo[tuple[str, frozenset[str]], tuple[tuple[int, int, int, int], str | None]] = LruMemo(
+    MODULE_READ_DIGESTS
+)
 
 
 def closure_digest(path: str, names: Iterable[str]) -> str | None:
@@ -345,14 +348,15 @@ def closure_digest(path: str, names: Iterable[str]) -> str | None:
     except OSError:
         return None
     cached = _DIGESTS.get(key)
-    if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
-        return cached[2]
+    version = file_version(st)
+    if cached is not None and cached[0] == version:
+        return cached[1]
     settled = stat_has_settled(st)
     analysis = analysis_for(path)
     digest = _digest(analysis, key[1]) if analysis is not None else None
     if not settled:
         return digest
-    _DIGESTS[key] = (st.st_mtime_ns, st.st_size, digest)
+    _DIGESTS[key] = (version, digest)
     return digest
 
 
