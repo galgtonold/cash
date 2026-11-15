@@ -173,7 +173,15 @@ def _unit_class() -> type:
         """What one traced call saw: `Unit`'s fields, its lookups by name
         and the items of what was served inside it."""
 
-        __slots__ = ("cached_codes", "callees", "global_starts", "lookups", "lookups_followed", "sites")
+        __slots__ = (
+            "attr_params",
+            "cached_codes",
+            "callees",
+            "global_starts",
+            "lookups",
+            "lookups_followed",
+            "sites",
+        )
 
         def __init__(self, kind: str) -> None:
             super().__init__(kind)
@@ -192,6 +200,11 @@ def _unit_class() -> type:
             #: parameters -> ``(caller code, offset of the call)`` for each
             #: start of it (`_Recorder.site_codes`, `cash.analysis.out_arguments`).
             self.sites: dict[types.CodeType, set[tuple[types.CodeType, int]]] = {}
+            #: A traced call's: code of the user's that binds attributes of
+            #: its parameters (`out_arguments.binds_parameter_attributes`)
+            #: -> ``{parameter: ids of what each start of it bound it to}``
+            #: (`_Recorder.attr_codes`, `_AttributeOwners`).
+            self.attr_params: dict[types.CodeType, dict[str, set[int]]] = {}
             #: A strict traced call's (`begin`): ``(module, name)`` of a
             #: global or ``(module, "mod.a.b")`` of an attribute chain the
             #: code that ran reads -> ``(digest, qualname)`` as the first
@@ -210,7 +223,7 @@ TraceUnit: Any = None
 
 
 def _recorder_class() -> type:
-    from ..analysis.out_arguments import writes_through_parameters
+    from ..analysis.out_arguments import binds_parameter_attributes, writes_through_parameters
     from ..install_paths import is_user_path, known_user_path
     from ..tracking import trace_recorder as rec
 
@@ -262,6 +275,11 @@ def _recorder_class() -> type:
             #: start event stays armed while a call is traced, and each start
             #: records where it was called from (`TraceUnit.sites`).
             self.site_codes: weakref.WeakSet[types.CodeType] = _weak.WeakSet()
+            #: The user's code that binds attributes of its parameters
+            #: (`out_arguments.binds_parameter_attributes`) -> those
+            #: parameters: armed the same way, and each start records what
+            #: they were bound to (`TraceUnit.attr_params`).
+            self.attr_codes: weakref.WeakKeyDictionary[types.CodeType, tuple[str, ...]] = _weak.WeakKeyDictionary()
             self.rearm: set[types.CodeType] = set()
             #: The user's code that looks names up by a string in its own
             #: globals (`string_lookups`): what it calls is recorded for a
@@ -395,6 +413,11 @@ def _recorder_class() -> type:
                 self.site_codes.add(code)
                 if self.active:
                     self._note_site(code, frame)
+            bound = () if pool else binds_parameter_attributes(code)
+            if bound:
+                self.attr_codes[code] = bound
+                if self._strict_active():
+                    self._note_bound(code, frame, bound)
             if self.active or self.stack:
                 if resumed and code.co_flags & rec.RESUMABLE:
                     self._seen_resume(code, g, kind)
@@ -476,11 +499,17 @@ def _recorder_class() -> type:
             if not inside_collection:
                 self.rearm.add(code)
             site = self.active and code in self.site_codes
-            if site:
+            bound = self.attr_codes.get(code) if self._strict_active() else None
+            watched = bool(site or bound)
+            if watched:
                 # Every start, not the first one: where each was called
-                # from decides what its writes change.
+                # from decides what its writes change, and what it was
+                # handed whose attributes it binds.
                 frame = sys._getframe(rec.WATCHED_FRAME)
-                self._note_site(code, frame)
+                if site:
+                    self._note_site(code, frame)
+                if bound:
+                    self._note_bound(code, frame, bound)
                 if not self.stack and all(code in u.codes for u in self.active):
                     return None
             if self.active or self.stack:
@@ -492,13 +521,36 @@ def _recorder_class() -> type:
                 self._seen_start(code, frame, g, kind)
             # Code a garbage collection runs (a ``__del__``) is left armed: a
             # run of it by the unit's own code is told apart (`Unit.collected`).
-            return None if inside_collection or site else DISABLE
+            return None if inside_collection or watched else DISABLE
 
         def _note_site(self, code: types.CodeType, frame: Any) -> None:
             caller = frame.f_back
             site = (caller.f_code, caller.f_lasti) if caller is not None else (None, -1)
             for unit in self.active:
                 unit.sites.setdefault(code, set()).add(site)
+
+        def _strict_active(self) -> bool:
+            """Is a strict traced call (`begin` with *watch_globals*) in
+            progress: only its check reads `TraceUnit.attr_params`."""
+            return any(unit.global_starts is not None for unit in self.active)
+
+        def _note_bound(self, code: types.CodeType, frame: Any, params: tuple[str, ...]) -> None:
+            """What this start of *code* was handed for *params*, whose
+            attributes it binds; and, for an ``__init__``, where it was
+            called from, which tells whether its instance is new
+            (`out_arguments.site_constructs`)."""
+            f_locals = frame.f_locals
+            init = code.co_name == "__init__" and code not in self.site_codes
+            caller = frame.f_back
+            site = (caller.f_code, caller.f_lasti) if caller is not None else (None, -1)
+            for unit in self.active:
+                if unit.global_starts is None:
+                    continue
+                held = unit.attr_params.setdefault(code, {})
+                for name in params:
+                    held.setdefault(name, set()).add(id(f_locals.get(name)))
+                if init:
+                    unit.sites.setdefault(code, set()).add(site)
 
         def _seen_start(self, code: types.CodeType, frame: Any, g: dict, kind: tuple) -> None:
             if own_work_inside():
@@ -1426,16 +1478,21 @@ def _chain_digest(module: str, chain: str) -> str | None:
     return _digest(obj)
 
 
-def _refusal_in(functions: Iterable[Any], unit: Any = None) -> str | None:
+def _refusal_in(functions: Iterable[Any], unit: Any = None, owners: frozenset[int] = frozenset()) -> str | None:
     """Why a function the call ran makes its result unsafe to serve: a
     finding a hit would skip (a side effect, a clock read, eval), or a
     random generator of its own it draws from. A finding in a helper that
-    did not run (`_helpers_not_run`), and one on a parameter every caller
-    handed an object it made itself (`_OutArguments`), is not one."""
+    did not run (`_helpers_not_run`), one on a parameter every caller
+    handed an object it made itself (`_OutArguments`), and an attribute
+    bound on a parameter that every start of its function was handed one
+    of *owners* for, is not one: *owners* are the ids of the instances the
+    cached call's attributes were recorded on (`attribute_replay`), whose
+    verdict stores and replays that binding or refuses it with its own
+    reason."""
     from ..analysis.purity_analyzer import get_analyzer
     from ..tracking.randomness.state import capture_reachable_carrier_states
 
-    out = _OutArguments(unit)
+    out = _OutArguments(unit, owners)
     for fn in dict.fromkeys(functions):
         report = get_analyzer().analyze_reached(fn)
         if report.unwalkable:
@@ -1480,9 +1537,11 @@ class _OutArguments:
     function that writes through its parameters was called from
     (`TraceUnit.sites`)."""
 
-    def __init__(self, unit: Any) -> None:
+    def __init__(self, unit: Any, owners: frozenset[int] = frozenset()) -> None:
         self.unit = unit
+        self.owners = owners
         self._by_name: dict[str, Any] | None = None
+        self._binders: dict[str, dict[str, set[int]]] | None = None
         self._judged: dict[tuple[str, str], bool] = {}
 
     def _functions(self) -> dict[str, Any]:
@@ -1498,20 +1557,41 @@ class _OutArguments:
         return self._by_name
 
     def _function_of(self, code: types.CodeType) -> Any:
-        from ..tracking.trace_items import resolve
+        from ..tracking.trace_items import candidates, resolve
 
         where = self.unit.codes.get(code)
         if where is None:
             return None
         g, module = where
         _rc, fn, _owner = resolve(module, code.co_qualname, g, module)
-        return fn if type(fn) is types.FunctionType and fn.__code__ is code else None
+        # A method a decorator wrapped (``@_fit_context``) is found as the
+        # wrapper: the function is the one whose code ran.
+        return next((c for c in candidates(fn) if c.__code__ is code), None) if fn is not None else None
+
+    def _bound(self) -> dict[str, dict[str, set[int]]]:
+        """``qualname_of(fn) -> {parameter: ids}`` for each function the
+        trace recorded binding attributes of its parameters."""
+        if self._binders is None:
+            from ..analysis.helper_code import qualname_of
+
+            self._binders = {}
+            for code, params in getattr(self.unit, "attr_params", {}).items():
+                fn = self._function_of(code)
+                if fn is not None:
+                    self._binders[qualname_of(fn)] = params
+        return self._binders
 
     def excuses(self, issue: Any) -> bool:
-        from ..analysis.out_arguments import mutated_parameter
+        from ..analysis.out_arguments import attribute_bound_parameter, mutated_parameter
 
         if self.unit is None:
             return False
+        if self.owners:
+            param = attribute_bound_parameter(issue)
+            if param is not None:
+                held = self._bound().get(issue.where, {}).get(param)
+                if held and held <= self.owners:
+                    return True
         param = mutated_parameter(issue)
         if param is not None:
             return self._excused(issue.where, param)
@@ -1524,7 +1604,7 @@ class _OutArguments:
         return self._judged[key]
 
     def _judge(self, where: str, param: str) -> bool:
-        from ..analysis.out_arguments import site_hands_own
+        from ..analysis.out_arguments import site_constructs, site_hands_own
 
         fn = self._functions().get(where)
         if fn is None:
@@ -1534,7 +1614,12 @@ class _OutArguments:
             return False
         for caller_code, lasti in sites:
             caller = self._function_of(caller_code)
-            if caller is None or not site_hands_own(fn, param, caller, caller_code, lasti):
+            if caller is None:
+                return False
+            if not (
+                site_hands_own(fn, param, caller, caller_code, lasti)
+                or (param == fn.__code__.co_varnames[0] and site_constructs(fn, caller, caller_code, lasti))
+            ):
                 return False
         return True
 
@@ -1545,6 +1630,7 @@ def build(
     *,
     strict: bool = True,
     accepted: set[types.CodeType] | None = None,
+    owners: frozenset[int] = frozenset(),
 ) -> tuple[list[tuple] | None, str]:
     """The items of a traced call's finished *unit*, or None and why the
     call's result cannot be served from a trace. *static_codes* are the
@@ -1552,7 +1638,9 @@ def build(
     so code with effects a hit would skip is refused too; a call the key
     already accepted is not second-guessed for those, nor is *accepted*,
     code the key folded from the call's arguments (a method of an
-    argument's class), which a call without the lookup runs as well."""
+    argument's class), which a call without the lookup runs as well.
+    *owners*: the ids of the instances the call's attribute changes were
+    recorded on (`_refusal_in`)."""
     from ..tracking.trace_items import call_starts
 
     try:
@@ -1560,7 +1648,7 @@ def build(
             b = _Build(unit, static_codes)
             items = b.run()
         judged = [f for f in b.functions if f.__code__ not in accepted] if accepted else b.functions
-        why = (_refusal_in(judged, unit) or _changed_global(items, unit.global_starts)) if strict else None
+        why = (_refusal_in(judged, unit, owners) or _changed_global(items, unit.global_starts)) if strict else None
         if why is not None:
             return None, why
         return items, ""

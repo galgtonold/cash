@@ -768,13 +768,18 @@ class HelperWalk:
     def _queue_called(self, body: _Body) -> None:
         """Every call the visitor recorded, judged or not: resolved, its
         binding noted, and the callee queued when it is user code."""
-        shadowed: frozenset[str] | None = None
+        shadowed = body.param_names | _scope_locals(body.func_def)
+        # A parameter or local is not the module global of the same name:
+        # ``def resample(sampler): sampler.fit_resample()`` called by a
+        # module-level ``for sampler in samplers:`` loop calls the ARGUMENT's
+        # method (folded from the argument), never the global's binding.
+        bound_here = shadowed - body.local_imports.keys()
         for call_node in body.visitor.called_callable_nodes + body.visitor.impure_call_nodes:
             chain = callee_chain(call_node.func)
+            if chain and chain[0] in bound_here:
+                continue
             site_path = _call_site_path(body, chain)
             if site_path is not None and len(site_path[1]) == 1 and site_path[1] == chain:
-                if shadowed is None:
-                    shadowed = body.param_names | _scope_locals(body.func_def)
                 self._note_if_unbound(body, site_path, shadowed)
             if site_path is not None:
                 start = getattr(call_node, "lineno", 0)
