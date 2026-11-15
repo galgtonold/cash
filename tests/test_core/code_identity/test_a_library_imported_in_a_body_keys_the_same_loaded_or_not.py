@@ -52,3 +52,33 @@ def test_a_run_that_loaded_it_first_is_served_what_one_that_did_not_stored(tmp_p
     run_python("job.py", "cold", cwd=tmp_path)
     out = run_python("job.py", "loaded", cwd=tmp_path)
     assert out.stdout.split()[-1] == "2", out.stdout
+
+
+def _fake_parseaddr(text):
+    return ("fake", text)
+
+
+def test_a_library_name_rebound_between_calls_is_keyed_by_what_it_holds(disk_cash, monkeypatch):
+    """Loaded, the name is read once: rebound to anything but the library's
+    own object (a patch, the user's function), the call is keyed by that,
+    and every call returns what plain Python does."""
+    import email.utils
+
+    def parse(text):
+        from email.utils import parseaddr
+
+        return parseaddr(text)
+
+    cached = disk_cash.cache(parse)
+    seen = [cached("a <b@c>")]
+    monkeypatch.setattr(email.utils, "parseaddr", _fake_parseaddr)
+    seen.append(cached("a <b@c>"))
+    monkeypatch.undo()
+    seen.append(cached("a <b@c>"))
+    plain = [parse("a <b@c>")]
+    monkeypatch.setattr(email.utils, "parseaddr", _fake_parseaddr)
+    plain.append(parse("a <b@c>"))
+    monkeypatch.undo()
+    plain.append(parse("a <b@c>"))
+    assert seen == plain == [("a", "b@c"), ("fake", "a <b@c>"), ("a", "b@c")]
+    assert cached.cache_info()["hits"] == 1

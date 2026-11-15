@@ -573,6 +573,27 @@ def library_import(module_name: str, root_module: str | None) -> bool:
     return got
 
 
+def library_owns(bound: Any, imported: tuple[str, tuple[str, ...]]) -> bool:
+    """Is *bound* -- what a body import of a library binds now
+    (`resolve_local_import`: None when its module is not loaded, so nothing
+    can have rebound it) -- that library's own object, which its name and
+    version stand for? False for a name rebound to anything else (a test's
+    patch, the user's function), which is keyed by the object."""
+    if bound is None:
+        return True
+    module_name, prefix = imported
+    top = top_package(module_name)
+    if issubclass(type(bound), types.ModuleType):
+        return top_package(importable_attr(bound, "__name__")) == top
+    try:
+        owner = getattr(bound, "__module__", None)
+        name = getattr(bound, "__name__", None)
+    except Exception:  # noqa: BLE001 - an object answering attributes with its own code: keyed by itself
+        return False
+    expected = prefix[-1] if prefix else None
+    return isinstance(owner, str) and top_package(owner) == top and expected is not None and name == expected
+
+
 #: code -> the absolute module names it and the code nested in it import.
 _IMPORTED: dict[int, tuple[types.CodeType, tuple[str, ...]]] = {}
 
