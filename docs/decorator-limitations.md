@@ -358,7 +358,7 @@ paths from the project root or pass absolute paths.
   argument (a list of lists, a frame given a new column, an object of your
   class changed other than as the next item says) are not stored, so they
   run every time. Return a modified copy instead (`rows = sorted(rows)`).
-<!-- claim: cash/decorator/attribute_replay.py:AttrVerdict.of @b6eb901a, cash/rewrite_in_place.py:attribute_refusal @40074681, cash/rewrite_in_place.py:AttrState.replay @0e4c9439, cash/decorator/attribute_replay.py:find @6c04b2c5 -->
+<!-- claim: cash/decorator/attribute_replay.py:AttrVerdict.of @5152391a, cash/rewrite_in_place.py:attribute_refusal @40074681, cash/rewrite_in_place.py:AttrState.replay @0e4c9439, cash/decorator/attribute_replay.py:find @6c04b2c5 -->
 - A call that only binds, rebinds or deletes **attributes of an object it
   was handed** (`est.fit(X)` setting `self.coef_` and returning `self`, a
   resampler's `fit_resample` setting `self.sampling_strategy_`, or a
@@ -401,6 +401,45 @@ paths from the project root or pass absolute paths.
   cannot replay it. Sharing cash cannot see stays a limit: an object
   written in C that holds references without telling the garbage collector
   is not looked into.
+<!-- claim: cash/decorator/attribute_replay.py:also_changed @0c99ff5f, cash/decorator/runtime.py:CallRunner._source_changes @7dad10ee -->
+- A call that **writes into a container an argument holds** is not stored,
+  and runs every time: a dict, list or array the object keeps as an
+  attribute (`data.uns["total"] = ...`, `self.history.append(x)`, a new
+  column in a frame it holds, a slot of an array in it). Binding the
+  attribute is something a hit can replay; changing what it already held is
+  not. Library functions that work in place by default and write their
+  output into such containers fall under this. When the call also bound
+  attributes, the warning and the miss reason name the change that kept a
+  hit from replaying them: the line of your function
+  (`self.history.append (line 12)`), or else the container
+  (`an in-place change of the list self.history held`). Where the library
+  offers a form that returns a new object instead (`copy=True`,
+  `inplace=False`), use it, or copy first; the call is then cached:
+
+    <!-- test:expect-warning -->
+    ```python
+    import copy
+    from types import SimpleNamespace as Data  # any data object
+    import cash
+
+    @cash.cache
+    def tag_in_place(d):
+        d.uns["total"] = sum(d.values)  # writes into a dict d holds
+
+    tag_in_place(Data(values=[1, 2], uns={}))  # cache miss, not stored
+    tag_in_place(Data(values=[1, 2], uns={}))  # cache miss again
+
+    @cash.cache
+    def tag(d):
+        out = copy.deepcopy(d)  # or copy=True / inplace=False
+        out.uns["total"] = sum(out.values)
+        return out
+
+    d = tag(Data(values=[1, 2], uns={}))  # first call: stored
+    d = tag(Data(values=[1, 2], uns={}))  # cache hit
+    # test:inject: assert d.uns == {"total": 3}
+    ```
+
 - A set in a result comes back with the same items, but a `for` loop may
   meet them in a different order than in the call that made it: Python does
   not keep a set's order. Use `sorted(s)` where the order matters.
