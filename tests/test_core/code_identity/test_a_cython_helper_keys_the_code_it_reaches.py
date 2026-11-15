@@ -250,3 +250,49 @@ def test_numpy_macros_and_headers_keep_the_per_function_key(cython_compiler, tmp
     assert _run(proj) == ("7", False), "an edit to a function f never reaches re-ran it"
     _edit(proj, "NPY_1_7_API_VERSION", "NPY_1_8_API_VERSION")
     assert _run(proj) == ("7", True), "a changed macro did not re-run"
+
+
+#: `JOB`, also saying whether the process imported Cython's compiler.
+JOB_COMPILER = (
+    JOB + 'print("[COMPILER]" if "Cython.Compiler.Main" in sys.modules else "[NO-COMPILER]", file=sys.stderr)\n'
+)
+
+
+def _run_compiler(proj):
+    p = run_python("job.py", cwd=proj)
+    return p.stdout.strip(), "[RUN]" in p.stderr, "[COMPILER]" in p.stderr
+
+
+def test_a_warm_process_uses_the_stored_analysis_and_still_misses_after_an_edit(cython_compiler, tmp_path):
+    """Parsing the ``.pyx`` with Cython cost every fresh process about a
+    second per module. The analysis is stored with the content digest of
+    every file it read, so a warm process never imports the compiler, and
+    an edit to ``f`` is still seen."""
+    proj = _project(tmp_path, files={"job.py": JOB_COMPILER})
+    (proj / "job.py").write_text(JOB_COMPILER, encoding="utf-8")
+    assert _run_compiler(proj)[:2] == ("7", True)
+    _run_compiler(proj)  # the cache folder exists now, so the analysis is stored
+    assert _run_compiler(proj) == ("7", False, False), "a warm process parsed the .pyx again"
+    _edit(proj, "return x - 1", "return x - 2")
+    assert _run_compiler(proj) == ("7", False, True), "an edit to a function f never reaches re-ran it"
+    assert _run_compiler(proj) == ("7", False, False)
+    _edit(proj, "return h(x) + 1", "return h(x) + 2")
+    assert _run_compiler(proj)[:2] == ("8", True), "an edit to f was served the old result"
+    assert _run_compiler(proj) == ("8", False, False)
+
+
+def test_a_stored_analysis_is_not_used_when_a_pxd_appears(cython_compiler, tmp_path):
+    """A stored analysis also records which files were NOT there. A
+    ``.pxd`` that appears beside the ``.pyx``, dated before the binary and
+    nothing rebuilt, is keyed as a fresh analysis keys it: the stored one,
+    made without it, is not used."""
+    proj = _project(tmp_path)
+    assert _run(proj) == ("7", True)
+    _run(proj)
+    assert _run(proj) == ("7", False)
+    pxd = proj / "fastops.pxd"
+    pxd.write_text("cdef int h(int x)\n", encoding="utf-8")
+    past = time.time() - 60
+    os.utime(pxd, (past, past))
+    assert _run(proj) == ("7", True), "a new .pxd was not keyed"
+    assert _run(proj) == ("7", False)
