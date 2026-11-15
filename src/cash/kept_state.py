@@ -66,6 +66,7 @@ __all__ = [
     "stopped_at_defined_again",
     "store_memo",
     "too_deep",
+    "without_filled_caches",
 ]
 
 
@@ -1586,6 +1587,8 @@ class _KeepDict(dict):
         if self._keyed and t.__name__ in _GLOBAL_RNG_TYPE_NAMES:
             # One instance of the class may be a module's global RNG.
             reducer = functools.partial(_reduce_rng_for_key, reducer=reducer)
+        if self._keyed and t.__name__ == "vectorize" and t is getattr(sys.modules.get("numpy"), "vectorize", None):
+            reducer = functools.partial(_reduce_vectorize_for_key, reducer=reducer)
         return reducer
 
     def _store_reducer(self, t: type, registered: Any) -> Any:
@@ -1907,6 +1910,32 @@ def _reduce_rng_for_key(obj: Any, reducer: Any) -> Any:
     if module is not None:
         return (_global_rng, (module,))
     return reducer(obj)
+
+
+def without_filled_caches(value: Any, state: dict) -> dict:
+    """*value*'s instance *state* without what it fills on use from the
+    rest of it: the ufunc a ``numpy.vectorize`` builds from its function on
+    its first call (``_ufunc``). *state* itself when there is none.
+
+    ``scipy.stats.f`` holds several vectorized methods; calling
+    ``f.moment(6, ...)`` anywhere in the process filled one, so a function
+    reading ``f`` -- lmfit's ``conf_interval`` -- keyed apart in a process
+    that had made that call and one that had not, and an argument holding
+    one could not be keyed at all once it had been called (that ufunc has
+    no pickle). What the ufunc does is the function it was built from,
+    which the state still holds."""
+    if state.get("_ufunc") is not None and type(value) is getattr(sys.modules.get("numpy"), "vectorize", None):
+        return {k: v for k, v in state.items() if k != "_ufunc"}
+    return state
+
+
+def _reduce_vectorize_for_key(obj: Any, reducer: Any) -> Any:
+    """*reducer*'s reduce of a ``numpy.vectorize``, its state
+    `without_filled_caches`."""
+    reduced = reducer(obj)
+    if isinstance(reduced, str) or len(reduced) < 3 or not isinstance(reduced[2], dict):
+        return reduced
+    return (reduced[0], reduced[1], without_filled_caches(obj, reduced[2]), *reduced[3:])
 
 
 def _global_rng(module: str) -> Any:

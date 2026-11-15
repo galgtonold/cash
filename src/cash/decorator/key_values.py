@@ -14,6 +14,7 @@ from typing import Any
 from .._type_memo import TypeMemo, type_key
 from ..analysis.helper_code import is_mock, renamed
 from ..jit_functions import jit_python_function
+from ..kept_state import without_filled_caches
 from ..pint_values import pint_kind
 from ..value_types import IMMUTABLE_LEAF_TYPES, is_dead_proxy
 from .module_identity import module_ref, namespace_module
@@ -149,7 +150,7 @@ def carried_payload(value: Any) -> Any:
     if is_user_class(type(value), own_package(type(value))):
         state = getattr(value, "__dict__", None)
         if isinstance(state, dict):
-            return ("instance", dict(state))
+            return ("instance", without_filled_caches(value, dict(state)))
         return ("instance", reduced_state(value))
     held = held_partials(value)
     return ("wrapped partials", held) if held else None
