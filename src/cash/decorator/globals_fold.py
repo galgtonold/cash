@@ -157,6 +157,17 @@ def _replay(entry: _HeldTable, folded: dict | None) -> None:
         lookups.extend(entry.lookups)
 
 
+def _context_read_at_run_time(func: Callable) -> bool:
+    """Is a ``ContextVar`` *func* reads checked as its body runs
+    (`library_reads`)? Each call's body is recorded (`code_trace`), so
+    not a coroutine's."""
+    import inspect
+
+    from . import code_trace
+
+    return code_trace.on() and not inspect.iscoroutinefunction(func)
+
+
 class GlobalsFold:
     """The module data a function reads, and the functions it reaches read,
     folded into the state segment: the cached function's own globals, its
@@ -407,6 +418,11 @@ class GlobalsFold:
             if payload is None or payload[0] != "instance":
                 self._code_ref_part(fold, name, v)
                 return
+        if type(v) is contextvars.ContextVar and _context_read_at_run_time(fold.func):
+            # Its value is read as the body runs and checked on every lookup
+            # (`library_reads`): keyed here by which variable it is.
+            fold.parts.append((f"{name}#contextvar", f"contextvar:{v.name}"))
+            return
         plain = plain_data_kind(v)
         if chains is not None:
             self._fold_chains(fold, name, v, chains)

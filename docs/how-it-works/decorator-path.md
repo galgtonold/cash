@@ -65,6 +65,23 @@ it runs uncached with a
 [`KEY-UNTRACKABLE-DEP`](../warnings.md#key-untrackable-dep) warning. Name such
 code with `depends_on=[...]` to key it directly.
 
+A library's settings are not in the key: a library is keyed by its
+installed version. On Python 3.12 and newer each call records, as its body
+runs, the settings the code it ran read: an attribute chain from a module
+global that ends on plain data (`sc.settings.n_jobs`, also through a
+property of a settings class's metaclass; sklearn's `set_config` dict;
+pandas' options), the value of a `ContextVar` (NumPy's print options, one of
+yours), NumPy's error handling and `decimal`'s context. The entry keeps
+them, and a lookup in any process serves it only while each reads the same
+(a miss says `library setting changed`). A `ContextVar` holding something
+other than plain data cannot be compared, and the call runs uncached with a
+[`KEY-LIBRARY-STATE-UNREAD`](../warnings.md#key-library-state-unread)
+warning. Not seen: a setting held as an object or a function (a formatter
+callback), one read through a method (`options.get("x")`), and anything before Python 3.12, with `CASH_TRACE=0`, or in a
+coroutine function, whose bodies are not recorded; the first such call that
+reaches library code says so once per process with a
+[`KEY-LIBRARY-STATE-UNSEEN`](../warnings.md#key-library-state-unseen) warning.
+
 <!-- claim: cash/decorator/rng.py:RngWatch.fold_rng_epoch @8346a209 -->
 An unseeded draw is not a change. The first value is stored and returned on
 every later call, with a [`RANDOM-UNSEEDED`](../warnings.md#random-unseeded)

@@ -1126,6 +1126,8 @@ Something the result depends on may not be in the cache key. Every code here sta
 | [KEY-HELPERS-UNWALKABLE](#key-helpers-unwalkable) | both | the code a function runs cannot all be found; not cached |
 | [KEY-INSTANCE-STATE](#key-instance-state) | decorator | a bound method's instance cannot be hashed |
 | [KEY-ITERATOR-CONSUMED](#key-iterator-consumed) | decorator | a registered hasher read an iterator argument; the call ran uncached |
+| [KEY-LIBRARY-STATE-UNREAD](#key-library-state-unread) | decorator | the body read a library setting or a `ContextVar` whose value cannot be compared; not cached |
+| [KEY-LIBRARY-STATE-UNSEEN](#key-library-state-unseen) | decorator | below Python 3.12, with `CASH_TRACE=0` or for a coroutine, a changed library setting is not detected; said once per process |
 | [KEY-LIBRARY-VALUE-UNREAD](#key-library-value-unread) | both | a value set on a library's module is too big to look through for an iterator; code reading it runs every time |
 | [KEY-MEMO-BEFORE-IMPORT](#key-memo-before-import) | both | a `functools` memo already held results when cash was imported |
 | [KEY-LOOP-VAR-CHANGED](#key-loop-var-changed) | notebook | a loop body changes its loop variable before work cached for each pass |
@@ -1494,6 +1496,56 @@ key, a list of the same rows included.
 **When it is safe to ignore.** When the message says the iterator *may* have
 been read and you know the key did not read it. When it says it was read,
 the result of that call came from an emptied iterator.
+
+### KEY-LIBRARY-STATE-UNREAD {#key-library-state-unread}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
+
+**What happened.** While the body ran, it (or a library it called) read a
+setting kept outside its arguments: a `ContextVar`, or a library's settings
+object. On Python 3.12 and newer cash records such reads as the body runs
+and checks each again before it serves the entry: `sc.settings.n_jobs`,
+`sklearn.set_config(...)`, `pd.set_option(...)`, NumPy's print options and
+error handling, `decimal`'s context, a `ContextVar` of yours. This one holds
+a value that is not plain data (numbers, strings, enums, and lists, tuples,
+sets and dicts of them), so cash cannot tell whether a later call sees the
+same value.
+
+**Why it matters.** Nothing is wrong with the results. The call is not
+stored, so it costs its full time on every run.
+
+**What to do.** Keep plain data in the variable (a name or a number standing
+for the object), or pass the value in as an argument.
+
+**When it is safe to ignore.** When the function is quick.
+
+### KEY-LIBRARY-STATE-UNSEEN {#key-library-state-unseen}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
+
+**What happened.** A cached call that reaches library code was stored, and
+its body ran unrecorded: on Python below 3.12, with `CASH_TRACE=0`, as a
+coroutine, or returning an iterator whose code runs after the call. Only a recorded body has the library settings it read checked
+before a hit is served (see [KEY-LIBRARY-STATE-UNREAD](#key-library-state-unread)).
+Cash says this once per process, the first time such a call is stored.
+
+**Why it matters.** A setting changed between two calls with the same
+arguments is not seen: `sklearn.set_config(...)`, `np.seterr(...)`,
+`pd.set_option(...)`, `sc.settings.n_jobs = ...`, `decimal`'s context, a
+`ContextVar`. The later call is served the result made under the old
+setting. Library versions, environment variables and your own globals are
+still keyed.
+
+**What to do.** Run on Python 3.12 or newer with tracing on (the default),
+pass the setting in as an argument, or clear the cache after changing a
+setting.
+
+**When it is safe to ignore.** When your cached functions do not depend on
+library settings, or you never change them between calls.
+
+**Silencing it.** `warnings.filterwarnings("ignore",
+message=r"\[KEY-LIBRARY-STATE-UNSEEN\]")`. See [Silencing one
+code](#silencing-one-code).
 
 ### KEY-LIBRARY-VALUE-UNREAD {#key-library-value-unread}
 
