@@ -20,6 +20,13 @@ after the body, and what it ends on is kept with the entry (`build`):
     them (a library's ``_global_config``);
 ``("c", module, "VAR", fingerprint)``
     a ``ContextVar``: the value it holds in the context the body ran in;
+``("k", module, "a.b#[keys]", fingerprint)``
+    one entry of a dict of settings: a chain only ever subscripted by
+    constant strings (``config["display"]["precision"]``), or the dict a
+    `KEYED_READERS` function reads by the key it is handed (pandas'
+    ``get_option``). Only the entries read are checked: pandas' registry
+    holds defaults a script and a notebook kernel set apart, and grows as
+    modules register options. A dict read any other way is checked whole;
 ``("s", name, "", fingerprint)``
     state kept in C that no chain reaches: NumPy's error handling
     (``np.errstate``, ``np.seterr``) for a call that reached NumPy,
@@ -48,17 +55,21 @@ import enum
 import hashlib
 import importlib
 import inspect
+import json
 import sys
 import threading
 import types
-import weakref
 from collections.abc import Iterable, Mapping
 from contextvars import ContextVar
 from typing import Any
 
-__all__ = ["build", "changed", "counts_file", "note_served"]
+from .. import _weak
+
+__all__ = ["KEYED_NAMES", "build", "changed", "counts_file", "keyed_argument", "note_served"]
 
 _MISSING = object()
+#: The fingerprint of a settings entry that is not there.
+ABSENT = "absent"
 _ATOMS = (type(None), bool, int, float, complex, str, bytes)
 #: How many items one fingerprint looks through before giving up.
 _BUDGET = 20000
@@ -71,9 +82,7 @@ _SPECIAL_TOPS = frozenset({"numpy", "decimal", "_decimal", "_pydecimal"})
 
 _lock = threading.Lock()
 #: code -> ``(chains, globals it binds)`` of its bytecode.
-_CHAINS: weakref.WeakKeyDictionary[types.CodeType, tuple[tuple[tuple[str, ...], ...], frozenset[str]]] = (
-    weakref.WeakKeyDictionary()
-)
+_CHAINS: _weak.WeakKeyDictionary[types.CodeType, tuple] = _weak.WeakKeyDictionary()
 
 
 class CodeSet:
@@ -103,7 +112,7 @@ class CodeSet:
             if refs.get(key) is ref:
                 del refs[key]
 
-        refs[key] = weakref.ref(code, gone)
+        refs[key] = _weak.ref(code, gone)
 
     def discard(self, code: types.CodeType) -> None:
         if code in self:
@@ -188,6 +197,11 @@ _ATTR_STORES = frozenset({_OP["STORE_ATTR"], _OP["DELETE_ATTR"]})
 _EXTENDED_ARG, _CACHE = _OP["EXTENDED_ARG"], _OP.get("CACHE", -1)
 _NOP = _OP.get("NOP", -1)
 _LOAD_DEREF = _OP.get("LOAD_DEREF", -1)
+_LOAD_CONST = _OP["LOAD_CONST"]
+#: A subscript: its own op before 3.14, a ``BINARY_OP`` from it.
+_BINARY_SUBSCR = _OP.get("BINARY_SUBSCR", -1)
+_BINARY_OP = _OP.get("BINARY_OP", -1)
+_NB_SUBSCR = next((i for i, (name, _sign) in enumerate(getattr(dis, "_nb_ops", ())) if name == "NB_SUBSCR"), -1)
 #: A chain from a closure's variable, not a global, starts with this mark.
 DEREF = "@"
 #: LOAD_GLOBAL and LOAD_ATTR keep a flag in the low bit of their argument
@@ -196,18 +210,41 @@ _SHIFT_GLOBAL = 1 if sys.version_info >= (3, 11) else 0
 _SHIFT_ATTR = 1 if sys.version_info >= (3, 12) else 0
 
 
-def _chains(code: types.CodeType) -> tuple[tuple[tuple[str, ...], ...], frozenset[str]]:
-    """The attribute chains *code* follows from a global name, and the
-    globals it binds (and, as ``".name"``, the attributes it sets): read
-    off its bytecode, once."""
+def _chains(
+    code: types.CodeType,
+) -> tuple[tuple[tuple[str, ...], ...], frozenset[str], Mapping[tuple[str, ...], frozenset]]:
+    """The attribute chains *code* follows from a global name, the globals
+    it binds (and, as ``".name"``, the attributes it sets), and the chains
+    it only ever subscripts by constant strings -> those key paths
+    (``config["display"]["precision"]``): read off its bytecode, once."""
     held = _CHAINS.get(code)
     if held is not None:
         return held
     names = code.co_names
+    consts = code.co_consts
     raw = code.co_code
     chains: set[tuple[str, ...]] = set()
     stores: set[str] = set()
+    paths: dict[tuple[str, ...], set[tuple[str, ...]]] = {}
+    whole: set[tuple[str, ...]] = set()
     cur: list[str] | None = None
+    #: The constant keys the chain in *cur* was subscripted by so far, and
+    #: a constant loaded after them not yet seen subscripting it.
+    keys: list[str] | None = None
+    pending: Any = _MISSING
+
+    def end() -> None:
+        if not cur:
+            return
+        chain = tuple(cur)
+        chains.add(chain)
+        if keys:
+            # What the subscripts reached, its whole value (a constant
+            # loaded after them is an operand of what follows).
+            paths.setdefault(chain, set()).add(tuple(keys))
+        else:
+            whole.add(chain)
+
     ext = 0
     for i in range(0, len(raw), 2):
         op = raw[i]
@@ -218,15 +255,23 @@ def _chains(code: types.CodeType) -> tuple[tuple[tuple[str, ...], ...], frozense
         ext = 0
         if op == _CACHE or op == _NOP:
             continue
+        if cur is not None:
+            if op == _LOAD_ATTR and keys is None:
+                cur.append(names[arg >> _SHIFT_ATTR])
+                continue
+            if op == _LOAD_CONST and pending is _MISSING and type(consts[arg]) is str:
+                pending = consts[arg]
+                continue
+            if pending is not _MISSING and (op == _BINARY_SUBSCR or (op == _BINARY_OP and arg == _NB_SUBSCR)):
+                keys = [*(keys or ()), pending]
+                pending = _MISSING
+                continue
+            end()
+            cur, keys, pending = None, None, _MISSING
         if op == _LOAD_GLOBAL or op == _LOAD_NAME:
-            if cur:
-                chains.add(tuple(cur))
             cur = [names[arg >> _SHIFT_GLOBAL if op == _LOAD_GLOBAL else arg]]
             continue
         if op == _LOAD_DEREF:
-            if cur:
-                chains.add(tuple(cur))
-            cur = None
             try:
                 name = code._varname_from_oparg(arg)  # type: ignore[attr-defined]
             except Exception:  # noqa: BLE001 - a Python without it: closures are not followed
@@ -234,19 +279,13 @@ def _chains(code: types.CodeType) -> tuple[tuple[tuple[str, ...], ...], frozense
             if name in code.co_freevars:
                 cur = [DEREF + name]
             continue
-        if op == _LOAD_ATTR and cur is not None:
-            cur.append(names[arg >> _SHIFT_ATTR])
-            continue
-        if cur:
-            chains.add(tuple(cur))
-        cur = None
         if op in _STORES:
             stores.add(names[arg])
         elif op in _ATTR_STORES:
             stores.add("." + names[arg])
-    if cur:
-        chains.add(tuple(cur))
-    held = (tuple(sorted(chains)), frozenset(stores))
+    end()
+    keyed = {chain: frozenset(found) for chain, found in paths.items() if chain not in whole}
+    held = (tuple(sorted(chains)), frozenset(stores), keyed)
     with _lock:
         _CHAINS[code] = held
     return held
@@ -454,11 +493,14 @@ class _Check:
     """One item, ready to be checked again: its chain split, and the object
     it ended on last (when that object cannot change in place)."""
 
-    __slots__ = ("dotted", "fp", "kind", "last", "module", "names", "snap")
+    __slots__ = ("dotted", "fp", "kind", "last", "module", "names", "path", "snap")
 
     def __init__(self, item: Any) -> None:
         self.kind, self.module, self.dotted, self.fp = item
-        self.names = tuple(self.dotted.split(".")) if self.dotted else ()
+        chain, _sep, keys = self.dotted.partition(_KEYS)
+        self.names = tuple(chain.split(".")) if chain else ()
+        #: The entry of the dict *names* ends on that the item reads.
+        self.path: tuple[str, ...] = tuple(json.loads(keys)) if keys else ()
         self.last: Any = _MISSING
         #: A copy of the container it ended on last, which matched *fp*.
         self.snap: Any = _MISSING
@@ -468,6 +510,10 @@ class _Check:
         if kind == "s":
             return _SPECIALS[self.module]() == self.fp
         v = _resolve(self.module, self.names)
+        if self.path:
+            v = _entry(v, self.path)
+            if v is _MISSING:
+                return self.fp == ABSENT
         if kind == "c":
             v = v.get(_MISSING)
             if v is _MISSING:
@@ -498,7 +544,8 @@ class _Check:
     def text(self) -> str:
         if self.kind == "s":
             return f"{self.module}'s {'error handling' if self.module == 'numpy' else 'context'}"
-        return f"{self.module}.{self.dotted}"
+        chain = ".".join(self.names)
+        return f"{self.module}.{chain}" + "".join(f"[{key!r}]" for key in self.path)
 
 
 #: ``id(items)`` -> ``(items, their checks)``: an entry's list, checked on
@@ -522,7 +569,7 @@ def _checks(items: Any) -> tuple[_Check, ...]:
 
 #: code -> ``(globals, user, roots, kept chains, specials)``: what `_plan`
 #: found, standing while every root name holds the object it held.
-_PLANS: weakref.WeakKeyDictionary[types.CodeType, tuple] = weakref.WeakKeyDictionary()
+_PLANS: _weak.WeakKeyDictionary[types.CodeType, tuple] = _weak.WeakKeyDictionary()
 
 
 def _plan(
@@ -536,7 +583,7 @@ def _plan(
         get = g.get
         if all(get(name, _MISSING) is value for name, value in held[2]):
             return held[3], held[4]
-    chains, _bound = _chains(code)
+    chains = _chains(code)[0]
     kept: list[tuple[str, ...]] = []
     specials: set[str] = set()
     roots: dict[str, Any] = {}
@@ -617,24 +664,67 @@ class _WithCells(dict):
         return dict.__getitem__(self, name) if name.startswith(DEREF) else self.g[name]
 
 
-def build(
+#: Library functions that read one entry of a dict of settings by a key
+#: their caller names: ``(module, qualname)`` -> ``(the global the dict is
+#: bound to, the argument naming the entry as a dotted path)``, or None as
+#: that argument for one that reads no entry's value. The recorder notes
+#: the key of each start of them (`code_trace`), so a call is checked on
+#: the options it read, not on every option a library registered: pandas'
+#: option registry holds defaults a script and a notebook kernel set apart
+#: (``display.max_columns``, ``display.encoding``) and grows as modules
+#: register theirs.
+KEYED_READERS: dict[tuple[str, str], tuple[str, str | None]] = {
+    # ``get_option``, ``pd.options.a.b``, ``option_context``, ``set_option``.
+    ("pandas._config.config", "_get_root"): ("_global_config", "key"),
+    # Adds an option with its default; what it reads (is the name taken?)
+    # is no value of a setting.
+    ("pandas._config.config", "register_option"): ("_global_config", None),
+}
+#: The qualnames of `KEYED_READERS`, for the recorder's first look.
+KEYED_NAMES = frozenset(qualname for _module, qualname in KEYED_READERS)
+#: The separator between an item's chain and the keys (a JSON list) it
+#: subscripts by: no name in a chain holds it.
+_KEYS = "#"
+
+
+def keyed_argument(code: types.CodeType, g: Mapping[str, Any]) -> str | None:
+    """The argument of *code* (with globals *g*) naming the settings entry
+    it reads, when it is one of `KEYED_READERS` that reads one."""
+    spec = KEYED_READERS.get((g.get("__name__"), code.co_qualname))
+    return spec[1] if spec else None
+
+
+def _entry(v: Any, path: tuple[str, ...]) -> Any:
+    """What ``v[path[0]][path[1]]...`` reads; `_MISSING` where an entry is
+    not there."""
+    for key in path:
+        if type(v) is not dict:
+            return _MISSING
+        v = v.get(key, _MISSING)
+        if v is _MISSING:
+            return _MISSING
+    return v
+
+
+def _wants(
     codes: Mapping[types.CodeType, tuple[Mapping[str, Any], bool]],
-    served: Iterable[tuple] = (),
-    cells: Mapping[types.CodeType, Mapping[str, Any]] | None = None,
-) -> tuple[list[tuple] | None, str | None]:
-    """The items the code a body ran reads (*codes*: code -> ``(its
-    globals, whether it is the user's)``), with those of the entries
-    served inside it (*served*); and why the call cannot be stored, if so."""
-    items: set[tuple] = set(served)
+    keys: Mapping[types.CodeType, set[str | None]],
+    cells: Mapping[types.CodeType, Mapping[str, Any]] | None,
+) -> tuple[list[tuple[Mapping[str, Any], bool, tuple[str, ...], set | None]], set[str], dict[int, set[str]]]:
+    """Per globals and chain the code that ran reads something kept by:
+    ``(globals, user, chain, key paths)``, the paths None where a code
+    reads the whole of it; the specials reached; what each globals' code
+    binds."""
     specials: set[str] = set()
     stores: dict[int, set[str]] = {}
-    plans = []
+    wants: dict[tuple[int, tuple[str, ...]], list] = {}
     for code, (g, user) in codes.items():
         if code.co_name == "<module>" or not isinstance(g.get("__name__"), str):
             continue
-        bound = _chains(code)[1]
-        if bound:
-            stores.setdefault(id(g), set()).update(bound)
+        cs = _chains(code)
+        if cs[1]:
+            stores.setdefault(id(g), set()).update(cs[1])
+        spec = KEYED_READERS.get((g["__name__"], code.co_qualname))
         held = cells.get(code) if cells else None
         if held:
             g = _WithCells(g, held)
@@ -642,58 +732,131 @@ def build(
         else:
             kept, found = _plan(code, g, user)
         specials |= found
-        if kept:
-            plans.append((g, user, kept))
-    seen: set[tuple[int, tuple[str, ...]]] = set()
-    places: set[tuple] = set()
-    for g, user, kept in plans:
+        for chain in kept:
+            paths: set | None
+            if spec is not None and chain == (spec[0],):
+                if spec[1] is None:
+                    continue
+                read = keys.get(code)
+                ok = bool(read) and all(isinstance(k, str) for k in read)
+                paths = {tuple(k.split(".")) for k in read} if ok else None  # type: ignore[union-attr]
+            else:
+                found_paths = cs[2].get(chain)
+                paths = set(found_paths) if found_paths else None
+            want = wants.get((id(g), chain))
+            if want is None:
+                wants[(id(g), chain)] = [g, user, chain, paths]
+            elif want[3] is not None:
+                if paths is None:
+                    want[3] = None
+                else:
+                    want[3] |= paths
+    return [tuple(w) for w in wants.values()], specials, stores  # type: ignore[misc]
+
+
+def _served_place(item: tuple) -> tuple | None:
+    """Where an item an entry served inside the call reads, as `build`
+    tells containers apart: the object it ends on, whatever it is called."""
+    kind, module, dotted, _fp = item
+    if kind not in ("v", "k"):
+        return None
+    chain, _sep, keys = dotted.partition(_KEYS)
+    try:
+        v = _resolve(module, tuple(chain.split(".")))
+    except Exception:  # noqa: BLE001 - not there now: kept as named
+        return None
+    if type(v) not in (dict, list, set):
+        return None
+    return ("obj", id(v), keys) if kind == "k" else ("obj", id(v))
+
+
+def build(
+    codes: Mapping[types.CodeType, tuple[Mapping[str, Any], bool]],
+    served: Iterable[tuple] = (),
+    cells: Mapping[types.CodeType, Mapping[str, Any]] | None = None,
+    keys: Mapping[types.CodeType, set[str | None]] | None = None,
+) -> tuple[list[tuple] | None, str | None]:
+    """The items the code a body ran reads (*codes*: code -> ``(its
+    globals, whether it is the user's)``), with those of the entries
+    served inside it (*served*); and why the call cannot be stored, if so.
+    *keys*: a `KEYED_READERS` code -> the keys its starts read."""
+    items: set[tuple] = set()
+    wants, specials, stores = _wants(codes, keys or {}, cells)
+    #: Where each item reads -> its fingerprint.
+    places: dict[tuple, str | None] = {}
+    for g, user, chain, paths in wants:
         module = g["__name__"]
         skip = stores.get(id(g), ())
-        for chain in kept:
-            if chain[0] in skip or (id(g), chain) in seen:
+        if chain[0] in skip:
+            continue
+        try:
+            hit = _follow(g, chain, user)
+        except Exception:  # noqa: BLE001 - a chain that cannot be followed is not kept
+            continue
+        if hit is None:
+            continue
+        kind, upto, v = hit
+        if len(upto) > 1 and "." + upto[-1] in skip:
+            # An attribute the code that ran sets: a counter of its own
+            # (numba's ``ArrayAnalysis.aa_count += 1``), not a setting.
+            continue
+        where, upto = _rooted(g, module, upto)
+        if _compiled(where):
+            # What a compiled module holds is set by its own code as it
+            # loads: numba's table of C helper addresses, pyarrow's type
+            # ids. The same in a process, other in the next, and no
+            # setting a program changes.
+            continue
+        dotted = ".".join(upto)
+        if kind == "c":
+            if (where, upto) in places:
                 continue
-            seen.add((id(g), chain))
-            try:
-                hit = _follow(g, chain, user)
-            except Exception:  # noqa: BLE001 - a chain that cannot be followed is not kept
+            places[(where, upto)] = None
+            special = _SPECIAL_VARS.get(v.name)
+            if special:
+                specials.add(special)
                 continue
-            if hit is None:
-                continue
-            kind, upto, v = hit
-            if len(upto) > 1 and "." + upto[-1] in skip:
-                # An attribute the code that ran sets: a counter of its own
-                # (numba's ``ArrayAnalysis.aa_count += 1``), not a setting.
-                continue
-            where, upto = _rooted(g, module, upto)
-            if _compiled(where):
-                # What a compiled module holds is set by its own code as it
-                # loads: numba's table of C helper addresses, pyarrow's type
-                # ids. The same in a process, other in the next, and no
-                # setting a program changes.
-                continue
-            # A container bound to several names (pandas' _global_config)
-            # is one object, checked once.
-            same = ("obj", id(v)) if kind == "v" and type(v) in (dict, list, set) else (where, upto)
-            if same in places:
-                continue
-            places.add(same)
-            dotted = ".".join(upto)
-            if kind == "c":
-                special = _SPECIAL_VARS.get(v.name)
-                if special:
-                    specials.add(special)
+            value = v.get(_MISSING)
+            fp = fingerprint("unset" if value is _MISSING else value)
+            if fp is None:
+                return None, (
+                    f"the context variable {v.name!r} ({where}.{dotted}) it read holds a "
+                    f"{type(value).__qualname__}, which cash cannot compare between calls"
+                )
+            items.add((kind, where, dotted, fp))
+            continue
+        if paths is not None and type(v) is dict and len(upto) == len(chain):
+            # Read only by constant keys, or by the keys a reader of it was
+            # handed: those entries are what the call read. A container
+            # bound to several names (pandas' _global_config) is one
+            # object, its entries checked once.
+            for path in sorted(paths):
+                text = json.dumps(list(path))
+                same = ("obj", id(v), text)
+                if same in places:
                     continue
-                value = v.get(_MISSING)
-                fp = fingerprint("unset" if value is _MISSING else value)
-                if fp is None:
-                    return None, (
-                        f"the context variable {v.name!r} ({where}.{dotted}) it read holds a "
-                        f"{type(value).__qualname__}, which cash cannot compare between calls"
-                    )
-            else:
-                fp = fingerprint(v)
-            if fp is not None:
-                items.add((kind, where, dotted, fp))
+                entry = _entry(v, path)
+                fp = ABSENT if entry is _MISSING else fingerprint(entry)
+                places[same] = fp
+                if fp is not None:
+                    items.add(("k", where, dotted + _KEYS + text, fp))
+            continue
+        same = ("obj", id(v)) if type(v) in (dict, list, set) else (where, upto)
+        if same in places:
+            continue
+        fp = fingerprint(v)
+        places[same] = fp
+        if fp is not None:
+            items.add((kind, where, dotted, fp))
+    for item in served:
+        item = tuple(item)
+        same = _served_place(item)
+        if same is not None:
+            if places.get(same, _MISSING) == item[3]:
+                # The same object under another name, read the same.
+                continue
+            places.setdefault(same, item[3])
+        items.add(item)
     for name in specials:
         items.add(("s", name, "", _SPECIALS[name]()))
     if len(items) > _MAX_ITEMS:
