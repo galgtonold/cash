@@ -86,7 +86,7 @@ from .call_state import (
     UnhashableDefault,
     run_to_completion,
 )
-from .class_data import CLASSES_FOLDED
+from .class_data import CLASSES_FOLDED, getter_fill_mark, note_getter_fills
 from .closure_fold import EVERY_PARAMETER, bound_owner, bound_values, defaults_of
 from .dynamic_sources import (
     Resolution,
@@ -1416,6 +1416,7 @@ class CallRunner:
         """
         func, func_name = spec.func, spec.name
         call = Call(args, kwargs)
+        call.fill_mark = getter_fill_mark()
         call.call_start = _perf_counter()
         # Where this call's time goes, when asked for (`cash.phase_times`).
         pt = _phases.CURRENT.get() if _phases.ON else None
@@ -2355,6 +2356,7 @@ class CallRunner:
     def finish_miss(self, spec: CachedFunction, call: Call, run: BodyRun) -> Any:
         """Everything a missed call does after its body: check, store, log."""
         func, func_name, args, kwargs = spec.func, spec.name, call.args, call.kwargs
+        note_getter_fills(call.fill_mark)
         res = run.res
         if call.traced and is_one_shot_iterator(res):
             # Its body runs as the caller iterates, after the trace ended:

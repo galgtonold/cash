@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import contextvars
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -119,6 +120,7 @@ class Call:
         "refusal_probe",
         "refusal_key",
         "args_fingerprinted",
+        "fill_mark",
     )
 
     def __init__(self, args: tuple, kwargs: dict) -> None:
@@ -132,6 +134,9 @@ class Call:
         self.checked: tuple[tuple, dict] | None = None
         #: What the key's state segment was made of, by name (`STATE_LEDGER`).
         self.ledger: dict | None = None
+        #: When the call started, for the ``cached_property`` slots its
+        #: body fills on Enum members (`class_data.note_getter_fills`).
+        self.fill_mark = sys.maxsize
         #: What the watched globals' attributes were bound to just before the
         #: body ran (`purity_checks.watched_identities`).
         self.watch_identities: dict | None = None
