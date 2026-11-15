@@ -393,6 +393,10 @@ def _recorder_class() -> type:
                 # whether a unit read or changed pyplot's current figure
                 # (`Unit.pyplot_ran`).
                 return self._arm_pyplot(code)
+            if filename.startswith("<frozen "):
+                # The interpreter's frozen modules (importlib's bootstrap,
+                # ntpath, posixpath): never the user's (`is_user_code_file`).
+                return DISABLE
             if (
                 filename
                 and not is_pseudo_filename(filename)
@@ -426,7 +430,7 @@ def _recorder_class() -> type:
                 return DISABLE
             mon = sys.monitoring
             events = mon.events.PY_START | mon.events.PY_RESUME
-            if not pool and _LOOKUP_NAMES.intersection(code.co_names):
+            if not pool and _LOOKUP_NAMES.intersection(code.co_names) and looks_up_by_name(code):
                 events |= mon.events.CALL
             if not pool and self._looks_up_by_string(code, g):
                 self.by_string.add(code)
@@ -766,8 +770,12 @@ def _recorder_class() -> type:
                     if arg0 is sys.monitoring.MISSING:
                         return None
                     name = _last_argument(code, offset, sys._getframe(rec.WATCHED_FRAME))
-                    entry = ("getattr", arg0, name)
-                    slot = ("getattr", id(arg0), name)
+                    # What `_lookup` reads it by: a module, or the class of
+                    # what it looks the name up on. Not the object itself,
+                    # which the unit would keep alive until the call ends.
+                    target = arg0 if issubclass(type(arg0), (type, types.ModuleType)) else type(arg0)
+                    entry = ("getattr", target, name)
+                    slot = ("getattr", id(target), name)
                 elif fn is self._import_module or fn is builtins.__import__:
                     entry = ("import", None, arg0 if isinstance(arg0, str) else None)
                     slot = ("import", 0, entry[2])
@@ -848,6 +856,64 @@ def note_cached_hit(func_name: str, code: types.CodeType | None, state: str | No
         unit.extra.extend(tuple(item) for item in trace or ())
 
 
+#: code -> does it call ``getattr`` with a name that is not a constant, or
+#: import by a name (`looks_up_by_name`).
+_BY_NAME: dict[types.CodeType, bool] = {}
+
+
+def looks_up_by_name(code: types.CodeType) -> bool:
+    """Does *code* look a name up at run time: ``import_module`` or
+    ``__import__`` by name, or ``getattr`` other than called with a constant
+    string as its name? ``getattr(obj, "c")`` and ``getattr(obj, "c", d)``
+    read ``obj.c``, as the attribute read does, which no event follows; only
+    the others are armed for CALL events, so an ndarray subclass's
+    ``__array_finalize__`` copying ``getattr(obj, "_opts", {})`` on every
+    slice costs the traced call nothing. ``getattr`` read other than as the
+    callee of such a call (bound to a name, handed on) counts as a lookup."""
+    got = _BY_NAME.get(code)
+    if got is not None:
+        return got
+    got = _by_name(code)
+    if len(_BY_NAME) > 4096:
+        _BY_NAME.clear()
+    _BY_NAME[code] = got
+    return got
+
+
+def _by_name(code: types.CodeType) -> bool:
+    if "__import__" in code.co_names or "import_module" in code.co_names:
+        return True
+    try:
+        ins = [i for i in dis.get_instructions(code) if i.opname not in _SKIPPED]
+    except Exception:  # noqa: BLE001 - code dis cannot read is armed, as before
+        return True
+    for k, load in enumerate(ins):
+        if load.opname not in ("LOAD_GLOBAL", "LOAD_NAME") or load.argval != "getattr":
+            continue
+        start = load.positions
+        if start is None or start.lineno is None or start.col_offset is None:
+            return True
+        # The call of it: the first CALL after it that starts where it does
+        # (a call in its arguments starts further right; a call of what it
+        # returns, ``getattr(o, "f")(x)``, comes after it).
+        call = next(
+            (
+                c
+                for c in ins[k + 1 :]
+                if c.opname == "CALL"
+                and c.positions is not None
+                and (c.positions.lineno, c.positions.col_offset) == (start.lineno, start.col_offset)
+            ),
+            None,
+        )
+        if call is None or call.arg not in (2, 3):
+            return True
+        plan = _plan(code, call.offset)
+        if plan is None or plan[0] != "const" or not isinstance(plan[1], str):
+            return True
+    return False
+
+
 _INSTRUCTIONS: dict[types.CodeType, dict[int, tuple[str, Any] | None]] = {}
 _FAST_LOADS = frozenset({"LOAD_FAST", "LOAD_FAST_CHECK", "LOAD_FAST_BORROW", "LOAD_DEREF"})
 _PAIRED_LOADS = frozenset({"LOAD_FAST_LOAD_FAST", "LOAD_FAST_BORROW_LOAD_FAST_BORROW"})
@@ -867,6 +933,12 @@ def _load_plan(ins: Any, pair_slot: int) -> tuple[str, Any] | None:
     if op in ("LOAD_GLOBAL", "LOAD_NAME"):
         return ("global", val)
     return None
+
+
+def _empty_build(ins: Any) -> bool:
+    """Does *ins* build an empty dict, list or tuple: a default such as
+    ``getattr(obj, "opts", {})``?"""
+    return ins.opname in ("BUILD_MAP", "BUILD_LIST", "BUILD_TUPLE") and ins.arg == 0
 
 
 def _plan(code: types.CodeType, offset: int) -> tuple[str, Any] | None:
@@ -893,7 +965,7 @@ def _plan(code: types.CodeType, offset: int) -> tuple[str, Any] | None:
                     # name, or by a load of its own after the name's.
                     if previous.opname in _PAIRED_LOADS:
                         plan = _load_plan(previous, 0)
-                    elif before is not None and _load_plan(previous, 1) is not None:
+                    elif before is not None and (_load_plan(previous, 1) is not None or _empty_build(previous)):
                         plan = _load_plan(before, 1)
             break
         if ins.opname not in _SKIPPED:

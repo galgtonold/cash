@@ -13,7 +13,7 @@ from .._type_memo import per_type
 from .._user_attrs import module_file
 from ..analysis.helper_code import UnwalkableLayers, callable_layers
 from ..code_digest import unwrap_partials
-from ..install_paths import in_own_package, is_cash_path, is_user_code_module, top_package
+from ..install_paths import in_own_package, is_cash_path, is_user_code_file, is_user_code_module, top_package
 from .call_state import KeyBuildFailed
 
 
@@ -195,6 +195,17 @@ def is_user_code_object(obj: Any) -> bool:
     mod_name = getattr(obj, "__module__", None)
     mod = sys.modules.get(mod_name) if mod_name else None
     if mod is None or not qualname_resolves_in(mod, obj):
+        if (
+            isinstance(code, types.CodeType)
+            and type(obj) is types.FunctionType
+            and code.co_qualname != obj.__qualname__
+        ):
+            # Names copied from what it wraps (``functools.wraps``): a
+            # library's delegate for each method of numpy's ``Generator``
+            # calls itself ``numpy.random._generator.Generator.normal``,
+            # which finds the C method instead. Its own code says whose
+            # it is.
+            return is_user_code_file(code.co_filename)
         verdict = _c_code_verdict(obj)
         if verdict is None and isinstance(obj, type) and built_by_library(obj):
             verdict = False
