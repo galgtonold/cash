@@ -905,14 +905,11 @@ def _object_steps(value: Any, walk: _Walk) -> Generator[Any, Any, Any]:
                 return by_fields
         if contains_set(value, walk.holds_set, walk.clean):
             # Opened so each set is keyed by its items sorted. One whose
-            # parts loop back to it (lmfit's ``Parameters`` holds an
-            # asteval interpreter whose symbol table holds it again) is left
-            # to the key pickle, which keeps the loop and sorts the sets.
-            try:
-                return ("__cash_obj__", f"{t.__module__}.{t.__qualname__}", (yield _pickled_state(value)))
-            except CyclicValueError:
-                pass
-        elif holds_content_data(value, walk.content):
+            # parts loop back to it raises `CyclicValueError` and runs
+            # uncached: left to the key pickle, two graphs that differ only
+            # inside the loop keyed alike.
+            return ("__cash_obj__", f"{t.__module__}.{t.__qualname__}", (yield _pickled_state(value)))
+        if holds_content_data(value, walk.content):
             # Pickled whole, every frame inside was serialised and hashed on each
             # call. Opened up, each goes through the caller's content hasher
             # (``walk.content``, the decorator's memo), so an unchanged frame is
