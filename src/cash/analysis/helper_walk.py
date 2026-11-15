@@ -137,13 +137,17 @@ class _Entry(NamedTuple):
     mutation. ``reported`` is False below a callable marked ``@pure`` or
     ``@stateful``: the marker settles what it and everything it calls may do,
     so their findings are not reported -- but their code still decides the
-    result, so it is keyed like any other helper's.
+    result, so it is keyed like any other helper's. ``tested_only``: a class
+    a body names only to test objects against (`check_targets`): none of its
+    code runs, so it is keyed by its code and its user bases' code (what the
+    test answers) and nothing it or they call is followed.
     """
 
     func: Any
     depth: int
     hash_only: bool
     reported: bool
+    tested_only: bool = False
 
 
 @dataclasses.dataclass
@@ -237,6 +241,9 @@ class HelperWalk:
         #: written in an audited body: what it binds depends on what is
         #: loaded (`report_store` checks it again).
         self._local_imports: dict[tuple[str, tuple[str, ...], tuple[str, ...]], None] = {}
+        #: Walk ids walked only as a class tested against (`_Entry`): walked
+        #: again, in full, when reached any other way.
+        self._tested_only_walked: set[Any] = set()
         #: Walk ids walked for their body, not only for the key (hash-only).
         self._bodies_walked: set[Any] = set()
         #: Functions audited with their findings reported, in walk order.
@@ -276,11 +283,18 @@ class HelperWalk:
 
     def _run(self) -> None:
         while self._stack:
-            func, depth, hash_only, reported = self._stack.pop()
+            func, depth, hash_only, reported, tested_only = self._stack.pop()
             reported = reported and not (is_pure(func) or is_stateful(func))
             walk_id = _walk_id(func)
             walked_reported = self._visited_ids.get(walk_id)
-            if walked_reported is not None and (walked_reported or not reported):
+            if walked_reported is not None and not tested_only and walk_id in self._tested_only_walked:
+                # Walked first as a class only tested against, which follows
+                # nothing it calls; reached now as one whose code can run:
+                # walked again so what its bases' methods call is keyed, as
+                # it is when this path comes first.
+                self._tested_only_walked.discard(walk_id)
+                self.composable = False
+            elif walked_reported is not None and (walked_reported or not reported):
                 if not hash_only and walk_id not in self._bodies_walked:
                     # Met first as a class's helper, for its key only: a walk
                     # from a function that calls it audits its body.
@@ -291,8 +305,10 @@ class HelperWalk:
                 break
             if not hash_only:
                 self._bodies_walked.add(walk_id)
+            if tested_only and walked_reported is None:
+                self._tested_only_walked.add(walk_id)
             qualname = self._claim(func, walk_id, walked_reported, reported)
-            self._visit(_Entry(func, depth, hash_only, reported), qualname)
+            self._visit(_Entry(func, depth, hash_only, reported, tested_only), qualname)
 
     def _start(self) -> list[_Entry]:
         """The first entries: the root function, or, for ``@cash.cache`` over
@@ -386,6 +402,7 @@ class HelperWalk:
             qualname,
             entry.hash_only,
             entry.reported,
+            entry.tested_only,
             entry.depth == 0,
             self._own_package,
             len(sys.modules),
@@ -433,11 +450,12 @@ class HelperWalk:
             self._other_classes.add(_walk_id(callee))
         self._stack.append(_Entry(callee, self._depth + 1, hash_only, reported))
 
-    def _put_check_push(self, callee: Any, reported: bool) -> None:
-        """A class a body names only to test objects against: walked for
-        its code like any class read by name (`_queue_hash_only`)."""
+    def _put_check_push(self, callee: Any, reported: bool, tested_only: bool) -> None:
+        """A class whose data its methods read is not folded on its own: one
+        a body names only to test objects against (*tested_only*), or a user
+        base of a class walked (`_queue_user_bases`)."""
         self._check_classes.add(_walk_id(callee))
-        self._stack.append(_Entry(callee, self._depth + 1, True, reported))
+        self._stack.append(_Entry(callee, self._depth + 1, True, reported, tested_only))
 
     def _put_caller_path(self, callee: Any, path: BindingPath) -> None:
         self._caller_paths.setdefault(id(callee), path)
@@ -538,6 +556,13 @@ class HelperWalk:
         except SyntaxError:
             if entry.reported:
                 self._emit("_put_opaque", qualname)
+            return
+
+        if entry.tested_only:
+            # No code of a class only tested against runs: its code and its
+            # bases' code are keyed (an edit can change what the test
+            # answers), and nothing its methods call or name is followed.
+            self._queue_user_bases(func, entry.reported, tested_only=True)
             return
 
         func_def = None if entry.hash_only else _find_first_function_def(tree)
@@ -817,7 +842,7 @@ class HelperWalk:
                 check_only = not decides_checks_itself(value) and named_only_as_check_target(
                     body.func_def, name, body.namespace
                 )
-                self._queue_hash_only(value, body.func, body.reported, check_only=check_only)
+                self._queue_hash_only(value, body.func, body.reported, check_only=check_only, tested_only=check_only)
             elif value is not None:
                 self._queue_special_functions(body, value)
 
@@ -1027,9 +1052,12 @@ class HelperWalk:
         ):
             self._note_binding(callee, path)
 
-    def _queue_hash_only(self, target: Any, owner: Any, reported: bool, *, check_only: bool = False) -> None:
-        """Queue *target* for its code alone. *check_only*: a class the body
-        names only to test objects against (`check_targets`)."""
+    def _queue_hash_only(
+        self, target: Any, owner: Any, reported: bool, *, check_only: bool = False, tested_only: bool = False
+    ) -> None:
+        """Queue *target* for its code alone. *check_only*: a class whose
+        data is not folded on its own (`_put_check_push`); *tested_only*:
+        one the body names only to test objects against (`check_targets`)."""
         if target is None or target is owner or not callable(target):
             return
         if getattr(target, "_cash_cached", False) is True:
@@ -1039,7 +1067,7 @@ class HelperWalk:
         if not is_user_code(target, self._root_module):
             return
         if check_only:
-            self._emit("_put_check_push", target, reported)
+            self._emit("_put_check_push", target, reported, tested_only)
         else:
             self._emit("_put_push", target, True, reported)
 
@@ -1107,7 +1135,7 @@ class HelperWalk:
                 continue
             self._queue_hash_only(target, func, reported)
 
-    def _queue_user_bases(self, cls: type, reported: bool) -> None:
+    def _queue_user_bases(self, cls: Any, reported: bool, *, tested_only: bool = False) -> None:
         """Queue *cls*'s user base classes, so the functions their methods
         call by bare name become helpers too.
 
@@ -1117,12 +1145,16 @@ class HelperWalk:
         calls ``_configure`` of Base's module). Queued as a check target:
         keyed by its code and walked for what it calls, while what its
         methods read is folded through *cls* (`fold_class_parts` follows
-        inherited methods), not once more per base.
+        inherited methods), not once more per base. The bases of a class
+        only tested against (*tested_only*) are keyed by their code alone:
+        nothing they call runs.
         """
+        if not isinstance(cls, type):
+            return
         for base in cls.__mro__[1:]:
             if base is object or not is_user_code(base, self._root_module):
                 continue
-            self._queue_hash_only(base, cls, reported, check_only=True)
+            self._queue_hash_only(base, cls, reported, check_only=True, tested_only=tested_only)
 
     # --- what the report records ---
 
