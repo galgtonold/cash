@@ -574,18 +574,32 @@ class KeyBuilder:
         )
 
     def _code_state(self, spec: CachedFunction, chain: list[str], *, note: bool = False) -> str:
-        """`_code_state_now`, or what it gave last time while nothing it
-        reads has moved since (`state_memo`)."""
+        """`_code_state_now`: its first part (`_code_state_pre`) as it gave
+        last time while nothing it reads has moved since (`state_memo`),
+        the rest (`_code_state_post`) built now."""
         memo = state_memo.memo_for(spec)
         if memo is None:
-            return self._code_state_now(spec, chain, note=note)
-        return memo.code_state(self, spec, chain, note)
+            state_hash = self._code_state_pre(spec, chain, note=note)
+        else:
+            state_hash = memo.code_state(self, spec, chain, note)
+        return self._code_state_post(spec, state_hash, chain)
 
     def _code_state_now(self, spec: CachedFunction, chain: list[str], *, note: bool = False) -> str:
         """The state segment before anything the arguments decide: the
         function's code, helpers, cached callees, declared files, closure,
-        defaults, globals, RNG epoch and environment. Appends each stage to
-        *chain*.
+        defaults, globals (`_code_state_pre`), then the RNG epoch, the
+        environment and ``key=`` (`_code_state_post`). Appends each stage
+        to *chain*.
+
+        Raises `UnhashableDefault` when a default cannot be hashed.
+        """
+        return self._code_state_post(spec, self._code_state_pre(spec, chain, note=note), chain)
+
+    def _code_state_pre(self, spec: CachedFunction, chain: list[str], *, note: bool = False) -> str:
+        """The part of the state segment that the program alone decides --
+        code, helpers, cached callees, declared files, closure, defaults,
+        globals -- which `state_memo` serves again while none of it moved.
+        Appends each stage to *chain*.
 
         What the decoration itself says -- its declared files, ``key=`` and
         ignored parameters -- is read from *spec*, the wrapper's own record,
@@ -628,6 +642,16 @@ class KeyBuilder:
         if phase is not None:
             _phases.sub_end(phase)
         chain.append(state_hash)
+        return state_hash
+
+    def _code_state_post(self, spec: CachedFunction, state_hash: str, chain: list[str]) -> str:
+        """The rest of the state segment, folded onto `_code_state_pre`'s
+        digest on every call: the RNG epoch (its seed moves without any
+        change to the program), the environment and the installed versions
+        of the libraries the call reaches, and ``key=``. Kept out of the
+        part `state_memo` serves, so a function that draws from a global
+        stream or reads a variable still has its code and globals served."""
+        func, func_name = spec.func, spec.name
         state_hash = self._rng.fold_rng_epoch(func_name, state_hash)
         chain.append(state_hash)
         state_hash = self._environment.fold_environment(func, func_name, state_hash)

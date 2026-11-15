@@ -9,6 +9,11 @@ answers the same: a write to another variable -- a library setting its own
 at import or call time -- leaves it standing, a write to one it read builds
 it again, in this process and in the next.
 
+The reads in the function's own code, its helpers' and its cached
+callees' are folded outside the remembered part (`KeyBuilder._code_state_post`),
+on every call; the check guards a read in code a global holds (a table of
+functions), which the remembered part folds.
+
 The environment read as a whole is judged as before: through ``os`` it is
 warned about and keyed not at all, and a module global bound to
 ``os.environ`` is folded as a value, so any variable moves the key.
@@ -45,6 +50,17 @@ SOURCE = textwrap.dedent(f"""
 
     def as_whole(x):
         return (x, len(dict(os.environ)) > 0)
+
+
+    def _held_reader():
+        return os.environ.get("{READ}_D")
+
+
+    TABLE = {{"read": _held_reader}}
+
+
+    def through_table(x):
+        return (x, TABLE["read"]())
 """)
 
 GLOBAL_SOURCE = textwrap.dedent("""
@@ -64,7 +80,7 @@ def mods(tmp_path, monkeypatch):
     (tmp_path / f"{names[0]}.py").write_text(SOURCE, encoding="utf-8")
     (tmp_path / f"{names[1]}.py").write_text(GLOBAL_SOURCE, encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
-    for var in (READ, f"{READ}_B", f"{READ}_C", OTHER):
+    for var in (READ, f"{READ}_B", f"{READ}_C", f"{READ}_D", OTHER):
         monkeypatch.delenv(var, raising=False)
     importlib.invalidate_caches()
     yield tuple(importlib.import_module(n) for n in names)
@@ -112,7 +128,8 @@ def test_a_write_to_another_variable_keeps_the_segment(c, mods, monkeypatch):
 @pytest.mark.parametrize("memo_kind", ["honest", "sabotaged"])
 def test_a_write_to_a_variable_read_moves_the_key(c, mods, monkeypatch, var, memo_kind):
     if memo_kind == "sabotaged":
-        # Takes every variable for unchanged: what the check guards against.
+        # Takes every variable for unchanged: the function's own reads are
+        # folded outside the remembered part, so they move the key anyway.
         monkeypatch.setattr(state_memo, "VERIFY", False)
         monkeypatch.setattr(state_memo, "_env_holds", lambda env: True)
     f = c.cache(mods[0].by_name)
@@ -121,15 +138,32 @@ def test_a_write_to_a_variable_read_moves_the_key(c, mods, monkeypatch, var, mem
     monkeypatch.setenv(var, "on")
     got, fresh = _state(c, f)
     assert fresh != old, "the write did not move the segment: the scenario proves nothing"
-    if memo_kind == "sabotaged":
-        assert got == old
-        return
     assert got == fresh
     misses = f.cache_info()["misses"]
     result = f(1)
     assert f.cache_info()["misses"] == misses + 1  # computed again
     assert result == (1, "on" if var == READ else None, "on" if var.endswith("_B") else None, var.endswith("_C"))
     # The new answer is what is remembered now.
+    assert _reused(c, f) == fresh
+
+
+@pytest.mark.parametrize("memo_kind", ["honest", "sabotaged"])
+def test_a_write_to_a_variable_code_a_global_holds_reads_moves_the_key(c, mods, monkeypatch, memo_kind):
+    if memo_kind == "sabotaged":
+        # Takes every variable for unchanged: what the check guards against.
+        monkeypatch.setattr(state_memo, "VERIFY", False)
+        monkeypatch.setattr(state_memo, "_env_holds", lambda env: True)
+    f = c.cache(mods[0].through_table)
+    assert f(1) == (1, None)
+    old = _reused(c, f)
+    monkeypatch.setenv(f"{READ}_D", "on")
+    got, fresh = _state(c, f)
+    assert fresh != old, "the write did not move the segment: the scenario proves nothing"
+    if memo_kind == "sabotaged":
+        assert got == old
+        return
+    assert got == fresh
+    assert f(1) == (1, "on")
     assert _reused(c, f) == fresh
 
 

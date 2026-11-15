@@ -3,6 +3,11 @@
 Every call of a ``@cash.cache`` function builds the state segment of its key
 (`KeyBuilder._code_state`): the function's code, its helpers', its cached
 callees', the globals all of them read, captures, defaults, the environment.
+What the program alone decides of it -- code, captures, defaults, globals
+(`KeyBuilder._code_state_pre`) -- is what this memo keeps; the rest -- the
+RNG seed epoch, the environment and the installed library versions, ``key=``
+(`KeyBuilder._code_state_post`) -- is folded onto it on every call, so a
+function whose code reads the global stream still has its code served.
 For a library of many small decorated functions that is most of what a call
 costs cash -- pvlib's test suite with every function decorated ran 20 times
 slower than plain, a third of it in this fold -- and nearly every call folds
@@ -36,8 +41,7 @@ The fold is remembered per function and served again while three things hold:
   state running around it but the function's own, the same explain mode.
 
 A fold whose output does not come from the world alone is never remembered:
-one that folded a random stream's epoch (its position moves with every
-draw) or a file's content. An environment variable the fold read by name
+one that folded a file's content or a data source's token. An environment variable the fold read by name
 (``os.environ.get("X")``, ``os.getenv("X")``, ``os.environ["X"]``) is the
 exception: the capture keeps what each such read answered
 (`effects.ENVIRONMENT_FOLDED`) and is served only while every one of them
@@ -125,6 +129,10 @@ GEN = [0]
 #: `folded_outside_world` and the modules it sums, and a
 #: build that counted one is not remembered.
 OUTSIDE = [0]
+
+#: The stages `KeyBuilder._code_state_pre` appends to the chain: files,
+#: closure, defaults, bound self, globals.
+_PRE_STAGES = 5
 
 #: Why a remembered segment had to be checked again: the world moved, or
 #: cash's own state did (``status()``; for telling what keeps moving).
@@ -535,8 +543,8 @@ class StateMemo:
         return True
 
     def code_state(self, keys: Any, spec: CachedFunction, chain: list, note: bool) -> str:
-        """`KeyBuilder._code_state`, served from the memo when it holds."""
-        build_now = keys._code_state_now
+        """`KeyBuilder._code_state_pre`, served from the memo when it holds."""
+        build_now = keys._code_state_pre
         mode = _mode(spec.name, note)
         if mode is None:
             WHY["why_context"] += 1
@@ -579,8 +587,7 @@ class StateMemo:
             and cap.env_complete
             and _env_holds(cap.env)
             and self.world == world
-            and len(cap.chain) >= 7
-            and cap.chain[5] == cap.chain[4]
+            and len(cap.chain) == _PRE_STAGES
             and self._holds()
         ):
             self.entries[mode] = cap
