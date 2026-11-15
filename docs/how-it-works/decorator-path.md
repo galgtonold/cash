@@ -339,8 +339,12 @@ The same watchers stand behind what a class folds to: the code an
 argument's class carries and what that code reads, and the digest of a class
 a call's trace names. Each is remembered per class while nothing the class
 holds or reaches moved; data the watchers cannot see (an instance held in a
-class attribute) is read whole again before each reuse. `CASH_CLASS_MEMO=0`
-turns this off; `CASH_CLASS_MEMO_VERIFY=1` folds again behind every reuse.
+class attribute) is read whole again before each reuse. A class whose code
+reads data bound to a variable of `__main__` (a notebook's or a script's
+namespace) that only such a read could watch is folded every time instead:
+the memo would hold that data, and the notebook, which counts a variable's
+holders before it stores a statement that changes it, would count the memo
+as one. `CASH_CLASS_MEMO=0` turns this off; `CASH_CLASS_MEMO_VERIFY=1` folds again behind every reuse.
 
 ## Related
 

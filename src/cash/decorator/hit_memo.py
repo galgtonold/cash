@@ -1073,6 +1073,8 @@ def watch_class(cls: type, reports: Any = ()) -> tuple[tuple, tuple, _Family | N
     if s.callees or any(report.cached_callees for report in reports):
         raise Ineligible("a cached function reached")
     s.finish()
+    if _probes_main_variables(s.probes, (x for pair in s.cells for x in pair)):
+        raise Ineligible("a probe would hold a variable of __main__")
     _watch_modules()
     s.commit()
     cells = tuple(x for pair in s.cells for x in pair)
@@ -1088,6 +1090,31 @@ def watch_class(cls: type, reports: Any = ()) -> tuple[tuple, tuple, _Family | N
         weak.registrations, weak.below = family.registrations, family.below
         family = weak
     return cells, tags, family
+
+
+def _probes_main_variables(probes: dict, met: typing.Iterable[Any]) -> bool:
+    """Would a probe of *probes* hold a value a variable of the notebook is
+    bound to: of ``__main__``, or of a namespace the code *met* runs in
+    that is no imported module's own (a notebook shell's, a script's)? A
+    memo of the process would then be one more holder of it, and the
+    notebook, which counts a variable's holders by reference count to tell
+    whether a restored copy could stand in for it, refuses to store any
+    statement that changes it (``calls += [...]`` after a decorated call
+    met a class whose method appends to ``calls``)."""
+    if not any(type(probe) is ContentProbe for probe in probes):
+        return False
+    spaces = {}
+    main = getattr(sys.modules.get("__main__"), "__dict__", None)
+    if type(main) is dict:
+        spaces[id(main)] = main
+    for f in met:
+        if type(f) is types.FunctionType:
+            g = f.__globals__
+            name = g.get("__name__")
+            if name == "__main__" or getattr(sys.modules.get(name), "__dict__", None) is not g:
+                spaces[id(g)] = g
+    bound = {id(v) for g in spaces.values() for v in list(g.values())}
+    return any(type(probe) is ContentProbe and id(probe.value) in bound for probe in probes)
 
 
 #: What `_ProbingScan` never reads whole: code, whose own watch is the proof.
