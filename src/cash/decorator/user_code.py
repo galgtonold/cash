@@ -195,17 +195,19 @@ def is_user_code_object(obj: Any) -> bool:
     mod_name = getattr(obj, "__module__", None)
     mod = sys.modules.get(mod_name) if mod_name else None
     if mod is None or not qualname_resolves_in(mod, obj):
-        if (
-            isinstance(code, types.CodeType)
-            and type(obj) is types.FunctionType
-            and code.co_qualname != obj.__qualname__
-        ):
+        if isinstance(code, types.CodeType) and type(obj) is types.FunctionType and _named_after_another(code, obj):
             # Names copied from what it wraps (``functools.wraps``): a
             # library's delegate for each method of numpy's ``Generator``
             # calls itself ``numpy.random._generator.Generator.normal``,
             # which finds the C method instead. Its own code says whose
             # it is.
             return is_user_code_file(code.co_filename)
+        if mod is not None and type(obj) is types.FunctionType and _wrapped_under_its_name(mod, obj):
+            # The function a decorator wrapped, which the name holds in
+            # its place (``typing``'s ``_tp_cache`` on
+            # ``_GenericAlias.__getitem__``): the module it is found in
+            # through ``__wrapped__`` says whose it is.
+            return is_user_code_module(mod)
         verdict = _c_code_verdict(obj)
         if verdict is None and isinstance(obj, type) and built_by_library(obj):
             verdict = False
@@ -273,6 +275,38 @@ def qualname_resolves_in(mod: Any, obj: Any) -> bool:
         return cur is obj
     except Exception:  # noqa: BLE001 - a module __getattr__ may raise anything
         return False  # could not confirm reachability - do not trust it
+
+
+def _named_after_another(code: types.CodeType, fn: Any) -> bool:
+    """Does *fn* carry a name its own code does not (``functools.wraps``)?
+    By the qualified name where code has one (3.11+), else by the name."""
+    own = getattr(code, "co_qualname", None)
+    if own is None:
+        return code.co_name != fn.__name__
+    return own != fn.__qualname__
+
+
+def _wrapped_under_its_name(mod: Any, fn: Any) -> bool:
+    """Does *fn*'s ``__qualname__`` find, from *mod*, a wrapper whose
+    ``__wrapped__`` chain reaches *fn*?"""
+    qualname = getattr(fn, "__qualname__", None)
+    if not qualname or "<locals>" in qualname:
+        return False
+    cur = mod
+    try:
+        for part in qualname.split("."):
+            cur = getattr(cur, part, None)
+            if cur is None:
+                return False
+        for _ in range(8):
+            cur = getattr(cur, "__wrapped__", None)
+            if cur is None:
+                return False
+            if cur is fn:
+                return True
+    except Exception:  # noqa: BLE001 - a module __getattr__ may raise anything
+        return False
+    return False
 
 
 def wraps_code(value: Any) -> bool:
