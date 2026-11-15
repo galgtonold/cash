@@ -300,6 +300,15 @@ class CachedFunction:
     phase_record: Any = field(default=None, repr=False)
     _signature: Any = field(default=_UNREAD, repr=False)
 
+    def __reduce__(self):
+        """Refused like the wrapper's (`refuse_pickling_by_value`): a
+        process pool sending the wrapper by value reaches this record from
+        its closure, and the pickler would report a lock it holds (its
+        `phase_record`'s) instead of saying what to do."""
+        from .script_pickling import refuse_pickling_by_value
+
+        refuse_pickling_by_value()
+
     @property
     def signature(self) -> inspect.Signature | None:
         """`call_signature` of the function, read once; None when it has none."""
