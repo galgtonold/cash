@@ -23,6 +23,7 @@ import datetime
 import decimal
 import fractions
 import hashlib
+import inspect
 import logging
 import operator
 import sys
@@ -97,7 +98,7 @@ def object_state(value: Any) -> dict:
 
 #: The tag a builtin container is keyed under: one string object per type, so a
 #: key's pickle stores it once however many containers it holds.
-_BUILTIN_CONTAINER_TAGS = {t: t.__qualname__ for t in (dict, list, tuple, set, frozenset)}
+_BUILTIN_CONTAINER_TAGS = {t: t.__qualname__ for t in (dict, list, tuple, set, frozenset, types.MappingProxyType)}
 
 
 def _typed(value: Any, canon: Any, walk: _Walk) -> Generator[Any, Any, tuple]:
@@ -732,7 +733,10 @@ def _object_steps(value: Any, walk: _Walk) -> Generator[Any, Any, Any]:
             if remembered:
                 _remember_sorted(value, form)
             return form
-        if isinstance(value, dict):
+        if isinstance(value, dict) or type(value) is types.MappingProxyType:
+            # A read-only view (``MappingProxyType({})``, a default kept
+            # from being changed) by the items it shows now, tagged apart
+            # from a dict: it has no pickle.
             for k, v in value.items():
                 k_form = k if type(k) in prims else (yield k)
                 items.append((k_form, v if type(v) in prims else (yield v)))
@@ -757,6 +761,13 @@ def _object_steps(value: Any, walk: _Walk) -> Generator[Any, Any, Any]:
                 else:
                     items.append((yield v))
             return (yield from _typed(value, tuple(items), walk))
+        if type(value) in _SIGNATURE_TYPES:
+            # What ``==`` compares (`_signature_fields`); pickled whole, a
+            # default it shows that has no pickle made it unkeyable.
+            fields = []
+            for part in _signature_fields(value):
+                fields.append(part if type(part) in prims else (yield part))
+            return ("__cash_sig__", type(value).__qualname__, tuple(fields))
         t = type(value)
         if walk.fielded is not None:
             by_fields = _object_by_fields(value, walk)
@@ -784,6 +795,19 @@ def _object_steps(value: Any, walk: _Walk) -> Generator[Any, Any, Any]:
         return value
     finally:
         walk.stack.discard(id(value))
+
+
+#: ``inspect.Signature`` and ``inspect.Parameter``, keyed by their fields.
+_SIGNATURE_TYPES = (inspect.Signature, inspect.Parameter)
+
+
+def _signature_fields(value: Any) -> tuple:
+    """The fields a signature or parameter's ``==`` compares: a
+    parameter's name, kind, default and annotation; a signature's
+    parameters in order and its return annotation."""
+    if type(value) is inspect.Parameter:
+        return (value.name, int(value.kind), value.default, value.annotation)
+    return (tuple(value.parameters.values()), value.return_annotation)
 
 
 def _numbers_form(value: list | tuple) -> tuple | None:
