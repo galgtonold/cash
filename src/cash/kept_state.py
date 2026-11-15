@@ -40,6 +40,7 @@ from . import _native, _weak
 from ._own_work import own_work
 from ._user_attrs import instance_of
 from .live_state import is_live_stream, live_reduce
+from .unnamed_code import library_code_override, refused_unnamed
 from .value_types import WEAK_PROXY_TYPES, is_dead_proxy
 
 __all__ = [
@@ -69,7 +70,9 @@ __all__ = [
 
 
 def dumps(value: Any, *args: Any, **kwargs: Any) -> bytes:
-    """`_dumps_value` inside `one_keying`; see there. A value holding a
+    """`_dumps_value` inside `one_keying`; see there. Key bytes that stopped
+    at a library's function or class no name finds are pickled again with
+    each written as what defines it (`unnamed_code`). A value holding a
     function whose cell ran again since is pickled again with it by its
     name, when that name holds the same definition now (`defined_again`):
     not with a *sink*, whose bytes are written already, nor when buffers
@@ -77,17 +80,21 @@ def dumps(value: Any, *args: Any, **kwargs: Any) -> bytes:
     *on_retry*)."""
     try:
         return _dumps_once(value, *args, **kwargs)
-    except pickle.PicklingError as exc:
-        again = (
-            stopped_at_defined_again(exc)
-            and kwargs.get("sink") is None
-            and (kwargs.get("buffer_callback") is None or kwargs.get("on_retry") is not None)
+    except (pickle.PicklingError, AttributeError) as exc:
+        retry = kwargs.get("sink") is None and (
+            kwargs.get("buffer_callback") is None or kwargs.get("on_retry") is not None
         )
-        if not again:
+        if retry and isinstance(exc, pickle.PicklingError) and stopped_at_defined_again(exc):
+            override = defined_again(kwargs.get("reducer_override"))
+        elif retry and kwargs.get("keyed") and refused_unnamed(exc):
+            # Key bytes, never loaded: a library's class or function no
+            # name finds is written as what defines it (`unnamed_code`).
+            override = library_code_override(kwargs.get("reducer_override"))
+        else:
             raise
     if kwargs.get("on_retry") is not None:
         kwargs["on_retry"]()
-    kwargs["reducer_override"] = defined_again(kwargs.get("reducer_override"))
+    kwargs["reducer_override"] = override
     return _dumps_once(value, *args, **kwargs)
 
 
