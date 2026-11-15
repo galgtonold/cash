@@ -1504,8 +1504,8 @@ class HitMemo:
             and not h.files
             and (self.family is None or (self.family.below is None and not self.family.probes))
         )
-        saved = (metadata.saves_seconds if metadata.saves_seconds is not None else metadata.execution_time) or 0.0
-        body = metadata.body_seconds
+        # Never the hit credited with a warm-up: the ordinary hit before it was.
+        saved, body = runner._calls.credit.credit(self.spec.name, metadata, steady=True)
         return (
             store,
             call.cache_key,

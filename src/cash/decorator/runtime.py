@@ -1232,8 +1232,7 @@ class CallRunner:
                 execution_time=_perf_counter() - call_start,
                 args_hash=args_hash,
                 cache_key=cache_key,
-                time_saved=(metadata.saves_seconds if metadata.saves_seconds is not None else metadata.execution_time)
-                or 0.0,
+                time_saved=self._calls.credit_hit(func_name, metadata),
             )
             # Last, once nothing can turn the hit into a miss: a miss runs
             # the body on the arguments as the caller handed them in.
@@ -1525,7 +1524,7 @@ class CallRunner:
             self._calls.note_effectiveness(
                 func_name,
                 call.cash_overhead,
-                body_seconds=getattr(call.metadata, "body_seconds", None),
+                body_seconds=self._calls.credited_body(call.metadata),
                 was_hit=True,
             )
             call.outcome = self._wrap_iterator_hit(call, call.metadata, hit)
@@ -2289,6 +2288,7 @@ class CallRunner:
             # can answer "did caching pay?".
             run.body_seconds = max(0.0, body_t1 - body_t0 - run.tracker.read_hash_seconds - nested[0])
             run.saves_seconds = run.body_seconds / max(threads_at_start, THREADS_IN_CALLS[0], 1)
+            run.first_call = self._calls.credit.body_ran(func_name, run.saves_seconds)
             run.rng_drew = self._rng.drawn_streams(run.rng_pre)
             run.rng_new = self._rng.note_draw(func_name, run.rng_drew)
             run.carriers_moved = moved_carriers(run.carriers_pre)
@@ -2464,6 +2464,7 @@ class CallRunner:
                     auto_file_deps=auto_file_deps,
                     body_seconds=run.body_seconds,
                     saves_seconds=run.saves_seconds,
+                    first_call=run.first_call,
                     rng_replay=self._rng.replay_parts(
                         bool(self._registry.cached[func_name].rng_modules),
                         run.rng_pre,

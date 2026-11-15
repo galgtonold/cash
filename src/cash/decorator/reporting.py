@@ -22,6 +22,7 @@ from . import hit_memo
 from .cached_function import WARNINGS_MAX
 from .call_state import CALL_ENTRY, NESTED_CASH_SECONDS
 from .explain import MissKind, MissReason, entry_id_of
+from .hit_credit import HitCredit
 
 if TYPE_CHECKING:
     from ..config.schema import CashConfig
@@ -468,6 +469,12 @@ class CallLog:
         #: ``(template, timestamp, seconds)``, made into entries when read.
         self.fast_log: deque[tuple[dict[str, Any], float, float]] = deque(maxlen=CALL_LOG_MAX)
         self._lock = threading.Lock()
+        #: What a hit is credited with saving: the stored time, less a
+        #: warm-up already paid in this process (`hit_credit`).
+        self.credit = HitCredit()
+        #: This thread's last ordinary hit: ``(metadata, credited body)``,
+        #: for `credited_body`.
+        self._last_hit = threading.local()
 
     @property
     def entries(self) -> deque[dict[str, Any]]:
@@ -497,7 +504,7 @@ class CallLog:
         leaves to the ordinary one."""
         if self._config.verbose or self._config.debug:
             return None
-        saved = (metadata.saves_seconds if metadata.saves_seconds is not None else metadata.execution_time) or 0.0
+        saved, _ = self.credit.credit(func_name, metadata, steady=True)
         return {
             "func_name": func_name,
             "cache_hit": True,
@@ -509,6 +516,21 @@ class CallLog:
             "cache_key": cache_key,
             "timestamp": 0.0,
         }
+
+    def credit_hit(self, func_name: str, metadata: Any) -> float:
+        """The time an ordinary hit of the entry *metadata* is credited with
+        saving (`HitCredit.credit`); its body time goes to `credited_body`."""
+        saved, body = self.credit.credit(func_name, metadata)
+        self._last_hit.held = (metadata, body)
+        return saved
+
+    def credited_body(self, metadata: Any) -> float | None:
+        """The body time the hit `credit_hit` just credited stands in for, for
+        the net-loss ledger, which then counts what ``total_time_saved`` does."""
+        held = getattr(self._last_hit, "held", None)
+        if held is not None and held[0] is metadata:
+            return held[1]
+        return getattr(metadata, "body_seconds", None)
 
     def note_fast_effectiveness(
         self, func_name: str, hits: int, overhead_seconds: float, saved_seconds: float, body_seconds: float | None
@@ -556,8 +578,8 @@ class CallLog:
 
         ``execution_time`` is the wall-time of *this* operation - a lookup on a
         hit, the compute on a miss. ``time_saved`` is the compute a hit
-        *avoided* (the originally-measured execution time stored with the
-        cached entry), and 0.0 on a miss. They are distinct: a hit's
+        *avoided* (the time stored with the entry, less a warm-up already
+        paid in this process: `hit_credit`), and 0.0 on a miss. They are distinct: a hit's
         ``execution_time`` is microseconds, but its ``time_saved`` is the full
         compute it stood in for. ``cache_info()['total_time_saved']`` sums the
         latter.
@@ -617,6 +639,8 @@ class CallLog:
         Such a call produced no line at all, and a run that crashed half-way
         summarised as "5 of 5 calls restored".
         """
+        # It ran, so whatever its first call warms up was paid here.
+        self.credit.body_ran(func_name)
         self.log(
             func_name,
             cache_hit=False,

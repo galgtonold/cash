@@ -161,6 +161,8 @@ class StoreRequest:
     auto_file_deps: dict[str, dict[str, float]] | None = None
     body_seconds: float | None = None
     saves_seconds: float | None = None
+    #: The call was its function's first in this process (`hit_credit`).
+    first_call: bool | None = None
     rng_replay: dict[str, Any] | None = None
     #: The fields that make the entry a chunked iterator's manifest
     #: (``iterator_storage``, ``n_chunks``, ``chunk_stream``).
@@ -698,6 +700,7 @@ class ResultStore:
                 # key hashing whose worth is the question.
                 body_seconds=body_seconds,
                 saves_seconds=request.saves_seconds,
+                first_call=request.first_call,
                 serializer_cls=type(serializer),
                 ttl=ttl,
                 ttl_declared=ttl_declared,
