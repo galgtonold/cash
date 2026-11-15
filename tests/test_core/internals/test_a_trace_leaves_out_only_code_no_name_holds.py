@@ -39,7 +39,8 @@ MODULE = textwrap.dedent("""
             return _configure(v)
 
 
-    PROBLEMS = {"a": lambda v: v + 1}
+    STEP = 1
+    PROBLEMS = {"a": lambda v: v + STEP}
 
 
     def go(v):
@@ -50,7 +51,7 @@ MODULE = textwrap.dedent("""
 @pytest.fixture
 def module(tmp_path, monkeypatch):
     name = f"traced_mod_{tmp_path.name.replace('-', '_')}"
-    (tmp_path / f"{name}.py").write_text(MODULE)
+    (tmp_path / f"{name}.py").write_text(MODULE, encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
     mod = importlib.import_module(name)
     yield mod
@@ -78,6 +79,14 @@ def test_a_call_that_needs_no_trace_keeps_the_items_beside_an_unnamed_lambda(mod
     # the key that read it would carry the item instead.
     whole, _ = code_trace.build(_unit(module), set(), strict=False)
     assert ("global", module.__name__, "PROBLEMS") in {item[:-1] for item in whole}
+
+
+def test_the_globals_only_the_unnamed_code_reads_are_left_out_with_it(module):
+    """Found again only through that code, and possibly a value no later
+    process rebuilds the same (a ``dynamic_depends_on=`` lambda reading a
+    dict of sources that carry fresh bytes): kept, the entry never hit."""
+    items, _ = code_trace.build(_unit(module), {module.go.__code__}, strict=False)
+    assert ("global", module.__name__, "STEP") not in {item[:-1] for item in items}
 
 
 def test_a_call_that_needs_its_trace_is_still_refused_one(module):
