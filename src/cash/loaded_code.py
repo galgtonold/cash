@@ -19,6 +19,7 @@ numbers, so an edit to a neighbouring function does not read as one.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import importlib.util
 import io
@@ -453,7 +454,7 @@ def class_functions(cls: type) -> list[types.FunctionType]:
     return found
 
 
-def code_objects_of(owner: object, *, follow_wrapped: bool = True) -> tuple:
+def code_objects_of(owner: object, *, follow_wrapped: bool = True, accessors: list | None = None) -> tuple:
     """The code objects *owner* runs as itself, in a fixed order: each method a
     class defines (as `class_functions` finds them) and the code down its
     ``__wrapped__`` chain, or a function's code and the code down its. What a digest memoised per object
@@ -461,6 +462,10 @@ def code_objects_of(owner: object, *, follow_wrapped: bool = True) -> tuple:
     the class and the function objects and swaps each one's ``__code__`` (and
     a wrapper's ``__dict__``) in place. *follow_wrapped* False: a class's
     methods a library's decorator wrapped give the wrapper's code alone.
+    *accessors*, a list: a class's ``cached_property`` getters (``.func`` can
+    be set in place) and property setters and deleters are appended to it --
+    what a memo per class must still match, but not code its key part
+    covers (the trace records them when they run).
 
     Asked per helper on every call, so written for speed: about 0.2 us for a
     plain function, 1-2 us for a class of a few methods."""
@@ -477,8 +482,16 @@ def code_objects_of(owner: object, *, follow_wrapped: bool = True) -> tuple:
                     func = value
                 elif kind is property:
                     func = value.fget
+                    if accessors is not None:
+                        for accessor in (value.fset, value.fdel):
+                            if type(accessor) is types.FunctionType:
+                                accessors.append(accessor.__code__)
                 elif kind is staticmethod or kind is classmethod:
                     func = value.__func__
+                elif kind is _CACHED_PROPERTY:
+                    if accessors is not None and type(value.func) is types.FunctionType:
+                        accessors.append(value.func.__code__)
+                    continue
                 elif kind in _PLAIN_ATTRIBUTE_TYPES:
                     continue
                 else:
@@ -520,9 +533,52 @@ def code_objects_of(owner: object, *, follow_wrapped: bool = True) -> tuple:
 
 
 #: Class attribute types that hold no function (`code_objects_of`).
+_CACHED_PROPERTY = functools.cached_property
 _PLAIN_ATTRIBUTE_TYPES = frozenset(
     {str, int, float, bool, type(None), tuple, dict, types.MappingProxyType, types.GetSetDescriptorType}
 )
+
+
+def _member_functions(value: object) -> list[tuple[str, types.FunctionType]]:
+    """The functions one class attribute runs, each with what it is to it."""
+    kind = type(value)
+    if kind is types.FunctionType:
+        pairs = [("", value)]
+    elif kind is property:
+        pairs = [("get", value.fget), ("set", value.fset), ("del", value.fdel)]
+    elif kind is staticmethod or kind is classmethod:
+        pairs = [(kind.__name__, value.__func__)]
+    elif kind is functools.cached_property:
+        pairs = [("cached", value.func)]
+    else:
+        return []
+    return [(tag, func) for tag, func in pairs if type(func) is types.FunctionType]
+
+
+def foreign_members(cls: type) -> list[tuple[str, str, types.FunctionType]]:
+    """The functions *cls*'s attributes run that its class body did not
+    define under that name: ``Thing.prop = property(newp)``,
+    ``Thing.m = new_m``, ``Thing.cp.func = ...`` from outside the class. A
+    class keyed by its source text stands for what its body defined; these
+    are not in it. Sorted by attribute name, as ``(name, tag, function)``.
+
+    A function the body defined carries the class's qualified name and its
+    own (a dataclass's generated methods are named so too); one the body
+    bound under another name (``prop = property(_get)``) is listed, which
+    is stable."""
+    prefix = f"{cls.__qualname__}."
+    module = cls.__module__
+    found = []
+    try:
+        members = sorted(((k, v) for k, v in vars(cls).items() if isinstance(k, str)), key=lambda kv: kv[0])
+    except TypeError:
+        return []
+    for name, value in members:
+        for tag, func in _member_functions(value):
+            if func.__module__ == module and func.__qualname__ == prefix + name:
+                continue
+            found.append((name, tag, func))
+    return found
 
 
 def loaded_class_identity(cls: type) -> str | None:

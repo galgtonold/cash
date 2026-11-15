@@ -27,7 +27,13 @@ from ..content_hashers import BUILTIN_CONTENT
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning
 from ..jit_functions import jit_identity, jit_python_function
-from ..loaded_code import code_objects_of, loaded_class_identity, loaded_code_matches_disk, loaded_module_matches_disk
+from ..loaded_code import (
+    code_objects_of,
+    foreign_members,
+    loaded_class_identity,
+    loaded_code_matches_disk,
+    loaded_module_matches_disk,
+)
 from ..source_norm import bytecode_identity, code_consts_without_docstring
 from ..source_reading import defining_file
 
@@ -248,7 +254,15 @@ def hash_callable_source(fn: Callable) -> str:
     # What a memo entry held by the object itself must still see: IPython's
     # ``%autoreload`` keeps the class and the function objects and swaps each
     # method's ``__code__`` (and a wrapper's ``__wrapped__``) in place.
-    codes = code_objects_of(fn) if memo_owner is fn else ()
+    if memo_owner is fn:
+        accessors: list = []
+        codes = code_objects_of(fn, accessors=accessors)
+        if accessors:
+            # A cached_property's getter set in place (``.func``), a
+            # property's setter: what the digest below reads too.
+            codes = (*codes, *accessors)
+    else:
+        codes = ()
     if memo_key is not None:
         entry = SOURCE_HASH_MEMO.get(memo_key)
         # ``is``, not ``==``: confirms this is the SAME object and not a
@@ -279,6 +293,14 @@ def hash_callable_source(fn: Callable) -> str:
     # file is recorded against the file's stat.
     keyed_stat = stat_code_file(fn)
     digest = source_digest(fn)
+    if digest is not None and isinstance(fn, type):
+        # A class's text is what its body defined. A method or property
+        # getter bound on it from outside (``Thing.prop = property(newp)``)
+        # is not in that text: keyed by it alone, the call kept serving the
+        # old getter's result, in this process and the next.
+        foreign = [f"{name}.{tag}={hash_callable_source(func)}" for name, tag, func in foreign_members(fn)]
+        if foreign:
+            digest = hashlib.sha256(f"{digest}:members:{'|'.join(foreign)}".encode()).hexdigest()
     if digest is None:
         digest = compiled_identity(fn)
         # A function with no readable source (a dataclass's generated
