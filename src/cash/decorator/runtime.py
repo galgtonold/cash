@@ -1017,6 +1017,8 @@ class KeyBuilder:
             (STATE_LEDGER, STATE_LEDGER.set(ledger)),
             (CAPTURE_WATCH, CAPTURE_WATCH.set(None)),
             (_EXPLAINING, _EXPLAINING.set(True)),
+            # As the key before the body held the classes of module data.
+            (HELD_BY_NAME, HELD_BY_NAME.set(self.held_by_name_for(spec))),
         )
         try:
             with shared_nodes():
@@ -2391,7 +2393,11 @@ class CallRunner:
             # What a call that picks code by name ran, for its trace. Begun
             # and ended outside the body's time: setting the recorder up
             # (installing it, on a process's first call) is cash's cost.
-            call.trace_unit = code_trace.begin(watch_globals=call.needs_trace) if call.traced else None
+            call.trace_unit = (
+                code_trace.begin(watch_globals=call.needs_trace, surface=call.narrowed and not call.needs_trace)
+                if call.traced
+                else None
+            )
             if pt is not None:
                 _phases.mark(pt, _phases.BODY_SETUP)
             body_t0 = _perf_counter()
@@ -2564,6 +2570,7 @@ class CallRunner:
             inputs_moved=None if swapped else self._inputs_moved_check(spec, call),
             cost=execution_time,
             watch_identities=call.watch_identities,
+            narrowed=call.narrowed,
         )
         if refusal is None:
             refusal = swapped

@@ -110,6 +110,7 @@ REACH = {
     "instance": "import model\n\ndef reach():\n    return model.SVC['m']\n",
     "class_table": "import model\n\ndef reach():\n    return model.CLASSES['model']()\n",
     "global": "from model import SVC\n\ndef reach():\n    return SVC['m']\n",
+    "class_global": "from model import CLASSES\n\ndef reach():\n    return CLASSES['model']()\n",
 }
 
 MAIN = """

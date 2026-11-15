@@ -36,7 +36,7 @@ from ..value_types import IMMUTABLE_PRIMS
 from .arg_hashing import LINEAGE_SRC_DECORATOR, LINEAGE_SRC_FROZEN, call_polars, content_only
 from .cache_metadata import CacheMetadata
 from .cached_function import CachedFunction
-from .call_state import NO_WATCH, BodyRun, Call
+from .call_state import HELD_BY_NAME, NO_WATCH, BodyRun, Call
 from .dynamic_sources import DynamicSources, recorded_sources, remember_sources, source_key
 from .explain import MissKind, not_persisted_reason
 from .file_deps import snapshot_tracked_deps
@@ -240,7 +240,17 @@ class ResultStore:
         self._notices = notices
         self._stored_keys = stored_keys
 
-    def refusal(
+    def refusal(self, *args: Any, narrowed: bool = False, **kwargs: Any) -> str | None:
+        """`_refusal`, with what the key folded built again as the key built
+        it: the classes of module data by their surface for a key that held
+        them so (*narrowed*, `HELD_BY_NAME`), else by all their code."""
+        token = HELD_BY_NAME.set(narrowed)
+        try:
+            return self._refusal(*args, **kwargs)
+        finally:
+            HELD_BY_NAME.reset(token)
+
+    def _refusal(
         self,
         func: Callable,
         func_name: str,

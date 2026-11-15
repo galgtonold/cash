@@ -219,10 +219,15 @@ def _unit_class() -> type:
             "lookups",
             "lookups_followed",
             "sites",
+            "surface",
         )
 
         def __init__(self, kind: str) -> None:
             super().__init__(kind)
+            #: A traced call whose key holds the classes of module data by
+            #: their surface (`begin`): its cells are digested as they start
+            #: with classes by their surface too, as `build` digests them.
+            self.surface = False
             #: name -> code of the cached functions served inside (`note_cached_hit`).
             self.cached_codes: dict[str, types.CodeType] = {}
             #: ``(kind, id(target), name)`` -> ``(kind, target, name)``.
@@ -514,8 +519,9 @@ def _recorder_class() -> type:
             self._kinds.clear()
             sys.monitoring.restart_events()
 
-        def begin(self, kind: str, *, watch_globals: bool = False) -> Any:
+        def begin(self, kind: str, *, watch_globals: bool = False, surface: bool = False) -> Any:
             unit = TraceUnit(kind)
+            unit.surface = surface
             if watch_globals:
                 unit.global_starts = {}
                 unit.line_codes = set()
@@ -734,7 +740,7 @@ def _recorder_class() -> type:
                     recv = frame.f_locals.get(code.co_varnames[0])
                 except Exception:  # noqa: BLE001 - a frame whose locals cannot be read has no receiver
                     recv = None
-            cells = None
+            cells = surface_cells = None
             # A generator expression's cells are left out: what they held is
             # read only when `build` digests a function of this code
             # (`trace_items.call_starts`), and no function of a generator
@@ -744,10 +750,18 @@ def _recorder_class() -> type:
             if code.co_freevars and not self._in_callback and not _is_genexpr(code):
                 self._in_callback = True
                 try:
-                    from ..tracking.trace_items import start_cells
+                    from ..tracking.trace_items import SURFACE, start_cells
 
+                    modes = {getattr(u, "surface", False) for u in units}
                     with untracked():
-                        cells = start_cells(frame, code)
+                        if False in modes:
+                            cells = start_cells(frame, code)
+                        if True in modes:
+                            token = SURFACE.set(True)
+                            try:
+                                surface_cells = start_cells(frame, code)
+                            finally:
+                                SURFACE.reset(token)
                 finally:
                     self._in_callback = False
             watching = [u for u in self.active if u.global_starts is not None and code not in u.codes]
@@ -766,8 +780,9 @@ def _recorder_class() -> type:
             for unit in units:
                 rec.note_collected(unit, code, inside_collection)
                 unit.codes.setdefault(code, (g, module))
-                if cells is not None:
-                    unit.cells.setdefault(code, cells)
+                started = surface_cells if getattr(unit, "surface", False) else cells
+                if started is not None:
+                    unit.cells.setdefault(code, started)
                 if recv is not None:
                     unit.receivers.setdefault(code, recv if issubclass(type(recv), type) else type(recv))
 
@@ -881,13 +896,15 @@ def recorder_or_reason() -> Any:
     return _RECORDER
 
 
-def begin(*, watch_globals: bool = False) -> Any:
+def begin(*, watch_globals: bool = False, surface: bool = False) -> Any:
     """Start recording a traced call's body; None when it cannot be.
     *watch_globals*: the call picks code by name, so the globals the code
     it runs reads are digested as that code starts (`_note_global_starts`)
-    and `build` refuses a call that changed one."""
+    and `build` refuses a call that changed one. *surface*: its trace will
+    be built with *narrow* (`build`), so the closure cells of the code that
+    starts are digested with classes by their surface."""
     rec = _recorder() if TRACEABLE else None
-    return rec.begin("decorator", watch_globals=watch_globals) if rec is not None else None
+    return rec.begin("decorator", watch_globals=watch_globals, surface=surface) if rec is not None else None
 
 
 def end(unit: Any) -> None:
