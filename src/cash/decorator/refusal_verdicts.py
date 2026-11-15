@@ -108,6 +108,17 @@ class RefusalVerdicts:
         self._memo: dict[tuple[str, str], dict] = {}
         #: id(func) -> (func, report, code part).
         self._code: dict[int, tuple[Any, Any, str]] = {}
+        #: func_name -> whether it may have a verdict (`may_have`).
+        self._names: dict[str, bool] = {}
+
+    def may_have(self, func_name: str) -> bool:
+        """Whether *func_name* may have a verdict: one kept in this process,
+        or any in its record, read once. A function that never had one pays
+        nothing per call beyond this lookup."""
+        got = self._names.get(func_name)
+        if got is None:
+            got = self._names[func_name] = self._stored_keys.any_refused(func_name)
+        return got
 
     def key_for(
         self, spec: CachedFunction, report: PurityReport | None, mode: str, args: tuple, kwargs: dict
@@ -162,6 +173,7 @@ class RefusalVerdicts:
         verdict = {"why": str(why), "warnings": list(warnings or ()), "uses": 0}
         with self._lock:
             self._memo[(func_name, key)] = verdict
+            self._names[func_name] = True
         self._stored_keys.note_refused(func_name, key, verdict, write=True)
 
     def drop(self, func_name: str, key: str) -> None:

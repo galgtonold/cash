@@ -483,6 +483,18 @@ class StoredKeyRecord:
         verdict = doc["refused"].get(key) if doc is not None else None
         return verdict if isinstance(verdict, dict) else None
 
+    def any_refused(self, func_name: str) -> bool:
+        """Does *func_name*'s record hold any refusal verdict (`refused`)?"""
+        path = self.path(func_name)
+        if path is None:
+            return False
+        with self._lock:
+            for changes in (self._pending.get(path), self._writing.get(path)):
+                if changes is not None and any(v is not None for v in changes.refused.values()):
+                    return True
+        doc = self._disk_doc(path, self.WRITE_INTERVAL)
+        return bool(doc is not None and doc["refused"])
+
     def note_refused(self, func_name: str, key: str, verdict: dict | None, *, write: bool) -> None:
         """Keep *verdict* (None: drop it) under *key*. *write*: soon, in the
         background; else with the record's next write, or at `flush`."""
