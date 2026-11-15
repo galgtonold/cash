@@ -42,6 +42,7 @@ from .explain import MissKind, not_persisted_reason
 from .file_deps import snapshot_tracked_deps
 from .iterators import chunk_prefix
 from .purity_checks import held_sentinels, sentinel_ref
+from .refusal_verdicts import ArgumentRefusal
 from .result_parts import split_by_a_hit
 
 if TYPE_CHECKING:
@@ -345,7 +346,7 @@ class ResultStore:
             names = ", ".join(repr(n) for n in mutated)
             plural = "s" if len(mutated) > 1 else ""
             why = observer.unreplayable
-            refusal = (
+            refusal = ArgumentRefusal(
                 f"it changed its argument{plural} {names} in place, and a hit cannot replay it: {why}"
                 if why
                 else f"it changed its argument{plural} {names} in place, which a hit would not do"

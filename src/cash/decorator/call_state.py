@@ -105,6 +105,7 @@ class Call:
         "trace_unit",
         "ran_unit",
         "folded_code",
+        "refusal_key",
     )
 
     def __init__(self, args: tuple, kwargs: dict) -> None:
@@ -145,6 +146,9 @@ class Call:
         self.ran_unit: Any = None
         #: The key's `BuiltKey.folded_code`.
         self.folded_code: Any = None
+        #: The call's `RefusalVerdicts` key, when this call keeps or drops a
+        #: verdict once it is checked.
+        self.refusal_key: str | None = None
 
 
 class BodyRun:

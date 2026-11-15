@@ -57,6 +57,7 @@ from .decorator.maintenance import Maintenance
 from .decorator.method_deps import MethodClassDeps
 from .decorator.module_attrs import ModuleAttrFold
 from .decorator.purity_checks import LearnedMutations, PurityChecks
+from .decorator.refusal_verdicts import RefusalVerdicts
 from .decorator.registry import FunctionRegistry, checked_depends_on, warn_inert_dependency
 from .decorator.reporting import CallLog, Notices
 from .decorator.rng import RngWatch
@@ -501,6 +502,7 @@ class Cash:
             self._rng,
             self._misses,
             self._notices,
+            RefusalVerdicts(self._stored_keys),
         )
         self._maintenance = Maintenance(self._registry, self._backend_slot)
         self._summary = RunSummary(lambda: self.config, self._registry, self._backend_slot)

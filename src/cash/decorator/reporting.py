@@ -105,6 +105,9 @@ class Notices:
         # Each code shown in the short form, and the function it was shown
         # for: the next function with that code prints only "also on <name>".
         self._shown_codes: dict[str, str] = {}
+        # func_name -> the warnings asked for it while a call of it is
+        # recorded (`record_warnings`), shown or not.
+        self._recording: dict[str, list[dict[str, Any]]] = {}
 
     def warn_once(
         self,
@@ -152,6 +155,8 @@ class Notices:
         if _EXPLAINING.get():
             return
         rendered = format_diagnostic(code, message, fix)  # raises on a bad code
+        if self._recording:
+            self._note_recorded(category, func_name, arg_type_name, message, code, fix, once_per_version, short)
         # The code is part of the key: warnings sharing a category, function
         # and (often empty) arg type are still different warnings, and one
         # must not silence another.
@@ -195,6 +200,68 @@ class Notices:
         # rerun.
         if digest and shown:
             self._stored_keys.note_warning_shown(func_name, digest)
+
+    def _note_recorded(
+        self,
+        category: type[Warning],
+        func_name: str,
+        arg_type_name: str,
+        message: str,
+        code: str,
+        fix: str,
+        once_per_version: bool,
+        short: str | None,
+    ) -> None:
+        with self.lock:
+            recorded = self._recording.get(func_name)
+            if recorded is not None:
+                recorded.append(
+                    {
+                        "category": category.__name__,
+                        "slot": arg_type_name,
+                        "message": message,
+                        "code": code,
+                        "fix": fix,
+                        "once_per_version": once_per_version,
+                        "short": short,
+                    }
+                )
+
+    def record_warnings(self, func_name: str) -> None:
+        """Keep every warning asked for *func_name* from now until
+        `recorded_warnings`, including one already shown: what a call that
+        skips the steps giving them shows instead (`replay_warnings`)."""
+        with self.lock:
+            self._recording[func_name] = []
+
+    def recorded_warnings(self, func_name: str) -> list[dict[str, Any]] | None:
+        """The warnings kept since `record_warnings`, which stops; None when
+        nothing was recording."""
+        with self.lock:
+            return self._recording.pop(func_name, None)
+
+    def replay_warnings(self, func_name: str, recorded: list[dict[str, Any]]) -> None:
+        """Ask again for the warnings *recorded* (`recorded_warnings`), each
+        still shown at most once per process (`warn_once`)."""
+        from .. import exceptions
+
+        for item in recorded:
+            category = getattr(exceptions, str(item.get("category")), None)
+            if not (isinstance(category, type) and issubclass(category, Warning)):
+                continue
+            try:
+                self.warn_once(
+                    category,
+                    func_name,
+                    str(item["slot"]),
+                    str(item["message"]),
+                    code=str(item["code"]),
+                    fix=str(item["fix"]),
+                    once_per_version=bool(item.get("once_per_version")),
+                    short=item.get("short"),
+                )
+            except (KeyError, ValueError):  # a code this version does not know
+                continue
 
     def _displayed(self, func_name: str, code: str, message: str, fix: str, rendered: str, short: str | None) -> str:
         """What stderr shows for a warning whose full text is *rendered*."""
@@ -464,6 +531,7 @@ class CallLog:
         miss: MissReason | None = None,
         body_seconds: float | None = None,
         cash_seconds: float | None = None,
+        not_stored: str | None = None,
     ) -> None:
         """Record a decorator call event for notebook integration.
 
@@ -484,6 +552,7 @@ class CallLog:
 
         *miss* is the reason for a miss that had no lookup (no key, or the
         body raised); a looked-up miss takes the one `MissHistory.note_miss` held.
+        *not_stored*: why a call that had no lookup would not have been stored.
         """
         # What cash spent on this call rather than the body: the whole of a
         # hit, and what the miss path measured around a body. Added to the
@@ -514,7 +583,7 @@ class CallLog:
             if outcome.get("at", 0) < entry["timestamp"] - execution_time:
                 outcome = {}
             entry["not_persisted"] = outcome.get("not_persisted")
-            entry["not_stored"] = outcome.get("not_stored")
+            entry["not_stored"] = outcome.get("not_stored") or not_stored
         self._write_fast()
         with self._lock:
             self._entries.append(entry)
