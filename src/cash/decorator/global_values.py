@@ -18,9 +18,11 @@ from ..analysis.helper_bindings import UNRESOLVED, resolve_binding
 from ..analysis.helper_code import callable_layers, is_mock, own_code_is_user, qualname_of
 from ..analysis.purity_analyzer import get_analyzer
 from ..analysis.purity_policy import REPORTED_METHODS
+from ..content_hashers import builtin_family_of
 from ..dependency_state import SysModulesHelperResolver
 from ..exceptions import CashImpurityWarning
 from ..jit_functions import jit_identity, jit_options, jit_python_function
+from ..tracking.randomness import rng_carrier_kind
 from . import walk_scope
 from .call_state import KeyBuildFailed
 from .code_tables import CodeTable
@@ -78,6 +80,18 @@ LOG_METHOD_NAMES = frozenset(
 #: and the check after the call -- hashes the value as it is then. The value
 #: is held, so its id is not reused while the entry stands.
 KEY_BUILD_DIGESTS: contextvars.ContextVar[dict | None] = contextvars.ContextVar("_cash_key_build_digests", default=None)
+
+
+def keyed_by_chains(value: Any) -> bool:
+    """May *value*, held by a module, be keyed by the attribute chains a
+    reader reads off it (`chain_digests`) instead of whole: an object, not
+    a class, module, callable, builtin container, tuple, array or frame,
+    plain data or random generator."""
+    if value is None or isinstance(value, (type, types.ModuleType, dict, list, set, frozenset)) or callable(value):
+        return False
+    if type(value) is tuple or plain_data_kind(value) is not None:
+        return False
+    return builtin_family_of(type(value)) is None and rng_carrier_kind(value) is None
 
 
 def chain_end(value: Any, chain: tuple[str, ...]) -> tuple[int, Any]:

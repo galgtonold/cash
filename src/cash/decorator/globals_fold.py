@@ -17,17 +17,15 @@ from ..analysis.helper_bindings import resolve_binding
 from ..analysis.helper_code import own_code_is_user, qualname_of, renamed
 from ..analysis.purity_analyzer import get_analyzer
 from ..analysis.purity_report import PurityReport
-from ..content_hashers import builtin_family_of
 from ..dependency_state import STATE_LEDGER, ledger_note
 from ..effects import environment_component
 from ..exceptions import CashImpurityWarning
 from ..jit_functions import jit_python_function
-from ..tracking.randomness import rng_carrier_kind
 from . import walk_scope
 from .call_state import CAPTURE_WATCH, CARRIER_LOOKUPS, KeyBuildFailed
 from .code_tables import CodeTable
 from .global_reads import reach_pass
-from .global_values import UNHASHABLE_GLOBAL_FIX, chain_end
+from .global_values import UNHASHABLE_GLOBAL_FIX, chain_end, keyed_by_chains
 from .helper_fold_memo import HelperFoldMemo, LoggedSeen
 from .key_values import (
     carried_payload,
@@ -434,11 +432,7 @@ class GlobalsFold:
         frame, random generator) and every load of the name in *func*'s
         code the head of such a chain (`global_attr_chains`). None keys it
         whole."""
-        if v is None or isinstance(v, (type, types.ModuleType, dict, list, set, frozenset)) or callable(v):
-            return None
-        if type(v) is tuple or plain_data_kind(v) is not None:
-            return None
-        if builtin_family_of(type(v)) is not None or rng_carrier_kind(v) is not None:
+        if not keyed_by_chains(v):
             return None
         return self._reads.attr_chains(func, name)
 

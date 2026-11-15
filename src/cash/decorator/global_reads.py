@@ -193,6 +193,56 @@ def global_attr_chains(scopes: tuple, name: str, getattr_is_builtin: bool) -> tu
     return tuple(sorted(chains)) or None
 
 
+def module_attr_chains(scopes: tuple, path: tuple[str, ...]) -> tuple[tuple[str, ...], ...] | None:
+    """The attribute chains *scopes* read off the value a module holds,
+    reached as *path* (``("m", "settings")`` for ``m.settings.n``,
+    ``("pkg", "m", "settings")`` for ``pkg.m.settings.n``), when every load
+    of the global ``path[0]`` that may reach it heads one: the rule of
+    `global_attr_chains`, read through a module. None when any of them is
+    anything else -- the module or the value taken whole (``m``,
+    ``m.settings`` handed on, compared, returned), a method called on it or
+    on a link of a chain, an attribute of a link stored or deleted -- or the
+    module's name is read by a name only a class body or ``exec`` looks up.
+    A load that goes on to another attribute of the module (``m.OTHER``)
+    is no read of it."""
+    head, prefix = path[0], path[1:]
+    chains: set[tuple[str, ...]] = set()
+    for scope in scopes:
+        try:
+            ins = [i for i in dis.get_instructions(scope) if i.opname not in ("CACHE", "EXTENDED_ARG", "NOP")]
+        except Exception:  # noqa: BLE001 - code dis cannot read: keyed whole
+            return None
+        for k, op in enumerate(ins):
+            if op.argval != head:
+                continue
+            if op.opname in ("LOAD_NAME", "LOAD_FROM_DICT_OR_GLOBALS", "LOAD_DEREF", "LOAD_CLASSDEREF"):
+                return None
+            if op.opname != "LOAD_GLOBAL":
+                continue
+            if sys.version_info >= (3, 11) and (op.arg or 0) & 1:
+                return None  # `m(...)`: called
+            attrs: list[str] = []
+            methods: list[bool] = []
+            j = k + 1
+            while j < len(ins) and ins[j].opname in ("LOAD_ATTR", "LOAD_METHOD"):
+                attrs.append(ins[j].argval)
+                methods.append(_method_load(ins[j]))
+                j += 1
+            n = len(prefix)
+            if tuple(attrs[:n]) != prefix[: len(attrs[:n])]:
+                continue  # another attribute of the module
+            if len(attrs) <= n or any(methods[n - 1 :]):
+                # The module or the value itself taken whole, or a method
+                # called on the value or a link of its chain.
+                return None
+            if j < len(ins) and ins[j].opname in _CHAIN_END_WRITES:
+                return None
+            if j + 1 < len(ins) and ins[j + 1].opname in ("STORE_ATTR", "DELETE_ATTR", "STORE_SUBSCR", "DELETE_SUBSCR"):
+                return None
+            chains.add(tuple(attrs[n:]))
+    return tuple(sorted(chains)) or None
+
+
 #: A miss in `GlobalReads._local_binding_cache`, whose entries may be None.
 _NO_PLAN = object()
 
@@ -503,6 +553,27 @@ class GlobalReads:
             scopes = tuple(iter_code_scopes(code))
             per_code[slot] = (
                 None if reaches_namespace_by_name(scopes, g) else global_attr_chains(scopes, name, getattr_is_builtin)
+            )
+        return per_code[slot]
+
+    def module_attr_chains(self, func: Callable, path: str) -> tuple[tuple[str, ...], ...] | None:
+        """`module_attr_chains` of *func*'s code and every scope nested in
+        it, for the value its module holds at the dotted *path*
+        (``m.settings``); None when it is not read only that way, or its
+        code can reach a namespace by a string. Cached per code object and
+        path."""
+        code = getattr(func, "__code__", None)
+        if code is None:
+            return None
+        per_code = self._attr_chains.get(code)
+        if per_code is None:
+            per_code = self._attr_chains[code] = {}
+        slot = ("module", path)
+        if slot not in per_code:
+            scopes = tuple(iter_code_scopes(code))
+            g = getattr(func, "__globals__", None) or {}
+            per_code[slot] = (
+                None if reaches_namespace_by_name(scopes, g) else module_attr_chains(scopes, tuple(path.split(".")))
             )
         return per_code[slot]
 

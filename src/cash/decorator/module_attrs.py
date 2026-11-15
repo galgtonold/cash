@@ -23,6 +23,7 @@ from ..install_paths import is_user_module
 from ..jit_functions import jit_python_function
 from ..value_types import CODELESS_PRIMS
 from .closure_fold import iter_code_scopes
+from .global_values import chain_end, keyed_by_chains
 from .key_values import iter_contained, plain_data_kind
 from .module_identity import module_ref_part
 from .user_code import cash_wrapped, is_cash_wrapper, is_user_class, is_user_code_object, own_package, wraps_code
@@ -448,6 +449,13 @@ class ModuleAttrFold:
                 parts.extend(self._module_callable_parts(reader, obj, attr, label, value))
                 parts.extend(self._ref_parts(reader, label, value))
             return parts
+        chains = self._reads.module_attr_chains(func, label) if is_mod and keyed_by_chains(value) else None
+        if chains is not None:
+            # `m.settings.n_jobs`: keyed by what the chains reach, as
+            # `from m import settings; settings.n_jobs` is
+            # (`GlobalsFold.chains_read`), not by the timestamps the object
+            # also holds, which moved the key in every new process.
+            return parts + self._chain_parts(reader, label, value, chains)
         h = self._values.safe_global_hash(value, func_name, label)
         if h is not None:
             parts.append((label, h))
@@ -458,6 +466,27 @@ class ModuleAttrFold:
             # table read by name.
             if self._held_code is not None and plain_data_kind(value) is None:
                 parts.extend(self._held_code(label, value, func_name, reader.owner_code, own_pkg))
+        return parts
+
+    def _chain_parts(
+        self, reader: _AttrReader, label: str, value: Any, chains: tuple[tuple[str, ...], ...]
+    ) -> list[tuple[str, str]]:
+        """Key parts for the module data *value* at *label*, read only
+        through *chains*: the digest of what each reaches, and the code
+        held there (`GlobalsFold._fold_chains`)."""
+        try:
+            digests = self._values.chain_digests(value, chains)
+        except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
+            # Unhashable along a chain: as keyed whole, which warns.
+            h = self._values.safe_global_hash(value, reader.func_name, label)
+            return [(label, h)] if h is not None else []
+        parts: list[tuple[str, str]] = []
+        for chain, digest in digests.items():
+            link = f"{label}#.{'.'.join(chain)}"
+            parts.append((link, digest))
+            end = chain_end(value, chain)[1]
+            if self._held_code is not None and plain_data_kind(end) is None:
+                parts.extend(self._held_code(link, end, reader.func_name, reader.owner_code, reader.own_pkg))
         return parts
 
     def _ref_parts(self, reader: _AttrReader, label: str, value: Any) -> list[tuple[str, str]]:
