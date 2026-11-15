@@ -53,7 +53,7 @@ out = {}
 for round_ in range(2):
     for sampler in samplers:
         resample(sampler, X, y)
-    out[f"round {round_}"] = len(RUNS)
+    out[f"pass {round_}"] = len(RUNS)
 resample(samplers[0], X, y)
 out["after the loop"] = len(RUNS)
 out["hits"] = resample.cache_info()["hits"]
@@ -71,14 +71,14 @@ print(json.dumps(out))
 def test_a_loop_over_a_global_named_as_the_parameter_hits_on_repeat(tmp_path):
     (tmp_path / "loop.py").write_text(textwrap.dedent(_LOOP), encoding="utf-8")
     first = json.loads(run_python("loop.py", cwd=tmp_path).stdout.strip().splitlines()[-1])
-    assert first["round 0"] == 3
-    assert first["round 1"] == 3
+    assert first["pass 0"] == 3
+    assert first["pass 1"] == 3
     assert first["after the loop"] == 3
     assert first["hits"] == 4
     # A global the body does read still invalidates: FACTOR 2 -> 3.
     assert first["scaled runs"] == 2
     assert first["scaled"] == [3, 6]
     again = json.loads(run_python("loop.py", cwd=tmp_path).stdout.strip().splitlines()[-1])
-    assert again["round 0"] == 0
+    assert again["pass 0"] == 0
     assert again["hits"] == 7
     assert again["scaled runs"] == 0
