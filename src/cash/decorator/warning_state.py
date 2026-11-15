@@ -175,7 +175,11 @@ def recording() -> Iterator[list[bool]]:
         yield flag
     finally:
         with _lock:
-            _ACTIVE.remove(flag)
+            # By identity: two flags that say the same are equal lists.
+            for i in range(len(_ACTIVE) - 1, -1, -1):
+                if _ACTIVE[i] is flag:
+                    del _ACTIVE[i]
+                    break
             _DEPTH[0] -= 1
             if _DEPTH[0] == 0:
                 _take_back()

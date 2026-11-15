@@ -363,3 +363,17 @@ def test_an_entry_of_a_run_that_warned_is_checked_in_another_process(tmp_path):
     # Raising now: the run that warned is not served; the one that did not is.
     assert run("-W", "error::UserWarning") == "(1, 'raised') 2 1 0"
     assert run("-W", "error::UserWarning") == "(1, 'raised') 2 0 0"
+
+
+def test_a_nested_run_that_warned_counts_for_the_outer_one(c, path):
+    inner = c.cache(caught)
+
+    def outer(x):
+        return (inner(x), x)
+
+    f = c.cache(outer)
+    _settle(f, outer, path, 1)
+    warnings.simplefilter("error")
+    assert _same(f, outer, 1) == ("returned", ((1, "raised"), 1))
+    warnings.simplefilter("always")
+    assert _same(f, outer, 1) == ("returned", ((1, "passed"), 1))
