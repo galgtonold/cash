@@ -2358,10 +2358,34 @@ def _decide_drops_dict(t: type) -> bool:
         method = own.get("__reduce_ex__") or own.get("__reduce__")
         if method is None:
             continue
-        if klass is object or isinstance(method, _PYTHON_METHODS):
+        owner = _wrapped_reduce_owner(t, klass, method)
+        if owner is not None:
+            # A Python wrapper put over a C type's reduce (cash's own over
+            # pandas' ``Block.__reduce__``, `frame_sharing._install_pickling`)
+            # drops the dict as the C reduce does: judged by that C type's.
+            klass = owner
+        elif klass is object or isinstance(method, _PYTHON_METHODS):
             return False  # object's reduce keeps the dict; a Python one is the class's own say
         return not klass.__dictoffset__
     return False
+
+
+def _wrapped_reduce_owner(t: type, klass: type, method: Any) -> type | None:
+    """The class past *klass* in *t*'s MRO whose own reduce *method*, a
+    Python function, wraps (``__wrapped__``, as ``functools.wraps`` sets
+    it) when that reduce is not Python's: the wrapper hands back what it
+    gives, so it drops the dict that one drops. Else None."""
+    if not isinstance(method, types.FunctionType):
+        return None
+    inner = getattr(method, "__wrapped__", None)
+    if inner is None or isinstance(inner, _PYTHON_METHODS):
+        return None
+    mro = t.__mro__
+    for base in mro[mro.index(klass) + 1 :]:
+        own = base.__dict__
+        if own.get("__reduce_ex__") is inner or own.get("__reduce__") is inner:
+            return None if base is object else base
+    return None
 
 
 _PYTHON_METHODS = (types.FunctionType, classmethod, staticmethod)
