@@ -41,7 +41,9 @@ stored, and runs again next time as before (`build` says why): a function no
 name finds, a value too big to digest, a lookup on a library object by a name
 the recorder could not read, a thread, worker process or generator the call
 left behind, a function it ran that has side effects, reads the clock,
-draws from a generator of its own or runs ``eval``, or a global the code it
+draws from a generator of its own or runs ``eval`` on a line that ran (the
+lines of code holding such a finding are watched on a miss, one LINE
+callback per line; a line no watch saw run keeps its finding), or a global the code it
 ran reads that the call changed in place (``heapq.heappush(HEAP, x)``): its
 item holds the state the call left, and a hit would not change it again.
 
@@ -156,6 +158,10 @@ _SKIP_GLOBALS = frozenset({"__builtins__", "__name__", "__file__", "__spec__", "
 #: Namespaces bigger than this are not digested whole (an unread name on one).
 _NAMESPACE_CAP = 2000
 _ABSENT = "absent"
+#: Code of the user's -> did a strict traced call judge it to hold a finding
+#: a hit would skip (`_refusal_in`)? Code judged to hold none has its lines
+#: left unwatched (`_Recorder._arm_lines`).
+_LINE_STATUS: weakref.WeakKeyDictionary[types.CodeType, bool] = _weak.WeakKeyDictionary()
 
 
 def covers(issues: Iterable[PurityIssue]) -> bool:
@@ -178,6 +184,8 @@ def _unit_class() -> type:
             "cached_codes",
             "callees",
             "global_starts",
+            "line_codes",
+            "line_ran",
             "lookups",
             "lookups_followed",
             "sites",
@@ -210,6 +218,13 @@ def _unit_class() -> type:
             #: code that ran reads -> ``(digest, qualname)`` as the first
             #: code reading it started; None when not watched.
             self.global_starts: dict[tuple[str, str], tuple[str, str]] | None = None
+            #: A strict traced call's: the code whose every line that ran in
+            #: the call was recorded (`_Recorder._arm_lines`), and code ->
+            #: the lines of it that ran (`_Recorder._on_line`); None when
+            #: lines are not watched. A finding on a line that did not run
+            #: is no effect of the call (`_line_unrun`).
+            self.line_codes: set[types.CodeType] | None = None
+            self.line_ran: dict[types.CodeType, set[int]] | None = None
 
         def absorb(self, inner: Any) -> None:
             super().absorb(inner)
@@ -285,6 +300,14 @@ def _recorder_class() -> type:
             #: globals (`string_lookups`): what it calls is recorded for a
             #: notebook unit, the callable a string found among it.
             self.by_string: weakref.WeakSet[types.CodeType] = _weak.WeakSet()
+            #: The user's code with LINE events on for a strict traced call
+            #: (`_arm_lines`): each line costs one callback, which disables
+            #: it; `line_dirty` holds the code a line of fired in since, armed
+            #: again when the next strict call begins.
+            self.line_on: weakref.WeakSet[types.CodeType] = _weak.WeakSet()
+            self.line_dirty: set[types.CodeType] = set()
+            #: LINE callbacks run, for the tests of what watching lines costs.
+            self.line_events = 0
             free = [tool for tool in self.tool_ids if mon.get_tool(tool) is None]
             if len(free) < 2:
                 held = {t: mon.get_tool(t) for t in self.tool_ids}
@@ -299,6 +322,7 @@ def _recorder_class() -> type:
             mon.register_callback(self.tool, ev.PY_START, self._guarded(self._on_start))
             mon.register_callback(self.tool, ev.PY_RESUME, self._guarded(self._on_resume))
             mon.register_callback(self.tool, ev.CALL, self._guarded(self._on_call))
+            mon.register_callback(self.tool, ev.LINE, self._guarded(self._on_line))
             mon.register_callback(self.disc, ev.PY_START, self._guarded(self._discover))
             # A partial adds no Python frame: `_discover` reads the watched
             # frame at `WATCHED_FRAME`.
@@ -341,7 +365,7 @@ def _recorder_class() -> type:
             for tool in {getattr(self, "disc", None), self.tool} - {None}:
                 if mon.get_tool(tool) == self.tool_name:
                     mon.set_events(tool, 0)
-                    for ev in (mon.events.PY_START, mon.events.PY_RESUME, mon.events.CALL):
+                    for ev in (mon.events.PY_START, mon.events.PY_RESUME, mon.events.CALL, mon.events.LINE):
                         mon.register_callback(tool, ev, None)
                     mon.free_tool_id(tool)
             self.tool = None
@@ -408,7 +432,7 @@ def _recorder_class() -> type:
                 self.by_string.add(code)
                 events |= mon.events.CALL
             self.user_codes[code] = events
-            mon.set_local_events(self.tool, code, events)
+            mon.set_local_events(self.tool, code, events | self._line_events(code))
             if not pool and writes_through_parameters(code):
                 self.site_codes.add(code)
                 if self.active:
@@ -448,6 +472,9 @@ def _recorder_class() -> type:
             unit = TraceUnit(kind)
             if watch_globals:
                 unit.global_starts = {}
+                unit.line_codes = set()
+                unit.line_ran = {}
+                self._rearm_lines()
             if not self._intact():
                 unit.markers.add("tool_conflict")
                 mon = sys.monitoring
@@ -480,7 +507,66 @@ def _recorder_class() -> type:
                     events = self.user_codes.get(code)
                     if events is not None:
                         mon.set_local_events(self.tool, code, 0)
-                        mon.set_local_events(self.tool, code, events)
+                        mon.set_local_events(self.tool, code, events | self._line_events(code))
+
+        def _line_events(self, code: types.CodeType) -> int:
+            """LINE when *code*'s lines are watched (`_arm_lines`): every
+            setting of its local events keeps them."""
+            return sys.monitoring.events.LINE if code in self.line_on else 0
+
+        def _rearm_lines(self) -> None:
+            """A strict traced call begins: arm again the lines that fired
+            (and so were disabled) since the last one, so each line of
+            watched code that runs in this call is seen; and, while no
+            strict call runs, stop watching code judged to hold no finding
+            a hit would skip (`note_line_status`)."""
+            mon = sys.monitoring
+            if not any(u.line_ran is not None for u in self.active):
+                for code in [c for c in self.line_on if _LINE_STATUS.get(c) is False]:
+                    self.line_on.discard(code)
+                    self.line_dirty.discard(code)
+                    mon.set_local_events(self.tool, code, self.user_codes.get(code, 0))
+            dirty, self.line_dirty = self.line_dirty, set()
+            if not dirty:
+                return
+            if not self.rearm_works:
+                mon.restart_events()
+                return
+            for code in dirty:
+                if code in self.line_on:
+                    mon.set_local_events(self.tool, code, 0)
+                    mon.set_local_events(self.tool, code, self.user_codes.get(code, 0) | mon.events.LINE)
+
+        def _arm_lines(self, code: types.CodeType, units: list[Any]) -> None:
+            """*code* starts for the first time in each of *units*, strict
+            traced calls: watch its lines, unless a call judged it to hold
+            no finding a hit would skip. Armed here, before its first line
+            runs, every line of it that runs in those calls is recorded;
+            code armed no other way is judged as a whole (`_line_unrun`).
+            Code no finding was judged on yet is armed too: its lines cost
+            one callback each, once per call."""
+            if _LINE_STATUS.get(code) is False:
+                return
+            if code not in self.line_on:
+                self.line_on.add(code)
+                mon = sys.monitoring
+                mon.set_local_events(self.tool, code, 0)
+                mon.set_local_events(self.tool, code, self.user_codes.get(code, 0) | mon.events.LINE)
+            for unit in units:
+                unit.line_codes.add(code)
+
+        def _on_line(self, code: types.CodeType, line: int) -> Any:
+            self.line_events += 1
+            for unit in self.active:
+                ran = unit.line_ran
+                if ran is not None:
+                    held = ran.get(code)
+                    if held is None:
+                        ran[code] = {line}
+                    else:
+                        held.add(line)
+            self.line_dirty.add(code)
+            return DISABLE
 
         def end(self, unit: Any) -> Any:
             if unit.kind != "decorator":
@@ -606,6 +692,10 @@ def _recorder_class() -> type:
                         _note_global_starts(watching, code, g, module)
                 finally:
                     self._in_callback = False
+            if code.co_flags & 0x1:
+                lined = [u for u in self.active if u.line_codes is not None and code not in u.codes]
+                if lined:
+                    self._arm_lines(code, lined)
             inside_collection = collecting()
             for unit in units:
                 rec.note_collected(unit, code, inside_collection)
@@ -1482,7 +1572,9 @@ def _refusal_in(functions: Iterable[Any], unit: Any = None, owners: frozenset[in
     """Why a function the call ran makes its result unsafe to serve: a
     finding a hit would skip (a side effect, a clock read, eval), or a
     random generator of its own it draws from. A finding in a helper that
-    did not run (`_helpers_not_run`), one on a parameter every caller
+    did not run (`_helpers_not_run`), one on a line of a function that ran
+    that did not run itself (a branch the call did not take, `_line_unrun`),
+    one on a parameter every caller
     handed an object it made itself (`_OutArguments`), and an attribute
     bound on a parameter that every start of its function was handed one
     of *owners* for, is not one: *owners* are the ids of the instances the
@@ -1498,14 +1590,107 @@ def _refusal_in(functions: Iterable[Any], unit: Any = None, owners: frozenset[in
         if report.unwalkable:
             return f"it ran {fn.__qualname__}, whose helpers cash could not all walk"
         idle = _helpers_not_run(report, unit)
-        for issue in report.issues:
-            if issue.kind in _REFUSED_KINDS or (issue.kind == ISSUE_UNTRACKABLE_DEP and not is_name_lookup(issue)):
-                if issue.where in idle or out.excuses(issue):
-                    continue
-                return f"it ran {fn.__qualname__}, which {issue.description} (line {issue.line})"
+        refused = [
+            issue
+            for issue in report.issues
+            if issue.kind in _REFUSED_KINDS or (issue.kind == ISSUE_UNTRACKABLE_DEP and not is_name_lookup(issue))
+        ]
+        families = _families(report, {issue.where for issue in refused})
+        for issue in refused:
+            if issue.where in idle or out.excuses(issue) or _line_unrun(issue, families, unit):
+                continue
+            return f"it ran {fn.__qualname__}, which {issue.description} (line {issue.line})"
         if capture_reachable_carrier_states(fn):
             return f"it ran {fn.__qualname__}, which can draw from a random generator it holds"
     return None
+
+
+def _families(report: Any, flagged: set[str]) -> dict[str, set[types.CodeType]]:
+    """``qualname_of(helper) -> its code objects``, nested code included (a
+    lambda, a nested function, a generator expression), for each function
+    of the user's *report* walked whose name is in *flagged*, the helpers
+    with a finding a hit would skip; those codes are noted as holding one,
+    and every other code walked as holding none (`_LINE_STATUS`), so a
+    later strict call watches the lines of the first alone."""
+    from ..analysis.helper_code import qualname_of
+
+    out: dict[str, set[types.CodeType]] = {}
+    clean: set[types.CodeType] = set()
+    for ref, walked in getattr(report, "walked_code", ()) or ():
+        fn = ref()
+        if type(fn) is not types.FunctionType or not _user_module(sys.modules.get(fn.__module__)):
+            continue
+        name = qualname_of(fn)
+        codes = _nested_codes(walked)
+        if name in flagged:
+            out.setdefault(name, set()).update(codes)
+        else:
+            clean |= codes
+    flagged_codes = set().union(*out.values()) if out else set()
+    for code in flagged_codes:
+        _LINE_STATUS[code] = True
+    for code in clean - flagged_codes:
+        _LINE_STATUS.setdefault(code, False)
+    return out
+
+
+def _nested_codes(codes: Iterable[Any]) -> set[types.CodeType]:
+    out: set[types.CodeType] = set()
+    stack = [c for c in codes if isinstance(c, types.CodeType)]
+    while stack:
+        c = stack.pop()
+        if c not in out:
+            out.add(c)
+            stack.extend(k for k in c.co_consts if isinstance(k, types.CodeType))
+    return out
+
+
+def _code_lines(code: types.CodeType) -> set[int]:
+    return {line for _start, _end, line in code.co_lines() if line is not None}
+
+
+def _line_unrun(issue: Any, families: Mapping[str, set[types.CodeType]], unit: Any) -> bool:
+    """Did the line *issue* is on not run in the strict traced call *unit*
+    (`TraceUnit.line_ran`)? Its function ran, but not the branch it is in.
+
+    The line is looked for in the code of the helper the finding names
+    (`_families`), nested code included: each code that holds an
+    instruction on it and started in the call must have had its lines
+    watched from its first start in it (`_Recorder._arm_lines`) and not
+    run that one. Anything less sure keeps the finding: a finding about a
+    whole function (line 0), a line no instruction is on (a decorator, a
+    constant folded away, a line of a statement spanning several that only
+    another line's instructions run), code from another file, or a
+    definition not where its file says (an edit since it was loaded)."""
+    if unit is None or getattr(unit, "line_ran", None) is None or issue.line <= 0:
+        return False
+    family = families.get(issue.where)
+    if not family:
+        return False
+    holders = [c for c in family if issue.line in _code_lines(c)]
+    if not holders:
+        return False
+    if issue.filename:
+        want = os.path.normcase(os.path.abspath(issue.filename))
+        if any(os.path.normcase(os.path.abspath(c.co_filename)) != want for c in holders):
+            return False
+    for code in holders:
+        if code not in unit.codes:
+            # Never started in the call: none of its lines ran.
+            continue
+        if code not in unit.line_codes or issue.line in unit.line_ran.get(code, ()):
+            return False
+    from ..source_reading import code_is_where_it_says
+
+    return all(code_is_where_it_says(c) for c in holders)
+
+
+def note_line_status(codes: Iterable[types.CodeType]) -> None:
+    """*codes* (the code the key covers, or folded) are not judged by a
+    strict traced call: their lines are not watched, unless a call judged
+    them to hold a finding (`_families`)."""
+    for code in codes:
+        _LINE_STATUS.setdefault(code, False)
 
 
 def _helpers_not_run(report: Any, unit: Any) -> set[str]:
@@ -1648,6 +1833,10 @@ def build(
             b = _Build(unit, static_codes)
             items = b.run()
         judged = [f for f in b.functions if f.__code__ not in accepted] if accepted else b.functions
+        if strict:
+            note_line_status(static_codes)
+            if accepted:
+                note_line_status(accepted)
         why = (_refusal_in(judged, unit, owners) or _changed_global(items, unit.global_starts)) if strict else None
         if why is not None:
             return None, why
