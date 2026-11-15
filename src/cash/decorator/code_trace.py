@@ -75,6 +75,7 @@ from typing import Any
 
 from .. import _weak
 from .._gc_context import collecting
+from .._memo import CODE_OBJECTS, LruMemo
 from .._own_work import inside as own_work_inside
 from .._own_work import left_out as own_work_left_out
 from .._own_work import rearm_with as own_work_rearm_with
@@ -1655,7 +1656,23 @@ _LOAD_LOCAL = frozenset({"LOAD_FAST", "LOAD_FAST_CHECK", "LOAD_FAST_BORROW"})
 _LOAD_TWO_LOCALS = frozenset({"LOAD_FAST_LOAD_FAST", "LOAD_FAST_BORROW_LOAD_FAST_BORROW"})
 
 
-def import_reads(code: types.CodeType, g: Mapping[str, Any]) -> list[tuple[str, str, tuple[str, ...]]]:
+def import_reads(code: types.CodeType, g: Mapping[str, Any]) -> tuple[tuple[str, str, tuple[str, ...]], ...]:
+    """`import_reads_now`, remembered per code object and package: it
+    reads nothing else, and a miss's trace asked it of every helper the
+    body ran, each disassembled again on every call."""
+    package = g.get("__package__") or ""
+    key = (code, package)
+    found = _IMPORT_READS.get(key)
+    if found is None:
+        found = _IMPORT_READS[key] = tuple(import_reads_now(code, g))
+    return found
+
+
+#: `import_reads` by ``(code, package)``.
+_IMPORT_READS: LruMemo[tuple, tuple] = LruMemo(CODE_OBJECTS)
+
+
+def import_reads_now(code: types.CodeType, g: Mapping[str, Any]) -> list[tuple[str, str, tuple[str, ...]]]:
     """What *code*'s own imports take, read from its bytecode: ``(imported,
     module, chain)`` for each ``from module import name`` used (chain
     ``(name,)``) and each ``module.a.b`` read through a local an import
