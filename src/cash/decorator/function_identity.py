@@ -27,7 +27,13 @@ from ..content_hashers import BUILTIN_CONTENT
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning
 from ..jit_functions import jit_identity, jit_python_function
-from ..loaded_code import code_objects_of, loaded_class_identity, loaded_code_matches_disk, loaded_module_matches_disk
+from ..loaded_code import (
+    code_objects_of,
+    foreign_members,
+    loaded_class_identity,
+    loaded_code_matches_disk,
+    loaded_module_matches_disk,
+)
 from ..source_norm import bytecode_identity, code_consts_without_docstring
 from ..source_reading import defining_file
 
@@ -279,6 +285,14 @@ def hash_callable_source(fn: Callable) -> str:
     # file is recorded against the file's stat.
     keyed_stat = stat_code_file(fn)
     digest = source_digest(fn)
+    if digest is not None and isinstance(fn, type):
+        # A class's text is what its body defined. A method or property
+        # getter bound on it from outside (``Thing.prop = property(newp)``)
+        # is not in that text: keyed by it alone, the call kept serving the
+        # old getter's result, in this process and the next.
+        foreign = [f"{name}.{tag}={hash_callable_source(func)}" for name, tag, func in foreign_members(fn)]
+        if foreign:
+            digest = hashlib.sha256(f"{digest}:members:{'|'.join(foreign)}".encode()).hexdigest()
     if digest is None:
         digest = compiled_identity(fn)
         # A function with no readable source (a dataclass's generated

@@ -19,6 +19,7 @@ numbers, so an edit to a neighbouring function does not read as one.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import importlib.util
 import io
@@ -476,9 +477,20 @@ def code_objects_of(owner: object, *, follow_wrapped: bool = True) -> tuple:
                 if kind is types.FunctionType:
                     func = value
                 elif kind is property:
+                    # Its setter and deleter too: `Thing.prop = property(get,
+                    # new_set)` keeps the getter's code.
                     func = value.fget
+                    accessor = value.fset
+                    if accessor is not None and type(accessor) is types.FunctionType:
+                        found.append(accessor.__code__)
+                    accessor = value.fdel
+                    if accessor is not None and type(accessor) is types.FunctionType:
+                        found.append(accessor.__code__)
                 elif kind is staticmethod or kind is classmethod:
                     func = value.__func__
+                elif kind is _CACHED_PROPERTY:
+                    # Its getter is `.func`, which can be set in place.
+                    func = value.func
                 elif kind in _PLAIN_ATTRIBUTE_TYPES:
                     continue
                 else:
@@ -520,9 +532,52 @@ def code_objects_of(owner: object, *, follow_wrapped: bool = True) -> tuple:
 
 
 #: Class attribute types that hold no function (`code_objects_of`).
+_CACHED_PROPERTY = functools.cached_property
 _PLAIN_ATTRIBUTE_TYPES = frozenset(
     {str, int, float, bool, type(None), tuple, dict, types.MappingProxyType, types.GetSetDescriptorType}
 )
+
+
+def _member_functions(value: object) -> list[tuple[str, types.FunctionType]]:
+    """The functions one class attribute runs, each with what it is to it."""
+    kind = type(value)
+    if kind is types.FunctionType:
+        pairs = [("", value)]
+    elif kind is property:
+        pairs = [("get", value.fget), ("set", value.fset), ("del", value.fdel)]
+    elif kind is staticmethod or kind is classmethod:
+        pairs = [(kind.__name__, value.__func__)]
+    elif kind is functools.cached_property:
+        pairs = [("cached", value.func)]
+    else:
+        return []
+    return [(tag, func) for tag, func in pairs if type(func) is types.FunctionType]
+
+
+def foreign_members(cls: type) -> list[tuple[str, str, types.FunctionType]]:
+    """The functions *cls*'s attributes run that its class body did not
+    define under that name: ``Thing.prop = property(newp)``,
+    ``Thing.m = new_m``, ``Thing.cp.func = ...`` from outside the class. A
+    class keyed by its source text stands for what its body defined; these
+    are not in it. Sorted by attribute name, as ``(name, tag, function)``.
+
+    A function the body defined carries the class's qualified name and its
+    own (a dataclass's generated methods are named so too); one the body
+    bound under another name (``prop = property(_get)``) is listed, which
+    is stable."""
+    prefix = f"{cls.__qualname__}."
+    module = cls.__module__
+    found = []
+    try:
+        members = sorted(((k, v) for k, v in vars(cls).items() if isinstance(k, str)), key=lambda kv: kv[0])
+    except TypeError:
+        return []
+    for name, value in members:
+        for tag, func in _member_functions(value):
+            if func.__module__ == module and func.__qualname__ == prefix + name:
+                continue
+            found.append((name, tag, func))
+    return found
 
 
 def loaded_class_identity(cls: type) -> str | None:
