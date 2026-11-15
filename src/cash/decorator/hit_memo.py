@@ -99,6 +99,10 @@ ENABLED = _cw is not None and _flag("CASH_HITPATH", "1")
 VERIFY = ENABLED and _flag("CASH_HITPATH_VERIFY", "0")
 
 _fast_lookup = _cw.fast_lookup if ENABLED else None
+if ENABLED:
+    from . import warning_state as _warning_state
+
+    _warning_state.watch(_cw)
 _world_epoch = _cw.world_epoch if ENABLED else None
 _cash_epoch = _cw.cash_epoch if ENABLED else None
 
@@ -198,6 +202,10 @@ def epochs(spec: CachedFunction, args: tuple, kwargs: dict) -> tuple | None:
     new, so a hit keyed from the content in between is not filed under it."""
     if _world_epoch is None:
         return None
+    # The warnings state a key folds: a change since the last look moves
+    # the cash epoch now, not at the next fast hit, so a hit keyed under
+    # the new state is not remembered under the old (`warning_state`).
+    _cw.warn_check()
     if _SCALARS_OF[0] is not sys.modules.get("numpy"):
         numpy_scalars_keyed()
     state = spec.hit_state
@@ -1536,6 +1544,7 @@ class HitMemo:
         """Remember the ordinary hit *call* just made, when it may be served
         again from here (see the module doc)."""
         spec, runner = self.spec, self.runner
+        _cw.warn_check()  # the warnings state moved since `epochs`: the cash epoch did
         world_now = _world_epoch()
         state = self.state
         if world_now != before[0] or _cash_epoch() != before[1] or state[S_ENTRIES] is not before[2]:
@@ -1748,7 +1757,7 @@ VERIFIED = [0]
 #: the call reaches, which `library_versions` reads once per process (the
 #: library itself is reached by a global name the scan watches).
 _LEDGER_KINDS = frozenset(
-    {"calls", "helper", "globals", "captures and defaults of cached function", "installed library"}
+    {"calls", "helper", "globals", "captures and defaults of cached function", "installed library", "warnings"}
 )
 
 #: Results a hit hands back as the very object the RAM tier holds.

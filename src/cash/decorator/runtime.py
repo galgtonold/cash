@@ -54,7 +54,7 @@ from ..tracking.randomness import (
     replayable,
 )
 from ..tracking.trace_recorder import other_thread_alive
-from . import attribute_replay, code_trace, hit_memo, state_memo, walk_scope
+from . import attribute_replay, code_trace, hit_memo, state_memo, walk_scope, warning_state
 from .arg_hashing import (
     CALL_POLARS,
     CONTENT_KEYED,
@@ -656,6 +656,13 @@ class KeyBuilder:
         chain.append(state_hash)
         state_hash = self._environment.fold_environment(func, func_name, state_hash)
         chain.append(state_hash)
+        # What a warning raised by any code the call reaches does: the
+        # filters that make it an exception and the display hooks a program
+        # rebound (`warning_state`). Nothing while both are plain Python's.
+        warned = warning_state.fingerprint()
+        if warned is not None:
+            ledger_note(("warnings", "filters and display hooks"), warned)
+            state_hash = hashlib.sha256(f"{state_hash}:warnings:{warned}".encode()).hexdigest()
         if spec.arg_key is not None:
             # What decides the argument part is code too: a caller that
             # reaches this function keys it as well (`callee_state`).
