@@ -15,6 +15,7 @@ import logging
 import subprocess
 import sys
 import textwrap
+import warnings
 
 import pytest
 
@@ -70,6 +71,55 @@ def test_a_cyclic_argument_holding_a_set_runs_uncached_and_says_so(tmp_path):
         assert f(graph) == 11
     assert f(graph) == 11
     assert calls == [0, 0]
+
+
+def _tagged_ring(size, chord=None, odd_tag=None):
+    nodes = [Node(i) for i in range(size)]
+    for i, node in enumerate(nodes):
+        node.tags = {"a", "b"}
+        node.peers = [nodes[(i + 1) % size]]
+    if odd_tag is not None:
+        nodes[1].tags = {"a", odd_tag}
+    if chord is not None:
+        nodes[chord[0]].peers.append(nodes[chord[1]])
+    return nodes[0]
+
+
+def _edges(node):
+    seen, todo, edges = set(), [node], []
+    while todo:
+        n = todo.pop()
+        if n.name in seen:
+            continue
+        seen.add(n.name)
+        edges += [(n.name, sorted(n.tags), p.name) for p in n.peers]
+        todo += n.peers
+    return sorted(edges)
+
+
+def test_set_holding_cyclic_graphs_apart_only_inside_the_loop_never_share_a_result(tmp_path):
+    """Left to the key pickle, such graphs keyed alike: a four-node ring
+    with a chord was handed the result of a three-node ring called before
+    it. Rings apart in one tag or one chord must each get their own result,
+    as plain Python gives."""
+    c = Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
+
+    @c.cache(assume_safe=True)
+    def edges(node):
+        return _edges(node)
+
+    graphs = [
+        _tagged_ring(3),
+        _tagged_ring(3, odd_tag="c"),
+        _tagged_ring(4, chord=(1, 3)),
+        _tagged_ring(4, chord=(2, 0)),
+    ]
+    expected = [_edges(g) for g in graphs]
+    assert len({repr(e) for e in expected}) == len(graphs)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        for _ in range(2):
+            assert [edges(g) for g in graphs] == expected
 
 
 def test_a_module_logger_read_in_a_cached_function_returns(tmp_path):
