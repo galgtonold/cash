@@ -1044,7 +1044,57 @@ def _digest(value: Any) -> str | None:
         # when it is served inside the call, is a "cached" item of its own).
         value = wrapped
     got = value_digest(value)
+    if got.startswith("opaque:") and wrapped is not None:
+        return _wrapping_cached_digest(value)
     return None if got.startswith("opaque:") else got
+
+
+#: How many ``__wrapped__`` links `_wrapping_cached_digest` follows.
+_WRAPPED_LINKS_MAX = 16
+
+
+def _wrapping_cached_digest(value: Any) -> str | None:
+    """The digest of a function whose ``__wrapped__`` chain reaches a
+    ``@cash.cache`` wrapper (``@deprecated_arg`` over ``@cash.cache``), else
+    None: the code and bindings of each layer above the cached function, and
+    that function's own state (``_cash_state``, what a nested cached call's
+    "cached" item holds) -- its code, helpers and the globals they read. By
+    value the layers' closures hold the cached wrapper, whose `Cash` cannot
+    be digested, so a function importing such a name ran unstored."""
+    from .user_code import is_cash_wrapper
+
+    parts: list[str] = []
+    link = value
+    for _ in range(_WRAPPED_LINKS_MAX):
+        if is_cash_wrapper(link):
+            try:
+                state = link._cash_state()
+            except Exception:  # noqa: BLE001 - a state that cannot be built cannot be checked
+                return None
+            if not isinstance(state, str):
+                return None
+            parts.append(f"cached:{state}")
+            return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()[:24]
+        nxt = getattr(link, "__wrapped__", None) if type(link) is types.FunctionType else None
+        if nxt is None:
+            return None
+        layer = _code_digest(link.__code__, link)
+        if layer is None:
+            return None
+        parts.append(f"layer:{layer}")
+        for cell in link.__closure__ or ():
+            try:
+                held = cell.cell_contents
+            except ValueError:  # an empty cell
+                continue
+            if held is nxt:
+                continue
+            got = _digest(held)
+            if got is None:
+                return None
+            parts.append(f"cell:{got}")
+        link = nxt
+    return None
 
 
 def _type_alias(ns: Mapping[str, Any] | None, module: str, name: str) -> Any:
