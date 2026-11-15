@@ -114,6 +114,10 @@ class CodeSet:
 #: code or an object. The recorder stops arming it (`code_trace`), which
 #: is most of what watching a library costs a miss.
 QUIET = CodeSet()
+#: Whether this process has said KEY-LIBRARY-STATE-UNSEEN: a call stored
+#: without its body recorded (below 3.12, ``CASH_TRACE=0``, a coroutine)
+#: has no setting checked, said once (`CallRunner._warn_settings_unseen`).
+UNSEEN_SAID = False
 #: filename -> whether code there is a library's (`counts_file`).
 _FILES: dict[str, bool] = {}
 

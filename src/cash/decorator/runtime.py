@@ -105,10 +105,12 @@ from .function_identity import func_key, hash_callable_source
 from .global_values import KEY_BUILD_DIGESTS
 from .globals_fold import READS_FOLDED
 from .iterators import ChunkedCachedIterator, StreamingCachedIterator, chunk_prefix, is_one_shot_iterator
+from .library_versions import library_versions
 from .refusal_verdicts import ArgumentRefusal, RefusalVerdicts
 from .registry import resolve_dynamic_dependencies
 from .rng import capture_rng_pre_state, replay_rng_state
 from .store import StoreRequest
+from .user_code import own_package
 
 if TYPE_CHECKING:
     from ..dependency_state import DependencyStateHasher
@@ -2507,6 +2509,8 @@ class CallRunner:
             # (uncached) value must not carry one - it would reference an entry
             # that was never written.
             self._store.attach_lineage(res, call.cache_key, auto_file_deps, ttl=call.ttl, func_name=func_name)
+            if not call.traced and not library_reads.UNSEEN_SAID:
+                self._warn_settings_unseen(func, func_name)
             self._store.store(
                 StoreRequest(
                     call,
@@ -2685,6 +2689,34 @@ class CallRunner:
             "the value in as an argument.",
         )
         return why
+
+    def _warn_settings_unseen(self, func: Callable, func_name: str) -> None:
+        """Say once a process that a call stored without its body recorded
+        does not have the library settings it read checked: below Python
+        3.12, with ``CASH_TRACE=0`` and for a coroutine nothing sees them
+        (`library_reads`). Only for a call that reaches a library."""
+        if not library_versions(self._registry.code_functions(func, func_name), own_package(func)):
+            return
+        library_reads.UNSEEN_SAID = True
+        if inspect.iscoroutinefunction(func):
+            where = "a coroutine's body is not recorded"
+        elif not code_trace.TRACEABLE:
+            where = "Python below 3.12 does not record what a body reads"
+        elif not code_trace.on():
+            where = "CASH_TRACE=0 turns off recording what a body reads"
+        else:
+            where = "it returns an iterator, whose code runs after the call and is not recorded"
+        self._notices.warn_once(
+            CashCacheIneffectiveWarning,
+            func_name,
+            "library_state_unseen",
+            f"{func_name} reaches library code and {where}, so a library setting changed between calls "
+            "(sklearn.set_config, np.seterr, pandas options, a ContextVar, ...) is not detected: a later "
+            "call could be served a result made under the old setting. Said once per process.",
+            code="KEY-LIBRARY-STATE-UNSEEN",
+            fix="run on Python 3.12+ with tracing on (the default), pass the setting in as an argument, "
+            "or clear the cache after changing it.",
+        )
 
     def _refuse_untraced(self, spec: CachedFunction, why: str) -> str:
         """Say once why a call that picks code by name is not stored; the

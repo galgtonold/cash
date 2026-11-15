@@ -78,7 +78,9 @@ other than plain data cannot be compared, and the call runs uncached with a
 [`KEY-LIBRARY-STATE-UNREAD`](../warnings.md#key-library-state-unread)
 warning. Not seen: a setting held as an object or a function (a formatter
 callback), one read through a method (`options.get("x")`), and anything before Python 3.12, with `CASH_TRACE=0`, or in a
-coroutine function, whose bodies are not recorded.
+coroutine function, whose bodies are not recorded; the first such call that
+reaches library code says so once per process with a
+[`KEY-LIBRARY-STATE-UNSEEN`](../warnings.md#key-library-state-unseen) warning.
 
 <!-- claim: cash/decorator/rng.py:RngWatch.fold_rng_epoch @8346a209 -->
 An unseeded draw is not a change. The first value is stored and returned on

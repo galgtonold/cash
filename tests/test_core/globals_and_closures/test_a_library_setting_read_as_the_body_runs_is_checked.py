@@ -355,3 +355,100 @@ def test_before_312_nothing_is_recorded(lib, c):
     f(7)
     f(7)
     assert f.cache_info()["hits"] == 1
+
+
+# Where a body is not recorded (below 3.12, CASH_TRACE=0, a coroutine) the
+# settings it reads are not checked: the first call reaching a library that
+# is stored says so, once a process.
+
+UNSEEN = "KEY-LIBRARY-STATE-UNSEEN"
+
+
+@pytest.fixture
+def unrecorded(monkeypatch):
+    monkeypatch.setattr(library_reads, "UNSEEN_SAID", False)
+    if RECORDED:
+        monkeypatch.setenv("CASH_TRACE", "0")
+
+
+def _said(seen):
+    return [w for w in seen if UNSEEN in str(w.message)]
+
+
+def adds_one(x):
+    return x + 1
+
+
+def roots(x):
+    np = pytest.importorskip("numpy")
+    return float(np.sqrt(x))
+
+
+def norms(x):
+    np = pytest.importorskip("numpy")
+    return float(np.linalg.norm([x, x]))
+
+
+def test_an_unrecorded_call_reaching_a_library_says_so_once(c, unrecorded):
+    pytest.importorskip("numpy")
+    with warnings.catch_warnings(record=True) as seen:
+        warnings.simplefilter("always")
+        own = c.cache(adds_one)
+        assert own(1) == 2
+        assert not _said(seen), "a call reaching no library has nothing to say"
+        f, g = c.cache(roots), c.cache(norms)
+        for x in (4, 9, 4):
+            assert f(x) == roots(x)
+            assert g(x) == norms(x)
+    said = _said(seen)
+    assert len(said) == 1
+    assert said[0].message.code == UNSEEN
+    assert "roots" in str(said[0].message)
+    # Otherwise as before: the entry is served by its key.
+    assert f.cache_info()["hits"] == 1
+    assert g.cache_info()["hits"] == 1
+
+
+def test_a_coroutine_reaching_a_library_says_so(c, monkeypatch):
+    pytest.importorskip("numpy")
+    import asyncio
+
+    monkeypatch.setattr(library_reads, "UNSEEN_SAID", False)
+
+    async def aroots(x):
+        return roots(x)
+
+    with warnings.catch_warnings(record=True) as seen:
+        warnings.simplefilter("always")
+        f = c.cache(aroots)
+        assert asyncio.run(f(4)) == 2.0
+        assert asyncio.run(f(4)) == 2.0
+    said = _said(seen)
+    assert len(said) == 1
+    assert "coroutine" in str(said[0].message)
+
+
+@needs_recording
+def test_a_recorded_call_says_nothing(c, monkeypatch):
+    pytest.importorskip("numpy")
+    monkeypatch.setattr(library_reads, "UNSEEN_SAID", False)
+    monkeypatch.delenv("CASH_TRACE", raising=False)
+    with warnings.catch_warnings(record=True) as seen:
+        warnings.simplefilter("always")
+        f = c.cache(roots)
+        f(4)
+        f(4)
+    assert not _said(seen)
+    assert library_reads.UNSEEN_SAID is False
+
+
+def test_the_note_can_be_silenced(c, unrecorded):
+    pytest.importorskip("numpy")
+    with warnings.catch_warnings(record=True) as seen:
+        warnings.simplefilter("always")
+        warnings.filterwarnings("ignore", message=r"\[KEY-LIBRARY-STATE-UNSEEN\]")
+        f = c.cache(roots)
+        assert f(4) == 2.0
+        assert f(4) == 2.0
+    assert not _said(seen)
+    assert f.cache_info()["hits"] == 1
