@@ -27,6 +27,7 @@ __all__ = [
     "audited_lines",
     "assume_safe_block_lines",
     "is_assume_safe_block",
+    "may_hold_waiver_block",
     "waiver_items",
 ]
 
@@ -461,6 +462,19 @@ def waiver_items(node: ast.With) -> list[ast.withitem]:
         if parts is not None and parts[-1] == _WAIVER_NAME:
             found.append(item)
     return found
+
+
+def may_hold_waiver_block(tree: ast.AST) -> bool:
+    """Could `assume_safe_block_lines` find a block in *tree*, for any
+    namespace? True when a ``with`` item calls a dotted name with no
+    arguments and binds no ``as`` name (``waive()`` may be ``assume_safe``
+    imported under another name). From the text alone, so an answer that
+    holds without waivers may be kept with the text (`text_store`)."""
+    return any(
+        isinstance(node, ast.With)
+        and any(i.optional_vars is None and _waiver_call_parts(i.context_expr) is not None for i in node.items)
+        for node in walk_tree(tree)
+    )
 
 
 def is_assume_safe_block(node: ast.AST) -> bool:

@@ -594,6 +594,8 @@ def library_owns(bound: Any, imported: tuple[str, tuple[str, ...]]) -> bool:
     return isinstance(owner, str) and top_package(owner) == top and expected is not None and name == expected
 
 
+#: The ``IMPORT_NAME`` opcode, as a byte string to look for.
+_IMPORT_NAME = bytes([dis.opmap["IMPORT_NAME"]])
 #: code -> the absolute module names it and the code nested in it import.
 _IMPORTED: dict[int, tuple[types.CodeType, tuple[str, ...]]] = {}
 
@@ -607,7 +609,10 @@ def _imported_modules(code: types.CodeType) -> tuple[str, ...]:
     while stack:
         c = stack.pop()
         stack.extend(k for k in c.co_consts if isinstance(k, types.CodeType))
-        if not c.co_names:
+        # Most code imports nothing: a scan of the opcode bytes (every
+        # other byte of ``co_code``, which holds no specialised or
+        # instrumented opcode) rules it out before `dis` decodes it.
+        if not c.co_names or _IMPORT_NAME not in c.co_code[::2]:
             continue
         try:
             ins = list(dis.get_instructions(c))

@@ -69,6 +69,7 @@ from typing import TYPE_CHECKING, Any
 from .. import _native, _weak
 from .._clock import perf_counter as _perf_counter
 from .._memo import CODE_OBJECTS, LruMemo
+from ..analysis import text_store
 from ..analysis.helper_code import own_code_is_user
 from ..jit_functions import jit_python_function
 from ..source_reading import own_source
@@ -331,8 +332,17 @@ def _signature_names(source: str) -> frozenset[str]:
     resolve them); every identifier of *source* when it does not parse."""
     found = _SIGNATURE_NAMES.get(source)
     if found is None:
-        found = _SIGNATURE_NAMES[source] = frozenset(_parse_signature_names(source))
+        # A function of the text alone, kept across processes (`text_store`).
+        found = _SIGNATURE_NAMES[source] = text_store.kept(
+            "signature-names", source, "", lambda: frozenset(_parse_signature_names(source)), sorted, _names_decoded
+        )
     return found
+
+
+def _names_decoded(value: Any) -> frozenset[str]:
+    if not isinstance(value, list) or not all(type(v) is str for v in value):
+        raise ValueError("not a list of names")
+    return frozenset(value)
 
 
 def _parse_signature_names(source: str) -> set[str]:
