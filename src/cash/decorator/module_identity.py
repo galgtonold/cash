@@ -40,6 +40,33 @@ def module_ref(module: types.ModuleType) -> str:
     return f"{name}@{origin}" if isinstance(origin, str) else name
 
 
+def namespace_module(value: Any) -> types.ModuleType | None:
+    """The module whose namespace *value* is, or None.
+
+    An object can hold a module's ``globals()``: MetPy's ``Exporter``
+    keeps the dict of the module it exports from, so every function of
+    ``metpy.calc`` reached ``exporter``, and through it every other
+    function there. That dict is the module, held another way, and is
+    keyed as a module held by a name is (`module_ref`): walked as data,
+    the walk followed each function into its own reads, which led back to
+    the dict, one function deeper each time, until the key build ran out
+    of stack.
+    """
+    if type(value) is not dict:
+        return None
+    name = value.get("__name__")
+    if type(name) is not str:
+        return None
+    module = sys.modules.get(name)
+    if module is None:
+        return None
+    try:
+        namespace = object.__getattribute__(module, "__dict__")
+    except Exception:  # noqa: BLE001 - a module with no namespace holds none
+        return None
+    return module if namespace is value else None
+
+
 def module_ref_part(label: str, value: Any) -> list[tuple[str, str]]:
     """The key part for *label* holding the module *value*:
     ``(label#module, name)``; none when *value* is not a module.

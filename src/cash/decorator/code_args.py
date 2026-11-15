@@ -36,6 +36,7 @@ from .arg_hashing import is_opaque, is_plain_data
 from .call_state import CARRIER_LOOKUPS
 from .class_data import class_surface_functions, implicit_access_functions
 from .closure_fold import CLASS_BODY_CELLS
+from .module_identity import namespace_module
 from .user_code import cached_function_in, is_user_code_object
 
 if TYPE_CHECKING:
@@ -466,7 +467,9 @@ class CodeArgs:
         # the same result, but it skips building a generator frame per element,
         # and a container of primitives is the overwhelmingly common argument.
         if isinstance(value, dict):
-            if id(value) in _seen:
+            if id(value) in _seen or namespace_module(value) is not None:
+                # Walked, or a module's ``globals()``: the module, which
+                # carries no code here, as one held by a name does not.
                 return
             _seen.add(id(value))
             # A dict SUBCLASS is both a container to walk and a user object
@@ -658,6 +661,8 @@ class CodeArgs:
                 continue
             if type(v) in BUILTIN_CONTAINERS:
                 _seen.add(id(v))
+                if namespace_module(v) is not None:
+                    continue  # a module's globals(): the module, skipped as one is
                 yield from self._find_user_code(v.values() if isinstance(v, dict) else v, _depth + 1, _seen)
             elif issubclass(type(v), (types.FunctionType, type)):
                 if defined_in_user_code(v):

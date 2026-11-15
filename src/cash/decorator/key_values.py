@@ -14,10 +14,11 @@ from typing import Any
 from .._type_memo import TypeMemo, type_key
 from ..analysis.helper_code import is_mock, renamed
 from ..jit_functions import jit_python_function
+from ..kept_state import without_filled_caches
 from ..pint_values import pint_kind
 from ..tracking.trace_items import TYPE_ALIAS, value_digest
 from ..value_types import IMMUTABLE_LEAF_TYPES, is_dead_proxy
-from .module_identity import module_ref
+from .module_identity import module_ref, namespace_module
 from .user_code import is_user_class, is_user_code_object, own_package
 
 
@@ -150,7 +151,7 @@ def carried_payload(value: Any) -> Any:
     if is_user_class(type(value), own_package(type(value))):
         state = getattr(value, "__dict__", None)
         if isinstance(state, dict):
-            return ("instance", dict(state))
+            return ("instance", without_filled_caches(value, dict(state)))
         return ("instance", reduced_state(value))
     held = held_partials(value)
     return ("wrapped partials", held) if held else None
@@ -281,6 +282,10 @@ def _stabilized(v: Any, hash_callable, _path: frozenset[int], carried: bool) -> 
             return ("__cash_callable__", ident), True
         return ("__cash_callable__", ident, _stabilized(payload, hash_callable, _path | {id(v)}, True)[0]), True
     if isinstance(v, dict):
+        module = namespace_module(v)
+        if module is not None:
+            # A module's ``globals()`` held by an object: the module.
+            return ("__cash_module__", module_ref(module)), True
         inner = _path | {id(v)}
         out, changed = {}, False
         for k, val in v.items():

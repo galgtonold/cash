@@ -1461,6 +1461,8 @@ def _pickled_state(value: Any) -> Any:
     views = kept_state.derived_views(value) if rest and isinstance(rest[0], dict) else ()
     if views:
         rest[0] = {k: v for k, v in rest[0].items() if k not in views}
+    if rest and isinstance(rest[0], dict):
+        rest[0] = kept_state.without_filled_caches(value, rest[0])
     parts: list = [tuple("__cash_self_type__" if a is t else a for a in args or ())]
     for i, part in enumerate(rest):
         # State, then the iterators of list items and dict items.

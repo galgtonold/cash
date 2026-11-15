@@ -40,6 +40,7 @@ from . import _native, _weak
 from ._own_work import own_work
 from ._user_attrs import instance_of
 from .live_state import is_live_stream, live_reduce
+from .unnamed_code import library_code_override, refused_unnamed
 from .value_types import WEAK_PROXY_TYPES, is_dead_proxy
 
 __all__ = [
@@ -65,11 +66,14 @@ __all__ = [
     "stopped_at_defined_again",
     "store_memo",
     "too_deep",
+    "without_filled_caches",
 ]
 
 
 def dumps(value: Any, *args: Any, **kwargs: Any) -> bytes:
-    """`_dumps_value` inside `one_keying`; see there. A value holding a
+    """`_dumps_value` inside `one_keying`; see there. Key bytes that stopped
+    at a library's function or class no name finds are pickled again with
+    each written as what defines it (`unnamed_code`). A value holding a
     function whose cell ran again since is pickled again with it by its
     name, when that name holds the same definition now (`defined_again`):
     not with a *sink*, whose bytes are written already, nor when buffers
@@ -77,17 +81,21 @@ def dumps(value: Any, *args: Any, **kwargs: Any) -> bytes:
     *on_retry*)."""
     try:
         return _dumps_once(value, *args, **kwargs)
-    except pickle.PicklingError as exc:
-        again = (
-            stopped_at_defined_again(exc)
-            and kwargs.get("sink") is None
-            and (kwargs.get("buffer_callback") is None or kwargs.get("on_retry") is not None)
+    except (pickle.PicklingError, AttributeError) as exc:
+        retry = kwargs.get("sink") is None and (
+            kwargs.get("buffer_callback") is None or kwargs.get("on_retry") is not None
         )
-        if not again:
+        if retry and isinstance(exc, pickle.PicklingError) and stopped_at_defined_again(exc):
+            override = defined_again(kwargs.get("reducer_override"))
+        elif retry and kwargs.get("keyed") and refused_unnamed(exc):
+            # Key bytes, never loaded: a library's class or function no
+            # name finds is written as what defines it (`unnamed_code`).
+            override = library_code_override(kwargs.get("reducer_override"))
+        else:
             raise
     if kwargs.get("on_retry") is not None:
         kwargs["on_retry"]()
-    kwargs["reducer_override"] = defined_again(kwargs.get("reducer_override"))
+    kwargs["reducer_override"] = override
     return _dumps_once(value, *args, **kwargs)
 
 
@@ -1586,6 +1594,8 @@ class _KeepDict(dict):
         if self._keyed and t.__name__ in _GLOBAL_RNG_TYPE_NAMES:
             # One instance of the class may be a module's global RNG.
             reducer = functools.partial(_reduce_rng_for_key, reducer=reducer)
+        if self._keyed and t.__name__ == "vectorize" and t is getattr(sys.modules.get("numpy"), "vectorize", None):
+            reducer = functools.partial(_reduce_vectorize_for_key, reducer=reducer)
         return reducer
 
     def _store_reducer(self, t: type, registered: Any) -> Any:
@@ -1907,6 +1917,32 @@ def _reduce_rng_for_key(obj: Any, reducer: Any) -> Any:
     if module is not None:
         return (_global_rng, (module,))
     return reducer(obj)
+
+
+def without_filled_caches(value: Any, state: dict) -> dict:
+    """*value*'s instance *state* without what it fills on use from the
+    rest of it: the ufunc a ``numpy.vectorize`` builds from its function on
+    its first call (``_ufunc``). *state* itself when there is none.
+
+    ``scipy.stats.f`` holds several vectorized methods; calling
+    ``f.moment(6, ...)`` anywhere in the process filled one, so a function
+    reading ``f`` -- lmfit's ``conf_interval`` -- keyed apart in a process
+    that had made that call and one that had not, and an argument holding
+    one could not be keyed at all once it had been called (that ufunc has
+    no pickle). What the ufunc does is the function it was built from,
+    which the state still holds."""
+    if state.get("_ufunc") is not None and type(value) is getattr(sys.modules.get("numpy"), "vectorize", None):
+        return {k: v for k, v in state.items() if k != "_ufunc"}
+    return state
+
+
+def _reduce_vectorize_for_key(obj: Any, reducer: Any) -> Any:
+    """*reducer*'s reduce of a ``numpy.vectorize``, its state
+    `without_filled_caches`."""
+    reduced = reducer(obj)
+    if isinstance(reduced, str) or len(reduced) < 3 or not isinstance(reduced[2], dict):
+        return reduced
+    return (reduced[0], reduced[1], without_filled_caches(obj, reduced[2]), *reduced[3:])
 
 
 def _global_rng(module: str) -> Any:
