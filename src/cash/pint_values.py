@@ -11,15 +11,19 @@ dimension tables, its groups, systems and contexts, the contexts active,
 and its settings. Not by its whole state: it also holds caches of what it
 derived from them (parsed names, dimensionalities, root units, the weak
 index of a context's relations) that grow as it is used and say nothing
-the definitions do not. A definition that has no value form -- a context
-transformation or a preprocessor written in Python rather than in a
-definitions file -- makes the registry unkeyable: the call runs uncached,
-with a warning (`KEY-UNHASHABLE-ARG`), never under a key that leaves it out.
+the definitions do not. A context transformation or a preprocessor written
+in Python (MetPy adds three preprocessors to the application registry) is
+keyed by its compiled body and every value it can read: its defaults,
+cells and the globals its code names. One that reads what has no value
+form -- a class of the user's, an object known only by its address --
+makes the registry unkeyable: the call runs uncached, with a warning
+(`KEY-UNHASHABLE-ARG`), never under a key that leaves it out.
 """
 
 from __future__ import annotations
 
 import contextvars
+import functools
 import hashlib
 import operator
 import re
@@ -31,6 +35,7 @@ from typing import Any
 
 from . import _weak
 from ._type_memo import per_type
+from .install_paths import is_user_code_module
 
 #: The registry's settings that change what a quantity computes or prints.
 _SCALAR_SETTINGS = (
@@ -203,7 +208,25 @@ def _fingerprint(reg: Any) -> tuple:
     formatter = getattr(reg, "formatter", None)
     parts.append(getattr(formatter, "default_format", None))
     parts.append(repr(getattr(formatter, "locale", None)))
+    parts.append(_foreign_functions_form(reg))
     return tuple(parts)
+
+
+def _foreign_functions_form(reg: Any) -> tuple:
+    """`_function_form` of each function in *reg* that pint did not build
+    (a preprocessor or a context transformation a library or the user
+    added). Part of the fingerprint: what such a function reads can change
+    while the same function object stays in the registry."""
+    found: list = list(getattr(reg, "preprocessors", None) or ())
+    contexts = list((getattr(reg, "_contexts", None) or {}).values())
+    contexts.extend(getattr(getattr(reg, "_active_ctx", None), "contexts", ()))
+    for ctx in contexts:
+        found.extend((getattr(ctx, "funcs", None) or {}).values())
+    return tuple(
+        _function_form(fn, "function")
+        for fn in found
+        if not (isinstance(fn, types.FunctionType) and (fn.__module__ or "").partition(".")[0] == "pint")
+    )
 
 
 #: What a group or system of units is (pint's ``Group`` and ``System``
@@ -237,18 +260,111 @@ def _value_repr(value: Any, where: str) -> str:
 
 
 def _function_form(fn: Any, where: str) -> tuple:
-    """A function pint built from a definition: its name and what it closes
-    over (the parsed relation, an equation's text). A function of the
-    user's has no value form here."""
+    """A function in the registry -- a context transformation or a
+    preprocessor. pint's own, built from a definition, by its name and what
+    it closes over (the parsed relation, an equation's text); any other by
+    its code and every value it can read (`_code_form`)."""
     module = getattr(fn, "__module__", None) or ""
-    if not isinstance(fn, types.FunctionType) or module.partition(".")[0] != "pint":
-        name = getattr(fn, "__qualname__", type(fn).__qualname__)
+    if isinstance(fn, types.FunctionType) and module.partition(".")[0] == "pint":
+        cells = tuple(_value_repr(c.cell_contents, where) for c in fn.__closure__ or ())
+        return (module, fn.__qualname__, fn.__code__.co_code, cells)
+    return _held_form(fn, where, set())
+
+
+def _code_names(code: types.CodeType) -> set[str]:
+    """The global names *code* and the code nested in it can load."""
+    names = set(code.co_names)
+    for const in code.co_consts:
+        if isinstance(const, types.CodeType):
+            names |= _code_names(const)
+    return names
+
+
+def _code_form(fn: types.FunctionType, where: str, walking: set[int]) -> tuple:
+    """A Python function by value: its compiled body (`bytecode_identity`,
+    stable across processes), its defaults, the cells it closes over and
+    the globals its code names, each by `_held_form`. Read again at every
+    digest: a global rebound or a cell written changes what it does with
+    the same function object in the registry."""
+    from .source_norm import bytecode_identity
+
+    body = bytecode_identity(fn)
+    if body is None:
+        raise TypeError(f"the pint registry's {where} holds {fn.__qualname__}, whose code cash cannot read")
+    walking.add(id(fn))
+    try:
+        held = [("default", _held_form(v, where, walking)) for v in fn.__defaults__ or ()]
+        held += [("kwdefault", k, _held_form(v, where, walking)) for k, v in sorted((fn.__kwdefaults__ or {}).items())]
+        held += [("cell", _held_form(c.cell_contents, where, walking)) for c in fn.__closure__ or ()]
+        namespace = fn.__globals__
+        for name in sorted(_code_names(fn.__code__)):
+            if name in namespace:
+                held.append(("global", name, _held_form(namespace[name], where, walking)))
+    except ValueError:  # an empty cell: a name the function binds after it is made
         raise TypeError(
-            f"the pint registry's {where} is the Python function {name}, which cash cannot key by value; "
-            f"define it in a definitions string or file, or register a hasher for the quantity"
+            f"the pint registry's {where} holds {fn.__qualname__}, which closes over an unset name"
+        ) from None
+    finally:
+        walking.discard(id(fn))
+    return ("code", fn.__module__, fn.__qualname__, body, tuple(held))
+
+
+def _held_form(value: Any, where: str, walking: set[int]) -> Any:
+    """What a function in the registry can read, as plain values: a function
+    by `_code_form`, a partial by what it calls and binds, a module or a
+    library class or builtin by its name, any other value by its repr.
+    TypeError for what has none of these -- a class of the user's, whose
+    methods could change, or an object whose repr is its address."""
+    if isinstance(value, types.FunctionType):
+        if id(value) in walking:
+            return ("recursive", value.__module__, value.__qualname__)
+        return _code_form(value, where, walking)
+    if isinstance(value, functools.partial):
+        keywords = sorted(value.keywords.items())
+        return (
+            "partial",
+            _held_form(value.func, where, walking),
+            tuple(_held_form(a, where, walking) for a in value.args),
+            tuple((k, _held_form(v, where, walking)) for k, v in keywords),
         )
-    cells = tuple(_value_repr(c.cell_contents, where) for c in fn.__closure__ or ())
-    return (module, fn.__qualname__, fn.__code__.co_code, cells)
+    if isinstance(value, types.ModuleType):
+        return ("module", value.__name__)
+    if isinstance(value, (type, types.BuiltinFunctionType, types.MethodDescriptorType, types.WrapperDescriptorType)):
+        owner = getattr(value, "__module__", None) or getattr(getattr(value, "__objclass__", None), "__module__", None)
+        if owner is None or is_user_code_module(sys.modules.get(owner)):
+            name = getattr(value, "__qualname__", repr(value))
+            raise TypeError(f"the pint registry's {where} reads {name}, which cash cannot key by value")
+        return ("named", owner, value.__qualname__)
+    t = type(value)
+    if t in _PLAIN_LEAVES:
+        return (t.__name__, repr(value))
+    if t is re.Pattern:
+        return ("pattern", value.pattern, value.flags)
+    if t in _CONTAINERS:
+        if id(value) in walking:
+            raise TypeError(f"the pint registry's {where} reads a {t.__qualname__} that contains itself")
+        walking.add(id(value))
+        try:
+            if t is dict:
+                items = tuple((_held_form(k, where, walking), _held_form(v, where, walking)) for k, v in value.items())
+            elif t in (set, frozenset):
+                items = tuple(sorted(repr(_held_form(v, where, walking)) for v in value))
+            else:
+                items = tuple(_held_form(v, where, walking) for v in value)
+        finally:
+            walking.discard(id(value))
+        return (t.__name__, items)
+    raise TypeError(
+        f"the pint registry's {where} reads a {t.__qualname__}, which cash cannot key by value; "
+        f"register a hasher for the quantity"
+    )
+
+
+#: Containers a registry function reads, keyed by what they hold.
+_CONTAINERS = frozenset({tuple, list, dict, set, frozenset})
+
+#: Values a registry function reads that are their repr.
+_PLAIN_LEAVES = frozenset({type(None), bool, int, float, complex, str, bytes})
 
 
 def _context_form(ctx: Any) -> tuple:

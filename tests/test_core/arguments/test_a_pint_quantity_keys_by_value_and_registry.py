@@ -138,11 +138,77 @@ def test_a_global_registry_class_keys_by_its_registry(tmp_path):
     assert f.cache_info()["hits"] == 1
 
 
-def test_a_python_function_in_a_context_runs_uncached_with_a_warning(tmp_path):
+def _context_with(fn):
     ureg = pint.UnitRegistry()
     ctx = pint.Context("custom")
-    ctx.add_transformation("[length]", "[time]", lambda reg, x: x / reg.Quantity(3e8, "m/s"))
+    ctx.add_transformation("[length]", "[time]", fn)
     ureg.add_context(ctx)
+    return ureg
+
+
+def test_a_python_function_in_a_context_keys_by_its_code(tmp_path):
+    f = _cache(tmp_path).cache(_in_meters)
+    light = _context_with(lambda reg, x: x / reg.Quantity(3e8, "m/s"))
+    sound = _context_with(lambda reg, x: x / reg.Quantity(343.0, "m/s"))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert f(light.Quantity(1, "m")) == 1
+        assert f(light.Quantity(1, "m")) == 1
+        assert f(sound.Quantity(1, "m")) == 1
+    assert f.cache_info()["hits"] == 1
+    assert f.cache_info()["misses"] == 2
+
+
+ALIASES = {"thing": "meter"}
+
+
+def _alias(text):
+    return ALIASES.get(text, text)
+
+
+def _to_unit(x, unit):
+    return x.to(unit).magnitude
+
+
+def test_a_preprocessor_keys_by_the_globals_it_reads(tmp_path):
+    ureg = pint.UnitRegistry()
+    ureg.preprocessors.append(_alias)
+    f = _cache(tmp_path).cache(_to_unit)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert f(ureg.Quantity(2000.0, "m"), "thing") == 2000.0
+        assert f(ureg.Quantity(2000.0, "m"), "thing") == 2000.0
+        ALIASES["thing"] = "kilometer"
+        try:
+            # pint remembers what it parsed; a registry that has not met
+            # "thing" yet reads the new alias, as plain Python would.
+            ureg._cache.parse_unit.clear()
+            expected = ureg.Quantity(2000.0, "m").to("thing").magnitude
+            assert expected == 2.0
+            assert f(ureg.Quantity(2000.0, "m"), "thing") == expected
+        finally:
+            ALIASES["thing"] = "meter"
+    assert f.cache_info()["hits"] == 1
+    assert f.cache_info()["misses"] == 2
+
+
+class _Table:
+    """An object with no value form: its repr is its address."""
+
+    def __init__(self):
+        self.names = {"thing": "meter"}
+
+
+TABLE = _Table()
+
+
+def _alias_from_table(text):
+    return TABLE.names.get(text, text)
+
+
+def test_a_function_reading_an_object_cash_cannot_key_runs_uncached_with_a_warning(tmp_path):
+    ureg = pint.UnitRegistry()
+    ureg.preprocessors.append(_alias_from_table)
     f = _cache(tmp_path).cache(_in_meters)
     with warnings.catch_warnings(record=True):
         warnings.simplefilter("always")
@@ -150,3 +216,16 @@ def test_a_python_function_in_a_context_runs_uncached_with_a_warning(tmp_path):
         assert f(ureg.Quantity(1, "m")) == 1
     assert f.cache_info()["hits"] == 0
     assert "KEY-UNHASHABLE-ARG" in _codes(f)
+
+
+def test_a_metpy_quantity_hits(tmp_path):
+    metpy_units = pytest.importorskip("metpy.units")
+    units = metpy_units.units
+    f = _cache(tmp_path).cache(_in_meters)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert f(units.Quantity(np.array([1.5, 2.0]), "km")).tolist() == [1500.0, 2000.0]
+        assert f(units.Quantity(np.array([1.5, 2.0]), "km")).tolist() == [1500.0, 2000.0]
+        assert f(units.Quantity(np.array([1.5, 2.0]), "m")).tolist() == [1.5, 2.0]
+    assert f.cache_info()["hits"] == 1
+    assert _codes(f) == []
