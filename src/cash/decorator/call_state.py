@@ -99,6 +99,7 @@ class Call:
         "polars_args",
         "keyed_parts",
         "content_keyed",
+        "by_content",
         "stored_in",
         "traced",
         "needs_trace",
@@ -133,6 +134,11 @@ class Call:
         #: Which arguments the key holds by all they hold
         #: (`arg_hashing.ContentKeyed`).
         self.content_keyed: Any = None
+        #: ``call_args_hash`` was taken by the arguments' content, not by
+        #: the statement tag the key holds one of them by
+        #: (`arg_hashing.content_only`): the check after the body hashes
+        #: them the same way.
+        self.by_content = False
         #: The tiers the store put the result in (``storage``), once stored.
         self.stored_in: list[str] | None = None
         #: The key's `BuiltKey.traced` and ``needs_trace``, and what recorded

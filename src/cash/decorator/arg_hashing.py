@@ -1108,7 +1108,7 @@ class ContentKeyed:
     a registered hasher, a lineage tag, a frozen result's digest or code's
     stand-in is not one: its key part is not what it holds."""
 
-    __slots__ = ("armed", "digested", "hooked", "indexes", "parts", "walked")
+    __slots__ = ("armed", "digested", "hooked", "indexes", "parts", "tagged", "walked")
 
     def __init__(self) -> None:
         #: Set while the key hashes the call's arguments, and only then:
@@ -1127,6 +1127,13 @@ class ContentKeyed:
         #: The walk keyed something by a hook (`ArgHasher._nested_hasher`):
         #: a walked argument may hold it, so none counts.
         self.hooked = False
+        #: ``{id(argument): argument}`` keyed by the notebook statement's
+        #: lineage tag (`ArgHasher.key_part`, step 7). The tag says which
+        #: statements made the value, so a key match says it holds what it
+        #: held when the entry was stored, as for `covers`. But the tag does
+        #: not move while the call runs, so the check after the body hashes
+        #: the arguments by their content (`content_only`).
+        self.tagged: dict[int, Any] = {}
 
     def covers(self, value: Any) -> bool:
         """Is *value* one of the call's arguments, keyed by all it holds?"""
@@ -1134,13 +1141,39 @@ class ContentKeyed:
             return True
         return not self.hooked and self.walked.get(id(value)) is value
 
+    def holds(self, value: Any) -> bool:
+        """Does a key match say *value* is in the state the entry was stored
+        from: keyed by all it holds (`covers`), or by its statement tag?"""
+        return self.covers(value) or self.tagged.get(id(value)) is value
+
 
 #: The `ContentKeyed` of the call whose key is being built, or None.
 CONTENT_KEYED: contextvars.ContextVar[ContentKeyed | None] = contextvars.ContextVar("cash_content_keyed", default=None)
 
 
 #: How an argument's key part stands for it (`ArgHasher.key_part`).
-_NOT_CONTENT, _DIGESTED, _WALKED = 0, 1, 2
+_NOT_CONTENT, _DIGESTED, _WALKED, _TAGGED = 0, 1, 2, 3
+
+#: Set while the arguments are hashed for the in-place-change check of a
+#: call one of whose arguments the key holds by its statement tag
+#: (`content_only`): no tag stands for a value's content then.
+_CONTENT_ONLY: contextvars.ContextVar[bool] = contextvars.ContextVar("cash_content_only", default=False)
+
+
+@contextlib.contextmanager
+def content_only(active: bool = True):
+    """Hash arguments by what they hold, not by a notebook statement's
+    lineage tag, while *active*. The tag stays put while a cached call runs,
+    so a body that sets ``s.mean_`` hashes ``s`` alike before and after it
+    by the tag; by its content, the change shows (`ContentKeyed.tagged`)."""
+    if not active:
+        yield
+        return
+    token = _CONTENT_ONLY.set(True)
+    try:
+        yield
+    finally:
+        _CONTENT_ONLY.reset(token)
 
 
 def _hooked(stand_in: Any) -> Any:
@@ -2366,6 +2399,8 @@ class ArgHasher:
             content.parts[id(arg)] = part
         elif kind == _WALKED:
             content.walked[id(arg)] = arg
+        elif kind == _TAGGED:
+            content.tagged[id(arg)] = arg
         return part
 
     def _payload_bytes(self, args: tuple, kwargs: dict, hashed_args: tuple, hashed_kwargs: dict) -> bytes:
@@ -2534,7 +2569,9 @@ class ArgHasher:
         """`arg_hash` of *arg*, and how it stands for *arg*: `_DIGESTED`, a
         digest of all it holds, read now or kept for this very object by an
         exact check; `_WALKED`, the value itself, for the payload walk; or
-        `_NOT_CONTENT`, anything else (`ContentKeyed`)."""
+        `_TAGGED`, a notebook statement's lineage tag (or the digest kept
+        for this object while that tag holds); `_NOT_CONTENT`, anything
+        else (`ContentKeyed`)."""
         method = cash_key_method(arg)
         if method is not None and not (
             (self.override_hashers or self.type_hashers) and self.keys_by_registration_only(arg)
@@ -2550,7 +2587,7 @@ class ArgHasher:
                 wref, memo_lineage, content_hash = entry
                 if memo_lineage == lineage and wref() is arg:
                     # Trusted by its tag, not read: not counted as its content.
-                    return content_hash, _NOT_CONTENT
+                    return content_hash, _TAGGED
         # Overriding hashers, ahead of everything cash would do itself.
         # The user has said their identity for this type beats content
         # hashing, which is the only way to stop re-reading a 800MB array
@@ -2619,7 +2656,7 @@ class ArgHasher:
         # its (possibly expensive) registered hasher within a session
         # (test_hasher_priority_cash_hash_first).
         if lineage is not None:
-            return lineage, _NOT_CONTENT
+            return lineage, _TAGGED
         for type_, (hasher_fn, src_hash) in self.type_hashers.items():
             if isinstance(arg, type_):
                 # Embed the hasher source hash so that changing the
@@ -2639,6 +2676,8 @@ class ArgHasher:
         The instance's OWN tag: one inherited from a tagged class made
         every instance key alike (see cash.lineage_tag).
         """
+        if _CONTENT_ONLY.get():
+            return None
         lineage = own_tag(arg)
         if lineage is not None:
             src = own_tag(arg, "_cash_lineage_src")

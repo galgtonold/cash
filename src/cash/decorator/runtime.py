@@ -63,6 +63,7 @@ from .arg_hashing import (
     CallPolarsDigests,
     ContentKeyed,
     call_polars,
+    content_only,
 )
 from .arg_key import keyed_arguments
 from .cache_metadata import CacheMetadata
@@ -1499,13 +1500,49 @@ class CallRunner:
         else:
             # Before the body runs: the mutation check compares against it.
             with call_polars(call.polars_args):
-                if copies is None:
-                    call.call_args_hash = self._keys.call_args_hash(spec, args, kwargs, built)
-                else:
+                if copies is not None:
                     call.checked = copies.checked_arguments(args, kwargs)
-                    call.call_args_hash = self._keys.checked_arguments_hash(spec, *call.checked)
+                if call.content_keyed is not None and call.content_keyed.tagged:
+                    # The key holds an argument by its statement tag, which
+                    # the body's changes do not move: hashed by content.
+                    call.call_args_hash = self._content_args_hash(spec, call)
+                if not call.by_content:
+                    if copies is None:
+                        call.call_args_hash = self._keys.call_args_hash(spec, args, kwargs, built)
+                    else:
+                        call.call_args_hash = self._keys.checked_arguments_hash(spec, *call.checked)
             call.polars_args.sign()
         return call
+
+    @staticmethod
+    def _attribute_changes_seen(observer: Any, attrs: attribute_replay.AttrVerdict | None) -> None:
+        """Name the arguments whose attributes the body was recorded binding
+        or deleting as changed, when the hash after the body did not, for a
+        call whose key holds an argument by its statement tag and which
+        could not hash its arguments by content (`_content_args_hash`):
+        the tag alone does not move when the body changes it."""
+        if observer is None or attrs is None or not attrs.changes or observer.mutated_args:
+            return
+        observer.mutated_args = attrs.names
+        observer.record(
+            "argument mutation",
+            f"the call changed {', '.join(repr(n) for n in attrs.names)} in place -- "
+            f"the result was not stored, so this call runs every time",
+        )
+
+    def _content_args_hash(self, spec: CachedFunction, call: Call) -> str | None:
+        """The arguments' hash by their content (`content_only`), with
+        ``call.by_content`` set, or None when they cannot be hashed so: the
+        check then compares the tags, and only an attribute change the
+        recording sees (`CallRunner.attribute_changes`) shows."""
+        try:
+            with content_only():
+                found = self._keys.checked_arguments_hash(spec, *(call.checked or (call.args, call.kwargs)))
+        except Exception:  # not hashed by content: the tags stand
+            logger.debug("[PURITY] %s: arguments not hashed by content", spec.name, exc_info=True)
+            return None
+        call.by_content = found is not None
+        return found
 
     def _hand_back_entry(self, call: Call, value: Any, metadata: Any, storage: list[str] | None) -> None:
         """Tell the notebook statement this call is (`cash.handed_digests`)
@@ -1611,7 +1648,7 @@ class CallRunner:
         before: dict[str, tuple] = {}
         for name, value in named.items():
             if not rewrite_in_place.rewritable_kind(value):
-                if keyed and _replays_attributes(value) and content.covers(value):
+                if keyed and _replays_attributes(value) and content.holds(value):
                     # An instance the key holds by all it holds: which of
                     # its attributes the body binds is recorded, for a hit
                     # to replay (`attribute_changes`).
@@ -1655,9 +1692,9 @@ class CallRunner:
         func, func_name = spec.func, spec.name
 
         def unchanged() -> bool:
-            return self._purity.checked_arguments_hash(
-                func_name, *arguments
-            ) == call.call_args_hash and not self._purity.bound_moved(run.observer)
+            with content_only(call.by_content):
+                after = self._purity.checked_arguments_hash(func_name, *arguments)
+            return after == call.call_args_hash and not self._purity.bound_moved(run.observer)
 
         try:
             verdict = attribute_replay.AttrVerdict.of(
@@ -1882,7 +1919,7 @@ class CallRunner:
             name
             for name, value in named.items()
             if (not rewrite_in_place.rewritable_kind(value) or rewrite_in_place.refusal(value) is not None)
-            and not (content is not None and _replays_attributes(value) and content.covers(value))
+            and not (content is not None and _replays_attributes(value) and content.holds(value))
         ]
 
     def _shared_with(
@@ -1989,7 +2026,7 @@ class CallRunner:
                     # Its whole state is in the key this hit matched.
                     same = True
                 elif isinstance(before, rewrite_in_place.KeyedBefore):
-                    same = content_keyed is not None and content_keyed.covers(live) and before.args_hash == args_hash
+                    same = content_keyed is not None and content_keyed.holds(live) and before.args_hash == args_hash
                 else:
                     same = mutation_fingerprint(live) == before
                 if not same:
@@ -2062,7 +2099,8 @@ class CallRunner:
         # (missing) path: a hit runs no body, so there is nothing to observe
         # and nothing to pay for.
         run.observer = self._purity.make_effect_observer()
-        run.observer.arg_snapshot = self._purity.argument_snapshot(func_name, args, kwargs, call.content_keyed)
+        with content_only(call.by_content):
+            run.observer.arg_snapshot = self._purity.argument_snapshot(func_name, args, kwargs, call.content_keyed)
         run.observer.arg_identities, run.observer.arg_identities_cover_all = self._purity.argument_identities(
             func_name, args, kwargs, call.keyed_parts
         )
@@ -2187,13 +2225,16 @@ class CallRunner:
         # caller would lose: the check sees it where the call found it.
         with carriers_put_back(run.arg_carriers_pre if run.arg_carriers_moved else []), call_polars(call.polars_args):
             attrs = self.attribute_changes(spec, call, run)
-            self._purity.check_argument_mutation(
-                func_name,
-                *(call.checked or (args, kwargs)),
-                call.call_args_hash,
-                run.observer,
-                explained=attrs.names if attrs is not None and attrs.states is not None else None,
-            )
+            with content_only(call.by_content):
+                self._purity.check_argument_mutation(
+                    func_name,
+                    *(call.checked or (args, kwargs)),
+                    call.call_args_hash,
+                    run.observer,
+                    explained=attrs.names if attrs is not None and attrs.states is not None else None,
+                )
+        if call.content_keyed is not None and call.content_keyed.tagged and not call.by_content:
+            self._attribute_changes_seen(run.observer, attrs)
         self._purity.check_bound_mutation(func_name, run.observer)
         args_left = self.arguments_left(spec, run, call.checked or (args, kwargs), call.ran_unit, attrs)
         self._files.credit_remembered_reads(func_name, run.tracker, args, kwargs)

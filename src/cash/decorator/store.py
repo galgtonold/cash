@@ -33,7 +33,7 @@ from ..rewrite_in_place import ArgumentsLeft, ResultIsArgument
 from ..sizing import estimate_object_size
 from ..tracking.randomness import CashRandomnessWarning
 from ..value_types import IMMUTABLE_PRIMS
-from .arg_hashing import LINEAGE_SRC_DECORATOR, LINEAGE_SRC_FROZEN, call_polars
+from .arg_hashing import LINEAGE_SRC_DECORATOR, LINEAGE_SRC_FROZEN, call_polars, content_only
 from .cache_metadata import CacheMetadata
 from .cached_function import CachedFunction
 from .call_state import NO_WATCH, BodyRun, Call
@@ -984,7 +984,7 @@ class ResultStore:
         last chunk and the manifest that names the stream's chunks."""
         func_name = spec.name
         tracker, observer = run.tracker, run.observer
-        with call_polars(call.polars_args):
+        with call_polars(call.polars_args), content_only(call.by_content):
             self._purity.check_argument_mutation(
                 func_name, *(call.checked or (call.args, call.kwargs)), call.call_args_hash, observer
             )
