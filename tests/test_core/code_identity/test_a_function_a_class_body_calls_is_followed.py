@@ -164,15 +164,15 @@ DRIVERS = {
 def test_an_edit_down_a_chain_from_a_class_body_is_seen(tmp_path, shape, trace):
     pkg = tmp_path / "pkg"
     pkg.mkdir()
-    (pkg / "__init__.py").write_text("")
-    (pkg / "a.py").write_text(MODULE_A)
-    (pkg / "c.py").write_text(MODULE_C)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "a.py").write_text(MODULE_A, encoding="utf-8")
+    (pkg / "c.py").write_text(MODULE_C, encoding="utf-8")
     body = textwrap.dedent(DRIVERS[shape])
-    (tmp_path / "main.py").write_text(f"import cash\n{body}\nprint(go(5))\n")
+    (tmp_path / "main.py").write_text(f"import cash\n{body}\nprint(go(5))\n", encoding="utf-8")
     env = {"CASH_TRACE": trace}
     seen = []
     for mult in (2, 3):
-        (pkg / "b.py").write_text(MODULE_B.replace("MULT", str(mult)))
+        (pkg / "b.py").write_text(MODULE_B.replace("MULT", str(mult)), encoding="utf-8")
         seen.append(int(run_python("main.py", cwd=tmp_path, env=env).stdout.split()[-1]))
     assert seen == [_plain(shape, mult) for mult in (2, 3)]
 
