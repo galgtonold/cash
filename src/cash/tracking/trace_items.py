@@ -48,6 +48,8 @@ import typing
 from collections.abc import Iterable, Iterator, Mapping
 from typing import Any
 
+from ..kept_state import global_rng_stand_in
+
 __all__ = [
     "VALUE_CAP",
     "class_digest",
@@ -245,6 +247,13 @@ class _SetsInOrder(pickle.Pickler):
                 raise _Opaque
             return t.__name__ + "|" + "|".join(sorted(map(value_digest, obj)))
         return None
+
+    def reducer_override(self, obj: Any) -> Any:
+        # A module's global RNG (``np.random.mtrand._rand``, which every
+        # ``scipy.stats`` distribution holds) by the module's name, as a key
+        # takes it: its state is fresh entropy in each process unseeded, and
+        # the global RNG channel, not the value, accounts for it.
+        return global_rng_stand_in(obj) or NotImplemented
 
 
 _SCALARS = (int, float, complex, bool, type(None), type(Ellipsis))
