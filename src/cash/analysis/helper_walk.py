@@ -561,6 +561,8 @@ class HelperWalk:
             if entry.reported:
                 self._emit("_put_opaque", qualname)
             self._queue_class_refs(func, tree, entry.reported)
+            if entry.hash_only and type(code_fn) is types.FunctionType and code_fn.__code__.co_name != "<lambda>":
+                self._queue_hash_only_refs(code_fn, entry.reported)
             if type(func) is types.FunctionType and func.__code__.co_name == "<lambda>":
                 # A lambda: its source is the statement it sits in, with no
                 # def to audit. What it calls still computes its result
@@ -1058,8 +1060,52 @@ class HelperWalk:
             return
         for called in called_names_in_tree(tree):
             self._queue_hash_only(resolve_in_class_namespaces(cls, called), cls, reported)
+        for node in ast.walk(tree):
+            # ``b.generic_walk(x)`` in a method: a call through a module the
+            # class's module imports, resolved like a bare name's root.
+            chain = callee_chain(node.func) if isinstance(node, ast.Call) else None
+            if chain is None or len(chain) < 2:
+                continue
+            root = resolve_in_class_namespaces(cls, chain[0])
+            if not issubclass(type(root), types.ModuleType):
+                continue
+            target = resolve_callee_chain({chain[0]: root}, chain)
+            if (_is_function(target) or isinstance(target, type)) and not is_mock(target):
+                self._queue_hash_only(target, cls, reported)
         self._queue_annotation_refs(cls, reported)
         self._queue_user_bases(cls, reported)
+
+    def _queue_hash_only_refs(self, func: types.FunctionType, reported: bool) -> None:
+        """Queue, hash-only, the user functions and classes a hash-only
+        FUNCTION's code names through its globals.
+
+        A class's methods call module functions by bare name, and those are
+        queued for their code alone (`_queue_class_refs`); they are not
+        audited, so nothing found what THEY call, and the chain stopped at
+        the first function: ``Front.__init__`` -> ``_common_init`` ->
+        ``_get_sampler`` -> ``RWalk`` -> ``generic_walk`` left
+        ``generic_walk`` out of the key. Its bytecode names (bare and
+        ``module.attr``, nested code included) stand in for the calls, as
+        for code with no source; an over-approximation that costs a fold,
+        never a stale value. Queued hash-only too, so nothing below a class
+        is audited; what each one reads is folded once, under its own name,
+        like any helper's, and the visited set ends cycles.
+        """
+        chains = bytecode_global_refs(func)
+        names = frozenset(name for code in _nested_codes(func.__code__) for name in code.co_names)
+        g = func.__globals__
+        for (root,) in [c for c in chains if len(c) == 1]:
+            if issubclass(type(g[root]), types.ModuleType):
+                # ``b.RWalk()``: a class read through a module, which
+                # `bytecode_global_refs` (functions only) leaves out.
+                chains.extend((root, n) for n in names if n != root and isinstance(getattr(g[root], n, None), type))
+        for chain in chains:
+            target = resolve_callee_chain(g, chain)
+            if target is func or not (_is_function(target) or isinstance(target, type)):
+                continue
+            if is_mock(target):
+                continue
+            self._queue_hash_only(target, func, reported)
 
     def _queue_user_bases(self, cls: type, reported: bool) -> None:
         """Queue *cls*'s user base classes, so the functions their methods
@@ -1461,3 +1507,12 @@ def _find_first_function_def(tree: ast.AST) -> ast.FunctionDef | ast.AsyncFuncti
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             return node
     return None
+
+
+def _nested_codes(code: types.CodeType) -> Iterator[types.CodeType]:
+    """*code* and every code object nested in it (lambdas, comprehensions)."""
+    stack = [code]
+    while stack:
+        c = stack.pop()
+        yield c
+        stack.extend(k for k in c.co_consts if isinstance(k, types.CodeType))
