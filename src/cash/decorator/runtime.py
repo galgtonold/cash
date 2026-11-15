@@ -2345,6 +2345,13 @@ class CallRunner:
                     _phases.mark(pt, _phases.BODY)
                 code_trace.end(call.trace_unit)
                 NESTED_CASH_SECONDS.reset(nested_token)
+                # The nested calls' cash time is theirs, and this call's
+                # caller's body ran it too: handed up as such, never as this
+                # call's own overhead (`miss_overhead` takes it out).
+                run.nested_cash_seconds = nested[0]
+                outer = NESTED_CASH_SECONDS.get()
+                if outer is not None:
+                    outer[0] += nested[0]
                 # What the body did to the attributes of an instance it was
                 # handed: recorded across the body alone.
                 for entry in run.args_before.values():
@@ -2574,8 +2581,11 @@ class CallRunner:
         if self._misses.pending_eviction(call.cache_key) is not None:
             self._notices.evicted_recompute(func_name, run.body_seconds)
         # Everything that was not the body: the key and lookup before it, the
-        # checks and the store after it.
-        miss_overhead = max(call.cash_overhead, _perf_counter() - call.call_start - run.body_seconds)
+        # checks and the store after it. Not the nested cached calls' own
+        # cash time, which their entries count (and the body excludes).
+        miss_overhead = max(
+            call.cash_overhead, _perf_counter() - call.call_start - run.body_seconds - run.nested_cash_seconds
+        )
         self._calls.log(
             func_name,
             cache_hit=False,

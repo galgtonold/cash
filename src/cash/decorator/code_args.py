@@ -31,7 +31,7 @@ from ..jit_functions import jit_python_function
 from ..kept_state import cached_properties, derived_views
 from ..loaded_code import class_functions
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, is_runtime_machinery
-from . import code_trace
+from . import class_memo, code_trace, walk_scope
 from .arg_hashing import is_opaque, is_plain_data
 from .call_state import CARRIER_LOOKUPS
 from .class_data import class_surface_functions, implicit_access_functions
@@ -179,6 +179,9 @@ class CodeArgs:
         # a list of 50k instances must not pay the verdict per element. The
         # class is kept so a recycled id is never trusted.
         self._attribute_walk_verdicts: LruMemo[tuple[str, int], tuple[type, bool]] = LruMemo(CODE_OBJECTS)
+        #: What an argument class's code reads, per class and cached function
+        #: (`_user_carrier_parts`).
+        self._carrier_memo = class_memo.ClassMemo()
         # Code carriers already reported (`_warn_unhashable_code_once`,
         # `_warn_untrackable_in_carrier_once`): once per carrier and function.
         self._warned_unhashable_code: set[tuple] = set()
@@ -940,18 +943,7 @@ class CodeArgs:
                 # Its code is in the key, and so is what that code reads,
                 # through the folds the cached function's own reads use.
                 if is_user_code_carrier(carrier):
-                    parts.extend(self._carrier_read_global_parts(carrier, func_name, owner_code))
-                    parts.extend(self._carrier_capture_parts(carrier))
-                    parts.extend(self._function_capture_parts(carrier))
-                    parts.extend(self._carrier_helper_parts(carrier, owner_code))
-                    env |= self._carrier_environment_reads(carrier)
-                    lookups = self.carrier_lookups(carrier)
-                    if lookups:
-                        pending = CARRIER_LOOKUPS.get()
-                        if pending is not None:
-                            pending.extend(lookups)
-                        self._warn_untrackable_in_carrier_once(carrier, lookups, func_name, param)
-                    self._warn_ambient_in_carrier_once(carrier, func_name, param)
+                    parts.extend(self._user_carrier_parts(carrier, func_name, param, owner_code, env))
             elif is_user_code_carrier(carrier):
                 # User code we could not hash: a C-extension type, an
                 # exotic descriptor. We fall back to today's key, which means
@@ -962,6 +954,96 @@ class CodeArgs:
         if env_entries is None and env:
             component = environment_component(env, note=lambda label, digest: ledger_note(("env", label), digest))
             parts.append(f"argenv:{component}")
+        return parts
+
+    def _user_carrier_parts(
+        self, carrier: Any, func_name: str, param: str | None, owner_code: Any, env: set
+    ) -> list[str]:
+        """Key parts for what the code of *carrier*, a user code carrier
+        whose code is keyed, reads; the environment variables it reads join
+        *env*.
+
+        For a class (an argument's), remembered while its world stands
+        still (`class_memo`): folded again, the same sampler class handed
+        to every call cost 8-20 ms a call, hits included. Served only
+        where the fold would ask the key build's records the same questions
+        and hear "not folded yet" again, and outside any walk of code
+        surfaces or callee states, so a reuse leaves the key and the
+        records as folding would."""
+        if (
+            not class_memo.ENABLED
+            or not isinstance(carrier, type)
+            or walk_scope.stack()
+            or not walk_scope.walk_is_idle()
+        ):
+            return self._user_carrier_parts_now(carrier, func_name, param, owner_code, env)
+        proof = class_memo.proof_for(carrier, "carrier", lambda: self._carrier_reports(carrier))
+        if proof is None:
+            return self._user_carrier_parts_now(carrier, func_name, param, owner_code, env)
+        key = (id(carrier), func_name, param, bool(_EXPLAINING.get()), walk_scope.building_now())
+        entry = self._carrier_memo.get(key, proof)
+        if entry is not class_memo.MISS and entry[0] is owner_code and class_memo.replayable(entry[1]):
+            if class_memo.VERIFY:
+                self._verify_carrier(carrier, func_name, param, owner_code, entry)
+            else:
+                class_memo.replay(entry[1])
+            env |= entry[3]
+            return list(entry[2])
+        own_env: set = set()
+        cap, parts = class_memo.captured(
+            lambda: self._user_carrier_parts_now(carrier, func_name, param, owner_code, own_env)
+        )
+        env |= own_env
+        if cap is not None:
+            self._carrier_memo.put(key, proof, (owner_code, cap, tuple(parts), frozenset(own_env)))
+        return parts
+
+    def _verify_carrier(self, carrier: Any, func_name: str, param: str | None, owner_code: Any, entry: tuple) -> None:
+        """Fold again behind a reuse, and say when it differs."""
+        own_env: set = set()
+        cap, parts = class_memo.captured(
+            lambda: self._user_carrier_parts_now(carrier, func_name, param, owner_code, own_env)
+        )
+        class_memo.STATS["verified"] += 1
+        if (
+            tuple(parts) != entry[2]
+            or frozenset(own_env) != entry[3]
+            or cap is None
+            or cap.ledger != entry[1].ledger
+            or cap.watch.keys() != entry[1].watch.keys()
+            or cap.lookups != entry[1].lookups
+            or cap.classes != entry[1].classes
+            or cap.reads.keys() != entry[1].reads.keys()
+        ):
+            raise class_memo.ClassMemoMismatch(
+                f"the remembered fold of {carrier.__qualname__} for {func_name} differs from folding it again"
+            )
+
+    def _carrier_reports(self, carrier: type) -> list:
+        """The analyses of *carrier*'s methods: the helpers they resolved are
+        read by its fold, and watched with it."""
+        reports = []
+        for member in class_surface_functions(carrier):
+            if is_user_code_object(member):
+                reports.append(get_analyzer().analyze_reached(member))
+        return reports
+
+    def _user_carrier_parts_now(
+        self, carrier: Any, func_name: str, param: str | None, owner_code: Any, env: set
+    ) -> list[str]:
+        """`_user_carrier_parts`, folded now."""
+        parts = self._carrier_read_global_parts(carrier, func_name, owner_code)
+        parts.extend(self._carrier_capture_parts(carrier))
+        parts.extend(self._function_capture_parts(carrier))
+        parts.extend(self._carrier_helper_parts(carrier, owner_code))
+        env |= self._carrier_environment_reads(carrier)
+        lookups = self.carrier_lookups(carrier)
+        if lookups:
+            pending = CARRIER_LOOKUPS.get()
+            if pending is not None:
+                pending.extend(lookups)
+            self._warn_untrackable_in_carrier_once(carrier, lookups, func_name, param)
+        self._warn_ambient_in_carrier_once(carrier, func_name, param)
         return parts
 
     def _carrier_helper_parts(self, carrier: Any, owner_code: Any) -> list[str]:

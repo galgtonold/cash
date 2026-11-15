@@ -57,9 +57,11 @@ import decimal
 import dis
 import enum
 import functools
+import io
 import operator
 import os
 import pathlib
+import pickle
 import re
 import sys
 import textwrap
@@ -1584,6 +1586,132 @@ def _array_content(v: Any) -> tuple:
     return (v.dtype.str, v.dtype.descr if v.dtype.names else None, v.shape, v.strides, digest)
 
 
+def watch_class(cls: type, reports: Any = ()) -> tuple[tuple, tuple, _Family | None]:
+    """Watch what *cls* holds, as `scan` watches a cached function's world:
+    every attribute along its MRO, the code of its methods and what that
+    code names, and the helpers *reports* (the analyses of its methods)
+    resolved. Returns the cells, the class tags and the family a check
+    compares. Data no watcher sees and no probe of `ContentProbe` reads
+    whole (an instance, a list of them: sklearn's parameter constraints) is
+    read whole again by pickle on every check (`_deep_content`), and the
+    user code that pickle names in it (an instance's class, a function in a
+    list) is watched as any code met. For the per-class memos of `class_memo`. Raises
+    `Ineligible`, also for a class whose world reaches a cached function."""
+    reports = tuple(reports)
+    s = _ProbingScan(getattr(cls, "__module__", None))
+    s.content = True
+    s.value(cls, frozenset())
+    for report in reports:
+        if report.unwalkable or report.unkeyable:
+            raise Ineligible("an analysis that could not finish")
+        for mod_name, chain in report.helper_resolution_paths.values():
+            s.value(_resolve(mod_name, chain), frozenset(chain))
+        for ref in report.helper_objects.values():
+            s.value(ref(), frozenset())
+        for ref in report.cached_callees:
+            s.value(ref() if callable(ref) else ref, frozenset())
+        for mod_name, chain, _ref in report.helper_bindings:
+            s.value(_resolve(mod_name, chain), frozenset(chain))
+    if s.callees or any(report.cached_callees for report in reports):
+        raise Ineligible("a cached function reached")
+    s.finish()
+    if _probes_main_variables(s.probes, (x for pair in s.cells for x in pair)):
+        raise Ineligible("a probe would hold a variable of __main__")
+    _watch_modules()
+    s.commit()
+    cells = tuple(x for pair in s.cells for x in pair)
+    tags = tuple(x for pair in s.types.values() for x in pair)
+    family = s.family()
+    if family is not None:
+        # Held by a memo of the process, it must not keep a class alive:
+        # one defined anew under the same name (a notebook cell run again)
+        # would stay among its base's ``__subclasses__``.
+        weak = _WeakFamily.__new__(_WeakFamily)
+        weak.refs = tuple(map(_weak.ref, family.classes))
+        weak.probes, weak.guard = family.probes, family.guard
+        weak.registrations, weak.below = family.registrations, family.below
+        family = weak
+    return cells, tags, family
+
+
+def _probes_main_variables(probes: dict, met: typing.Iterable[Any]) -> bool:
+    """Would a probe of *probes* hold a value a variable of the notebook is
+    bound to: of ``__main__``, or of a namespace the code *met* runs in
+    that is no imported module's own (a notebook shell's, a script's)? A
+    memo of the process would then be one more holder of it, and the
+    notebook, which counts a variable's holders by reference count to tell
+    whether a restored copy could stand in for it, refuses to store any
+    statement that changes it (``calls += [...]`` after a decorated call
+    met a class whose method appends to ``calls``)."""
+    if not any(type(probe) is ContentProbe for probe in probes):
+        return False
+    spaces = {}
+    main = getattr(sys.modules.get("__main__"), "__dict__", None)
+    if type(main) is dict:
+        spaces[id(main)] = main
+    for f in met:
+        if type(f) is types.FunctionType:
+            g = f.__globals__
+            name = g.get("__name__")
+            if name == "__main__" or getattr(sys.modules.get(name), "__dict__", None) is not g:
+                spaces[id(g)] = g
+    bound = {id(v) for g in spaces.values() for v in list(g.values())}
+    return any(type(probe) is ContentProbe and id(probe.value) in bound for probe in probes)
+
+
+#: What `_ProbingScan` never reads whole: code, whose own watch is the proof.
+_CODE_TYPES = (type, types.FunctionType, types.ModuleType, types.MethodType, types.BuiltinFunctionType, types.CellType)
+
+
+class _ProbingScan(_Scan):
+    """`_Scan`, but a data value it would refuse is read whole again on
+    every check instead (`_deep_content`), and the code it names watched."""
+
+    def value(self, v: Any, names: frozenset) -> None:
+        if type(v) in _ATOMS:
+            return
+        try:
+            super().value(v, names)
+        except Ineligible:
+            if isinstance(v, _CODE_TYPES) or self.count > _SCAN_LIMIT:
+                raise
+            met: list = []
+            try:
+                probe = ContentProbe(v, lambda value: _deep_content(value, met))
+            except Exception as e:  # noqa: BLE001 - what cannot be pickled cannot be probed
+                raise Ineligible(f"data that cannot be read whole ({type(e).__name__})") from None
+            self.probes[probe] = probe.digest
+            # A pickle names code: what that code is and reads is watched.
+            for code in met:
+                self.value(code, frozenset())
+            met.clear()
+            probe.read = _deep_content
+
+
+class _CodeNamingPickler(pickle.Pickler):
+    """Notes the user code met inside the data it pickles (*met*): a pickle
+    names it, never what it is or reads."""
+
+    def __init__(self, file: Any, met: list | None) -> None:
+        super().__init__(file, protocol=5)
+        self.met = met
+
+    def reducer_override(self, obj: Any) -> Any:
+        if self.met is not None and isinstance(obj, _CODE_TYPES) and is_user_code_object(obj):
+            self.met.append(obj)
+        return NotImplemented
+
+
+def _deep_content(v: Any, met: list | None = None) -> bytes:
+    """A digest of all *v* holds, as pickle spells it out; the user code
+    it names joins *met*."""
+    import hashlib
+
+    buf = io.BytesIO()
+    _CodeNamingPickler(buf, met).dump(v)
+    return hashlib.blake2b(buf.getbuffer(), digest_size=32).digest()
+
+
 class _Family:
     """What the key reads of the user classes met that moves no watcher
     (`class_data.class_family`): the ABCs that registered them, what the
@@ -1669,6 +1797,26 @@ class _Family:
                 if len(now) != len(refs) or any(r() is not c for r, c in zip(refs, now)):
                     return False
         return True
+
+
+class _WeakFamily(_Family):
+    """A `_Family` holding its classes by weak reference (`watch_class`):
+    one that is gone no longer holds."""
+
+    __slots__ = ("refs",)
+
+    @property  # type: ignore[override]
+    def classes(self) -> tuple[type, ...]:
+        found = tuple(ref() for ref in self.refs)
+        if any(k is None for k in found):
+            raise Ineligible("a class that is gone")
+        return found
+
+    def holds(self, state: list) -> bool:
+        try:
+            return super().holds(state)
+        except Ineligible:
+            return False
 
 
 # -- the memo --------------------------------------------------------------

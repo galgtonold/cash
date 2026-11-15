@@ -1222,12 +1222,12 @@ def _user_class(cls: Any) -> bool:
 
 def _classes_digest(cls: type) -> str | None:
     """The user classes of *cls*'s MRO, each by what it holds."""
-    from ..tracking.trace_items import class_digest
+    from ..tracking.trace_items import remembered_class_digest
 
     parts = []
     for klass in cls.__mro__:
         if _user_class(klass):
-            parts.append(class_digest(klass))
+            parts.append(remembered_class_digest(klass))
         else:
             parts.append(f"{klass.__module__}.{klass.__qualname__}")
     return hashlib.blake2b("|".join(parts).encode(), digest_size=12).hexdigest()
@@ -1607,14 +1607,14 @@ class _Build:
         raise _Unnamed(f"it ran {module}.{qn}, which no name of {module} holds")
 
     def _class(self, cls: type, ran: set[str]) -> None:
-        from ..tracking.trace_items import class_digest
+        from ..tracking.trace_items import remembered_class_digest
 
         qn = cls.__qualname__
         if "<locals>" in qn:
             if qn.rsplit(".<locals>.", 1)[0] in ran:
                 return
             raise _Unnamed(f"it ran a method of {qn}, a class no name holds")
-        self.add(("class", cls.__module__, qn), class_digest(cls), "")
+        self.add(("class", cls.__module__, qn), remembered_class_digest(cls), "")
 
     def _lookup(self, kind: str, target: Any, name: str | None) -> None:
         if kind == "import":
@@ -2316,10 +2316,10 @@ def verify(items: list, cached_state: Callable[[str], str | None]) -> str | None
                 now = _alias_digest(_namespace(item[1]), item[1], item[2])
                 what = f"the type alias {item[1]}.{item[2]}"
             elif kind == "class":
-                from ..tracking.trace_items import class_digest
+                from ..tracking.trace_items import remembered_class_digest
 
                 cls = _find(item[1], item[2])
-                now = class_digest(cls) if isinstance(cls, type) else None
+                now = remembered_class_digest(cls) if isinstance(cls, type) else None
                 what = f"the class {item[1]}.{item[2]}"
             elif kind == "global":
                 ns = _namespace(item[1])

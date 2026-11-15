@@ -113,6 +113,11 @@ def _descend(live: Any, target: Any) -> str | None:
     for _ in range(_MAX_STEPS):
         if live is target:
             return steps
+        if type(live) is types.MethodType and type(target) is types.MethodType:
+            # Read off an instance, a method is a new object every time:
+            # the same function bound to the same object is the same method.
+            if live.__func__ is target.__func__ and live.__self__ is target.__self__:
+                return steps
         if type(live) is types.MethodType:
             live, steps = live.__func__, steps + "f"
             continue
@@ -163,20 +168,109 @@ def _defining_home(obj: Any) -> tuple[str, tuple[str, ...]] | None:
     return module, tuple(qualname.split("."))
 
 
+def _owner_homes(obj: Any) -> list[tuple[str, tuple[str, ...]]]:
+    """Where a class of *obj*'s module holds it under its own name, for a
+    function whose qualified name leads nowhere: a method a ``dataclass``
+    generated (``__create_fn__.<locals>.__repr__``, held as ``Mount.__repr__``
+    behind ``reprlib.recursive_repr``'s wrapper). `_descend` follows such a
+    wrapper's ``__wrapped__`` from the class attribute to *obj*."""
+    base = obj.__func__ if type(obj) is types.MethodType else obj
+    if type(base) is not types.FunctionType or "<" not in base.__qualname__:
+        return []
+    name = base.__name__
+    found = []
+    for module in {base.__module__, base.__globals__.get("__name__")}:
+        namespace = getattr(sys.modules.get(module) if isinstance(module, str) else None, "__dict__", None)
+        if not isinstance(namespace, dict):
+            continue
+        for held in list(namespace.values()):
+            if not isinstance(held, type) or held.__module__ != module or name not in held.__dict__:
+                continue
+            qualname = held.__qualname__
+            if isinstance(qualname, str) and "<" not in qualname:
+                found.append((module, (*qualname.split("."), name)))
+    return found
+
+
+def _instance_homes(obj: Any) -> list[tuple[str, tuple[str, ...]]]:
+    """Where the module that defined a method's function holds the object
+    the method is bound to (``model = Model()``), by the method's name."""
+    if type(obj) is not types.MethodType or isinstance(obj.__self__, type):
+        return []
+    owner, name = obj.__self__, getattr(obj.__func__, "__name__", None)
+    module = getattr(obj.__func__, "__module__", None)
+    namespace = getattr(sys.modules.get(module) if isinstance(module, str) else None, "__dict__", None)
+    if not isinstance(name, str) or not isinstance(namespace, dict):
+        return []
+    return [(module, (held, name)) for held, value in list(namespace.items()) if value is owner]
+
+
+def _holder_homes(obj: Any) -> list[tuple[str, tuple[str, ...]]]:
+    """Where a module that defines the class a method names as its owner
+    holds it: a method a library made for a class of the user's
+    (``namedtuple``'s ``P._make``, ``P._replace``, ``P._asdict``), whose
+    module is the library's and whose class lives in the user's module.
+    Asked only when no other name leads to it: one lookup per loaded
+    module."""
+    base = obj.__func__ if type(obj) is types.MethodType else obj
+    qualname = getattr(base, "__qualname__", None) if type(base) is types.FunctionType else None
+    if not isinstance(qualname, str) or "<" in qualname or "." not in qualname:
+        return []
+    chain = tuple(qualname.split("."))
+    found = []
+    for name, module in list(sys.modules.items()):
+        namespace = getattr(module, "__dict__", None)
+        held = namespace.get(chain[0]) if type(namespace) is dict else None
+        if isinstance(held, type) and getattr(held, "__module__", None) == name:
+            found.append((name, chain))
+    return found
+
+
 def _path_of(obj: Any, *also: tuple[str, tuple[str, ...]] | None) -> list:
     """``[module, chain, steps]`` that lead back to *obj* now: its home
     (module and qualified name), one of *also* (where a caller names it),
-    or the module it was defined in."""
-    for path in (_home(obj), *also, _defining_home(obj)):
-        if path is None:
-            continue
-        live = resolve_binding(*path)
-        if live is UNRESOLVED:
-            continue
-        steps = _descend(live, obj)
-        if steps is not None:
-            return [path[0], list(path[1]), steps]
+    the module it was defined in, a class there that holds it, the object
+    a method is bound to, or the class a library made a method for."""
+    # The class holders last: they are looked up in every loaded module.
+    for paths in ((_home(obj), *also, _defining_home(obj), *_owner_homes(obj), *_instance_homes(obj)), _holder_homes):
+        for path in paths if isinstance(paths, tuple) else paths(obj):
+            if path is None:
+                continue
+            live = resolve_binding(*path)
+            if live is UNRESOLVED:
+                continue
+            steps = _descend(live, obj)
+            if steps is not None:
+                return [path[0], list(path[1]), steps]
     raise _Unstorable(f"no name leads to {obj!r}")
+
+
+def _owner_path(method: types.MethodType, named: tuple[str, tuple[str, ...]] | None) -> list:
+    """``[module, chain]`` of the object a visited method is bound to: a
+    module-level instance (``model = Model()``, ``model.fit`` called), read
+    as the name its caller uses, less the method's own name. The walk read
+    its methods off that very object, so the report holds while the name
+    leads to an object of the same kind defined by the same text
+    (`_owners_now`)."""
+    if named is None or len(named[1]) < 2:
+        raise _Unstorable("a method of an object no name leads to")
+    module, chain = named[0], tuple(named[1][:-1])
+    if resolve_binding(module, chain) is not method.__self__:
+        raise _Unstorable("a method of an object no name leads to")
+    return [module, list(chain)]
+
+
+def _owners_now(owners: list) -> list:
+    """What each object a visited method was bound to is now: its kind and
+    the text of the module whose name holds it (rebinding the name to
+    another object is an edit of that text)."""
+    found = []
+    for module, chain in owners:
+        obj = resolve_binding(module, tuple(chain))
+        mod_file = getattr(sys.modules.get(module), "__file__", None)
+        text = _file_digest(mod_file) if isinstance(mod_file, str) and not is_pseudo_filename(mod_file) else None
+        found.append(None if obj is UNRESOLVED else [_type_name(type(obj)), text])
+    return found
 
 
 def _find(path: Any) -> Any:
@@ -606,6 +700,10 @@ def _spell(report: PurityReport, objects: list[Any], paths: list[list], files: d
     index = {id(o): i for i, o in enumerate(objects)}
 
     def at(obj: Any) -> int:
+        if type(obj) is types.MethodType and not isinstance(obj.__self__, type):
+            # A method of a module-level instance (`_owner_path`): read
+            # back as its function, the code it runs.
+            obj = obj.__func__
         i = index.get(id(obj))
         if i is None:
             index[id(obj)] = i = len(paths)
@@ -646,7 +744,7 @@ def _spell(report: PurityReport, objects: list[Any], paths: list[list], files: d
         obj = ref()
         if obj is None:
             raise _Unstorable(f"helper {qualname} is gone")
-        held.append([qualname, _path_of(obj)])
+        held.append([qualname, _path_of(obj, report.helper_resolution_paths.get(qualname))])
     found = {q: _find(p) for q, p in held}
     for qualname, digest in report.helper_source_hashes.items():
         path = report.helper_resolution_paths.get(qualname)
@@ -825,6 +923,7 @@ def _check(entry: dict, func: Any) -> PurityReport | None:
         func.__module__,
         files,
     )
+    now["owners"] = _owners_now(entry.get("owners", []))
     if _digest(now) != entry["guards"]:
         return None
     # Each helper as the decorator finds it on every call: through the
@@ -898,16 +997,18 @@ def _entry(func: Any, report: PurityReport, walk: Any, text: str) -> dict:
     paths: list[list] = [_path_of(func)]
     seen = {id(func)}
     names = walk.visited_names()
+    owners: list[list] = []
     for obj in walk.visited():
         base = obj.__func__ if type(obj) is types.MethodType else obj
         if id(base) in seen:
             continue
-        if type(obj) is types.MethodType and not isinstance(obj.__self__, type):
-            raise _Unstorable("a method of an object")
-        seen.add(id(base))
         qualname = names.get(id(obj))
+        named = report.helper_resolution_paths.get(qualname) if qualname else None
+        if type(obj) is types.MethodType and not isinstance(obj.__self__, type):
+            owners.append(_owner_path(obj, named))
+        seen.add(id(base))
         objects.append(base)
-        paths.append(_path_of(base, report.helper_resolution_paths.get(qualname) if qualname else None))
+        paths.append(_path_of(base, named))
     files: dict[str, str | None] = {}
     spelled = _spell(report, objects, paths, files)
     bindings = [resolve_binding(m, tuple(c)) for m, c in spelled["bindings"]]
@@ -923,9 +1024,11 @@ def _entry(func: Any, report: PurityReport, walk: Any, text: str) -> dict:
         func.__module__,
         files,
     )
+    guards["owners"] = _owners_now(owners)
     return {
         "text": text,
         "paths": paths,
+        "owners": owners,
         "report": spelled,
         "imports": [[m, list(p), list(d)] for m, p, d in imports],
         # Only the digest of the guards: they are worked out again to check.
