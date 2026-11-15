@@ -18,12 +18,14 @@ from typing import Any
 
 from .._memo import CODE_OBJECTS, LruMemo
 from .._user_attrs import importable_attr
+from ..analysis import text_store
+from ..analysis.annotations import line_assumes_safe, may_hold_waiver_block
 from ..analysis.bytecode import GLOBAL_WRITES, argvals, instructions
 from ..analysis.helper_bindings import dotted_imports, local_import_map
 from ..analysis.helper_code import own_code_is_user
 from ..analysis.purity_policy import REPORTED_METHODS
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
-from ..source_reading import getsource, own_source
+from ..source_reading import getsource, getsourcelines, own_source
 from .closure_fold import iter_code_scopes, unsafe_uses_of, waived_use_filter
 
 #: Dunder globals that are machine or import machinery, never user data.
@@ -503,21 +505,7 @@ class GlobalReads:
         provisional: frozenset = frozenset()
         if candidates:
             try:
-                tree = ast.parse(textwrap.dedent(getsource(func)))
-                hard = unsafe_uses_of(
-                    tree,
-                    candidates,
-                    bare_args=False,
-                    mutating_methods_only=True,
-                )
-                suspected = unsafe_uses_of(tree, candidates) - hard
-                provisional = unsafe_uses_of(tree, suspected, waived=waived_use_filter(func, tree))
-                # Suspected only on waived lines (`LEDGER.record(r)  #
-                # @cash:assume-safe`, or inside `with cash.assume_safe():`):
-                # the audited effect moves it on every call, so keying on it
-                # made every hit impossible and demoting it warned about the
-                # very line that was audited.
-                hard |= suspected - provisional
+                hard, provisional = _mutated_globals(func, getsource(func), frozenset(candidates))
                 candidates -= hard
             except SOURCE_RETRIEVAL_ERRORS:
                 # No source (`python - <<EOF`, `python -c`, `exec`): the
@@ -738,30 +726,159 @@ class GlobalReads:
         cached = self._local_binding_cache.get(code, _NO_PLAN)
         if cached is not _NO_PLAN:
             return cached
-        plan = None
         try:
-            tree = ast.parse(textwrap.dedent(own_source(func)))
-            func_def = next(
-                (n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))), None
-            )
-            if func_def is not None:
-                imports = local_import_map(func_def, func)
-                watched = set(imports) | set(code.co_freevars or ())
-                attr_reads: dict[str, set[str]] = {}
-                bare_reads: set[str] = set()
-                for node in ast.walk(func_def):
-                    if (
-                        isinstance(node, ast.Attribute)
-                        and isinstance(node.value, ast.Name)
-                        and node.value.id in watched
-                        and not node.attr.startswith("__")
-                    ):
-                        attr_reads.setdefault(node.value.id, set()).add(node.attr)
-                    elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in imports:
-                        bare_reads.add(node.id)
-                if attr_reads or bare_reads:
-                    plan = (imports, attr_reads, bare_reads, dotted_imports(func_def))
-        except (*SOURCE_RETRIEVAL_ERRORS, SyntaxError, ValueError):
+            source = own_source(func)
+        except SOURCE_RETRIEVAL_ERRORS:
             plan = None
+        else:
+            # The text, the package a relative import resolves in and the
+            # code's free names are all the plan reads: kept across
+            # processes with them (`text_store`).
+            g = getattr(func, "__globals__", None)
+            package = g.get("__package__") if isinstance(g, dict) else None
+            module = getattr(func, "__module__", "") or ""
+            freevars = tuple(code.co_freevars or ())
+            plan = text_store.kept(
+                "local-binding-plan",
+                source,
+                repr((package, module, freevars)),
+                lambda: _binding_plan(source, func, freevars),
+                _plan_encoded,
+                _plan_decoded,
+            )
         self._local_binding_cache[code] = plan
         return plan
+
+
+# --- answers read off a function's text, kept across processes ---
+
+
+def _binding_plan(source: str, func: Callable, freevars: tuple[str, ...]) -> tuple | None:
+    """`GlobalReads.local_binding_plan` worked out from *source*, *func*'s
+    own text (*func* gives only the package a relative import resolves in)."""
+    try:
+        tree = ast.parse(textwrap.dedent(source))
+    except (SyntaxError, ValueError):
+        return None
+    func_def = next(
+        (n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))), None
+    )
+    if func_def is None:
+        return None
+    imports = local_import_map(func_def, func)
+    watched = set(imports) | set(freevars)
+    attr_reads: dict[str, set[str]] = {}
+    bare_reads: set[str] = set()
+    for node in ast.walk(func_def):
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id in watched
+            and not node.attr.startswith("__")
+        ):
+            attr_reads.setdefault(node.value.id, set()).add(node.attr)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in imports:
+            bare_reads.add(node.id)
+    if attr_reads or bare_reads:
+        return (imports, attr_reads, bare_reads, dotted_imports(func_def))
+    return None
+
+
+def _plan_encoded(plan: tuple | None) -> Any:
+    if plan is None:
+        return None
+    imports, attr_reads, bare_reads, dotted = plan
+    return [
+        sorted([k, m, list(p)] for k, (m, p) in imports.items()),
+        sorted([k, sorted(v)] for k, v in attr_reads.items()),
+        sorted(bare_reads),
+        sorted([k, list(v)] for k, v in dotted.items()),
+    ]
+
+
+def _strs(value: Any) -> list[str]:
+    if not isinstance(value, list) or not all(type(v) is str for v in value):
+        raise ValueError("not a list of names")
+    return value
+
+
+def _plan_decoded(value: Any) -> tuple | None:
+    if value is None:
+        return None
+    imports_, attrs_, bare_, dotted_ = value
+    imports = {}
+    for k, m, p in imports_:
+        if type(k) is not str or type(m) is not str:
+            raise ValueError("not an import")
+        imports[k] = (m, tuple(_strs(p)))
+    attr_reads = {}
+    for k, v in attrs_:
+        if type(k) is not str:
+            raise ValueError("not a name")
+        attr_reads[k] = set(_strs(v))
+    dotted = {}
+    for k, v in dotted_:
+        if type(k) is not str:
+            raise ValueError("not a name")
+        dotted[k] = tuple(_strs(v))
+    return (imports, attr_reads, set(_strs(bare_)), dotted)
+
+
+def _mutated_globals(func: Callable, source: str, candidates: frozenset[str]) -> tuple[set[str], frozenset[str]]:
+    """``(hard, provisional)``: the *candidates* *func*'s body (*source*, its
+    text) plainly mutates, and those it only passes to a call (see
+    `GlobalReads.read_global_data_names`). Kept across processes with the
+    text and the candidates (`text_store`) when no waiver can reach it: a
+    ``# @cash:assume-safe`` comment is read from the file (the line above the
+    ``def`` too), and a ``with`` block may be the waiver under another name.
+    A function with either is worked out every time."""
+    if _waiver_comment_near(func, source):
+        return _mutated_globals_now(func, ast.parse(textwrap.dedent(source)), candidates)
+
+    def compute() -> tuple[set[str], frozenset[str], bool]:
+        tree = ast.parse(textwrap.dedent(source))
+        hard, provisional = _mutated_globals_now(func, tree, candidates)
+        return hard, provisional, may_hold_waiver_block(tree)
+
+    def encoded(answer: tuple[set[str], frozenset[str], bool]) -> Any:
+        if answer[2]:
+            raise ValueError("a block a waiver may hold")
+        return [sorted(answer[0]), sorted(answer[1])]
+
+    def decoded(value: Any) -> tuple[set[str], frozenset[str], bool]:
+        hard, provisional = value
+        return set(_strs(hard)), frozenset(_strs(provisional)), False
+
+    hard, provisional, _ = text_store.kept(
+        "mutated-globals", source, "\0".join(sorted(candidates)), compute, encoded, decoded
+    )
+    return hard, provisional
+
+
+def _waiver_comment_near(func: Callable, source: str) -> bool:
+    """Does a line `waived_use_filter` may read for *func* -- its own, and
+    the one above its ``def`` -- carry the ``# @cash:assume-safe`` marker?"""
+    import inspect
+    import linecache
+
+    try:
+        filename = inspect.getsourcefile(func) or inspect.getfile(func)
+        first = getsourcelines(func)[1]
+    except SOURCE_RETRIEVAL_ERRORS:
+        return False
+    if not filename:
+        return False
+    last = first + source.count("\n") + 1
+    return any(line_assumes_safe(linecache.getline(filename, n)) for n in range(max(first, 1) - 1, last + 1))
+
+
+def _mutated_globals_now(func: Callable, tree: ast.AST, candidates: frozenset[str]) -> tuple[set[str], frozenset[str]]:
+    hard = set(unsafe_uses_of(tree, candidates, bare_args=False, mutating_methods_only=True))
+    suspected = unsafe_uses_of(tree, candidates) - hard
+    provisional = unsafe_uses_of(tree, suspected, waived=waived_use_filter(func, tree))
+    # Suspected only on waived lines (`LEDGER.record(r)  # @cash:assume-safe`,
+    # or inside `with cash.assume_safe():`): the audited effect moves it on
+    # every call, so keying on it made every hit impossible and demoting it
+    # warned about the very line that was audited.
+    hard |= suspected - provisional
+    return hard, provisional

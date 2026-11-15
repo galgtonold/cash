@@ -44,6 +44,7 @@ import sys
 import textwrap
 import tokenize
 import types
+from typing import Any
 
 from ._memo import NOTEBOOK_STATEMENTS
 from .analysis.annotations import ANNOTATION_PATTERN, waiver_items
@@ -543,8 +544,23 @@ def source_identity_digest(source: str) -> str:
     that a rule like `strip_cache_decorator` cannot be applied to three of
     them.
     """
+    from .analysis import text_store
+
+    # A function of the text alone, kept across processes (`text_store`):
+    # the normalisation parses and walks it.
+    return text_store.kept("source-identity", source, "", lambda: _identity_digest(source), _hex_digest, _hex_digest)
+
+
+def _identity_digest(source: str) -> str:
     normalized = normalize_source_for_hash(strip_cache_decorator(source))
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _hex_digest(value: Any) -> str:
+    """*value*, a sha256 hex digest, as stored and read back."""
+    if type(value) is not str or len(value) != 64 or value.strip("0123456789abcdef"):
+        raise ValueError("not a digest")
+    return value
 
 
 @functools.lru_cache(maxsize=NOTEBOOK_STATEMENTS)
