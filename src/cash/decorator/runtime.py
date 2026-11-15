@@ -1258,7 +1258,10 @@ class CallRunner:
         if metadata.code_trace is not None:
             changed = code_trace.verify(metadata.code_trace, self._cached_state)
             if changed is not None:
-                return MissReason(MissKind.TRACE, f"{changed} since the entry was stored")
+                # Kept for a call that needs none too, as a check beside the
+                # key: then nothing was picked by name.
+                kind = MissKind.TRACE if needs_trace else MissKind.RAN
+                return MissReason(kind, f"{changed} since the entry was stored")
         elif needs_trace:
             return MissReason(MissKind.TRACE, "the entry has no trace of the code the call picked by name")
         if metadata.env_reads:

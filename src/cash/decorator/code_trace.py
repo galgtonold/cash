@@ -55,6 +55,7 @@ is in its trace (and an unrelated thread's work only adds checks).
 from __future__ import annotations
 
 import builtins
+import contextlib
 import dis
 import functools
 import hashlib
@@ -65,7 +66,7 @@ import threading
 import time
 import types
 import weakref
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import Any
 
 from .. import _weak
@@ -1223,9 +1224,10 @@ def first_import_digest(name: str, was: str | None = None) -> str | None:
 class _Build:
     """The items of one traced call (`build`)."""
 
-    def __init__(self, unit: Any, static_codes: set[types.CodeType]) -> None:
+    def __init__(self, unit: Any, static_codes: set[types.CodeType], strict: bool = True) -> None:
         self.unit = unit
         self.static = static_codes
+        self.strict = strict
         self.items: dict[tuple, str] = {}
         self.functions: list[Any] = []
 
@@ -1275,7 +1277,8 @@ class _Build:
                     )
                 continue
             if _namespace(module) is not g:
-                self._hidden(code, g, module)
+                with self._unless_unnamed():
+                    self._hidden(code, g, module)
                 continue
             # A later process may not have imported the module yet (``import
             # helpers`` inside the body): the check imports it, as the call
@@ -1285,10 +1288,12 @@ class _Build:
             loaded_from = _import_digest(module)
             if loaded_from is not None:
                 self.add(("import", module), loaded_from, "")
-            self._code(code, g, module, ran)
+            with self._unless_unnamed():
+                self._code(code, g, module, ran)
             recv = unit.receivers.get(code)
             if recv is not None and _user_class(recv):
-                self._class(recv, ran)
+                with self._unless_unnamed():
+                    self._class(recv, ran)
             ns = g
             table = name_table(code)
             for name in table.reads:
@@ -1312,6 +1317,22 @@ class _Build:
             tuple(x) for x in unit.extra if not (x[0] == "cached" and unit.cached_codes.get(x[1]) in self.static)
         )
         return list(dict.fromkeys(out))
+
+    @contextlib.contextmanager
+    def _unless_unnamed(self) -> Iterator[None]:
+        """Leave out code no name holds, for a call that does not need its
+        trace (*strict* off): the key already accepted the call, and each
+        item only adds a check, so the rest of the trace still stands --
+        dropped whole, it took with it the items that would see an edit
+        elsewhere (``PROBLEMS = {"a": lambda v: ...}`` beside a library
+        function the call reached). The code left out is read through
+        the global that holds it (``PROBLEMS``), which the reading code's
+        items check. A call that needs its trace is refused as before."""
+        try:
+            yield
+        except _Unnamed:
+            if self.strict:
+                raise
 
     def _imported(self, code: types.CodeType, g: Mapping[str, Any]) -> None:
         """What *code* takes from a user module it imports, by value:
@@ -1363,12 +1384,12 @@ class _Build:
         qn = code.co_qualname
         filename = code.co_filename
         if is_pseudo_filename(filename) or _frame_namespace(module, filename) is not g:
-            raise _Untraceable(f"it ran {qn} of a {module} no module holds and no running frame shows")
+            raise _Unnamed(f"it ran {qn} of a {module} no module holds and no running frame shows")
         from ..tracking.trace_items import name_table, resolve
 
         rc, fn, _owner = resolve(module, qn, g, module)
         if rc is not code:
-            raise _Untraceable(f"it ran {module}.{qn} of {filename}, which no name there holds")
+            raise _Unnamed(f"it ran {module}.{qn} of {filename}, which no name there holds")
         self.add(
             ("file_code", module, filename, qn), _code_digest(code, fn), f"{qn} has defaults that cannot be checked"
         )
@@ -1424,7 +1445,7 @@ class _Build:
             # digest holds it, by code and defaults.
             self._class(cls, ran)
             return
-        raise _Untraceable(f"it ran {module}.{qn}, which no name of {module} holds")
+        raise _Unnamed(f"it ran {module}.{qn}, which no name of {module} holds")
 
     def _class(self, cls: type, ran: set[str]) -> None:
         from ..tracking.trace_items import class_digest
@@ -1433,7 +1454,7 @@ class _Build:
         if "<locals>" in qn:
             if qn.rsplit(".<locals>.", 1)[0] in ran:
                 return
-            raise _Untraceable(f"it ran a method of {qn}, a class no name holds")
+            raise _Unnamed(f"it ran a method of {qn}, a class no name holds")
         self.add(("class", cls.__module__, qn), class_digest(cls), "")
 
     def _lookup(self, kind: str, target: Any, name: str | None) -> None:
@@ -1466,6 +1487,11 @@ class _Build:
 
 class _Untraceable(Exception):
     """Why a traced call's trace could not be built."""
+
+
+class _Unnamed(_Untraceable):
+    """Code ran that no name holds, so no item can find it again: the
+    trace leaves it out unless the call needs its trace (`_Build`)."""
 
 
 _MISSING = object()
@@ -1902,7 +1928,7 @@ def build(
 
     try:
         with call_starts(unit.cells):
-            b = _Build(unit, static_codes)
+            b = _Build(unit, static_codes, strict)
             items = b.run()
         judged = [f for f in b.functions if f.__code__ not in accepted] if accepted else b.functions
         if strict:

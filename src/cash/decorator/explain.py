@@ -151,6 +151,9 @@ class MissKind(str, Enum):
     HANDED = "handed a function that changes state"
     UNTRACKABLE = "code picked by a run-time name"
     TRACE = "code picked by a run-time name changed"
+    #: The trace kept beside the key (`code_trace`) saw code the call ran
+    #: change, for a call that picks no code by name.
+    RAN = "code the call ran changed"
     UNREAD_MODULE = "imports a module cash cannot read before it is loaded"
     ENVIRONMENT = "environment variable changed"
     RAISED = "raised"
