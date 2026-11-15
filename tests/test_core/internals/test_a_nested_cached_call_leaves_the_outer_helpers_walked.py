@@ -70,9 +70,9 @@ def inner(x):
 
 
 def _run(tmp_path, body: str) -> dict:
-    (tmp_path / "bfhelpers.py").write_text(textwrap.dedent(_HELPERS))
+    (tmp_path / "bfhelpers.py").write_text(textwrap.dedent(_HELPERS), encoding="utf-8")
     script = tmp_path / "main.py"
-    script.write_text(textwrap.dedent(_PRELUDE) + textwrap.dedent(body))
+    script.write_text(textwrap.dedent(_PRELUDE) + textwrap.dedent(body), encoding="utf-8")
     out = run_python(script.name, cwd=tmp_path).stdout
     return json.loads(out.strip().splitlines()[-1])
 
@@ -136,7 +136,7 @@ print(json.dumps({"result": r, "walks": len(WALKS) - n, "hit": outer.cache_info(
 
 @pytest.mark.parametrize("how", ["os", "module"])
 def test_a_user_rebinding_the_global_still_misses(tmp_path, how):
-    (tmp_path / "bfhelpers.py").write_text(textwrap.dedent(_HELPERS))
+    (tmp_path / "bfhelpers.py").write_text(textwrap.dedent(_HELPERS), encoding="utf-8")
     script = tmp_path / "main.py"
     script.write_text(textwrap.dedent(_PRELUDE) + textwrap.dedent(_REBOUND))
     out = run_python(script.name, how, cwd=tmp_path).stdout
