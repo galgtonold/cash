@@ -198,7 +198,8 @@ def is_user_code_object(obj: Any) -> bool:
         if (
             isinstance(code, types.CodeType)
             and type(obj) is types.FunctionType
-            and code.co_qualname != obj.__qualname__
+            # No ``co_qualname`` before 3.11: its ``co_name`` then.
+            and (code.co_qualname != obj.__qualname__ if hasattr(code, "co_qualname") else code.co_name != obj.__name__)
         ):
             # Names copied from what it wraps (``functools.wraps``): a
             # library's delegate for each method of numpy's ``Generator``
