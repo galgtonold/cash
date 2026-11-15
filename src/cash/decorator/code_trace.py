@@ -1352,8 +1352,17 @@ class _Build:
             loaded_from = _import_digest(module)
             if loaded_from is not None:
                 self.add(("import", module), loaded_from, "")
-            with self._unless_unnamed():
+            try:
                 self._code(code, g, module, ran)
+            except _Unnamed:
+                if self.strict:
+                    raise
+                # Left out whole, with the globals it reads: they are found
+                # again only through the code, and what it reads may be no
+                # value a later process rebuilds the same (a
+                # ``dynamic_depends_on=`` lambda reading a dict of sources
+                # that carry fresh bytes).
+                continue
             recv = unit.receivers.get(code)
             if recv is not None and _user_class(recv):
                 with self._unless_unnamed():
@@ -1389,9 +1398,10 @@ class _Build:
         item only adds a check, so the rest of the trace still stands --
         dropped whole, it took with it the items that would see an edit
         elsewhere (``PROBLEMS = {"a": lambda v: ...}`` beside a library
-        function the call reached). The code left out is read through
-        the global that holds it (``PROBLEMS``), which the reading code's
-        items check. A call that needs its trace is refused as before."""
+        function the call reached). The code left out, and the globals it
+        reads, are read through the global that holds it (``PROBLEMS``),
+        which the reading code's items check. A call that needs its trace
+        is refused as before."""
         try:
             yield
         except _Unnamed:
