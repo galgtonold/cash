@@ -864,6 +864,7 @@ static int str_equal(PyObject *a, PyObject *b) {
 
 static PyObject *wg_dict;
 static int wg_dirty;
+static int wg_watched;
 static int on_dict(PyDict_WatchEvent ev, PyObject *d, PyObject *key, PyObject *nv) {
     c_events++;
     if (d == wg_dict) wg_dirty = 1;   /* the warnings namespace: looked at in full on the next hit */
@@ -952,8 +953,13 @@ static int on_func(PyFunction_WatchEvent ev, PyFunctionObject *f, PyObject *nv) 
     return 0;
 }
 
+static int wg_watched;
 static int ensure_watchers(void) {
     if (dict_wid < 0) { dict_wid = PyDict_AddWatcher(on_dict); if (dict_wid < 0) return -1; }
+    if (wg_dict && !wg_watched) {   /* `warn_watch` came first: watched from here on */
+        if (PyDict_Watch(dict_wid, wg_dict) < 0) return -1;
+        wg_watched = 1;
+    }
     if (type_wid < 0) { type_wid = PyType_AddWatcher(on_type); if (type_wid < 0) return -1; }
     if (func_wid < 0) { func_wid = PyFunction_AddWatcher(on_func); if (func_wid < 0) return -1; }
     return 0;
@@ -2616,7 +2622,7 @@ static int wg_items_same(PyObject *f) {
  * namespace since (`wg_dirty`, set by `on_dict`), the hooks and the list
  * are the ones looked at: only the list's items are compared. */
 static int wg_same(void) {
-    if (!wg_dirty && !wg_getter && wg_list) return wg_items_same(wg_list);
+    if (!wg_dirty && wg_watched && !wg_getter && wg_list) return wg_items_same(wg_list);
     wg_dirty = 0;
     for (int i = 0; i < 3; i++) {
         PyObject *now = PyDict_GetItemWithError(wg_dict, wg_names[i]);   /* borrowed */
@@ -2677,7 +2683,13 @@ static PyObject *py_warn_watch(PyObject *self, PyObject *const *args, Py_ssize_t
     PyObject *g = args[1] == Py_None ? NULL : args[1];
     Py_XINCREF(g); Py_XSETREF(wg_getter, g);
     Py_INCREF(args[2]); Py_XSETREF(wg_moved, args[2]);
-    if (ensure_watchers() < 0 || PyDict_Watch(dict_wid, args[0]) < 0) { Py_CLEAR(wg_dict); return NULL; }
+    /* Watched once cash watches anything (`ensure_watchers`): adding the
+     * watchers at import would count every function made meanwhile. */
+    wg_watched = 0;
+    if (dict_wid >= 0) {
+        if (PyDict_Watch(dict_wid, args[0]) < 0) { Py_CLEAR(wg_dict); return NULL; }
+        wg_watched = 1;
+    }
     if (wg_look() < 0) { Py_CLEAR(wg_dict); return NULL; }
     Py_RETURN_NONE;
 }
