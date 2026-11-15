@@ -9,7 +9,9 @@ code digest, the digests of the helpers its analysis walked and of the
 cached functions it calls, how it is checked (``purity=``), and the types of
 the arguments it is handed, with the values of flags and strings
 (``copy=True`` and ``inplace=False`` take another path through the same
-code). A call with
+code), what a closure captures (`_captured_part`: a closure capturing
+anything else keeps no verdict) and the type of the object a method handed
+to ``cash.cache`` is bound to. A call with
 a verdict runs uncached straight away, giving the warnings the refused call
 gave (`Notices.replay_warnings`).
 
@@ -30,7 +32,9 @@ the analysis of a new process re-reads the code the key is made of.
 from __future__ import annotations
 
 import hashlib
+import logging
 import threading
+import types
 from typing import TYPE_CHECKING, Any
 
 from .function_identity import hash_callable_source
@@ -87,6 +91,78 @@ def _argument_part(value: Any) -> str:
     return _type_name(value)
 
 
+#: Captured values named by their value in a closure's part of a key.
+_CAPTURED_SCALARS = (bool, int, float, complex, str, bytes, type(None))
+
+#: How deep a captured function's own captures are followed.
+_CLOSURE_DEPTH = 4
+
+
+def _captured_part(value: Any, depth: int) -> str | None:
+    """What names one captured *value* in a verdict key, or None for a
+    value that cannot be named: the closure then keeps no verdict. A
+    function is named by its code and by what it captures in turn, a class
+    by what it holds (`class_digest`), a logger by its name, a scalar by
+    its value."""
+    kind = type(value)
+    if kind in _CAPTURED_SCALARS:
+        text = repr(value)
+        if len(text) > _SCALAR_REPR_MAX:
+            text = "#" + hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()[:16]
+        return f"{kind.__name__}={text}"
+    if kind is types.FunctionType:
+        if depth >= _CLOSURE_DEPTH:
+            return None
+        inner = _closure_part(value, depth + 1)
+        defaults = _values_part(value.__defaults__ or (), depth)
+        kwdefaults = sorted((value.__kwdefaults__ or {}).items())
+        named = _values_part(tuple(v for _k, v in kwdefaults), depth)
+        if inner is None or defaults is None or named is None:
+            return None
+        keywords = ",".join(k for k, _v in kwdefaults)
+        return f"fn={hash_callable_source(value)}[{inner}]({defaults};{keywords}={named})"
+    if isinstance(value, type):
+        from ..tracking.trace_items import class_digest
+
+        return f"class={value.__module__}.{value.__qualname__}={class_digest(value)}"
+    if kind is logging.Logger or kind is logging.RootLogger:
+        return f"logger={value.name}"
+    if kind is tuple:
+        inner = _values_part(value, depth)
+        return None if inner is None else f"tuple=({inner})"
+    return None
+
+
+def _values_part(values: tuple, depth: int) -> str | None:
+    parts = []
+    for v in values:
+        got = _captured_part(v, depth)
+        if got is None:
+            return None
+        parts.append(got)
+    return ",".join(parts)
+
+
+def _closure_part(func: Any, depth: int = 0) -> str | None:
+    """What *func*'s closure captures, each cell by `_captured_part`: ``""``
+    for a function that captures nothing, None when a capture cannot be
+    named. Read each call: a cell can be rebound."""
+    cells = getattr(func, "__closure__", None)
+    if not cells:
+        return ""
+    parts = []
+    for name, cell in zip(func.__code__.co_freevars, cells):
+        try:
+            value = cell.cell_contents
+        except ValueError:  # an empty cell: not bound yet
+            return None
+        got = _captured_part(value, depth)
+        if got is None:
+            return None
+        parts.append(f"{name}={got}")
+    return ";".join(parts)
+
+
 def _code_part(func: Any, report: PurityReport | None) -> str:
     """The function's own code digest and those of what its analysis walked."""
     parts = [f"own={hash_callable_source(func)}"]
@@ -124,20 +200,35 @@ class RefusalVerdicts:
         self, spec: CachedFunction, report: PurityReport | None, mode: str, args: tuple, kwargs: dict
     ) -> str | None:
         """The verdict key of a call of *spec* with these arguments, or None
-        for one no verdict is kept for: a closure, whose captures are not in
-        the key, or a function checked with ``purity="silent"``, which is
-        never refused for changing its arguments."""
+        for one no verdict is kept for: a closure capturing a value that
+        cannot be named (`_captured_part`), or a function checked with
+        ``purity="silent"``, which is never refused for changing its
+        arguments. A closure's captures are in the key: a wrapper that
+        closes over the function it wraps, a logger and a count (NiMARE's
+        ``use_memmap``) keeps one verdict per thing it wraps."""
         func = spec.func
-        if mode == "silent" or getattr(func, "__closure__", None):
+        if mode == "silent":
             return None
         try:
+            captured = _closure_part(func)
+            if captured is None:
+                return None
             held = self._code.get(id(func))
             if held is None or held[0] is not func or held[1] is not report:
                 held = (func, report, _code_part(func, report))
                 self._code[id(func)] = held
             from .. import __version__
 
-            parts = [__version__, spec.name, held[2], mode]
+            parts = [__version__, spec.name, held[2], mode, captured]
+            if isinstance(func, types.MethodType):
+                # ``cash.cache(estimator.fit)``: the instance is in no
+                # argument, and subclasses sharing the method take other
+                # paths through it (their own attributes and overrides).
+                owner = func.__self__
+                if isinstance(owner, type):  # a classmethod: the class it is bound to
+                    parts.append(f"cls={owner.__module__}.{owner.__qualname__}")
+                else:
+                    parts.append("self=" + _type_name(owner))
             parts.extend(_argument_part(a) for a in args)
             parts.extend(f"{k}:{_argument_part(v)}" for k, v in sorted(kwargs.items()))
         except Exception:  # noqa: BLE001 - no key: the call is keyed as always

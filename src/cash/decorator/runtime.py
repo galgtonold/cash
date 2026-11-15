@@ -65,6 +65,7 @@ from .arg_hashing import (
     ContentKeyed,
     call_polars,
     content_only,
+    quiet_digests,
 )
 from .arg_key import keyed_arguments
 from .cache_metadata import CacheMetadata
@@ -1439,13 +1440,14 @@ class CallRunner:
         overhead_t0 = _perf_counter()
         if pt is not None:
             _phases.mark(pt, _phases.SETUP)
-            window = _phases.open_window(pt, _phases.KEY_OTHER)
         # Outside the key build, which turns any exception into "no key": an
         # exception from the body of an uncached call must propagate, not run
         # the body a second time.
         handed = claim_handed_digests()
         if self._verdicts is not None and not async_body and self._known_refusal(spec, call, handed):
             return call
+        if pt is not None:
+            window = _phases.open_window(pt, _phases.KEY_OTHER)
         # Before the key: a fast hit remembered from this call must not
         # outlive a change made while the key was built (`hit_memo`).
         epochs_before = hit_memo.epochs(spec, args, kwargs)
@@ -1627,7 +1629,14 @@ class CallRunner:
         refused = str(verdict.get("why") or "it changed its arguments in place")
         why = MissReason(MissKind.NOT_STORED, refused)
         note_unentered_body(func_name)
+        # Timed as the uncached call's body (`_run_uncached`): reported
+        # with the wrapper, the body of every such call counted as cash's.
+        pt = _phases.CURRENT.get() if _phases.ON else None
+        if pt is not None:
+            _phases.mark(pt, _phases.REPLAY)
         call.outcome = spec.func(*call.args, **call.kwargs)
+        if pt is not None:
+            _phases.mark(pt, _phases.BODY)
         self._calls.log(
             func_name,
             cache_hit=False,
@@ -1652,8 +1661,10 @@ class CallRunner:
             self._notices.recorded_warnings(func_name)
             call.refusal_probe = False
 
-    def _settle_verdict(self, spec: CachedFunction, call: Call, refusal: str | None) -> None:
-        """Keep or drop the verdict of a checked call (`_known_refusal`)."""
+    def _settle_verdict(self, spec: CachedFunction, call: Call, refusal: str | None, observer: Any = None) -> None:
+        """Keep or drop the verdict of a checked call (`_known_refusal`).
+        *observer* is the call's `EffectObserver`, which says whether a
+        later call may be stored (`arguments_left`)."""
         if not call.refusal_probe or self._verdicts is None:
             return
         func_name = spec.name
@@ -1664,11 +1675,14 @@ class CallRunner:
                 self._verdicts.drop(func_name, call.refusal_key)
             return
         earlier = self._first_refusal_warnings.pop(func_name, [])
-        if not (refusal.unreplayable or call.args_fingerprinted):
+        final = observer is not None and bool(observer.mutated_args) and not observer.next_may_store
+        if not (refusal.unreplayable or call.args_fingerprinted or final):
             # The first change seen, on an argument nothing was taken of
             # before the body: the next call fingerprints it and may be
             # stored (`arguments_left`), so it says nothing yet. What it
-            # warned goes with the verdict that call may leave.
+            # warned goes with the verdict that call may leave. Not when
+            # no later call can write the argument back either (*final*):
+            # the next is refused too, and would build its key for nothing.
             self._first_refusal_warnings[func_name] = warnings
             return
         # Made from what the body changed: the types it was handed stay,
@@ -1949,6 +1963,7 @@ class CallRunner:
                     for v in values
                 ):
                     observer.stored_from_next = list(mutated)
+                    observer.next_may_store = True
                     observer.reword(
                         "argument mutation",
                         "so this call runs every time",
@@ -1982,6 +1997,7 @@ class CallRunner:
             except rewrite_in_place.HeldByCash:
                 # Its first change seen, under the memo's hold: the next
                 # call lets go of the frame first and is stored.
+                observer.next_may_store = True
                 observer.reword(
                     "argument mutation",
                     "so this call runs every time",
@@ -2362,7 +2378,11 @@ class CallRunner:
         # A generator argument the body drew from is moved on again by a hit
         # (`replay_argument_carriers`), so that draw is not a mutation the
         # caller would lose: the check sees it where the call found it.
-        with carriers_put_back(run.arg_carriers_pre if run.arg_carriers_moved else []), call_polars(call.polars_args):
+        with (
+            carriers_put_back(run.arg_carriers_pre if run.arg_carriers_moved else []),
+            call_polars(call.polars_args),
+            quiet_digests(),
+        ):
             attrs = self.attribute_changes(spec, call, run)
             with content_only(call.by_content):
                 self._purity.check_argument_mutation(
@@ -2451,7 +2471,7 @@ class CallRunner:
         pt = _phases.CURRENT.get() if _phases.ON else None
         if pt is not None:
             _phases.mark(pt, _phases.POST)
-        self._settle_verdict(spec, call, refusal)
+        self._settle_verdict(spec, call, refusal, run.observer)
         if refusal is not None:
             self._misses.note_not_stored(call.cache_key, refusal, func_name)
         else:

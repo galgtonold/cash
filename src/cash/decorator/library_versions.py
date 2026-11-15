@@ -66,6 +66,16 @@ _RECORD_PATHS: dict[str, str] = {}
 _DIGESTS: dict[str, str | None] = {}
 #: distribution name -> the installed distributions it requires, transitively.
 _CLOSURES: dict[str, frozenset[str]] = {}
+#: The saved map's fingerprint this process checked or wrote
+#: (`_install_fingerprint`), under which `_closure`'s results are kept for
+#: the next process; None when the map is not saved.
+_SLOT_FINGERPRINT: dict | None = None
+#: distribution name -> ``{"names": [...], "versions": {name: [version,
+#: RECORD path]}}``: what `_closure` found, kept with the saved map: read
+#: from it, and what this process added.
+_SAVED_CLOSURES: dict[str, Any] = {}
+#: Whether `_SAVED_CLOSURES` holds what the saved map does not yet.
+_CLOSURES_ADDED = False
 #: The project name at the start of a requirement line: ``numpy>=1.26; ...``.
 _REQ_NAME = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
 #: code object -> the global names it and its nested code read.
@@ -194,6 +204,8 @@ def _distribution_map() -> dict[str, list[tuple[str, Any]]]:
     is the metadata folders on ``sys.path`` (`_install_fingerprint`): while
     those are the same, so is the map, and so is every key.
     """
+    global _SLOT_FINGERPRINT, _SAVED_CLOSURES
+    _SAVED_CLOSURES = {}
     try:
         header = _fingerprint_header()
         fingerprint = None
@@ -207,6 +219,7 @@ def _distribution_map() -> dict[str, list[tuple[str, Any]]]:
         return {}
     if fingerprint is not None and saveable is not None:
         _save_map(fingerprint, saveable)
+        _SLOT_FINGERPRINT = fingerprint
     return by_top
 
 
@@ -350,15 +363,22 @@ def _saved_map(header: list) -> dict[str, list[tuple[str, Any]]] | None:
                     return None
                 rows.append((name, folder))
             result[top] = rows
+        closures = saved.get("closures")
+        closures = closures if isinstance(closures, dict) else {}
     except Exception:  # noqa: BLE001 - anything off in the file: build it again
         return None
+    global _SLOT_FINGERPRINT, _SAVED_CLOSURES
+    _SLOT_FINGERPRINT = {"header": header, "paths": refreshed}
+    _SAVED_CLOSURES = closures
     if refreshed != prints:  # a working folder that moved and is still bare
-        _save_map({"header": header, "paths": refreshed}, by_top)
+        _save_map(_SLOT_FINGERPRINT, by_top, closures)
     return result
 
 
-def _save_map(fingerprint: dict, by_top: dict[str, list]) -> None:
-    """Keep *by_top* for the next process with these installs. Best-effort."""
+def _save_map(fingerprint: dict, by_top: dict[str, list] | None, closures: dict | None = None) -> None:
+    """Keep *by_top* for the next process with these installs, and with it
+    *closures* (`_SAVED_CLOSURES`). With *by_top* None, only *closures*, and
+    only into a slot saved under this same *fingerprint*. Best-effort."""
     path = _map_path()
     slot = _slot(fingerprint["header"])
     try:
@@ -367,8 +387,16 @@ def _save_map(fingerprint: dict, by_top: dict[str, list]) -> None:
         # which refused it as one a hit would skip (p27's ``load``).
         with untracked(), io_watch.own_work():
             data = _read_saved()
-            data.pop(slot, None)
-            data[slot] = {"fingerprint": fingerprint, "map": by_top, "digest": _map_digest(by_top)}
+            held = data.pop(slot, None)
+            if by_top is None:
+                if not isinstance(held, dict) or held.get("fingerprint") != fingerprint:
+                    return  # the installs changed since: these may be stale
+                held["closures"] = closures or {}
+                data[slot] = held
+            else:
+                data[slot] = {"fingerprint": fingerprint, "map": by_top, "digest": _map_digest(by_top)}
+                if closures:
+                    data[slot]["closures"] = closures
             for old in list(data)[:-_SAVED_MAPS]:
                 del data[old]
             os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -490,10 +518,22 @@ def _requires(dist: str) -> list[str]:
 
 
 def _closure(dist: str) -> frozenset[str]:
-    """*dist* and every installed distribution it requires, transitively."""
+    """*dist* and every installed distribution it requires, transitively.
+
+    Kept with the saved map (`_SAVED_CLOSURES`), with the version and
+    ``RECORD`` of each: finding them reads the metadata of every
+    distribution on the way, 0.2 s a process for a scientific stack. The
+    map's fingerprint names every metadata folder and the stat of the
+    files in it (`_install_fingerprint`), so an install, an uninstall or an
+    upgrade reads them again."""
+    global _CLOSURES_ADDED
     done = _CLOSURES.get(dist)
     if done is not None:
         return done
+    kept = _kept_closure(dist)
+    if kept is not None:
+        _CLOSURES[dist] = kept
+        return kept
     found: set[str] = set()
     stack = [dist]
     while stack:
@@ -505,7 +545,39 @@ def _closure(dist: str) -> frozenset[str]:
         stack.extend(_requires(d))
     result = frozenset(found)
     _CLOSURES[dist] = result
+    if _SLOT_FINGERPRINT is not None:
+        versions = {}
+        for name in sorted(result):
+            versions[name] = [_version(name), _RECORD_PATHS.get(name)]
+        _SAVED_CLOSURES[dist] = {"names": sorted(result), "versions": versions}
+        _CLOSURES_ADDED = True
     return result
+
+
+def _kept_closure(dist: str) -> frozenset[str] | None:
+    """*dist*'s closure as the saved map keeps it, its versions and
+    ``RECORD`` paths taken in too; None when it keeps none (or a malformed one)."""
+    if _SLOT_FINGERPRINT is None:
+        return None
+    entry = _SAVED_CLOSURES.get(dist)
+    try:
+        names, versions = entry["names"], entry["versions"]  # type: ignore[index]
+        rows = []
+        for name in names:
+            version, record = versions[name]
+            if not isinstance(name, str) or not (version is None or isinstance(version, str)):
+                return None
+            if not (record is None or isinstance(record, str)):
+                return None
+            rows.append((name, version, record))
+    except Exception:  # noqa: BLE001 - not kept, or not whole: read again
+        return None
+    for name, version, record in rows:
+        if name not in _VERSIONS:  # a version is read once a process, kept or not
+            _VERSIONS[name] = version
+            if record is not None:
+                _RECORD_PATHS[name] = record
+    return frozenset(names)
 
 
 def _code_names(code: types.CodeType) -> tuple[str, ...]:
@@ -696,13 +768,25 @@ def _library_versions(functions: Iterable[Callable], own_pkg: str | None) -> lis
                 found.add((name, version if digest is None else f"{version} files {digest}"))
     if saved is not None and saved.get(""):
         _save_records(saved)
+    _keep_closures()
     return sorted(found)
+
+
+def _keep_closures() -> None:
+    """Save what `_closure` found this process with the map it was found under."""
+    global _CLOSURES_ADDED
+    if _CLOSURES_ADDED and _SLOT_FINGERPRINT is not None:
+        _CLOSURES_ADDED = False
+        _save_map(_SLOT_FINGERPRINT, None, dict(_SAVED_CLOSURES))
 
 
 def forget() -> None:
     """Read the installed distributions again (tests that install one)."""
-    global _DISTS_BY_TOP
+    global _DISTS_BY_TOP, _SLOT_FINGERPRINT, _SAVED_CLOSURES, _CLOSURES_ADDED
     _DISTS_BY_TOP = None
+    _SLOT_FINGERPRINT = None
+    _SAVED_CLOSURES = {}
+    _CLOSURES_ADDED = False
     _PROVIDERS.clear()
     _VERSIONS.clear()
     _RECORD_PATHS.clear()

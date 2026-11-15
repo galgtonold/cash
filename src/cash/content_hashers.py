@@ -87,7 +87,7 @@ def builtin_hash(value: Any) -> str | None:
     names, dtypes, the memory layout of an array. The same values under two
     dtypes are two different objects to the code reading them.
     """
-    family = builtin_hash_family(type(value))
+    family = builtin_family_of(type(value))
     if family == "pandas":
         return hash_pandas(value)
     if family == "numpy":
@@ -1052,6 +1052,12 @@ def array_layout(value: Any) -> str:
     by pickle as a C-ordered copy, and it genuinely ravels differently from
     one, so the restored value must key apart. Safe direction.
     """
+    if value.ndim < 2 or (value.flags.c_contiguous and value.size):
+        # At most one axis, or C-contiguous with data: the axes longer than
+        # 1 sit outermost first, as below finds at ~1.5 us an array. An
+        # empty array is flagged contiguous whatever its strides, so it is
+        # read from them.
+        return "C"
     axes = [(axis, stride) for axis, (n, stride) in enumerate(zip(value.shape, value.strides)) if n > 1]
     if len(axes) <= 1:
         return "C"
