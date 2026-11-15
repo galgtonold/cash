@@ -59,9 +59,21 @@ cannot tell whether they differ.
 `func.cache_info()` counts the hits and misses of this wrapper since it was
 created, with the reasons for the misses and, under `changed`, what changed
 for each `code or state changed` one. `explain()` itself is not a call, so
-above it reports one miss and no hits. Its `total_time_saved` adds up the
-compute time recorded when each entry was first written; it is an estimate of
-what the hits avoided, not a measurement, so treat it as an upper bound.
+above it reports one miss and no hits. Its `total_time_saved` adds up, for
+each hit, the compute time recorded when the entry was written; it is an
+estimate of what the hits avoided, not a measurement.
+
+<!-- claim: cash/decorator/hit_credit.py:HitCredit.credit @f913f0d1 -->
+A function's first call in a process can pay work no later call pays again:
+a numba function compiles, a lazy import loads. An entry written by such a
+call is credited with its whole stored time only once per function per
+process, and only when no body of the function has run in that process yet,
+since that hit did stand in for the warm-up. Every later hit of it is
+credited with the smallest warm time seen for the function in the process
+(a later call, or a hit of an entry a later call wrote), never more than its
+stored time. Until a warm time has been seen there is nothing smaller to go
+by, and such a hit keeps the stored time. The `cash.calls` lines,
+`CASH_SUMMARY`'s table and the net-loss warning count the same credit.
 `cash.show_stats()` prints the same per-function table for every cached
 function in a script.
 

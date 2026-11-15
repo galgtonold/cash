@@ -52,6 +52,10 @@ class CacheMetadata:
     # threads that were running cached calls alongside it: sixteen 0.5 s calls
     # on eight threads take 1 s, not 8 s.
     saves_seconds: float | None = None
+    # The call that wrote the entry was its function's first in its process,
+    # so its time may hold a one-off warm-up (a JIT compile, a lazy import):
+    # what a hit is credited with saving (`hit_credit`).
+    first_call: bool | None = None
     outputs: list[str] | None = None
     lineage_hash: str | None = None
     source: str | None = None  # Backend source identifier (e.g. 'RAM', 'disk')
