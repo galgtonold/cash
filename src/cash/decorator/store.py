@@ -349,7 +349,8 @@ class ResultStore:
             refusal = ArgumentRefusal(
                 f"it changed its argument{plural} {names} in place, and a hit cannot replay it: {why}"
                 if why
-                else f"it changed its argument{plural} {names} in place, which a hit would not do"
+                else f"it changed its argument{plural} {names} in place, which a hit would not do",
+                unreplayable=bool(why),
             )
         split = split_by_a_hit(res) if refusal is None else None
         if split is not None:

@@ -1070,6 +1070,9 @@ class CallRunner:
         #: What earlier calls learned of arguments changed in place
         #: (`refusal_verdicts`).
         self._verdicts = verdicts
+        #: func_name -> what a call refused for a first-seen argument change
+        #: warned (`_settle_verdict`).
+        self._first_refusal_warnings: dict[str, list] = {}
         self._keys = keys
         self._store = store
         self._calls = calls
@@ -1535,6 +1538,7 @@ class CallRunner:
         verdict = self._verdicts.use(func_name, key)
         if verdict is None:
             call.refusal_key = key
+            call.args_fingerprinted = spec.changes_arguments
             self._notices.record_warnings(func_name)
             return False
         if handed is not None:
@@ -1568,7 +1572,15 @@ class CallRunner:
         if self._verdicts is None or call.refusal_key is None:
             return
         if isinstance(refusal, ArgumentRefusal):
-            self._verdicts.refused(func_name, call.refusal_key, refusal, warnings)
+            earlier = self._first_refusal_warnings.pop(func_name, [])
+            if refusal.unreplayable or call.args_fingerprinted:
+                self._verdicts.refused(func_name, call.refusal_key, refusal, [*earlier, *(warnings or ())])
+            else:
+                # The first change seen, on an argument nothing was taken of
+                # before the body: the next call fingerprints it and may be
+                # stored (`arguments_left`), so it says nothing yet. What it
+                # warned goes with the verdict that call may leave.
+                self._first_refusal_warnings[func_name] = warnings or []
         else:
             self._verdicts.drop(func_name, call.refusal_key)
 

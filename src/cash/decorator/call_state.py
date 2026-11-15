@@ -106,6 +106,7 @@ class Call:
         "ran_unit",
         "folded_code",
         "refusal_key",
+        "args_fingerprinted",
     )
 
     def __init__(self, args: tuple, kwargs: dict) -> None:
@@ -149,6 +150,10 @@ class Call:
         #: The call's `RefusalVerdicts` key, when this call keeps or drops a
         #: verdict once it is checked.
         self.refusal_key: str | None = None
+        #: Whether its arguments were fingerprinted before the body ran
+        #: (`CachedFunction.changes_arguments` at lookup): a refusal for
+        #: changing them then is not the first-seen one the next call stores.
+        self.args_fingerprinted = False
 
 
 class BodyRun:

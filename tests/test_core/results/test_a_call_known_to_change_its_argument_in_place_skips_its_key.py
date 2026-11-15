@@ -215,7 +215,7 @@ def test_what_the_verdict_cannot_see_is_probed_again_across_processes(tmp_path):
     `REPROBE_EVERY` calls later, counted across processes."""
     (tmp_path / "probe.py").write_text(textwrap.dedent(PROBE), encoding="utf-8")
     cache = str(tmp_path / "cache")
-    run_python("probe.py", cache, "1", "0", cwd=tmp_path)
+    run_python("probe.py", cache, "2", "0", cwd=tmp_path)
     hits = []
     for _ in range(REPROBE_EVERY // 4 + 1):
         out = run_python("probe.py", cache, "0", "4", cwd=tmp_path)

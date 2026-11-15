@@ -61,9 +61,16 @@ _ABSENT: dict = {}
 class ArgumentRefusal(str):
     """A refusal (`ResultStore.refusal`) because the call changed an
     argument in place in a way a hit cannot replay: the one a verdict is
-    kept for."""
+    kept for. *unreplayable*: the change is of a kind no hit replays (an
+    attribute bound to an object pickled by its own ``__reduce__``), not
+    merely one nothing was fingerprinted for before this body ran."""
 
-    __slots__ = ()
+    unreplayable: bool = False
+
+    def __new__(cls, text: str, *, unreplayable: bool = False) -> ArgumentRefusal:
+        made = super().__new__(cls, text)
+        made.unreplayable = unreplayable
+        return made
 
 
 def _type_name(value: Any) -> str:
