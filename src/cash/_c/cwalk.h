@@ -17,6 +17,8 @@ int csets_add_functions(PyObject *m);
 int cgc_add_functions(PyObject *m);
 /* Add the private-graph check (cprivate.c). */
 int cprivate_add_functions(PyObject *m);
+/* Add the key walk of plain data (cplain.c). */
+int cplain_add_functions(PyObject *m);
 /* The marker a set leaves where it deleted a key (cwatch.c). */
 PyObject *cwatch_set_dummy(void);
 

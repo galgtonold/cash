@@ -107,7 +107,7 @@ def builtin_hash(value: Any) -> str | None:
 
 #: How a key walk reads a frame, array or table with no memo in front:
 #: every byte, through `builtin_hash`.
-BUILTIN_CONTENT = ContentHashing(builtin_family_of, builtin_hash)
+BUILTIN_CONTENT = ContentHashing(builtin_family_of, builtin_hash, plain_arrays=lambda: None)
 
 
 def hash_pandas(value: Any) -> str | None:
@@ -1092,6 +1092,15 @@ def _dtype_text(dtype: Any) -> str:
     return text
 
 
+def plain_dtype_text(dtype: Any) -> str | None:
+    """`_dtype_text` of a dtype the C walk of plain data reads an array of
+    itself (numbers, booleans, strings: no fields, no objects, no subarray,
+    no datetimes), else None: `hash_numpy` reads it."""
+    if dtype.fields is not None or dtype.subdtype is not None or dtype.hasobject or dtype.kind not in "biufcSU":
+        return None
+    return _dtype_text(dtype)
+
+
 def hash_numpy(value: Any) -> str | None:
     """Hash a numpy ndarray over its FULL contents.
 
@@ -1100,7 +1109,8 @@ def hash_numpy(value: Any) -> str | None:
     return a wrong cached result (a silent data-corruption bug, especially for
     the large ML/data arrays caching targets). Shape and dtype are folded in
     so a reshape or retype of the same bytes does not collide. Uses a
-    zero-copy ``memoryview`` for contiguous arrays and a C-order copy
+    zero-copy ``memoryview`` for C-contiguous arrays, the memory of an
+    F-contiguous one as it lies (behind ``F-memory:``), and a C-order copy
     otherwise; a big buffer is hashed on several threads (`fold_buffer`).
     An object array is keyed by its items (`_fold_object_array`).
 
@@ -1122,6 +1132,14 @@ def hash_numpy(value: Any) -> str | None:
             return h.hexdigest()
         # A record dtype's padding holds whatever the memory held.
         value = packed_records(value)
+        if value.flags.f_contiguous and not value.flags.c_contiguous:
+            # Fortran order (a nibabel image): its memory as it lies, read
+            # through the transpose, which is C-contiguous -- a 25 MB image
+            # was copied to C order on every hit. The header above already
+            # holds the shape and the "F" layout, and the marker keeps these
+            # bytes apart from any C-order read.
+            h.update(b"F-memory:")
+            value = value.T
         try:
             data = memoryview(raw_view(value))  # no copy if C-contiguous
         except (TypeError, ValueError):
