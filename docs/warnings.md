@@ -146,7 +146,7 @@ Caching happened, or refused to, and it is worth saying. Every code here starts 
 
 | Code | Applies to | Meaning |
 |---|---|---|
-| [CACHE-ARGUMENT-WRITTEN-BACK](#cache-argument-written-back) | decorator | the call changed an argument in place, and a hit writes that change back |
+| [CACHE-ARG-WRITTEN-BACK](#cache-arg-written-back) | decorator | the call changed an argument in place, and a hit writes that change back |
 | [CACHE-ASYNC-GENERATOR](#cache-async-generator) | decorator | async generators are not cached |
 | [CACHE-CLEAR-INCOMPLETE](#cache-clear-incomplete) | decorator | `cache_clear()` could not remove some entries; they are still served |
 | [CACHE-DIR-NEW](#cache-dir-new) | decorator | cash created its default cache folder, and says where |
@@ -168,7 +168,7 @@ Caching happened, or refused to, and it is worth saying. Every code here starts 
 | [CACHE-VALUE-TOO-BIG](#cache-value-too-big) | both | a value is bigger than the disk cap |
 | [CACHE-WRITE-ABANDONED](#cache-write-abandoned) | both | the process exited before its writes finished |
 
-### CACHE-ARGUMENT-WRITTEN-BACK {#cache-argument-written-back}
+### CACHE-ARG-WRITTEN-BACK {#cache-arg-written-back}
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
@@ -963,7 +963,7 @@ unless cash can write the argument's new state back on a hit
 ([which arguments](decorator-limitations.md#results-cash-refuses-to-store)).
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks._report_written_back @87eba24c -->
 When it can write back every argument the call changed, the warning is one
-line under its own code, [CACHE-ARGUMENT-WRITTEN-BACK](#cache-argument-written-back),
+line under its own code, [CACHE-ARG-WRITTEN-BACK](#cache-arg-written-back),
 with nothing to fix.
 A call that only binds attributes on an object it was handed is stored with
 them and a hit binds them again, so nothing is said about it; where a hit
@@ -1057,7 +1057,7 @@ Each finding has a line number and a label:
 A line of the function's own body that changes one of its arguments in place
 (`rows.sort()`) is reported once that first call has run, and only when cash
 cannot write the argument's new state back on a hit; when it can, the one line
-of [CACHE-ARGUMENT-WRITTEN-BACK](#cache-argument-written-back) says so instead.
+of [CACHE-ARG-WRITTEN-BACK](#cache-arg-written-back) says so instead.
 When the call bound attributes a hit cannot replay, the report ends with why
 (`a hit cannot replay the attributes the call bound: it also changed
 something else in its arguments in place: self.history.append (line 12)`).

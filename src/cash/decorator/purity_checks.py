@@ -1923,7 +1923,7 @@ class PurityChecks:
             f"and a hit writes it back.",
             # Its own code: under the one that also says "this call is never
             # stored", a later function's refusal printed only "also on f".
-            code="CACHE-ARGUMENT-WRITTEN-BACK",
+            code="CACHE-ARG-WRITTEN-BACK",
             fix="",
         )
 

@@ -39,10 +39,10 @@ def test_the_write_back_note_has_its_own_code(disk_cash):
         return float(a.sum())
 
     shown = _shown(clip_in_place, np.array([-1.0, 2.0, 0.5]))
-    assert [code for code, _ in shown] == ["CACHE-ARGUMENT-WRITTEN-BACK"], shown
+    assert [code for code, _ in shown] == ["CACHE-ARG-WRITTEN-BACK"], shown
     assert "clip_in_place changed 'a' in place; cash stores the state it leaves 'a' in" in shown[0][1]
     logged = clip_in_place.cache_info()["warnings"]
-    assert [entry["code"] for entry in logged] == ["CACHE-ARGUMENT-WRITTEN-BACK"], logged
+    assert [entry["code"] for entry in logged] == ["CACHE-ARG-WRITTEN-BACK"], logged
 
 
 def test_a_call_never_stored_after_a_write_back_note_says_why(disk_cash):

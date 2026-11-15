@@ -29,7 +29,7 @@ PAGE = Path(__file__).resolve().parents[2] / "docs" / "warnings.md"
 #: block waiver wraps that line and the lines indented under it) and ``{DEC}``
 #: the decorator's arguments.
 CASES: dict[str, tuple[str, str]] = {
-    "CACHE-ARGUMENT-WRITTEN-BACK": (
+    "CACHE-ARG-WRITTEN-BACK": (
         """
         @c.cache{DEC}
         def f(v):
@@ -244,11 +244,11 @@ def _wrap_in_block(body: str) -> str:
 
 #: Codes shown only on some Pythons: KEY-UNRESOLVED-CALL before 3.12 (from
 #: 3.12 the call is served on a trace of what it ran instead), and
-#: CACHE-ARGUMENT-WRITTEN-BACK from 3.12 (below it, a call that changes its
+#: CACHE-ARG-WRITTEN-BACK from 3.12 (below it, a call that changes its
 #: argument is not recorded, so it runs every time instead).
 _FIRES_ON = {
     "KEY-UNRESOLVED-CALL": sys.version_info < (3, 12),
-    "CACHE-ARGUMENT-WRITTEN-BACK": sys.version_info >= (3, 12),
+    "CACHE-ARG-WRITTEN-BACK": sys.version_info >= (3, 12),
 }
 
 PARAMS = [
