@@ -179,6 +179,9 @@ class StoreRequest:
     #: name -> digest of the environment variables an installed package
     #: read while the body ran (`env_reads.environment_digests`).
     env_reads: dict[str, str] | None = None
+    #: The warnings state a result can see (`warning_state.stamp`), when the
+    #: body warned.
+    warned_under: str | None = None
     #: What the result shared with an object outside the call, as the
     #: warning said it (`PurityChecks.warn_shared_result`): a hit says it too.
     shared_result: str | None = None
@@ -747,6 +750,7 @@ class ResultStore:
                 process_local=True if dynamic is not None and not dynamic.picklable else None,
                 code_trace=[list(item) for item in request.code_trace] if request.code_trace is not None else None,
                 env_reads=request.env_reads,
+                warned_under=request.warned_under,
                 shared_result=request.shared_result,
                 args_left=sorted(request.args_left) if request.args_left else None,
                 **(request.manifest or {}),

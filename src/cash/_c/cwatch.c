@@ -862,8 +862,12 @@ static int str_equal(PyObject *a, PyObject *b) {
     return memcmp(PyUnicode_DATA(a), PyUnicode_DATA(b), (size_t)n * PyUnicode_KIND(a)) == 0;
 }
 
+static PyObject *wg_dict;
+static int wg_dirty;
+static int wg_watched;
 static int on_dict(PyDict_WatchEvent ev, PyObject *d, PyObject *key, PyObject *nv) {
     c_events++;
+    if (d == wg_dict) wg_dirty = 1;   /* the warnings namespace: looked at in full on the next hit */
     if (nrecs) {
         rec_iterating++;
         for (size_t i = 0; i < nrecs; i++)
@@ -949,8 +953,13 @@ static int on_func(PyFunction_WatchEvent ev, PyFunctionObject *f, PyObject *nv) 
     return 0;
 }
 
+static int wg_watched;
 static int ensure_watchers(void) {
     if (dict_wid < 0) { dict_wid = PyDict_AddWatcher(on_dict); if (dict_wid < 0) return -1; }
+    if (wg_dict && !wg_watched) {   /* `warn_watch` came first: watched from here on */
+        if (PyDict_Watch(dict_wid, wg_dict) < 0) return -1;
+        wg_watched = 1;
+    }
     if (type_wid < 0) { type_wid = PyType_AddWatcher(on_type); if (type_wid < 0) return -1; }
     if (func_wid < 0) { func_wid = PyFunction_AddWatcher(on_func); if (func_wid < 0) return -1; }
     return 0;
@@ -2568,6 +2577,128 @@ static PyObject *py_world_quiet(PyObject *self, PyObject *const *args, Py_ssize_
     Py_RETURN_NONE;
 }
 
+/* ------------------------------------------------------------ warnings guard
+ * What a warning does is read at the time of the call, outside any key's
+ * code: the filters, ``defaultaction`` and the display hooks of `warnings`
+ * (`cash.decorator.warning_state`). Every key folds what of them a call
+ * could see; a fast hit compares them with the last look (`wg_check`):
+ * the hooks and ``defaultaction`` by identity, the filters item by item
+ * (``catch_warnings`` copies the list, with the same items). When they
+ * differ, the look is taken again and `wg_moved` (Python) moves the cash
+ * epoch when what a key folds of them moved. */
+static PyObject *wg_dict = NULL, *wg_getter = NULL, *wg_moved = NULL;
+static int wg_dirty = 1;
+static PyObject *wg_list = NULL;                      /* the filters list at the last look */
+static PyObject *wg_names[3] = {NULL, NULL, NULL};   /* showwarning, formatwarning, defaultaction */
+static PyObject *wg_held[3] = {NULL, NULL, NULL};
+static PyObject *wg_filters = NULL;                   /* tuple: the filters' items at the last look */
+static PyObject *wg_filters_name = NULL;
+
+/* The filters now, a new reference, or NULL (an error set or not). */
+static PyObject *wg_filters_now(void) {
+    if (wg_getter) return PyObject_CallNoArgs(wg_getter);
+    PyObject *f = PyDict_GetItemWithError(wg_dict, wg_filters_name);   /* borrowed */
+    Py_XINCREF(f);
+    return f;
+}
+
+/* Are the items of list *f* those of `wg_filters`? 1, 0, -1: error */
+static int wg_items_same(PyObject *f) {
+    if (!PyList_Check(f) || !wg_filters || PyList_GET_SIZE(f) != PyTuple_GET_SIZE(wg_filters)) return 0;
+    for (Py_ssize_t i = 0; i < PyList_GET_SIZE(f); i++) {
+        if (i >= PyTuple_GET_SIZE(wg_filters)) return 0;
+        PyObject *a = PyList_GET_ITEM(f, i), *b = PyTuple_GET_ITEM(wg_filters, i);
+        if (a == b) continue;
+        Py_INCREF(a);
+        int eq = PyObject_RichCompareBool(a, b, Py_EQ);
+        Py_DECREF(a);
+        if (eq <= 0) return eq;
+        if (PyList_GET_SIZE(f) != PyTuple_GET_SIZE(wg_filters)) return 0;   /* changed meanwhile */
+    }
+    return 1;
+}
+
+/* 1: as at the last look, 0: not, -1: error. While no event reached the
+ * namespace since (`wg_dirty`, set by `on_dict`), the hooks and the list
+ * are the ones looked at: only the list's items are compared. */
+static int wg_same(void) {
+    if (!wg_dirty && wg_watched && !wg_getter && wg_list) return wg_items_same(wg_list);
+    wg_dirty = 0;
+    for (int i = 0; i < 3; i++) {
+        PyObject *now = PyDict_GetItemWithError(wg_dict, wg_names[i]);   /* borrowed */
+        if (!now && PyErr_Occurred()) return -1;
+        if (now != wg_held[i]) return 0;
+    }
+    PyObject *f = wg_filters_now();
+    if (!f) return PyErr_Occurred() ? -1 : 0;
+    int same = wg_items_same(f);
+    if (same == 1) Py_XSETREF(wg_list, f);   /* the list a ``catch_warnings`` put back */
+    else Py_DECREF(f);
+    if (same != 1) wg_dirty = 1;
+    return same;
+}
+
+static int wg_look(void) {
+    wg_dirty = 0;
+    Py_CLEAR(wg_list);
+    PyObject *f = wg_filters_now();
+    if (!f) { if (!PyErr_Occurred()) PyErr_SetString(PyExc_RuntimeError, "warnings.filters is gone"); return -1; }
+    PyObject *t = PySequence_Tuple(f);
+    if (!t) { Py_DECREF(f); return -1; }
+    Py_XSETREF(wg_filters, t);
+    if (PyList_Check(f)) wg_list = f; else Py_DECREF(f);
+    for (int i = 0; i < 3; i++) {
+        PyObject *now = PyDict_GetItemWithError(wg_dict, wg_names[i]);
+        if (!now && PyErr_Occurred()) return -1;
+        Py_XINCREF(now);
+        Py_XSETREF(wg_held[i], now);
+    }
+    return 0;
+}
+
+/* 0: the remembered hits stand (or the cash epoch was moved), -1: cannot tell (no error set) */
+static int wg_check(void) {
+    if (!wg_dict) return 0;
+    int same = wg_same();
+    if (same == 1) return 0;
+    if (same < 0) { PyErr_Clear(); return -1; }
+    if (wg_look() < 0) { PyErr_Clear(); Py_CLEAR(wg_filters); wg_dirty = 1; return -1; }
+    PyObject *r = PyObject_CallNoArgs(wg_moved);
+    if (!r) { PyErr_Clear(); cash_epoch++; return 0; }
+    Py_DECREF(r);
+    return 0;
+}
+
+/* warn_watch(warnings.__dict__, filters_getter | None, moved): see above */
+static PyObject *py_warn_watch(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs != 3 || !PyDict_Check(args[0]) || !PyCallable_Check(args[2]) ||
+        (args[1] != Py_None && !PyCallable_Check(args[1]))) {
+        PyErr_SetString(PyExc_TypeError, "warn_watch(dict, getter | None, moved)"); return NULL;
+    }
+    static const char *names[3] = {"showwarning", "formatwarning", "defaultaction"};
+    for (int i = 0; i < 3; i++)
+        if (!wg_names[i] && !(wg_names[i] = PyUnicode_InternFromString(names[i]))) return NULL;
+    if (!wg_filters_name && !(wg_filters_name = PyUnicode_InternFromString("filters"))) return NULL;
+    Py_INCREF(args[0]); Py_XSETREF(wg_dict, args[0]);
+    PyObject *g = args[1] == Py_None ? NULL : args[1];
+    Py_XINCREF(g); Py_XSETREF(wg_getter, g);
+    Py_INCREF(args[2]); Py_XSETREF(wg_moved, args[2]);
+    /* Watched once cash watches anything (`ensure_watchers`): adding the
+     * watchers at import would count every function made meanwhile. */
+    wg_watched = 0;
+    if (dict_wid >= 0) {
+        if (PyDict_Watch(dict_wid, args[0]) < 0) { Py_CLEAR(wg_dict); return NULL; }
+        wg_watched = 1;
+    }
+    if (wg_look() < 0) { Py_CLEAR(wg_dict); return NULL; }
+    Py_RETURN_NONE;
+}
+
+/* warn_check(): `wg_check` now; True when the state could be read */
+static PyObject *py_warn_check(PyObject *self, PyObject *noargs) {
+    return PyBool_FromLong(wg_check() == 0);
+}
+
 /* world_watch_type(t) -> its version tag now (not checked: see WEnt), or None for a static type */
 static PyObject *py_world_watch_type(PyObject *self, PyObject *t) {
     if (!PyType_Check(t)) { PyErr_SetString(PyExc_TypeError, "world_watch_type(type)"); return NULL; }
@@ -2906,6 +3037,7 @@ static PyObject *py_fast_lookup(PyObject *self, PyObject *const *args, Py_ssize_
     if (nargs != 3) { PyErr_SetString(PyExc_TypeError, "fast_lookup(memo, args, kwargs)"); return NULL; }
     PyObject *memo = args[0];
     if (!PyList_CheckExact(memo) || PyList_GET_SIZE(memo) < 4 || !PyTuple_CheckExact(args[1])) goto declined;
+    if (wg_check() < 0) goto declined;
     if (!epoch_is(PyList_GET_ITEM(memo, 0), world_epoch)) goto declined;
     PyObject *cells = PyList_GET_ITEM(memo, 2), *types = PyList_GET_ITEM(memo, 3);
     if (!PyTuple_CheckExact(cells) || !PyTuple_CheckExact(types)) goto declined;
@@ -3201,6 +3333,7 @@ static PyObject *py_fast_call(PyObject *self, PyObject *const *args, Py_ssize_t 
     PyObject *entries = PyList_GET_ITEM(st, S_ENTRIES);
     if (!PyDict_CheckExact(entries) || PyDict_GET_SIZE(entries) == 0) goto miss;
     if (offers_open || !cv_is_none(cv_call_entry) || !cv_is_none(cv_tracker) || !cv_is_none(cv_nested)) goto miss;
+    if (wg_check() < 0) goto miss;   /* the warnings state: may move the cash epoch */
     double t0 = clock_perf();
     PyObject *cells = PyList_GET_ITEM(st, S_CELLS), *types = PyList_GET_ITEM(st, S_TYPES);
     if (!PyTuple_CheckExact(cells) || !PyTuple_CheckExact(types)) goto miss;
@@ -3322,6 +3455,8 @@ static PyMethodDef methods[] = {
     {"world_watch_type", py_world_watch_type, METH_O, ""},
     {"world_add_names", py_world_add_names, METH_O, ""},
     {"world_quiet", (PyCFunction)(void (*)(void))py_world_quiet, METH_FASTCALL, ""},
+    {"warn_watch", (PyCFunction)(void (*)(void))py_warn_watch, METH_FASTCALL, ""},
+    {"warn_check", py_warn_check, METH_NOARGS, ""},
     {"world_info", py_world_info, METH_NOARGS, ""},
     {"set_scalar_types", py_set_scalar_types, METH_O, "the numpy number types keyed by their bytes"},
     {"memo_key", (PyCFunction)(void (*)(void))py_memo_key, METH_FASTCALL, ""},

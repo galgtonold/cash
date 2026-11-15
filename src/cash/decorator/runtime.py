@@ -55,7 +55,7 @@ from ..tracking.randomness import (
     replayable,
 )
 from ..tracking.trace_recorder import other_thread_alive
-from . import attribute_replay, code_trace, hit_memo, state_memo, walk_scope
+from . import attribute_replay, code_trace, hit_memo, state_memo, walk_scope, warning_state
 from .arg_hashing import (
     CALL_POLARS,
     CONTENT_KEYED,
@@ -587,18 +587,32 @@ class KeyBuilder:
         )
 
     def _code_state(self, spec: CachedFunction, chain: list[str], *, note: bool = False) -> str:
-        """`_code_state_now`, or what it gave last time while nothing it
-        reads has moved since (`state_memo`)."""
+        """`_code_state_now`: its first part (`_code_state_pre`) as it gave
+        last time while nothing it reads has moved since (`state_memo`),
+        the rest (`_code_state_post`) built now."""
         memo = state_memo.memo_for(spec)
         if memo is None:
-            return self._code_state_now(spec, chain, note=note)
-        return memo.code_state(self, spec, chain, note)
+            state_hash = self._code_state_pre(spec, chain, note=note)
+        else:
+            state_hash = memo.code_state(self, spec, chain, note)
+        return self._code_state_post(spec, state_hash, chain)
 
     def _code_state_now(self, spec: CachedFunction, chain: list[str], *, note: bool = False) -> str:
         """The state segment before anything the arguments decide: the
         function's code, helpers, cached callees, declared files, closure,
-        defaults, globals, RNG epoch and environment. Appends each stage to
-        *chain*.
+        defaults, globals (`_code_state_pre`), then the RNG epoch, the
+        environment and ``key=`` (`_code_state_post`). Appends each stage
+        to *chain*.
+
+        Raises `UnhashableDefault` when a default cannot be hashed.
+        """
+        return self._code_state_post(spec, self._code_state_pre(spec, chain, note=note), chain)
+
+    def _code_state_pre(self, spec: CachedFunction, chain: list[str], *, note: bool = False) -> str:
+        """The part of the state segment that the program alone decides --
+        code, helpers, cached callees, declared files, closure, defaults,
+        globals -- which `state_memo` serves again while none of it moved.
+        Appends each stage to *chain*.
 
         What the decoration itself says -- its declared files, ``key=`` and
         ignored parameters -- is read from *spec*, the wrapper's own record,
@@ -641,6 +655,16 @@ class KeyBuilder:
         if phase is not None:
             _phases.sub_end(phase)
         chain.append(state_hash)
+        return state_hash
+
+    def _code_state_post(self, spec: CachedFunction, state_hash: str, chain: list[str]) -> str:
+        """The rest of the state segment, folded onto `_code_state_pre`'s
+        digest on every call: the RNG epoch (its seed moves without any
+        change to the program), the environment and the installed versions
+        of the libraries the call reaches, and ``key=``. Kept out of the
+        part `state_memo` serves, so a function that draws from a global
+        stream or reads a variable still has its code and globals served."""
+        func, func_name = spec.func, spec.name
         state_hash = self._rng.fold_rng_epoch(func_name, state_hash)
         chain.append(state_hash)
         state_hash = self._environment.fold_environment(func, func_name, state_hash)
@@ -1297,6 +1321,11 @@ class CallRunner:
             )
         if metadata.env_reads and not environment_unchanged(metadata.env_reads):
             return MissReason(MissKind.ENVIRONMENT, "an environment variable an installed package read changed")
+        if metadata.warned_under is not None and not warning_state.holds(metadata.warned_under):
+            return MissReason(
+                MissKind.WARNINGS,
+                "the run warned, and the warnings filters or a display hook of the user's changed since",
+            )
         if not self._chunks_are_intact(cache_key, metadata):
             return MissReason(MissKind.INCOMPLETE, "a chunk of the stored result is missing")
         if metadata.code_trace is not None:
@@ -1311,6 +1340,8 @@ class CallRunner:
         if metadata.env_reads:
             # Served inside another body being recorded: what it read counts there.
             note_reads(metadata.env_reads)
+        if metadata.warned_under is not None:
+            warning_state.note_warned()
         return None
 
     def _cached_state(self, func_name: str) -> str | None:
@@ -2303,7 +2334,7 @@ class CallRunner:
             try:
                 self._files.track_declared_files(run.tracker, spec)
                 self._files.track_scanned_files(run.tracker, args, kwargs)
-                with recording_env_reads() as run.env_reads:
+                with recording_env_reads() as run.env_reads, warning_state.recording() as run.warned:
                     yield run
             except Exception as exc:  # the user's body can raise anything; logged, then re-raised
                 self._calls.log_raised(func_name, exc, call.call_start)
@@ -2525,6 +2556,9 @@ class CallRunner:
                     # What the environment variables an installed package
                     # read held: a lookup checks them again (`env_reads`).
                     env_reads=environment_digests(run.env_reads) if run.env_reads else None,
+                    # The warnings state, when the body warned: a lookup
+                    # checks it again (`warning_state`).
+                    warned_under=warning_state.stamp(run.warned) if run.warned else None,
                     shared_result=shared,
                     args_left=args_left,
                     args_reads=run.args_reads,

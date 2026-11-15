@@ -132,6 +132,11 @@ class CacheMetadata:
     #: a lookup reads them again, and serves the entry only when all match.
     #: No key holds them: the analyzer does not read installed code.
     env_reads: dict[str, str] | None = None
+    #: When a warning reached the filters while the body ran: what of the
+    #: warnings state a result can see (`warning_state.stamp`, ``""`` for
+    #: plain Python's defaults). A lookup serves the entry only while it is
+    #: the same; no key holds it.
+    warned_under: str | None = None
     #: What the result shared with an object outside the call when it was
     #: stored (`PurityChecks.warn_shared_result`): a hit warns as the miss did.
     shared_result: str | None = None

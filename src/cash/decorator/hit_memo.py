@@ -49,9 +49,11 @@ from __future__ import annotations
 import abc
 import ast
 import builtins
+import collections
 import dataclasses
 import datetime
 import decimal
+import enum
 import functools
 import operator
 import os
@@ -97,6 +99,10 @@ ENABLED = _cw is not None and _flag("CASH_HITPATH", "1")
 VERIFY = ENABLED and _flag("CASH_HITPATH_VERIFY", "0")
 
 _fast_lookup = _cw.fast_lookup if ENABLED else None
+if ENABLED:
+    from . import warning_state as _warning_state
+
+    _warning_state.watch(_cw)
 _world_epoch = _cw.world_epoch if ENABLED else None
 _cash_epoch = _cw.cash_epoch if ENABLED else None
 
@@ -196,6 +202,10 @@ def epochs(spec: CachedFunction, args: tuple, kwargs: dict) -> tuple | None:
     new, so a hit keyed from the content in between is not filed under it."""
     if _world_epoch is None:
         return None
+    # The warnings state a key folds: a change since the last look moves
+    # the cash epoch now, not at the next fast hit, so a hit keyed under
+    # the new state is not remembered under the old (`warning_state`).
+    _cw.warn_check()
     if _SCALARS_OF[0] is not sys.modules.get("numpy"):
         numpy_scalars_keyed()
     state = spec.hit_state
@@ -462,11 +472,18 @@ class _Scan:
             self.klass(v)
         elif t is types.BuiltinFunctionType:
             owner = v.__self__
-            if owner is not None and not issubclass(type(owner), types.ModuleType):
+            if self.content and _global_stream(owner):
+                self.value(type(owner), names)
+            elif owner is not None and not issubclass(type(owner), types.ModuleType):
                 self.value(owner, names)
         elif t is types.MethodType:
             self.value(v.__func__, names)
-            self.value(v.__self__, names)
+            if self.content and _global_stream(v.__self__):
+                self.value(type(v.__self__), names)
+            else:
+                self.value(v.__self__, names)
+        elif self.content and _library_cython(v, t):
+            return
         elif t is types.MethodWrapperType:
             self.value(v.__self__, names)
         elif t is staticmethod or t is classmethod:
@@ -510,10 +527,56 @@ class _Scan:
             self.probes[abc.get_cache_token] = abc.get_cache_token()
         elif self._sklearn_config(v):
             return
+        elif self.content and self._fixed_kind(v, t, names):
+            return
         elif self.content and (probe := ContentProbe.of(v)) is not None:
             self.probes[probe] = probe.digest
         else:
             raise Ineligible(f"a {t.__module__}.{t.__qualname__}")
+
+    def _fixed_kind(self, v: Any, t: type, names: frozenset) -> bool:
+        """The state memo's scan: a member of an enum, or a number, string
+        or bytes of a subclass without attributes of its own. True when *v*
+        is one and is watched now.
+
+        An enum member is its class's (`_klass` watches the class, the
+        members' table among its attributes) and what it holds is its
+        ``__dict__`` (``_value_``, ``_name_``), a plain dict watched like
+        a function's attributes: setting anything on it moves the world.
+
+        A subclass of ``int``, ``float``, ``str`` or ``bytes`` holds a value
+        fixed when it is made; what else a key can read of it is its class,
+        scanned as any class, and attributes set on the instance, which no
+        watcher sees: only one with none is taken, and a probe
+        (`_attribute_count`) checks before every reuse that it still has
+        none. Not one with ``__slots__`` of its own (what they hold no
+        watcher sees either)."""
+        if not t.__flags__ & _HEAPTYPE:
+            return False
+        if type(t) is enum.EnumMeta and isinstance(v, enum.Enum):
+            held = getattr(v, "__dict__", None)
+            if type(held) is not dict:
+                return False
+            self.value(t, names)
+            self.watch(held, True)
+            for item in list(held.values()):
+                self.value(item, names)
+            return True
+        if not issubclass(t, (int, float, str, bytes)) or issubclass(t, enum.Enum):
+            return False
+        for k in t.__mro__:
+            slots = vars(k).get("__slots__")
+            if isinstance(slots, str):
+                slots = (slots,)
+            if slots and any(name not in ("__dict__", "__weakref__") for name in slots):
+                return False
+        held = getattr(v, "__dict__", None)
+        if held is not None:
+            if type(held) is not dict or held:
+                return False
+            self.probes[ContentProbe(v, _attribute_count)] = 0
+        self.value(t, names)
+        return True
 
     def _typing(self, v: Any, names: frozenset) -> None:
         """A typing form or alias: fixed, but for what it was built from."""
@@ -713,7 +776,7 @@ class _Scan:
     def _klass(self, cls: type) -> None:
         if not (cls.__flags__ & _HEAPTYPE) or cls is typing.Any:
             return  # a builtin class, or ``typing.Any``: nothing in it changes
-        if type(cls) not in _METACLASSES:
+        if type(cls) not in _METACLASSES and not (self.content and self._metaclass_ok(cls)):
             raise Ineligible("a class with a metaclass of its own")
         for k in cls.__mro__:
             if not (k.__flags__ & _HEAPTYPE) or id(k) in self.types:
@@ -737,6 +800,35 @@ class _Scan:
                         self.value(attr, frozenset())
                     continue
                 self.value(attr, frozenset())
+
+    def _metaclass_ok(self, cls: type) -> bool:
+        """The state memo's scan: *cls*'s metaclass is ``enum``'s own (an
+        enum class: its members are its attributes, watched with it), or a
+        library's for a class of that library, which a key keys by name
+        and the library's version (`_library_class_attr_parts`). Such a
+        metaclass is watched as a class too, and only one that reads a
+        class's attributes as ``type`` does: no ``__getattr__`` or
+        ``__getattribute__`` of its own and no property, which could
+        answer a read from state no watcher sees."""
+        meta = type(cls)
+        if meta is enum.EnumMeta:
+            return True
+        if is_user_code_object(cls) or is_user_code_object(meta):
+            return False
+        for k in meta.__mro__:
+            if not (k.__flags__ & _HEAPTYPE):
+                continue
+            for name, attr in vars(k).items():
+                if name in ("__getattr__", "__getattribute__"):
+                    return False
+                if not callable(attr) and hasattr(type(attr), "__get__"):
+                    return False
+            if id(k) not in self.types:
+                tag = _cw.world_watch_type(k)
+                if tag is None:
+                    return False
+                self.types[id(k)] = (k, tag)
+        return True
 
     def finish(self) -> None:
         """Look into the attributes of the library classes met that the
@@ -787,6 +879,7 @@ class _Scan:
         for d, unkeyed in self.dicts:
             _cw.world_watch_dict(d, unkeyed)
         _cw.world_add_names(self.names)
+        _quiet_warnings()
 
 
 #: ``id(module dict)`` of every module namespace watched so far.
@@ -859,6 +952,24 @@ _OS_GLOBALS = os.__dict__
 _WARNING_HOOKS = ("showwarning", "_showwarnmsg_impl")
 
 
+def _quiet_warnings() -> None:
+    """Make `_WARNING_HOOKS` quiet in the ``warnings`` namespace, for every
+    scan: `watch_helper` watches that namespace as soon as a helper names
+    ``warnings``, while only `_watch_modules` made the hooks quiet, and a
+    function whose own scan stopped early (`Ineligible`) never reaches it.
+    Every ``catch_warnings(record=True)`` its body ran then moved the world
+    twice, and no helper fold was served again."""
+    if _QUIET_DONE[0] or _warnings is None or not hasattr(_cw, "world_quiet"):
+        return
+    md = getattr(_warnings, "__dict__", None)
+    if type(md) is dict:
+        _cw.world_quiet(md, _WARNING_HOOKS)
+        _QUIET_DONE[0] = True
+
+
+_QUIET_DONE = [False]
+
+
 def _watch_modules() -> None:
     """Watch every module's namespace (keyed) and ``sys.modules`` (every
     change): a helper cash finds by name can live in any of them."""
@@ -870,8 +981,7 @@ def _watch_modules() -> None:
             if type(md) is dict and id(md) not in _WATCHED_MODULES:
                 _cw.world_watch_dict(md, False)
                 _WATCHED_MODULES.add(id(md))
-                if mod is _warnings and hasattr(_cw, "world_quiet"):
-                    _cw.world_quiet(md, _WARNING_HOOKS)
+        _quiet_warnings()
         _cw.world_watch_dict(builtins.__dict__, False)
 
 
@@ -1013,11 +1123,28 @@ class ContentProbe:
                 return cls(v, _plain_content)
             except Exception:  # noqa: BLE001 - cannot be read whole: not probed
                 return None
+        if t is collections.OrderedDict:
+            from .key_values import plain_data_kind
+
+            if plain_data_kind(dict(v)) is None:
+                return None
+            try:
+                return cls(v, _plain_content)
+            except Exception:  # noqa: BLE001 - cannot be read whole: not probed
+                return None
         if t.__name__ == "ndarray" and t.__module__ == "numpy":
             try:
                 if v.dtype.hasobject:
                     return None
                 return cls(v, _array_content)
+            except Exception:  # noqa: BLE001 - cannot be read whole: not probed
+                return None
+        pd = sys.modules.get("pandas")
+        if pd is not None and (t is pd.DataFrame or t is pd.Series):
+            try:
+                if not _plain_frame(v, pd):
+                    return None
+                return cls(v, _frame_content)
             except Exception:  # noqa: BLE001 - cannot be read whole: not probed
                 return None
         return None
@@ -1028,6 +1155,98 @@ def _plain_content(v: Any) -> bytes:
     import pickle
 
     return hashlib.blake2b(pickle.dumps(v, protocol=5), digest_size=32).digest()
+
+
+def _global_stream(owner: Any) -> bool:
+    """Is *owner* the process's global random stream, numpy's
+    (``np.random.normal`` is a method of ``numpy.random.mtrand._rand``) or
+    the standard library's (``random.random``, of ``random._inst``)?
+
+    What a key reads of it is its seed epoch, folded after the part the
+    state memo keeps (`KeyBuilder._code_state_post`), on every call; the
+    part kept reads the method by its library's name only, never the
+    stream's position, which every draw moves and no watcher sees. So the
+    state memo's scan watches the stream's class, not the stream."""
+    mtrand = sys.modules.get("numpy.random.mtrand")
+    if mtrand is not None and owner is getattr(mtrand, "_rand", None):
+        return type(owner) is getattr(mtrand, "RandomState", None)
+    stdlib = sys.modules.get("random")
+    return stdlib is not None and owner is getattr(stdlib, "_inst", None) and type(owner) is stdlib.Random
+
+
+def _library_cython(v: Any, t: type) -> bool:
+    """Is *v* a Cython-compiled function of a library (``np.random.default_rng``,
+    pandas' ``is_scalar``)? A key names it as it names a library's Python
+    function, by its module and name, its code keyed by the library's
+    version: like one (`_Scan.function`), there is nothing in it to watch,
+    and rebinding the name is a module event. One the user compiled is
+    keyed by its source, which no watcher sees: not this."""
+    if t.__name__ not in ("cython_function_or_method", "fused_cython_function"):
+        return False
+    if not t.__module__.startswith("_cython_"):
+        return False
+    from ..install_paths import is_user_code_module
+
+    name = getattr(v, "__module__", None)
+    mod = sys.modules.get(name) if isinstance(name, str) else None
+    if mod is None or name == "cash" or name.startswith("cash."):
+        return False
+    return not is_user_code_module(mod)
+
+
+def _attribute_count(v: Any) -> int:
+    """How many attributes *v* (a number or string of a subclass) holds."""
+    return len(v.__dict__)
+
+
+def _plain_frame(v: Any, pd: Any) -> bool:
+    """Is *v* (an exact frame or series) one whose content hash
+    (`content_hashers.hash_pandas`) is all a key reads of it and moves
+    with any change to it: no ``attrs``, columns of numbers, booleans,
+    dates or strings, labels and axis names of immutable scalars. A
+    column of objects could hold one changed in place, which no hash of
+    the column's references sees."""
+    from ..content_hashers import immutable_labels, pandas_value_route
+
+    if v.attrs:
+        return False
+    dtypes = list(v.dtypes) if _is_frame(v, pd) else [v.dtype]
+    for dtype in dtypes:
+        if not _plain_dtype(dtype, pd, pandas_value_route):
+            return False
+    axes = [v.index, v.columns] if _is_frame(v, pd) else [v.index]
+    names = [] if _is_frame(v, pd) else [v.name]
+    for axis in axes:
+        names.extend(axis.names)
+        levels = axis.levels if isinstance(axis, pd.MultiIndex) else [axis]
+        for level in levels:
+            if _plain_dtype(level.dtype, pd, pandas_value_route):
+                continue
+            if level.dtype != object or not immutable_labels(level._values):
+                return False
+    return all(type(name) in _ATOMS for name in names)
+
+
+def _is_frame(v: Any, pd: Any) -> bool:
+    return type(v) is pd.DataFrame
+
+
+def _plain_dtype(dtype: Any, pd: Any, route_of: Any) -> bool:
+    route = route_of(dtype, pd)
+    return route in ("raw", "datetimetz") or isinstance(dtype, pd.StringDtype)
+
+
+def _frame_content(v: Any) -> str:
+    """The content hash of a frame or series, as a key folds it: through
+    the copy-on-write memo (`arg_hashing.cow_frame_digest`), read again
+    only when the frame changed, else in full."""
+    from ..content_hashers import hash_pandas
+    from .arg_hashing import cow_frame_digest
+
+    digest = cow_frame_digest(v) or hash_pandas(v)
+    if digest is None:
+        raise TypeError("a frame that cannot be hashed")
+    return digest
 
 
 def _array_content(v: Any) -> tuple:
@@ -1325,6 +1544,7 @@ class HitMemo:
         """Remember the ordinary hit *call* just made, when it may be served
         again from here (see the module doc)."""
         spec, runner = self.spec, self.runner
+        _cw.warn_check()  # the warnings state moved since `epochs`: the cash epoch did
         world_now = _world_epoch()
         state = self.state
         if world_now != before[0] or _cash_epoch() != before[1] or state[S_ENTRIES] is not before[2]:
