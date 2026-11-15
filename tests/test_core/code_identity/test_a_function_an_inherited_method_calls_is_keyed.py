@@ -85,13 +85,13 @@ DRIVERS = {
 def test_an_edit_to_a_function_a_base_method_calls_is_seen(tmp_path, shape, trace):
     pkg = tmp_path / "pkg"
     pkg.mkdir()
-    (pkg / "__init__.py").write_text("")
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
     body = textwrap.dedent(DRIVERS[shape])
-    (tmp_path / "main.py").write_text(f"import cash\n{body}\nprint(go(5))\n")
+    (tmp_path / "main.py").write_text(f"import cash\n{body}\nprint(go(5))\n", encoding="utf-8")
     env = {"CASH_TRACE": trace}
     seen = []
     for mult in (2, 3):
-        (pkg / "mod.py").write_text(MODULE.replace("MULT", str(mult)))
+        (pkg / "mod.py").write_text(MODULE.replace("MULT", str(mult)), encoding="utf-8")
         seen.append(int(run_python("main.py", cwd=tmp_path, env=env).stdout.split()[-1]))
     assert seen == [_plain(shape, mult) for mult in (2, 3)]
 

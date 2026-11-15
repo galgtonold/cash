@@ -50,7 +50,7 @@ MODULE = textwrap.dedent("""
 @pytest.fixture
 def module(tmp_path, monkeypatch):
     name = f"traced_mod_{tmp_path.name.replace('-', '_')}"
-    (tmp_path / f"{name}.py").write_text(MODULE)
+    (tmp_path / f"{name}.py").write_text(MODULE, encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
     mod = importlib.import_module(name)
     yield mod
