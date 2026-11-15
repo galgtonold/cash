@@ -76,6 +76,10 @@ class BuiltKey(NamedTuple):
     #: top level cash cannot read before they are (UNREAD_MODULE): a call
     #: that loads one is not stored (`CallRunner._loaded_unread`).
     unread: frozenset = frozenset()
+    #: The key's trace was asked for only by a lazy import of such a module
+    #: in code an argument carries: a call that did not load it is stored
+    #: by its key when the trace cannot be built.
+    trace_for_unread: bool = False
 
 
 class Call:
@@ -111,6 +115,7 @@ class Call:
         "ran_unit",
         "folded_code",
         "unread",
+        "trace_for_unread",
         "refusal_probe",
         "refusal_key",
         "args_fingerprinted",
@@ -161,6 +166,7 @@ class Call:
         self.folded_code: Any = None
         #: The key's `BuiltKey.unread`.
         self.unread: frozenset = frozenset()
+        self.trace_for_unread = False
         #: Whether this call keeps or drops a refusal verdict once it is
         #: checked (`CallRunner._known_refusal`), and its `RefusalVerdicts`
         #: key when the lookup made one.
