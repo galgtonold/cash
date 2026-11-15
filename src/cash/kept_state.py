@@ -1910,13 +1910,23 @@ def global_rng_module(obj: object) -> str | None:
     return None
 
 
+def global_rng_stand_in(obj: Any) -> tuple | None:
+    """What a key reduces *obj* to when it is a module's global RNG
+    (`global_rng_module`): the module's name, not the state. None for any
+    other object. The trace's value digests take the same stand-in, so a
+    library global holding the singleton (``scipy.stats.f``) digests alike
+    in every process too."""
+    if type(obj).__name__ not in _GLOBAL_RNG_TYPE_NAMES:
+        return None
+    module = global_rng_module(obj)
+    return None if module is None else (_global_rng, (module,))
+
+
 def _reduce_rng_for_key(obj: Any, reducer: Any) -> Any:
     """A module's global RNG by the module's name; any other generator of
     the class as *reducer* reduces it, by its state."""
-    module = global_rng_module(obj)
-    if module is not None:
-        return (_global_rng, (module,))
-    return reducer(obj)
+    stand_in = global_rng_stand_in(obj)
+    return reducer(obj) if stand_in is None else stand_in
 
 
 def without_filled_caches(value: Any, state: dict) -> dict:
