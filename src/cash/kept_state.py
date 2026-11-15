@@ -571,8 +571,11 @@ _BIG_STACK = _BigStack()
 _NO_BIG_STACK = object()
 
 #: The stack of the thread a `FLAT_FIRST` Python pickles on, in bytes: a
-#: reservation the pages of are taken only as the pickle goes deep.
-BIG_STACK_BYTES = 256 * 1024 * 1024
+#: reservation the pages of are taken only as the pickle goes deep. Below
+#: 256 MiB: on Windows CPython takes a thread stack size under that only
+#: (``thread_nt.h``'s THREAD_MAX_STACKSIZE), and ``threading.stack_size``
+#: refused 256 MiB itself with ValueError, so every value was walked first.
+BIG_STACK_BYTES = 255 * 1024 * 1024
 
 #: The C stack budgeted for each level of recursion the pickler is let go
 #: (the recursion limit): on Windows 3.10 a 2 MB stack ran out a few hundred

@@ -386,6 +386,23 @@ class TestOnALargeStack:
             var.reset(token)
         assert seen == ["caller's", "caller's"]
 
+    def test_the_stack_is_a_size_windows_threads_take(self, no_walk, monkeypatch):
+        """CPython on Windows sets a thread's stack size only below 256 MiB
+        (``thread_nt.h``) and raises ValueError for 256 MiB itself: the
+        large stack was never had there, every value walked first."""
+        import threading
+
+        real = threading.stack_size
+
+        def windows_stack_size(size=0):
+            if size and not 32 * 1024 <= size < 0x10000000:
+                raise ValueError("size not valid: %d bytes" % size)
+            return real(size)
+
+        monkeypatch.setattr(threading, "stack_size", windows_stack_size)
+        head = _chain(5_000)
+        assert _values(pickle.loads(kept_state.dumps(head))) == _values(head)
+
     def test_a_recursion_limit_too_high_for_the_stack_walks_first(self, monkeypatch):
         walks = []
         real = kept_state._at_most_deep
