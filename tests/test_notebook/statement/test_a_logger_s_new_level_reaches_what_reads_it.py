@@ -231,7 +231,12 @@ def test_noting_past_the_budget_is_never_served(cash_magics, cash_instance, monk
     from cash.notebook.statement.processor import StatementProcessor
 
     cash_instance.config.min_execution_time_to_cache_seconds = 0.0
-    monkeypatch.setattr(StatementProcessor, "_noting_budget", staticmethod(lambda run: 0.0), raising=False)
+    from cash.tracking import lookups_seen
+
+    # Spent before it starts: on Windows the thread's CPU clock moves in
+    # 15.6 ms ticks, and noting a few loggers can read as 0 s, not past 0.
+    monkeypatch.setattr(StatementProcessor, "_noting_budget", staticmethod(lambda run: -1.0), raising=False)
+    monkeypatch.setattr(lookups_seen, "_warned_past_budget", False)  # said once a process
     reader = "seen = here.MANY[-1].level"
     cells = [LOOKUP_SETUP, reader, f"# elsewhere\nlogging.getLogger({NAME!r}).setLevel(30)", f"# again\n{reader}"]
     with warnings.catch_warnings(record=True) as caught:
