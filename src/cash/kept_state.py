@@ -1566,12 +1566,16 @@ class _KeepDict(dict):
             reducer = _reduce_container_subclass
         else:
             if _drops_dict(t):
-                reducer = _reducer_with_dict(self._protocol, self._unshared)
+                reducer = _reducer_with_dict(self._protocol, self._unshared, self._keyed)
             else:
                 reducer = operator.methodcaller("__reduce_ex__", self._protocol)
             if cached_properties(t) and (self._keyed or _leaves_views_out(t)):
                 which = None if self._keyed else stored_views
                 reducer = functools.partial(_reduce_without_views, reducer=reducer, which=which)
+            if self._keyed and (_pandas_cached_names(t) or _xarray_lazy_dicts(t)):
+                # What reading the object fills and no value it shows
+                # depends on (`library_memos`): a key leaves it out.
+                reducer = functools.partial(_reduce_without_memos, reducer=reducer)
         if self._keyed and may_stand_by_reference(t):
             # A logger reduces to ``getLogger(name)``: the key would hold
             # its name and none of its level (`_reduce_by_reference_for_key`).
@@ -1946,6 +1950,15 @@ def _watched(reducer: Any, t: type, registered: Any, watch: list) -> Any:
             return reduced
 
         return state
+    if registered is None and not _plain_container_subclass(t) and (_pandas_cached_names(t) or _xarray_lazy_dicts(t)):
+        stored = reducer
+
+        def memo(obj: Any) -> Any:
+            if library_memos(obj):
+                watch.append(True)  # a key leaves the memo out
+            return stored(obj)
+
+        reducer = memo
     if may_stand_by_reference(t):
         reducer = _watched_by_reference(_watched_views(reducer, t, registered, watch), watch)
     else:
@@ -2317,12 +2330,14 @@ _PYTHON_METHODS = (types.FunctionType, classmethod, staticmethod)
 _DROPS_DICT: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()
 
 
-def _reducer_with_dict(protocol: int, unshared: bool = False) -> Any:
+def _reducer_with_dict(protocol: int, unshared: bool = False, keyed: bool = False) -> Any:
     """`_reduce_with_dict` for *protocol*, with the common case -- an
     instance with nothing in its ``__dict__`` -- first and in one call: a
     column of 1.9 million ``pandas.Timestamp`` went through it one at a
     time, 1.8 s on top of pickle's own 3.4 s. *unshared*: for a pickle
-    without the memo (`_reduce_with_dict`)."""
+    without the memo (`_reduce_with_dict`). *keyed*: for a key, which
+    leaves pandas' memo of its ``cache_readonly`` values out
+    (`pandas_memo_attrs`)."""
 
     def reduce(obj: Any) -> Any:
         try:
@@ -2331,13 +2346,13 @@ def _reducer_with_dict(protocol: int, unshared: bool = False) -> Any:
             empty = True
         if empty:
             return obj.__reduce_ex__(protocol)
-        return _reduce_with_dict(obj, protocol, unshared)
+        return _reduce_with_dict(obj, protocol, unshared, keyed)
 
     reduce.with_dict_protocol = protocol  # type: ignore[attr-defined]
     return reduce
 
 
-def _reduce_with_dict(obj: Any, protocol: int, unshared: bool = False) -> Any:
+def _reduce_with_dict(obj: Any, protocol: int, unshared: bool = False, keyed: bool = False) -> Any:
     """*obj*'s own reduce, with its ``__dict__`` restored after its state.
 
     *unshared*: for a pickle without the memo, which is only ever hashed
@@ -2351,12 +2366,161 @@ def _reduce_with_dict(obj: Any, protocol: int, unshared: bool = False) -> Any:
     attrs = getattr(obj, "__dict__", None)
     if not attrs or isinstance(reduced, str):
         return reduced
+    if keyed and pandas_memo_attrs(obj):
+        attrs = {k: v for k, v in attrs.items() if k != "_cache"}
+        if not attrs:
+            return reduced
     rebuild, args, *rest = reduced
     rest += [None] * (4 - len(rest))
     state, listitems, dictitems, setter = rest[:4]
     if unshared:
         return rebuild, args, (state, setter, dict(attrs)), listitems, dictitems
     return rebuild, args, (state, setter, dict(attrs)), listitems, dictitems, restore_with_dict
+
+
+def pandas_memo_attrs(obj: Any) -> bool:
+    """Does *obj* hold, as ``_cache`` in its ``__dict__``, pandas' memo of
+    its ``cache_readonly`` values and nothing else?
+
+    ``pandas.util._decorators.cache_readonly`` is
+    ``pandas._libs.properties.CachedProperty``, whose ``__get__`` computes
+    ``fget(obj)`` once and keeps it under the property's name in
+    ``obj._cache`` (made ``{}`` on first use); its ``__set__`` raises. The
+    rest of pandas only empties that dict (``PandasObject._reset_cache``)
+    or hands it to a view of the same data. So it holds values derived
+    from the object and changes no value the object shows: reading
+    ``gdf.area`` fills a block's ``dtype`` and ``fill_value`` there, and
+    a key of a frame pickled whole (a ``GeoDataFrame``) moved, read as an
+    in-place change of the frame. Left out of a key only when every name
+    it holds is a ``CachedProperty`` of *obj*'s class: anything else put
+    there by other code is keyed as it is.
+    """
+    memo = obj.__dict__.get("_cache")
+    if type(memo) is not dict:
+        return False
+    names = _pandas_cached_names(type(obj))
+    return bool(names) and all(name in names for name in memo)
+
+
+def _pandas_cached_names(t: type) -> frozenset[str]:
+    """The names of *t*'s ``pandas`` ``CachedProperty`` members, by the
+    names they store under. Remembered per type."""
+    try:
+        return _PANDAS_CACHED[t]
+    except KeyError:
+        pass
+    except TypeError:  # a class whose metaclass makes it unhashable
+        return frozenset()
+    names: set[str] = set()
+    for klass in t.__mro__:
+        for member in vars(klass).values():
+            kind = type(member)
+            if kind.__name__ == "CachedProperty" and kind.__module__ == "pandas._libs.properties":
+                name = getattr(member, "name", None)
+                if isinstance(name, str):
+                    names.add(name)
+    found = _PANDAS_CACHED[t] = frozenset(names)
+    return found
+
+
+_PANDAS_CACHED: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()
+
+
+def _xarray_lazy_dicts(t: type) -> tuple[str, ...]:
+    """The slots of *t* that xarray fills with an empty dict on first read
+    and holds as None until then: ``_attrs`` under an ``attrs`` property
+    and ``_encoding`` under an ``encoding`` one of an xarray class
+    (``NamedArray``, ``Variable``, ``Dataset``). Their getters do
+    ``if self._attrs is None: self._attrs = {}``, and the ``attrs``
+    setter stores None for an empty mapping (``dict(value) if value else
+    None``): the two are one value to xarray, whose own dask token is
+    taken of ``self._attrs or None``. ``da.resample(...)`` reads
+    ``attrs`` of the time coordinate, so a key of the array pickled whole
+    moved. Remembered per type."""
+    try:
+        return _XARRAY_LAZY[t]
+    except KeyError:
+        pass
+    except TypeError:  # a class whose metaclass makes it unhashable
+        return ()
+    names: list[str] = []
+    for klass in t.__mro__:
+        if not (klass.__module__ or "").startswith("xarray."):
+            continue
+        own = vars(klass)
+        for prop, slot in (("attrs", "_attrs"), ("encoding", "_encoding")):
+            if isinstance(own.get(prop), property) and slot not in names:
+                names.append(slot)
+    found = _XARRAY_LAZY[t] = tuple(names)
+    return found
+
+
+_XARRAY_LAZY: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()
+
+
+def library_memos(obj: Any) -> bool:
+    """Does *obj* hold what reading it filled and no value it shows depends
+    on: pandas' memo of its ``cache_readonly`` values (`pandas_memo_attrs`)
+    or an xarray dict made on first read (`_xarray_lazy_dicts`)?"""
+    t = type(obj)
+    if _pandas_cached_names(t) and isinstance(getattr(obj, "__dict__", None), dict) and pandas_memo_attrs(obj):
+        return True
+    lazy = _xarray_lazy_dicts(t)
+    return bool(lazy) and any(_lazy_dict_filled(obj, name) for name in lazy)
+
+
+def _lazy_dict_filled(obj: Any, name: str) -> bool:
+    try:
+        value = object.__getattribute__(obj, name)
+    except AttributeError:
+        return False
+    return type(value) is dict and not value
+
+
+def _reduce_without_memos(obj: Any, reducer: Any) -> Any:
+    """*reducer*'s reduce of *obj* for a key, with what `library_memos`
+    finds left out of its state: pandas' ``_cache`` dropped from the
+    instance dict the state holds, an xarray dict made on first read
+    keyed as the None it stood for before."""
+    reduced = reducer(obj)
+    if isinstance(reduced, str) or len(reduced) < 3:
+        return reduced
+    state = reduced[2]
+    own = getattr(obj, "__dict__", None)
+    if isinstance(own, dict) and "_cache" in own and pandas_memo_attrs(obj):
+        trimmed = {k: v for k, v in own.items() if k != "_cache"}
+        if state is own:
+            state = trimmed
+        elif isinstance(state, tuple) and state and state[-1] is own and not trimmed:
+            # pandas' ``NDArrayBacked.__reduce__`` adds the instance dict
+            # to its state only when it holds something.
+            state = state[:-1]
+        elif isinstance(state, tuple) and any(part is own for part in state):
+            state = tuple(trimmed if part is own else part for part in state)
+    lazy = _xarray_lazy_dicts(type(obj))
+    if lazy:
+        state = _lazy_dicts_as_none(state, lazy)
+    if state is reduced[2]:
+        return reduced
+    return (reduced[0], reduced[1], state, *reduced[3:])
+
+
+def _lazy_dicts_as_none(state: Any, names: tuple[str, ...]) -> Any:
+    """*state*, a ``__dict__`` or a ``(dict, slots)`` pair, with each of
+    *names* that holds an empty dict holding None instead."""
+
+    def fixed(part: Any) -> Any:
+        if not isinstance(part, dict) or not any(type(part.get(n)) is dict and not part[n] for n in names):
+            return part
+        return {k: (None if k in names and type(v) is dict and not v else v) for k, v in part.items()}
+
+    if isinstance(state, dict):
+        return fixed(state)
+    if isinstance(state, tuple) and len(state) == 2:
+        first, slots = fixed(state[0]), fixed(state[1])
+        if first is not state[0] or slots is not state[1]:
+            return (first, slots)
+    return state
 
 
 #: How many times a pickle of cash's has run a reducer of the user's.

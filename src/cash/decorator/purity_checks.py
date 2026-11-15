@@ -2145,9 +2145,11 @@ class PurityChecks:
         if untrackable:
             issues = [i for i in issues if getattr(i, "kind", None) != ISSUE_UNTRACKABLE_DEP]
             self._static_flagged.add(func_name)
-            if code_trace.covers(untrackable):
+            if code_trace.covers(untrackable) or all(UNREAD_MODULE in i.description for i in untrackable):
                 # Lookups by name only: cached on a trace of what the call
                 # ran, which says itself when it cannot be (`code_trace`).
+                # Imports of a module not loaded yet only: keyed, and not
+                # stored by a call that loads one (`CallRunner._loaded_unread`).
                 return issues
             if all(ANSWERED_AT_RUN_TIME in i.description for i in untrackable):
                 # `isinstance(x, Kind)` answered by Kind's own metaclass
@@ -2156,12 +2158,6 @@ class PurityChecks:
                 fix = (
                     "on Python 3.12 and newer cash checks what the call ran instead; "
                     "`# @cash:assume-safe` on that line caches anyway."
-                )
-            elif all(UNREAD_MODULE in i.description for i in untrackable):
-                what = f"it imports a module cash cannot key before it is loaded ({describe_untrackable(untrackable)})"
-                fix = (
-                    "compute the value in a function instead of at the module's top level, or import the "
-                    "module at the top of the file; `# @cash:assume-safe` on that line caches anyway."
                 )
             else:
                 what = f"it picks code by a run-time name ({describe_untrackable(untrackable)})"

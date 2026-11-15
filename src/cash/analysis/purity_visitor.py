@@ -58,7 +58,7 @@ from .purity_report import (
     ISSUE_UNTRACKABLE_DEP,
     PurityIssue,
 )
-from .static_dispatch import computed_namespace_lookup, namespace_spelled
+from .static_dispatch import computed_namespace_lookup, getattr_on_any_name_stdlib, namespace_spelled
 from .writer_aliases import namespace_writer_aliases
 
 #: What a `network_read` finding names as the source of the answer.
@@ -616,12 +616,32 @@ class PurityVisitor(ast.NodeVisitor):
             and func.func.id == "getattr"
             and len(func.args) >= 2
             and not (isinstance(func.args[1], ast.Constant) and isinstance(func.args[1].value, str))
+            and not self._on_any_name_stdlib(func)
         ):
             self._issue(
                 ISSUE_UNTRACKABLE_DEP, "getattr(obj, name)(...) with non-constant name - dynamic dispatch", node
             )
             return True
         return False
+
+    def _on_any_name_stdlib(self, node: ast.AST) -> bool:
+        """``getattr(operator, name)``: whichever name, it finds one of the
+        standard library's own functions (`any_name_stdlib`)."""
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "getattr"):
+            return False
+        local = scope_locals(self._func_def) if self._func_def is not None else frozenset()
+        imported = (
+            {
+                (alias.asname or alias.name).split(".")[0]
+                for sub in ast.walk(self._func_def)
+                if isinstance(sub, (ast.Import, ast.ImportFrom))
+                for alias in sub.names
+            }
+            if self._func_def is not None
+            else set()
+        )
+        # A name the body imports itself is bound as its namespace says.
+        return getattr_on_any_name_stdlib(node, self._namespace, (local | self._param_names) - imported)
 
     def _dynamic_import(self, node: ast.Call) -> bool:
         """``importlib.import_module(...)`` / ``__import__(...)``. The imported
@@ -946,7 +966,9 @@ class PurityVisitor(ast.NodeVisitor):
         # Record the RHS kind for a simple ``name = ...`` so a dynamically-bound
         # local that is later called can be flagged (see finalize_taint).
         if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-            if self._is_dynamic_source(node.value) or self._holds_a_dynamic_source(node.value):
+            if (
+                self._is_dynamic_source(node.value) and not self._on_any_name_stdlib(node.value)
+            ) or self._holds_a_dynamic_source(node.value):
                 kind = "dynamic"
                 if not self._is_name_lookup_source(node.value):
                     self._bound_by_more_than_a_lookup.add(node.targets[0].id)

@@ -28,6 +28,18 @@ ANSWERED_AT_RUN_TIME = "answered at run time by"
 #: not loaded yet, whose source cannot vouch for what it binds, ends
 #: (`HelperWalk._unvouched_import_issues`).
 UNREAD_MODULE = "a module not imported yet whose top level cash cannot read without running it"
+
+
+def unread_module(issue: Any) -> str | None:
+    """The module an UNREAD_MODULE finding names (``import <module> -
+    ...``), or None for any other finding."""
+    description = getattr(issue, "description", "")
+    if not isinstance(description, str) or not description.endswith(f" - {UNREAD_MODULE}"):
+        return None
+    head = description[: -len(f" - {UNREAD_MODULE}")]
+    return head[len("import ") :] if head.startswith("import ") else None
+
+
 #: How a ``sys.modules`` lookup by a computed name in a library's own code
 #: begins (`static_dispatch.spell_static_dispatch`).
 LIBRARY_MODULE_LOOKUP = "a library's lookup of an imported module:"

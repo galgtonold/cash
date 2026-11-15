@@ -72,6 +72,10 @@ class BuiltKey(NamedTuple):
     #: The code the key folded (`cash.code_swaps.FoldedCode`), compared
     #: again after the body; None for a key not built for a call.
     folded_code: Any = None
+    #: The modules not loaded yet the code the key reached imports, whose
+    #: top level cash cannot read before they are (UNREAD_MODULE): a call
+    #: that loads one is not stored (`CallRunner._loaded_unread`).
+    unread: frozenset = frozenset()
 
 
 class Call:
@@ -106,6 +110,7 @@ class Call:
         "trace_unit",
         "ran_unit",
         "folded_code",
+        "unread",
         "refusal_probe",
         "refusal_key",
         "args_fingerprinted",
@@ -154,6 +159,8 @@ class Call:
         self.ran_unit: Any = None
         #: The key's `BuiltKey.folded_code`.
         self.folded_code: Any = None
+        #: The key's `BuiltKey.unread`.
+        self.unread: frozenset = frozenset()
         #: Whether this call keeps or drops a refusal verdict once it is
         #: checked (`CallRunner._known_refusal`), and its `RefusalVerdicts`
         #: key when the lookup made one.

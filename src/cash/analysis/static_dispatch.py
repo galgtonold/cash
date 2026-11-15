@@ -36,6 +36,33 @@ _LIBRARY_MODULE = f"{LIBRARY_MODULE_LOOKUP} %s with a non-constant name"
 _DYNAMIC_GETTER = "operator.%s(name)(obj) with non-constant name - dynamic dispatch"
 
 
+def any_name_stdlib(module: Any) -> bool:
+    """Is *module* the standard library's ``operator``, the one a lookup by
+    any name is keyable on? Whichever name ``getattr(operator, f"__{op}__")``
+    is handed, what it finds is one of ``operator``'s functions, C builtins
+    of the interpreter (or their pure-Python twins in ``operator.py``) that
+    no code of the user's defines, and the interpreter is in every key. A
+    trace of the call checks the module's names besides
+    (`code_trace._lookup_digest`), so one rebound is seen there."""
+    return module is operator
+
+
+def getattr_on_any_name_stdlib(node: ast.AST, namespace: dict[str, Any] | None, local_names: Any = ()) -> bool:
+    """Is *node* ``getattr(m, name)`` with *m* a global or closure name bound
+    to a module `any_name_stdlib` accepts, not shadowed by *local_names*?"""
+    if not (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "getattr"
+        and len(node.args) >= 2
+        and isinstance(node.args[0], ast.Name)
+        and namespace
+    ):
+        return False
+    name = node.args[0].id
+    return name not in local_names and any_name_stdlib(namespace.get(name))
+
+
 def _is_identifier(node: ast.AST) -> bool:
     key = _const_str(node)
     return key is not None and key.isidentifier()

@@ -92,6 +92,7 @@ from ..analysis.purity_report import (
     PurityIssue,
     is_name_lookup,
 )
+from ..analysis.static_dispatch import any_name_stdlib
 from ..source_reading import SETTLED_SECONDS, stat_has_settled
 from ..tracking.process_registries import register_atexit
 from ..tracking.tracker_context import untracked
@@ -1265,7 +1266,8 @@ def _lookup_digest(module: str, qualname: str, name: str) -> str | None:
     if ns is None:
         return None
     if name == "*":
-        return _namespace_digest(ns) if _user_module(sys.modules.get(module)) else None
+        mod = sys.modules.get(module)
+        return _namespace_digest(ns) if _user_module(mod) or any_name_stdlib(mod) else None
     return _digest(ns[name]) if name in ns else _ABSENT
 
 
@@ -1601,7 +1603,7 @@ class _Build:
             return
         if issubclass(type(target), types.ModuleType):
             module, qualname = target.__name__, ""
-            if name is None and not _user_module(target):
+            if name is None and not (_user_module(target) or any_name_stdlib(target)):
                 raise _Untraceable(f"it looks up a computed name on {module}, a library module")
             # A later process may not have imported it yet: the check
             # imports it, as the call would, when its file is the same.

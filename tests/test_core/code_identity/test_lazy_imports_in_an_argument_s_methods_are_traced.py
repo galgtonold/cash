@@ -169,15 +169,18 @@ def test_an_edit_to_what_the_call_ran_recomputes(tmp_path, edit, want, trace):
 
 def test_without_a_trace_a_lazy_import_runs_uncached(tmp_path):
     """With no trace, an edit to a module the call imports lazily cannot be
-    seen: the call runs every time, and the miss names the import (before
-    3.12 the lookup by name refuses it too, and is named first)."""
+    seen: the call that imports it is not stored, so it runs every time, and
+    the summary names the import (before 3.12 the lookup by name refuses it
+    first)."""
     _write(tmp_path)
     _run(tmp_path, "0")
     out, err = _run(tmp_path, "0")
     assert out == "[6, 12]"
     assert "[RUN]" in err, "a call no trace checks must not be served"
-    label = "imports a module cash cannot read before it is loaded" if TRACED else "code picked by a run-time name"
-    assert f"missed: 1 {label}" in err, err
+    if TRACED:
+        assert "it imported imbpkg._constants, imbpkg._tags, which were not loaded" in err, err
+    else:
+        assert "missed: 1 code picked by a run-time name" in err, err
 
 
 # Once the lazily imported module is loaded, the walk can key it; the

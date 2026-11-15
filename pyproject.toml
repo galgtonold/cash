@@ -160,6 +160,9 @@ dev = [
     "dask[dataframe]",
     # For the sparse-matrix branches of the size estimator tests.
     "scipy",
+    # test_a_memo_a_library_fills_on_read_is_no_change.py reads arrays
+    # through xarray's accessors, which fill memos inside them.
+    "xarray",
     # Optional for users. Without them here, the tests that need them would be
     # skipped at collection in CI without anyone noticing.
     "matplotlib>=3.5,<4",

@@ -5,9 +5,10 @@ import ...`` inside a function, of a module not loaded yet whose top level
 cash cannot read without running it, was said to refuse every call of the
 process, not only the first.
 
-The call that first imports such a module runs uncached: its top level may
+The call that first imports such a module is not stored: its top level may
 compute a value from outside its source (the environment, a file), which
-neither its file nor a trace of the call would see. Once the module is
+neither its file nor a trace of the call would see. A call that does not
+import it runs none of its code, and is stored by its key. Once the module is
 loaded the walk reads it, so the calls after it are keyed and served, in this
 process and the next, and an edit to the module recomputes, also when only a
 later call reaches the import.
@@ -59,7 +60,7 @@ MAIN = textwrap.dedent("""
         print(transform([1, 2], use == "1"))
 """)
 
-UNREAD = "missed: 1 imports a module cash cannot read before it is loaded"
+UNREAD = "it imported lazypkg.sig, which was not loaded when its key was built"
 
 
 def _write(tmp_path, factor=3):
@@ -83,8 +84,8 @@ def _runs(err):
 
 @pytest.mark.parametrize("trace", ["1", "0"])
 def test_the_calls_after_the_import_hit(tmp_path, trace):
-    """Call 1 imports the module and runs uncached; call 2 is the first
-    keyed, and every call after it hits."""
+    """Call 1 imports the module and is not stored; call 2 is keyed with
+    the module's code, and every call after it hits."""
     _write(tmp_path)
     out, err = _run(tmp_path, "1", "1", "1", "1", trace=trace)
     assert out == ["[3,", "6]"] * 4
