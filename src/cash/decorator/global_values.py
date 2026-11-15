@@ -233,11 +233,16 @@ class GlobalValues:
             return self.data_digest(value)
         args = self._args
         memo = plain == "immutable" and not (args.override_hashers or args.type_hashers)
+        build = KEY_BUILD_DIGESTS.get()
         if memo:
             entry = self._immutable_digests.get(id(value))
             if entry is not None and entry[0] is value:
+                if build is not None:
+                    # Left behind as computing it would: a state segment
+                    # served again (`state_memo`) leaves what its first
+                    # fold, which computed it, did.
+                    build[("plain", id(value))] = entry
                 return entry[1]
-        build = KEY_BUILD_DIGESTS.get()
         if build is not None:
             entry = build.get(("plain", id(value)))
             if entry is not None and entry[0] is value:
