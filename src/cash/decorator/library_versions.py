@@ -23,6 +23,7 @@ and the same files reinstalled key as before (`_files_digest`).
 from __future__ import annotations
 
 import csv
+import dis
 import hashlib
 import importlib.machinery as importlib_machinery
 import inspect
@@ -551,14 +552,100 @@ def _library_top(module: types.ModuleType, own_pkg: str | None) -> str | None:
     return top
 
 
+#: ``(module name, root module)`` -> is it a library's (`library_import`).
+_LIBRARY_IMPORTS: dict[tuple[str, str | None], bool] = {}
+
+
+def library_import(module_name: str, root_module: str | None) -> bool:
+    """Is *module_name*, imported in a function body of *root_module*, not
+    the user's code nor cash's: decided by its name and where it would load
+    from, never by importing it, so the same whether it is loaded or not."""
+    slot = (module_name, root_module)
+    got = _LIBRARY_IMPORTS.get(slot)
+    if got is None:
+        from ..analysis.unloaded_modules import is_user_code
+
+        top = top_package(module_name)
+        got = bool(top) and top != "cash" and not is_user_code(module_name, root_module)
+        if len(_LIBRARY_IMPORTS) > 4096:
+            _LIBRARY_IMPORTS.clear()
+        _LIBRARY_IMPORTS[slot] = got
+    return got
+
+
+def library_owns(bound: Any, imported: tuple[str, tuple[str, ...]]) -> bool:
+    """Is *bound* -- what a body import of a library binds now
+    (`resolve_local_import`: None when its module is not loaded, so nothing
+    can have rebound it) -- that library's own object, which its name and
+    version stand for? False for a name rebound to anything else (a test's
+    patch, the user's function), which is keyed by the object."""
+    if bound is None:
+        return True
+    module_name, prefix = imported
+    top = top_package(module_name)
+    if issubclass(type(bound), types.ModuleType):
+        return top_package(importable_attr(bound, "__name__")) == top
+    try:
+        owner = getattr(bound, "__module__", None)
+        name = getattr(bound, "__name__", None)
+    except Exception:  # noqa: BLE001 - an object answering attributes with its own code: keyed by itself
+        return False
+    expected = prefix[-1] if prefix else None
+    return isinstance(owner, str) and top_package(owner) == top and expected is not None and name == expected
+
+
+#: code -> the absolute module names it and the code nested in it import.
+_IMPORTED: dict[int, tuple[types.CodeType, tuple[str, ...]]] = {}
+
+
+def _imported_modules(code: types.CodeType) -> tuple[str, ...]:
+    held = _IMPORTED.get(id(code))
+    if held is not None and held[0] is code:
+        return held[1]
+    found: dict[str, None] = {}
+    stack = [code]
+    while stack:
+        c = stack.pop()
+        stack.extend(k for k in c.co_consts if isinstance(k, types.CodeType))
+        if not c.co_names:
+            continue
+        try:
+            ins = list(dis.get_instructions(c))
+        except Exception:  # noqa: BLE001 - code dis cannot read imports nothing it can name
+            continue
+        for k, i in enumerate(ins):
+            # ``LOAD_CONST level`` comes before ``IMPORT_NAME``: 0 is absolute.
+            if i.opname == "IMPORT_NAME" and isinstance(i.argval, str) and k >= 2:
+                level = ins[k - 2].argval
+                if level == 0:
+                    found[i.argval] = None
+    out = tuple(found)
+    if len(_IMPORTED) > 4096:
+        _IMPORTED.clear()
+    _IMPORTED[id(code)] = (code, out)
+    return out
+
+
 def library_tops(functions: Iterable[Callable], own_pkg: str | None) -> set[str]:
-    """The library packages *functions* name in their global lookups."""
+    """The library packages *functions* name in their global lookups, and
+    those their bodies import (``from sklearn.linear_model import X`` inside
+    a function: the same whether the import has run yet or not)."""
     tops: set[str] = set()
     for fn in functions:
         code = getattr(fn, "__code__", None)
         g = getattr(fn, "__globals__", None)
         if not isinstance(code, types.CodeType) or not isinstance(g, dict):
             continue
+        root = g.get("__name__") if isinstance(g.get("__name__"), str) else None
+        for module_name in _imported_modules(code):
+            top = top_package(module_name)
+            if (
+                top is not None
+                and top not in sys.stdlib_module_names
+                and not in_own_package(module_name, own_pkg)
+                and library_import(module_name, root)
+            ):
+                tops.add(top)
         for name in _code_names(code):
             if name not in g:
                 continue

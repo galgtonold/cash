@@ -103,6 +103,7 @@ from .function_identity import func_key, hash_callable_source
 from .global_values import KEY_BUILD_DIGESTS
 from .globals_fold import READS_FOLDED
 from .iterators import ChunkedCachedIterator, StreamingCachedIterator, chunk_prefix, is_one_shot_iterator
+from .refusal_verdicts import ArgumentRefusal, RefusalVerdicts
 from .registry import resolve_dynamic_dependencies
 from .rng import capture_rng_pre_state, replay_rng_state
 from .store import StoreRequest
@@ -1075,9 +1076,16 @@ class CallRunner:
         rng: RngWatch,
         misses: MissHistory,
         notices: Notices,
+        verdicts: RefusalVerdicts | None = None,
     ) -> None:
         self._registry = registry
         self._backend_slot = backend_slot
+        #: What earlier calls learned of arguments changed in place
+        #: (`refusal_verdicts`).
+        self._verdicts = verdicts
+        #: func_name -> what a call refused for a first-seen argument change
+        #: warned (`_settle_verdict`).
+        self._first_refusal_warnings: dict[str, list] = {}
         self._keys = keys
         self._store = store
         self._calls = calls
@@ -1431,6 +1439,8 @@ class CallRunner:
         # exception from the body of an uncached call must propagate, not run
         # the body a second time.
         handed = claim_handed_digests()
+        if self._verdicts is not None and not async_body and self._known_refusal(spec, call, handed):
+            return call
         # Before the key: a fast hit remembered from this call must not
         # outlive a change made while the key was built (`hit_memo`).
         epochs_before = hit_memo.epochs(spec, args, kwargs)
@@ -1466,6 +1476,7 @@ class CallRunner:
             handed.ran_body = True  # until the call is seen to be a plain hit
             call.handed = handed
         if isinstance(built, Unkeyable):
+            self._stop_probe(func_name, call)
             call.outcome = self._run_uncached(spec, call, built.reason)
             return call
         call.cache_key, call.state_hash, call.args_hash = built.cache_key, built.state_hash, built.args_hash
@@ -1498,6 +1509,7 @@ class CallRunner:
         if pt is not None:
             _phases.mark(pt, _phases.CHECKS)
         if hit is not CACHE_MISS:
+            self._stop_probe(func_name, call)
             if code_trace.active():
                 # Served inside a traced call: its body did not run, so what
                 # it stands for goes in that call's trace.
@@ -1540,6 +1552,89 @@ class CallRunner:
         if pt is not None:
             _phases.mark(pt, _phases.REPLAY)
         return call
+
+    def _known_refusal(self, spec: CachedFunction, call: Call, handed: Any) -> bool:
+        """Run *call* uncached when an earlier call with the same code and
+        argument types changed an argument in a way a hit cannot replay
+        (`refusal_verdicts`): its result would not be stored, and building
+        its key and checking it after the body is work thrown away. True
+        when *call* ran; else the call is keyed as any other, and keeps or
+        drops a verdict once checked (`_settle_verdict`)."""
+        assert self._verdicts is not None
+        func_name = spec.name
+        try:
+            self._backend_slot.backend  # the record lives beside the cache built for the lookup
+        except Exception:  # noqa: BLE001 - the lookup itself says why there is no backend
+            return False
+        call.refusal_probe = True
+        call.args_fingerprinted = spec.changes_arguments
+        self._notices.record_warnings(func_name)
+        if not self._verdicts.may_have(func_name):
+            return False
+        key = self._verdict_key(spec, call)
+        if key is None:
+            return False
+        call.refusal_key = key
+        verdict = self._verdicts.use(func_name, key)
+        if verdict is None:
+            return False
+        self._stop_probe(func_name, call)
+        if handed is not None:
+            handed.ran_body = True
+            call.handed = handed
+        self._notices.replay_warnings(func_name, verdict.get("warnings") or [])
+        refused = str(verdict.get("why") or "it changed its arguments in place")
+        why = MissReason(MissKind.NOT_STORED, "an earlier call with the same code and argument types was not stored")
+        note_unentered_body(func_name)
+        call.outcome = spec.func(*call.args, **call.kwargs)
+        self._calls.log(
+            func_name,
+            cache_hit=False,
+            execution_time=_perf_counter() - call.call_start,
+            args_hash="",
+            cache_key="",
+            miss=why,
+            not_stored=refused,
+        )
+        return True
+
+    def _verdict_key(self, spec: CachedFunction, call: Call) -> str | None:
+        """*call*'s `RefusalVerdicts.key_for`."""
+        assert self._verdicts is not None
+        report = self._registry.report_for(spec.func, spec.name)
+        mode = self._registry.purity_mode(spec.name)
+        return self._verdicts.key_for(spec, report, mode, call.args, call.kwargs)
+
+    def _stop_probe(self, func_name: str, call: Call) -> None:
+        """A call that is not checked after a body: it keeps no verdict."""
+        if call.refusal_probe:
+            self._notices.recorded_warnings(func_name)
+            call.refusal_probe = False
+
+    def _settle_verdict(self, spec: CachedFunction, call: Call, refusal: str | None) -> None:
+        """Keep or drop the verdict of a checked call (`_known_refusal`)."""
+        if not call.refusal_probe or self._verdicts is None:
+            return
+        func_name = spec.name
+        warnings = self._notices.recorded_warnings(func_name) or []
+        call.refusal_probe = False
+        if not isinstance(refusal, ArgumentRefusal):
+            if call.refusal_key is not None:
+                self._verdicts.drop(func_name, call.refusal_key)
+            return
+        earlier = self._first_refusal_warnings.pop(func_name, [])
+        if not (refusal.unreplayable or call.args_fingerprinted):
+            # The first change seen, on an argument nothing was taken of
+            # before the body: the next call fingerprints it and may be
+            # stored (`arguments_left`), so it says nothing yet. What it
+            # warned goes with the verdict that call may leave.
+            self._first_refusal_warnings[func_name] = warnings
+            return
+        # Made from what the body changed: the types it was handed stay,
+        # and the flags and strings in the key cannot change in place.
+        key = call.refusal_key or self._verdict_key(spec, call)
+        if key is not None:
+            self._verdicts.refused(func_name, key, refusal, [*earlier, *warnings])
 
     def _hand_back_entry(self, call: Call, value: Any, metadata: Any, storage: list[str] | None) -> None:
         """Tell the notebook statement this call is (`cash.handed_digests`)
@@ -2287,6 +2382,7 @@ class CallRunner:
         pt = _phases.CURRENT.get() if _phases.ON else None
         if pt is not None:
             _phases.mark(pt, _phases.POST)
+        self._settle_verdict(spec, call, refusal)
         if refusal is not None:
             self._misses.note_not_stored(call.cache_key, refusal, func_name)
         else:

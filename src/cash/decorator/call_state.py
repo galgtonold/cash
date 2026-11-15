@@ -105,6 +105,9 @@ class Call:
         "trace_unit",
         "ran_unit",
         "folded_code",
+        "refusal_probe",
+        "refusal_key",
+        "args_fingerprinted",
     )
 
     def __init__(self, args: tuple, kwargs: dict) -> None:
@@ -145,6 +148,15 @@ class Call:
         self.ran_unit: Any = None
         #: The key's `BuiltKey.folded_code`.
         self.folded_code: Any = None
+        #: Whether this call keeps or drops a refusal verdict once it is
+        #: checked (`CallRunner._known_refusal`), and its `RefusalVerdicts`
+        #: key when the lookup made one.
+        self.refusal_probe = False
+        self.refusal_key: str | None = None
+        #: Whether its arguments were fingerprinted before the body ran
+        #: (`CachedFunction.changes_arguments` at lookup): a refusal for
+        #: changing them then is not the first-seen one the next call stores.
+        self.args_fingerprinted = False
 
 
 class BodyRun:
