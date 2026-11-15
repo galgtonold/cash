@@ -1059,6 +1059,24 @@ class HelperWalk:
         for called in called_names_in_tree(tree):
             self._queue_hash_only(resolve_in_class_namespaces(cls, called), cls, reported)
         self._queue_annotation_refs(cls, reported)
+        self._queue_user_bases(cls, reported)
+
+    def _queue_user_bases(self, cls: type, reported: bool) -> None:
+        """Queue *cls*'s user base classes, so the functions their methods
+        call by bare name become helpers too.
+
+        The class's digest holds its inherited methods' code, so an edit to
+        one is seen; a module function such a method calls is in no source
+        of *cls*'s own (``class Child(Base)`` running ``Base.run``, which
+        calls ``_configure`` of Base's module). Queued as a check target:
+        keyed by its code and walked for what it calls, while what its
+        methods read is folded through *cls* (`fold_class_parts` follows
+        inherited methods), not once more per base.
+        """
+        for base in cls.__mro__[1:]:
+            if base is object or not is_user_code(base, self._root_module):
+                continue
+            self._queue_hash_only(base, cls, reported, check_only=True)
 
     # --- what the report records ---
 
