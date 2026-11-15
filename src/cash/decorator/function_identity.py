@@ -331,6 +331,25 @@ def code_fingerprint(code: types.CodeType) -> str:
     return hashlib.sha256("|".join(parts).encode()).hexdigest()
 
 
+#: (pin, code) -> the pin of a function whose ``__code__`` was assigned
+#: (`_swapped_pin`).
+_SWAPPED_PINS: LruMemo = LruMemo(256)
+
+
+def _swapped_pin(pin: str, func: Any) -> str:
+    """The own-identity pin of *func* running code other than the code its
+    *pin* was taken for: the pin with the compiled body that runs now."""
+    code = func.__code__
+    memo_key = (pin, id(code))
+    got = _SWAPPED_PINS.get(memo_key)
+    if got is not None and got[0] is code:
+        return got[1]
+    live = bytecode_identity(func) or repr(code)
+    swapped = hashlib.sha256(f"{pin}:code-assigned:{live}".encode("utf-8")).hexdigest()
+    _SWAPPED_PINS[memo_key] = (code, swapped)
+    return swapped
+
+
 class OwnSourcePins:
     """The identity of each cached function's own source, pinned per
     function object when it is decorated (`OwnSourcePins.pin_own_source`)."""
@@ -344,7 +363,9 @@ class OwnSourcePins:
         # id(func) -> (reference to func, decoration-pinned own-source
         # identity). The reference is checked on every read: a redefined
         # function's id can go to a later definition once the old one dies.
-        self._own_pins: dict[int, tuple[Callable[[], Any], str]] = {}
+        #: id(func) -> (a ref to func, its pin, the code object the pin was
+        #: taken for).
+        self._own_pins: dict[int, tuple[Callable[[], Any], str, Any]] = {}
         # Pins taken at decoration whose file has not yet been compared with
         # the loaded code; the first call does it once (see `pin_own_source`).
         self._own_pins_unverified: set[int] = set()
@@ -393,6 +414,12 @@ class OwnSourcePins:
         # the hash it just computed) always takes a fresh pin.
         entry = self._own_pins.get(key)
         pin = entry[1] if entry is not None and source_hash is None and entry[0]() is owner else None
+        if pin is not None and getattr(func, "__code__", None) is not entry[2]:
+            # ``func.__code__`` was assigned since the pin was taken: the pin
+            # describes code that no longer runs. Keyed by what runs now;
+            # the pin itself is kept, so assigning the old code back keys
+            # as before.
+            return _swapped_pin(pin, func)
         if pin is not None:
             if self._own_pins_unverified and key in self._own_pins_unverified:
                 self._own_pins_unverified.discard(key)
@@ -407,7 +434,7 @@ class OwnSourcePins:
                     live = bytecode_identity(func)
                     if live is not None:
                         pin = live
-                        self._own_pins[key] = (entry[0], live)
+                        self._own_pins[key] = (entry[0], live, entry[2])
                         _generation_moved()
             return pin
         at_decoration = source_hash is not None
@@ -430,7 +457,7 @@ class OwnSourcePins:
                 pin = hashlib.sha256(f"{pin}:{code_fingerprint(code)}".encode("utf-8")).hexdigest()
         self._own_pins_unverified.discard(key)
         if key in self._own_pins or len(self._own_pins) < self.OWN_PINS_MAX:
-            self._own_pins[key] = (self._pin_owner_ref(owner, key), pin)
+            self._own_pins[key] = (self._pin_owner_ref(owner, key), pin, getattr(func, "__code__", None))
             held = entry is not None and entry[0]() is owner
             if not ((held and entry[1] == pin) or (quiet and not held)):
                 _generation_moved()
