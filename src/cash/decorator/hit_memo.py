@@ -1326,7 +1326,7 @@ def scan_trace(spec: CachedFunction, registry: Any, items: list) -> tuple[tuple,
     s = _Scan(getattr(spec.func, "__module__", None))
     for item in items:
         kind = item[0]
-        if kind in ("code", "class", "global", "held", "attr"):
+        if kind in ("code", "class", "surface", "global", "held", "attr"):
             # From the module the item names, through the names it reads:
             # a function scanned is its code, globals, cells and defaults; a
             # class every attribute of it.

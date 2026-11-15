@@ -22,7 +22,7 @@ from ..effects import environment_component
 from ..exceptions import CashImpurityWarning
 from ..jit_functions import jit_python_function
 from . import walk_scope
-from .call_state import CAPTURE_WATCH, CARRIER_LOOKUPS, KeyBuildFailed
+from .call_state import CAPTURE_WATCH, CARRIER_LOOKUPS, KeyBuildFailed, held_by_name
 from .code_tables import CodeTable
 from .global_reads import reach_pass
 from .global_values import UNHASHABLE_GLOBAL_FIX, chain_end, keyed_by_chains
@@ -522,7 +522,7 @@ class GlobalsFold:
         their current values. *owner_code* is the cached function's code,
         for the drift guard."""
         parts, env, _entry = self._held_parts(
-            ("global", label, func_name, id(owner_code), id(v)),
+            ("global", label, func_name, id(owner_code), id(v), held_by_name()),
             v,
             owner_code,
             lambda env: self._held_code_parts_now(label, v, func_name, owner_code, own_pkg, env),
@@ -634,20 +634,25 @@ class GlobalsFold:
         self, label: str, v: Any, func_name: str, owner_code: Any, own_pkg: str | None, env: set
     ) -> list[tuple[str, str]]:
         parts: list[tuple[str, str]] = []
+        # For a call whose body is recorded, a class is keyed by its surface
+        # (`HELD_BY_NAME`): the trace checks the code of each method that ran.
+        by_name = held_by_name()
         # A pre-built user-class INSTANCE (or a container of them) is only
         # value-hashed -- its class's method SOURCE is invisible to the
         # pickle. Fold the class-graph source too (memoized per class; see
         # instance_class_source_parts).
         for item in iter_contained(v):
             if is_user_class(type(item), own_pkg):
-                for cname, chash in self._code.instance_class_source_parts(item, own_pkg=own_pkg):
+                for cname, chash in self._code.instance_class_source_parts(item, own_pkg=own_pkg, by_name=by_name):
                     parts.append((f"{label}#cls:{cname}", chash))
             elif isinstance(item, type) and is_user_class(item, own_pkg):
                 # The CLASS itself, not an instance of it: `TABLE = {"fast":
                 # impl.Fast}` pickles by reference, so editing `Fast.run`
                 # moved nothing while the same dict holding a FUNCTION was
                 # followed.
-                surface = self._code.code_surface_hash(item)
+                surface = self._code.held_class_surface(item) if by_name else None
+                if surface is None:
+                    surface = self._code.code_surface_hash(item)
                 if surface is not None:
                     parts.append((f"{label}#cls:{item.__qualname__}{renamed(item)}", surface))
         # Code deeper in: an instance held in a tuple in a list, a
@@ -656,7 +661,9 @@ class GlobalsFold:
         # only, and the one-level look above does not reach them; the
         # argument walk does, so a global goes through it too.
         if self.code_args is not None:
-            code_parts = self.code_args.carrier_parts(v, func_name, owner_code=owner_code, env_entries=env)
+            code_parts = self.code_args.carrier_parts(
+                v, func_name, owner_code=owner_code, env_entries=env, by_name=by_name
+            )
             if code_parts:
                 digest = hashlib.sha256(":".join(sorted(set(code_parts))).encode("utf-8")).hexdigest()
                 parts.append((f"{label}#code", digest))

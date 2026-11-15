@@ -1039,6 +1039,10 @@ class ResultStore:
                 auto_file_deps=auto_file_deps,
                 chunks_not_persisted=chunks.not_persisted,
                 dynamic_sources=recorded_sources(tracker),
+                # Its body ran as the caller iterated, unrecorded: a key
+                # that left the code of module data's classes to a trace
+                # is checked on that code in full (`CallRunner._closure_check`).
+                code_trace=call.closure_check,
             ),
             {"n_chunks": n_chunks, "total_items": chunks.total_items, **_returned(returned)},
             chunks.stream,

@@ -38,7 +38,7 @@ from ..code_swaps import FOLDED_CODE, FoldedCode
 from ..dependency_state import STATE_LEDGER
 from ..effects import ENVIRONMENT_READS
 from . import hit_memo
-from .call_state import CAPTURE_WATCH, CARRIER_LOOKUPS
+from .call_state import CAPTURE_WATCH, CARRIER_LOOKUPS, held_by_name
 from .global_values import KEY_BUILD_DIGESTS
 
 _MASK = (1 << 64) - 1
@@ -165,7 +165,7 @@ class HelperFoldMemo:
         if epochs is None:
             return compute()
         world, cash = epochs
-        full_key = (*key, state_in, seen.fingerprint())
+        full_key = (*key, state_in, seen.fingerprint(), held_by_name())
         entry = self._entries.get(full_key)
         if (
             entry is not None

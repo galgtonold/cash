@@ -22,6 +22,7 @@ from ..analysis.unloaded_modules import source_digest
 from ..install_paths import is_user_module
 from ..jit_functions import jit_python_function
 from ..value_types import CODELESS_PRIMS
+from .call_state import held_by_name
 from .closure_fold import iter_code_scopes
 from .global_values import chain_end, keyed_by_chains
 from .key_values import iter_contained, plain_data_kind
@@ -522,17 +523,30 @@ class ModuleAttrFold:
         data (`ClassDataFold.class_parts`) and their code. An instance read as
         `lib.SVC`: its pickle is its own attributes, not what its class holds
         (`helper = CC(10)`), nor the methods that run on it without being
-        named -- a property, an operator, ``len()``, ``__getattr__``."""
+        named -- a property, an operator, ``len()``, ``__getattr__``.
+
+        For a call whose body is recorded (`HELD_BY_NAME`), each class is
+        keyed by its surface, and the globals its methods read are left to
+        the trace too (`class_parts`'s *by_name*): the trace checks the code
+        of each method that ran and what it read, so an edit to a method no
+        call runs keeps the key."""
         parts: list[tuple[str, str]] = []
+        by_name = held_by_name()
         item_types = {type(item) for item in iter_contained(value) if type(item) not in CODELESS_PRIMS}
         for item_type in sorted(item_types, key=lambda t: f"{t.__module__}.{t.__qualname__}"):
             if item_type is not type and is_user_class(item_type, reader.own_pkg):
+                identity = self._values.held_class_identity(item_type)
                 parts.extend(
                     self._classes.class_parts(
-                        item_type, reader.func_name, owner_code=reader.owner_code, seen=reader.seen, reader=reader.func
+                        item_type,
+                        reader.func_name,
+                        owner_code=reader.owner_code,
+                        seen=reader.seen,
+                        reader=reader.func,
+                        by_name=by_name and identity.startswith("surface:"),
                     )
                 )
-                parts.append((f"{label}#cls:{item_type.__qualname__}", self._values.data_callable_identity(item_type)))
+                parts.append((f"{label}#cls:{item_type.__qualname__}", identity))
         return parts
 
     def _module_callable_parts(
