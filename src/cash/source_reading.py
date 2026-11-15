@@ -311,6 +311,10 @@ def _getsourcelines(obj: object) -> tuple[list[str], int]:
             return found
         if _compiled_from_no_file(obj):
             raise OSError("could not get source code")
+    elif type(obj) is types.FunctionType and _compiled_from_no_file(obj.__code__):
+        # A dataclass's generated method, read on every watch of its class
+        # (`class_memo`): the same answer, without ``inspect`` looking.
+        raise OSError("could not get source code")
     return inspect.getsourcelines(obj)  # type: ignore[arg-type]
 
 

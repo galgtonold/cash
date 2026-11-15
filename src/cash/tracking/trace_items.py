@@ -615,6 +615,34 @@ _CLASS_SKIP = frozenset(
 def class_digest(cls: type, within: _Digester | None = None) -> str:
     """A digest of what *cls* holds: its attributes (methods by code, data
     by value) and the names of its bases."""
+    return _class_digest_now(cls, within)
+
+
+def remembered_class_digest(cls: type) -> str:
+    """`class_digest` of *cls* on its own, remembered while the class's
+    world stands still (`class_memo`): a call's trace names about a dozen
+    classes, each digested again on every miss that records it and every
+    check of it."""
+    if not getattr(_STARTS, "cells", None):
+        # Not while a call's start cells stand in for its functions' cells
+        # (`start_cells`): the digest then is of that call's, not the class's.
+        from ..decorator import class_memo
+
+        if class_memo.ENABLED:
+            proof = class_memo.proof_for(cls, "digest")
+            if proof is not None:
+                got = class_memo.DIGESTS.get((id(cls),), proof)
+                if got is class_memo.MISS or class_memo.VERIFY:
+                    fresh = _class_digest_now(cls, None)
+                    if got is not class_memo.MISS and got != fresh:
+                        raise class_memo.ClassMemoMismatch(f"the digest of {cls.__qualname__} changed unseen")
+                    class_memo.DIGESTS.put((id(cls),), proof, fresh)
+                    return fresh
+                return got
+    return _class_digest_now(cls, None)
+
+
+def _class_digest_now(cls: type, within: _Digester | None) -> str:
     h = hashlib.blake2b(digest_size=12)
     d = _Digester(h)
     if within is not None:

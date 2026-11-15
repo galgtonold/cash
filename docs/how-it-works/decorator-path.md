@@ -335,6 +335,13 @@ remembered. `CASH_STATE_MEMO=0` turns this off; `CASH_STATE_MEMO_VERIFY=1`
 (or `CASH_HITPATH_VERIFY=1`) folds the segment again behind every reuse and
 raises if the two differ.
 
+The same watchers stand behind what a class folds to: the code an
+argument's class carries and what that code reads, and the digest of a class
+a call's trace names. Each is remembered per class while nothing the class
+holds or reaches moved; data the watchers cannot see (an instance held in a
+class attribute) is read whole again before each reuse. `CASH_CLASS_MEMO=0`
+turns this off; `CASH_CLASS_MEMO_VERIFY=1` folds again behind every reuse.
+
 ## Related
 
 - [`@cash.cache` guide](../decorator.md): every parameter, with examples.
