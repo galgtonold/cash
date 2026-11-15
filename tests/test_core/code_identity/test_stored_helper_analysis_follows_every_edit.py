@@ -109,7 +109,12 @@ def test_a_second_process_reads_the_analysis_back_and_hits(project):
     assert first["hits"] == 0 and first["text"]["computed"] > 0
     second = _run(project)
     assert second["hits"] == 1 and second["value"] == first["value"]
-    assert second["text"]["loaded"] > 0 and second["text"]["computed"] == 0
+    assert second["text"]["loaded"] > 0
+    # The first hit's world scan reads what the first process, whose one
+    # call took no scan (`state_memo`), never worked out; from then on
+    # nothing is worked out again.
+    settled = _run(project)
+    assert settled["hits"] == 1 and settled["text"]["loaded"] > 0 and settled["text"]["computed"] == 0
     # Each stored answer is what working it out again gives.
     third = _run(project, verify=True)
     assert third["hits"] == 1 and third["text"]["verified"] == third["text"]["loaded"] > 0

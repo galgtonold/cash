@@ -50,9 +50,11 @@ import abc
 import ast
 import builtins
 import collections
+import contextvars
 import dataclasses
 import datetime
 import decimal
+import dis
 import enum
 import functools
 import operator
@@ -73,7 +75,7 @@ from .._clock import perf_counter as _perf_counter
 from .._memo import CODE_OBJECTS, LruMemo
 from ..analysis import text_store
 from ..analysis.helper_code import own_code_is_user
-from ..jit_functions import jit_python_function
+from ..jit_functions import is_jit_type, jit_python_function
 from ..source_reading import own_source
 from ..tracking.tracker_context import active_tracker
 from .call_state import NESTED_CASH_SECONDS
@@ -378,6 +380,67 @@ def _is_dunder(name: str) -> bool:
     return name.startswith("__") and name.endswith("__")
 
 
+#: What `jit_functions.jit_options` reads of a dispatcher besides its class.
+_JIT_READS = frozenset(
+    {"targetoptions", "locals", "_dispatcher", "gufunc_builder", "kernel_ir", "mode", "options", "_sig"}
+)
+
+#: A class defining one of these reads or pickles its instances its own way.
+_OWN_ACCESS = frozenset(
+    {
+        "__getattr__",
+        "__getattribute__",
+        "__reduce__",
+        "__reduce_ex__",
+        "__getstate__",
+        "__getnewargs__",
+        "__getnewargs_ex__",
+    }
+)
+
+#: Modules whose objects change as the collector runs (a
+#: ``WeakValueDictionary`` loses entries, a ``WeakSet`` too): watched, each
+#: change would move the world for every memo.
+_VOLATILE_MODULES = frozenset({"weakref", "_weakrefset"})
+
+#: Library classes whose own reduction pickles the instance's ``__dict__``
+#: as ``object``'s does (numba's types: ``Type.__reduce__`` wraps it).
+_PLAIN_REDUCE = frozenset({("numba.core.types.abstract", "Type")})
+
+#: The instructions of a getter that only reads attributes off its argument.
+_GETTER_OPS = frozenset(
+    {"RESUME", "LOAD_FAST", "LOAD_FAST_BORROW", "LOAD_FAST_CHECK", "LOAD_ATTR", "RETURN_VALUE", "NOP", "NOT_TAKEN"}
+)
+_GETTER_FLAGS = 0x04 | 0x08 | 0x20 | 0x80 | 0x200  # varargs, varkw, generator, coroutine, async generator
+
+
+def _plain_getter(prop: Any) -> frozenset[str] | None:
+    """The attribute names a property's getter reads, when all it does is
+    return an attribute chain off the object it is read from
+    (``return self._n_jobs``); None for any other descriptor or getter."""
+    if type(prop) is not property:
+        return None
+    f = prop.fget
+    if type(f) is not types.FunctionType or f.__closure__ or f.__defaults__ or f.__kwdefaults__:
+        return None
+    code = f.__code__
+    if code.co_argcount != 1 or code.co_kwonlyargcount or code.co_flags & _GETTER_FLAGS or code.co_freevars:
+        return None
+    first = code.co_varnames[0]
+    try:
+        ins = [i for i in dis.get_instructions(code) if i.opname not in ("CACHE", "EXTENDED_ARG")]
+    except Exception:  # noqa: BLE001 - code dis cannot read: no plain getter
+        return None
+    for op in ins:
+        if op.opname not in _GETTER_OPS:
+            return None
+        if op.opname.startswith("LOAD_FAST") and op.argval != first:
+            return None
+        if op.opname == "LOAD_ATTR" and sys.version_info >= (3, 12) and (op.arg or 0) & 1:
+            return None  # a method loaded to call
+    return frozenset(code.co_names)
+
+
 class _Scan:
     """What one cached function's key can read, made watched (see module doc)."""
 
@@ -529,14 +592,28 @@ class _Scan:
             return
         elif self.content and self._fixed_kind(v, t, names):
             return
+        elif self.content and self._jit_dispatcher(v, t, names):
+            return
+        elif self.content and self._fixed_value(v, t, names):
+            return
         elif self.content and (probe := ContentProbe.of(v)) is not None:
+            self.probes[probe] = probe.digest
+        elif self.content and self._library_instance(v, t, names):
+            return
+        elif self.content and t is list:
+            # A list of what is watched otherwise (sklearn's parameter
+            # constraints): which items it holds is read again before each
+            # reuse, by identity; each item is looked into as any value.
+            probe = ContentProbe(v, _Items.of)
+            for item in list(v):
+                self.value(item, names)
             self.probes[probe] = probe.digest
         else:
             raise Ineligible(f"a {t.__module__}.{t.__qualname__}")
 
     def _fixed_kind(self, v: Any, t: type, names: frozenset) -> bool:
-        """The state memo's scan: a member of an enum, or a number, string
-        or bytes of a subclass without attributes of its own. True when *v*
+        """The state memo's scan: a member of an enum, or a number, string,
+        bytes or tuple of a subclass without attributes of its own. True when *v*
         is one and is watched now.
 
         An enum member is its class's (`_klass` watches the class, the
@@ -544,8 +621,9 @@ class _Scan:
         ``__dict__`` (``_value_``, ``_name_``), a plain dict watched like
         a function's attributes: setting anything on it moves the world.
 
-        A subclass of ``int``, ``float``, ``str`` or ``bytes`` holds a value
-        fixed when it is made; what else a key can read of it is its class,
+        A subclass of ``int``, ``float``, ``str``, ``bytes`` or ``tuple`` (a
+        named tuple) holds a value fixed when it is made, a tuple's items
+        looked into as any value; what else a key can read of it is its class,
         scanned as any class, and attributes set on the instance, which no
         watcher sees: only one with none is taken, and a probe
         (`_attribute_count`) checks before every reuse that it still has
@@ -562,7 +640,7 @@ class _Scan:
             for item in list(held.values()):
                 self.value(item, names)
             return True
-        if not issubclass(t, (int, float, str, bytes)) or issubclass(t, enum.Enum):
+        if not issubclass(t, (int, float, str, bytes, tuple)) or issubclass(t, enum.Enum):
             return False
         for k in t.__mro__:
             slots = vars(k).get("__slots__")
@@ -572,11 +650,172 @@ class _Scan:
                 return False
         held = getattr(v, "__dict__", None)
         if held is not None:
-            if type(held) is not dict or held:
+            if type(held) is not dict:
                 return False
-            self.probes[ContentProbe(v, _attribute_count)] = 0
+            if not held:
+                self.probes[ContentProbe(v, _attribute_count)] = 0
+            else:
+                # Attributes set on it (scverse's ``Deprecation``, a ``str``
+                # carrying the version it was deprecated in): watched as an
+                # instance's (`_library_instance`).
+                self.watch(held, True)
+                for item in list(held.values()):
+                    self.value(item, names)
+                self._keeps_class_and_dict(v)
         self.value(t, names)
+        if isinstance(v, tuple):
+            for item in tuple.__iter__(v):
+                self.value(item, names)
         return True
+
+    def _jit_dispatcher(self, v: Any, t: type, names: frozenset) -> bool:
+        """The state memo's scan: a numba dispatcher (``@njit``). True when
+        *v* is one and is watched now.
+
+        A key reads it as code (`jit_functions`): the Python function it
+        compiles (``py_func``), walked as any function met, and its compile
+        options (`jit_options`: ``targetoptions``, ``locals``, and what a
+        ``_dispatcher``, ``gufunc_builder``, ``kernel_ir``, ``mode``,
+        ``options`` or ``_sig`` would add, none of which a dispatcher
+        has). All of it is in its ``__dict__``, a plain dict numba never
+        writes to after the dispatcher is made (compiling fills tables the
+        dict holds, not the dict): watched whole, so rebinding
+        ``py_func`` or ``targetoptions`` moves the world, and the options'
+        own dicts are watched as any dict met. Its class is watched as a
+        library class (an attribute added to it is a type event), and a
+        probe checks the instance keeps its class and ``__dict__``. Only a dispatcher whose
+        class reads attributes as ``object`` does: no ``__getattr__`` or
+        ``__getattribute__`` of its own, none of those names a class
+        attribute. numba's other wrappers (``DUFunc``, ``GUFunc``,
+        ``CFunc``, a stencil) are not taken."""
+        if not t.__flags__ & _HEAPTYPE or not is_jit_type(t):
+            return False
+        fn = jit_python_function(v)
+        held = getattr(v, "__dict__", None)
+        if fn is None or type(held) is not dict or held.get("py_func") is not fn or "targetoptions" not in held:
+            return False
+        for k in t.__mro__:
+            ns = vars(k)
+            if k is not object and ("__getattr__" in ns or "__getattribute__" in ns):
+                return False
+            if any(name in ns for name in _JIT_READS):
+                return False
+        self.value(t, names)
+        self.watch(held, True)
+        for name, item in list(held.items()):
+            if type(item) is types.CodeType:
+                continue  # ``__code__``: fixed, and ``py_func``'s is what a key reads
+            if name in _JIT_READS or name == "py_func" or _is_dunder(name):
+                self.value(item, names)
+        self._keeps_class_and_dict(v)
+        return True
+
+    def _fixed_value(self, v: Any, t: type, names: frozenset) -> bool:
+        """The state memo's scan: a value of a library that cannot change
+        once made, or a context variable. True when *v* is one and is
+        watched now.
+
+        * a numpy scalar of numpy's own type (``np.float64(1.5)``,
+          ``np.bool_(True)``), not a ``void`` (a view into a structured
+          array) or an ``object_``;
+        * pandas' ``NaT`` and its axis descriptors (``DataFrame.index``,
+          an ``AxisProperty``: which axis, fixed);
+        * a dataclass's parameters (``__dataclass_params__``: the flags
+          the class was made with);
+        * a ``ContextVar``: its name and default are fixed; what it holds
+          in the context of a call is read again before each reuse, by
+          identity, and looked into as any value."""
+        if t is contextvars.ContextVar:
+            probe = ContentProbe(v, _context_value)
+            held = probe.digest.items[0]
+            if held is not _NOTHING:
+                self.value(held, names)
+            self.probes[probe] = probe.digest
+            return True
+        if t is getattr(dataclasses, "_DataclassParams", None):
+            return True
+        module = t.__module__
+        if module == "pandas._libs.properties" and t.__name__ == "AxisProperty":
+            return True
+        pd = sys.modules.get("pandas")
+        if pd is not None and v is getattr(pd, "NaT", None):
+            return True
+        if module == "numpy" and not t.__flags__ & _HEAPTYPE:
+            np = sys.modules.get("numpy")
+            return np is not None and isinstance(v, np.generic) and not isinstance(v, (np.void, np.object_))
+        return False
+
+    def _library_instance(self, v: Any, t: type, names: frozenset) -> bool:
+        """The state memo's scan: an instance of a library's class whose
+        whole state is its ``__dict__`` -- a library's settings object.
+        True when *v* is one and is watched now.
+
+        A key reads such an object by the attribute chains a reader reads
+        off it (`global_values.chain_end`: what its ``__dict__`` holds), or
+        whole, by its class and its ``__dict__`` (a class keyed by name, a
+        pickle of the attributes), never through a property. Its
+        ``__dict__`` is watched whole, a write to any attribute moving the
+        world -- a property's setter (``settings.n_jobs = 4`` storing
+        ``_n_jobs``) as an assignment -- and every value it holds is
+        looked into as any value met. Its classes are watched as library
+        classes and a probe checks it keeps its class and its ``__dict__``.
+
+        Taken only when that is all there is to it: a class of a library,
+        made by ``type``, ``abc.ABCMeta`` or a library's metaclass that
+        reads attributes as ``type`` does (`_metaclass_ok`), with no builtin base but
+        ``object`` (whose storage no watcher sees), no ``__slots__`` but
+        ``__dict__`` and ``__weakref__``, no ``__getattr__`` or
+        ``__getattribute__`` that could answer a read from elsewhere, no
+        reduction of its own (``__reduce__``, ``__getstate__``: a pickle of
+        it is its ``__dict__``), and every property or other descriptor the
+        scanned code names a getter that only reads attributes off the
+        object (`_plain_getter`), or a method. Not a weak mapping or set
+        (`_VOLATILE_MODULES`), which the collector changes."""
+        if not t.__flags__ & _HEAPTYPE or is_user_code_object(t) or t.__module__ in _VOLATILE_MODULES:
+            return False
+        if type(t) not in _METACLASSES and not self._metaclass_ok(t):
+            return False
+        for k in t.__mro__:
+            if k is object:
+                continue
+            if not k.__flags__ & _HEAPTYPE:
+                return False
+            ns = vars(k)
+            if any(name in ns for name in _OWN_ACCESS) and (k.__module__, k.__qualname__) not in _PLAIN_REDUCE:
+                return False
+            slots = ns.get("__slots__")
+            if isinstance(slots, str):
+                slots = (slots,)
+            if slots and any(name not in ("__dict__", "__weakref__") for name in slots):
+                return False
+            for name in names.intersection(ns) if len(names) < len(ns) else [n for n in ns if n in names]:
+                attr = ns[name]
+                if type(attr) is property:
+                    if _plain_getter(attr) is None:
+                        return False
+                elif hasattr(type(attr), "__get__") and not isinstance(
+                    attr, (types.FunctionType, staticmethod, classmethod)
+                ):
+                    return False
+        try:
+            held = object.__getattribute__(v, "__dict__")
+        except AttributeError:
+            return False
+        if type(held) is not dict:
+            return False
+        self.value(t, names)
+        self.watch(held, True)
+        for item in list(held.values()):
+            self.value(item, names)
+        self._keeps_class_and_dict(v)
+        return True
+
+    def _keeps_class_and_dict(self, v: Any) -> None:
+        """Check before each reuse that *v* keeps its class and its
+        ``__dict__``: assigning either (``obj.__dict__ = {...}``) moves no
+        watcher, and the dict watched would no longer be its."""
+        probe = ContentProbe(v, _class_and_dict)
+        self.probes[probe] = probe.digest
 
     def _typing(self, v: Any, names: frozenset) -> None:
         """A typing form or alias: fixed, but for what it was built from."""
@@ -614,6 +853,7 @@ class _Scan:
         if type(md) is not dict:
             raise Ineligible("a module without a plain namespace")
         self.watch(md, False)
+        library = self.content and self._library_module(mod)
         in_module, self.in_module = self.in_module, self.shallow
         try:
             for name in names:
@@ -624,9 +864,28 @@ class _Scan:
                         # (`ModuleAttrs`: a library's object is no data). A
                         # write to another variable moves nothing it reads.
                         continue
+                    if library and _unread_object(md[name]):
+                        # ``logging._handlers``: read through a library's
+                        # module, an object of the library's is no data a
+                        # key folds (`module_attrs._library_attr_parts`),
+                        # whatever it holds; rebinding the name moves the
+                        # module's watched namespace.
+                        continue
                     self.value(md[name], names)
         finally:
             self.in_module = in_module
+
+    def _library_module(self, mod: types.ModuleType) -> bool:
+        """Is *mod* a library's module for every reader the key can have:
+        not the user's, and not in the package of the cached function (a
+        library's own function decorated reads its package as its own)."""
+        from ..install_paths import is_user_code_module
+
+        root_pkg = (self.root_module or "").partition(".")[0]
+        name = getattr(mod, "__name__", None)
+        if not isinstance(name, str) or (root_pkg and name.partition(".")[0] == root_pkg):
+            return False
+        return not is_user_code_module(mod)
 
     def _one_level(self, f: types.FunctionType) -> None:
         """The globals *f*'s code names, at the depth a helper's own are."""
@@ -806,10 +1065,11 @@ class _Scan:
         enum class: its members are its attributes, watched with it), or a
         library's for a class of that library, which a key keys by name
         and the library's version (`_library_class_attr_parts`). Such a
-        metaclass is watched as a class too, and only one that reads a
-        class's attributes as ``type`` does: no ``__getattr__`` or
-        ``__getattribute__`` of its own and no property, which could
-        answer a read from state no watcher sees."""
+        metaclass is watched as a class too, and only one that reads a class's attributes as
+        ``type`` does: no ``__getattr__`` or ``__getattribute__`` of its
+        own, and no property but one returning what the class holds
+        (`_plain_getter`); any other could answer a read from state no
+        watcher sees."""
         meta = type(cls)
         if meta is enum.EnumMeta:
             return True
@@ -821,8 +1081,20 @@ class _Scan:
             for name, attr in vars(k).items():
                 if name in ("__getattr__", "__getattribute__"):
                     return False
-                if not callable(attr) and hasattr(type(attr), "__get__"):
-                    return False
+                if (
+                    not callable(attr)
+                    and hasattr(type(attr), "__get__")
+                    and type(attr) not in (staticmethod, classmethod)
+                ):
+                    # A property that returns what the class holds
+                    # (``settings.n_jobs`` reading ``cls._n_jobs``) answers
+                    # from the class, which is watched: its setter writes
+                    # the class, a type event. The attributes it reads are
+                    # looked into as named ones (`finish`).
+                    read = _plain_getter(attr) if not _is_dunder(name) else None
+                    if read is None:
+                        return False
+                    self.names.update(read)
             if id(k) not in self.types:
                 tag = _cw.world_watch_type(k)
                 if tag is None:
@@ -1148,6 +1420,57 @@ class ContentProbe:
             except Exception:  # noqa: BLE001 - cannot be read whole: not probed
                 return None
         return None
+
+
+_NOTHING: Any = object()
+
+
+def _class_and_dict(v: Any) -> _Items:
+    """*v*'s class and ``__dict__``, compared by identity."""
+    return _Items((type(v), object.__getattribute__(v, "__dict__")))
+
+
+def _context_value(var: contextvars.ContextVar) -> _Items:
+    """What *var* holds in the current context, compared by identity."""
+    return _Items((var.get(_NOTHING),))
+
+
+def _unread_object(v: Any) -> bool:
+    """Is *v* an object a key never folds when read as a library module's
+    attribute: not plain data (`key_values.plain_data_kind`, which
+    looks only into exact builtin containers and leaves, so no change to
+    *v* makes it plain), and not a module, class or callable, whose name a
+    key reads."""
+    from .key_values import _PLAIN_LEAVES
+
+    t = type(v)
+    if t in _PLAIN_LEAVES or t in (tuple, frozenset, list, set, dict):
+        return False
+    return not (isinstance(v, (type, types.ModuleType)) or callable(v))
+
+
+class _Items:
+    """The items of a list, compared by identity: equal while it holds the
+    very same objects in the same order (`_Scan._inside`)."""
+
+    __slots__ = ("items",)
+
+    def __init__(self, items: tuple) -> None:
+        self.items = items
+
+    @classmethod
+    def of(cls, v: list) -> _Items:
+        return cls(tuple(v))
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, _Items) or len(self.items) != len(other.items):
+            return False
+        return all(a is b for a, b in zip(self.items, other.items))
+
+    def __ne__(self, other: object) -> bool:
+        return not self == other
+
+    __hash__ = None  # type: ignore[assignment]
 
 
 def _plain_content(v: Any) -> bytes:
