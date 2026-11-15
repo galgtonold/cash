@@ -378,7 +378,7 @@ class CodeSurface:
         else:
             ident = self._code_identity(obj)
             if not ident:
-                return None, layers
+                return self._wrapper_digest(obj)
             parts = [(getattr(obj, "__qualname__", "?") + renamed(obj), "", ident)]
             # And the user functions it runs besides its own code: what a
             # decorator wraps, a function a closure holds. A decorator's
@@ -390,6 +390,26 @@ class CodeSurface:
         if not parts:
             return None, layers
         return hashlib.sha256(repr(parts).encode("utf-8")).hexdigest(), layers
+
+    def _wrapper_digest(self, obj: Any) -> tuple[str | None, list[Any]]:
+        """The digest of a callable with no code of its own that names the
+        function it runs as ``__wrapped__``: a ``functools.lru_cache`` or
+        ``functools.cache`` wrapper, a C-level decorator. Its own dispatch is
+        fixed; what it computes is the wrapped function's code, so that is
+        what is keyed, and an edit to it misses. Without it the wrapper was
+        "opaque" (KEY-OPAQUE-CALLABLE): passed as an argument, it was keyed by
+        its name alone, and an edit was served the old result unless a trace
+        of the call caught it. ``None`` for any other codeless callable."""
+        if getattr(obj, "__code__", None) is not None:
+            return None, []
+        wrapped = getattr(obj, "__wrapped__", None)
+        if wrapped is None or wrapped is obj or not callable(wrapped):
+            return None, []
+        inner = self._code_surface_own(wrapped)
+        if inner is None:
+            return None, []
+        part = (getattr(obj, "__qualname__", "?") + renamed(obj), "wraps", inner)
+        return hashlib.sha256(repr([part]).encode("utf-8")).hexdigest(), [wrapped]
 
     def code_surface_hash(self, obj: Any) -> str | None:
         """A digest of *obj*'s code AND the user code that code reaches.

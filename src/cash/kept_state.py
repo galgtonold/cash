@@ -30,6 +30,7 @@ import pickle
 import sys
 import threading
 import types
+import typing
 import uuid
 import weakref
 from collections.abc import Callable, Iterator
@@ -1417,6 +1418,8 @@ class _KeepDict(dict):
             raise KeyError(t)  # a class: pickled by name, as pickle does
         if t in WEAK_PROXY_TYPES and self._watch is None:
             return functools.partial(_reduce_weak_proxy, protocol=self._protocol)
+        if t is typing.ForwardRef:
+            return _reduce_forward_ref
         registered = copyreg.dispatch_table.get(t)
         if self._watch is not None:
             reducer = _watched(self._store_reducer(t, registered), t, registered, self._watch)
@@ -1480,6 +1483,54 @@ def _reduce_weak_proxy(proxy: Any, protocol: int) -> Any:
     if is_dead_proxy(proxy):
         return (dead_weak_proxy, ())
     return proxy.__reduce_ex__(protocol)
+
+
+def forward_ref(arg: str, module: str | None, is_argument: bool, is_class: bool, owner: tuple[str, str] | None) -> Any:
+    """A ``typing.ForwardRef`` made again from what `_reduce_forward_ref`
+    wrote: its text, the module it is looked up in and (3.14) the class
+    whose scope it is looked up in, *owner* ``(module, qualified name)``,
+    found again by that name where the name still holds a class."""
+    ref = typing.ForwardRef(arg, is_argument=is_argument, module=module, is_class=is_class)
+    if owner is not None and hasattr(ref, "__owner__"):
+        found: Any = sys.modules.get(owner[0])
+        for part in owner[1].split("."):
+            found = getattr(found, part, None)
+        if isinstance(found, type):
+            ref.__owner__ = found
+    return ref
+
+
+def _reduce_forward_ref(ref: Any) -> Any:
+    """A ``ForwardRef`` (a string annotation: ``Optional["Cfg"]``, every
+    field of a ``TypedDict`` in a module with ``from __future__ import
+    annotations``) pickled as its source text, its module and the name of
+    the class whose scope it is looked up in.
+
+    Its own reduce writes its slots, and one of them is the code object it
+    compiled from the text (3.13 ``__forward_code__``, 3.14 ``__code__``):
+    "cannot pickle code objects", so no key could hold one, and a function
+    reading one ran uncached (nor could a result holding one be stored).
+    The code is compiled from the text alone, so the text keys it; the value
+    it last evaluated to is a cache of a lookup, not part of the annotation.
+    The owner is written by name, which a class defined in a function also
+    has, and a store writes the same bytes a key does.
+    """
+    owner = getattr(ref, "__owner__", None)
+    where = (
+        (str(getattr(owner, "__module__", "?")), str(getattr(owner, "__qualname__", "?")))
+        if owner is not None
+        else None
+    )
+    return (
+        forward_ref,
+        (
+            ref.__forward_arg__,
+            getattr(ref, "__forward_module__", None),
+            bool(getattr(ref, "__forward_is_argument__", True)),
+            bool(getattr(ref, "__forward_is_class__", False)),
+            where,
+        ),
+    )
 
 
 def _names_apart(reducer: Any, names: dict[str, str]) -> Callable[[Any], Any]:
