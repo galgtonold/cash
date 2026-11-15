@@ -195,7 +195,12 @@ def is_user_code_object(obj: Any) -> bool:
     mod_name = getattr(obj, "__module__", None)
     mod = sys.modules.get(mod_name) if mod_name else None
     if mod is None or not qualname_resolves_in(mod, obj):
-        if isinstance(code, types.CodeType) and type(obj) is types.FunctionType and _named_after_another(code, obj):
+        if (
+            isinstance(code, types.CodeType)
+            and type(obj) is types.FunctionType
+            # No ``co_qualname`` before 3.11: its ``co_name`` then.
+            and (code.co_qualname != obj.__qualname__ if hasattr(code, "co_qualname") else code.co_name != obj.__name__)
+        ):
             # Names copied from what it wraps (``functools.wraps``): a
             # library's delegate for each method of numpy's ``Generator``
             # calls itself ``numpy.random._generator.Generator.normal``,
@@ -275,15 +280,6 @@ def qualname_resolves_in(mod: Any, obj: Any) -> bool:
         return cur is obj
     except Exception:  # noqa: BLE001 - a module __getattr__ may raise anything
         return False  # could not confirm reachability - do not trust it
-
-
-def _named_after_another(code: types.CodeType, fn: Any) -> bool:
-    """Does *fn* carry a name its own code does not (``functools.wraps``)?
-    By the qualified name where code has one (3.11+), else by the name."""
-    own = getattr(code, "co_qualname", None)
-    if own is None:
-        return code.co_name != fn.__name__
-    return own != fn.__qualname__
 
 
 def _wrapped_under_its_name(mod: Any, fn: Any) -> bool:

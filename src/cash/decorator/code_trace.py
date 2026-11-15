@@ -194,6 +194,7 @@ def _unit_class() -> type:
 
         __slots__ = (
             "attr_params",
+            "attr_targets",
             "cached_codes",
             "callees",
             "global_starts",
@@ -226,6 +227,12 @@ def _unit_class() -> type:
             #: -> ``{parameter: ids of what each start of it bound it to}``
             #: (`_Recorder.attr_codes`, `_AttributeOwners`).
             self.attr_params: dict[types.CodeType, dict[str, set[int]]] = {}
+            #: The same starts' objects, held weakly: code -> ``{parameter:
+            #: {id: weak reference, or False for an object that takes
+            #: none}}``. A binding made only on objects that are all gone
+            #: when the call is judged changed nothing a hit skips
+            #: (`_OutArguments.excuses`).
+            self.attr_targets: dict[types.CodeType, dict[str, dict[int, Any]]] = {}
             #: A strict traced call's (`begin`): ``(module, name)`` of a
             #: global or ``(module, "mod.a.b")`` of an attribute chain the
             #: code that ran reads -> ``(digest, qualname)`` as the first
@@ -650,8 +657,20 @@ def _recorder_class() -> type:
                 if unit.global_starts is None:
                     continue
                 held = unit.attr_params.setdefault(code, {})
+                targets = unit.attr_targets.setdefault(code, {})
                 for name in params:
-                    held.setdefault(name, set()).add(id(f_locals.get(name)))
+                    obj = f_locals.get(name)
+                    held.setdefault(name, set()).add(id(obj))
+                    refs = targets.setdefault(name, {})
+                    ref = refs.get(id(obj))
+                    if ref and ref() is obj:
+                        continue
+                    # An id seen before whose object is gone is a new
+                    # object: the dead one's reference has nothing to add.
+                    try:
+                        refs[id(obj)] = _weak.ref(obj)
+                    except TypeError:
+                        refs[id(obj)] = False
                 if init:
                     unit.sites.setdefault(code, set()).add(site)
 
@@ -1838,17 +1857,19 @@ class _OutArguments:
         # wrapper: the function is the one whose code ran.
         return next((c for c in candidates(fn) if c.__code__ is code), None) if fn is not None else None
 
-    def _bound(self) -> dict[str, dict[str, set[int]]]:
-        """``qualname_of(fn) -> {parameter: ids}`` for each function the
-        trace recorded binding attributes of its parameters."""
+    def _bound(self) -> dict[str, tuple[dict[str, set[int]], dict[str, dict[int, Any]]]]:
+        """``qualname_of(fn) -> ({parameter: ids}, {parameter: {id: weak
+        reference}})`` for each function the trace recorded binding
+        attributes of its parameters."""
         if self._binders is None:
             from ..analysis.helper_code import qualname_of
 
             self._binders = {}
+            targets = getattr(self.unit, "attr_targets", {})
             for code, params in getattr(self.unit, "attr_params", {}).items():
                 fn = self._function_of(code)
                 if fn is not None:
-                    self._binders[qualname_of(fn)] = params
+                    self._binders[qualname_of(fn)] = (params, targets.get(code, {}))
         return self._binders
 
     def excuses(self, issue: Any) -> bool:
@@ -1856,12 +1877,20 @@ class _OutArguments:
 
         if self.unit is None:
             return False
-        if self.owners:
-            param = attribute_bound_parameter(issue)
-            if param is not None:
-                held = self._bound().get(issue.where, {}).get(param)
-                if held and held <= self.owners:
-                    return True
+        param = attribute_bound_parameter(issue)
+        if param is not None:
+            params, targets = self._bound().get(issue.where, ({}, {}))
+            held = params.get(param)
+            if held and self.owners and held <= self.owners:
+                return True
+            # Every object it was bound on is gone (a clone the call made
+            # and dropped, ``clone(est).fit(X)``): nothing after the call
+            # can read what the binding set, so a hit skips nothing. One
+            # still alive (returned, stored, on a cycle not collected yet)
+            # or one no weak reference reaches keeps the refusal.
+            refs = targets.get(param)
+            if held and refs and len(refs) >= len(held) and all(ref and ref() is None for ref in refs.values()):
+                return True
         param = mutated_parameter(issue)
         if param is not None:
             return self._excused(issue.where, param)
@@ -1965,11 +1994,17 @@ def folded_codes(folded: Any) -> set[types.CodeType] | None:
 
     out: set[types.CodeType] = set()
     for owner, codes in list(folded.owners.values()):
-        out.update(codes)
-        if isinstance(owner, type):
-            for base in owner.__mro__[1:]:
-                if base is not object and is_user_code_object(base):
-                    out.update(code_objects_of(base))
+        if not isinstance(owner, type):
+            out.update(codes)
+            continue
+        # A method a library's decorator wrapped is the wrapper's code
+        # here, not the method's below it: what the method's helpers do
+        # (an attribute bound on a global's object) is judged by the
+        # strict check, which a method accepted here would skip.
+        out.update(set(codes) & set(code_objects_of(owner, follow_wrapped=False)))
+        for base in owner.__mro__[1:]:
+            if base is not object and is_user_code_object(base):
+                out.update(code_objects_of(base, follow_wrapped=False))
     return out
 
 
