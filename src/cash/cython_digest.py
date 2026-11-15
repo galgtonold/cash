@@ -21,7 +21,9 @@ function is keyed by what it can reach in it instead
 - every ``.pxd`` / ``.pxi`` the module uses (its own ``.pxd``, a local
   ``cimport``, an ``include``), and the ``.pxd`` of a library it cimports;
 - the build configuration (``setup.py``, ``setup.cfg``, ``pyproject.toml``)
-  next to the package.
+  next to the package, in a canonical form without the metadata that
+  cannot change what is compiled (`canonical_build_config`): a version
+  bump does not move the key of every helper.
 - for each local module it cimports (a ``cdef`` function called through
   its ``.pxd`` runs from THAT module's binary): the blocks the names in use
   reach in its ``.pyx``, by the same rules and through its own cimports, or
@@ -32,7 +34,8 @@ the modules it cimports for the same reason.
 
 Blocks and names come from Cython's own parser and tokenizer; a block is
 keyed by its token stream, so a comment, a blank line or a line shift does
-not move it.
+not move it. Line endings are made ``\n`` before tokenizing, as Cython's
+own reader does, so a CRLF checkout keys like an LF one.
 
 ``None`` -- the caller keeps the whole-binary digest -- whenever the parts
 cannot be trusted to be what the binary holds: no Cython, no ``.pyx``, a
@@ -59,8 +62,10 @@ binary's content digest, the Cython version, the Python and its
 build configuration); and the answer of every check for a file that may or
 may not be there (a cimport's candidates, a ``meson.build``). A later process
 uses the record only when all of them are the same now -- each file is read
-and digested again, never trusted by its timestamp -- and then never imports
-the Cython compiler. The checks that do not depend on content (a keyed
+and digested again (a build configuration file in its canonical form),
+never trusted by its timestamp -- and then never imports the Cython
+compiler. An analysis that failed for any reason but a missing file is
+stored as a fallback too, so it is not paid again in every process. The checks that do not depend on content (a keyed
 file newer than the binary, every function of the binary where the
 analysis places it) run every time.
 """
@@ -83,7 +88,7 @@ from typing import Any
 from ._user_attrs import module_file
 from .tracking.tracker_context import untracked
 
-__all__ = ["cimported_binaries_digest", "cython_function_digest"]
+__all__ = ["canonical_build_config", "cimported_binaries_digest", "cython_function_digest"]
 
 _CYFUNCTION_TYPES = frozenset({"cython_function_or_method", "fused_cython_function"})
 
@@ -114,6 +119,47 @@ _CONFIG_FLAG_WORDS = tuple(sorted({w for a in _FLAG_ARGUMENTS for w in (a, a.rep
 #: header, ``setup.py``), and change only with it -- numpy's
 #: ``NPY_NO_DEPRECATED_API``, say, which hdbscan sets in every module.
 _HARMLESS_DISTUTILS = frozenset({"language", "include_dirs", "define_macros", "undef_macros"})
+
+#: ``setup()`` keywords (and ``setup.cfg`` ``[metadata]`` keys) that describe
+#: the distribution and cannot change what is compiled. Only the keyword of
+#: a call named ``setup`` is dropped: a value it shares with anything else
+#: (a version passed to ``define_macros`` too) stays keyed there.
+_SETUP_METADATA = frozenset(
+    {
+        "version",
+        "description",
+        "long_description",
+        "long_description_content_type",
+        "author",
+        "author_email",
+        "maintainer",
+        "maintainer_email",
+        "url",
+        "project_urls",
+        "license",
+        "classifiers",
+        "keywords",
+        "platforms",
+    }
+)
+
+#: PEP 621 ``[project]`` keys that are metadata only. ``name``,
+#: ``requires-python``, the dependencies and ``dynamic`` stay keyed, as do
+#: ``[build-system]`` and every ``[tool.*]`` table.
+_PROJECT_METADATA = frozenset(
+    {
+        "version",
+        "description",
+        "readme",
+        "authors",
+        "maintainers",
+        "license",
+        "license-files",
+        "keywords",
+        "classifiers",
+        "urls",
+    }
+)
 
 
 class _Fallback(Exception):
@@ -149,7 +195,7 @@ class _Module:
 
 
 #: The layout of a stored analysis; a change makes every older one a miss.
-_STORE_FORMAT = 1
+_STORE_FORMAT = 2
 _STORE_KIND = f"cython-module-v{_STORE_FORMAT}"
 
 
@@ -186,6 +232,93 @@ def _read(path: str) -> bytes:
     if _RECORDING:
         _RECORDING[-1].files[path] = hashlib.sha256(data).hexdigest()
     return data
+
+
+#: The prefix of a recorded digest taken of a file's canonical build
+#: configuration form rather than of its bytes.
+_CONFIG_DIGEST = "config:"
+
+
+def _config_digest(path: str, data: bytes) -> str:
+    return _CONFIG_DIGEST + hashlib.sha256(canonical_build_config(path, data)).hexdigest()
+
+
+def _read_config(path: str) -> bytes:
+    """The canonical form (`canonical_build_config`) of the build
+    configuration file *path*, recorded by its digest."""
+    with open(path, "rb") as fh:
+        data = fh.read()
+    form = canonical_build_config(path, data)
+    if _RECORDING:
+        _RECORDING[-1].files[path] = _CONFIG_DIGEST + hashlib.sha256(form).hexdigest()
+    return form
+
+
+def canonical_build_config(path: str, data: bytes) -> bytes:
+    """*data*, the bytes of the build configuration file *path*, without
+    what cannot change the compiled result: the distribution metadata
+    (version, description, authors, classifiers, ...) of ``pyproject.toml``'s
+    ``[project]``, of ``setup.cfg``'s ``[metadata]`` and of the keywords of
+    a ``setup(...)`` call in ``setup.py``, and the comments and layout of
+    each. Everything else stays. A file that does not parse is its bytes."""
+    name = os.path.basename(path)
+    try:
+        if name == "pyproject.toml":
+            return _canonical_pyproject(data)
+        if name == "setup.cfg":
+            return _canonical_setup_cfg(data)
+        if name == "setup.py":
+            return _canonical_setup_py(data)
+    except Exception:  # noqa: BLE001 - what does not parse is keyed by its bytes
+        pass
+    return data
+
+
+def _canonical_pyproject(data: bytes) -> bytes:
+    if sys.version_info >= (3, 11):
+        import tomllib
+    else:  # cash depends on tomli there
+        import tomli as tomllib
+
+    doc = tomllib.loads(data.decode("utf-8"))
+    project = doc.get("project")
+    if isinstance(project, dict):
+        doc["project"] = {k: v for k, v in project.items() if k not in _PROJECT_METADATA}
+    return b"toml:" + json.dumps(doc, sort_keys=True, default=repr).encode("utf-8")
+
+
+def _canonical_setup_cfg(data: bytes) -> bytes:
+    import configparser
+
+    parser = configparser.RawConfigParser(strict=True, delimiters=("=", ":"))
+    parser.optionxform = str  # type: ignore[assignment,method-assign]
+    parser.read_string(data.decode("utf-8"))
+    doc = {}
+    for section in parser.sections():
+        items = dict(parser.items(section, raw=True))
+        if section == "metadata":
+            items = {k: v for k, v in items.items() if k.replace("-", "_").lower() not in _SETUP_METADATA}
+        doc[section] = items
+    return b"cfg:" + json.dumps(doc, sort_keys=True).encode("utf-8")
+
+
+def _canonical_setup_py(data: bytes) -> bytes:
+    tree = ast.parse(data)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else ""
+        if name == "setup":
+            node.keywords = [k for k in node.keywords if k.arg not in _SETUP_METADATA]
+    options = {"show_empty": True} if sys.version_info >= (3, 13) else {}
+    return b"py:" + ast.dump(tree, annotate_fields=True, include_attributes=False, **options).encode("utf-8")
+
+
+def _source_text(data: bytes) -> str:
+    """*data* decoded, with ``\r\n`` and ``\r`` made ``\n`` as Cython's
+    own reader makes them: its scanner refuses a bare ``\r``."""
+    return data.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
 
 
 #: binary path -> (the module loaded from it, its analysis or None).
@@ -351,9 +484,31 @@ def _analyse_recorded(
         analysis = _analyse(module, binary, co_filename, pyx)
     except _Fallback:
         analysis = None
+    except OSError:
+        # A file that could not be read is not among the recorded inputs,
+        # so a stored answer could outlive its coming back.
+        raise
+    except Exception as e:  # noqa: BLE001 - a parse failure, stored as a fallback
+        # The same inputs fail the same way: stored, so that every process
+        # does not pay for it again. A file the parser read on its own (an
+        # include) is recorded where the error names it.
+        _record_error_file(e, inputs)
+        analysis = None
     finally:
         _RECORDING.pop()
     return analysis, inputs
+
+
+def _record_error_file(error: BaseException, inputs: _Inputs) -> None:
+    position = getattr(error, "position", None)
+    source = position[0] if isinstance(position, tuple) and position else None
+    path = getattr(source, "filename", None)
+    if isinstance(path, str) and path not in inputs.files:
+        try:
+            with open(path, "rb") as fh:
+                inputs.files[path] = hashlib.sha256(fh.read()).hexdigest()
+        except OSError:
+            pass
 
 
 def _inputs_unchanged(stored: dict) -> bool:
@@ -363,8 +518,12 @@ def _inputs_unchanged(stored: dict) -> bool:
         for path, digest in stored["files"]:
             try:
                 with open(path, "rb") as fh:
-                    if hashlib.sha256(fh.read()).hexdigest() != digest:
+                    data = fh.read()
+                if str(digest).startswith(_CONFIG_DIGEST):
+                    if _config_digest(path, data) != digest:
                         return False
+                elif hashlib.sha256(data).hexdigest() != digest:
+                    return False
             except OSError:
                 return False
         for kind, path, found in stored["probes"]:
@@ -549,7 +708,7 @@ def _whole_cimports(module: types.ModuleType, binary: str, co_filename: str, vis
             continue
         done.add(path)
         with open(path, "rb") as fh:
-            toks = _tokens(path, fh.read().decode("utf-8"))
+            toks = _tokens(path, _source_text(fh.read()))
         for i, (sy, _text, _line) in enumerate(toks):
             if sy == "include":
                 follows = [t for s_, t, _l in toks[i + 1 : i + 4] if s_ == "CHARS"]
@@ -655,7 +814,7 @@ def _analyse(module: types.ModuleType, binary: str, co_filename: str, pyx: str |
         raise _Fallback("no Cython") from e
     if pyx is None:
         pyx = _find_pyx(module, binary, co_filename)
-    pyx_text = _read(pyx).decode("utf-8")
+    pyx_text = _source_text(_read(pyx))
     distutils = _refuse_distutils_settings(pyx_text)
     tree = _parse(module.__name__, pyx)
     stats = list(_top_level(tree.body))
@@ -666,7 +825,7 @@ def _analyse(module: types.ModuleType, binary: str, co_filename: str, pyx: str |
             files.append(path)
     texts = {pyx: pyx_text}
     for path in files[1:]:
-        texts[path] = _read(path).decode("utf-8")
+        texts[path] = _source_text(_read(path))
     tokens = {path: _tokens(path, texts[path]) for path in files}
     headers: list[str] = []
     for path in files:
@@ -701,7 +860,9 @@ def _analyse(module: types.ModuleType, binary: str, co_filename: str, pyx: str |
     pxds = _used_pxds(module.__name__, pyx, tree, files, root, headers)
     keyed = [*files, *configs, *(p for p, local in pxds if local)]
     file_parts = []
-    for path in [*configs, *(p for p, _ in pxds), *sorted(set(headers))]:
+    for path in configs:
+        file_parts.append(f"{_label(path, root)}={hashlib.sha256(_read_config(path)).hexdigest()}")
+    for path in [*(p for p, _ in pxds), *sorted(set(headers))]:
         digest = hashlib.sha256(_read(path)).hexdigest()
         file_parts.append(f"{_label(path, root)}={digest}")
     analysis = _Module(
@@ -781,9 +942,11 @@ def _node_path(node: Any) -> str:
 
 
 def _tokens(path: str, text: str) -> list[tuple[str, str, int]]:
-    """``(kind, text, line)`` for every token of *text*, by Cython's scanner."""
+    """``(kind, text, line)`` for every token of *text*, by Cython's scanner.
+    Line endings are made ``\n`` first: the scanner refuses a ``\r``."""
     from io import StringIO
 
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
     from Cython.Compiler.Scanning import PyrexScanner, StringSourceDescriptor
     from Cython.Compiler.TreeFragment import StringParseContext
 
@@ -961,10 +1124,16 @@ def _build_config(folder: str) -> tuple[str, list[str]]:
             raise _Fallback("no build configuration")
         folder = parent
     for path in configs:
-        text = _read(path).decode("utf-8", "replace")
+        # Recorded by its canonical form, as it is keyed.
+        form = _read_config(path)
         if path.endswith("setup.py"):
-            _refuse_setup_flags(text)
-        elif any(word in text for word in _CONFIG_FLAG_WORDS):
+            with open(path, "rb") as fh:
+                _refuse_setup_flags(fh.read().decode("utf-8", "replace"))
+            continue
+        # The canonical form: a word in a description or a classifier is
+        # not a flag.
+        text = form.decode("utf-8", "replace")
+        if any(word in text for word in _CONFIG_FLAG_WORDS):
             raise _Fallback(f"flags or sources in {path}")
     return folder, configs
 
@@ -1019,7 +1188,7 @@ def _used_pxds(
         found[path] = local
         if not local:
             continue
-        toks = _tokens(path, _read(path).decode("utf-8"))
+        toks = _tokens(path, _source_text(_read(path)))
         headers.extend(_extern_headers(toks, path))
         if any(sy == "include" for sy, _t, _l in toks):
             raise _Fallback(f"include in {path}")

@@ -296,3 +296,178 @@ def test_a_stored_analysis_is_not_used_when_a_pxd_appears(cython_compiler, tmp_p
     os.utime(pxd, (past, past))
     assert _run(proj) == ("7", True), "a new .pxd was not keyed"
     assert _run(proj) == ("7", False)
+
+
+# -- CRLF sources --------------------------------------------------------------
+
+
+def _crlf(text):
+    return text.replace("\n", "\r\n").encode("utf-8")
+
+
+def _project_crlf(tmp_path, pyx=PYX, setup=SETUP):
+    """`_project` with every source written with CRLF line endings, as a
+    Windows checkout leaves them."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "fastops.pyx").write_bytes(_crlf(pyx))
+    (proj / "setup.py").write_bytes(_crlf(setup))
+    (proj / "job.py").write_bytes(_crlf(JOB_COMPILER))
+    _build(proj)
+    return proj
+
+
+def _edit_crlf(proj, old, new, name="fastops.pyx"):
+    path = proj / name
+    data = path.read_bytes()
+    assert _crlf(old) in data
+    path.write_bytes(data.replace(_crlf(old), _crlf(new)))
+    _build(proj)
+
+
+def test_a_crlf_pyx_keeps_the_per_function_key(cython_compiler, tmp_path):
+    """Cython's scanner refuses a ``\\r``, so a CRLF ``.pyx`` fell back to
+    the whole binary in every process: an edit to another function re-ran
+    ``f``. Line endings are made ``\\n`` first, as Cython's reader does."""
+    proj = _project_crlf(tmp_path)
+    assert _run_compiler(proj)[:2] == ("7", True)
+    _run_compiler(proj)
+    assert _run_compiler(proj) == ("7", False, False), "a warm process parsed the CRLF .pyx again"
+    _edit_crlf(proj, "return x - 1", "return x - 2")
+    assert _run_compiler(proj)[:2] == ("7", False), "an edit to a function f never reaches re-ran it"
+    _edit_crlf(proj, "return h(x) + 1", "return h(x) + 2")
+    assert _run_compiler(proj)[:2] == ("8", True), "an edit to f was served the old result"
+
+
+def test_lf_and_crlf_of_the_same_source_key_alike(cython_compiler, tmp_path):
+    """Only the line endings differ, so the key does not move: a CRLF
+    checkout of a project hits what an LF one stored."""
+    proj = _project(tmp_path)
+    assert _run(proj) == ("7", True)
+    for name in ("fastops.pyx", "setup.py"):
+        path = proj / name
+        path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+    _build(proj)
+    assert _run(proj) == ("7", False), "the CRLF form of the same source moved the key"
+
+
+# -- the build configuration's metadata ------------------------------------------
+
+SETUP_MACRO = """\
+from setuptools import Extension, setup
+from Cython.Build import cythonize
+
+LEVEL = "1"
+setup(
+    name="fastops",
+    version="0.8.40",
+    description="fast ops",
+    ext_modules=cythonize(
+        [Extension("fastops", ["fastops.pyx"], define_macros=[("LEVEL", LEVEL)])],
+        language_level=3,
+        quiet=True,
+    ),
+)
+"""
+
+
+def test_a_version_bump_hits_and_a_macro_change_misses(cython_compiler, tmp_path):
+    """The build configuration is keyed without its metadata: a version
+    bump in ``setup()`` re-ran every Cython helper of the package. What can
+    change the compiled result -- a macro here -- still misses."""
+    proj = _project(tmp_path, setup=SETUP_MACRO)
+    assert _run(proj) == ("7", True)
+    assert _run(proj) == ("7", False)
+    _edit(
+        proj,
+        'version="0.8.40",\n    description="fast ops"',
+        'version="0.8.41",\n    description="faster ops"',
+        "setup.py",
+    )
+    assert _run(proj) == ("7", False), "a version-only bump re-ran the Cython helper"
+    _edit(proj, 'LEVEL = "1"', 'LEVEL = "2"', "setup.py")
+    assert _run(proj) == ("7", True), "a define_macros change was served the old result"
+
+
+def test_a_version_shared_with_a_macro_still_misses(cython_compiler, tmp_path):
+    """Only the ``setup()`` keyword is dropped: a version also passed to
+    ``define_macros`` is keyed there."""
+    setup = SETUP_MACRO.replace('LEVEL = "1"', 'LEVEL = "0.8.40"').replace('version="0.8.40"', "version=LEVEL")
+    proj = _project(tmp_path, setup=setup)
+    assert _run(proj) == ("7", True)
+    _edit(proj, 'LEVEL = "0.8.40"', 'LEVEL = "0.8.41"', "setup.py")
+    assert _run(proj) == ("7", True), "a version that is also a macro was served the old result"
+
+
+def _canonical(name, text):
+    from cash.cython_digest import canonical_build_config
+
+    return canonical_build_config(name, text.encode("utf-8"))
+
+
+def test_the_canonical_pyproject_drops_only_metadata():
+    base = '[project]\nname = "p"\nversion = "1"\ndescription = "d"\ndependencies = ["numpy"]\n'
+    base += '[build-system]\nrequires = ["cython"]\n[tool.x]\nflag = 1\n'
+    same = base.replace('version = "1"', 'version = "2"').replace('"d"', '"e"') + "# a comment\n"
+    assert _canonical("pyproject.toml", base) == _canonical("pyproject.toml", same)
+    for old, new in (('"numpy"', '"scipy"'), ('"cython"', '"cython<3"'), ("flag = 1", "flag = 2"), ('"p"', '"q"')):
+        assert _canonical("pyproject.toml", base) != _canonical("pyproject.toml", base.replace(old, new)), new
+    assert _canonical("pyproject.toml", "[[broken") == b"[[broken"
+
+
+def test_the_canonical_setup_cfg_drops_only_metadata():
+    base = "[metadata]\nname = p\nversion = 1\nlong_description = x\n[options]\nzip_safe = False\n"
+    same = base.replace("version = 1", "version = 2").replace("= x", "= y")
+    assert _canonical("setup.cfg", base) == _canonical("setup.cfg", same)
+    assert _canonical("setup.cfg", base) != _canonical("setup.cfg", base.replace("zip_safe = False", "zip_safe = True"))
+    assert _canonical("setup.cfg", base) != _canonical("setup.cfg", base.replace("name = p", "name = q"))
+
+
+def test_the_canonical_setup_py_drops_only_setup_metadata_keywords():
+    base = 'from setuptools import setup\nV = "1"\nsetup(name="p", version="1", ext_modules=m(V))\n'
+    same = base.replace('version="1"', 'version="2"').replace("setup(", "# c\nsetup(\n    ")
+    assert _canonical("setup.py", base) == _canonical("setup.py", same)
+    assert _canonical("setup.py", base) != _canonical("setup.py", base.replace('V = "1"', 'V = "2"'))
+    other = base.replace("setup(name", "other(name")
+    assert _canonical("setup.py", other) != _canonical("setup.py", other.replace('version="1"', 'version="2"'))
+    assert _canonical("setup.py", "def (") == b"def ("
+
+
+def test_a_failed_analysis_is_stored_and_an_edit_invalidates_it(tmp_path, monkeypatch):
+    """An analysis that fails (not a deliberate fallback) is an answer of
+    the files it read, stored so each process does not pay for it again;
+    an edit to one of them makes it stale."""
+    from cash import cython_digest
+
+    pyx = tmp_path / "m.pyx"
+    pyx.write_bytes(b"def f():\n    pass\n")
+
+    def failing(module, binary, co_filename, pyx_path=None):
+        cython_digest._read(str(pyx))
+        raise ValueError("parse failure")
+
+    monkeypatch.setattr(cython_digest, "_analyse", failing)
+    analysis, inputs = cython_digest._analyse_recorded(None, "", "", None)
+    assert analysis is None
+    stored = {"files": sorted(inputs.files.items()), "probes": []}
+    assert cython_digest._inputs_unchanged(stored)
+    pyx.write_bytes(b"def f():\n    return 1\n")
+    assert not cython_digest._inputs_unchanged(stored)
+
+
+def test_a_config_recorded_by_its_canonical_form_survives_a_version_bump(tmp_path):
+    from cash import cython_digest
+
+    setup = tmp_path / "setup.py"
+    setup.write_text('from setuptools import setup\nsetup(name="p", version="1")\n', encoding="utf-8")
+    inputs = cython_digest._Inputs()
+    cython_digest._RECORDING.append(inputs)
+    try:
+        cython_digest._read_config(str(setup))
+    finally:
+        cython_digest._RECORDING.pop()
+    stored = {"files": sorted(inputs.files.items()), "probes": []}
+    setup.write_text('from setuptools import setup\nsetup(name="p", version="2")\n', encoding="utf-8")
+    assert cython_digest._inputs_unchanged(stored)
+    setup.write_text('from setuptools import setup\nsetup(name="q", version="2")\n', encoding="utf-8")
+    assert not cython_digest._inputs_unchanged(stored)
