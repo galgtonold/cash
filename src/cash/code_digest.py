@@ -32,6 +32,7 @@ __all__ = [
     "callable_identity",
     "compiled_identity",
     "extension_file_digest",
+    "loaded_extension_digest",
     "module_identity",
     "own_source_digest",
     "source_digest",
@@ -210,10 +211,21 @@ def extension_file_digest(fn: object) -> str | None:
     if not is_user_path(path):
         return None
     try:
-        with untracked(), open(path, "rb") as fh:
-            digest = extension_bytes_digest(fh.read())
+        return loaded_extension_digest(module, path)
     except OSError:
         return None
+
+
+def loaded_extension_digest(module: types.ModuleType, path: str) -> str:
+    """`extension_bytes_digest` of the file *module* was loaded from, at
+    *path*: read once per loaded module, for this identity and the Cython
+    keys alike (`cash.cython_digest`), which read the same binaries. Raises
+    `OSError` when the file cannot be read."""
+    cached = _EXTENSION_DIGESTS.get(path)
+    if cached is not None and cached[0] is module:
+        return cached[1]
+    with untracked(), open(path, "rb") as fh:
+        digest = extension_bytes_digest(fh.read())
     _EXTENSION_DIGESTS[path] = (module, digest)
     return digest
 
