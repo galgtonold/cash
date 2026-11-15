@@ -1443,10 +1443,10 @@ def _unread_object(v: Any) -> bool:
     looks only into exact builtin containers and leaves, so no change to
     *v* makes it plain), and not a module, class or callable, whose name a
     key reads."""
-    from .key_values import _PLAIN_LEAVES
+    from ..value_types import IMMUTABLE_LEAF_TYPES
 
     t = type(v)
-    if t in _PLAIN_LEAVES or t in (tuple, frozenset, list, set, dict):
+    if t in IMMUTABLE_LEAF_TYPES or t in (tuple, frozenset, list, set, dict):
         return False
     return not (isinstance(v, (type, types.ModuleType)) or callable(v))
 

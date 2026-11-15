@@ -37,11 +37,10 @@ from __future__ import annotations
 
 import abc
 import os
-import weakref
 from collections.abc import Callable
 from typing import Any
 
-from .. import _native
+from .. import _native, _weak
 from .._memo import LruMemo
 from . import hit_memo, state_memo
 
@@ -88,7 +87,7 @@ class _Proof:
     __slots__ = ("_cls", "backoff", "cells", "family", "gen", "served", "skipped", "stamp", "tags", "world")
 
     def __init__(self, cls: type) -> None:
-        self._cls = weakref.ref(cls)
+        self._cls = _weak.ref(cls)
         self.world = -1
         self.gen = -1
         self.stamp = 0
@@ -147,12 +146,18 @@ class _Proof:
 _proofs: LruMemo[tuple, _Proof] = LruMemo(_PROOFS)
 
 
-class _WeakType(weakref.ref):
+class _WeakType:
     """A class a watch names, held weakly: a memo of the process must keep
     no class alive (one defined anew under its name would stay among its
     base's ``__subclasses__``)."""
 
-    __slots__ = ()
+    __slots__ = ("_ref",)
+
+    def __init__(self, cls: type) -> None:
+        self._ref = _weak.ref(cls)
+
+    def __call__(self) -> type | None:
+        return self._ref()
 
 
 def _weakened(flat: tuple) -> tuple:
