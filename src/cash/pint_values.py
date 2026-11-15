@@ -14,7 +14,9 @@ index of a context's relations) that grow as it is used and say nothing
 the definitions do not. A context transformation or a preprocessor written
 in Python (MetPy adds three preprocessors to the application registry) is
 keyed by its compiled body and every value it can read: its defaults,
-cells and the globals its code names. One that reads what has no value
+cells and the globals its code names; a C method bound to an object
+(xclim's ``partial(re.compile(...).sub, "**")``) by that object's value, a
+compiled pattern by its pattern and flags. One that reads what has no value
 form -- a class of the user's, an object known only by its address --
 makes the registry unkeyable: the call runs uncached, with a warning
 (`KEY-UNHASHABLE-ARG`), never under a key that leaves it out.
@@ -329,6 +331,18 @@ def _held_form(value: Any, where: str, walking: set[int]) -> Any:
         )
     if isinstance(value, types.ModuleType):
         return ("module", value.__name__)
+    bound = getattr(value, "__self__", None) if isinstance(value, types.BuiltinMethodType) else None
+    if bound is not None and not isinstance(bound, types.ModuleType):
+        # A C method bound to an object (``re.compile(...).sub``): what it
+        # does is its name on that object's built-in class, read from the
+        # object's value -- a compiled pattern by its pattern and flags.
+        if id(bound) in walking:
+            raise TypeError(f"the pint registry's {where} reads a method bound to an object that contains it")
+        walking.add(id(bound))
+        try:
+            return ("bound", _held_form(bound, where, walking), value.__name__)
+        finally:
+            walking.discard(id(bound))
     if isinstance(value, (type, types.BuiltinFunctionType, types.MethodDescriptorType, types.WrapperDescriptorType)):
         owner = getattr(value, "__module__", None) or getattr(getattr(value, "__objclass__", None), "__module__", None)
         if owner is None or is_user_code_module(sys.modules.get(owner)):

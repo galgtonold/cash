@@ -229,3 +229,47 @@ def test_a_metpy_quantity_hits(tmp_path):
         assert f(units.Quantity(np.array([1.5, 2.0]), "m")).tolist() == [1.5, 2.0]
     assert f.cache_info()["hits"] == 1
     assert _codes(f) == []
+
+
+def _registry_with_pattern_preprocessor(pattern):
+    """A registry with the preprocessor xclim adds: a compiled pattern's
+    ``sub`` method, bound and partially applied."""
+    import functools
+    import re
+
+    ureg = pint.UnitRegistry()
+    ureg.preprocessors.append(functools.partial(re.compile(pattern).sub, "**"))
+    return ureg
+
+
+def test_a_bound_pattern_preprocessor_keys_by_its_pattern(tmp_path):
+    first = _registry_with_pattern_preprocessor(r"(?<=[A-Za-z])(?![A-Za-z])(?<![0-9\-][eE])(?<![0-9\-])(?=[0-9\-])")
+    same = _registry_with_pattern_preprocessor(r"(?<=[A-Za-z])(?![A-Za-z])(?<![0-9\-][eE])(?<![0-9\-])(?=[0-9\-])")
+    other = _registry_with_pattern_preprocessor(r"(?<=[A-Za-z])(?=[0-9])")
+    f = _cache(tmp_path).cache(_in_meters)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert f(first.Quantity(3.0, "km")) == 3000.0
+        assert f(same.Quantity(3.0, "km")) == 3000.0
+        assert f(other.Quantity(3.0, "km")) == 3000.0
+    info = f.cache_info()
+    assert (info["hits"], info["misses"]) == (1, 2)
+    assert _codes(f) == []
+
+
+def test_an_xclim_quantity_hits_and_a_changed_one_misses(tmp_path):
+    units = pytest.importorskip("xclim.core.units").units
+    f = _cache(tmp_path).cache(_in_meters)
+    calls = [
+        units.Quantity(np.array([1.5, 2.0]), "km"),
+        units.Quantity(np.array([1.5, 2.0]), "km"),
+        units.Quantity(np.array([1.5, 3.0]), "km"),
+        units.Quantity(np.array([1.5, 2.0]), "m"),
+    ]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        got = [f(q).tolist() for q in calls]
+    assert got == [_in_meters(q).tolist() for q in calls]
+    info = f.cache_info()
+    assert (info["hits"], info["misses"]) == (1, 3)
+    assert _codes(f) == []
