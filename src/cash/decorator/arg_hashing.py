@@ -1176,6 +1176,35 @@ def content_only(active: bool = True):
         _CONTENT_ONLY.reset(token)
 
 
+#: ``{id(value): (value, digest)}`` of the content digests read while a
+#: `quiet_digests` window is open, or None outside one.
+_QUIET_DIGESTS: contextvars.ContextVar[dict | None] = contextvars.ContextVar("cash_quiet_digests", default=None)
+
+
+@contextlib.contextmanager
+def quiet_digests():
+    """Read each frame, array or table once while cash alone runs.
+
+    Opened around steps of one call that hash the same arguments more than
+    once with no user code between them: after the body, the arguments
+    with the attributes it bound put back (`attribute_replay`) and then as
+    the body left them (`PurityChecks.check_argument_mutation`). Nothing
+    writes into an array between those hashes, so the second reads the
+    digest the first took instead of every byte again: an estimator
+    holding 7,500 small arrays paid for each of them twice. Each value is
+    held while the window is open, so no other object takes its id. Never
+    open across a body or any other user code: an array the body writes
+    into must be read again."""
+    if _QUIET_DIGESTS.get() is not None:
+        yield
+        return
+    token = _QUIET_DIGESTS.set({})
+    try:
+        yield
+    finally:
+        _QUIET_DIGESTS.reset(token)
+
+
 def _hooked(stand_in: Any) -> Any:
     """*stand_in*, a hook's answer for a value inside an argument, noted in
     `CONTENT_KEYED`: no walked argument of this call counts as keyed by its
@@ -2266,13 +2295,22 @@ class ArgHasher:
         """`builtin_hash` for a frame, array or table inside an argument,
         through the copy-on-write memo when it is a pandas frame: an
         unchanged frame inside an object or a list is checked, not read
-        again (``ContentHashing.digest`` of the key walk)."""
+        again (``ContentHashing.digest`` of the key walk). Inside a
+        `quiet_digests` window, a value read once is not read again."""
+        quiet = _QUIET_DIGESTS.get()
+        if quiet is not None:
+            held = quiet.get(id(value))
+            if held is not None and held[0] is value:
+                return held[1]
         if is_cow_pandas(value):
             digest = self._frame_memo_lookup(value)
-            if digest is not None:
-                return digest
-            return self._frame_memo.hash_frame(value)
-        return builtin_hash(value)
+            if digest is None:
+                digest = self._frame_memo.hash_frame(value)
+        else:
+            digest = builtin_hash(value)
+        if quiet is not None and digest is not None:
+            quiet[id(value)] = (value, digest)
+        return digest
 
     def plain_value_digest(self, value: Any) -> str | None:
         """``hash_payload((value,), {})`` for plain or JSON-like data

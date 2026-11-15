@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import threading
 import time
+import warnings
 
 import pytest
 
@@ -99,6 +100,36 @@ def test_a_call_refused_after_its_body_is_counted_apart(timed):
     assert times["not_stored.total"]["count"] == 1
     assert times["not_stored.post"]["total"] > 0
     assert not any(k.startswith("miss.") for k in times)
+
+
+class _Slotted:
+    __slots__ = ("log",)
+
+    def __init__(self):
+        self.log = []
+
+
+def test_a_call_run_by_its_refusal_verdict_counts_its_body_as_body(timed):
+    """A call an earlier refusal runs uncached without a key
+    (`refusal_verdicts`) still has its body timed as ``body``: counted with
+    the wrapper, the body of every such call was reported as cash's own."""
+
+    @timed.cache
+    def fill(box):
+        box.log.append(1)  # a hit cannot put this back: slots
+        time.sleep(0.02)
+        return len(box.log)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        for _ in range(5):
+            fill(_Slotted())
+
+    uncached = _phases(fill.cache_info(), "uncached")
+    assert uncached["total"]["count"] >= 2
+    assert uncached["body"]["count"] == uncached["total"]["count"]
+    assert uncached["body"]["total"] >= 0.02 * uncached["total"]["count"]
+    assert uncached["cash"]["total"] < uncached["body"]["total"]
 
 
 def test_cache_clear_forgets_the_phase_times(timed):

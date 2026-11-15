@@ -65,6 +65,7 @@ from .arg_hashing import (
     ContentKeyed,
     call_polars,
     content_only,
+    quiet_digests,
 )
 from .arg_key import keyed_arguments
 from .cache_metadata import CacheMetadata
@@ -1439,13 +1440,14 @@ class CallRunner:
         overhead_t0 = _perf_counter()
         if pt is not None:
             _phases.mark(pt, _phases.SETUP)
-            window = _phases.open_window(pt, _phases.KEY_OTHER)
         # Outside the key build, which turns any exception into "no key": an
         # exception from the body of an uncached call must propagate, not run
         # the body a second time.
         handed = claim_handed_digests()
         if self._verdicts is not None and not async_body and self._known_refusal(spec, call, handed):
             return call
+        if pt is not None:
+            window = _phases.open_window(pt, _phases.KEY_OTHER)
         # Before the key: a fast hit remembered from this call must not
         # outlive a change made while the key was built (`hit_memo`).
         epochs_before = hit_memo.epochs(spec, args, kwargs)
@@ -1627,7 +1629,14 @@ class CallRunner:
         refused = str(verdict.get("why") or "it changed its arguments in place")
         why = MissReason(MissKind.NOT_STORED, refused)
         note_unentered_body(func_name)
+        # Timed as the uncached call's body (`_run_uncached`): reported
+        # with the wrapper, the body of every such call counted as cash's.
+        pt = _phases.CURRENT.get() if _phases.ON else None
+        if pt is not None:
+            _phases.mark(pt, _phases.REPLAY)
         call.outcome = spec.func(*call.args, **call.kwargs)
+        if pt is not None:
+            _phases.mark(pt, _phases.BODY)
         self._calls.log(
             func_name,
             cache_hit=False,
@@ -2362,7 +2371,11 @@ class CallRunner:
         # A generator argument the body drew from is moved on again by a hit
         # (`replay_argument_carriers`), so that draw is not a mutation the
         # caller would lose: the check sees it where the call found it.
-        with carriers_put_back(run.arg_carriers_pre if run.arg_carriers_moved else []), call_polars(call.polars_args):
+        with (
+            carriers_put_back(run.arg_carriers_pre if run.arg_carriers_moved else []),
+            call_polars(call.polars_args),
+            quiet_digests(),
+        ):
             attrs = self.attribute_changes(spec, call, run)
             with content_only(call.by_content):
                 self._purity.check_argument_mutation(

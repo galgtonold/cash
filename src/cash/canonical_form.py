@@ -368,6 +368,56 @@ def _enter(value: Any, walk: _Walk) -> Any:
         stand_in = walk.hook(value)
         if stand_in is not NOT_HOOKED:
             return stand_in
+    if type(value) not in _NEVER_SPECIAL and type(value) is not numpy_ndarray():
+        # An array or a plain container is none of these: a key holding
+        # thousands of dicts of small arrays asked each one every question.
+        form = _special_form(value, walk)
+        if form is not _NOT_SPECIAL:
+            return form
+    family = walk.content.family(type(value))
+    if family is not None:
+        if family in _WRITABLE_FAMILIES:
+            # One array held twice changes in two places when written.
+            first = seen.get(id(value))
+            if first is not None:
+                return ("__cash_alias__", first[0])
+        digest = _content_digest(value, walk.content)
+        if digest is not None:
+            if family in _WRITABLE_FAMILIES:
+                seen[id(value)] = (len(seen), value)
+            return ("__cash_content__", family, digest)
+    whole = walk.whole.get(id(value))
+    if whole is not None:
+        # An object met before and left to pickle whole: the same form
+        # again, and pickle's memo writes it once. A column holding one
+        # bound method in each of 845,000 rows searched the method's
+        # frame for a set once per row, 224 s for one statement.
+        if whole[1]:
+            walk.left.append(value)  # type: ignore[union-attr]
+        return value
+    if id(value) in walk.stack:
+        raise CyclicValueError(f"a {type(value).__qualname__} that contains itself has no stable form to key on")
+    if isinstance(value, _MUTABLE_CONTAINERS):
+        first = seen.get(id(value))
+        if first is not None:
+            return ("__cash_alias__", first[0])
+        # The value is held, so its id cannot be reused by another
+        # container while the walk lasts.
+        seen[id(value)] = (len(seen), value)
+    return _Descend(_object_steps(value, walk))
+
+
+#: `_special_form`'s answer for a value that is none of its kinds.
+_NOT_SPECIAL = object()
+
+#: Exact types `_special_form` never claims.
+_NEVER_SPECIAL = frozenset({dict, list, tuple})
+
+
+def _special_form(value: Any, walk: _Walk) -> Any:
+    """`_enter`'s form for a pint value, a numpy number or time, a pandas
+    date or index, or `_NOT_SPECIAL`."""
+    seen = walk.seen
     pint = pint_kind(type(value))
     if pint is not None:
         return _pint_form(value, pint)
@@ -400,37 +450,7 @@ def _enter(value: Any, walk: _Walk) -> Any:
             if noted is not None:
                 noted[id(value)] = (value, digest)
             return ("__cash_index__", digest)
-    family = walk.content.family(type(value))
-    if family is not None:
-        if family in _WRITABLE_FAMILIES:
-            # One array held twice changes in two places when written.
-            first = seen.get(id(value))
-            if first is not None:
-                return ("__cash_alias__", first[0])
-        digest = _content_digest(value, walk.content)
-        if digest is not None:
-            if family in _WRITABLE_FAMILIES:
-                seen[id(value)] = (len(seen), value)
-            return ("__cash_content__", family, digest)
-    whole = walk.whole.get(id(value))
-    if whole is not None:
-        # An object met before and left to pickle whole: the same form
-        # again, and pickle's memo writes it once. A column holding one
-        # bound method in each of 845,000 rows searched the method's
-        # frame for a set once per row, 224 s for one statement.
-        if whole[1]:
-            walk.left.append(value)  # type: ignore[union-attr]
-        return value
-    if id(value) in walk.stack:
-        raise CyclicValueError(f"a {type(value).__qualname__} that contains itself has no stable form to key on")
-    if isinstance(value, _MUTABLE_CONTAINERS):
-        first = seen.get(id(value))
-        if first is not None:
-            return ("__cash_alias__", first[0])
-        # The value is held, so its id cannot be reused by another
-        # container while the walk lasts.
-        seen[id(value)] = (len(seen), value)
-    return _Descend(_object_steps(value, walk))
+    return _NOT_SPECIAL
 
 
 def _pint_form(value: Any, kind: str) -> Any:
@@ -870,6 +890,27 @@ def _numpy_times(numpy: Any) -> frozenset:
 
 
 _NUMPY_TIMES: tuple[Any, frozenset] = (None, frozenset())
+
+
+def numpy_ndarray() -> type | None:
+    """``numpy.ndarray`` when numpy is loaded (never imported here), else None."""
+    numpy = sys.modules.get("numpy")
+    known = _NDARRAY
+    if numpy is known[0]:
+        return known[1]
+    return _numpy_ndarray(numpy)
+
+
+def _numpy_ndarray(numpy: Any) -> type | None:
+    global _NDARRAY
+    found = getattr(numpy, "ndarray", None)
+    if not isinstance(found, type):  # no numpy, or one still importing
+        return None
+    _NDARRAY = (numpy, found)
+    return found
+
+
+_NDARRAY: tuple[Any, type | None] = (None, None)
 _DTYPE = operator.attrgetter("dtype")
 
 
@@ -1395,6 +1436,11 @@ def contains_set(value: Any, found: dict[int, Any] | None = None, clean: dict[in
         # str/int SUBCLASS can carry a ``__dict__`` holding a set and must
         # still be walked.
         if kind in CODELESS_PRIMS or (kind in WEAK_PROXY_TYPES and is_dead_proxy(node)):
+            continue
+        if kind is numpy_ndarray():
+            # Nothing below: no ``__dict__``, no slots, no native state
+            # looked into. Without this, an MRO walk per array, and an
+            # estimator holding 22,000 small arrays searched them all.
             continue
         if isinstance(node, (set, frozenset)) or (found is not None and id(node) in found):
             if found is not None:
