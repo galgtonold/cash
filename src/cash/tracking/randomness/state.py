@@ -303,12 +303,48 @@ def restore_object_rng_states(
             logger.debug("[RANDOMNESS] Failed to restore RNG state for %r: %s", name, e)
 
 
+#: The key of the state of a numpy ``Generator`` that keeps its stream in
+#: generators it holds, not in a bit generator of its own (`_held_states`).
+_HELD = "__cash_held_generators__"
+
+
 def _carrier_state(obj: object, kind: str) -> object:
     if kind == KIND_NP_GENERATOR:
-        return obj.bit_generator.state
+        try:
+            return obj.bit_generator.state
+        except AttributeError:
+            held = _held_states(obj)
+            if held is None:
+                raise
+            return held
     if kind == KIND_NP_RANDOMSTATE:
         return obj.get_state()
     return obj.getstate()
+
+
+def _held_states(obj: object) -> dict | None:
+    """The state of a ``Generator`` subclass with no bit generator of its
+    own, which hands every draw to the generators its attributes hold
+    (scanpy's legacy wrapper draws from the ``RandomState`` it keeps as
+    ``state``): ``{_HELD: {attribute: {"kind", "state"}}}``. Those are where
+    its stream is, so that state is put back and moved on as a plain
+    generator's would be. None when it holds none whose state can be read:
+    one holding only the global ``RandomState`` draws from the module
+    stream, which the module channel watches."""
+    attrs = getattr(obj, "__dict__", None)
+    if type(attrs) is not dict:
+        return None
+    held: dict[str, dict] = {}
+    for name, value in attrs.items():
+        kind = rng_carrier_kind(value) if value is not obj else None
+        if kind is None:
+            continue
+        try:
+            state = value.bit_generator.state if kind == KIND_NP_GENERATOR else _carrier_state(value, kind)
+        except (TypeError, ValueError, AttributeError, NotImplementedError):
+            return None
+        held[name] = {"kind": kind, "state": state}
+    return {_HELD: held} if held else None
 
 
 def capture_reachable_carrier_states(fn: object) -> list[tuple[object, object, tuple[str, str] | None]]:
@@ -395,7 +431,14 @@ def carrier_states_changed(before: list[tuple[object, object, tuple[str, str] | 
 
 
 def _set_carrier_state(obj: object, kind: str, state: object) -> None:
-    if kind == KIND_NP_GENERATOR:
+    if kind == KIND_NP_GENERATOR and type(state) is dict and _HELD in state:
+        attrs = getattr(obj, "__dict__", None) or {}
+        for name, entry in state[_HELD].items():
+            value = attrs.get(name)
+            if rng_carrier_kind(value) != entry["kind"]:
+                raise AttributeError(f"{name} no longer holds a generator")
+            _set_carrier_state(value, entry["kind"], entry["state"])
+    elif kind == KIND_NP_GENERATOR:
         obj.bit_generator.state = state
     elif kind == KIND_NP_RANDOMSTATE:
         obj.set_state(state)

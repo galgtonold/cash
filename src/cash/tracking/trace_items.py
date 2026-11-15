@@ -255,6 +255,10 @@ class _Digester:
         self.nodes = 0
         self.active: set[int] = set()
         self.types: set[int] = set()
+        #: Codes more than one function of a class being digested runs
+        #: (`_shared_codes`): which of them started with the cells a call
+        #: saw (`start_cells`) is not known, so each goes by its own.
+        self.shared: frozenset[types.CodeType] = frozenset()
 
     def feed(self, v: Any) -> None:
         self.nodes += 1
@@ -391,7 +395,7 @@ class _Digester:
         if fn.__kwdefaults__:
             self.feed(fn.__kwdefaults__)
         starts = getattr(_STARTS, "cells", None)
-        cells = starts.get(fn.__code__) if starts else None
+        cells = starts.get(fn.__code__) if starts and fn.__code__ not in self.shared else None
         if cells is None or len(cells) != len(fn.__closure__ or ()):
             cells = _cell_digests(fn.__closure__ or (), self)
         elif _AS_IT_IS in cells:
@@ -434,7 +438,7 @@ def _sub_digest(v: Any, within: _Digester | None) -> str | None:
     h = hashlib.blake2b(digest_size=12)
     d = _Digester(h)
     if within is not None:
-        d.nodes, d.active, d.types = within.nodes, within.active, within.types
+        d.nodes, d.active, d.types, d.shared = within.nodes, within.active, within.types, within.shared
     try:
         d.feed(v)
     except _Opaque:
@@ -529,11 +533,13 @@ def class_digest(cls: type, within: _Digester | None = None) -> str:
     if within is not None:
         d.types = within.types
         d.types.add(id(cls))
+        d.shared = within.shared
     h.update(",".join(f"{c.__module__}.{c.__qualname__}" for c in cls.__mro__).encode())
     try:
         attrs = sorted((k, v) for k, v in vars(cls).items() if k not in _CLASS_SKIP)
     except TypeError:
         attrs = [(k, v) for k, v in vars(cls).items() if k not in _CLASS_SKIP]
+    d.shared = d.shared | _shared_codes(attrs)
     leftovers = set_loop_leftovers(cls, tuple(k for k, v in attrs if isinstance(k, str) and not callable(v)))
     for name, value in attrs:
         h.update(b"\x00" + str(name).encode())
@@ -551,6 +557,21 @@ def class_digest(cls: type, within: _Digester | None = None) -> str:
 
 
 _MISSING = object()
+
+
+def _shared_codes(attrs: list) -> frozenset[types.CodeType]:
+    """The codes two or more of a class's functions run: wrappers a loop
+    made from one ``def`` and set on the class (a delegate per method of
+    another class, each closing over the name it forwards)."""
+    seen: set[types.CodeType] = set()
+    shared: set[types.CodeType] = set()
+    for _name, value in attrs:
+        fn = value.__func__ if isinstance(value, (staticmethod, classmethod)) else value
+        code = getattr(fn, "__code__", None) if type(fn) is types.FunctionType else None
+        if code is None or not fn.__closure__:
+            continue
+        (shared if code in seen else seen).add(code)
+    return frozenset(shared)
 
 
 def candidates(obj: Any) -> Iterable[types.FunctionType]:
