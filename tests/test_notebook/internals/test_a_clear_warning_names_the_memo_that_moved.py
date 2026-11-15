@@ -159,3 +159,30 @@ def test_a_memo_that_only_grew_beside_a_clear_cash_cannot_read_is_not_named():
     verdict = helper_memos.used(before, clears=True)
     assert isinstance(verdict, tuple), verdict
     assert "It may empty a helper memo or read" in verdict[1], verdict[1]
+
+
+def test_a_memo_defined_again_where_the_last_one_was_freed_is_watched():
+    """``del f`` and ``f`` defined again in the same namespace: the new
+    memo is often made at the freed one's address, so the namespace holds
+    a function of the same id as before. It is watched all the same, and
+    a statement clearing it names it."""
+    ns: dict = {}
+    for _ in range(4):
+        ns.clear()
+        ns.update(_three_alone())
+        before = helper_memos.watched(ns)
+        assert [where[-1] for where, *_ in before or ()] == ["third"]
+        exec("third.cache_clear(); third(1); third(2)", ns)
+        verdict = helper_memos.used(before, clears=True, ns=ns, site=("third.cache_clear()", None))
+        assert isinstance(verdict, tuple), verdict
+        assert "helper memo third " in verdict[1], verdict[1]
+        del before, verdict
+
+
+def _three_alone():
+    @functools.cache
+    def third(n):
+        return n + 1
+
+    third(1)
+    return {"third": third}

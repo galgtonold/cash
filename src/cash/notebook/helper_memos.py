@@ -254,22 +254,39 @@ def _module_memos() -> list[tuple[list[str], Any]]:
 _HOLDER_TYPES = frozenset(t for t in (types.FunctionType, _LRU_WRAPPER, staticmethod, classmethod) if t is not None)
 
 
-def _holders(ns: Mapping[str, Any]) -> tuple[int, ...]:
-    """The ids of the values in *ns* that can be or hold a memo (functions,
-    wrappers, classes): binding or rebinding one changes this, and nothing
-    else bound in the namespace can bring a memo in."""
+def _holder_values(ns: Mapping[str, Any]) -> list[Any]:
+    """The values in *ns* that can be or hold a memo (functions, wrappers,
+    classes): binding or rebinding one changes them, and nothing else bound
+    in the namespace can bring a memo in."""
     kinds = _HOLDER_TYPES
     # ``issubclass`` of the real type is what `instance_of` answers for
     # ``type`` (no object passes for a class by its ``__class__``), without
     # its per-value lookups: this runs over the whole namespace twice a
     # statement.
-    return tuple(id(v) for v in list(ns.values()) if (kind := type(v)) in kinds or issubclass(kind, type))
+    return [v for v in list(ns.values()) if (kind := type(v)) in kinds or issubclass(kind, type)]
+
+
+def _holders(ns: Mapping[str, Any]) -> tuple[int, ...]:
+    """The ids of `_holder_values`."""
+    return tuple(map(id, _holder_values(ns)))
+
+
+def _same_objects(kept: list[Any], values: list[Any]) -> bool:
+    """Whether *kept* (`_weak` of each value once) are still *values*,
+    object for object. Equal ids alone are not: a function freed with its
+    namespace, or unbound from it, leaves its id to the next one made
+    (``del f`` then ``@functools.cache def f`` again, or the next
+    namespace made at the old one's address), and the memos found then are
+    gone, so the new ones would not be watched."""
+    return len(kept) == len(values) and all(
+        (k() if type(k) is weakref.ReferenceType else k) is v for k, v in zip(kept, values)
+    )
 
 
 #: Bumped before each statement (`new_statement`).
 _statement = 0
 #: ``id of a namespace -> (its holders, its memos outside classes, its
-#: classes)`` and ``(statement, the user's modules then, their memos)``: a
+#: classes, its holders held weakly)`` and ``(statement, the user's modules then, their memos)``: a
 #: namespace is looked through again only when a function or class was
 #: bound in it, and the modules once per statement or when one was
 #: imported (walking hundreds of modules per call made a 50,000-call loop
@@ -278,7 +295,7 @@ _statement = 0
 #: would keep the classes once bound there alive, with what their class
 #: attributes hold. One gone is skipped: a namespace still alive holds what
 #: was found in it.
-_ns_reached: dict[int, tuple[tuple[int, ...], list[tuple[list[str], Any]], list[tuple[str, Any]]]] = {}
+_ns_reached: dict[int, tuple[tuple[int, ...], list[tuple[list[str], Any]], list[tuple[str, Any]], list[Any]]] = {}
 _modules_reached: tuple[int, Any, list[tuple[list[str], Any]]] = (-1, None, [])
 
 
@@ -294,13 +311,19 @@ def _where(ns: Mapping[str, Any], *, fresh: bool = False) -> list[tuple[list[str
     *fresh*: look through the modules again, for a memo bound in one by the
     statement that just ran (``mod.f = functools.cache(g)``)."""
     global _modules_reached
-    holders = _holders(ns)
+    values = _holder_values(ns)
+    holders = tuple(map(id, values))
     known = _ns_reached.get(id(ns))
-    if known is None or known[0] != holders:
+    if known is None or known[0] != holders or not _same_objects(known[3], values):
         if len(_ns_reached) > 64:
             _ns_reached.clear()
         memos, classes = _ns_memos(ns)
-        _ns_reached[id(ns)] = (holders, [(w, _weak(m)) for w, m in memos], [(n, _weak(c)) for n, c in classes])
+        _ns_reached[id(ns)] = (
+            holders,
+            [(w, _weak(m)) for w, m in memos],
+            [(n, _weak(c)) for n, c in classes],
+            [_weak(v) for v in values],
+        )
         known = (holders, memos, classes)
     else:
         known = (holders, _alive(known[1]), _alive(known[2]))
