@@ -134,3 +134,27 @@ def test_a_fit_like_argument_keys_alike_under_another_hash_seed(tmp_path):
     assert _run(project, env, "same", "3") == "[58.0, 58.0] 2 0 []"
     # Another value is another call.
     assert _run(project, env, "other", "2") == "[74.0, 74.0] 1 1 []"
+
+
+STORED = """
+    from cash import kept_state
+    from fitlib import Uval
+
+    value = Uval(2.0, 0.5)
+    state = value.__getstate__()
+    _, also_keyed = kept_state.dumps_also_keyed(value)
+    print(list(state) == sorted(state), also_keyed)
+"""
+
+
+def test_its_store_bytes_are_not_taken_for_its_key_bytes(tmp_path):
+    """A store pickle of such an object writes its state in the set's
+    order, which its key puts in name order: those bytes are not its key's
+    too. Taken for them, a fitted scikit-learn estimator a notebook
+    variable held digested apart from its key, read as changed by a
+    statement that did not touch it, and refused that statement's store."""
+    project, env = _setup(tmp_path)
+    (project / "stored.py").write_text(textwrap.dedent(STORED), encoding="utf-8")
+    for seed in ("1", "2", "3", "4"):
+        out = run_python("stored.py", cwd=project, env={**env, "PYTHONHASHSEED": seed}).stdout.split()
+        assert out[-1] == ("True" if out[-2] == "True" else "False"), (seed, out)
