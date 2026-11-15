@@ -51,11 +51,16 @@ def unnamed_library_code(*parts: Any) -> None:
 
 def refused_unnamed(exc: BaseException) -> bool:
     """Did pickling stop at a function or class no name finds? CPython's
-    wording for it (3.10 to 3.14): a class or a function at module level
-    that is not there (``attribute lookup X on m failed``), or one made in
-    a function (``Can't get local object``, ``<locals>``)."""
+    wording for it: a class or a function at module level that is not
+    there (``attribute lookup X on m failed`` up to 3.13, ``it's not found
+    as m.X`` from 3.14, ``import of module 'm' failed`` for a module not
+    loaded), or one made in a function (``Can't get local object``,
+    ``<locals>``)."""
     text = str(exc)
-    return "attribute lookup" in text or "local object" in text or "<locals>" in text
+    return any(marker in text for marker in _UNNAMED_WORDING)
+
+
+_UNNAMED_WORDING = ("attribute lookup", "not found as", "import of module", "local object", "<locals>")
 
 
 def library_code_override(then: Callable[[Any], Any] | None = None) -> Callable[[Any], Any]:

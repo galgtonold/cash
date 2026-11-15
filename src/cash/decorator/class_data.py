@@ -207,24 +207,75 @@ def class_data_items(
 _ENUM_MEMBER_MACHINERY = frozenset({"_value_", "_name_", "__objclass__", "_sort_order_"})
 
 
+#: What each ``cached_property`` getter stored on an Enum member while a
+#: call ran: ``(member, name) -> value``. A slot holding exactly that object
+#: is keyed as the getter's (its code stands for it); any other value there
+#: -- written by hand, or filled outside a call -- is keyed as data.
+_GETTER_FILLS: dict[tuple[Any, str], Any] = {}
+#: The ``cached_property`` slots of Enum members a key found empty, with the
+#: `getter_fill_mark` it was read at.
+_EMPTY_SLOTS: dict[tuple[Any, str], int] = {}
+_FILL_MARK = [0]
+
+
+def getter_fill_mark() -> int:
+    """A mark taken as a call starts: slots its key finds empty carry it
+    (or a later one), for `note_getter_fills` after the body."""
+    _FILL_MARK[0] += 1
+    return _FILL_MARK[0]
+
+
+def note_getter_fills(mark: int) -> None:
+    """After a body ran: a ``cached_property`` slot on an Enum member that a
+    key read since *mark* found empty and that holds a value now was filled
+    by its getter during the call -- a fill, not a write. Remembered, so the
+    key reads it as it read the empty slot, and the call's store is not
+    refused as a change of the state its key read."""
+    if not _EMPTY_SLOTS:
+        return
+    for slot, seen in list(_EMPTY_SLOTS.items()):
+        if seen < mark:
+            continue
+        held = getattr(slot[0], "__dict__", None)
+        if type(held) is dict and slot[1] in held:
+            _GETTER_FILLS[slot] = held[slot[1]]
+            del _EMPTY_SLOTS[slot]
+
+
 def enum_members(cls: type) -> list[tuple[str, Any, list[tuple[str, Any]]]]:
     """Each member of the Enum *cls*: its name, value and the attributes
     it holds besides (``Planet.EARTH.mass`` set by its ``__init__``, or
     ``Color.RED.extra = 1`` set later). A member pickles by name, so
     neither its value nor what it holds is seen otherwise. What a
-    ``cached_property`` of the class stored on it is left out: its getter's
-    code stands for it, and the first read fills it."""
+    ``cached_property`` getter of the class stored on it during a call is
+    left out (`note_getter_fills`): its getter's code stands for it. A
+    value written into that slot by hand is kept."""
     filled = {k for base in cls.__mro__ for k, v in vars(base).items() if type(v) is functools.cached_property}
     out = []
     for name, member in cls.__members__.items():
         held = getattr(member, "__dict__", None)
-        extra = (
-            sorted((k, v) for k, v in held.items() if k not in _ENUM_MEMBER_MACHINERY and k not in filled)
-            if type(held) is dict
-            else []
-        )
+        extra: list[tuple[str, Any]] = []
+        if type(held) is dict:
+            for k, v in held.items():
+                if k in _ENUM_MEMBER_MACHINERY:
+                    continue
+                if k in filled:
+                    slot = (member, k)
+                    _EMPTY_SLOTS.pop(slot, None)
+                    if _GETTER_FILLS.get(slot, _NO_FILL) is v:
+                        continue
+                extra.append((k, v))
+            extra.sort(key=lambda kv: kv[0])
+            for k in filled:
+                if k not in held:
+                    slot = (member, k)
+                    _GETTER_FILLS.pop(slot, None)
+                    _EMPTY_SLOTS[slot] = _FILL_MARK[0]
         out.append((name, member._value_, extra))
     return out
+
+
+_NO_FILL = object()
 
 
 #: The name a class's code reads to list its subclasses.
