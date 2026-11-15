@@ -260,6 +260,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         "ANNOT-TTL-INVALID",  # `# @cash:ttl=` is not whole seconds; ignored
         "ANNOT-UNKNOWN-DIRECTIVE",  # `# @cash:<name>` is not a directive; ignored
         # -- CACHE: caching happened, or refused to, and it is worth saying -----
+        "CACHE-ARGUMENT-WRITTEN-BACK",  # the call changed an argument in place;
+        # its entry stores that state and a hit writes it back
         "CACHE-ASYNC-GENERATOR",  # async generators are returned unwrapped
         "CACHE-EVICTED-RECOMPUTE",  # the cap had evicted a costly result, so it
         # was computed again

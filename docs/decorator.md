@@ -244,7 +244,7 @@ source changed`, `helper model._rank changed`, `environment variable TENANT
 changed`, and so on. This works across runs too, including `ttl expired` and
 entries the size cap evicted (`evicted to make room`).
 
-<!-- claim: cash/decorator/reporting.py:describe_call @b8e1d0da -->
+<!-- claim: cash/decorator/reporting.py:describe_call @e8ff7830 -->
 A hit whose lookup took a noticeable share of what it saved says so:
 
 ```text title="Output"
@@ -257,6 +257,10 @@ or cache a larger step that calls it.
 [`CACHE-NET-LOSS`](warnings.md#cache-net-loss) warns when such losses add up
 to more than two seconds.
 
+A call not stored for the reason its miss already gives (`not stored last
+time: ...`) ends `(ran 0.00s; not stored again, for the same reason)` rather
+than repeating it.
+
 <!-- claim: cash/_log.py:_StandDownWhenTheAppLogs.filter @1f08254a -->
 If your program configures `logging`, these lines go to your handlers in your
 format instead of stderr.
@@ -266,8 +270,8 @@ format instead of stderr.
 prints as one line: the code, what happened, the fix, and a link to its entry
 on [Warnings](warnings.md). The `file:line` in front is the call in your code
 that set it off; a `line N` inside the message is a line of the cached
-function's own file. When a second function gets the same code, its line
-says only `also on <name>`. `f.cache_info()["warnings"]` keeps each one's
+function's own file. When a second function gets the same finding under
+the same code, its line says only `also on <name>`. `f.cache_info()["warnings"]` keeps each one's
 full text, with every finding listed, and `CASH_WARNING_DETAIL=full` prints
 that instead. `logging.captureWarnings(True)` routes warnings to your
 handlers.

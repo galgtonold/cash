@@ -37,7 +37,7 @@ import sys
 import types
 from typing import TYPE_CHECKING, Any, NamedTuple
 
-from ..rewrite_in_place import AttrChange, AttrRecording, AttrState, Relink, put_back, seal
+from ..rewrite_in_place import AttrChange, AttrRecording, AttrState, Relink, held_changes, put_back, seal
 from ..value_types import IMMUTABLE_LEAF_TYPES
 
 if TYPE_CHECKING:
@@ -45,7 +45,7 @@ if TYPE_CHECKING:
 
     from .call_state import BodyRun
 
-__all__ = ["AttrVerdict", "Unresolved", "recordings"]
+__all__ = ["ALSO_CHANGED", "AttrVerdict", "Unresolved", "also_changed", "recordings"]
 
 #: Bound by value: copies are the same value, whatever their identity.
 _ATOMS = IMMUTABLE_LEAF_TYPES
@@ -58,6 +58,30 @@ def recordings(args_before: dict | None) -> dict[str, AttrRecording]:
     """``{parameter: recording}`` of the instances whose attributes the
     body was recorded changing (`CallRunner.arguments_before`)."""
     return {name: entry[1] for name, entry in (args_before or {}).items() if type(entry[1]) is AttrRecording}
+
+
+#: The refusal of a call that changed more in its arguments than the
+#: attributes it bound; `also_changed` and `CallRunner.attribute_changes`
+#: add what that was, where they can tell.
+ALSO_CHANGED = "it also changed something else in its arguments in place"
+
+
+def also_changed(recorded: dict[str, AttrRecording], named: list[str] = ()) -> str:
+    """`ALSO_CHANGED`, naming what else changed: *named* (the calls of the
+    body that change an argument in place, as reading the source found
+    them: ``self.history.append``), or else each container an instance held
+    as an attribute and still holds, which the call grew or shrank (``the
+    list self.history``)."""
+    found = list(named)
+    if not found:
+        for param, rec in recorded.items():
+            found += [f"an in-place change of the {kind} {param}.{key} held" for key, kind in held_changes(rec)]
+    if not found:
+        return (
+            f"{ALSO_CHANGED}, inside a value one of its attributes holds (a list, a dict, an array), "
+            "which a hit cannot replay by binding attributes"
+        )
+    return f"{ALSO_CHANGED}: {'; '.join(dict.fromkeys(found))}"
 
 
 class AttrVerdict(NamedTuple):
@@ -141,7 +165,7 @@ class AttrVerdict(NamedTuple):
             except Exception:  # noqa: BLE001 - not hashed again: nothing says what else changed
                 explained = False
             if not explained:
-                return cls(changes, None, "it also changed something else in its arguments in place", False)
+                return cls(changes, None, also_changed(recorded), False)
             if why is None:
                 why = _shared(fresh, shared_outside, hidden)
             result_checked = id(result) not in objects

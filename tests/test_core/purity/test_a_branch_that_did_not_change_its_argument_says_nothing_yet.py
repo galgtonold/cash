@@ -38,7 +38,7 @@ def test_only_the_line_saying_a_hit_writes_it_back(disk_cash):
             a = [3, 1, 2]
             cached(a, True)
             assert a == [1, 2, 3]
-    texts = [str(w.message) for w in caught if "IMPURE" in str(w.message)]
+    texts = [str(w.message) for w in caught if "IMPURE" in str(w.message) or "WRITTEN-BACK" in str(w.message)]
     assert cached.cache_info()["hits"] == 1
     assert not any("runs every time" in t for t in texts), texts
     assert any("a hit writes it back" in t for t in texts), texts
@@ -57,7 +57,7 @@ def test_an_argument_no_hit_can_write_back_is_warned_about_at_once(disk_cash):
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         cached(([3, 1],), False)
-    texts = [str(w.message) for w in caught if "IMPURE" in str(w.message)]
+    texts = [str(w.message) for w in caught if "IMPURE" in str(w.message) or "WRITTEN-BACK" in str(w.message)]
     assert any("runs every time" in t for t in texts), texts
 
 
@@ -82,5 +82,5 @@ def test_an_argument_no_hit_writes_back_is_warned_about_on_the_first_call(disk_c
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         cached(_Keyed())
-    texts = [str(w.message) for w in caught if "IMPURE" in str(w.message)]
+    texts = [str(w.message) for w in caught if "IMPURE" in str(w.message) or "WRITTEN-BACK" in str(w.message)]
     assert any("'k' in place" in t for t in texts), texts

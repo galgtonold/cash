@@ -79,6 +79,9 @@ def test_the_cash_calls_line_names_the_replay_refusal(tmp_path):
     out = run_python(script, tmp_path / ".cash", cwd=tmp_path, env={"CASH_DEBUG": "1"})
     lines = [line for line in out.stderr.splitlines() if line.startswith("cash.calls:")]
     assert len(lines) == 2, out.stderr
-    for line in lines:
-        assert "not stored: it changed its argument 'est' in place, and " + REASON in line, line
+    assert "not stored: it changed its argument 'est' in place, and " + REASON in lines[0], lines[0]
+    # The second miss names the refusal as its reason, once.
+    assert lines[1].count(REASON) == 1, lines[1]
+    assert "not stored last time: it changed its argument 'est' in place, and " + REASON in lines[1], lines[1]
+    assert "not stored again, for the same reason" in lines[1], lines[1]
     assert "which a hit would not do" not in out.stderr

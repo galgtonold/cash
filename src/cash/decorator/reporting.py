@@ -73,7 +73,12 @@ def describe_call(entry: dict[str, Any]) -> str:
     ran = entry.get("body_seconds")
     line += f"  (ran {entry['execution_time'] if ran is None else ran:.2f}s"
     if entry.get("not_stored"):
-        line += f"; not stored: {entry['not_stored']}"
+        # A call not stored for the reason its miss already gave ("not
+        # stored last time: ...") says so without printing it twice.
+        if missed.kind is MissKind.NOT_STORED and missed.text == entry["not_stored"]:
+            line += "; not stored again, for the same reason"
+        else:
+            line += f"; not stored: {entry['not_stored']}"
     elif entry.get("not_persisted"):
         line += f"; kept in RAM only -- {entry['not_persisted']} -- so another process will recompute it"
     return line + ")"
@@ -102,9 +107,12 @@ class Notices:
         self.lock = threading.Lock()
         # What `warn_once` has shown: (category, func_name, arg_type_name, code).
         self._seen: set[tuple[type[Warning], str, str, str]] = set()
-        # Each code shown in the short form, and the function it was shown
-        # for: the next function with that code prints only "also on <name>".
-        self._shown_codes: dict[str, str] = {}
+        # Each (code, kind) shown in the short form, and the function it was
+        # shown for: the next function with that code and kind prints only
+        # "also on <name>". The kind is warn_once's *arg_type_name*: one code
+        # covers different findings ("a hit will not repeat it" and "this
+        # call is never stored"), and "also on" must repeat the one shown.
+        self._shown_codes: dict[tuple[str, str], str] = {}
 
     def warn_once(
         self,
@@ -183,12 +191,12 @@ class Notices:
         shown = warn_diagnostic_message(
             category,
             code,
-            self._displayed(func_name, code, message, fix, rendered, short),
+            self._displayed(func_name, (code, arg_type_name), message, fix, rendered, short),
             fallback=self._definition_site(func_name),
         )
         if shown:
             with self.lock:
-                self._shown_codes.setdefault(code, func_name)
+                self._shown_codes.setdefault((code, arg_type_name), func_name)
         # Recorded only once it was shown: a filter that ignores it, or turns
         # it into an error (which raises past this line), must not hide it
         # from every later run -- a CI job that fails on it would pass on the
@@ -196,14 +204,18 @@ class Notices:
         if digest and shown:
             self._stored_keys.note_warning_shown(func_name, digest)
 
-    def _displayed(self, func_name: str, code: str, message: str, fix: str, rendered: str, short: str | None) -> str:
-        """What stderr shows for a warning whose full text is *rendered*."""
+    def _displayed(
+        self, func_name: str, shown_as: tuple[str, str], message: str, fix: str, rendered: str, short: str | None
+    ) -> str:
+        """What stderr shows for a warning whose full text is *rendered*;
+        *shown_as* is its ``(code, kind)``."""
         if full_warnings(self._config):
             return rendered
+        code = shown_as[0]
         name = self._display_name(func_name)
         more = f"{name}.cache_info()['warnings']"
         with self.lock:
-            first = self._shown_codes.get(code)
+            first = self._shown_codes.get(shown_as)
         if first is not None and first != func_name:
             return f"[{code}] also on {name} ({more})"
         return short_diagnostic(code, short or message, fix, more=more)

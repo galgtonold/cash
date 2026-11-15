@@ -23,6 +23,7 @@ from .._active import EXPLAINING as _EXPLAINING
 from .._clock import perf_counter as _perf_counter
 from ..analysis.handed_callables import hands_a_state_changing_callable
 from ..analysis.helper_walk import shared_nodes
+from ..analysis.out_arguments import attribute_bound_parameter, mutated_parameter
 from ..analysis.purity_report import UNREAD_MODULE, PurityReport, describe_untrackable
 from ..backends._base import ttl_expired, written_at
 from ..canonical_form import WALKED_INDEXES
@@ -1659,7 +1660,7 @@ class CallRunner:
             ) == call.call_args_hash and not self._purity.bound_moved(run.observer)
 
         try:
-            return attribute_replay.AttrVerdict.of(
+            verdict = attribute_replay.AttrVerdict.of(
                 run,
                 func,
                 func_name,
@@ -1683,6 +1684,29 @@ class CallRunner:
         except Exception:  # not judged: the change refuses the store, as without it
             logger.debug("[ATTRS] %s: attribute changes not judged", func_name, exc_info=True)
             return None
+        if verdict is not None and verdict.why is not None and verdict.why.startswith(attribute_replay.ALSO_CHANGED):
+            named = self._source_changes(spec, verdict.names)
+            if named:
+                verdict = verdict._replace(why=attribute_replay.also_changed({}, named))
+        return verdict
+
+    def _source_changes(self, spec: CachedFunction, params: list[str]) -> list[str]:
+        """The places in *spec*'s own body that reading its source found
+        changing one of *params* in place other than by binding a top-level
+        attribute (``self.history.append (line 12)``): what keeps a hit from
+        replaying the attributes the call bound."""
+        report = self._registry.report_for(spec.func, spec.name)
+        own = {spec.name, getattr(spec.func, "__qualname__", None)}
+        found = []
+        for issue in getattr(report, "issues", None) or ():
+            if getattr(issue, "where", None) not in own or mutated_parameter(issue) not in params:
+                continue
+            if attribute_bound_parameter(issue) is not None:
+                continue
+            what = getattr(issue, "description", "").split(" - ", 1)[0].removesuffix("()")
+            line = getattr(issue, "line", 0)
+            found.append(f"{what} (line {line})" if line else what)
+        return found
 
     @staticmethod
     def _reads_now(func: Callable, ran: Any) -> list[tuple[str, Any]]:

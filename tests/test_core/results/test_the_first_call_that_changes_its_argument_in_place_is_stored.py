@@ -246,15 +246,18 @@ class Box:
         self.items = []
 
 
+_OBSERVED = ("IMPURE-OBSERVED-EFFECTS", "CACHE-ARGUMENT-WRITTEN-BACK")
+
+
 def _observed(func, *args):
-    """The IMPURE-OBSERVED-EFFECTS warnings calling *func* on each of
-    *args* in turn shows, and the first line of each it logs."""
+    """The IMPURE-OBSERVED-EFFECTS and CACHE-ARGUMENT-WRITTEN-BACK warnings
+    calling *func* on each of *args* in turn shows, and those it logs."""
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         for arg in args:
             func(arg)
-    shown = [str(w.message) for w in caught if getattr(w.message, "code", None) == "IMPURE-OBSERVED-EFFECTS"]
-    logged = [entry["message"] for entry in func.cache_info()["warnings"] if entry["code"] == "IMPURE-OBSERVED-EFFECTS"]
+    shown = [str(w.message) for w in caught if getattr(w.message, "code", None) in _OBSERVED]
+    logged = [entry["message"] for entry in func.cache_info()["warnings"] if entry["code"] in _OBSERVED]
     return shown, logged
 
 
@@ -273,7 +276,7 @@ def test_the_warning_says_what_a_hit_does_when_it_writes_the_state_back(full_war
 
     shown, logged = _observed(clip_in_place, np.array([-1.0, 0.5, 2.0]), np.array([-1.0, 0.5, 2.0]))
     line = (
-        "[IMPURE-OBSERVED-EFFECTS] clip_in_place changed 'a' in place; cash stores the state it leaves 'a' in, "
+        "[CACHE-ARGUMENT-WRITTEN-BACK] clip_in_place changed 'a' in place; cash stores the state it leaves 'a' in, "
         "and a hit writes it back."
     )
     assert [text.splitlines()[0] for text in shown] == [line], shown
@@ -310,8 +313,8 @@ def test_a_change_written_in_the_body_is_said_once(full_warning_text, disk_cash)
     shown = [(w.message.code, str(w.message).splitlines()[0]) for w in caught if hasattr(w.message, "code")]
     assert shown == [
         (
-            "IMPURE-OBSERVED-EFFECTS",
-            "[IMPURE-OBSERVED-EFFECTS] sort_values changed 'v' in place; cash stores the state it leaves 'v' in, "
+            "CACHE-ARGUMENT-WRITTEN-BACK",
+            "[CACHE-ARGUMENT-WRITTEN-BACK] sort_values changed 'v' in place; cash stores the state it leaves 'v' in, "
             "and a hit writes it back.",
         )
     ], shown

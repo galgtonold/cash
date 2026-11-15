@@ -1764,7 +1764,7 @@ class PurityChecks:
             deferred = observer.stored_from_next
             changed = [name for name in observer.mutated_args or () if name not in deferred]
             changed += [name for name in observer.unwritable_args if name not in changed]
-            self.surface_held_mutations(func_name, written, changed)
+            self.surface_held_mutations(func_name, written, changed, observer.unreplayable)
             # Reading the source saw the change this call was the first to
             # make, and the next such call is stored: the line saying so
             # once it is (`_report_written_back`) is all there is to say.
@@ -1854,7 +1854,11 @@ class PurityChecks:
         return func_name in self._held_mutations
 
     def surface_held_mutations(
-        self, func_name: str, written: list[str] | None = None, changed: list[str] | None = None
+        self,
+        func_name: str,
+        written: list[str] | None = None,
+        changed: list[str] | None = None,
+        unreplayable: str | None = None,
     ) -> None:
         """Warn about the held-back findings (`_hold_argument_mutations`) on
         an argument the call just made changed in place (*changed*, every
@@ -1864,7 +1868,10 @@ class PurityChecks:
         A finding on an argument the call left alone stays held: an
         ``if flag: a.sort()`` that did not sort has shown nothing yet, and
         warning that the call runs every time would be wrong once a later
-        call sorts and is stored."""
+        call sorts and is stored. *unreplayable* is why a hit cannot replay
+        the attributes the call bound (`attribute_replay.AttrVerdict.why`),
+        said under the findings: the line that blocked it may not be one
+        of them."""
         found = self._held_mutations.get(func_name)
         if found is None:
             return
@@ -1889,6 +1896,8 @@ class PurityChecks:
             return
         self._static_flagged.add(func_name)
         summary = format_issues_summary(rest)
+        if unreplayable:
+            summary += f"\n  a hit cannot replay the attributes the call bound: {unreplayable}"
         self._warn_side_effects(func_name, summary, per_report, slot="purity-arguments")
 
     def _parameter_names(self, func_name: str) -> set[str]:
@@ -1912,7 +1921,9 @@ class PurityChecks:
             "argument_written_back",
             f"{func_name.rpartition('.')[2]} changed {changed} in place; cash stores the state it leaves {them} in, "
             f"and a hit writes it back.",
-            code="IMPURE-OBSERVED-EFFECTS",
+            # Its own code: under the one that also says "this call is never
+            # stored", a later function's refusal printed only "also on f".
+            code="CACHE-ARGUMENT-WRITTEN-BACK",
             fix="",
         )
 

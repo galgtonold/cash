@@ -14,7 +14,7 @@ Every cash warning starts with a code in square brackets, such as
 
 ## How much a warning says {#warning-detail}
 
-<!-- claim: cash/diagnostics.py:short_diagnostic @aa9e9b1c, cash/decorator/reporting.py:Notices._displayed @edbc85c6 -->
+<!-- claim: cash/diagnostics.py:short_diagnostic @aa9e9b1c, cash/decorator/reporting.py:Notices._displayed @96d4fb79 -->
 By default a warning is one line: the code, what happened, the fix,
 and where to read more. A list of findings or effects
 is cut to how many there are and the first one. The rest is in the code's
@@ -26,8 +26,11 @@ model.py:10: CashImpurityWarning: [IMPURE-OBSERVED-EFFECTS] @cash.cache on model
 
 For a decorated function, `f.cache_info()["warnings"]` keeps the full text
 (every finding), which the line names. When a second function
-gets a code the first already showed, its line only says so:
+gets the same finding under a code the first already showed, its line only
+says so:
 `[IMPURE-OBSERVED-EFFECTS] also on backtest2 (backtest2.cache_info()['warnings'])`.
+A different finding under that code (the first function's effects will not
+repeat on a hit, the second's calls are never stored) gets its own line.
 
 Set [`warning_detail`](getting-started/configuration.md#output-and-switches)
 to `"full"` (`CASH_WARNING_DETAIL=full`) to print the full text instead:
@@ -143,6 +146,7 @@ Caching happened, or refused to, and it is worth saying. Every code here starts 
 
 | Code | Applies to | Meaning |
 |---|---|---|
+| [CACHE-ARGUMENT-WRITTEN-BACK](#cache-argument-written-back) | decorator | the call changed an argument in place, and a hit writes that change back |
 | [CACHE-ASYNC-GENERATOR](#cache-async-generator) | decorator | async generators are not cached |
 | [CACHE-CLEAR-INCOMPLETE](#cache-clear-incomplete) | decorator | `cache_clear()` could not remove some entries; they are still served |
 | [CACHE-DIR-NEW](#cache-dir-new) | decorator | cash created its default cache folder, and says where |
@@ -163,6 +167,35 @@ Caching happened, or refused to, and it is worth saying. Every code here starts 
 | [CACHE-THRASH](#cache-thrash) | both | the cache is full and evicts what it just stored |
 | [CACHE-VALUE-TOO-BIG](#cache-value-too-big) | both | a value is bigger than the disk cap |
 | [CACHE-WRITE-ABANDONED](#cache-write-abandoned) | both | the process exited before its writes finished |
+
+### CACHE-ARGUMENT-WRITTEN-BACK {#cache-argument-written-back}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
+
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks._report_written_back @87eba24c -->
+**What happened.** The call changed an argument in place (`np.clip(a, 0, 1,
+out=a)`, `v.sort()`), and cash could take the state it left the argument in.
+That state is stored with the result, and a hit writes it into the argument
+you hand in, so the call is cached like any other:
+`clip_in_place changed 'a' in place; cash stores the state it leaves 'a' in, and a hit writes it back.`
+[Which arguments](decorator-limitations.md#results-cash-refuses-to-store)
+can be written back.
+
+**Why it matters.** Nothing is lost: after a hit the argument holds what the
+call would have left in it. The note is there so the write-back does not
+surprise you, and it costs the size of the argument in the entry.
+
+**What to do.** Nothing. To store less, return a new object instead of
+changing the argument.
+
+**When it is safe to ignore.** Always. A call that changes an argument cash
+cannot write back is not stored and says why under
+[IMPURE-OBSERVED-EFFECTS](#impure-observed-effects).
+
+**Silencing it.** A `# @cash:assume-safe` line or a `with cash.assume_safe():`
+block does not reach it: the change is cached, not waived. Whole function:
+`@cash.cache(assume_safe=True)` silences the note; a hit still writes the
+argument back. See [Silencing one code](#silencing-one-code).
 
 ### CACHE-ASYNC-GENERATOR {#cache-async-generator}
 
@@ -927,10 +960,10 @@ behave differently from the first.
 A call that changes an argument is **not stored**, so it runs every time,
 unless cash can write the argument's new state back on a hit
 ([which arguments](decorator-limitations.md#results-cash-refuses-to-store)).
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks._report_written_back @4686d068 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks._report_written_back @87eba24c -->
 When it can write back every argument the call changed, the warning is one
-line saying so instead, with nothing to fix:
-`clip_in_place changed 'a' in place; cash stores the state it leaves 'a' in, and a hit writes it back.`
+line under its own code, [CACHE-ARGUMENT-WRITTEN-BACK](#cache-argument-written-back),
+with nothing to fix.
 A call that only binds attributes on an object it was handed is stored with
 them and a hit binds them again, so nothing is said about it; where a hit
 cannot replay them, the line says why (`... changed 'est' in place, and a hit
@@ -1019,11 +1052,14 @@ Each finding has a line number and a label:
 | `network_read` | A GET request or a read-only SQL query | [KEY-NETWORK-READ](#key-network-read) |
 | `untrackable_dep` | `eval` / `exec` / `compile`, a call to a function that `exec` / `eval` built from a string into a namespace of no module (`ns = {}; exec(rules_text, ns)`), `getattr(obj, name)()`, `globals()[name]()`, `globals().get(name)()` or `vars(mod)[name]()`, `operator.attrgetter(name)` or `methodcaller(name)` with a run-time name, `importlib.import_module`, `sys.modules[name]` | [KEY-UNTRACKABLE-DEP](#key-untrackable-dep) |
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks._hold_argument_mutations @9cc0c5ec, cash/decorator/purity_checks.py:PurityChecks.surface_held_mutations @d0282e45 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks._hold_argument_mutations @9cc0c5ec, cash/decorator/purity_checks.py:PurityChecks.surface_held_mutations @bed8413c -->
 A line of the function's own body that changes one of its arguments in place
 (`rows.sort()`) is reported once that first call has run, and only when cash
 cannot write the argument's new state back on a hit; when it can, the one line
-of [IMPURE-OBSERVED-EFFECTS](#impure-observed-effects) says so instead.
+of [CACHE-ARGUMENT-WRITTEN-BACK](#cache-argument-written-back) says so instead.
+When the call bound attributes a hit cannot replay, the report ends with why
+(`a hit cannot replay the attributes the call bound: it also changed
+something else in its arguments in place: self.history.append (line 12)`).
 
 Log lines (`logging`, `print(..., file=sys.stderr)`) are not reported. A
 table of functions is not reported either, wherever it lives: a module-level
@@ -1055,7 +1091,7 @@ several lines in a row, wrap them in `with cash.assume_safe():` instead. A line
 that changes an argument in place is better fixed than waived: return a
 modified copy.
 
-<!-- claim: cash/decorator/reporting.py:Notices._not_shown_before @7e3fc337, cash/decorator/reporting.py:Notices.warn_once @213ba8ef -->
+<!-- claim: cash/decorator/reporting.py:Notices._not_shown_before @7e3fc337, cash/decorator/reporting.py:Notices.warn_once @f09f4b16 -->
 **When it is safe to ignore.** When every line is a `print` to stdout or a
 progress bar: you only lose the printout on hits. Never ignore
 `mutable_global` or `dynamic_pattern`. This warning is shown once per cache,

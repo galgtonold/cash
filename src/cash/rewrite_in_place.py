@@ -32,6 +32,7 @@ object itself or a module global, named so a hit binds that very object.
 
 from __future__ import annotations
 
+import collections
 import io
 import pickle
 import sys
@@ -761,12 +762,17 @@ class AttrRecording:
     shallow copy of the ``__dict__`` compared after the call. `finish`
     stops it and says what changed."""
 
-    __slots__ = ("change", "copy", "kind", "obj", "recorder", "state", "why")
+    __slots__ = ("change", "copy", "held", "kind", "obj", "recorder", "state", "why")
 
     def __init__(self, obj: Any) -> None:
         self.obj = obj
         self.kind = type(obj)
         self.state = object.__getattribute__(obj, "__dict__")
+        #: ``{attribute: (container, its length)}`` of the plain containers
+        #: its attributes hold before the call: which one the call grew or
+        #: shrank in place (``self.history.append(x)``) is what a refusal
+        #: to replay its attributes names (`held_changes`).
+        self.held = {key: (value, len(value)) for key, value in self.state.items() if type(value) in _SIZED_CONTAINERS}
         self.recorder = cwatch.record(self.state) if cwatch is not None else None
         self.copy = None if self.recorder is not None else dict(self.state)
         #: Set by `finish`: the change, None when there is none, and why
@@ -815,6 +821,21 @@ class AttrRecording:
         if not bound and not deleted:
             return
         self.change = AttrChange(self.obj, state, before, bound, tuple(deleted), tuple(state))
+
+
+#: The containers whose length `AttrRecording.held` keeps.
+_SIZED_CONTAINERS = (list, dict, set, bytearray, collections.deque)
+
+
+def held_changes(recording: AttrRecording) -> list[tuple[str, str]]:
+    """``[(attribute, kind)]`` of the containers *recording*'s object
+    held before its call and still holds, whose length the call changed
+    in place: a change a hit cannot replay by binding attributes."""
+    found = []
+    for key, (value, size) in recording.held.items():
+        if recording.state.get(key, ABSENT) is value and len(value) != size:
+            found.append((key, type(value).__name__))
+    return found
 
 
 class put_back:  # a context manager, named like contextlib's

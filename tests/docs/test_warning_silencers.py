@@ -29,6 +29,15 @@ PAGE = Path(__file__).resolve().parents[2] / "docs" / "warnings.md"
 #: block waiver wraps that line and the lines indented under it) and ``{DEC}``
 #: the decorator's arguments.
 CASES: dict[str, tuple[str, str]] = {
+    "CACHE-ARGUMENT-WRITTEN-BACK": (
+        """
+        @c.cache{DEC}
+        def f(v):
+            v.sort(){W}
+            return len(v)
+        """,
+        "f([3, 1, 2])\nf([3, 1, 2])",
+    ),
     "CACHE-RESULT-SHARED": (
         """
         @c.cache{DEC}
