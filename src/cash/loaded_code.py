@@ -454,7 +454,7 @@ def class_functions(cls: type) -> list[types.FunctionType]:
     return found
 
 
-def code_objects_of(owner: object, *, follow_wrapped: bool = True) -> tuple:
+def code_objects_of(owner: object, *, follow_wrapped: bool = True, accessors: list | None = None) -> tuple:
     """The code objects *owner* runs as itself, in a fixed order: each method a
     class defines (as `class_functions` finds them) and the code down its
     ``__wrapped__`` chain, or a function's code and the code down its. What a digest memoised per object
@@ -462,6 +462,10 @@ def code_objects_of(owner: object, *, follow_wrapped: bool = True) -> tuple:
     the class and the function objects and swaps each one's ``__code__`` (and
     a wrapper's ``__dict__``) in place. *follow_wrapped* False: a class's
     methods a library's decorator wrapped give the wrapper's code alone.
+    *accessors*, a list: a class's ``cached_property`` getters (``.func`` can
+    be set in place) and property setters and deleters are appended to it --
+    what a memo per class must still match, but not code its key part
+    covers (the trace records them when they run).
 
     Asked per helper on every call, so written for speed: about 0.2 us for a
     plain function, 1-2 us for a class of a few methods."""
@@ -477,20 +481,17 @@ def code_objects_of(owner: object, *, follow_wrapped: bool = True) -> tuple:
                 if kind is types.FunctionType:
                     func = value
                 elif kind is property:
-                    # Its setter and deleter too: `Thing.prop = property(get,
-                    # new_set)` keeps the getter's code.
                     func = value.fget
-                    accessor = value.fset
-                    if accessor is not None and type(accessor) is types.FunctionType:
-                        found.append(accessor.__code__)
-                    accessor = value.fdel
-                    if accessor is not None and type(accessor) is types.FunctionType:
-                        found.append(accessor.__code__)
+                    if accessors is not None:
+                        for accessor in (value.fset, value.fdel):
+                            if type(accessor) is types.FunctionType:
+                                accessors.append(accessor.__code__)
                 elif kind is staticmethod or kind is classmethod:
                     func = value.__func__
                 elif kind is _CACHED_PROPERTY:
-                    # Its getter is `.func`, which can be set in place.
-                    func = value.func
+                    if accessors is not None and type(value.func) is types.FunctionType:
+                        accessors.append(value.func.__code__)
+                    continue
                 elif kind in _PLAIN_ATTRIBUTE_TYPES:
                     continue
                 else:

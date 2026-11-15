@@ -196,8 +196,13 @@ def test_the_code_a_class_runs_includes_its_cached_property_and_property_setter(
     def swapped(self):
         return 3
 
-    before = code_objects_of(Holder)
+    before: list = []
+    code_objects_of(Holder, accessors=before)
     assert vars(Holder)["cp"].func.__code__ in before
     assert vars(Holder)["prop"].fset.__code__ in before
+    # Not code the class's key part covers: what runs of them is traced.
+    assert not set(before) & set(code_objects_of(Holder))
     Holder.cp.func = swapped
-    assert swapped.__code__ in code_objects_of(Holder)
+    after: list = []
+    code_objects_of(Holder, accessors=after)
+    assert swapped.__code__ in after

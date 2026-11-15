@@ -254,7 +254,15 @@ def hash_callable_source(fn: Callable) -> str:
     # What a memo entry held by the object itself must still see: IPython's
     # ``%autoreload`` keeps the class and the function objects and swaps each
     # method's ``__code__`` (and a wrapper's ``__wrapped__``) in place.
-    codes = code_objects_of(fn) if memo_owner is fn else ()
+    if memo_owner is fn:
+        accessors: list = []
+        codes = code_objects_of(fn, accessors=accessors)
+        if accessors:
+            # A cached_property's getter set in place (``.func``), a
+            # property's setter: what the digest below reads too.
+            codes = (*codes, *accessors)
+    else:
+        codes = ()
     if memo_key is not None:
         entry = SOURCE_HASH_MEMO.get(memo_key)
         # ``is``, not ``==``: confirms this is the SAME object and not a

@@ -70,9 +70,11 @@ def _codes_now(owners: list[Any]) -> tuple:
     found: list = []
     for owner in owners:
         if settable(owner):
-            codes = code_objects_of(owner)
+            accessors: list = []
+            codes = code_objects_of(owner, accessors=accessors)
             note_owner(owner, codes)
             found.extend(codes)
+            found.extend(accessors)
     return tuple(found)
 
 
