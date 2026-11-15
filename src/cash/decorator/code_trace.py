@@ -75,6 +75,7 @@ from typing import Any
 
 from .. import _weak
 from .._gc_context import collecting
+from .._memo import CODE_OBJECTS, LruMemo
 from .._own_work import inside as own_work_inside
 from .._own_work import left_out as own_work_left_out
 from .._own_work import rearm_with as own_work_rearm_with
@@ -1044,7 +1045,57 @@ def _digest(value: Any) -> str | None:
         # when it is served inside the call, is a "cached" item of its own).
         value = wrapped
     got = value_digest(value)
+    if got.startswith("opaque:") and wrapped is not None:
+        return _wrapping_cached_digest(value)
     return None if got.startswith("opaque:") else got
+
+
+#: How many ``__wrapped__`` links `_wrapping_cached_digest` follows.
+_WRAPPED_LINKS_MAX = 16
+
+
+def _wrapping_cached_digest(value: Any) -> str | None:
+    """The digest of a function whose ``__wrapped__`` chain reaches a
+    ``@cash.cache`` wrapper (``@deprecated_arg`` over ``@cash.cache``), else
+    None: the code and bindings of each layer above the cached function, and
+    that function's own state (``_cash_state``, what a nested cached call's
+    "cached" item holds) -- its code, helpers and the globals they read. By
+    value the layers' closures hold the cached wrapper, whose `Cash` cannot
+    be digested, so a function importing such a name ran unstored."""
+    from .user_code import is_cash_wrapper
+
+    parts: list[str] = []
+    link = value
+    for _ in range(_WRAPPED_LINKS_MAX):
+        if is_cash_wrapper(link):
+            try:
+                state = link._cash_state()
+            except Exception:  # noqa: BLE001 - a state that cannot be built cannot be checked
+                return None
+            if not isinstance(state, str):
+                return None
+            parts.append(f"cached:{state}")
+            return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()[:24]
+        nxt = getattr(link, "__wrapped__", None) if type(link) is types.FunctionType else None
+        if nxt is None:
+            return None
+        layer = _code_digest(link.__code__, link)
+        if layer is None:
+            return None
+        parts.append(f"layer:{layer}")
+        for cell in link.__closure__ or ():
+            try:
+                held = cell.cell_contents
+            except ValueError:  # an empty cell
+                continue
+            if held is nxt:
+                continue
+            got = _digest(held)
+            if got is None:
+                return None
+            parts.append(f"cell:{got}")
+        link = nxt
+    return None
 
 
 def _type_alias(ns: Mapping[str, Any] | None, module: str, name: str) -> Any:
@@ -1605,7 +1656,23 @@ _LOAD_LOCAL = frozenset({"LOAD_FAST", "LOAD_FAST_CHECK", "LOAD_FAST_BORROW"})
 _LOAD_TWO_LOCALS = frozenset({"LOAD_FAST_LOAD_FAST", "LOAD_FAST_BORROW_LOAD_FAST_BORROW"})
 
 
-def import_reads(code: types.CodeType, g: Mapping[str, Any]) -> list[tuple[str, str, tuple[str, ...]]]:
+def import_reads(code: types.CodeType, g: Mapping[str, Any]) -> tuple[tuple[str, str, tuple[str, ...]], ...]:
+    """`import_reads_now`, remembered per code object and package: it
+    reads nothing else, and a miss's trace asked it of every helper the
+    body ran, each disassembled again on every call."""
+    package = g.get("__package__") or ""
+    key = (code, package)
+    found = _IMPORT_READS.get(key)
+    if found is None:
+        found = _IMPORT_READS[key] = tuple(import_reads_now(code, g))
+    return found
+
+
+#: `import_reads` by ``(code, package)``.
+_IMPORT_READS: LruMemo[tuple, tuple] = LruMemo(CODE_OBJECTS)
+
+
+def import_reads_now(code: types.CodeType, g: Mapping[str, Any]) -> list[tuple[str, str, tuple[str, ...]]]:
     """What *code*'s own imports take, read from its bytecode: ``(imported,
     module, chain)`` for each ``from module import name`` used (chain
     ``(name,)``) and each ``module.a.b`` read through a local an import

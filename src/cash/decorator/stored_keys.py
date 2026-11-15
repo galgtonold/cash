@@ -38,7 +38,9 @@ __all__ = ["NOT_STORED_MARK", "StoredKeyRecord"]
 #: results that reached disk. ``ram_only``: ``{cache_key: [computed_at, why]}``
 #: for results kept in RAM only. ``states``: ``{state: flat ledger}``.
 #: ``warned``: ``{digest: shown_at}`` of warnings already shown.
-_KINDS = ("keys", "ram_only", "states", "warned")
+#: ``refused``: ``{verdict key: verdict}`` of calls known to change their
+#: arguments in a way a hit cannot replay (`refusal_verdicts`).
+_KINDS = ("keys", "ram_only", "states", "warned", "refused")
 
 #: The third item of a ``ram_only`` value for a result that was not kept at
 #: all (``[computed_at, why, NOT_STORED_MARK]``): a call refused storing.
@@ -71,9 +73,13 @@ class _Changes:
     #: state -> its flat ledger, or None to only mark it most recent.
     states: dict[str, dict | None] = field(default_factory=dict)
     warned: dict[str, float] = field(default_factory=dict)
+    #: verdict key -> its verdict, or None to drop it.
+    refused: dict[str, dict | None] = field(default_factory=dict)
 
     def copy(self) -> _Changes:
-        return _Changes(self.func, dict(self.keys), dict(self.ram_only), dict(self.states), dict(self.warned))
+        return _Changes(
+            self.func, dict(self.keys), dict(self.ram_only), dict(self.states), dict(self.warned), dict(self.refused)
+        )
 
     def apply(self, doc: Doc) -> None:
         for key, value in self.keys.items():
@@ -87,6 +93,10 @@ class _Changes:
             if known is not None or flat:
                 doc["states"][state] = known if known is not None else flat
         doc["warned"].update(self.warned)
+        for key, verdict in self.refused.items():
+            doc["refused"].pop(key, None)
+            if verdict is not None:
+                doc["refused"][key] = verdict
 
 
 class MissFacts(NamedTuple):
@@ -272,6 +282,8 @@ class StoredKeyRecord:
     #: States whose ledger a record keeps, most recent last.
     STATES_MAX = 8
     WARNED_MAX = 32
+    #: Refusal verdicts a record keeps, most recent last.
+    REFUSED_MAX = 16
     #: Seconds between two writes of one record. A miss of a cheap function
     #: rewrote the whole file each time (a read, a JSON dump, a rename: more
     #: than the call); what is not written yet is still in memory, where
@@ -456,6 +468,46 @@ class StoredKeyRecord:
             changes.warned[digest] = time.time()
             _trim(changes.warned, self.WARNED_MAX)
 
+    def refused(self, func_name: str, key: str) -> dict | None:
+        """The refusal verdict *key* of *func_name* as earlier runs and this
+        one left it (`note_refused`), or None. A lookup, not a copy of the
+        record: asked before a call's key is built."""
+        path = self.path(func_name)
+        if path is None:
+            return None
+        with self._lock:
+            for changes in (self._pending.get(path), self._writing.get(path)):
+                if changes is not None and key in changes.refused:
+                    return changes.refused[key]
+        doc = self._disk_doc(path, self.WRITE_INTERVAL)
+        verdict = doc["refused"].get(key) if doc is not None else None
+        return verdict if isinstance(verdict, dict) else None
+
+    def any_refused(self, func_name: str) -> bool:
+        """Does *func_name*'s record hold any refusal verdict (`refused`)?"""
+        path = self.path(func_name)
+        if path is None:
+            return False
+        with self._lock:
+            for changes in (self._pending.get(path), self._writing.get(path)):
+                if changes is not None and any(v is not None for v in changes.refused.values()):
+                    return True
+        doc = self._disk_doc(path, self.WRITE_INTERVAL)
+        return bool(doc is not None and doc["refused"])
+
+    def note_refused(self, func_name: str, key: str, verdict: dict | None, *, write: bool) -> None:
+        """Keep *verdict* (None: drop it) under *key*. *write*: soon, in the
+        background; else with the record's next write, or at `flush`."""
+        path = self.path(func_name)
+        if path is None:
+            return
+        with self._lock:
+            changes = self._changes(path, func_name)
+            _put_last(changes.refused, key, verdict)
+            _trim(changes.refused, self.REFUSED_MAX)
+        if write:
+            self._schedule(path)
+
     def _changes(self, path: str, func_name: str) -> _Changes:
         changes = self._pending.get(path)
         if changes is None:
@@ -591,6 +643,7 @@ class StoredKeyRecord:
                     ("ram_only", self.KEYS_MAX),
                     ("states", self.STATES_MAX),
                     ("warned", self.WARNED_MAX),
+                    ("refused", self.REFUSED_MAX),
                 ):
                     _trim(doc[kind], most)
                 keys_dir = os.path.dirname(path)

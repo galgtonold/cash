@@ -11,6 +11,7 @@ import os
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from .. import phase_times
 from .._active import ACTIVE_CONFIG
 from ..kept_state import reducers_run
 from . import hit_memo
@@ -188,6 +189,7 @@ class Wrappers:
         # Read through `cf` by the end-of-run summary too.
         stats = cf.stats
         warn_unseeded = self._rng.warn_unseeded_estimator_result
+        phases = cf.phase_record = phase_times.record_for(func, func_name)
 
         if inspect.iscoroutinefunction(func):
 
@@ -200,11 +202,16 @@ class Wrappers:
                 token = ACTIVE_CONFIG.set(settings)
                 slot: list = [None]
                 slot_token = CALL_ENTRY.set(slot)
+                pt = phase_times.new() if phase_times.ON else None
+                pt_token = phase_times.CURRENT.set(pt) if pt is not None else None
                 enter_cached_call()
                 try:
                     result = await wrapper(*args, **kwargs)
                 finally:
                     exit_cached_call()
+                    if pt_token is not None:
+                        phase_times.CURRENT.reset(pt_token)
+                        phases.commit(pt, phase_times.outcome_of(slot[0], pt))
                     CALL_ENTRY.reset(slot_token)
                     ACTIVE_CONFIG.reset(token)
                     _count(stats, slot)
@@ -222,12 +229,17 @@ class Wrappers:
 
         @functools.wraps(func)
         def sync_stats_wrapper(*args: Any, **kwargs: Any) -> Any:
+            pt = phase_times.new() if phase_times.ON else None
             if fast_state is not None:
                 # A call met before, while nothing its key reads has moved
                 # (`hit_memo`): served without building the key again.
                 result = fast_call(fast_state, args, kwargs)
                 if result is not missed:
+                    if pt is not None:
+                        phases.fast_hit(phase_times.elapsed(pt))
                     return result
+                if pt is not None:
+                    phase_times.mark(pt, phase_times.FAST_PROBE)
                 if fast_state[hit_memo.S_ACC].pending:
                     cf.hit_memo.flush()
             settings = self._config()
@@ -241,11 +253,15 @@ class Wrappers:
             token = ACTIVE_CONFIG.set(settings)
             slot: list = [None]
             slot_token = CALL_ENTRY.set(slot)
+            pt_token = phase_times.CURRENT.set(pt) if pt is not None else None
             enter_cached_call()
             try:
                 result = wrapper(*args, **kwargs)
             finally:
                 exit_cached_call()
+                if pt_token is not None:
+                    phase_times.CURRENT.reset(pt_token)
+                    phases.commit(pt, phase_times.outcome_of(slot[0], pt))
                 CALL_ENTRY.reset(slot_token)
                 ACTIVE_CONFIG.reset(token)
                 _count(stats, slot)
@@ -326,8 +342,11 @@ class Wrappers:
                 ``total_time_saved`` (seconds), ``miss_reasons`` (count per
                 reason), ``changed`` (for the "code or state changed"
                 misses, count per what changed: ``"helper ticks._parse
-                changed"``) and ``warnings`` (the last 20, each with
-                ``category``, ``code``, ``message`` and ``timestamp``).
+                changed"``), ``warnings`` (the last 20, each with
+                ``category``, ``code``, ``message`` and ``timestamp``) and
+                ``phase_times`` (where the calls' time went, by outcome and
+                phase; empty unless ``CASH_PHASE_TIMES=1``, see
+                `cash.phase_times`).
             """
             if cf.hit_memo is not None:
                 cf.hit_memo.flush()
@@ -342,6 +361,9 @@ class Wrappers:
                 "miss_reasons": {str(kind): n for kind, n in stats["miss_reasons"].items()},
                 "changed": dict(stats["changed"]),
                 "warnings": warnings_log,
+                # Per "<outcome>.<phase>": count, total, median, max seconds;
+                # empty unless CASH_PHASE_TIMES is on (`cash.phase_times`).
+                "phase_times": cf.phase_record.summary() if cf.phase_record is not None else {},
             }
 
         return cache_info
@@ -356,6 +378,8 @@ class Wrappers:
             if cf.hit_memo is not None:
                 cf.hit_memo.flush()
             stats.update(new_stats())
+            if cf.phase_record is not None:
+                cf.phase_record.clear()
             self._maintenance.delete_function_entries(cf.name)
             self._notices.forget(cf)
 

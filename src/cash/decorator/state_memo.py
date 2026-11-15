@@ -14,8 +14,11 @@ The fold is remembered per function and served again while three things hold:
   path watches it (`hit_memo.scan`): the function's code, globals, closures,
   defaults, classes, helpers and cached callees, transitively. Every value
   met must be one whose content cannot change unseen (an atom, a tuple of
-  them, code, a watched plain dict); anything else (a list, an array, an
-  instance) keeps the function on the ordinary path. A change to any of it
+  them, code, a watched plain dict), or data the memo reads whole again
+  before each reuse (`hit_memo.ContentProbe`: a list or set of plain data,
+  a numpy array without objects), served only while it reads the same;
+  anything else (an instance, a list holding one) keeps the function on
+  the ordinary path. A change to any of it
   moves the C extension's world epoch, and a renamed function, a rebound
   closure cell or a rebased class is checked on every reuse
   (`cwatch.world_holds`), as is what ABCs registered.
@@ -498,7 +501,7 @@ class StateMemo:
         self.entries = {}
         STATS["scans"] += 1
         try:
-            cells, tags, _callees, family = hit_memo.scan(self.spec, registry, environment_ok=True)
+            cells, tags, _callees, family = hit_memo.scan(self.spec, registry, environment_ok=True, content=True)
         except Exception:  # noqa: BLE001 - Ineligible, or a scan that broke: the ordinary path
             STATS["scans_failed"] += 1
             return False

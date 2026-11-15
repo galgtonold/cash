@@ -25,6 +25,7 @@ from ..value_types import CODELESS_PRIMS
 from .closure_fold import iter_code_scopes
 from .global_values import chain_end, keyed_by_chains
 from .key_values import iter_contained, plain_data_kind
+from .library_versions import library_import, library_owns
 from .module_identity import module_ref_part
 from .user_code import cash_wrapped, is_cash_wrapper, is_user_class, is_user_code_object, own_package, wraps_code
 
@@ -335,7 +336,25 @@ class ModuleAttrFold:
                 # code. Its source stands for what it binds; one it cannot
                 # vouch for is the helper walk's to warn about.
                 parts.append((f"local:{name}#source:{unloaded}", source_digest(unloaded, root_module) or "unvouched"))
+        library = {
+            name
+            for name in imports
+            if (name in attr_reads or name in bare_reads)
+            and library_import(imports[name][0], root_module)
+            and library_owns(resolve(name), imports[name])
+        }
+        for name in sorted(library):
+            # A library's own: by the name imported, loaded or not. What it
+            # binds is the library's code, which its installed version keys
+            # (`library_versions`, local imports included); keyed by the
+            # object only once loaded, the key moved with whatever ran
+            # earlier in the process ("no longer uses global local:X"). A
+            # name rebound to anything else is keyed by that, below.
+            module_name, prefix = imports[name]
+            parts.append((f"local:{name}#import", ".".join((module_name, *prefix))))
         for name, attrs in attr_reads.items():
+            if name in library:
+                continue
             obj = resolve(name)
             # Which module the name holds (`from .backends import LIB` then
             # `LIB.fft(x)`); a user module's attributes are folded below.
@@ -349,6 +368,8 @@ class ModuleAttrFold:
                     continue
                 fold(f"local:{name}.{attr}", value)
         for name in sorted(bare_reads):
+            if name in library:
+                continue
             obj = resolve(name)
             if obj is None or (name in attr_reads and issubclass(type(obj), types.ModuleType)):
                 continue  # a module read as `name.attr` too is keyed above

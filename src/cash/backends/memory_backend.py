@@ -23,7 +23,17 @@ from cash._referents import get_referents
 from cash._user_attrs import instance_of, own_dict
 from cash.exceptions import CacheBackendError
 
-from .. import _native, _plain_data, _weak, cost_model, handed_copies, held_reads, kept_state, stored_pickle
+from .. import (
+    _native,
+    _plain_data,
+    _weak,
+    cost_model,
+    handed_copies,
+    held_reads,
+    kept_state,
+    phase_times,
+    stored_pickle,
+)
 from .._clock import fine_thread_clock
 from .._lazy_module import LazyModule
 from ..cost_model import GENERIC_FAMILY
@@ -1533,6 +1543,7 @@ class InMemoryBackend(CacheBackend):
             return metadata
 
     def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
+        phase = phase_times.sub_begin(phase_times.READ_DECODE) if phase_times.ON else None
         try:
             metadata, value = self._get_copy(key)
         except Exception as exc:
@@ -1545,6 +1556,9 @@ class InMemoryBackend(CacheBackend):
                 if key in self._store:
                     self._drop(key)
             return None, None
+        finally:
+            if phase is not None:
+                phase_times.sub_end(phase)
         if type(value) is _ReadOut:
             if value.reused:
                 # Handed out before and proved untouched since: its sets are
