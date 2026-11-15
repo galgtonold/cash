@@ -44,7 +44,9 @@ def test_the_phases_of_a_call_add_up_to_the_time_it_took(timed):
     assert parts == pytest.approx(total, rel=1e-9, abs=1e-9)
     # The wrapper's clock starts on entry and stops before the counting.
     assert 0.9 * took <= total <= took
-    assert miss["body"]["total"] >= 0.05
+    # A 50 ms sleep can end a millisecond early on Windows (3.10 waits in
+    # whole milliseconds of the system tick; perf_counter is finer).
+    assert miss["body"]["total"] >= 0.05 * 0.95
     assert miss["cash"]["total"] == pytest.approx(total - miss["body"]["total"])
     for phase in ("setup", "key.code", "key.args", "read.fetch", "checks", "body_setup", "post", "store"):
         assert miss[phase]["count"] == 1, phase
