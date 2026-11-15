@@ -266,3 +266,74 @@ def _shared_parameters(fn: types.FunctionType, call: ast.Call, fresh_nodes: froz
         if name not in defaults or not _immutable(defaults[name]):
             shared.add(name)
     return shared
+
+
+#: How a log call's caller uses what the call returns (`log_site_use`).
+DROPPED, LOGGED, RETURNED = "dropped", "logged", "returned"
+
+
+def log_site_use(caller: Any, caller_code: types.CodeType, lasti: int) -> str | None:
+    """How the call at *lasti* in *caller_code* (the code of *caller*, a
+    function of the user's) uses what it returns, when that call is a log
+    line: ``DROPPED`` (a statement of its own), ``LOGGED`` (it reaches
+    nothing but other log lines, `LogOnlyFlow`), ``RETURNED`` (``return
+    <the call>``: the caller's own callers decide). None when the call is
+    no log line, or its value goes anywhere else."""
+    from .ambient_reads import log_helper_names
+    from .purity_flow import LogOnlyFlow
+
+    if type(caller) is not types.FunctionType or caller.__code__ is not caller_code:
+        return None
+    func_def = _function_def(caller)
+    if func_def is None:
+        return None
+    call = _call_at(caller, caller_code, lasti, func_def)
+    if call is None or not _is_log_call(call, caller, func_def):
+        return None
+    parent = next(
+        (node for node in ast.walk(func_def) if any(child is call for child in ast.iter_child_nodes(node))), None
+    )
+    if isinstance(parent, ast.Expr):
+        return DROPPED
+    if isinstance(parent, ast.Return) and parent.value is call:
+        return RETURNED
+    flow = LogOnlyFlow(func_def, log_helper_names(func_def, caller))
+    return LOGGED if flow.only_logged(call) else None
+
+
+def _is_log_call(call: ast.Call, caller: types.FunctionType, func_def: ast.AST) -> bool:
+    """Is *call* a log line (`is_log_line`), or a logger's method calling
+    another of its own log methods (``self.log(...)`` in a method of a
+    ``logging.Logger`` subclass)?"""
+    import logging
+
+    from .ambient_reads import method_namespace
+    from .purity_flow import LOG_METHODS, is_log_line
+
+    if is_log_line(call):
+        return True
+    f = call.func
+    if not (isinstance(f, ast.Attribute) and f.attr in LOG_METHODS and isinstance(f.value, ast.Name)):
+        return False
+    owner = method_namespace(caller, func_def, {}).get(f.value.id)
+    return isinstance(owner, type) and issubclass(owner, logging.Logger)
+
+
+def clock_read_on(fn: types.FunctionType, line: int) -> bool:
+    """Is every ambient read on *line* (of *fn*'s file) a clock read?"""
+    from ..effects import EffectKind, classify_call
+    from .helper_bindings import build_namespace
+
+    func_def = _function_def(fn)
+    if func_def is None or line <= 0:
+        return False
+    shift = fn.__code__.co_firstlineno - 1
+    namespace = build_namespace(fn)
+    kinds = [
+        effect.kind
+        for node in ast.walk(func_def)
+        if isinstance(node, ast.Call) and node.lineno + shift == line
+        for effect in (classify_call(node, namespace),)
+        if effect is not None and effect.kind in (EffectKind.CLOCK, EffectKind.ENVIRONMENT)
+    ]
+    return bool(kinds) and all(k is EffectKind.CLOCK for k in kinds)
