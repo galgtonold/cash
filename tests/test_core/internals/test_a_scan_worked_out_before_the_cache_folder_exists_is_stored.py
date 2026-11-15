@@ -9,7 +9,20 @@ again (a Cython module's parse, about a second each).
 
 from __future__ import annotations
 
+import pytest
+
+from cash._active import default_cash, set_default_cash
 from cash.analysis import scan_store
+
+
+@pytest.fixture(autouse=True)
+def _settings_from_the_environment():
+    """No default instance an earlier test left behind: its cache dir would
+    stand in for the ``CASH_CACHE_DIR`` each test here sets."""
+    earlier = default_cash()
+    set_default_cash(None)
+    yield
+    set_default_cash(earlier)
 
 
 def test_a_record_saved_before_the_folder_exists_is_written_once_it_does(tmp_path, monkeypatch):
