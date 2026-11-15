@@ -88,6 +88,22 @@ def carrier_name(carrier: Any) -> str:
     return getattr(t, "__qualname__", None) or getattr(t, "__name__", None) or "?"
 
 
+def _plain_record(value: Any) -> bool:
+    """Is *value* a tuple (a ``NamedTuple``) or an object whose fields are
+    all numbers, strings and the like: code only through its class?"""
+    if type(value) in CODELESS_PRIMS:
+        return False
+    fields = value if isinstance(value, tuple) else None
+    if fields is None:
+        state = getattr(value, "__dict__", None)
+        if not isinstance(state, dict) or not state:
+            return False
+        fields = state.values()
+    elif getattr(value, "__dict__", None):
+        return False
+    return all(type(f) in CODELESS_PRIMS for f in fields)
+
+
 def is_user_code_carrier(carrier: Any) -> bool:
     """``is_user_code_object`` for the ADVISORY rather than for hashing.
 
@@ -584,15 +600,25 @@ class CodeArgs:
         too), and its class is folded with *value*'s class: the getter that
         makes it names it, and `CodeSurface.code_surface_hash` folds every
         class that code reaches. A view whose class the code does not reach
-        (picked at run time) is still walked.
+        (picked at run time) is still walked. So is a record of plain
+        values a getter filled (`_plain_record`), on the same terms.
         """
-        if not cached_properties(type(value)):
+        names = cached_properties(type(value))
+        if not names:
             return list(attrs.values())
-        views = derived_views(value)
-        if not views or is_opaque(type(value)):
+        derived = set(derived_views(value))
+        # A record of plain values a getter built (an enum member's
+        # ``cached_property`` returning ``HVGPreset(flavor="seurat")``)
+        # brings no code but its class, which the getter's code reaches:
+        # walked, the first read in a call added a part, and the call
+        # read as changing the state its key read.
+        derived.update(name for name in names if name in attrs and _plain_record(attrs[name]))
+        if not derived or is_opaque(type(value)):
             return list(attrs.values())
         return [
-            held for name, held in attrs.items() if name not in views or not self._code.reaches(type(value), type(held))
+            held
+            for name, held in attrs.items()
+            if name not in derived or not self._code.reaches(type(value), type(held))
         ]
 
     def _iter_library_held(self, value: Any, _depth: int, _seen: set):
