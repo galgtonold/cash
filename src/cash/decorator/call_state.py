@@ -178,6 +178,7 @@ class BodyRun:
         "arg_carriers_moved",
         "res",
         "body_seconds",
+        "nested_cash_seconds",
         "saves_seconds",
         "first_call",
         "rng_new",
