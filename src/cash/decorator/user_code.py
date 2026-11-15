@@ -214,7 +214,7 @@ def is_user_code_object(obj: Any) -> bool:
             # through ``__wrapped__`` says whose it is.
             return is_user_code_module(mod)
         verdict = _c_code_verdict(obj)
-        if verdict is None and isinstance(obj, type) and built_by_library(obj):
+        if verdict is None and isinstance(obj, type) and (built_by_library(obj) or library_methods(obj)):
             verdict = False
         return True if verdict is None else verdict
     return is_user_code_module(mod)
@@ -247,6 +247,32 @@ def _built_by_library(cls: type) -> bool:
 
 #: `_built_by_library`, per class: asked each time such a class is judged.
 built_by_library = per_type(_built_by_library)
+
+
+def _library_methods(cls: type) -> bool:
+    """Is *cls* a class whose module names a library's module with a file,
+    and whose own methods' code all lives in library files? The pure-Python
+    twin of a C class (``zoneinfo._zoneinfo.ZoneInfo`` calls itself
+    ``zoneinfo.ZoneInfo``, the C class's name) does not resolve at its
+    name, and counted as exec'd user code: its weak cache was folded as
+    the class's data. Its code says whose it is."""
+    mod = sys.modules.get(getattr(cls, "__module__", None) or "")
+    if mod is None or module_file(mod) is None or is_user_code_module(mod):
+        return False
+    try:
+        files = set()
+        for v in vars(cls).values():
+            fn = v.__func__ if isinstance(v, (staticmethod, classmethod)) else v.fget if isinstance(v, property) else v
+            code = getattr(fn, "__code__", None) if type(fn) is types.FunctionType else None
+            if code is not None:
+                files.add(code.co_filename)
+        return bool(files) and not any(is_user_code_file(f) for f in files)
+    except Exception:  # noqa: BLE001 - an odd class keeps the lenient verdict
+        return False
+
+
+#: `_library_methods`, per class.
+library_methods = per_type(_library_methods)
 
 
 def unnamed_library_class(cls: type) -> bool:
