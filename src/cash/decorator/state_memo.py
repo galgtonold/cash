@@ -82,7 +82,7 @@ from ..code_swaps import FOLDED_CODE, FoldedCode
 from ..dependency_state import OUTSIDE_READS_FOLDED, STATE_LEDGER
 from ..effects import ENVIRONMENT_FOLDED, ENVIRONMENT_READS, ENVIRONMENT_READS_FOLDED, environment_value_now
 from . import hit_memo, walk_scope
-from .call_state import CAPTURE_WATCH, CARRIER_LOOKUPS, REACHED_TTLS
+from .call_state import CAPTURE_WATCH, CARRIER_LOOKUPS, HELD_BY_NAME, REACHED_TTLS
 from .class_data import CLASSES_FOLDED
 from .global_values import KEY_BUILD_DIGESTS
 from .globals_fold import READS_FOLDED
@@ -317,6 +317,8 @@ def _mode(name: str, note: bool) -> tuple | None:
         building,
         EXPLAINING.get(),
         id(config) if config is not None else None,
+        # The classes of module data by their surface or by all their code.
+        HELD_BY_NAME.get(),
     )
 
 

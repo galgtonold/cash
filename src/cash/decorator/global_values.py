@@ -24,7 +24,7 @@ from ..exceptions import CashImpurityWarning
 from ..jit_functions import jit_identity, jit_options, jit_python_function
 from ..tracking.randomness import rng_carrier_kind
 from . import walk_scope
-from .call_state import KeyBuildFailed
+from .call_state import KeyBuildFailed, held_by_name
 from .code_tables import CodeTable
 from .function_identity import hash_callable_source
 from .key_values import (
@@ -36,7 +36,7 @@ from .key_values import (
     reduced_state,
     stabilize_for_global_hash,
 )
-from .user_code import is_cash_wrapper, unnamed_library_class
+from .user_code import is_cash_wrapper, is_user_code_object, unnamed_library_class
 
 if TYPE_CHECKING:
     from .arg_hashing import ArgHasher
@@ -176,6 +176,27 @@ class GlobalValues:
         helpers = ",".join(f"{q}={live.get(q, h)}" for q, h in sorted(report.helper_source_hashes.items()))
         return hashlib.sha256(f"{own}|{helpers}".encode("utf-8")).hexdigest()
 
+    def held_class_identity(self, cls: type) -> str:
+        """A class of the user's that module data holds, keyed: by its
+        surface (`trace_items.class_surface_digest`) while the key is built
+        for a call whose body is recorded (`HELD_BY_NAME`), whose trace
+        checks the code of each of its methods that ran; else, or when its
+        surface cannot be digested, by all its code (`data_callable_identity`)."""
+        if held_by_name():
+            from ..tracking.trace_items import class_surface_digest
+
+            surface = class_surface_digest(cls)
+            if surface is not None:
+                return "surface:" + surface
+        return self.data_callable_identity(cls)
+
+    def _held_callable_identity(self, fn: Any) -> str:
+        """`data_callable_identity`, but a class of the user's by
+        `held_class_identity`: what a data value holds."""
+        if isinstance(fn, type) and is_user_code_object(fn):
+            return self.held_class_identity(fn)
+        return self.data_callable_identity(fn)
+
     def reached_helper_digests(self, functions: list[types.FunctionType]) -> dict[str, str]:
         """``qualname -> digest`` of every helper the purity walk of one of
         *functions* reached, besides *functions* themselves: their code as
@@ -274,7 +295,9 @@ class GlobalValues:
         of a table of plain functions (`table_digest`), and for the rest of
         one key build (`KEY_BUILD_DIGESTS`)."""
         build = KEY_BUILD_DIGESTS.get()
-        item = ("data", id(value))
+        # A class it holds by its surface (`held_class_identity`), or not.
+        narrow = held_by_name()
+        item = ("data", id(value), narrow)
         if build is not None:
             entry = build.get(item)
             if entry is not None and entry[0] is value and walk_scope.servable(entry[2]):
@@ -287,10 +310,11 @@ class GlobalValues:
         # for the one built outside it, and the key moved between calls.
         scope = walk_scope.enter(item)
         try:
+            identity = self._held_callable_identity if narrow else self.data_callable_identity
             digest = self.table_digest(
-                "data",
+                "data:surface" if narrow else "data",
                 value,
-                lambda: self._args.hash_payload((stabilize_for_global_hash(value, self.data_callable_identity),), {}),
+                lambda: self._args.hash_payload((stabilize_for_global_hash(value, identity),), {}),
             )
         finally:
             record = walk_scope.leave(scope)

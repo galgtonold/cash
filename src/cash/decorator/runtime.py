@@ -75,6 +75,7 @@ from .call_state import (
     CACHE_MISS,
     CAPTURE_WATCH,
     CARRIER_LOOKUPS,
+    HELD_BY_NAME,
     NESTED_CASH_SECONDS,
     REACHED_TTLS,
     THREADS_IN_CALLS,
@@ -727,6 +728,28 @@ class KeyBuilder:
             return state_hash
         return hashlib.sha256(f"{state_hash}:callee-bindings:{':'.join(parts)}".encode("utf-8")).hexdigest()
 
+    @staticmethod
+    def held_by_name_for(spec: CachedFunction) -> bool:
+        """Is a call of *spec* keyed with the classes of module data by their
+        surface (`HELD_BY_NAME`)? When its body is recorded and its entry
+        served on that record (`code_trace.on`): not for a coroutine, whose
+        body other tasks' code runs in the middle of, nor for a generator,
+        whose body runs after the call, unrecorded."""
+        func = spec.func
+        return code_trace.on() and not (
+            inspect.iscoroutinefunction(func) or inspect.isgeneratorfunction(func) or inspect.isasyncgenfunction(func)
+        )
+
+    def full_closure_state(self, spec: CachedFunction) -> str:
+        """`callee_state` with every class of module data keyed by all its
+        code, as for an untraced call (`HELD_BY_NAME` off): the check an
+        entry whose call left no trace is stored with."""
+        token = HELD_BY_NAME.set(False)
+        try:
+            return self.callee_state(spec)
+        finally:
+            HELD_BY_NAME.reset(token)
+
     def callee_state(self, spec: CachedFunction) -> str:
         """What a call of cached *func_name* depends on besides its arguments,
         as ONE digest: for a cached function another one reaches without a
@@ -745,8 +768,19 @@ class KeyBuilder:
         contributes its name. The ledger and the capture watch of the key
         being built are the caller's, so they are set aside meanwhile.
 
-        Raises `KeyBuildFailed` when the state cannot be built.
+        Raises `KeyBuildFailed` when the state cannot be built. Built inside
+        a key build, with that build's `HELD_BY_NAME`; outside one, with
+        the function's own (`held_by_name_for`).
         """
+        if HELD_BY_NAME.get() is not None:
+            return self._callee_state(spec)
+        token = HELD_BY_NAME.set(self.held_by_name_for(spec))
+        try:
+            return self._callee_state(spec)
+        finally:
+            HELD_BY_NAME.reset(token)
+
+    def _callee_state(self, spec: CachedFunction) -> str:
         func, func_name = spec.func, spec.name
         reached_ttls = REACHED_TTLS.get()
         if reached_ttls is not None:
@@ -822,9 +856,17 @@ class KeyBuilder:
         `_EXPLAINING` is set. *split* holds the ids of the iterator copies
         made for the key alone (`split_for_key`). Each helper the build's
         purity walks reach is read and audited once (`shared_nodes`).
+        The classes of module data are keyed by their surface for a call
+        whose body is recorded (`held_by_name_for`, `BuiltKey.narrowed`).
         """
-        with shared_nodes():
-            return self._build(spec, args, kwargs, split)
+        narrow = self.held_by_name_for(spec)
+        token = HELD_BY_NAME.set(narrow)
+        try:
+            with shared_nodes():
+                built = self._build(spec, args, kwargs, split)
+        finally:
+            HELD_BY_NAME.reset(token)
+        return built._replace(narrowed=True) if narrow else built
 
     def _build(self, spec: CachedFunction, args: tuple, kwargs: dict, split: frozenset[int]) -> BuiltKey:
         func, func_name = spec.func, spec.name
@@ -977,6 +1019,8 @@ class KeyBuilder:
             (STATE_LEDGER, STATE_LEDGER.set(ledger)),
             (CAPTURE_WATCH, CAPTURE_WATCH.set(None)),
             (_EXPLAINING, _EXPLAINING.set(True)),
+            # As the key before the body held the classes of module data.
+            (HELD_BY_NAME, HELD_BY_NAME.set(self.held_by_name_for(spec))),
         )
         try:
             with shared_nodes():
@@ -1335,7 +1379,7 @@ class CallRunner:
         if not self._chunks_are_intact(cache_key, metadata):
             return MissReason(MissKind.INCOMPLETE, "a chunk of the stored result is missing")
         if metadata.code_trace is not None:
-            changed = code_trace.verify(metadata.code_trace, self._cached_state)
+            changed = code_trace.verify(metadata.code_trace, self._cached_state, self._full_closure_state)
             if changed is not None:
                 # Kept for a call that needs none too, as a check beside the
                 # key: then nothing was picked by name.
@@ -1362,6 +1406,29 @@ class CallRunner:
             return self._keys.callee_state(spec)
         except Exception:  # noqa: BLE001 - a state that cannot be built is not the one recorded
             return None
+
+    def _full_closure_state(self, func_name: str) -> str | None:
+        """`KeyBuilder.full_closure_state` of cached function *func_name*
+        now, for a ``full_state`` trace item; None when there is none."""
+        spec = self._registry.cached.get(func_name)
+        if spec is None:
+            return None
+        try:
+            return self._keys.full_closure_state(spec)
+        except Exception:  # noqa: BLE001 - a state that cannot be built is not the one recorded
+            return None
+
+    def _closure_check(self, spec: CachedFunction) -> tuple[list | None, str]:
+        """The trace an entry of a call keyed with the classes of module data
+        by their surface (`BuiltKey.narrowed`) is stored with when its own
+        trace is missing or could not be built: its state with those classes
+        keyed by all their code (``full_state``), checked again on every
+        lookup, so nothing the key left to the trace goes unchecked. ``(None,
+        why)`` when that state cannot be built: the call is not stored."""
+        state = self._full_closure_state(spec.name)
+        if state is None:
+            return None, "cash could not key the code of the classes it reads from module data in full"
+        return [("full_state", spec.name, state)], ""
 
     def _stored_source(self, key: str) -> Any:
         """What the backend holds under *key*: a pickled source a caller's
@@ -1540,6 +1607,7 @@ class CallRunner:
             return call
         call.cache_key, call.state_hash, call.args_hash = built.cache_key, built.state_hash, built.args_hash
         call.traced, call.needs_trace = built.traced, built.needs_trace
+        call.narrowed = built.narrowed
         call.folded_code = built.folded_code
         call.unread = built.unread
         call.trace_for_unread = built.trace_for_unread
@@ -2334,7 +2402,11 @@ class CallRunner:
             # What a call that picks code by name ran, for its trace. Begun
             # and ended outside the body's time: setting the recorder up
             # (installing it, on a process's first call) is cash's cost.
-            call.trace_unit = code_trace.begin(watch_globals=call.needs_trace) if call.traced else None
+            call.trace_unit = (
+                code_trace.begin(watch_globals=call.needs_trace, surface=call.narrowed and not call.needs_trace)
+                if call.traced
+                else None
+            )
             if pt is not None:
                 _phases.mark(pt, _phases.BODY_SETUP)
             body_t0 = _perf_counter()
@@ -2429,6 +2501,14 @@ class CallRunner:
             # A trace is a check on top of the key: a call that does not
             # need one is stored by its key, as without the recorder.
             trace, untraced = None, ""
+        if trace is None and not untraced and call.narrowed:
+            # Its key left the code of the classes module data holds to a
+            # trace there is none of: stored with a check of that code in
+            # full instead.
+            trace, untraced = self._closure_check(spec)
+            call.closure_check = trace
+            if untraced and is_one_shot_iterator(res):
+                return self._untraced(spec, call, untraced, res)
         # A generator is handed straight back, wrapped, and cached only once
         # the caller has drained it. Draining it here instead meant a streamed
         # response arrived in one lump after the full latency, so
@@ -2508,6 +2588,7 @@ class CallRunner:
             inputs_moved=None if swapped else self._inputs_moved_check(spec, call),
             cost=execution_time,
             watch_identities=call.watch_identities,
+            narrowed=call.narrowed,
         )
         if refusal is None:
             refusal = swapped
@@ -2664,6 +2745,9 @@ class CallRunner:
             strict=call.needs_trace,
             accepted=accepted,
             owners=owners,
+            # A call that needs its trace is checked on all of each class's
+            # code, as before: the strict build judges what ran.
+            narrow=call.narrowed and not call.needs_trace,
         )
 
     def _code_swapped(self, spec: CachedFunction, call: Call) -> str | None:

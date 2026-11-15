@@ -642,6 +642,7 @@ class ClassDataFold:
         owner_code: Any = None,
         seen: set | None = None,
         reader: Any = None,
+        by_name: bool = False,
     ) -> list[tuple[str, str]]:
         """Key parts for the DATA a user class brings: what it holds, and what
         its code reads.
@@ -668,6 +669,13 @@ class ClassDataFold:
         same dedup (*seen*); a global any of them writes is state, not input,
         and is left out. *reader* is the function that reached the class, for
         naming a member that cannot be hashed.
+
+        *by_name*: the class is one module data holds, keyed by its surface
+        for a call whose trace checks the code of each method that ran and
+        the globals it read (`HELD_BY_NAME`): what its functions read is
+        left to that trace, so an edit to what a method no call runs reads
+        keeps the key. Folded so, it is folded again in full when the same
+        key reaches it another way.
         """
         folded = CLASSES_FOLDED.get()
         token = None
@@ -675,16 +683,16 @@ class ClassDataFold:
             folded = set()
             token = CLASSES_FOLDED.set(folded)
         try:
-            if id(cls) in folded:
+            if id(cls) in folded or (by_name and ("by_name", id(cls)) in folded):
                 return []
-            folded.add(id(cls))
-            return self._class_parts(cls, func_name, owner_code, seen, reader)
+            folded.add(("by_name", id(cls)) if by_name else id(cls))
+            return self._class_parts(cls, func_name, owner_code, seen, reader, by_name)
         finally:
             if token is not None:
                 CLASSES_FOLDED.reset(token)
 
     def _class_parts(
-        self, cls: type, func_name: str, owner_code: Any, seen: set | None, reader: Any
+        self, cls: type, func_name: str, owner_code: Any, seen: set | None, reader: Any, by_name: bool = False
     ) -> list[tuple[str, str]]:
         if owner_code is None:
             owner = self._registry.functions.get(func_name)
@@ -708,7 +716,8 @@ class ClassDataFold:
                 raise _unhashable_annotation(cls, func_name, e) from e
         if unhashable:
             self._warn_unhashable_class_data(func_name, unhashable, read_names, reader)
-        parts.extend(self._function_read_parts(functions, excluded, label, func_name, owner_code, seen))
+        if not by_name:
+            parts.extend(self._function_read_parts(functions, excluded, label, func_name, owner_code, seen))
         parts.extend(self._held_code_parts(cls, label, func_name, owner_code, learned))
         return parts
 

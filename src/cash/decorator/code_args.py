@@ -899,6 +899,7 @@ class CodeArgs:
         seen_carriers: set[int] | None = None,
         owner_code: Any = None,
         env_entries: set | None = None,
+        by_name: bool = False,
     ) -> list[str]:
         """Key parts for the user code *value* carries: each carrier's code and
         what that code reads. One walk for an argument and a data global.
@@ -913,6 +914,11 @@ class CodeArgs:
         identity because every carrier stays reachable from the values for
         the whole key build, so no id can be recycled underneath us.
         *owner_code* is the cached function's code, for the drift guard.
+
+        *by_name*: *value* is module data, keyed for a call whose trace
+        checks the code of each method that ran and what it read
+        (`HELD_BY_NAME`): a class of the user's is keyed by its surface and
+        its data (`_held_class_carrier_parts`), not by all its code.
         """
         if seen_carriers is None:
             seen_carriers = set()
@@ -937,6 +943,12 @@ class CodeArgs:
                 continue
             if is_opaque(carrier):
                 continue
+            if by_name and isinstance(carrier, type) and is_user_code_carrier(carrier):
+                surface = self._code.held_class_surface(carrier)
+                if surface is not None:
+                    parts.append(f"{carrier_name(carrier)}:{surface}")
+                    parts.extend(self._held_class_carrier_parts(carrier, func_name, param, owner_code, env))
+                    continue
             digest = self._code.code_surface_hash(carrier)
             if digest is not None:
                 parts.append(f"{carrier_name(carrier)}:{digest}")
@@ -996,6 +1008,28 @@ class CodeArgs:
         env |= own_env
         if cap is not None:
             self._carrier_memo.put(key, proof, (owner_code, cap, tuple(parts), frozenset(own_env)))
+        return parts
+
+    def _held_class_carrier_parts(
+        self, carrier: type, func_name: str, param: str | None, owner_code: Any, env: set
+    ) -> list[str]:
+        """`_user_carrier_parts` for a class module data holds, keyed by its
+        surface: its data (`ClassDataFold.class_parts`), not what its
+        functions read, nor their captures or helpers, which the trace
+        checks for each that ran; the environment variables its code reads
+        and its lookups by name, as for any carrier."""
+        parts = [
+            f"argclass:{label}:{h}"
+            for label, h in self._classes.class_parts(carrier, func_name, owner_code=owner_code, by_name=True)
+        ]
+        env |= self._carrier_environment_reads(carrier)
+        lookups = self.carrier_lookups(carrier)
+        if lookups:
+            pending = CARRIER_LOOKUPS.get()
+            if pending is not None:
+                pending.extend(lookups)
+            self._warn_untrackable_in_carrier_once(carrier, lookups, func_name, param)
+        self._warn_ambient_in_carrier_once(carrier, func_name, param)
         return parts
 
     def _verify_carrier(self, carrier: Any, func_name: str, param: str | None, owner_code: Any, entry: tuple) -> None:

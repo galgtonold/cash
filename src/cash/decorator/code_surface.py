@@ -826,11 +826,22 @@ class CodeSurface:
         self._user_class_src_cache[cls] = h
         return h
 
+    def held_class_surface(self, cls: type) -> str | None:
+        """*cls*, a class of the user's that data holds, by its surface
+        (`trace_items.class_surface_digest`), for a key whose call's trace
+        checks the code of each of its methods that ran (`HELD_BY_NAME`);
+        None when it cannot be digested so, to be keyed by its code."""
+        from ..tracking.trace_items import class_surface_digest
+
+        surface = class_surface_digest(cls)
+        return None if surface is None else "surface:" + surface
+
     def instance_class_source_parts(
         self,
         value: Any,
         _seen: set | None = None,
         own_pkg: str | None = None,
+        by_name: bool = False,
     ) -> list[tuple[str, str]]:
         """``(qualname, source-hash)`` for the user classes behind an INSTANCE.
 
@@ -848,6 +859,9 @@ class CodeSurface:
         on real pipelines. A user class reachable only through a third-party
         container is not folded here; `CodeArgs.carrier_parts`, which a data
         global also goes through, searches library objects for it.
+
+        *by_name*: each class by its surface (`held_class_surface`) where it
+        can be, for a call whose trace checks the methods that ran.
         """
         if _seen is None:
             _seen = set()
@@ -863,10 +877,14 @@ class CodeSurface:
             _seen.add(id(item))
             cls = type(item)
             if is_user_class(cls, own_pkg):
-                try:
-                    parts.append((cls.__qualname__, self.user_class_source_hash(cls)))
-                except SOURCE_RETRIEVAL_ERRORS:
-                    pass
+                surface = self.held_class_surface(cls) if by_name else None
+                if surface is not None:
+                    parts.append((cls.__qualname__, surface))
+                else:
+                    try:
+                        parts.append((cls.__qualname__, self.user_class_source_hash(cls)))
+                    except SOURCE_RETRIEVAL_ERRORS:
+                        pass
             held = getattr(item, "__dict__", None)
             if isinstance(held, dict):
                 found = [

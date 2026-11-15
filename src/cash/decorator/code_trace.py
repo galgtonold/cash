@@ -21,6 +21,14 @@ check, since a trace cannot see a seed or a value a function holds.
     stands for.
 ``("class", module, qualname, digest)``
     a class of the user's a method that ran was called on.
+``("surface", module, qualname, digest)``
+    the same, by its surface (`trace_items.class_surface_digest`), in a
+    trace built for a key that holds the classes of module data by their
+    surface (`build`'s *narrow*).
+``("full_state", func_name, digest)``
+    the state segment of the cached function *func_name* built with every
+    class of module data keyed by all its code, for an entry whose key
+    held them by their surface and whose call left no trace to check.
 ``("global", module, name, digest)``
     a global such a function reads by name, ``"absent"`` when unbound.
 ``("attr", module, "mod.a.b", digest)``
@@ -215,10 +223,15 @@ def _unit_class() -> type:
             "lib_items",
             "lib_keys",
             "sites",
+            "surface",
         )
 
         def __init__(self, kind: str) -> None:
             super().__init__(kind)
+            #: A traced call whose key holds the classes of module data by
+            #: their surface (`begin`): its cells are digested as they start
+            #: with classes by their surface too, as `build` digests them.
+            self.surface = False
             #: name -> code of the cached functions served inside (`note_cached_hit`).
             self.cached_codes: dict[str, types.CodeType] = {}
             #: ``(kind, id(target), name)`` -> ``(kind, target, name)``.
@@ -598,8 +611,9 @@ def _recorder_class() -> type:
             self._kinds.clear()
             sys.monitoring.restart_events()
 
-        def begin(self, kind: str, *, watch_globals: bool = False) -> Any:
+        def begin(self, kind: str, *, watch_globals: bool = False, surface: bool = False) -> Any:
             unit = TraceUnit(kind)
+            unit.surface = surface
             if watch_globals:
                 unit.global_starts = {}
                 unit.line_codes = set()
@@ -820,7 +834,7 @@ def _recorder_class() -> type:
                     recv = frame.f_locals.get(code.co_varnames[0])
                 except Exception:  # noqa: BLE001 - a frame whose locals cannot be read has no receiver
                     recv = None
-            cells = None
+            cells = surface_cells = None
             if code.co_freevars and self.active:
                 self._closure_modules(code, frame)
             # A generator expression's cells are left out: what they held is
@@ -832,10 +846,18 @@ def _recorder_class() -> type:
             if code.co_freevars and not self._in_callback and not _is_genexpr(code):
                 self._in_callback = True
                 try:
-                    from ..tracking.trace_items import start_cells
+                    from ..tracking.trace_items import SURFACE, start_cells
 
+                    modes = {getattr(u, "surface", False) for u in units}
                     with untracked():
-                        cells = start_cells(frame, code)
+                        if False in modes:
+                            cells = start_cells(frame, code)
+                        if True in modes:
+                            token = SURFACE.set(True)
+                            try:
+                                surface_cells = start_cells(frame, code)
+                            finally:
+                                SURFACE.reset(token)
                 finally:
                     self._in_callback = False
             watching = [u for u in self.active if u.global_starts is not None and code not in u.codes]
@@ -854,8 +876,9 @@ def _recorder_class() -> type:
             for unit in units:
                 rec.note_collected(unit, code, inside_collection)
                 unit.codes.setdefault(code, (g, module))
-                if cells is not None:
-                    unit.cells.setdefault(code, cells)
+                started = surface_cells if getattr(unit, "surface", False) else cells
+                if started is not None:
+                    unit.cells.setdefault(code, started)
                 if recv is not None:
                     unit.receivers.setdefault(code, recv if issubclass(type(recv), type) else type(recv))
 
@@ -988,13 +1011,15 @@ def recorder_or_reason() -> Any:
     return _RECORDER
 
 
-def begin(*, watch_globals: bool = False) -> Any:
+def begin(*, watch_globals: bool = False, surface: bool = False) -> Any:
     """Start recording a traced call's body; None when it cannot be.
     *watch_globals*: the call picks code by name, so the globals the code
     it runs reads are digested as that code starts (`_note_global_starts`)
-    and `build` refuses a call that changed one."""
+    and `build` refuses a call that changed one. *surface*: its trace will
+    be built with *narrow* (`build`), so the closure cells of the code that
+    starts are digested with classes by their surface."""
     rec = _recorder() if TRACEABLE else None
-    return rec.begin("decorator", watch_globals=watch_globals) if rec is not None else None
+    return rec.begin("decorator", watch_globals=watch_globals, surface=surface) if rec is not None else None
 
 
 def end(unit: Any) -> None:
@@ -1496,16 +1521,25 @@ def first_import_digest(name: str, was: str | None = None) -> str | None:
 class _Build:
     """The items of one traced call (`build`)."""
 
-    def __init__(self, unit: Any, static_codes: set[types.CodeType], strict: bool = True) -> None:
+    def __init__(self, unit: Any, static_codes: set[types.CodeType], strict: bool = True, narrow: bool = False) -> None:
         self.unit = unit
         self.static = static_codes
         self.strict = strict
+        #: The key holds the classes of module data by their surface: a
+        #: class is digested by its surface (`trace_items.SURFACE`), its
+        #: methods that ran by their own code items, and nothing that ran
+        #: may be left out (`left_out`).
+        self.narrow = narrow
+        #: Code that ran was left out, no name holding it (`_unless_unnamed`).
+        self.left_out = False
         self.items: dict[tuple, str] = {}
         self.functions: list[Any] = []
 
     def add(self, item: tuple, digest: str | None, why: str) -> None:
         if digest is None:
             raise _Untraceable(why)
+        if self.narrow and item[0] not in _FILE_KINDS:
+            digest = _NARROW + digest
         self.items.setdefault(item, digest)
 
     def run(self) -> list[tuple]:
@@ -1565,6 +1599,7 @@ class _Build:
             except _Unnamed:
                 if self.strict:
                     raise
+                self.left_out = True
                 # Left out whole, with the globals it reads: they are found
                 # again only through the code, and what it reads may be no
                 # value a later process rebuilds the same (a
@@ -1574,7 +1609,7 @@ class _Build:
             recv = unit.receivers.get(code)
             if recv is not None and _user_class(recv):
                 with self._unless_unnamed():
-                    self._class(recv, ran)
+                    self._class(recv, ran, receiver=True)
             ns = g
             table = name_table(code)
             for name in table.reads:
@@ -1615,6 +1650,7 @@ class _Build:
         except _Unnamed:
             if self.strict:
                 raise
+            self.left_out = True
 
     def _imported(self, code: types.CodeType, g: Mapping[str, Any]) -> None:
         """What *code* takes from a user module it imports, by value:
@@ -1740,14 +1776,23 @@ class _Build:
             return
         raise _Unnamed(f"it ran {module}.{qn}, which no name of {module} holds")
 
-    def _class(self, cls: type, ran: set[str]) -> None:
-        from ..tracking.trace_items import remembered_class_digest
+    def _class(self, cls: type, ran: set[str], *, receiver: bool = False) -> None:
+        from ..tracking.trace_items import class_surface_digest, remembered_class_digest
 
         qn = cls.__qualname__
         if "<locals>" in qn:
             if qn.rsplit(".<locals>.", 1)[0] in ran:
                 return
             raise _Unnamed(f"it ran a method of {qn}, a class no name holds")
+        if receiver and self.narrow:
+            # The class a method ran on: its methods that ran have code
+            # items of their own, so the rest go by name. A class that
+            # holds a method made for it (`_holding_class`) is checked by
+            # all its code below.
+            surface = class_surface_digest(cls)
+            if surface is not None:
+                self.add(("surface", cls.__module__, qn), surface, "")
+                return
         self.add(("class", cls.__module__, qn), remembered_class_digest(cls), "")
 
     def _lookup(self, kind: str, target: Any, name: str | None) -> None:
@@ -1780,6 +1825,13 @@ class _Build:
 
 class _Untraceable(Exception):
     """Why a traced call's trace could not be built."""
+
+
+#: Items whose digest is a file's, the same whatever classes it names.
+_FILE_KINDS = frozenset({"import", "first_import"})
+#: What a digest taken with classes by their surface starts with
+#: (`_Build.add`): `verify` digests such an item the same way again.
+_NARROW = "n:"
 
 
 class _Unnamed(_Untraceable):
@@ -2318,6 +2370,7 @@ def build(
     strict: bool = True,
     accepted: set[types.CodeType] | None = None,
     owners: frozenset[int] = frozenset(),
+    narrow: bool = False,
 ) -> tuple[list[tuple] | None, str]:
     """The items of a traced call's finished *unit*, or None and why the
     call's result cannot be served from a trace. *static_codes* are the
@@ -2327,13 +2380,23 @@ def build(
     code the key folded from the call's arguments (a method of an
     argument's class), which a call without the lookup runs as well.
     *owners*: the ids of the instances the call's attribute changes were
-    recorded on (`_refusal_in`)."""
-    from ..tracking.trace_items import call_starts
+    recorded on (`_refusal_in`). *narrow*: the call's key holds the classes
+    of module data by their surface only (`HELD_BY_NAME`), so every class
+    here is digested by its surface too, and its methods that ran are
+    checked by their code items; code that ran and that no name holds
+    leaves no trace at all then, since the key no longer stands for it."""
+    from ..tracking.trace_items import SURFACE, call_starts
 
     try:
-        with call_starts(unit.cells):
-            b = _Build(unit, static_codes, strict)
-            items = b.run()
+        surface = SURFACE.set(narrow)
+        try:
+            with call_starts(unit.cells):
+                b = _Build(unit, static_codes, strict, narrow)
+                items = b.run()
+        finally:
+            SURFACE.reset(surface)
+        if b.left_out and narrow:
+            return None, "it ran code no name holds, which its key does not hold all of"
         judged = [f for f in b.functions if f.__code__ not in accepted] if accepted else b.functions
         if strict:
             note_line_status(static_codes)
@@ -2397,10 +2460,17 @@ def folded_codes(folded: Any) -> set[types.CodeType] | None:
 
 
 # -- checking --------------------------------------------------------------
-def verify(items: list, cached_state: Callable[[str], str | None]) -> str | None:
+def verify(
+    items: list,
+    cached_state: Callable[[str], str | None],
+    full_state: Callable[[str], str | None] | None = None,
+) -> str | None:
     """None when every item of a stored trace still holds its digest, else
     what changed, in a few words. *cached_state* gives a cached function's
-    state segment now."""
+    state segment now; *full_state* the same with every class of module
+    data keyed by all its code (a ``full_state`` item)."""
+    from ..tracking.trace_items import SURFACE
+
     try:
         items = [tuple(i) for i in items]
         # Modules imported by name first: the code items below find their
@@ -2417,62 +2487,74 @@ def verify(items: list, cached_state: Callable[[str], str | None]) -> str | None
                 if was != _ABSENT:
                     importlib.import_module(name)
         for item in items:
-            kind = item[0]
-            if kind == "import":
+            if item[0] == "import":
                 continue
-            if kind == "first_import":
-                # Loaded already, by this process or the check above: its
-                # file is the one the call imported.
-                now = _import_digest(item[1])
-                what = f"the module {item[1]}"
-            elif kind == "code":
-                from ..tracking.trace_items import resolve
-
-                rc, fn, _ = resolve(item[1], item[2], {}, "\x00")
-                now = None if rc is None else _code_digest(rc, fn)
-                what = f"{item[1]}.{item[2]}"
-            elif kind in ("file_code", "file_global"):
-                ns = _frame_namespace(item[1], item[2])
-                if kind == "file_code":
-                    from ..tracking.trace_items import resolve
-
-                    rc, fn, _ = resolve(item[1], item[3], ns, item[1]) if ns is not None else (None, None, None)
-                    now = None if rc is None else _code_digest(rc, fn)
-                    what = f"{item[3]} of {item[2]}"
-                else:
-                    now = None if ns is None else (_digest(ns[item[3]]) if item[3] in ns else _ABSENT)
-                    what = f"the global {item[3]} of {item[2]}"
-            elif kind == "held":
-                ns = _namespace(item[1])
-                now = None if ns is None else (_digest(ns[item[2]]) if item[2] in ns else _ABSENT)
-                what = f"{item[1]}.{item[2]}"
-            elif kind == "alias":
-                now = _alias_digest(_namespace(item[1]), item[1], item[2])
-                what = f"the type alias {item[1]}.{item[2]}"
-            elif kind == "class":
-                from ..tracking.trace_items import remembered_class_digest
-
-                cls = _find(item[1], item[2])
-                now = remembered_class_digest(cls) if isinstance(cls, type) else None
-                what = f"the class {item[1]}.{item[2]}"
-            elif kind == "global":
-                ns = _namespace(item[1])
-                now = None if ns is None else (_digest(ns[item[2]]) if item[2] in ns else _ABSENT)
-                what = f"the global {item[1]}.{item[2]}"
-            elif kind == "attr":
-                now = _chain_digest(item[1], item[2])
-                what = item[2]
-            elif kind == "lookup":
-                now = _lookup_digest(item[1], item[2], item[3])
-                where = f"{item[1]}.{item[2]}" if item[2] else item[1]
-                what = f"what {where} holds" + (f" under {item[3]!r}" if item[3] != "*" else "")
-            elif kind == "cached":
-                now = cached_state(item[1])
-                what = f"the cached function {item[1]}"
-            else:
-                return f"an item cash does not know ({kind})"
-            if now is None or now != item[-1]:
+            was = item[-1]
+            narrow = isinstance(was, str) and was.startswith(_NARROW)
+            surface = SURFACE.set(narrow)
+            try:
+                now, what = _item_now(item, cached_state, full_state)
+            finally:
+                SURFACE.reset(surface)
+            if now is _UNKNOWN:
+                return f"an item cash does not know ({item[0]})"
+            if now is None or (_NARROW + now if narrow else now) != was:
                 return f"{what} changed"
         return None
     except Exception as e:  # noqa: BLE001 - a trace that cannot be checked is not served
         return f"its trace could not be checked ({type(e).__name__})"
+
+
+_UNKNOWN = object()
+
+
+def _item_now(
+    item: tuple, cached_state: Callable[[str], str | None], full_state: Callable[[str], str | None] | None
+) -> tuple[Any, str]:
+    """``(the digest *item* names now, what it names)`` for `verify`;
+    `_UNKNOWN` for an item of a kind cash does not know."""
+    kind = item[0]
+    if kind == "first_import":
+        # Loaded already, by this process or the check in `verify`: its
+        # file is the one the call imported.
+        return _import_digest(item[1]), f"the module {item[1]}"
+    if kind == "code":
+        from ..tracking.trace_items import resolve
+
+        rc, fn, _ = resolve(item[1], item[2], {}, "\x00")
+        return (None if rc is None else _code_digest(rc, fn)), f"{item[1]}.{item[2]}"
+    if kind in ("file_code", "file_global"):
+        ns = _frame_namespace(item[1], item[2])
+        if kind == "file_code":
+            from ..tracking.trace_items import resolve
+
+            rc, fn, _ = resolve(item[1], item[3], ns, item[1]) if ns is not None else (None, None, None)
+            return (None if rc is None else _code_digest(rc, fn)), f"{item[3]} of {item[2]}"
+        now = None if ns is None else (_digest(ns[item[3]]) if item[3] in ns else _ABSENT)
+        return now, f"the global {item[3]} of {item[2]}"
+    if kind in ("held", "global"):
+        ns = _namespace(item[1])
+        now = None if ns is None else (_digest(ns[item[2]]) if item[2] in ns else _ABSENT)
+        return now, (f"{item[1]}.{item[2]}" if kind == "held" else f"the global {item[1]}.{item[2]}")
+    if kind == "alias":
+        return _alias_digest(_namespace(item[1]), item[1], item[2]), f"the type alias {item[1]}.{item[2]}"
+    if kind in ("class", "surface"):
+        from ..tracking.trace_items import class_surface_digest, remembered_class_digest
+
+        cls = _find(item[1], item[2])
+        if not isinstance(cls, type):
+            now = None
+        else:
+            now = class_surface_digest(cls) if kind == "surface" else remembered_class_digest(cls)
+        return now, f"the class {item[1]}.{item[2]}"
+    if kind == "attr":
+        return _chain_digest(item[1], item[2]), item[2]
+    if kind == "lookup":
+        where = f"{item[1]}.{item[2]}" if item[2] else item[1]
+        what = f"what {where} holds" + (f" under {item[3]!r}" if item[3] != "*" else "")
+        return _lookup_digest(item[1], item[2], item[3]), what
+    if kind == "cached":
+        return cached_state(item[1]), f"the cached function {item[1]}"
+    if kind == "full_state" and full_state is not None:
+        return full_state(item[1]), f"code the classes {item[1]} reads from module data hold"
+    return _UNKNOWN, kind

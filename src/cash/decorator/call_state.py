@@ -81,6 +81,10 @@ class BuiltKey(NamedTuple):
     #: in code an argument carries: a call that did not load it is stored
     #: by its key when the trace cannot be built.
     trace_for_unread: bool = False
+    #: Built with the classes of module data held by their surface
+    #: (`HELD_BY_NAME`): stored only with a trace of what ran, or else with
+    #: a check of their code in full (`CallRunner.finish_miss`).
+    narrowed: bool = False
 
 
 class Call:
@@ -117,6 +121,8 @@ class Call:
         "folded_code",
         "unread",
         "trace_for_unread",
+        "narrowed",
+        "closure_check",
         "refusal_probe",
         "refusal_key",
         "args_fingerprinted",
@@ -172,6 +178,11 @@ class Call:
         #: The key's `BuiltKey.unread`.
         self.unread: frozenset = frozenset()
         self.trace_for_unread = False
+        #: The key's `BuiltKey.narrowed`, and the trace an entry of a call
+        #: whose own trace is missing is stored with in its place: a check of
+        #: its state with the classes of module data keyed in full.
+        self.narrowed = False
+        self.closure_check: list | None = None
         #: Whether this call keeps or drops a refusal verdict once it is
         #: checked (`CallRunner._known_refusal`), and its `RefusalVerdicts`
         #: key when the lookup made one.
@@ -277,6 +288,23 @@ CARRIER_LOOKUPS: "contextvars.ContextVar[list | None]" = contextvars.ContextVar(
 
 #: `ResultStore.refusal` was not handed a capture watch (the streaming path).
 NO_WATCH = object()
+
+
+#: Is the key being built for a call whose body the code trace records
+#: (`code_trace.on`, a plain function)? Then a class of the user's whose
+#: objects module data holds -- an instance read as ``lib.SVC``, a table of
+#: classes -- is keyed by its surface (`trace_items.class_surface_digest`):
+#: its name, its bases, what it holds, its methods by name. The code of the
+#: methods that run is checked by the trace's code items, so an edit to
+#: one no call runs (``Minimizer.shgo`` beside the ``leastsq`` a fit runs)
+#: keeps the key. None outside a key build: each build sets it, and the
+#: state of a cached callee built inside one follows it.
+HELD_BY_NAME: contextvars.ContextVar[bool | None] = contextvars.ContextVar("_cash_held_by_name", default=None)
+
+
+def held_by_name() -> bool:
+    """`HELD_BY_NAME`, False outside a key build."""
+    return bool(HELD_BY_NAME.get())
 
 
 #: The seconds cash spent inside the body of the cached call in progress, on

@@ -21,6 +21,10 @@ when the unit ran:
     lineage when it has one, as the key compares it.
 ``("attr", module, "mod.a.b", digest)``
     an attribute chain through a module of the user's own code.
+``("surface", module, qualname, digest)``
+    a class a method that ran was called on, by its surface
+    (`class_surface_digest`): what it holds and its bases', each method by
+    name only, for a trace whose code items check the methods that ran.
 ``("gap", module, qualname, why)``
     code that ran but that nothing here can find again; it is counted,
     never compared.
@@ -34,6 +38,7 @@ from __future__ import annotations
 
 import builtins
 import contextlib
+import contextvars
 import dataclasses
 import dis
 import functools
@@ -51,8 +56,10 @@ from typing import Any
 from ..kept_state import global_rng_stand_in
 
 __all__ = [
+    "SURFACE",
     "VALUE_CAP",
     "class_digest",
+    "class_surface_digest",
     "code_digest",
     "name_table",
     "resolve",
@@ -526,7 +533,7 @@ class _Digester:
         if id(t) in self.types or not is_user_type(t):
             return
         self.types.add(id(t))
-        h.update(class_digest(t, self).encode())
+        h.update(_class_digest_now(t, self, surface=SURFACE.get()).encode())
 
 
 #: A type parameter's ``__default__`` when it has none (3.13+).
@@ -719,11 +726,69 @@ def class_digest(cls: type, within: _Digester | None = None) -> str:
     return _class_digest_now(cls, within)
 
 
+#: Set while a trace's items are digested for a call whose key holds the
+#: classes of module data by their surface (`code_trace.build`): a class
+#: met inside a value is digested by its surface too (`_class_digest`),
+#: each method by name, since the methods that ran have code items of
+#: their own.
+SURFACE: contextvars.ContextVar[bool] = contextvars.ContextVar("cash_class_surface", default=False)
+
+
 def remembered_class_digest(cls: type) -> str:
     """`class_digest` of *cls* on its own, remembered while the class's
     world stands still (`class_memo`): a call's trace names about a dozen
     classes, each digested again on every miss that records it and every
     check of it."""
+    return _remembered(cls, "digest", lambda: _class_digest_now(cls, None))
+
+
+def class_surface_digest(cls: type) -> str | None:
+    """*cls* by its surface: its name, the names of its bases, and for it
+    and each base of the user's what it holds, a plain method (a function
+    with no closure of its own, or a staticmethod, classmethod, property or
+    ``cached_property`` of one) by its name and kind only, not its code.
+    A class met in what it holds is digested the same way. None when what
+    it holds cannot be digested.
+
+    For a call whose trace has a code item for every method that ran: an
+    edit to a method no call ran leaves this digest alone, and one to a
+    method that ran moves that method's item. Remembered as
+    `remembered_class_digest` is."""
+    if not isinstance(cls, type) or not is_user_type(cls) or "<locals>" in cls.__qualname__:
+        # One no module of the user's holds (made by ``exec``, or inside a
+        # function), which no trace item finds again by name.
+        return None
+    parts = []
+    for klass in cls.__mro__:
+        if is_user_type(klass):
+            got = _remembered(klass, "surface", lambda klass=klass: _own_surface(klass))
+            if got.startswith("opaque:"):
+                return None
+            parts.append(got)
+        else:
+            parts.append(f"{klass.__module__}.{klass.__qualname__}")
+    return hashlib.blake2b("|".join(parts).encode(), digest_size=12).hexdigest()
+
+
+def _own_surface(cls: type) -> str:
+    """What *cls* itself holds, by `class_surface_digest`'s rules."""
+    token = SURFACE.set(True)
+    try:
+        h = hashlib.blake2b(digest_size=12)
+        d = _Digester(h)
+        d.types.add(id(cls))
+        d.open.add(id(cls))
+        return _class_digest(cls, h, d, surface=True)
+    except Exception:  # noqa: BLE001 - a class that breaks on being read
+        return "opaque:" + cls.__qualname__
+    finally:
+        SURFACE.reset(token)
+
+
+def _remembered(cls: type, kind: str, compute: Any) -> str:
+    """*compute*'s digest of *cls*, remembered while its world stands
+    still (`class_memo`), apart for each *kind* and for digests taken by
+    the surface of the classes met inside (`SURFACE`)."""
     if not getattr(_STARTS, "cells", None):
         # Not while a call's start cells stand in for its functions' cells
         # (`start_cells`): the digest then is of that call's, not the class's.
@@ -732,18 +797,19 @@ def remembered_class_digest(cls: type) -> str:
         if class_memo.ENABLED:
             proof = class_memo.proof_for(cls, "digest")
             if proof is not None:
-                got = class_memo.DIGESTS.get((id(cls),), proof)
+                key = (id(cls),) if kind == "digest" and not SURFACE.get() else (id(cls), kind, SURFACE.get())
+                got = class_memo.DIGESTS.get(key, proof)
                 if got is class_memo.MISS or class_memo.VERIFY:
-                    fresh = _class_digest_now(cls, None)
+                    fresh = compute()
                     if got is not class_memo.MISS and got != fresh:
-                        raise class_memo.ClassMemoMismatch(f"the digest of {cls.__qualname__} changed unseen")
-                    class_memo.DIGESTS.put((id(cls),), proof, fresh)
+                        raise class_memo.ClassMemoMismatch(f"the {kind} of {cls.__qualname__} changed unseen")
+                    class_memo.DIGESTS.put(key, proof, fresh)
                     return fresh
                 return got
-    return _class_digest_now(cls, None)
+    return compute()
 
 
-def _class_digest_now(cls: type, within: _Digester | None) -> str:
+def _class_digest_now(cls: type, within: _Digester | None, *, surface: bool = False) -> str:
     h = hashlib.blake2b(digest_size=12)
     d = _Digester(h)
     if within is not None:
@@ -754,13 +820,36 @@ def _class_digest_now(cls: type, within: _Digester | None) -> str:
     opened = id(cls) not in d.open
     d.open.add(id(cls))
     try:
-        return _class_digest(cls, h, d)
+        return _class_digest(cls, h, d, surface=surface)
     finally:
         if opened:
             d.open.discard(id(cls))
 
 
-def _class_digest(cls: type, h: Any, d: _Digester) -> str:
+def _plain_method_kind(value: Any) -> str | None:
+    """The kind of *value* when it is a plain method of a class: a function
+    whose only free variable is ``__class__`` (``super()``), or a
+    staticmethod, classmethod, property or ``cached_property`` holding only
+    such functions; else None. Run, such a function is found again by its
+    qualified name and checked by a code item of its own; one with a
+    closure is not, so it is digested by its code and cells."""
+
+    def plain(fn: Any) -> bool:
+        return type(fn) is types.FunctionType and set(fn.__code__.co_freevars) <= {"__class__"}
+
+    if plain(value):
+        return "def"
+    if isinstance(value, (staticmethod, classmethod)):
+        return type(value).__name__ if plain(value.__func__) else None
+    if type(value) is property:
+        fns = [f for f in (value.fget, value.fset, value.fdel) if f is not None]
+        return "property" if fns and all(map(plain, fns)) else None
+    if type(value) is functools.cached_property:
+        return "cached_property" if plain(value.func) else None
+    return None
+
+
+def _class_digest(cls: type, h: Any, d: _Digester, *, surface: bool = False) -> str:
     from ..decorator.loop_leftovers import leftover_value, set_loop_leftovers
 
     h.update(",".join(f"{c.__module__}.{c.__qualname__}" for c in cls.__mro__).encode())
@@ -772,6 +861,12 @@ def _class_digest(cls: type, h: Any, d: _Digester) -> str:
     leftovers = set_loop_leftovers(cls, tuple(k for k, v in attrs if isinstance(k, str) and not callable(v)))
     for name, value in attrs:
         h.update(b"\x00" + str(name).encode())
+        kind = _plain_method_kind(value) if surface else None
+        if kind is not None:
+            # By name: the code items of the call's trace check the
+            # methods that ran.
+            h.update(b"method:" + kind.encode())
+            continue
         if name in leftovers:
             # What a class-body loop over a set left: which set, not which
             # element its iteration order ended on.
