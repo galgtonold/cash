@@ -56,15 +56,20 @@ Parsing a module with Cython costs about a second (importing the compiler
 alone a fifth of one), which every fresh process paid for every module it
 reached. So a module's analysis is stored on disk (`cash.analysis.scan_store`,
 one record per built file) with everything it was worked out from: the
-binary's content digest, the Cython version, the Python and its
-``sys.path``; the content digest of every file it read (the ``.pyx``, its
-``.pxd`` / ``.pxi`` files, the cimported ``.pxd`` files, the headers, the
-build configuration); and the answer of every check for a file that may or
-may not be there (a cimport's candidates, a ``meson.build``). A later process
-uses the record only when all of them are the same now -- each file is read
-and digested again (a build configuration file in its canonical form),
-never trusted by its timestamp -- and then never imports the Cython
-compiler. An analysis that failed for any reason but a missing file is
+binary's content digest, the Cython version and the Python; the content
+digest of every file it read (the ``.pyx``, its ``.pxd`` / ``.pxi`` files,
+the cimported ``.pxd`` files, the headers, the build configuration); the
+answer of every check for a file that may or may not be there (a cimport's
+candidates, a ``meson.build``); and the import path it ran under with the
+answer of every lookup that depends on it (where each cimport and header
+was found, which files are the user's). A later process uses the record
+only when all of them are the same now -- each file is read and digested
+again (a build configuration file in its canonical form), never trusted by
+its timestamp, and under another import path (a driver script in another
+folder) each lookup is made again (`_lookups_hold`) -- and then never
+imports the Cython compiler. Keyed by the import path itself, a record
+was replaced by every process started from another folder, and each of
+them parsed every module again. An analysis that failed for any reason but a missing file is
 stored as a fallback too, so it is not paid again in every process. The checks that do not depend on content (a keyed
 file newer than the binary, every function of the binary where the
 analysis places it) run every time.
@@ -195,17 +200,19 @@ class _Module:
 
 
 #: The layout of a stored analysis; a change makes every older one a miss.
-_STORE_FORMAT = 2
+_STORE_FORMAT = 3
 _STORE_KIND = f"cython-module-v{_STORE_FORMAT}"
 
 
 class _Inputs:
-    """What an analysis read: each file's content digest, and the answer of
-    each check for whether a file or folder is there."""
+    """What an analysis read: each file's content digest, the answer of
+    each check for whether a file or folder is there, and the answer of each
+    lookup that depends on the import path (`_LOOKUPS`)."""
 
     def __init__(self) -> None:
         self.files: dict[str, str] = {}
         self.probes: dict[tuple[str, str], bool] = {}
+        self.lookups: dict[tuple, Any] = {}
 
 
 #: The inputs of the analysis running now (under `_LOCK`), if any.
@@ -224,6 +231,14 @@ def _isdir(path: str) -> bool:
     if _RECORDING:
         _RECORDING[-1].probes[("d", path)] = found
     return found
+
+
+def _recorded(kind: str, args: tuple, answer: Any) -> Any:
+    """Note *answer*, the outcome of the lookup *kind* of *args*, for a
+    process with another import path to ask again (`_lookups_hold`)."""
+    if _RECORDING:
+        _RECORDING[-1].lookups[(kind, *args)] = answer
+    return answer
 
 
 def _read(path: str) -> bytes:
@@ -323,8 +338,6 @@ def _source_text(data: bytes) -> str:
 
 #: binary path -> (the module loaded from it, its analysis or None).
 _MODULES: dict[str, tuple[types.ModuleType, _Module | None]] = {}
-#: binary path -> (the module loaded from it, its content digest).
-_BINARIES: dict[str, tuple[types.ModuleType, str]] = {}
 _LOCK = threading.RLock()
 
 
@@ -442,13 +455,12 @@ def _stored_or_analysed(module: types.ModuleType, binary: str, co_filename: str,
                 os.path.abspath(str(getattr(Cython, "__file__", ""))),
                 sys.prefix,
                 sys.exec_prefix,
-                list(sys.path),
             ]
         ).encode("utf-8")
     ).hexdigest()
     slot = f"{_norm(binary)}\0{co_filename}\0{pyx}"
     stored = scan_store.load_record(_STORE_KIND, slot, key)
-    if stored is not None and _inputs_unchanged(stored):
+    if stored is not None and _inputs_unchanged(stored) and _lookups_hold(stored):
         try:
             analysis = _module_from_json(stored["analysis"])
         except (KeyError, TypeError, ValueError):
@@ -467,6 +479,8 @@ def _stored_or_analysed(module: types.ModuleType, binary: str, co_filename: str,
         {
             "files": sorted(inputs.files.items()),
             "probes": sorted([kind, path, found] for (kind, path), found in inputs.probes.items()),
+            "import_path": _import_path(),
+            "lookups": [[list(k), found] for k, found in inputs.lookups.items()],
             "analysis": _module_to_json(analysis),
         },
     )
@@ -517,12 +531,7 @@ def _inputs_unchanged(stored: dict) -> bool:
     try:
         for path, digest in stored["files"]:
             try:
-                with open(path, "rb") as fh:
-                    data = fh.read()
-                if str(digest).startswith(_CONFIG_DIGEST):
-                    if _config_digest(path, data) != digest:
-                        return False
-                elif hashlib.sha256(data).hexdigest() != digest:
+                if _digest_now(path, str(digest).startswith(_CONFIG_DIGEST)) != digest:
                     return False
             except OSError:
                 return False
@@ -531,6 +540,73 @@ def _inputs_unchanged(stored: dict) -> bool:
             if check(path) != found:
                 return False
     except (KeyError, TypeError, ValueError):
+        return False
+    return True
+
+
+#: ``(path, as a build configuration)`` -> ``(the file's stat, its digest)``
+#: for `_digest_now`.
+_FILE_DIGESTS: dict[tuple[str, bool], tuple[tuple[int, ...], str]] = {}
+
+
+def _digest_now(path: str, config: bool) -> str:
+    """The digest of the file at *path* as a stored analysis recorded it
+    (by its canonical form for a build configuration), read once per
+    version of the file in a process: the modules of one project share
+    their configuration, ``.pxd`` files and headers, and each record lists
+    them. Memoised on the stat only for a file that has settled
+    (`stat_has_settled`), asked before it is read."""
+    from .source_reading import stat_has_settled
+
+    st = os.stat(path)
+    version = (st.st_dev, st.st_ino, st.st_mtime_ns, st.st_size, getattr(st, "st_ctime_ns", 0))
+    kept = _FILE_DIGESTS.get((path, config))
+    if kept is not None and kept[0] == version:
+        return kept[1]
+    with open(path, "rb") as fh:
+        data = fh.read()
+    digest = _config_digest(path, data) if config else hashlib.sha256(data).hexdigest()
+    if stat_has_settled(st):
+        _FILE_DIGESTS[(path, config)] = (version, digest)
+    return digest
+
+
+def _import_path() -> list:
+    """What a cimport is looked up through besides the files themselves:
+    ``sys.path``, and the folder its relative entries name."""
+    return [list(sys.path), os.getcwd()]
+
+
+#: The lookups whose answer depends on the import path, by the kind
+#: `_recorded` notes them under.
+_LOOKUPS = {
+    "cimport": lambda *args: _find_cimport(*args),
+    "header": lambda name: _find_library_header(name),
+    "local": lambda path, root: _is_local(path, root),
+}
+
+
+def _lookups_hold(stored: dict) -> bool:
+    """Does every lookup the stored analysis made answer the same now?
+
+    Only the cimports, the library headers and which files are the user's
+    depend on ``sys.path``; under the same import path the recorded file
+    checks (``probes``) already answer for them. Under another one (a
+    script in another folder, a ``PYTHONPATH`` entry, a test runner's
+    insertions) each is looked up again: the record holds when every
+    answer is the one it was made with, and a cimport another entry now
+    shadows, or one found nowhere now, makes a fresh analysis."""
+    try:
+        if stored["import_path"] == _import_path():
+            return True
+        for (kind, *args), answer in stored["lookups"]:
+            try:
+                now = _LOOKUPS[kind](*args)
+            except _Fallback:
+                now = None
+            if now != answer:
+                return False
+    except Exception:  # noqa: BLE001 - a record that cannot be checked is not used
         return False
     return True
 
@@ -663,8 +739,25 @@ def _cimported_parts(analysis: _Module, names: set[str], visited: set[str]) -> l
     return sorted(parts)
 
 
+#: ``.pxd`` path -> the module name and module `_module_for_pxd` found,
+#: served while that name still holds that module and its file.
+_PXD_MODULES: dict[str, tuple[str, types.ModuleType, str]] = {}
+
+
 def _module_for_pxd(pxd: str) -> tuple[types.ModuleType, str] | None:
     """The loaded extension module built from the ``.pyx`` beside *pxd*."""
+    kept = _PXD_MODULES.get(pxd)
+    if kept is not None:
+        name, module, path = kept
+        if sys.modules.get(name) is module and module_file(module) == path:
+            return module, path
+    found = _find_module_for_pxd(pxd)
+    if found is not None:
+        _PXD_MODULES[pxd] = (found[0].__name__, *found)
+    return found
+
+
+def _find_module_for_pxd(pxd: str) -> tuple[types.ModuleType, str] | None:
     folder = os.path.dirname(_norm(pxd))
     stem = os.path.splitext(os.path.basename(_norm(pxd)))[0]
     for module in list(sys.modules.values()):
@@ -678,48 +771,18 @@ def _module_for_pxd(pxd: str) -> tuple[types.ModuleType, str] | None:
 
 
 def _binary_digest(module: types.ModuleType, binary: str) -> str:
-    cached = _BINARIES.get(binary)
-    if cached is not None and cached[0] is module:
-        return cached[1]
-    from .pe_digest import extension_bytes_digest
+    from .code_digest import loaded_extension_digest
 
-    with open(binary, "rb") as fh:
-        digest = extension_bytes_digest(fh.read())
-    _BINARIES[binary] = (module, digest)
-    return digest
+    return loaded_extension_digest(module, binary)
 
 
 def _whole_cimports(module: types.ModuleType, binary: str, co_filename: str, visited: set[str]) -> list[str]:
     """``name=digest`` of the binary of every loaded module *module*'s ``.pyx``
     cimports, transitively, read from its tokens. Raises where the
     cimports cannot be read."""
-    pyx = _find_pyx(module, binary, co_filename)
-    package_root = _package_root(module.__name__, pyx)
-    includes = _cython_includes()
-    texts = [pyx]
-    own = os.path.splitext(pyx)[0] + ".pxd"
-    if os.path.isfile(own):
-        texts.append(own)
-    pxds: list[str] = []
-    done: set[str] = set()
-    while texts:
-        path = texts.pop()
-        if path in done:
-            continue
-        done.add(path)
-        with open(path, "rb") as fh:
-            toks = _tokens(path, _source_text(fh.read()))
-        for i, (sy, _text, _line) in enumerate(toks):
-            if sy == "include":
-                follows = [t for s_, t, _l in toks[i + 1 : i + 4] if s_ == "CHARS"]
-                if not follows:
-                    raise _Fallback("an include not understood")
-                texts.append(os.path.join(os.path.dirname(path), follows[0]))
-        for name, level in _token_cimports(toks):
-            for target in _resolve_cimport(name, level, path, package_root, includes):
-                if target != own and target not in pxds and _is_local(target, package_root):
-                    pxds.append(target)
-                    texts.append(target)
+    pxds = _stored_cimports(module, binary, co_filename)
+    if pxds is None:
+        raise _Fallback("the cimports cannot be read")
     parts = []
     for pxd in pxds:
         loaded = _module_for_pxd(pxd)
@@ -733,6 +796,104 @@ def _whole_cimports(module: types.ModuleType, binary: str, co_filename: str, vis
         parts.append(f"{os.path.basename(pxd)}={_binary_digest(sub, sub_binary)}")
         parts.extend(_whole_cimports(sub, sub_binary, os.path.basename(os.path.splitext(pxd)[0] + ".pyx"), visited))
     return parts
+
+
+#: The layout of a stored list of local cimports (`_stored_cimports`).
+_CIMPORTS_KIND = "cython-cimports-v1"
+
+
+def _stored_cimports(module: types.ModuleType, binary: str, co_filename: str) -> list[str] | None:
+    """`_local_cimports`, or the list an earlier process stored for the
+    same inputs; None where they cannot be read.
+
+    The whole-binary key is the one a ``.pyx`` edited and not rebuilt (newer
+    than its binary) is keyed by, in every process until the rebuild.
+    Reading its cimports tokenizes the sources with Cython's scanner, and
+    importing that costs a fresh process about half a second, so the list
+    is stored as an analysis is (`_stored_or_analysed`): with the content
+    digest of every file it read, every file check, and every lookup that
+    depends on the import path."""
+    from .analysis import scan_store
+
+    try:
+        import Cython
+    except Exception as e:
+        raise _Fallback("no Cython") from e
+    key = hashlib.sha256(
+        json.dumps(
+            [
+                _CIMPORTS_KIND,
+                module.__name__,
+                co_filename,
+                str(getattr(Cython, "__version__", "")),
+                os.path.abspath(str(getattr(Cython, "__file__", ""))),
+                sys.prefix,
+                sys.exec_prefix,
+            ]
+        ).encode("utf-8")
+    ).hexdigest()
+    slot = f"{_norm(binary)}\0{co_filename}"
+    stored = scan_store.load_record(_CIMPORTS_KIND, slot, key)
+    if stored is not None and _inputs_unchanged(stored) and _lookups_hold(stored):
+        pxds = stored.get("pxds")
+        if pxds is None or (isinstance(pxds, list) and all(isinstance(p, str) for p in pxds)):
+            return pxds
+    inputs = _Inputs()
+    _RECORDING.append(inputs)
+    try:
+        try:
+            pxds = _local_cimports(module, binary, co_filename)
+        except _Fallback:
+            pxds = None
+        # Any other failure (a file that cannot be read) is raised, not stored.
+    finally:
+        _RECORDING.pop()
+    scan_store.save_record(
+        _CIMPORTS_KIND,
+        slot,
+        key,
+        {
+            "files": sorted(inputs.files.items()),
+            "probes": sorted([kind, path, found] for (kind, path), found in inputs.probes.items()),
+            "import_path": _import_path(),
+            "lookups": [[list(k), found] for k, found in inputs.lookups.items()],
+            "pxds": pxds,
+        },
+    )
+    return pxds
+
+
+def _local_cimports(module: types.ModuleType, binary: str, co_filename: str) -> list[str]:
+    """The local ``.pxd`` files *module*'s ``.pyx`` cimports, read from its
+    tokens (and its own ``.pxd``'s and its includes'). Reads only through
+    `_read`, `_isfile` and the recorded lookups."""
+    pyx = _find_pyx(module, binary, co_filename)
+    package_root = _package_root(module.__name__, pyx)
+    includes = _cython_includes()
+    texts = [pyx]
+    own = os.path.splitext(pyx)[0] + ".pxd"
+    if _isfile(own):
+        texts.append(own)
+    pxds: list[str] = []
+    done: set[str] = set()
+    while texts:
+        path = texts.pop()
+        if path in done:
+            continue
+        done.add(path)
+        toks = _tokens(path, _source_text(_read(path)))
+        for i, (sy, _text, _line) in enumerate(toks):
+            if sy == "include":
+                follows = [t for s_, t, _l in toks[i + 1 : i + 4] if s_ == "CHARS"]
+                if not follows:
+                    raise _Fallback("an include not understood")
+                texts.append(os.path.join(os.path.dirname(path), follows[0]))
+        for name, level in _token_cimports(toks):
+            for target in _resolve_cimport(name, level, path, package_root, includes):
+                if target != own and target not in pxds and _is_local(target, package_root):
+                    pxds.append(target)
+                    texts.append(target)
+    return pxds
 
 
 def _sibling_binaries(module: types.ModuleType, binary: str) -> list[str]:
@@ -997,6 +1158,10 @@ def _extern_headers(tokens: list[tuple[str, str, int]], path: str) -> list[str]:
 
 def _library_header(name: str) -> str | None:
     """*name* found in numpy's or Python's include folder, or None."""
+    return _recorded("header", (name,), _find_library_header(name))
+
+
+def _find_library_header(name: str) -> str | None:
     import sysconfig
 
     if not name or os.path.isabs(name) or ".." in name.replace("\\", "/").split("/"):
@@ -1017,9 +1182,13 @@ def _library_header(name: str) -> str | None:
     return None
 
 
+#: The suffixes of a built extension, in `os.path.normcase`'s spelling.
+_EXTENSION_SUFFIXES = tuple(os.path.normcase(s) for s in importlib.machinery.EXTENSION_SUFFIXES)
+
+
 def _is_extension(path: str) -> bool:
     """Is *path* a built extension (``.so``, ``.pyd`` in any case)?"""
-    return os.path.normcase(path).endswith(tuple(os.path.normcase(s) for s in importlib.machinery.EXTENSION_SUFFIXES))
+    return os.path.normcase(path).endswith(_EXTENSION_SUFFIXES)
 
 
 def _norm(path: str) -> str:
@@ -1203,7 +1372,9 @@ def _is_local(path: str, root: str) -> bool:
     from .install_paths import is_user_path
 
     inside = os.path.normcase(os.path.abspath(path)).startswith(os.path.normcase(os.path.abspath(root)) + os.sep)
-    return inside and is_user_path(path)
+    # Whether a file is the user's depends on the import path too
+    # (`installed_outside_project`).
+    return _recorded("local", (path, root), inside and is_user_path(path))
 
 
 def _cimports(tree: Any) -> Iterator[tuple[str, int]]:
@@ -1281,6 +1452,18 @@ def _dotted(tokens: list[tuple[str, str, int]], i: int) -> tuple[str, int]:
 
 
 def _resolve_cimport(name: str, level: int, importer: str, package_root: str, includes: str) -> list[str]:
+    """`_find_cimport`, noted for a process with another import path; a
+    cimport found nowhere is noted as None."""
+    args = (name, level, importer, package_root, includes)
+    try:
+        found = _find_cimport(*args)
+    except _Fallback:
+        _recorded("cimport", args, None)
+        raise
+    return _recorded("cimport", args, found)
+
+
+def _find_cimport(name: str, level: int, importer: str, package_root: str, includes: str) -> list[str]:
     """The ``.pxd`` a cimport of *name* reads, as a list of at most one.
 
     A ``from X cimport y`` yields ``X.y`` too, where ``y`` is usually a name

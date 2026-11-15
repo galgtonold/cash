@@ -271,7 +271,8 @@ def test_a_warm_process_uses_the_stored_analysis_and_still_misses_after_an_edit(
     proj = _project(tmp_path, files={"job.py": JOB_COMPILER})
     (proj / "job.py").write_text(JOB_COMPILER, encoding="utf-8")
     assert _run_compiler(proj)[:2] == ("7", True)
-    _run_compiler(proj)  # the cache folder exists now, so the analysis is stored
+    # The first process analysed before the cache folder existed; what it
+    # worked out is written once the folder is there.
     assert _run_compiler(proj) == ("7", False, False), "a warm process parsed the .pyx again"
     _edit(proj, "return x - 1", "return x - 2")
     assert _run_compiler(proj) == ("7", False, True), "an edit to a function f never reaches re-ran it"
@@ -279,6 +280,49 @@ def test_a_warm_process_uses_the_stored_analysis_and_still_misses_after_an_edit(
     _edit(proj, "return h(x) + 1", "return h(x) + 2")
     assert _run_compiler(proj)[:2] == ("8", True), "an edit to f was served the old result"
     assert _run_compiler(proj) == ("8", False, False)
+
+
+def test_a_script_in_another_folder_uses_the_stored_analysis(cython_compiler, tmp_path):
+    """``sys.path[0]`` is the script's folder: a driver started from another
+    folder (or with another ``PYTHONPATH``) has another import path. Each
+    cimport is looked up again under it rather than the module parsed
+    again, and an edit is still seen from either folder."""
+    proj = _project(tmp_path, files={"job.py": JOB_COMPILER})
+    (proj / "job.py").write_text(JOB_COMPILER, encoding="utf-8")
+    other = proj / "drivers"
+    other.mkdir()
+    (other / "job.py").write_text(JOB_COMPILER, encoding="utf-8")
+
+    def elsewhere():
+        p = run_python(
+            "drivers/job.py", cwd=proj, env={"PYTHONPATH": f"{proj}{os.pathsep}{os.environ.get('PYTHONPATH', '')}"}
+        )
+        return p.stdout.strip(), "[RUN]" in p.stderr, "[COMPILER]" in p.stderr
+
+    assert _run_compiler(proj)[:2] == ("7", True)
+    assert elsewhere()[::2] == ("7", False), "another import path parsed the .pyx again"
+    assert _run_compiler(proj)[::2] == ("7", False)
+    assert elsewhere()[::2] == ("7", False)
+    _edit(proj, "return h(x) + 1", "return h(x) + 2")
+    assert elsewhere()[:2] == ("8", True), "an edit to f was served the old result"
+    assert _run_compiler(proj) == ("8", False, False)
+
+
+def test_a_pyx_edited_and_not_rebuilt_is_read_once(cython_compiler, tmp_path):
+    """A ``.pyx`` newer than its binary keys the whole binary and the
+    modules it cimports, which reads its cimports with Cython's scanner.
+    That is stored too: the next process neither re-runs nor imports the
+    compiler, and the rebuild is still seen."""
+    proj = _project(tmp_path, files={"job.py": JOB_COMPILER})
+    (proj / "job.py").write_text(JOB_COMPILER, encoding="utf-8")
+    assert _run_compiler(proj)[:2] == ("7", True)
+    pyx = proj / "fastops.pyx"
+    pyx.write_text(PYX.replace("return x - 1", "return x - 2"), encoding="utf-8")
+    assert _run_compiler(proj)[:2] == ("7", True)
+    assert _run_compiler(proj) == ("7", False, False), "a newer .pyx was read with Cython in every process"
+    pyx.write_text(PYX.replace("return h(x) + 1", "return h(x) + 2"), encoding="utf-8")
+    _build(proj)
+    assert _run_compiler(proj)[:2] == ("8", True), "the rebuilt f was served the old result"
 
 
 def test_a_stored_analysis_is_not_used_when_a_pxd_appears(cython_compiler, tmp_path):
