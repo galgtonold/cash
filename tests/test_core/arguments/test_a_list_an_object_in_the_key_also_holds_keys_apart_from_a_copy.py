@@ -99,6 +99,7 @@ def test_an_object_pickled_flat_marks_the_list_too(tmp_path, monkeypatch, shape)
     from cash import kept_state
 
     monkeypatch.setattr(kept_state, "FLAT_FIRST", True)
+    monkeypatch.setattr(kept_state, "BIG_STACK_BYTES", 0)  # the walk, where no large stack is had
     monkeypatch.setattr(kept_state, "_SAFE_DEPTH", 0)
     cash = Cash(backend="memory", register_magic=False)
     a = [1, 2, 3]

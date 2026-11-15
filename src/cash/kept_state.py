@@ -153,7 +153,25 @@ def _dumps_value(
         raise ValueError("dumps: a sink takes keyed bytes only")
     if keyed and sorted_sets and not aliases:
         persistent_id = _sets_first(persistent_id, sorted_set_ids(protocol, extra))
-    if FLAT_FIRST and not _surely_shallow(value):
+    if _walked_first(value):
+        done = _on_big_stack(
+            _dumps_value,
+            value,
+            protocol,
+            fast=fast,
+            buffer_callback=buffer_callback,
+            extra=extra,
+            persistent_id=persistent_id,
+            keyed=keyed,
+            on_retry=on_retry,
+            aliases=aliases,
+            sink=sink,
+            reducer_override=reducer_override,
+            sorted_sets=False,  # its persistent id is made above
+            after=after,
+        )
+        if done is not _NO_BIG_STACK:
+            return done
         return _dumps_walked_first(
             value, protocol, fast, buffer_callback, extra, persistent_id, keyed, aliases, sink, reducer_override
         )
@@ -223,9 +241,25 @@ def _dumps_also_keyed(
     called with the pickler once it has pickled *value*, its memo still
     whole; not for a value pickled flat. *watch*, a list, is appended to
     as each such object is met (a *sink* may stop the pickle there)."""
+    walked_first = _walked_first(value)
+    if walked_first:
+        done = _on_big_stack(
+            _dumps_also_keyed,
+            value,
+            protocol,
+            buffer_callback=buffer_callback,
+            extra=extra,
+            on_retry=on_retry,
+            sink=sink,
+            reducer_override=reducer_override,
+            after=after,
+            watch=watch,
+        )
+        if done is not _NO_BIG_STACK:
+            return done
     differs: list[bool] = [] if watch is None else watch
     table = _KeepDict(protocol, extra, watch=differs)
-    if FLAT_FIRST and not _surely_shallow(value):
+    if walked_first:
         walk = _Walk(getattr(sink, "walked", None), reducer_override, differs)
         if not _at_most_deep(value, _SAFE_DEPTH, table, _flat_leaf(None), walk):
             if sink is not None:
@@ -519,6 +553,96 @@ def _reduced_parts(obj: Any, reducers: Any, leaf: Any, walk: _Walk | None = None
     return parts
 
 
+def _walked_first(value: Any) -> bool:
+    """Is *value* walked before the pickler is let follow it (`FLAT_FIRST`):
+    on such a Python, a value not `_surely_shallow`, unless this thread is
+    the large stack `_on_big_stack` pickles on."""
+    return FLAT_FIRST and not _BIG_STACK.on and not _surely_shallow(value)
+
+
+class _BigStack(threading.local):
+    #: True on the thread `_on_big_stack` runs a pickle on.
+    on = False
+
+
+_BIG_STACK = _BigStack()
+
+#: What `_on_big_stack` returns when it cannot start its thread.
+_NO_BIG_STACK = object()
+
+#: The stack of the thread a `FLAT_FIRST` Python pickles on, in bytes: a
+#: reservation the pages of are taken only as the pickle goes deep.
+BIG_STACK_BYTES = 256 * 1024 * 1024
+
+#: The C stack budgeted for each level of recursion the pickler is let go
+#: (the recursion limit): on Windows 3.10 a 2 MB stack ran out a few hundred
+#: objects deep, near a thousand levels, about 2 KB a level.
+_STACK_PER_LEVEL = 32 * 1024
+
+#: Held while the stack size of new threads is set for `_on_big_stack`'s.
+_STACK_SIZE_LOCK = threading.Lock()
+
+
+def _on_big_stack(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """``fn(*args, **kwargs)`` on a thread of its own with a stack of
+    `BIG_STACK_BYTES`, this thread waiting for it; `_NO_BIG_STACK` when no
+    such thread can be had.
+
+    On `FLAT_FIRST` Pythons a value was walked level by level before each
+    pickle to find it shallow enough for the 2 MB stack (`_at_most_deep`):
+    a Python step for each object, 3.6 s of a 4.1 s store of a trie of
+    250,000 nodes, where its pickle took 0.6 s. On a stack this large the
+    recursion limit stops the pickler long before the stack runs out, as on
+    every other Python, and the value is pickled as there: a value too deep
+    for the recursion limit is pickled flat, or refused for a key.
+
+    The thread runs in a copy of this one's context, and takes this
+    thread's keying (`one_keying`), `met_by_reference` collector and
+    `reducers_run` depth. With a recursion limit too high for the stack
+    (`_STACK_PER_LEVEL`), or no thread to be had, the value is walked
+    first as before."""
+    if not BIG_STACK_BYTES or sys.getrecursionlimit() * _STACK_PER_LEVEL > BIG_STACK_BYTES:
+        return _NO_BIG_STACK
+    context = contextvars.copy_context()
+    keying, met, cached = _keying(), _MET.found, getattr(_IN_A_CACHED_CALL, "depth", 0)
+    outcome: list = []
+    done = threading.Lock()
+    done.acquire()
+
+    def run() -> None:
+        try:
+            _BIG_STACK.on = True
+            _KEYING.now = keying
+            _MET.found = met
+            _IN_A_CACHED_CALL.depth = cached
+            outcome.append((True, context.run(fn, *args, **kwargs)))
+        except BaseException as exc:  # noqa: BLE001 - raised again on the caller's thread
+            outcome.append((False, exc))
+        finally:
+            done.release()
+
+    with _STACK_SIZE_LOCK:
+        try:
+            before = threading.stack_size(BIG_STACK_BYTES)
+        except (ValueError, RuntimeError):  # a platform that sets no size
+            return _NO_BIG_STACK
+        try:
+            # Not counted as the user's: neither its function nor its starter is.
+            threading.Thread(target=run, name="cash-pickle", daemon=True).start()
+        except (RuntimeError, MemoryError):  # no memory for it, or shutting down
+            return _NO_BIG_STACK
+        finally:
+            threading.stack_size(before)
+    done.acquire()
+    ok, result = outcome.pop()
+    if ok:
+        return result
+    try:
+        raise result
+    finally:
+        del result
+
+
 #: How many objects deep the pickler is let follow a value on `FLAT_FIRST`
 #: Pythons. Each costs it two or three levels of C recursion.
 _SAFE_DEPTH = 100
@@ -531,6 +655,8 @@ _SAFE_DEPTH = 100
 #: always pickled flat, and only a library's objects, whose pickling is a
 #: level or two deep, by the pickler itself. Later Pythons, and 3.10 on the
 #: 8 MB and larger stacks of Linux and macOS, raise RecursionError first.
+#: Where it can, a store or key pickle runs on a thread with a stack large
+#: enough for that instead (`_on_big_stack`), and is pickled as there.
 FLAT_FIRST = sys.version_info < (3, 11) and sys.platform == "win32"
 
 
