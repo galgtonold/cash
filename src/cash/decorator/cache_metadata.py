@@ -137,6 +137,12 @@ class CacheMetadata:
     #: plain Python's defaults). A lookup serves the entry only while it is
     #: the same; no key holds it.
     warned_under: str | None = None
+    #: The library settings the body read as it ran, each as
+    #: ``[kind, module, chain, fingerprint]`` (`library_reads.build`): a
+    #: lookup follows each chain again and serves the entry only while all
+    #: end as they did. No key holds them: the key reads a library by its
+    #: installed version alone.
+    lib_reads: list[list[str]] | None = None
     #: What the result shared with an object outside the call when it was
     #: stored (`PurityChecks.warn_shared_result`): a hit warns as the miss did.
     shared_result: str | None = None

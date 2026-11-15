@@ -1126,6 +1126,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 | [KEY-HELPERS-UNWALKABLE](#key-helpers-unwalkable) | both | the code a function runs cannot all be found; not cached |
 | [KEY-INSTANCE-STATE](#key-instance-state) | decorator | a bound method's instance cannot be hashed |
 | [KEY-ITERATOR-CONSUMED](#key-iterator-consumed) | decorator | a registered hasher read an iterator argument; the call ran uncached |
+| [KEY-LIBRARY-STATE-UNREAD](#key-library-state-unread) | decorator | the body read a library setting or a `ContextVar` whose value cannot be compared; not cached |
 | [KEY-LIBRARY-VALUE-UNREAD](#key-library-value-unread) | both | a value set on a library's module is too big to look through for an iterator; code reading it runs every time |
 | [KEY-MEMO-BEFORE-IMPORT](#key-memo-before-import) | both | a `functools` memo already held results when cash was imported |
 | [KEY-LOOP-VAR-CHANGED](#key-loop-var-changed) | notebook | a loop body changes its loop variable before work cached for each pass |
@@ -1494,6 +1495,28 @@ key, a list of the same rows included.
 **When it is safe to ignore.** When the message says the iterator *may* have
 been read and you know the key did not read it. When it says it was read,
 the result of that call came from an emptied iterator.
+
+### KEY-LIBRARY-STATE-UNREAD {#key-library-state-unread}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
+
+**What happened.** While the body ran, it (or a library it called) read a
+setting kept outside its arguments: a `ContextVar`, or a library's settings
+object. On Python 3.12 and newer cash records such reads as the body runs
+and checks each again before it serves the entry: `sc.settings.n_jobs`,
+`sklearn.set_config(...)`, `pd.set_option(...)`, NumPy's print options and
+error handling, `decimal`'s context, a `ContextVar` of yours. This one holds
+a value that is not plain data (numbers, strings, enums, and lists, tuples,
+sets and dicts of them), so cash cannot tell whether a later call sees the
+same value.
+
+**Why it matters.** Nothing is wrong with the results. The call is not
+stored, so it costs its full time on every run.
+
+**What to do.** Keep plain data in the variable (a name or a number standing
+for the object), or pass the value in as an argument.
+
+**When it is safe to ignore.** When the function is quick.
 
 ### KEY-LIBRARY-VALUE-UNREAD {#key-library-value-unread}
 

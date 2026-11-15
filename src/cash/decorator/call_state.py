@@ -183,6 +183,7 @@ class BodyRun:
         "rng_new",
         "rng_drew",
         "env_reads",
+        "lib_reads",
         "warned",
         "args_before",
         "args_reads",

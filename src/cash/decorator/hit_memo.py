@@ -78,6 +78,7 @@ from ..analysis.helper_code import own_code_is_user
 from ..jit_functions import is_jit_type, jit_python_function
 from ..source_reading import own_source
 from ..tracking.tracker_context import active_tracker
+from . import library_reads
 from .call_state import NESTED_CASH_SECONDS
 from .user_code import cash_wrapped, is_cash_wrapper, is_user_class, is_user_code_object, own_package
 
@@ -1717,7 +1718,7 @@ def new_state() -> list | None:
 class _Hit:
     """What a fast hit needs besides what `_cwatch.fast_call` reads."""
 
-    __slots__ = ("metadata", "deadline", "files", "ttl", "ram", "backend", "copy", "value", "md")
+    __slots__ = ("metadata", "deadline", "files", "lib", "ttl", "ram", "backend", "copy", "value", "md")
 
 
 class HitMemo:
@@ -1784,6 +1785,8 @@ class HitMemo:
         else:
             state[S_CLEAR_AT] = float("inf")
         if hit.files and not runner._files.auto_file_deps_fresh(hit.metadata):
+            return MISS
+        if hit.lib and library_reads.changed(hit.lib) is not None:
             return MISS
         if VERIFY:
             self._verify(entry, args, kwargs)
@@ -2028,6 +2031,7 @@ class HitMemo:
         h.ram = ram
         h.backend = backend
         h.files = bool(metadata.auto_file_deps)
+        h.lib = metadata.lib_reads
         h.ttl = call.ttl
         ttl = runner._backend_slot.entry_ttl(call.ttl, metadata)
         h.deadline = None
@@ -2055,6 +2059,7 @@ class HitMemo:
             direct
             and h.deadline is None
             and not h.files
+            and not h.lib
             and (self.family is None or (self.family.below is None and not self.family.probes))
         )
         # Never the hit credited with a warm-up: the ordinary hit before it was.

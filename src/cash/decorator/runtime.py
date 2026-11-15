@@ -54,7 +54,7 @@ from ..tracking.randomness import (
     replayable,
 )
 from ..tracking.trace_recorder import other_thread_alive
-from . import attribute_replay, code_trace, hit_memo, state_memo, walk_scope, warning_state
+from . import attribute_replay, code_trace, hit_memo, library_reads, state_memo, walk_scope, warning_state
 from .arg_hashing import (
     CALL_POLARS,
     CONTENT_KEYED,
@@ -1308,6 +1308,10 @@ class CallRunner:
             )
         if metadata.env_reads and not environment_unchanged(metadata.env_reads):
             return MissReason(MissKind.ENVIRONMENT, "an environment variable an installed package read changed")
+        if metadata.lib_reads:
+            moved = library_reads.changed(metadata.lib_reads)
+            if moved is not None:
+                return MissReason(MissKind.LIBRARY, f"{moved}, a library setting the run read, changed")
         if metadata.warned_under is not None and not warning_state.holds(metadata.warned_under):
             return MissReason(
                 MissKind.WARNINGS,
@@ -1329,6 +1333,8 @@ class CallRunner:
             note_reads(metadata.env_reads)
         if metadata.warned_under is not None:
             warning_state.note_warned()
+        if metadata.lib_reads:
+            library_reads.note_served(metadata.lib_reads)
         return None
 
     def _cached_state(self, func_name: str) -> str | None:
@@ -2321,6 +2327,14 @@ class CallRunner:
             # The user's own work, isolated. Everything cash does sits outside
             # this pair, which is the whole point: it is the only number that
             # can answer "did caching pay?".
+            # The library settings the code that ran read, as the body left
+            # them (`library_reads`).
+            unit = call.trace_unit
+            run.lib_reads = (
+                library_reads.build(code_trace.library_codes(unit), unit.lib_items, unit.lib_cells)
+                if unit is not None
+                else (None, None)
+            )
             run.body_seconds = max(0.0, body_t1 - body_t0 - run.tracker.read_hash_seconds - nested[0])
             run.saves_seconds = run.body_seconds / max(threads_at_start, THREADS_IN_CALLS[0], 1)
             run.first_call = self._calls.credit.body_ran(func_name, run.saves_seconds)
@@ -2454,6 +2468,8 @@ class CallRunner:
                 f"it changed {', '.join(repr(n) for n in args_left)} in place and its result shares an object "
                 f"with what it was handed ({shared}), which a hit would hand back apart"
             )
+        if refusal is None:
+            refusal = self._refuse_library_reads(spec, run)
         if refusal is None and untraced:
             refusal = self._refuse_untraced(spec, untraced)
         if refusal is None and not replayable(run.carriers_moved + run.arg_carriers_moved):
@@ -2516,6 +2532,8 @@ class CallRunner:
                     # The warnings state, when the body warned: a lookup
                     # checks it again (`warning_state`).
                     warned_under=warning_state.stamp(run.warned) if run.warned else None,
+                    # The library settings it read: a lookup checks them again.
+                    lib_reads=run.lib_reads[0] or None,
                     shared_result=shared,
                     args_left=args_left,
                     args_reads=run.args_reads,
@@ -2649,6 +2667,24 @@ class CallRunner:
             "anyway if the setting does not matter.",
         )
         return f"it changed {what}, which no variable holds and a hit would not change again"
+
+    def _refuse_library_reads(self, spec: CachedFunction, run: BodyRun) -> str | None:
+        """Why a call that read library state cash cannot compare between
+        calls is not stored (`library_reads.build`); said once."""
+        why = run.lib_reads[1]
+        if why is None:
+            return None
+        self._notices.warn_once(
+            CashCacheIneffectiveWarning,
+            spec.name,
+            "library_state:" + why,
+            f"{spec.name}: {why}, so a later call made under another value could be served this one's "
+            "result: calls like this run uncached.",
+            code="KEY-LIBRARY-STATE-UNREAD",
+            fix="hold plain data (numbers, strings, tuples, dicts of them) in the context variable, or pass "
+            "the value in as an argument.",
+        )
+        return why
 
     def _refuse_untraced(self, spec: CachedFunction, why: str) -> str:
         """Say once why a call that picks code by name is not stored; the

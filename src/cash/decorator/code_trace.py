@@ -209,6 +209,9 @@ def _unit_class() -> type:
             "line_ran",
             "lookups",
             "lookups_followed",
+            "lib_cells",
+            "lib_codes",
+            "lib_items",
             "sites",
         )
 
@@ -225,6 +228,13 @@ def _unit_class() -> type:
             #: A notebook statement's: its own lookups by a string are ones
             #: its trace follows (``cache_key.lookups_followed``).
             self.lookups_followed = False
+            #: A traced call's: a library's code that ran -> its globals,
+            #: and the items of the entries served inside it (`library_reads`).
+            self.lib_codes: dict[types.CodeType, dict] = {}
+            self.lib_items: list[tuple] = []
+            #: User code -> the library modules its closure holds under the
+            #: names a chain it reads starts from (`library_reads.deref_roots`).
+            self.lib_cells: dict[types.CodeType, dict[str, Any]] = {}
             #: A traced call's: code of a function that writes through its
             #: parameters -> ``(caller code, offset of the call)`` for each
             #: start of it (`_Recorder.site_codes`, `cash.analysis.out_arguments`).
@@ -268,6 +278,10 @@ def _recorder_class() -> type:
     from ..analysis.out_arguments import binds_parameter_attributes, writes_through_parameters
     from ..install_paths import is_user_path, known_user_path
     from ..tracking import trace_recorder as rec
+    from .library_reads import QUIET as library_quiet
+    from .library_reads import CodeSet as LibraryCodes
+    from .library_reads import counts_file
+    from .library_reads import deref_roots as library_deref_roots
 
     DISABLE = sys.monitoring.DISABLE
     _POOL_QUALNAMES = frozenset(qualname for _, qualname in rec.POOL_STARTS)
@@ -333,6 +347,9 @@ def _recorder_class() -> type:
             #: again when the next strict call begins.
             self.line_on: weakref.WeakSet[types.CodeType] = _weak.WeakSet()
             self.line_dirty: set[types.CodeType] = set()
+            #: A library's code, armed so each traced call sees it run
+            #: (`_arm_library`); its events are in `user_codes` too.
+            self.lib_codes = LibraryCodes()
             #: LINE callbacks run, for the tests of what watching lines costs.
             self.line_events = 0
             free = [tool for tool in self.tool_ids if mon.get_tool(tool) is None]
@@ -441,6 +458,10 @@ def _recorder_class() -> type:
                     with untracked():
                         user = is_user_path(filename)
                 if not user:
+                    with untracked():
+                        library = code.co_name != "<module>" and counts_file(filename)
+                    if library:
+                        self._arm_library(code)
                     return DISABLE
             frame = sys._getframe(rec.WATCHED_FRAME)
             g = frame.f_globals
@@ -481,6 +502,39 @@ def _recorder_class() -> type:
                     self._seen_resume(code, g, kind)
                 else:
                     self._seen_start(code, frame, g, kind)
+            return DISABLE
+
+        def _arm_library(self, code: types.CodeType) -> None:
+            """First sight of a library's *code*: armed, so each traced
+            call that runs it sees it once (`library_reads`), and noted for
+            the calls in progress, whose run of it this is."""
+            if code in library_quiet:
+                # Seen again after a restart: it reads no setting.
+                return
+            if code not in self.lib_codes:
+                mon = sys.monitoring
+                events = mon.events.PY_START | mon.events.PY_RESUME
+                self.user_codes[code] = events
+                self.lib_codes.add(code)
+                mon.set_local_events(self.tool, code, events | self._line_events(code))
+            if self.active:
+                self._seen_library(code, sys._getframe(rec.WATCHED_FRAME + 1).f_globals)
+
+        def _seen_library(self, code: types.CodeType, g: dict) -> None:
+            if own_work_inside():
+                own_work_left_out(code)
+                return
+            for unit in self.active:
+                unit.lib_codes.setdefault(code, g)
+
+        def _on_library(self, code: types.CodeType) -> Any:
+            if code in library_quiet:
+                # Reads no setting (a restart armed it again): left disabled.
+                return DISABLE
+            if not collecting():
+                self.rearm.add(code)
+            if self.active:
+                self._seen_library(code, sys._getframe(rec.WATCHED_FRAME + 1).f_globals)
             return DISABLE
 
         def _arm_pyplot(self, code: types.CodeType) -> Any:
@@ -615,6 +669,8 @@ def _recorder_class() -> type:
             return unit
 
         def _on_start(self, code: types.CodeType, offset: int) -> Any:
+            if code in self.lib_codes:
+                return self._on_library(code)
             inside_collection = collecting()
             if not inside_collection:
                 self.rearm.add(code)
@@ -721,6 +777,8 @@ def _recorder_class() -> type:
                 except Exception:  # noqa: BLE001 - a frame whose locals cannot be read has no receiver
                     recv = None
             cells = None
+            if code.co_freevars and self.active:
+                self._closure_modules(code, frame)
             if code.co_freevars and not self._in_callback:
                 self._in_callback = True
                 try:
@@ -751,6 +809,23 @@ def _recorder_class() -> type:
                 if recv is not None:
                     unit.receivers.setdefault(code, recv if issubclass(type(recv), type) else type(recv))
 
+        def _closure_modules(self, code: types.CodeType, frame: Any) -> None:
+            """The library modules *code*'s closure holds that a chain it
+            reads starts from (``np.errstate`` with ``np`` captured), for
+            `library_reads`."""
+            roots = library_deref_roots(code)
+            if not roots:
+                return
+            try:
+                f_locals = frame.f_locals
+                held = {name: f_locals.get(name) for name in roots}
+            except Exception:  # noqa: BLE001 - unreadable locals: nothing followed from them
+                return
+            held = {k: v for k, v in held.items() if isinstance(v, types.ModuleType)}
+            if held:
+                for unit in self.active:
+                    unit.lib_cells.setdefault(code, held)
+
         @staticmethod
         def _unregistered_user_code(name: str, code: types.CodeType) -> bool:
             if name == "cash" or name.startswith("cash.") or sys.modules.get(name) is not None:
@@ -759,6 +834,8 @@ def _recorder_class() -> type:
             return bool(filename) and not is_pseudo_filename(filename) and is_user_path(filename)
 
         def _on_resume(self, code: types.CodeType, offset: int) -> Any:
+            if code in self.lib_codes:
+                return self._on_library(code)
             self.rearm.add(code)
             if (self.active or self.stack) and code.co_flags & rec.RESUMABLE:
                 g = sys._getframe(rec.WATCHED_FRAME).f_globals
@@ -896,6 +973,25 @@ def note_cached_hit(func_name: str, code: types.CodeType | None, state: str | No
         if code is not None:
             unit.cached_codes[func_name] = code
         unit.extra.extend(tuple(item) for item in trace or ())
+
+
+def note_library_items(items: list[tuple]) -> None:
+    """An entry whose run read *items* (`library_reads`) was served inside
+    the traced calls in progress."""
+    rec = _RECORDER
+    if rec is None:
+        return
+    for unit in list(rec.active):
+        unit.lib_items.extend(items)
+
+
+def library_codes(unit: Any) -> dict[types.CodeType, tuple[dict, bool]]:
+    """What `library_reads.build` reads of *unit*: the library code that
+    ran in it, and the user's."""
+    out: dict[types.CodeType, tuple[dict, bool]] = {code: (g, False) for code, g in unit.lib_codes.items()}
+    for code, (g, _module) in unit.codes.items():
+        out.setdefault(code, (g, True))
+    return out
 
 
 #: code -> does it call ``getattr`` with a name that is not a constant, or
