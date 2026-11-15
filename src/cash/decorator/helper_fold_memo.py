@@ -17,7 +17,8 @@ watcher sees the environment.
 An entry is the fold's whole effect: the state hash it turned *state_in*
 into, and what it left in the key build -- the pairs it marked as folded
 (`LoggedSeen`), its capture watch, ledger, reads-folded and folded-code
-records, the run-time lookups by name it met (`CARRIER_LOOKUPS`) --
+records, the run-time lookups by name it met (`CARRIER_LOOKUPS`), the
+digests it computed for the rest of the build (`KEY_BUILD_DIGESTS`) --
 replayed on reuse. It is looked up by the helper, the cached
 function's code and name, the decorator names folded with it, the state
 hash it started from and what the build had folded before it, so a reuse
@@ -38,6 +39,7 @@ from ..dependency_state import STATE_LEDGER
 from ..effects import ENVIRONMENT_READS
 from . import hit_memo
 from .call_state import CAPTURE_WATCH, CARRIER_LOOKUPS
+from .global_values import KEY_BUILD_DIGESTS
 
 _MASK = (1 << 64) - 1
 
@@ -117,6 +119,7 @@ class _Entry:
     __slots__ = (
         "added",
         "cells",
+        "digests",
         "cash",
         "folded",
         "helper",
@@ -219,12 +222,18 @@ class HelperFoldMemo:
         # Kept whether or not this build collects them (`explain()` does
         # not): the entry may be replayed into one that does.
         own_lookups: list = []
+        # The digests the fold computes for the rest of the build: its own
+        # (it computes what the build held before it again), handed on, so
+        # a reuse leaves what folding again would (`state_memo` compares).
+        build = KEY_BUILD_DIGESTS.get()
+        own_digests = {} if build is not None else None
         for var, value in (
             (CAPTURE_WATCH, own_watch),
             (STATE_LEDGER, own_ledger),
             (READS_FOLDED, own_folded),
             (FOLDED_CODE, own_code),
             (CARRIER_LOOKUPS, own_lookups),
+            (KEY_BUILD_DIGESTS, own_digests),
         ):
             tokens.append((var, var.set(value)))
         try:
@@ -242,6 +251,7 @@ class HelperFoldMemo:
         entry.owners = dict(own_code.owners) if own_code is not None else {}
         entry.reports = dict(own_code.reports) if own_code is not None else {}
         entry.lookups = tuple(own_lookups)
+        entry.digests = own_digests or {}
         self._replay(entry, None)
         return entry, state_out
 
@@ -261,6 +271,9 @@ class HelperFoldMemo:
             code.reports.update(entry.reports)
         if lookups is not None and entry.lookups:
             lookups.extend(entry.lookups)
+        build = KEY_BUILD_DIGESTS.get()
+        if build is not None and entry.digests:
+            build.update(entry.digests)
 
     def _verify(self, entry: _Entry, seen: LoggedSeen, compute: Callable[[], str]) -> None:
         """Fold again and compare with the entry, as the fast path's verify
