@@ -49,13 +49,20 @@ from ..exceptions import (
 )
 from ..install_paths import is_user_code_module, is_user_module
 from ..kept_state import reduce_counted
-from ..lineage_tag import own_tag
+from ..lineage_tag import own_tag, tags_trusted
 from ..rewrite_in_place import WRITTEN_BACK
 from ..source_reading import getsource, getsourcelines
 from ..tracking.randomness import capture_argument_carrier_states, moved_carriers, rng_carrier_kind
 from ..value_types import IMMUTABLE_VALUE_TYPES, writable_types
 from . import code_trace
-from .arg_hashing import CONTENT_KEYED, ContentKeyed, WatchedSince, is_cow_pandas
+from .arg_hashing import (
+    CONTENT_KEYED,
+    LINEAGE_SRC_STATEMENT,
+    ContentKeyed,
+    WatchedSince,
+    content_only,
+    is_cow_pandas,
+)
 from .arg_key import keyed_arguments
 from .cash_key import cash_key_method_of_type
 from .closure_fold import bound_values, capture_digest, iter_code_scopes, unsafe_uses_of
@@ -1622,14 +1629,19 @@ class PurityChecks:
         """``[(name, instance)]`` of the instances *func* is bound to that
         its key holds by all they hold (`ClosureFold.fold_bound_self` hashes
         them as an argument is hashed): no ``__cash_key__``, registered
-        hasher or lineage tag stands for one, nor for anything in it."""
+        hasher or lineage tag stands for one, nor for anything in it. A
+        notebook statement's tag counts as its content, as for an argument
+        (`ContentKeyed.holds`): the check across the body hashes it by
+        content (`_bound_digest`)."""
         found = []
         for name, value in bound_values(func):
             if name != "self" or isinstance(value, type):
                 continue
             if cash_key_method_of_type(type(value)) is not None or self._args.keys_by_registration_only(value):
                 continue
-            if own_tag(value) is not None:
+            if own_tag(value) is not None and not (
+                own_tag(value, "_cash_lineage_src") == LINEAGE_SRC_STATEMENT and tags_trusted()
+            ):
                 continue
             content = ContentKeyed()
             content.armed = True
@@ -1657,7 +1669,9 @@ class PurityChecks:
         attributes (a class hashes by name, which does not move when a
         classmethod sets ``cls.x``). An instance that cannot be hashed is
         compared by the identities of its attributes, which an assignment
-        moves. None when nothing can be taken."""
+        moves. None when nothing can be taken. Hashed by content, never by a
+        notebook statement's tag, which the body's changes do not move
+        (`content_only`)."""
         if isinstance(value, type):
             parts = []
             for attr, held in sorted(vars(value).items()):
@@ -1670,7 +1684,8 @@ class PurityChecks:
                     parts.append((attr, id(held)))
             return tuple(parts)
         try:
-            return self._args.hash_payload((value,), {})
+            with content_only():
+                return self._args.hash_payload((value,), {})
         except Exception:  # noqa: BLE001 - fall back to the attributes' identities
             pass
         attrs = getattr(value, "__dict__", None)

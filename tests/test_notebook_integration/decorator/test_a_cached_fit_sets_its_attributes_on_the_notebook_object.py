@@ -125,3 +125,49 @@ def test_an_object_that_cannot_be_hashed_by_its_content_still_ends_up_fitted(nb_
     nb_runner.run_all()
     nb_runner.run_all()
     assert nb_runner.peek("(s.mean_, r is s)") == "(5.0, True)"
+
+
+_CACHED_METHOD = (
+    "class CScaler:\n"
+    "    def __init__(self, k=2):\n"
+    "        self.k = k\n"
+    "    @cash.cache\n"
+    "    def fit(self, X):\n"
+    "        self.mean_ = float(np.mean(X)) * self.k\n"
+    "        return self\n"
+    "\n"
+    "@cash.cache\n"
+    "def fit_kw(X, *, s):\n"
+    "    return s.fit(X)\n"
+    "\n"
+    "@cash.cache\n"
+    "def fit_all(ss, X):\n"
+    "    for each in ss:\n"
+    "        each.fit(X)\n"
+    "    return ss\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("make", "call", "same"),
+    [
+        pytest.param("s = Scaler()", "fitted = cash.cache(s.fit)\nr = fitted(X)", "r is s", id="bound-method"),
+        pytest.param("s = CScaler()", "r = s.fit(X)", "r is s", id="cached-method"),
+        pytest.param("s = Scaler()", "r = fit_kw(X, s=s)", "r is s", id="keyword"),
+        pytest.param("s = Scaler()", "r = fit_all([s], X)", "r[0] is s", id="in-a-list"),
+        pytest.param("s = Scaler()", "r = fit_all((s,), X)", "r[0] is s", id="in-a-tuple"),
+    ],
+)
+def test_every_way_of_handing_the_object_in_matches_plain_python(nb_runner, make, call, same):
+    nb_runner.create_notebook([_DEFS, _CACHED_METHOD, make, call, "centred = X - s.mean_"])
+    nb_runner.start_kernel()
+    expected = "({'k': 2, 'mean_': 5.0}, True, [-5.0, -4.0, -3.0, -2.0, -1.0, 0.0])"
+    probe = f"(vars(s), {same}, centred.tolist())"
+    nb_runner.run_all()
+    assert nb_runner.peek(probe) == expected
+    nb_runner.run_all()
+    assert nb_runner.peek(probe) == expected, "Run All again"
+    nb_runner.settle_writes()
+    nb_runner.restart()
+    nb_runner.run_all()
+    assert nb_runner.peek(probe) == expected, "after a restart"
