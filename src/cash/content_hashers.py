@@ -993,7 +993,7 @@ class _GeometryPieces:
         if len(data) < self.MIN_ROWS or _addresses(data) is None:
             return
         try:
-            ref = weakref.ref(data)
+            ref = _weak.ref(data)
         except TypeError:
             return
         self._entries[id(data)] = (ref, data.copy(), piece)

@@ -101,7 +101,9 @@ def plugin(tmp_path, monkeypatch):
     def load():
         count[0] += 1
         name = f"cash_ut_pd_plugin_{tmp_path.name.replace('-', '_')}_{count[0]}"
-        (site / f"{name}.py").write_text(PLUGIN.format(n=f"{tmp_path.name}_{count[0]}".replace("-", "_")))
+        (site / f"{name}.py").write_text(
+            PLUGIN.format(n=f"{tmp_path.name}_{count[0]}".replace("-", "_")), encoding="utf-8"
+        )
         importlib.invalidate_caches()
         return importlib.import_module(name)
 
