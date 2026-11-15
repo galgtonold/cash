@@ -599,7 +599,7 @@ def _pandas_index(type_: type) -> bool:
 _MUTABLE_CONTAINERS = (list, dict, set)
 
 #: Content-hashed families whose values can be written into in place.
-_WRITABLE_FAMILIES = frozenset({"numpy", "pandas", "scipy.sparse"})
+_WRITABLE_FAMILIES = frozenset({"numpy", "pandas", "geopandas", "scipy.sparse"})
 
 #: Leaves that pickle as their value, whatever else refers to them.
 _VALUE_LEAVES = (*PARSED_VALUE_TYPES, fractions.Fraction, uuid.UUID)
@@ -782,6 +782,10 @@ def _worth_opening(value: Any, content: ContentHashing) -> bool:
             size = value.nbytes
         elif family == "scipy.sparse":
             size = sum(getattr(getattr(value, part, None), "nbytes", 0) for part in SPARSE_PARTS)
+        elif family == "geopandas":
+            # Pickled whole, each geometry is reduced to its WKB one at a
+            # time; keyed on its own, shapely writes them all at once.
+            return True
         else:
             # A lazy collection (dask, modin) is keyed by its own token,
             # which costs less than computing it to pickle it.

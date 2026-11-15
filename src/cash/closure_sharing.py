@@ -34,7 +34,7 @@ from cash._user_attrs import own_dict, own_dicts
 from cash.install_paths import is_user_code_module
 from cash.kept_state import reduce_counted
 from cash.live_state import is_live_stream
-from cash.value_types import IMMUTABLE_LEAF_TYPES
+from cash.value_types import IMMUTABLE_LEAF_TYPES, shapely_geometry_types
 
 __all__ = ["ClosureCheck", "closure_check_budget", "closures_sharing"]
 
@@ -48,18 +48,24 @@ def _leaves() -> frozenset:
     ``np.float64`` (``list(arr)``) was read a scalar at a time, through its
     reduce, past the time and not stored. With numpy's ``datetime64`` and
     ``timedelta64`` as well, as atomic: ``list(frame['t'].diff())`` gave a
-    list of 868,000 walked through two calls each, 27 s of a session."""
+    list of 868,000 walked through two calls each, 27 s of a session. And
+    with shapely's geometry classes (`shapely_geometry_types`): immutable,
+    no attribute, pickled as their WKB bytes; a GeoDataFrame of 200,000
+    points was read a geometry at a time through ``to_wkb``, past the time
+    and not stored."""
     global _WITH_SCALARS
     scalars = numpy_scalar_set()
-    if _WITH_SCALARS[0] is not scalars:
+    shapely = sys.modules.get("shapely")
+    if _WITH_SCALARS[0] is not scalars or _WITH_SCALARS[1] is not shapely:
         numpy = sys.modules.get("numpy")
         times = frozenset() if numpy is None else frozenset((numpy.datetime64, numpy.timedelta64))
-        _WITH_SCALARS = (scalars, _LEAVES | scalars | times)
-    return _WITH_SCALARS[1]
+        _WITH_SCALARS = (scalars, shapely, _LEAVES | scalars | times | shapely_geometry_types())
+    return _WITH_SCALARS[2]
 
 
-#: ``(numpy_scalar_set(), _leaves())`` as `_leaves` last found them.
-_WITH_SCALARS: tuple[frozenset, frozenset] = (frozenset(), _LEAVES)
+#: ``(numpy_scalar_set(), the shapely module or None, _leaves())`` as
+#: `_leaves` last found them.
+_WITH_SCALARS: tuple[frozenset, Any, frozenset] = (frozenset(), None, _LEAVES)
 #: The builtin containers, read in bulk a level at a time.
 _SEQUENCES = frozenset({tuple, list, set, frozenset})
 #: The builtin containers whose subclasses' items `_object_parts` reads.

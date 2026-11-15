@@ -192,6 +192,9 @@ dev = [
     "seaborn",
     # test_a_jit_compiled_helper_is_keyed_as_code.py runs real @njit functions.
     "numba",
+    # cash ships a content hasher for its frames and treats shapely's
+    # geometries as values; the tests that check both need the real ones.
+    "geopandas>=0.14",
     # The soundfile reader tests read real .wav files through libsndfile.
     "soundfile",
     # test_comm_reply_during_execution.py pumps the kernel event loop from inside
