@@ -72,7 +72,7 @@ class SlotSampler:
     _fit_plain = Sampler._fit_plain
 
 
-class SkSampler(BaseEstimator, Sampler):
+class SkSampler(Sampler, BaseEstimator):
     pass
 
 
