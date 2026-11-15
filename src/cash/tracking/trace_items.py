@@ -44,6 +44,7 @@ import struct
 import sys
 import threading
 import types
+import typing
 from collections.abc import Iterable, Iterator, Mapping
 from typing import Any
 
@@ -55,6 +56,9 @@ __all__ = [
     "resolve",
     "value_digest",
 ]
+
+#: ``type X = ...``'s class (3.12+), else None.
+TYPE_ALIAS = getattr(typing, "TypeAliasType", None)
 
 #: The largest value, in bytes, digested by content; above it a value is opaque.
 VALUE_CAP = 1 << 20
@@ -380,6 +384,10 @@ class _Digester:
             h.update(b"cprop")
             self.feed(v.func)
             return
+        if t is TYPE_ALIAS:
+            h.update(b"alias")
+            self._alias(v)
+            return
         if t is dataclasses.Field:
             h.update(b"field")
             self.feed(v.default)
@@ -448,6 +456,61 @@ class _Digester:
                 raise _Opaque
             h.update(b"c" + got.encode())
 
+    def _alias(self, alias: Any) -> None:
+        """A ``type X = ...`` alias by what defines it, read or not: the
+        code that builds its value lazily, the globals that code reads and
+        its type parameters. Its ``__value__`` is built once, on its first
+        read, and pickles by name: keyed by that, an edit to the alias was
+        seen only when the value was first built inside the call."""
+        h = self.h
+        h.update(f"{alias.__module__}.{alias.__name__}".encode())
+        params = tuple(alias.__type_params__ or ())
+        for p in params:
+            self._type_param(p)
+        build = _alias_builder(alias)
+        if build is None:
+            # Made by calling ``TypeAliasType(name, value)``: its value is
+            # given, not built later.
+            h.update(b"v")
+            self.feed(alias.__value__)
+            return
+        h.update(code_digest(build.__code__).encode())
+        code = build.__code__
+        for name, cell in zip(code.co_freevars, build.__closure__ or ()):
+            try:
+                held = cell.cell_contents
+            except ValueError:
+                h.update(b"empty")
+                continue
+            if name == "__classdict__" or any(held is p for p in params):
+                # The class it is made in (its names are read by the code
+                # only through the class), or a type parameter, fed above.
+                continue
+            h.update(b"c" + name.encode())
+            self.feed(held)
+        ns = build.__globals__
+        for name in sorted(_code_names(code)):
+            h.update(b"g" + name.encode())
+            value = ns.get(name, _MISSING)
+            if value is _MISSING:
+                value = builtins.__dict__.get(name, _MISSING)
+            if value is _MISSING:
+                h.update(b"absent")
+            else:
+                self.feed(value)
+
+    def _type_param(self, p: Any) -> None:
+        """A type parameter of an alias, by its kind, name and what bounds
+        it."""
+        h = self.h
+        h.update(b"tp" + f"{type(p).__qualname__}:{getattr(p, '__name__', '')}".encode())
+        for part in ("__bound__", "__constraints__", "__default__", "__covariant__", "__contravariant__"):
+            got = getattr(p, part, _MISSING)
+            if got is _MISSING or got is _NO_DEFAULT:
+                continue
+            h.update(part.encode())
+            self.feed(got)
+
     def _type(self, t: type) -> None:
         h = self.h
         h.update(b"t" + f"{t.__module__}.{t.__qualname__}".encode())
@@ -455,6 +518,35 @@ class _Digester:
             return
         self.types.add(id(t))
         h.update(class_digest(t, self).encode())
+
+
+#: A type parameter's ``__default__`` when it has none (3.13+).
+_NO_DEFAULT = getattr(typing, "NoDefault", object())
+
+
+def _alias_builder(alias: Any) -> types.FunctionType | None:
+    """The function a ``type X = ...`` statement made to build *alias*'s
+    value on its first read (kept after), else None."""
+    got = getattr(alias, "evaluate_value", None)  # 3.14
+    if type(got) is types.FunctionType:
+        return got
+    import gc
+
+    for ref in gc.get_referents(alias):
+        if type(ref) is types.FunctionType:
+            return ref
+    return None
+
+
+def _code_names(code: types.CodeType) -> set[str]:
+    """The global names *code* and the code nested in it may read."""
+    out: set[str] = set()
+    stack = [code]
+    while stack:
+        c = stack.pop()
+        out.update(c.co_names)
+        stack.extend(k for k in c.co_consts if isinstance(k, types.CodeType))
+    return out
 
 
 _STARTS = threading.local()
