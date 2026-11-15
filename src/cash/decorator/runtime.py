@@ -1621,7 +1621,7 @@ class CallRunner:
             call.handed = handed
         self._notices.replay_warnings(func_name, verdict.get("warnings") or [])
         refused = str(verdict.get("why") or "it changed its arguments in place")
-        why = MissReason(MissKind.NOT_STORED, "an earlier call with the same code and argument types was not stored")
+        why = MissReason(MissKind.NOT_STORED, refused)
         note_unentered_body(func_name)
         call.outcome = spec.func(*call.args, **call.kwargs)
         self._calls.log(

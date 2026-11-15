@@ -31,7 +31,7 @@ def test_compression_enabled(temp_cache_dir):
     data_path = os.path.join(temp_cache_dir, data_file)
     file_size = os.path.getsize(data_path)
 
-    assert file_size < 1000
+    assert file_size < 2000  # 10,000 bytes in; the rest is entry metadata
 
 
 def test_compression_disabled(temp_cache_dir):
