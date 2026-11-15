@@ -392,6 +392,9 @@ class _Scan:
         #: reading it again (`_Family.holds`): the abc cache token, sklearn's
         #: settings.
         self.probes: dict[Any, Any] = {}
+        #: The state memo's scan: data no watcher sees (a list, a numpy
+        #: array) is read again on every reuse instead (`ContentProbe`).
+        self.content = False
         self.count = 0
 
     def _first(self, key: Any, obj: Any) -> bool:
@@ -497,6 +500,8 @@ class _Scan:
             self.probes[abc.get_cache_token] = abc.get_cache_token()
         elif self._sklearn_config(v):
             return
+        elif self.content and (probe := ContentProbe.of(v)) is not None:
+            self.probes[probe] = probe.digest
         else:
             raise Ineligible(f"a {t.__module__}.{t.__qualname__}")
 
@@ -870,16 +875,19 @@ def _resolve(mod_name: str, chain: tuple) -> Any:
 
 
 def scan(
-    spec: CachedFunction, registry: Any, *, environment_ok: bool = False
+    spec: CachedFunction, registry: Any, *, environment_ok: bool = False, content: bool = False
 ) -> tuple[tuple, tuple, list, _Family | None]:
     """Watch the world of *spec*'s key. Returns the cells and the class
     tags a fast hit compares, the states of the cached functions it
     reaches, and the classes whose family it checks (`_Scan.family`);
     raises `Ineligible`. With *environment_ok* (the state memo, which checks
     each variable a segment read before serving it) an analysis that keys
-    an environment read does not make it ineligible."""
+    an environment read does not make it ineligible. With *content* (the
+    state memo too) a list or an array met is read again on every reuse
+    (`ContentProbe`) instead of making it ineligible."""
     func, name = spec.func, spec.name
     s = _Scan(getattr(func, "__module__", None), func)
+    s.content = content
     s.value(func, frozenset())
     graph = registry.graph
     stack, visited = [name], {name}
@@ -956,6 +964,72 @@ def scan_trace(spec: CachedFunction, registry: Any, items: list) -> tuple[tuple,
     cells = tuple(x for pair in s.cells for x in pair)
     tags = tuple(x for pair in s.types.values() for x in pair)
     return cells, tags, s.callees, s.family()
+
+
+class ContentProbe:
+    """Data a key folds by its content that no watcher sees changed in
+    place: an exact list, set or bytearray of plain data
+    (`key_values.plain_data_kind`), or an exact numpy array of a dtype
+    without objects. Called, it reads the whole value again and gives a
+    digest that moves with any change the fold could see (`_Family.holds`
+    compares it): the pickle of the plain data, which spells out every
+    item, its type and the sharing between them; the array's dtype, shape,
+    strides and bytes. As costly as the fold's own hash of the value, which
+    it stands in for; no costlier.
+
+    Rebinding the name that holds the value moves a watched dict; this
+    covers what is done to the value itself."""
+
+    __slots__ = ("digest", "read", "value")
+
+    def __init__(self, value: Any, read: Any) -> None:
+        self.value = value
+        self.read = read
+        self.digest = read(value)
+
+    def __call__(self) -> Any:
+        return self.read(self.value)
+
+    @classmethod
+    def of(cls, v: Any) -> ContentProbe | None:
+        """A probe of *v*, or None when it is no data a probe reads whole."""
+        t = type(v)
+        if t is list or t is set or t is bytearray:
+            from .key_values import plain_data_kind
+
+            if t is not bytearray and plain_data_kind(v) != "plain":
+                return None
+            try:
+                return cls(v, _plain_content)
+            except Exception:  # noqa: BLE001 - cannot be read whole: not probed
+                return None
+        if t.__name__ == "ndarray" and t.__module__ == "numpy":
+            try:
+                if v.dtype.hasobject:
+                    return None
+                return cls(v, _array_content)
+            except Exception:  # noqa: BLE001 - cannot be read whole: not probed
+                return None
+        return None
+
+
+def _plain_content(v: Any) -> bytes:
+    import hashlib
+    import pickle
+
+    return hashlib.blake2b(pickle.dumps(v, protocol=5), digest_size=32).digest()
+
+
+def _array_content(v: Any) -> tuple:
+    import hashlib
+
+    import numpy as np
+
+    if v.dtype.hasobject:
+        raise TypeError("an array of objects")
+    data = v if v.flags.c_contiguous else np.ascontiguousarray(v)
+    digest = hashlib.blake2b(data.reshape(-1).view(np.uint8), digest_size=32).digest() if data.size else b""
+    return (v.dtype.str, v.dtype.descr if v.dtype.names else None, v.shape, v.strides, digest)
 
 
 class _Family:
