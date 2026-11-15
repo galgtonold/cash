@@ -33,6 +33,7 @@ from ..canonical_form import (
     canonical_marker_bytes,
     field_rows_only,
     index_digest,
+    register_plain_hook,
     stable_key_repr,
 )
 from ..content_hashers import (
@@ -1990,7 +1991,9 @@ class ArgHasher:
         self.override_hashers: dict[type, tuple[Callable[[Any], str], str]] = {}
         #: How a key walk reads a frame, array or table inside an argument:
         #: through the copy-on-write memo (`_memo_content_digest`).
-        self._content = ContentHashing(builtin_family_of, self._memo_content_digest, frame_memoable)
+        self._content = ContentHashing(
+            builtin_family_of, self._memo_content_digest, frame_memoable, plain_arrays=_QUIET_DIGESTS.get
+        )
 
     def register_hasher(self, type_: type, hasher_fn: Callable[[Any], str], src_hash: str, *, override: bool) -> None:
         """Make *hasher_fn* the identity of *type_* values, replacing any earlier one."""
@@ -2797,3 +2800,13 @@ class ArgHasher:
         if cf is None or (cf.arg_cost is not None and cf.arg_cost[2] >= seconds):
             return
         cf.arg_cost = (label, type_name, seconds, producer, old_pandas, unkeyed)
+
+
+def _passes_plain(hasher: ArgHasher) -> bool:
+    """Does *hasher*'s `ArgHasher._nested_hasher` pass every exact dict,
+    list, tuple and numpy array? With no hasher registered: their types
+    have no ``__cash_key__``, are no JIT function, no function."""
+    return not (hasher.override_hashers or hasher.type_hashers)
+
+
+register_plain_hook(ArgHasher._nested_hasher, _passes_plain)

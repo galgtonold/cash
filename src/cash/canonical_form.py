@@ -35,7 +35,7 @@ from collections.abc import Callable, Generator
 from itertools import chain, repeat
 from typing import Any, NamedTuple
 
-from . import _plain_data, _weak, kept_state
+from . import _native, _plain_data, _weak, kept_state
 from ._memo import SORTED_SETS, LruMemo
 from ._type_memo import TypeMemo, type_key
 from .pint_values import is_registry_class, pint_kind, quantity_parts, registry_digest
@@ -69,6 +69,12 @@ class ContentHashing(NamedTuple):
     family: Callable[[type], str | None]
     digest: Callable[[Any], str | None]
     memoable: Callable[[Any], bool] | None = None
+    #: When given, *family* and *digest* are ``builtin_hash``'s for an
+    #: exact numpy array of numbers or strings, read through the window
+    #: this returns (``id -> (array, digest)``, written as each is read;
+    #: None for no window): the C walk of plain data (`PlainWalk`) may
+    #: then read such arrays itself.
+    plain_arrays: Callable[[], dict | None] | None = None
 
 
 def object_state(value: Any) -> dict:
@@ -199,10 +205,14 @@ def stable_key_repr(
     fields (`_fields_form`) and gets the id of each one that is; the caller
     must then check that none of them is held twice (`canonical_bytes`).
     """
+    walk = _Walk(content, {} if seen is None else seen, hook, left, fielded)
     try:
-        return _walk(value, _Walk(content, {} if seen is None else seen, hook, left, fielded))
+        return _walk(value, walk)
     except RecursionError:
         raise TooDeepValueError(_too_deep(value)) from None
+    finally:
+        # The C walk holds the walk: freed now, not by the next collection.
+        walk.fast = None
 
 
 class TooDeepValueError(TypeError):
@@ -222,7 +232,7 @@ class _Walk:
     containers met so far (*seen*), and the caller's *content*, *hook* and
     *left* (see `stable_key_repr`)."""
 
-    __slots__ = ("clean", "content", "fielded", "holds_set", "hook", "left", "seen", "stack", "whole")
+    __slots__ = ("clean", "content", "fast", "fielded", "holds_set", "hook", "left", "seen", "stack", "whole")
 
     def __init__(
         self,
@@ -248,9 +258,86 @@ class _Walk:
         #: it went on *left*: met again, one is that form again without a
         #: second search. Held here, so no other object takes its id.
         self.whole: dict[int, tuple[Any, bool]] = {}
+        #: The C walk of plain data for this walk (`_plain_walk`), or None.
+        self.fast = _plain_walk(self)
 
 
-def _walk(value: Any, walk: _Walk) -> Any:
+#: The C walk of plain data, or None without the C extension.
+_PLAIN_WALK: Any = getattr(_native.kernels, "PlainWalk", None)
+
+#: ``{hook function: does its owner give no stand-in for a plain container
+#: or array}``: a hook method registered here lets the C walk read what it
+#: would pass (`register_plain_hook`). Any other hook keeps the Python walk.
+_PLAIN_HOOKS: dict[Any, Callable[[Any], bool]] = {}
+
+#: The C walk's sentinel for a value it leaves to the Python walk.
+_NOT_FAST = object()
+
+_PLAIN_SET_UP: list = []
+
+
+def register_plain_hook(function: Any, passes: Callable[[Any], bool]) -> None:
+    """Let a walk whose hook is a method *function* run the C walk of plain
+    data when ``passes(owner)``: the hook then answers `NOT_HOOKED` for
+    every exact dict, list, tuple and numpy array."""
+    _PLAIN_HOOKS[function] = passes
+
+
+def _plain_walk(walk: _Walk) -> Any:
+    """The C walk of plain data (``cplain.c``) for *walk*, or None.
+
+    It forms exact dicts, lists and tuples and the arrays of numbers inside
+    them as `_enter` and `_object_steps` form them, with the same effects
+    on *walk*, and hands every other part back to `_walk_below`. Only for a
+    walk with no hook, or one registered as passing such values
+    (`register_plain_hook`), whose content hashing says how it reads an
+    array (``ContentHashing.plain_arrays``)."""
+    if _PLAIN_WALK is None:
+        return None
+    window = walk.content.plain_arrays
+    if window is None:
+        return None
+    hook = walk.hook
+    if hook is not None:
+        passes = _PLAIN_HOOKS.get(getattr(hook, "__func__", None))
+        if passes is None or not passes(hook.__self__):
+            return None
+    if not _PLAIN_SET_UP:
+        _set_up_plain_walk()
+    return _PLAIN_WALK(walk.seen, walk.stack, window(), walk, numpy_ndarray())
+
+
+def _set_up_plain_walk() -> None:
+    from .bulk_digest import DIRECT_MAX_BYTES
+    from .content_hashers import array_layout, plain_dtype_text
+
+    _native.kernels.plain_walk_setup(
+        "__cash_type__",
+        "__cash_alias__",
+        "__cash_content__",
+        "numpy",
+        _BUILTIN_CONTAINER_TAGS[dict],
+        _BUILTIN_CONTAINER_TAGS[list],
+        _BUILTIN_CONTAINER_TAGS[tuple],
+        CyclicValueError,
+        _walk_below,
+        plain_dtype_text,
+        array_layout,
+        hashlib.sha256,
+        _NOT_FAST,
+        DIRECT_MAX_BYTES,
+        RECORDS_FROM,
+    )
+    _PLAIN_SET_UP.append(True)
+
+
+def _walk_below(value: Any, walk: _Walk) -> Any:
+    """`_walk` of a part the C walk of plain data hands over, not handed
+    back to it at the top."""
+    return _walk(value, walk, False)
+
+
+def _walk(value: Any, walk: _Walk, fast: bool = True) -> Any:
     """`stable_key_repr` of one value, as part of *walk*.
 
     Iterative: each container or object being walked is a generator
@@ -268,7 +355,7 @@ def _walk(value: Any, walk: _Walk) -> Any:
     timeout's, in the middle of a deep value) took pytest minutes to print
     and its worker's memory to send.
     """
-    entered = _enter(value, walk)
+    entered = _enter(value, walk, fast)
     if type(entered) is not _Descend:
         return entered
     steps = [entered.steps]
@@ -348,7 +435,7 @@ def _content_digest(value: Any, content: ContentHashing) -> str | None:
 DEAD_PROXY_FORM = ("__cash_dead_proxy__",)
 
 
-def _enter(value: Any, walk: _Walk) -> Any:
+def _enter(value: Any, walk: _Walk, fast: bool = True) -> Any:
     """*value*'s form when it needs no walk below it (a primitive, a hooked
     or content-hashed value, a container met before), else a `_Descend`
     holding the generator that walks it."""
@@ -361,6 +448,12 @@ def _enter(value: Any, walk: _Walk) -> Any:
                 return ("__cash_alias__", first[0])
             seen[id(value)] = (len(seen), value)
         return value
+    if fast and walk.fast is not None:
+        # An exact dict, list or tuple, or an array of numbers: formed in C
+        # (`_plain_walk`), the same form at a fraction of the cost.
+        form = walk.fast(value)
+        if form is not _NOT_FAST:
+            return form
     if type(value) in WEAK_PROXY_TYPES and is_dead_proxy(value):
         # Refers to nothing: one form for every such proxy (`is_dead_proxy`).
         return DEAD_PROXY_FORM

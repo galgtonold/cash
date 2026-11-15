@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from cash import Cash, content_hashers
+from cash import Cash, canonical_form, content_hashers
 from cash.canonical_form import contains_set
 from cash.content_hashers import array_layout
 
@@ -169,6 +169,10 @@ def test_the_checks_after_a_body_read_each_array_once(c, monkeypatch):
     est = Fitting(n_bags=100)
     est.log = []
     monkeypatch.setattr(content_hashers, "hash_numpy", counting)
+    # Counted in the Python walk: the C one reads these arrays without
+    # `hash_numpy` (its own window test is in
+    # test_the_c_key_walk_forms_what_the_python_walk_forms.py).
+    monkeypatch.setattr(canonical_form, "_PLAIN_WALK", None)
     arrays = 3 * 100
     reads = []
     with warnings.catch_warnings():

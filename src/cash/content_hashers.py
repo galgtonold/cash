@@ -107,7 +107,7 @@ def builtin_hash(value: Any) -> str | None:
 
 #: How a key walk reads a frame, array or table with no memo in front:
 #: every byte, through `builtin_hash`.
-BUILTIN_CONTENT = ContentHashing(builtin_family_of, builtin_hash)
+BUILTIN_CONTENT = ContentHashing(builtin_family_of, builtin_hash, plain_arrays=lambda: None)
 
 
 def hash_pandas(value: Any) -> str | None:
@@ -1090,6 +1090,15 @@ def _dtype_text(dtype: Any) -> str:
         if getattr(dtype, "isbuiltin", 0) == 1 and not getattr(dtype, "metadata", None) and len(_DTYPE_TEXTS) < 256:
             _DTYPE_TEXTS[dtype] = text
     return text
+
+
+def plain_dtype_text(dtype: Any) -> str | None:
+    """`_dtype_text` of a dtype the C walk of plain data reads an array of
+    itself (numbers, booleans, strings: no fields, no objects, no subarray,
+    no datetimes), else None: `hash_numpy` reads it."""
+    if dtype.fields is not None or dtype.subdtype is not None or dtype.hasobject or dtype.kind not in "biufcSU":
+        return None
+    return _dtype_text(dtype)
 
 
 def hash_numpy(value: Any) -> str | None:
