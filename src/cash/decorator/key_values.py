@@ -15,6 +15,7 @@ from .._type_memo import TypeMemo, type_key
 from ..analysis.helper_code import is_mock, renamed
 from ..jit_functions import jit_python_function
 from ..pint_values import pint_kind
+from ..tracking.trace_items import TYPE_ALIAS, value_digest
 from ..value_types import IMMUTABLE_LEAF_TYPES, is_dead_proxy
 from .module_identity import module_ref
 from .user_code import is_user_class, is_user_code_object, own_package
@@ -262,6 +263,14 @@ def _stabilized(v: Any, hash_callable, _path: frozenset[int], carried: bool) -> 
         except (OSError, TypeError, ValueError):
             ident = v.__qualname__
         return ("__cash_class__", f"{v.__module__}.{v.__qualname__}", ident), True
+    if TYPE_ALIAS is not None and type(v) is TYPE_ALIAS:
+        # ``type X = ...`` pickles by name, and builds its value once, on
+        # its first read: by what defines it (`value_digest`), however
+        # early that read was.
+        got = value_digest(v)
+        if got.startswith("opaque:"):
+            raise TypeError(f"the type alias {v.__name__} cannot be digested")
+        return ("__cash_type_alias__", f"{v.__module__}.{v.__name__}", got), True
     if callable(v):
         try:
             ident: Any = hash_callable(v)
