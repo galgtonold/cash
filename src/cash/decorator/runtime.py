@@ -756,7 +756,11 @@ class KeyBuilder:
         try:
             if self._registry.functions.get(func_name) is func:
                 self._registry.ensure_closure_analyzed(func)
-            return self._code_state(spec, [])
+            if state_memo.memo_for(spec) is None:
+                return self._code_state(spec, [])
+            # Apart from the caller's containers, so the callee's own memo
+            # can serve its segment (`state_memo.fresh_context`).
+            return state_memo.fresh_context(lambda into: self._code_state(spec, into), [])
         except UnhashableDefault:
             raise _unhashable_callee_default(func_name) from None
         finally:
