@@ -1711,7 +1711,8 @@ class InMemoryBackend(CacheBackend):
     def _read_pickled(self, key: str, metadata: MetadataDict, kept: _Pickled) -> tuple[MetadataDict | None, Any]:
         """A hit of a value kept as pickle bytes: a new copy read out of them,
         or the copy the last hit handed out when nothing can tell the two
-        apart (`handed_copies`), as a `_ReadOut`.
+        apart, or a new copy made from that one when it is unchanged but
+        held (`handed_copies`), as a `_ReadOut`.
 
         The first one is timed, as the store used to time its round trip:
         the reading goes on the entry (``measured_round_trip_seconds``) and
@@ -1726,9 +1727,12 @@ class InMemoryBackend(CacheBackend):
                 if handed is not None and entry is not None and entry[1] is kept:
                     found = handed_copies.reuse(handed)
                     if found is not handed_copies.NONE:
+                        # The kept copy, or one made from it while someone
+                        # holds it (which stays kept): either way laid out
+                        # as the bytes lay it out, and nothing to keep.
                         kept.misses = 0
                         self._handed[key] = self._handed.pop(key, kept)
-                        return metadata, _ReadOut(found, kept, 0.0, True)
+                        return metadata, _ReadOut(found[0], kept, 0.0, True)
                     kept.misses += 1
                 self._release_handed(key)
         started = time.perf_counter()
