@@ -507,6 +507,8 @@ class StateMemo:
         self.backoff = 1
         self.scanned_at = 0.0
         self.reused_since_scan = 0
+        #: Has a build asked for a scan yet? The first does not get one.
+        self.asked = False
 
     def _holds(self) -> bool:
         if not _world_holds(self.cells, self.tags):
@@ -520,6 +522,13 @@ class StateMemo:
         world, gen = _world_epoch(), GEN[0]
         if self.world == world and self.gen == gen:
             return True
+        if not self.asked:
+            # Most functions of a library run once a process, and a scan
+            # costs as much as tens of reuses: the first build is not
+            # remembered (its body, importing and compiling, mostly moves
+            # the world anyway), the second scans.
+            self.asked = True
+            return False
         self.slow += 1
         now = time.monotonic()
         if self.slow < self.backoff and now - self.scanned_at < self.RESCAN_AFTER_S:
