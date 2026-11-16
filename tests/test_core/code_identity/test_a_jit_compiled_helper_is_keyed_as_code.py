@@ -15,6 +15,7 @@ process is served is what the test sees.
 from __future__ import annotations
 
 import importlib.util
+import sys
 import textwrap
 from pathlib import Path
 
@@ -144,10 +145,23 @@ def _run(project: Path) -> tuple[bool, str, str]:
     return "RAN" in out.stdout, result, out.stdout + out.stderr
 
 
+def _without_the_pre_312_settings_notice(output: str) -> str:
+    """Drop the one key notice Python below 3.12 owes every body reaching a library.
+
+    Below 3.12 nothing records the library settings a body reads, so cash says
+    so (KEY-LIBRARY-STATE-UNSEEN) for any body that reaches library code: a
+    correct notice about settings, not about how the jitted helper is keyed.
+    On 3.12+ it must not appear, so nothing is dropped there.
+    """
+    if sys.version_info >= (3, 12):
+        return output
+    return "\n".join(line for line in output.splitlines() if "[KEY-LIBRARY-STATE-UNSEEN]" not in line)
+
+
 def _assert_caches(project: Path, expected: str) -> str:
     ran, first, output = _run(project)
     assert ran and first == expected
-    assert "KEY-" not in output, output
+    assert "KEY-" not in _without_the_pre_312_settings_notice(output), output
     ran, again, output = _run(project)
     assert not ran, f"the second process ran again instead of hitting:\n{output}"
     assert again == expected

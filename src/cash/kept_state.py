@@ -2582,7 +2582,8 @@ def _xarray_lazy_dicts(t: type) -> tuple[str, ...]:
         return ()
     names: list[str] = []
     for klass in t.__mro__:
-        if not (klass.__module__ or "").startswith("xarray."):
+        module = klass.__module__  # a member_descriptor on Cython 3.1's function type
+        if not (isinstance(module, str) and module.startswith("xarray.")):
             continue
         own = vars(klass)
         for prop, slot in (("attrs", "_attrs"), ("encoding", "_encoding")):

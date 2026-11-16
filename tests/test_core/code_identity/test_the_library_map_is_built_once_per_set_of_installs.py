@@ -232,6 +232,27 @@ def test_an_old_style_editable_install_is_found_by_the_next_process(site, tmp_pa
     assert library_versions._dists_for("devpkg") == ["fake_dev"]
 
 
+def test_an_egg_info_file_on_the_path_still_lets_the_map_be_saved(site, monkeypatch):
+    """python.org's Python 3.10 keeps ``wsgiref.egg-info``, a lone metadata
+    file with no ``RECORD``, in its standard library folder: the map is still
+    saved, and a new process finds what a fresh build finds."""
+    _fill(site)
+    (site / "wsgiref.egg-info").write_text("Metadata-Version: 1.0\nName: wsgiref\nVersion: 0.1.2\n", encoding="utf-8")
+    _dist(site, "fake_egg", "1.0", [])
+    shutil.rmtree(site / "fake_egg-1.0.dist-info")
+    egg = site / "fake_egg-1.0.egg-info"
+    egg.mkdir()
+    (egg / "PKG-INFO").write_text("Metadata-Version: 1.0\nName: fake_egg\nVersion: 1.0\n", encoding="utf-8")
+    (egg / "installed-files.txt").write_text("../eggpkg/__init__.py\n", encoding="utf-8")
+    scans = _scans(monkeypatch)
+    first = {**_lookups(), "eggpkg": library_versions._dists_for("eggpkg")}
+    assert first["realpkg"] == ["fake_real"]
+    assert os.path.exists(library_versions._map_path())
+    _new_process()
+    assert {**_lookups(), "eggpkg": library_versions._dists_for("eggpkg")} == first
+    assert len(scans) == 1
+
+
 def test_a_pth_file_changed_alone_builds_the_map_again(site, monkeypatch):
     _fill(site)
     _lookups()

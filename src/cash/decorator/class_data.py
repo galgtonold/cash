@@ -8,6 +8,7 @@ import contextvars
 import enum
 import functools
 import hashlib
+import operator
 import pickle
 import threading
 import types
@@ -618,7 +619,8 @@ class ClassDataFold:
         #: `GlobalsFold.held_value_code_parts`, bound by `GlobalsFold`.
         self._held_code: Callable[..., list[tuple[str, str]]] | None = None
         # class -> (its surface functions, the names their code reads); see
-        # `class_parts`. A redefined class is a new key.
+        # `class_parts`. A redefined class is a new key; a rebound method a
+        # new read (`_class_code`).
         self._class_code_cache: LruMemo[type, tuple[tuple, frozenset]] = LruMemo(CODE_OBJECTS)
         # class -> (the immutable data values last hashed, their digest); see
         # `class_data_digest`.
@@ -822,11 +824,16 @@ class ClassDataFold:
         that is read but cannot be hashed. The attributes written are those
         its code stores or mutates in place (`bytecode_written_attrs`): a
         class-level counter or registry is state, not an input.
+
+        Read again when the functions are not the ones it was read from: a
+        method rebound on the class (``Vec.__add__ = _add``) kept what the
+        old one read, and a global only the new one reads was left out of
+        the key.
         """
-        cached = self._class_code_cache.get(cls)
-        if cached is not None:
-            return cached
         functions = tuple(class_surface_functions(cls))
+        cached = self._class_code_cache.get(cls)
+        if cached is not None and len(cached[0]) == len(functions) and all(map(operator.is_, cached[0], functions)):
+            return cached
         excluded: set[tuple[int, str]] = set()
         names: set[str] = set()
         written: set[str] = set()

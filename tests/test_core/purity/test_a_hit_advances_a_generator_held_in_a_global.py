@@ -109,3 +109,35 @@ def test_a_generator_passed_in_is_advanced_by_a_hit(tmp_path, mode):
     assert {k: more[k] for k in ("res", "next")} == {k: plain[12][k] for k in ("res", "next")}
     # A draw a hit replays is not an effect the caller loses.
     assert "IMPURE-OBSERVED-EFFECTS" not in first["codes"]
+
+
+GLOBAL_RNG = None
+
+
+def test_a_generator_held_in_a_global_is_keyed_by_its_state():
+    """Pickling a ``Generator`` for the key reaches numpy's Cython function
+    type, whose ``__module__`` is a slot descriptor on the class: reading it
+    as a module name refused the global as unhashable (KEY-UNHASHABLE-GLOBAL)
+    and a moved stream was served the values drawn before."""
+    import warnings
+
+    import numpy as np
+
+    import cash
+
+    global GLOBAL_RNG
+    GLOBAL_RNG = np.random.default_rng(42)
+
+    @cash.cache
+    def draw(x):
+        return float(GLOBAL_RNG.normal()) + x
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        first = draw(0)
+        GLOBAL_RNG = np.random.default_rng(42)
+        GLOBAL_RNG.normal()
+        moved = draw(0)
+    assert not [w for w in caught if "KEY-UNHASHABLE-GLOBAL" in str(w.message)]
+    assert moved != first
+    GLOBAL_RNG = None
