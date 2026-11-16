@@ -102,11 +102,13 @@ jobs:
       # 120 s on one test, and timeout-minutes ends the step (the slowest,
       # a whole macOS run, took up to 19.5 min, so every OS now runs in shards).
       # A Windows 3.14 shard reached 20 min of tests on 2026-10-29 and 28-30 min
-      # by 2026-11-05 (every test uniformly slower than on macOS): 40 leaves room.
+      # by 2026-11-05 (every test uniformly slower than on macOS); a Windows 3.10
+      # shard took 36 min on 2026-11-15 and hit 40 the next run. A third shard
+      # would pass the free plan's 20 parallel jobs, so the limit is 55.
       # --durations lists the slowest tests, so a shard creeping up on the
       # limit shows which tests took the time.
       - name: Run unit tests
-        timeout-minutes: 40
+        timeout-minutes: 55
         run: |
           python -m pytest tests/ \
             --ignore=tests/test_notebook_integration \
