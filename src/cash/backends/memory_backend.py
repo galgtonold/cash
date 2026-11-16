@@ -132,7 +132,7 @@ class _Pickled:
     buffers (a read-only one, which numpy will not make writable, shared).
     """
 
-    __slots__ = ("buffers", "handed", "misses", "readonly", "served", "stream", "top_class")
+    __slots__ = ("buffers", "clones", "handed", "misses", "readonly", "served", "stream", "top_class")
 
     def __init__(self, stream: bytes, buffers: list[bytes], readonly: list[bool], top_class: str | None = None) -> None:
         self.stream = stream
@@ -147,6 +147,9 @@ class _Pickled:
         #: (`handed_copies`), and the hits in a row that could not reuse one.
         self.handed: handed_copies.Handed | None = None
         self.misses = 0
+        #: Hits since one last handed the kept copy back that got a copy
+        #: made from it instead, as something outside held it.
+        self.clones = 0
 
     def load(self) -> Any:
         """A new copy of the value."""
@@ -170,20 +173,29 @@ class _Pickled:
 
 class _ReadOut:
     """What `InMemoryBackend._read_pickled` hands `get`: the value, the
-    kept bytes it came from, how long reading it took, and whether it is
-    the copy handed out before (`handed_copies`)."""
+    kept bytes it came from, how long reading it took, whether it is the
+    copy handed out before, and whether it was made from that copy while
+    something outside held it (`handed_copies`)."""
 
-    __slots__ = ("kept", "reused", "seconds", "value")
+    __slots__ = ("cloned", "kept", "reused", "seconds", "value")
 
-    def __init__(self, value: Any, kept: _Pickled, seconds: float, reused: bool) -> None:
+    def __init__(self, value: Any, kept: _Pickled, seconds: float, reused: bool, cloned: bool = False) -> None:
         self.value = value
         self.kept = kept
         self.seconds = seconds
         self.reused = reused
+        self.cloned = cloned
 
 
 #: Most copies kept for the next hit per tier (`handed_copies`).
 _MAX_HANDED = 8
+
+#: The hit in a row, counted from 1, that gets a copy made from the kept one
+#: while something outside holds that and keeps the new copy in its place
+#: (`InMemoryBackend._read_pickled`). Not the first: watching the new copy
+#: costs more than making it, and a caller holding one result once (a
+#: tokenizer keeping the trie it was given) need not pay it on that hit.
+_ADOPT_AT_CLONE = 2
 
 
 def _load_pickled(stream: bytes, buffers: list[bytes], readonly: list[bool]) -> Any:
@@ -1564,7 +1576,9 @@ class InMemoryBackend(CacheBackend):
                 # Handed out before and proved untouched since: its sets are
                 # laid out already.
                 return metadata, value.value
-            set_order.restore(value.value, metadata)
+            if not value.cloned:
+                # A copy made from the handed one is laid out as it is.
+                set_order.restore(value.value, metadata)
             return metadata, self._keep_handed(key, value)
         # The copy's sets iterate as the stored ones do (`set_order`).
         set_order.restore(value, metadata)
@@ -1725,14 +1739,27 @@ class InMemoryBackend(CacheBackend):
                 entry = self._store.get(key)
                 handed = kept.handed
                 if handed is not None and entry is not None and entry[1] is kept:
+                    started = time.perf_counter()
                     found = handed_copies.reuse(handed)
                     if found is not handed_copies.NONE:
-                        # The kept copy, or one made from it while someone
-                        # holds it (which stays kept): either way laid out
-                        # as the bytes lay it out, and nothing to keep.
-                        kept.misses = 0
-                        self._handed[key] = self._handed.pop(key, kept)
-                        return metadata, _ReadOut(found[0], kept, 0.0, True)
+                        made, reused = found
+                        if reused:
+                            kept.misses = kept.clones = 0
+                        kept.clones += not reused
+                        if reused or kept.clones != _ADOPT_AT_CLONE:
+                            # The kept copy, or one made from it while
+                            # something outside holds it: either way laid
+                            # out as the bytes lay it out, and nothing to keep.
+                            self._handed[key] = self._handed.pop(key, kept)
+                            return metadata, _ReadOut(made, kept, 0.0, True)
+                        # Held again: the holder keeps it, so the new copy is
+                        # kept in its place (`_keep_handed`), and the hits
+                        # after, whose callers let go, hand that one back
+                        # instead of copying the held one every time. Once
+                        # per run of such hits: a caller holding every copy
+                        # it gets is not paid a new watch for each.
+                        self._release_handed(key)
+                        return metadata, _ReadOut(made, kept, time.perf_counter() - started, False, True)
                     kept.misses += 1
                 self._release_handed(key)
         started = time.perf_counter()
