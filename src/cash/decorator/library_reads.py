@@ -80,6 +80,7 @@ import importlib
 import inspect
 import json
 import os
+import re
 import sys
 import threading
 import types
@@ -857,6 +858,12 @@ def _targets(
     elif upto[0] in skip:
         written = upto[0]
     where, upto = _rooted(g, g["__name__"], upto)
+    if _import_hook(where):
+        # An editable install's import hook: where the project's files
+        # are (setuptools' ``MAPPING``), under a name holding its version.
+        # Import machinery, no setting: the code it finds is keyed by its
+        # own content.
+        return []
     if _compiled(where):
         # What a compiled module holds is set by its own code as it
         # loads: numba's table of C helper addresses, pyarrow's type
@@ -879,6 +886,18 @@ def _targets(
         return out
     same = ("obj", id(v)) if type(v) in (dict, list, set) else (where, upto)
     return [(kind, where, dotted, same, v, written, ext)]
+
+
+#: The modules an editable install's import hook is: setuptools'
+#: ``__editable___<project>_<version>_finder``, scikit-build-core's
+#: ``_<project>_editable``, and the ``editables`` package's (hatchling's,
+#: pdm-backend's) ``_editable_impl_<project>`` and its redirector.
+_HOOK_NAME = re.compile(r"^(__editable___\w+_finder|_\w+_editable|_editable_impl_\w+|editables(\..+)?)$")
+
+
+def _import_hook(module: str) -> bool:
+    """Is *module* an editable install's import hook (`_HOOK_NAME`)?"""
+    return _HOOK_NAME.match(module) is not None
 
 
 #: ``[len(sys.modules) when built, id -> (container, module, name)]``: the

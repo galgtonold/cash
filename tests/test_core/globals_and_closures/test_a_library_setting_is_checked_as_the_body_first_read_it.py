@@ -273,3 +273,65 @@ def test_a_compiled_modules_table_of_addresses_is_checked_in_its_process_only(tm
     # The addresses differ in the next process; the table is the same one.
     assert run("plain") == ["True", "1"]
     assert run("rebind") == ["True", "1"]
+
+
+FINDER = """
+MAPPING = {"cash_ut_proj": "/src/v1/cash_ut_proj"}
+
+
+def where(name):
+    return MAPPING.get(name)
+"""
+
+HOOKED = """
+import __editable___cash_ut_proj_1_0_finder as finder
+
+_opts = {"scale": 1}
+
+
+def helper(x):
+    finder.where("cash_ut_proj")
+    return x * _opts["scale"]
+"""
+
+HOOKED_MAIN = """
+import sys
+sys.path.insert(0, {site!r})
+import __editable___cash_ut_proj_1_0_finder as finder
+import cash_ut_hooked as lib
+from cash import Cash
+
+# Another checkout, another version: where the files are moved.
+finder.MAPPING["cash_ut_proj"] = sys.argv[1]
+lib._opts["scale"] = int(sys.argv[2])
+f = Cash(cache_dir={cache!r}, register_magic=False).cache(lambda x: lib.helper(x))
+print(f(7), f.cache_info()["hits"])
+"""
+
+
+@needs_recording
+def test_an_editable_installs_path_map_is_no_setting(tmp_path):
+    site = tmp_path / "venv" / "lib" / "site-packages"
+    site.mkdir(parents=True)
+    (site / "__editable___cash_ut_proj_1_0_finder.py").write_text(FINDER, encoding="utf-8")
+    (site / "cash_ut_hooked.py").write_text(HOOKED, encoding="utf-8")
+    script = tmp_path / "hooked.py"
+    script.write_text(
+        textwrap.dedent(HOOKED_MAIN.format(site=str(site), cache=str(tmp_path / "cache"))), encoding="utf-8"
+    )
+
+    def run(path, scale):
+        out = subprocess.run(
+            [sys.executable, "-W", "ignore", str(script), path, str(scale)],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=120,
+        )
+        return out.stdout.split()
+
+    assert run("/a", 1) == ["7", "0"]
+    # The import hook's map moved: no setting, served.
+    assert run("/b", 1) == ["7", "1"]
+    # A setting the body read moved: runs, with plain's result.
+    assert run("/b", 2) == ["14", "0"]
