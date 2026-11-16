@@ -16,6 +16,7 @@ from __future__ import annotations
 import datetime
 import pickle
 import sys
+import threading
 
 from cash import kept_state
 from cash.backends.memory_backend import InMemoryBackend
@@ -29,7 +30,9 @@ def _sessions() -> list:
 
 
 def _calls_by_name(run) -> dict[str, int]:
-    """Python calls made by *run*, by function name."""
+    """Python calls made by *run*, by function name; on the threads it
+    starts too (a pickle on Python 3.10 under Windows runs on a thread with
+    a large stack, `kept_state._on_big_stack`)."""
     counts: dict[str, int] = {}
 
     def profile(frame, event, _arg):
@@ -37,15 +40,18 @@ def _calls_by_name(run) -> dict[str, int]:
             counts[frame.f_code.co_name] = counts.get(frame.f_code.co_name, 0) + 1
 
     sys.setprofile(profile)
+    threading.setprofile(profile)
     try:
         run()
     finally:
         sys.setprofile(None)
+        threading.setprofile(None)
     return counts
 
 
 def _lines_in(name: str, run) -> tuple[int, int]:
-    """Calls of, and lines run in, the functions called *name* while *run* runs."""
+    """Calls of, and lines run in, the functions called *name* while *run*
+    runs, on the threads it starts too (`_calls_by_name`)."""
     calls = lines = 0
 
     def local(frame, event, _arg):
@@ -62,10 +68,12 @@ def _lines_in(name: str, run) -> tuple[int, int]:
         return local
 
     sys.settrace(trace)
+    threading.settrace(trace)
     try:
         run()
     finally:
         sys.settrace(None)
+        threading.settrace(None)
     return calls, lines
 
 
