@@ -117,7 +117,11 @@ ENABLED = hit_memo.ENABLED and _cw is not None and hasattr(_cw, "world_holds") a
 #: Rebuild behind every reuse and compare.
 VERIFY = ENABLED and (_flag("CASH_STATE_MEMO_VERIFY", "0") or hit_memo.VERIFY)
 
-_world_epoch = _cw.world_epoch if ENABLED else None
+#: The epoch the memo is at: the core epoch, which a change to a name
+#: libraries set and put back (`hit_memo._SCOPED_NAMES`: ``warnings.filters``
+#: around each ``catch_warnings``, ``sys.stderr``) does not move. Such a
+#: name the scan met is among its cells, at its own epoch (`_holds`).
+_world_epoch = _cw.core_epoch if ENABLED else None
 _world_holds = _cw.world_holds if ENABLED else None
 
 #: The generation of cash's own state that a state segment reads. Moved by

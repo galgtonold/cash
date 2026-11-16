@@ -145,15 +145,19 @@ def test_the_warning_hooks_move_the_world_only_when_swapped_for_something_new():
 
     cw = _native.cwatch
     Cash(backend="memory", register_magic=False).cache(clear_sky)(TIMES, _weather(), 0.5, 0.0)  # watches modules
-    epoch = cw.world_epoch()
+    # The epoch the memos compare. ``warnings.filters``, which
+    # ``catch_warnings`` sets and puts back, moves the total world epoch
+    # once any code scanned earlier in the process named it, and only
+    # its own epoch besides (`hit_memo._SCOPED_NAMES`).
+    epoch = cw.core_epoch()
     with warnings.catch_warnings(record=True):
         warnings.warn("recorded", UserWarning, stacklevel=1)
-    assert cw.world_epoch() == epoch
+    assert cw.core_epoch() == epoch
     hook = warnings.formatwarning
     warnings.formatwarning = hook  # the object it holds: no change
-    assert cw.world_epoch() == epoch
+    assert cw.core_epoch() == epoch
     try:
         warnings.formatwarning = lambda *a, **k: ""  # a new callable under a name a key may call
-        assert cw.world_epoch() != epoch
+        assert cw.core_epoch() != epoch
     finally:
         warnings.formatwarning = hook
