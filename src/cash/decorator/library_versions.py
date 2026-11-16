@@ -105,6 +105,10 @@ def _packages_distributions() -> tuple[dict[str, list[tuple[str, Any]]], dict[st
     distribution's file list; this does the same on every version. A listed
     file counts only if it is on disk, as in ``dist.files``; that is checked
     for the names a cached function reaches, when it does (`_dists_for`).
+    An egg-info install (no ``RECORD``) is named for the files it lists,
+    unchecked, here and in the saved map alike: Python 3.10's own
+    ``wsgiref.egg-info``, which python.org's builds keep in the standard
+    library folder, once left no map saved at all.
     """
     by_top: dict[str, list[tuple[str, Any]]] = {}
     saved: dict[str, list] | None = {}
@@ -120,14 +124,13 @@ def _packages_distributions() -> tuple[dict[str, list[tuple[str, Any]]], dict[st
                     saved.setdefault(top, []).append([name, None])
             continue
         listed = _listed_files(dist)
-        if listed is None:  # an egg-info install: its own file list, checked now
-            listed, checked = [str(f) for f in dist.files or ()], True
-            saved = None  # checked now, so not for another process
+        if listed is None:  # an egg-info install: its own file list, not checked on disk
+            listed, checked, folder = [str(f) for f in dist.files or ()], True, None
         else:
             checked = False
-        folder = _metadata_folder(dist)
-        if folder is None:
-            saved = None
+            folder = _metadata_folder(dist)
+            if folder is None:
+                saved = None
         seen: dict[str, list[str]] = {}
         for f in listed:
             top = _top_of(f)
