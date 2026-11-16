@@ -220,6 +220,7 @@ def _unit_class() -> type:
             "lookups_followed",
             "lib_cells",
             "lib_codes",
+            "lib_first",
             "lib_items",
             "lib_keys",
             "lib_receivers",
@@ -255,6 +256,9 @@ def _unit_class() -> type:
             #: User code -> the library modules its closure holds under the
             #: names a chain it reads starts from (`library_reads.deref_roots`).
             self.lib_cells: dict[types.CodeType, dict[str, Any]] = {}
+            #: ``(kind, module, dotted)`` of a library setting -> its
+            #: fingerprint as the call first read it (`library_reads.first_reads`).
+            self.lib_first: dict[tuple[str, str, str], str | None] = {}
             #: A library's method that ran -> the class of the object (or the
             #: class) it first ran on, whose attributes it reads off
             #: ``self``/``cls`` (`library_reads.self_names`).
@@ -298,6 +302,73 @@ def _unit_class() -> type:
 TraceUnit: Any = None
 
 
+class _CodeIds:
+    """Code objects held by identity (see `library_reads.CodeSet`): what a
+    set of them keeps of two equal ones is the first."""
+
+    __slots__ = ("_codes",)
+
+    def __init__(self) -> None:
+        self._codes: dict[int, types.CodeType] = {}
+
+    def add(self, code: types.CodeType) -> None:
+        self._codes[id(code)] = code
+
+    def __iter__(self) -> Iterator[types.CodeType]:
+        return iter(list(self._codes.values()))
+
+    def __len__(self) -> int:
+        return len(self._codes)
+
+    def __bool__(self) -> bool:
+        return bool(self._codes)
+
+
+class _CodeEvents:
+    """Code object -> the local events armed on it, held weakly and by
+    identity (see `library_reads.CodeSet`)."""
+
+    __slots__ = ("_held",)
+
+    def __init__(self) -> None:
+        self._held: dict[int, tuple[Any, int]] = {}
+
+    def __setitem__(self, code: types.CodeType, events: int) -> None:
+        key = id(code)
+        held = self._held
+        found = held.get(key)
+        if found is not None and found[0]() is code:
+            held[key] = (found[0], events)
+            return
+
+        def gone(ref: Any, key: int = key) -> None:
+            entry = held.get(key)
+            if entry is not None and entry[0] is ref:
+                del held[key]
+
+        held[key] = (_weak.ref(code, gone), events)
+
+    def get(self, code: types.CodeType, default: Any = None) -> Any:
+        found = self._held.get(id(code))
+        if found is None or found[0]() is not code:
+            return default
+        return found[1]
+
+    def __contains__(self, code: Any) -> bool:
+        found = self._held.get(id(code))
+        return found is not None and found[0]() is code
+
+    def __len__(self) -> int:
+        return len(self._held)
+
+    def keys(self) -> list[types.CodeType]:
+        """The code held, alive."""
+        return [code for code in (ref() for ref, _events in list(self._held.values())) if code is not None]
+
+    def __iter__(self) -> Iterator[types.CodeType]:
+        return iter(self.keys())
+
+
 def _recorder_class() -> type:
     from ..analysis.out_arguments import binds_parameter_attributes, writes_through_parameters
     from ..install_paths import is_user_path, known_user_path
@@ -307,8 +378,9 @@ def _recorder_class() -> type:
     from .library_reads import CodeSet as LibraryCodes
     from .library_reads import counts_file
     from .library_reads import deref_roots as library_deref_roots
+    from .library_reads import first_reads as library_first_reads
     from .library_reads import keyed_argument as library_keyed_argument
-    from .library_reads import self_names as library_self_names
+    from .library_reads import receiver_class as library_receiver_class
 
     DISABLE = sys.monitoring.DISABLE
     _POOL_QUALNAMES = frozenset(qualname for _, qualname in rec.POOL_STARTS)
@@ -355,7 +427,11 @@ def _recorder_class() -> type:
             # code of its own, and a long session kept every one of them.
             # Code that is gone cannot run again, so nothing it would have
             # recorded is lost; code still alive stays.
-            self.user_codes: weakref.WeakKeyDictionary[types.CodeType, int] = _weak.WeakKeyDictionary()
+            # By identity (`_CodeEvents`): two code objects compare equal
+            # whatever file they come from, and a module imported again
+            # from another folder had its code's events kept under the
+            # first one's, gone with it.
+            self.user_codes: _CodeEvents = _CodeEvents()
             #: The user's top-level functions that write through their
             #: parameters (`out_arguments.writes_through_parameters`): their
             #: start event stays armed while a call is traced, and each start
@@ -366,7 +442,11 @@ def _recorder_class() -> type:
             #: parameters: armed the same way, and each start records what
             #: they were bound to (`TraceUnit.attr_params`).
             self.attr_codes: weakref.WeakKeyDictionary[types.CodeType, tuple[str, ...]] = _weak.WeakKeyDictionary()
-            self.rearm: set[types.CodeType] = set()
+            #: The code to arm again at the next call's start, by identity:
+            #: two code objects compare equal whatever file they come from,
+            #: and a set kept a module's code imported before in place of
+            #: the code running now, which stayed disabled.
+            self.rearm: _CodeIds = _CodeIds()
             #: The user's code that looks names up by a string in its own
             #: globals (`string_lookups`): what it calls is recorded for a
             #: notebook unit, the callable a string found among it.
@@ -572,28 +652,61 @@ def _recorder_class() -> type:
                 key = None
             if not isinstance(key, str):
                 key = None
+            fresh = []
             for unit in self.active:
-                unit.lib_keys.setdefault(code, set()).add(key)
+                read = unit.lib_keys.setdefault(code, set())
+                if key not in read:
+                    read.add(key)
+                    fresh.append(unit)
+            if fresh:
+                self._first_reads(fresh, code, frame.f_globals, False, keys={key})
 
         def _seen_library(self, code: types.CodeType, frame: Any) -> None:
             if own_work_inside():
                 own_work_left_out(code)
                 return
             g = frame.f_globals
-            cls = None
-            if library_self_names(code):
-                # A method reading attributes off ``self``/``cls``: what it
-                # ran on, whose class's attributes it reads.
-                try:
-                    recv = frame.f_locals.get(code.co_varnames[0])
-                except Exception:  # noqa: BLE001 - unreadable locals: no receiver
-                    recv = None
-                if recv is not None:
-                    cls = recv if isinstance(recv, type) else type(recv)
-            for unit in self.active:
-                unit.lib_codes.setdefault(code, g)
+            fresh = [unit for unit in self.active if code not in unit.lib_codes]
+            cls = library_receiver_class(code, frame) if fresh else None
+            for unit in fresh:
+                unit.lib_codes[code] = g
                 if cls is not None:
-                    unit.lib_receivers.setdefault(code, cls)
+                    unit.lib_receivers[code] = cls
+            if fresh:
+                self._first_reads(fresh, code, g, False, receiver=cls)
+
+        def _first_reads(
+            self,
+            units: list[Any],
+            code: types.CodeType,
+            g: dict,
+            user: bool,
+            cells: Any = None,
+            keys: Any = None,
+            receiver: type | None = None,
+        ) -> None:
+            """*code* starts in *units* for the first time: the library
+            settings it reads, as they are before it runs, for those that
+            have not read them yet (`library_reads.first_reads`). Taken on
+            the thread a call runs on only: what another thread runs
+            meanwhile (a test's in-process S3 server counting requests,
+            moto's ``request_count += 1``) is no read of the call's."""
+            me = threading.get_ident()
+            units = [unit for unit in units if getattr(unit, "thread", me) == me]
+            if not units or self._in_callback:
+                return
+            self._in_callback = True
+            try:
+                with untracked():
+                    found = library_first_reads(code, g, user, cells, keys, receiver)
+            except Exception:  # noqa: BLE001 - not taken: read after the body
+                found = ()
+            finally:
+                self._in_callback = False
+            for unit in units:
+                first = unit.lib_first
+                for place, fp in found:
+                    first.setdefault(place, fp)
 
         def _on_library(self, code: types.CodeType) -> Any:
             if code in library_quiet:
@@ -658,10 +771,10 @@ def _recorder_class() -> type:
             return unit
 
         def _rearm(self) -> None:
-            rearm, self.rearm = self.rearm, set()
+            rearm, self.rearm = self.rearm, _CodeIds()
             self._rearm_codes(rearm)
 
-        def _rearm_codes(self, rearm: set[types.CodeType]) -> None:
+        def _rearm_codes(self, rearm: Iterable[types.CodeType]) -> None:
             mon = sys.monitoring
             if not self.rearm_works:
                 if rearm:
@@ -892,6 +1005,7 @@ def _recorder_class() -> type:
                 if lined:
                     self._arm_lines(code, lined)
             inside_collection = collecting()
+            fresh = [unit for unit in self.active if code not in unit.codes]
             for unit in units:
                 rec.note_collected(unit, code, inside_collection)
                 unit.codes.setdefault(code, (g, module))
@@ -900,6 +1014,10 @@ def _recorder_class() -> type:
                     unit.cells.setdefault(code, started)
                 if recv is not None:
                     unit.receivers.setdefault(code, recv if issubclass(type(recv), type) else type(recv))
+            fresh = [unit for unit in fresh if hasattr(unit, "lib_first")]
+            if fresh:
+                cls = None if recv is None else recv if issubclass(type(recv), type) else type(recv)
+                self._first_reads(fresh, code, g, True, fresh[0].lib_cells.get(code), receiver=cls)
 
         def _closure_modules(self, code: types.CodeType, frame: Any) -> None:
             """The library modules *code*'s closure holds that a chain it

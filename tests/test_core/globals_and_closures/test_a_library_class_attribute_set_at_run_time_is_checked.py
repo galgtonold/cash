@@ -67,6 +67,24 @@ class Sub(Model):
 
 def run(x):
     return Model(x).compute()
+
+
+class Base:
+    def __init__(self, x):
+        self.x = x
+
+    def compute(self):
+        return self.x * self.scale
+
+
+class OnInstance(Base):
+    def __init__(self, x):
+        super().__init__(x)
+        self.scale = 2
+
+
+class OnClass(Base):
+    scale = 1
 """
 
 
@@ -292,3 +310,28 @@ def test_unrecorded_a_call_reaching_the_class_says_so_once(lib, c, monkeypatch, 
     finally:
         _reset(lib)
         library_versions.forget()
+
+
+@needs_recording
+def test_a_method_first_run_on_another_class_is_still_watched(lib, c, path):
+    # ``Base.compute`` first runs on a class whose ``scale`` is the
+    # instance's: no class setting read there. Run later on a class holding
+    # ``scale`` as a class attribute, that attribute is checked all the same.
+    def on_instance(x):
+        return lib.OnInstance(x).compute()
+
+    def on_class(x):
+        return lib.OnClass(x).compute()
+
+    f = c.cache(on_instance)
+    _settle(f, on_instance, path)
+    assert lib.Base.compute.__code__ not in library_reads.QUIET
+    g = c.cache(on_class)
+    try:
+        _settle(g, on_class, path)
+        for v in (5, 2, 1):
+            lib.OnClass.scale = v
+            assert g(7) == on_class(7) == 7 * v
+            assert f(7) == on_instance(7) == 14
+    finally:
+        lib.OnClass.scale = 1

@@ -2479,7 +2479,7 @@ class CallRunner:
             # The user's own work, isolated. Everything cash does sits outside
             # this pair, which is the whole point: it is the only number that
             # can answer "did caching pay?".
-            # The library settings the code that ran read, as the body left
+            # The library settings the code that ran read, as it first read
             # them (`library_reads`).
             unit = call.trace_unit
             run.lib_reads = (
@@ -2488,6 +2488,7 @@ class CallRunner:
                     unit.lib_items,
                     unit.lib_cells,
                     unit.lib_keys,
+                    unit.lib_first,
                     {**unit.receivers, **unit.lib_receivers},
                 )
                 if unit is not None
