@@ -71,7 +71,11 @@ runs, the settings the code it ran read: an attribute chain from a module
 global that ends on plain data (`sc.settings.n_jobs`, also through a
 property of a settings class's metaclass; sklearn's `set_config` dict;
 pandas' options), the value of a `ContextVar` (NumPy's print options, one of
-yours), NumPy's error handling and `decimal`'s context. The entry keeps
+yours), NumPy's error handling and `decimal`'s context, and an attribute of a
+library's class a method of it reads off `self` or `cls` (`Model.scale = 5`
+set by your script before the call): an atom, an enum member or a tuple of
+them (a list, dict or set on a class is left out, most often a cache its
+methods fill). The entry keeps
 them, and a lookup in any process serves it only while each reads the same
 (a miss says `library setting changed`). A `ContextVar` holding something
 other than plain data cannot be compared, and the call runs uncached with a

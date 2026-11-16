@@ -222,6 +222,7 @@ def _unit_class() -> type:
             "lib_codes",
             "lib_items",
             "lib_keys",
+            "lib_receivers",
             "sites",
             "surface",
         )
@@ -254,6 +255,10 @@ def _unit_class() -> type:
             #: User code -> the library modules its closure holds under the
             #: names a chain it reads starts from (`library_reads.deref_roots`).
             self.lib_cells: dict[types.CodeType, dict[str, Any]] = {}
+            #: A library's method that ran -> the class of the object (or the
+            #: class) it first ran on, whose attributes it reads off
+            #: ``self``/``cls`` (`library_reads.self_names`).
+            self.lib_receivers: dict[types.CodeType, type] = {}
             #: A traced call's: code of a function that writes through its
             #: parameters -> ``(caller code, offset of the call)`` for each
             #: start of it (`_Recorder.site_codes`, `cash.analysis.out_arguments`).
@@ -303,6 +308,7 @@ def _recorder_class() -> type:
     from .library_reads import counts_file
     from .library_reads import deref_roots as library_deref_roots
     from .library_reads import keyed_argument as library_keyed_argument
+    from .library_reads import self_names as library_self_names
 
     DISABLE = sys.monitoring.DISABLE
     _POOL_QUALNAMES = frozenset(qualname for _, qualname in rec.POOL_STARTS)
@@ -550,7 +556,7 @@ def _recorder_class() -> type:
                         self.keyed_codes[code] = arg
                 mon.set_local_events(self.tool, code, events | self._line_events(code))
             if self.active:
-                self._seen_library(code, frame.f_globals)
+                self._seen_library(code, frame)
                 if code in self.keyed_codes:
                     self._note_key(code, frame)
 
@@ -569,12 +575,25 @@ def _recorder_class() -> type:
             for unit in self.active:
                 unit.lib_keys.setdefault(code, set()).add(key)
 
-        def _seen_library(self, code: types.CodeType, g: dict) -> None:
+        def _seen_library(self, code: types.CodeType, frame: Any) -> None:
             if own_work_inside():
                 own_work_left_out(code)
                 return
+            g = frame.f_globals
+            cls = None
+            if library_self_names(code):
+                # A method reading attributes off ``self``/``cls``: what it
+                # ran on, whose class's attributes it reads.
+                try:
+                    recv = frame.f_locals.get(code.co_varnames[0])
+                except Exception:  # noqa: BLE001 - unreadable locals: no receiver
+                    recv = None
+                if recv is not None:
+                    cls = recv if isinstance(recv, type) else type(recv)
             for unit in self.active:
                 unit.lib_codes.setdefault(code, g)
+                if cls is not None:
+                    unit.lib_receivers.setdefault(code, cls)
 
         def _on_library(self, code: types.CodeType) -> Any:
             if code in library_quiet:
@@ -584,7 +603,7 @@ def _recorder_class() -> type:
                 self.rearm.add(code)
             if self.active:
                 frame = sys._getframe(rec.WATCHED_FRAME + 1)
-                self._seen_library(code, frame.f_globals)
+                self._seen_library(code, frame)
                 if code in self.keyed_codes:
                     # Each start reads its own entry: left armed while a
                     # call is in progress.
