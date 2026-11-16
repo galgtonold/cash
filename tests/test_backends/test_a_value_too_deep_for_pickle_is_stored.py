@@ -355,8 +355,15 @@ class TestOnALargeStack:
         head = _chain(200_000)
         assert _values(pickle.loads(kept_state.dumps(head))) == _values(head)
         stream, also_keyed = kept_state.dumps_also_keyed(head, protocol=5)
-        assert not also_keyed
         assert _values(pickle.loads(stream)) == _values(head)
+        if sys.version_info >= (3, 14) and also_keyed:
+            # From 3.14 the pickler's C recursion is bounded by the stack
+            # it runs on, not the recursion limit: on this one, 255 MB,
+            # the chain may fit (Windows' smaller frames), and is then
+            # keyed by the very bytes stored.
+            assert kept_state.dumps(head, keyed=True) == stream
+            return
+        assert not also_keyed
         with pytest.raises(RecursionError):
             kept_state.dumps(head, keyed=True)
 
