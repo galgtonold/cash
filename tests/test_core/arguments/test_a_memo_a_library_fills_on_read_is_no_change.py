@@ -17,11 +17,14 @@ from __future__ import annotations
 
 import pickle
 import sys
+import weakref
 
 import numpy as np
 import pandas as pd
 import pytest
 
+from cash import kept_state
+from cash.backends import frame_sharing
 from cash.value_hash import compute_hash, is_identity_fallback_hash
 
 
@@ -99,6 +102,24 @@ def test_a_value_put_in_the_memo_by_other_code_is_keyed(monkeypatch):
     # second copy whose ``Frame`` is another class, the frame did not pickle,
     # and its digest was the identity tier's -- equal before and after.
     monkeypatch.setitem(sys.modules, __name__, _THIS_MODULE)
+    frame = _frame()
+    before = _content_digest(frame)
+    frame[frame.a > 1]
+    assert _content_digest(frame) == before
+    frame._mgr.blocks[0]._cache["not_a_property"] = 1
+    assert _content_digest(frame) != before
+
+
+def test_a_value_put_in_the_memo_is_keyed_once_tables_are_shared(monkeypatch):
+    """The RAM tier wraps pandas' ``Block.__reduce__`` in a Python function
+    once it shares a table. Where that came before the first key of a
+    block's class, the wrapper read as the class's own say over its state,
+    the block's ``__dict__`` was keyed without, and a value put in its memo
+    by other code changed no digest: a worker that ran a store test first."""
+    monkeypatch.setitem(sys.modules, __name__, _THIS_MODULE)
+    frame_sharing._install_pickling()
+    # Every block class decided afresh, after the wrapper, as in such a worker.
+    monkeypatch.setattr(kept_state, "_DROPS_DICT", weakref.WeakKeyDictionary())
     frame = _frame()
     before = _content_digest(frame)
     frame[frame.a > 1]

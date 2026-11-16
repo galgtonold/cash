@@ -2257,6 +2257,11 @@ def _install_pickling() -> None:
                 return reduced
             return (func, (form, *args[1:]), *reduced[2:])
 
+        # pandas' C reduce, which drops the block's ``__dict__`` (its
+        # ``_cache``): a key adds that dict after it (`kept_state._drops_dict`)
+        # whether this wrapper is in or not.
+        __reduce__.__wrapped__ = block_reduce  # type: ignore[attr-defined]
+
         single_getstate = SingleBlockManager.__getstate__
 
         def __getstate__(self: Any) -> Any:
