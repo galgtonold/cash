@@ -430,13 +430,31 @@ class GlobalValues:
         payload = carried_payload(value)
         if payload is None:
             return None
+        # Hashed once per key build (`KEY_BUILD_DIGESTS`): a large table whose
+        # bound method several helpers name (xclim's ``registry.get``, about
+        # 1 MB of indicators) was hashed once for each. A bound method is a
+        # new object at each read, so it is remembered by what it is bound to.
+        anchor = value.__self__ if type(value) is types.MethodType else value
+        build = KEY_BUILD_DIGESTS.get()
+        item = ("carried", payload[0], id(anchor), held_by_name())
+        if build is not None:
+            entry = build.get(item)
+            if entry is not None and entry[0] is anchor and walk_scope.servable(entry[2]):
+                walk_scope.note_callees(entry[2].touched)
+                return entry[1]
+        scope = walk_scope.enter(item)
         try:
             stabilized = stabilize_for_global_hash(payload, self.data_callable_identity)
-            return self._args.hash_payload((stabilized,), {})
+            digest = self._args.hash_payload((stabilized,), {})
         except KeyBuildFailed:
             raise  # a function it holds cannot be keyed: the call runs uncached
         except Exception:  # noqa: BLE001 - never break a call over this
-            return None
+            digest = None
+        finally:
+            record = walk_scope.leave(scope)
+        if build is not None and record is not None:
+            build[item] = (anchor, digest, record)
+        return digest
 
     def carried_global_hash(self, value: Any, root_module: str | None) -> str | None:
         """Hash of the data a LIBRARY-made callable carries, or None.

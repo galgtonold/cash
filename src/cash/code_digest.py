@@ -146,7 +146,66 @@ def _compiled_identity(fn: object, walked: frozenset[int]) -> str:
             if cimported is not None:
                 built = f"{built}:cimports:{cimported}"
             own = hashlib.sha256(f"{own}:built:{built}".encode()).hexdigest()
+    own = _with_forwarded(own, fn, walked)
+    own = _with_members(own, fn, walked)
     return _with_wrapped(own, fn, walked)
+
+
+def _with_forwarded(own: str, fn: object, walked: frozenset[int]) -> str:
+    """*own*, joined with the identity of each function *fn* calls through
+    a namespace ``exec`` built for it alone.
+
+    A signature-preserving decorator (``boltons.funcutils.wraps``,
+    ``makefun``, the ``decorator`` package) compiles a stub with no source
+    file whose globals are a private dict holding the function it forwards
+    to (``_call``). Its bytecode is the same for every function it wraps,
+    and its ``__wrapped__`` skips the decorator's own wrapper in between:
+    an edit to that wrapper kept the old identity."""
+    if type(fn) is not types.FunctionType:
+        return own
+    g = fn.__globals__
+    module = sys.modules.get(g.get("__name__") or "")
+    if g.get("__file__") or getattr(module, "__dict__", None) is g:
+        return own
+    walked = walked | {id(fn)}
+    parts = []
+    for name in sorted(set(fn.__code__.co_names)):
+        held = g.get(name)
+        if type(held) is not types.FunctionType or id(held) in walked:
+            continue
+        parts.append(f"{name}={_callable_identity(held, walked)}")
+    if not parts:
+        return own
+    return hashlib.sha256(f"{own}:forwards:{'|'.join(parts)}".encode("utf-8")).hexdigest()
+
+
+def _with_members(own: str, fn: object, walked: frozenset[int]) -> str:
+    """*own*, joined with the identity of each function a class with no
+    source holds (``type(...)``, a class a factory builds from a table).
+
+    Its compiled identity is its ``__call__``'s bytecode: the methods and
+    the static functions set on it (xclim's indicator classes each hold
+    their ``compute``) were not keyed at all, so an edit to the function an
+    indicator computes with was served the old result."""
+    if not isinstance(fn, type):
+        return own
+    walked = walked | {id(fn)}
+    parts = []
+    try:
+        members = sorted((k, v) for k, v in vars(fn).items() if isinstance(k, str))
+    except TypeError:
+        return own
+    for name, value in members:
+        if isinstance(value, (staticmethod, classmethod)):
+            value = value.__func__
+        elif isinstance(value, property):
+            value = value.fget
+        if type(value) is not types.FunctionType or id(value) in walked:
+            continue
+        parts.append(f"{name}={_callable_identity(value, walked)}")
+    if not parts:
+        return own
+    return hashlib.sha256(f"{own}:members:{'|'.join(parts)}".encode("utf-8")).hexdigest()
 
 
 def opaque_identity(fn: object) -> str:
