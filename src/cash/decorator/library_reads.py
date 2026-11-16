@@ -12,8 +12,19 @@ What a body reads of them is found as it runs: the code it ran, the user's
 and the libraries' (`code_trace` records both: library code is armed for
 it on first sight), each read by the global names its bytecode loads and the
 attribute chains it follows from them (``settings.n_jobs``,
-``_threadlocal.global_config``, ``VAR.get``). Each chain is followed again
-after the body, and what it ends on is kept with the entry (`build`):
+``_threadlocal.global_config``, ``VAR.get``). What each chain ends on is
+taken as the first code reading it starts in the call (`first_reads`) and
+kept with the entry (`build`): the result came of the value the body read,
+not of what it left there: torch's ``cached_backends``, which an optimizer
+step fills, was kept filled, and a new process, which starts it empty, was
+never served. What the call changed as it ran is checked on what it read
+first: a counter it bumps (``n += 1``, ``state["n"] += 1``, a list it
+appends to) misses once bumped. Only a dict it added entries to and changed
+no entry of is a cache (``"a"`` and ``"w"`` below). What a module the body
+imports sets as it loads is read after the body. A name or attribute the
+code that ran binds before any of it read it, or binds only to constants (a
+latch set once, numba's ``_already_initialized = True``), is not kept: what
+the call set, a hit finds set the same. What is kept:
 
 ``("v", module, "a.b", fingerprint)``
     plain data: an atom, an enum member, or lists, tuples, sets and dicts of
@@ -27,6 +38,18 @@ after the body, and what it ends on is kept with the entry (`build`):
     ``get_option``). Only the entries read are checked: pandas' registry
     holds defaults a script and a notebook kernel set apart, and grows as
     modules register options. A dict read any other way is checked whole;
+``("a", module, "a.b#[key]", fingerprint)`` and ``("w", module, "a.b", keys)``
+    a dict the call itself added entries to as it ran, a cache it fills
+    (NumPy's ``iinfo._max_vals``, torch's ``cached_backends``): each entry
+    it held as first read is a ``"k"`` item, each one the call added is
+    either not there or what the call put there, and ``"w"`` (a JSON list)
+    holds every key it may have. A new process that has not filled it yet,
+    or has filled it the same, is served; one holding another key is not;
+``("x", module, "a.b", [process, fingerprint, compiled module, name])``
+    a table a compiled module filled as it loaded (numba's ``c_helpers``,
+    its C helpers' addresses), or an entry of one: compared in the process
+    that stored it; in another, only that the chain still reaches the
+    compiled module's table;
 ``("s", name, "", fingerprint)``
     state kept in C that no chain reaches: NumPy's error handling
     (``np.errstate``, ``np.seterr``) for a call that reached NumPy,
@@ -56,6 +79,7 @@ import hashlib
 import importlib
 import inspect
 import json
+import os
 import sys
 import threading
 import types
@@ -65,7 +89,7 @@ from typing import Any
 
 from .. import _weak
 
-__all__ = ["KEYED_NAMES", "build", "changed", "counts_file", "keyed_argument", "note_served"]
+__all__ = ["KEYED_NAMES", "build", "changed", "counts_file", "first_reads", "keyed_argument", "note_served"]
 
 _MISSING = object()
 #: The fingerprint of a settings entry that is not there.
@@ -198,6 +222,10 @@ _EXTENDED_ARG, _CACHE = _OP["EXTENDED_ARG"], _OP.get("CACHE", -1)
 _NOP = _OP.get("NOP", -1)
 _LOAD_DEREF = _OP.get("LOAD_DEREF", -1)
 _LOAD_CONST = _OP["LOAD_CONST"]
+#: What a store's target is loaded with between its value and the store.
+_TARGET_LOADS = frozenset(
+    code for name, code in _OP.items() if name.startswith(("LOAD_FAST", "LOAD_GLOBAL", "LOAD_NAME", "LOAD_DEREF"))
+) | {_LOAD_ATTR, _OP.get("LOAD_SMALL_INT", -1), _OP.get("PUSH_NULL", -1)}
 #: A subscript: its own op before 3.14, a ``BINARY_OP`` from it.
 _BINARY_SUBSCR = _OP.get("BINARY_SUBSCR", -1)
 _BINARY_OP = _OP.get("BINARY_OP", -1)
@@ -214,9 +242,10 @@ def _chains(
     code: types.CodeType,
 ) -> tuple[tuple[tuple[str, ...], ...], frozenset[str], Mapping[tuple[str, ...], frozenset]]:
     """The attribute chains *code* follows from a global name, the globals
-    it binds (and, as ``".name"``, the attributes it sets), and the chains
-    it only ever subscripts by constant strings -> those key paths
-    (``config["display"]["precision"]``): read off its bytecode, once."""
+    it binds (and, as ``".name"``, the attributes it sets), the chains it
+    only ever subscripts by constant strings -> those key paths
+    (``config["display"]["precision"]``), and the names and attributes it
+    binds to something other than a constant: read off its bytecode, once."""
     held = _CHAINS.get(code)
     if held is not None:
         return held
@@ -225,6 +254,11 @@ def _chains(
     raw = code.co_code
     chains: set[tuple[str, ...]] = set()
     stores: set[str] = set()
+    #: Stores of a value that is not a constant (``n += 1``, ``x = f()``).
+    computed: set[str] = set()
+    #: A constant was loaded, and since then only what a store's target
+    #: is loaded with: the next store binds that constant.
+    const = False
     paths: dict[tuple[str, ...], set[tuple[str, ...]]] = {}
     whole: set[tuple[str, ...]] = set()
     cur: list[str] | None = None
@@ -255,6 +289,14 @@ def _chains(
         ext = 0
         if op == _CACHE or op == _NOP:
             continue
+        if op in _STORES or op in _ATTR_STORES:
+            name = names[arg] if op in _STORES else "." + names[arg]
+            if not const:
+                computed.add(name)
+        if op == _LOAD_CONST:
+            const = True
+        elif op not in _TARGET_LOADS:
+            const = False
         if cur is not None:
             if op == _LOAD_ATTR and keys is None:
                 cur.append(names[arg >> _SHIFT_ATTR])
@@ -285,7 +327,7 @@ def _chains(
             stores.add("." + names[arg])
     end()
     keyed = {chain: frozenset(found) for chain, found in paths.items() if chain not in whole}
-    held = (tuple(sorted(chains)), frozenset(stores), keyed)
+    held = (tuple(sorted(chains)), frozenset(stores), keyed, frozenset(computed))
     with _lock:
         _CHAINS[code] = held
     return held
@@ -504,16 +546,33 @@ class _Check:
         self.last: Any = _MISSING
         #: A copy of the container it ended on last, which matched *fp*.
         self.snap: Any = _MISSING
+        if self.kind == "w":
+            # The keys the dict may hold.
+            self.snap = frozenset(json.loads(self.fp))
+        elif self.kind == "x":
+            self.snap = tuple(json.loads(self.fp))
 
     def holds(self) -> bool:
         kind = self.kind
         if kind == "s":
             return _SPECIALS[self.module]() == self.fp
         v = _resolve(self.module, self.names)
+        if kind == "w":
+            return type(v) is dict and self.snap.issuperset(v)
+        if kind == "x":
+            token, fp, mod, name = self.snap
+            table = getattr(sys.modules.get(mod) or importlib.import_module(mod), name, _MISSING)
+            if v is not table:
+                return False
+            if token != _PROCESS:
+                return True
+            v = _entry(v, self.path) if self.path else v
+            return (ABSENT if v is _MISSING else fingerprint(v)) == fp
+
         if self.path:
             v = _entry(v, self.path)
             if v is _MISSING:
-                return self.fp == ABSENT
+                return kind == "a" or self.fp == ABSENT
         if kind == "c":
             v = v.get(_MISSING)
             if v is _MISSING:
@@ -545,7 +604,8 @@ class _Check:
         if self.kind == "s":
             return f"{self.module}'s {'error handling' if self.module == 'numpy' else 'context'}"
         chain = ".".join(self.names)
-        return f"{self.module}.{chain}" + "".join(f"[{key!r}]" for key in self.path)
+        keys = " (the keys it holds)" if self.kind == "w" else ""
+        return f"{self.module}.{chain}" + "".join(f"[{key!r}]" for key in self.path) + keys
 
 
 #: ``id(items)`` -> ``(items, their checks)``: an entry's list, checked on
@@ -710,13 +770,19 @@ def _wants(
     codes: Mapping[types.CodeType, tuple[Mapping[str, Any], bool]],
     keys: Mapping[types.CodeType, set[str | None]],
     cells: Mapping[types.CodeType, Mapping[str, Any]] | None,
-) -> tuple[list[tuple[Mapping[str, Any], bool, tuple[str, ...], set | None]], set[str], dict[int, set[str]]]:
+) -> tuple[
+    list[tuple[Mapping[str, Any], bool, tuple[str, ...], set | None]],
+    set[str],
+    dict[int, set[str]],
+    dict[int, set[str]],
+]:
     """Per globals and chain the code that ran reads something kept by:
     ``(globals, user, chain, key paths)``, the paths None where a code
     reads the whole of it; the specials reached; what each globals' code
-    binds."""
+    binds, and of that what it binds only to constants."""
     specials: set[str] = set()
     stores: dict[int, set[str]] = {}
+    computed: dict[int, set[str]] = {}
     wants: dict[tuple[int, tuple[str, ...]], list] = {}
     for code, (g, user) in codes.items():
         if code.co_name == "<module>" or not isinstance(g.get("__name__"), str):
@@ -724,6 +790,8 @@ def _wants(
         cs = _chains(code)
         if cs[1]:
             stores.setdefault(id(g), set()).update(cs[1])
+        if cs[3]:
+            computed.setdefault(id(g), set()).update(cs[3])
         spec = KEYED_READERS.get((g["__name__"], code.co_qualname))
         held = cells.get(code) if cells else None
         if held:
@@ -737,9 +805,7 @@ def _wants(
             if spec is not None and chain == (spec[0],):
                 if spec[1] is None:
                     continue
-                read = keys.get(code)
-                ok = bool(read) and all(isinstance(k, str) for k in read)
-                paths = {tuple(k.split(".")) for k in read} if ok else None  # type: ignore[union-attr]
+                paths = _paths_read(keys.get(code))
             else:
                 found_paths = cs[2].get(chain)
                 paths = set(found_paths) if found_paths else None
@@ -751,14 +817,15 @@ def _wants(
                     want[3] = None
                 else:
                     want[3] |= paths
-    return [tuple(w) for w in wants.values()], specials, stores  # type: ignore[misc]
+    latched = {key: names - computed.get(key, set()) for key, names in stores.items()}
+    return [tuple(w) for w in wants.values()], specials, stores, latched  # type: ignore[misc]
 
 
 def _served_place(item: tuple) -> tuple | None:
     """Where an item an entry served inside the call reads, as `build`
     tells containers apart: the object it ends on, whatever it is called."""
     kind, module, dotted, _fp = item
-    if kind not in ("v", "k"):
+    if kind not in ("v", "k", "a"):
         return None
     chain, _sep, keys = dotted.partition(_KEYS)
     try:
@@ -767,7 +834,201 @@ def _served_place(item: tuple) -> tuple | None:
         return None
     if type(v) not in (dict, list, set):
         return None
-    return ("obj", id(v), keys) if kind == "k" else ("obj", id(v))
+    return ("obj", id(v), keys) if keys else ("obj", id(v))
+
+
+def _targets(
+    g: Mapping[str, Any], chain: tuple[str, ...], user: bool, paths: set | None, skip: Any = ()
+) -> list[tuple]:
+    """What *chain* in *g* reads, as an entry keeps it: ``(kind, module,
+    dotted, where it reads, value, written, exported)`` each -- the value an
+    entry's (`_MISSING` where it is not there), a ``ContextVar``, or the
+    plain data the chain ends on; *written*, the name (``.attribute``) by
+    which the code that ran binds it (*skip*: those it binds), or None;
+    *exported*, ``(module, name)`` of the compiled module whose container it
+    reads (`_exported`), or None. Empty when it ends on nothing kept."""
+    hit = _follow(g, chain, user)
+    if hit is None:
+        return []
+    kind, upto, v = hit
+    written = None
+    if len(upto) > 1 and "." + upto[-1] in skip:
+        written = "." + upto[-1]
+    elif upto[0] in skip:
+        written = upto[0]
+    where, upto = _rooted(g, g["__name__"], upto)
+    if _compiled(where):
+        # What a compiled module holds is set by its own code as it
+        # loads: numba's table of C helper addresses, pyarrow's type
+        # ids. The same in a process, other in the next, and no
+        # setting a program changes.
+        return []
+    dotted = ".".join(upto)
+    if kind == "c":
+        return [("c", where, dotted, (where, upto), v, written, None)]
+    ext = _exported(v)
+    if paths is not None and type(v) is dict and len(upto) == len(chain):
+        # Read only by constant keys, or by the keys a reader of it was
+        # handed: those entries are what the call read. A container
+        # bound to several names (pandas' _global_config) is one
+        # object, its entries checked once.
+        out = []
+        for path in sorted(paths):
+            text = json.dumps(list(path))
+            out.append(("k", where, dotted + _KEYS + text, ("obj", id(v), text), _entry(v, path), written, ext))
+        return out
+    same = ("obj", id(v)) if type(v) in (dict, list, set) else (where, upto)
+    return [(kind, where, dotted, same, v, written, ext)]
+
+
+#: ``[len(sys.modules) when built, id -> (container, module, name)]``: the
+#: dicts, lists and sets compiled modules hold (`_exported`).
+_EXPORTS: list[Any] = [-1, {}]
+
+
+def _exported(v: Any) -> tuple[str, str] | None:
+    """``(module, name)`` when *v* is a container a compiled module holds:
+    a table its C code filled as it loaded (numba's ``c_helpers``, the
+    addresses of its C helpers), bound under another name by a module that
+    imported it. What it holds is this process's, other in the next."""
+    if type(v) not in (dict, list, set):
+        return None
+    mods = sys.modules
+    if _EXPORTS[0] != len(mods):
+        index: dict[int, tuple] = {}
+        for name, mod in list(mods.items()):
+            if not isinstance(mod, types.ModuleType) or not _compiled(name):
+                continue
+            for attr, x in list(getattr(mod, "__dict__", {}).items()):
+                if type(x) in (dict, list, set) and not attr.startswith("__"):
+                    index[id(x)] = (x, name, attr)
+        _EXPORTS[:] = [len(mods), index]
+    held = _EXPORTS[1].get(id(v))
+    return (held[1], held[2]) if held is not None and held[0] is v else None
+
+
+#: This process: an item of a compiled module's table (``"x"``) is compared
+#: in the process that stored it only.
+_PROCESS = os.urandom(8).hex()
+
+
+def _fingerprint_of(kind: str, v: Any) -> str | None:
+    """The fingerprint an item of *kind* keeps for *v* (`_targets`)."""
+    if kind == "c":
+        value = v.get(_MISSING)
+        return fingerprint("unset" if value is _MISSING else value)
+    if kind == "k" and v is _MISSING:
+        return ABSENT
+    return fingerprint(v)
+
+
+def _paths_read(read: set[str | None] | None) -> set | None:
+    """The key paths a `KEYED_READERS` code's starts read, None for the
+    whole dict (a start whose key could not be read)."""
+    ok = bool(read) and all(isinstance(k, str) for k in read)  # type: ignore[union-attr]
+    return {tuple(k.split(".")) for k in read} if ok else None  # type: ignore[union-attr]
+
+
+def first_reads(
+    code: types.CodeType,
+    g: Mapping[str, Any],
+    user: bool,
+    cells: Mapping[str, Any] | None = None,
+    keys: set[str | None] | None = None,
+) -> list[tuple[tuple[str, str, str], tuple[str | None, dict | None]]]:
+    """What *code* (with globals *g*) is about to read, as it starts:
+    ``((kind, module, dotted), (fingerprint, entries))`` each, *entries*
+    the fingerprint of each entry of a small dict (`_entries`). The recorder takes them
+    at a code's first start in a call, and `build` keeps the first one
+    taken for each place: the call's result came of the value it read, not
+    of what it (or an optimizer step filling ``cached_backends``) left
+    there. *keys*: for a `KEYED_READERS` code, the key this start reads;
+    without it, its dict is left to that start."""
+    name = g.get("__name__")
+    if code.co_name == "<module>" or not isinstance(name, str):
+        return []
+    if cells:
+        g = _WithCells(g, cells)
+        kept, _found = _plan(code, g, user, memo=False)
+    else:
+        kept, _found = _plan(code, g, user)
+    if not kept:
+        return []
+    spec = KEYED_READERS.get((name, code.co_qualname))
+    keyed = _chains(code)[2]
+    out = []
+    for chain in kept:
+        paths: set | None
+        if spec is not None and chain == (spec[0],):
+            if spec[1] is None or keys is None:
+                continue
+            paths = _paths_read(keys)
+        else:
+            found = keyed.get(chain)
+            paths = set(found) if found else None
+        try:
+            targets = _targets(g, chain, user, paths)
+        except Exception:  # noqa: BLE001 - not followed now: read after the body
+            continue
+        for kind, where, dotted, _same, v, _written, _ext in targets:
+            if kind == "c" and _SPECIAL_VARS.get(v.name):
+                continue
+            if _initializing(where):
+                # A module the body imports, filling its own tables as it
+                # loads (NumPy's ``_docstrings_list``): what it holds once
+                # loaded, as a process that imported it before the call
+                # holds it, is read after the body.
+                continue
+            try:
+                fp = _fingerprint_of(kind, v)
+                entries = _entries(v) if kind == "v" and fp is not None else None
+            except Exception:  # noqa: BLE001 - unreadable now: read after the body
+                continue
+            out.append(((kind, where, dotted), (fp, entries)))
+    return out
+
+
+def _initializing(name: str) -> bool:
+    """Is module *name* still running its own top-level code?"""
+    spec = getattr(sys.modules.get(name), "__spec__", None)
+    return bool(getattr(spec, "_initializing", False))
+
+
+#: The most entries a dict the call fills is checked entry by entry with.
+_MAX_ENTRIES = 64
+
+
+def _entries(v: Any) -> dict | None:
+    """Each entry of *v* -> its fingerprint, for a dict of at most
+    `_MAX_ENTRIES` keyed by strings and ints; None otherwise."""
+    if type(v) is not dict or len(v) > _MAX_ENTRIES:
+        return None
+    out = {}
+    for key, x in list(v.items()):
+        if type(key) not in (str, int):
+            return None
+        fp = fingerprint(x)
+        if fp is None:
+            return None
+        out[key] = fp
+    return out
+
+
+def _grown(where: str, dotted: str, pre: dict, v: Any) -> list[tuple] | None:
+    """The items of a dict the call added entries to (see the module doc):
+    *pre*, each entry's fingerprint as first read; *v*, the dict now. None
+    when it cannot be checked that way."""
+    now = _entries(v)
+    if now is None or not set(pre).issubset(now):
+        return None
+    items = [("w", where, dotted, json.dumps(sorted(now, key=lambda k: (type(k) is str, k))))]
+    for key, fp in now.items():
+        text = json.dumps([key])
+        if key in pre:
+            items.append(("k", where, dotted + _KEYS + text, pre[key]))
+        else:
+            items.append(("a", where, dotted + _KEYS + text, fp))
+    return items
 
 
 def build(
@@ -775,79 +1036,83 @@ def build(
     served: Iterable[tuple] = (),
     cells: Mapping[types.CodeType, Mapping[str, Any]] | None = None,
     keys: Mapping[types.CodeType, set[str | None]] | None = None,
+    first: Mapping[tuple[str, str, str], tuple[str | None, dict | None]] | None = None,
 ) -> tuple[list[tuple] | None, str | None]:
     """The items the code a body ran reads (*codes*: code -> ``(its
     globals, whether it is the user's)``), with those of the entries
     served inside it (*served*); and why the call cannot be stored, if so.
-    *keys*: a `KEYED_READERS` code -> the keys its starts read."""
+    *keys*: a `KEYED_READERS` code -> the keys its starts read. *first*:
+    ``(kind, module, dotted)`` -> its fingerprint as the call first read
+    it, and a small dict's entries' (`first_reads`); a place not in it is
+    read as the body left it."""
     items: set[tuple] = set()
-    wants, specials, stores = _wants(codes, keys or {}, cells)
+    wants, specials, stores, latched = _wants(codes, keys or {}, cells)
+    first = first or {}
     #: Where each item reads -> its fingerprint.
     places: dict[tuple, str | None] = {}
     for g, user, chain, paths in wants:
-        module = g["__name__"]
         skip = stores.get(id(g), ())
-        if chain[0] in skip:
-            continue
+        latches = latched.get(id(g), ())
         try:
-            hit = _follow(g, chain, user)
+            targets = _targets(g, chain, user, paths, skip)
         except Exception:  # noqa: BLE001 - a chain that cannot be followed is not kept
             continue
-        if hit is None:
-            continue
-        kind, upto, v = hit
-        if len(upto) > 1 and "." + upto[-1] in skip:
-            # An attribute the code that ran sets: a counter of its own
-            # (numba's ``ArrayAnalysis.aa_count += 1``), not a setting.
-            continue
-        where, upto = _rooted(g, module, upto)
-        if _compiled(where):
-            # What a compiled module holds is set by its own code as it
-            # loads: numba's table of C helper addresses, pyarrow's type
-            # ids. The same in a process, other in the next, and no
-            # setting a program changes.
-            continue
-        dotted = ".".join(upto)
-        if kind == "c":
-            if (where, upto) in places:
+        for kind, where, dotted, same, v, written, ext in targets:
+            held = first.get((kind, where, dotted))
+            if written and (held is None or written in latches):
+                # Bound by the code that ran and never read before it was:
+                # what the call set, a hit finds set the same. Or bound
+                # only to constants: a latch it sets once (numba's
+                # ``_already_initialized = True``), which holds what it
+                # held or what the call set it to, whatever was first read.
                 continue
-            places[(where, upto)] = None
-            special = _SPECIAL_VARS.get(v.name)
-            if special:
-                specials.add(special)
+            if same in places:
                 continue
-            value = v.get(_MISSING)
-            fp = fingerprint("unset" if value is _MISSING else value)
-            if fp is None:
-                return None, (
-                    f"the context variable {v.name!r} ({where}.{dotted}) it read holds a "
-                    f"{type(value).__qualname__}, which cash cannot compare between calls"
-                )
-            items.add((kind, where, dotted, fp))
-            continue
-        if paths is not None and type(v) is dict and len(upto) == len(chain):
-            # Read only by constant keys, or by the keys a reader of it was
-            # handed: those entries are what the call read. A container
-            # bound to several names (pandas' _global_config) is one
-            # object, its entries checked once.
-            for path in sorted(paths):
-                text = json.dumps(list(path))
-                same = ("obj", id(v), text)
-                if same in places:
+            if kind == "c":
+                places[same] = None
+                special = _SPECIAL_VARS.get(v.name)
+                if special:
+                    specials.add(special)
                     continue
-                entry = _entry(v, path)
-                fp = ABSENT if entry is _MISSING else fingerprint(entry)
+            fp = _fingerprint_of(kind, v)
+            if ext is not None and kind in ("v", "k"):
+                # A compiled module's table: checked in this process only.
+                fp = held[0] if held is not None else fp
                 places[same] = fp
                 if fp is not None:
-                    items.add(("k", where, dotted + _KEYS + text, fp))
-            continue
-        same = ("obj", id(v)) if type(v) in (dict, list, set) else (where, upto)
-        if same in places:
-            continue
-        fp = fingerprint(v)
-        places[same] = fp
-        if fp is not None:
-            items.add((kind, where, dotted, fp))
+                    items.add(("x", where, dotted, json.dumps([_PROCESS, fp, *ext])))
+                continue
+            if held is not None and held[0] != fp and kind != "c":
+                # The call changed it as it ran: checked on what it read
+                # first, the value its result came of.
+                pre_fp, pre = held
+                places[same] = pre_fp
+                if pre_fp is None:
+                    continue
+                grown = _grown(where, dotted, pre, v) if pre is not None and type(v) is dict else None
+                if grown is not None:
+                    # Only entries added: a cache it fills.
+                    items.update(grown)
+                elif fp is None:
+                    # Filled with objects, not plain data: no settings
+                    # (numba's ``_ufunc_db``, None until first used).
+                    continue
+                else:
+                    items.add((kind, where, dotted, pre_fp))
+                continue
+            if held is not None:
+                fp = held[0]
+            if kind == "c":
+                if fp is None:
+                    value = v.get(_MISSING)
+                    return None, (
+                        f"the context variable {v.name!r} ({where}.{dotted}) it read holds a "
+                        f"{type(value).__qualname__}, which cash cannot compare between calls"
+                    )
+            else:
+                places[same] = fp
+            if fp is not None:
+                items.add((kind, where, dotted, fp))
     for item in served:
         item = tuple(item)
         same = _served_place(item)
