@@ -367,6 +367,69 @@ class TestOnALargeStack:
         with pytest.raises(RecursionError):
             kept_state.dumps(head, keyed=True)
 
+    def test_the_pickles_of_a_cell_start_no_thread_each(self, no_walk, monkeypatch):
+        """Each pickle started a thread of its own, through cash's own
+        ``Thread.start`` patch: a start or more for every statement of a
+        cell. One thread is kept for them."""
+        import threading
+
+        starts = []
+        real = threading.Thread.start
+        monkeypatch.setattr(threading.Thread, "start", lambda self: starts.append(self.name) or real(self))
+        for i in range(20):
+            value = {"a": Counted(i), "b": [Counted(i + 1)]}
+            stream, also_keyed = kept_state.dumps_also_keyed(value, protocol=5)
+            assert also_keyed and pickle.loads(stream)["b"][0].v == i + 1
+        assert len(starts) <= 1, starts
+
+    def test_the_kept_thread_holds_nothing_of_a_pickle_it_ran(self, no_walk):
+        """A value it pickled is held by nothing of the thread's once the
+        pickle is done: a statement's share check found the fitted model it
+        stored held by something else, and stored nothing."""
+        import gc
+        import weakref
+
+        value = {"a": Counted(1), "b": [Counted(2)]}
+        held = weakref.ref(value["a"])
+        kept_state.dumps_also_keyed(value, protocol=5)
+        del value
+        gc.collect()
+        assert held() is None
+
+    def test_pickles_on_two_threads_at_once_each_get_their_own(self, no_walk):
+        """While the kept thread runs one thread's pickle, another's runs
+        on a thread of its own: it does not wait for the first, and each
+        gets its own."""
+        import threading
+
+        gate, inside = threading.Event(), threading.Event()
+
+        class Slow:
+            def __init__(self, v):
+                self.v = v
+
+            def __reduce__(self):
+                inside.set()
+                gate.wait(10)
+                return (_identity, (self.v,))
+
+        got: dict = {}
+
+        def pickle_slow():
+            got["slow"] = pickle.loads(kept_state.dumps_also_keyed({"x": [Slow(1)]}, protocol=5)[0])["x"][0]
+
+        first = threading.Thread(target=pickle_slow)
+        first.start()
+        try:
+            assert inside.wait(10)
+            stream, _ = kept_state.dumps_also_keyed({"y": [Counted(2)]}, protocol=5)
+            assert pickle.loads(stream)["y"][0].v == 2
+            assert "slow" not in got, "the second pickle waited for the first"
+        finally:
+            gate.set()
+            first.join(10)
+        assert got == {"slow": 1}
+
     def test_what_the_pickle_raises_reaches_the_caller(self, no_walk):
         class Refused:
             def __reduce__(self):

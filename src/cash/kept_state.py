@@ -26,6 +26,7 @@ import io
 import itertools
 import logging
 import operator
+import os
 import pickle
 import sys
 import threading
@@ -595,9 +596,9 @@ _STACK_SIZE_LOCK = threading.Lock()
 
 
 def _on_big_stack(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
-    """``fn(*args, **kwargs)`` on a thread of its own with a stack of
-    `BIG_STACK_BYTES`, this thread waiting for it; `_NO_BIG_STACK` when no
-    such thread can be had.
+    """``fn(*args, **kwargs)`` on a thread with a stack of `BIG_STACK_BYTES`,
+    this thread waiting for it; `_NO_BIG_STACK` when no such thread can be
+    had.
 
     On `FLAT_FIRST` Pythons a value was walked level by level before each
     pickle to find it shallow enough for the 2 MB stack (`_at_most_deep`):
@@ -607,11 +608,12 @@ def _on_big_stack(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
     every other Python, and the value is pickled as there: a value too deep
     for the recursion limit is pickled flat, or refused for a key.
 
-    The thread runs in a copy of this one's context, and takes this
-    thread's keying (`one_keying`), `met_by_reference` collector and
-    `reducers_run` depth. With a recursion limit too high for the stack
-    (`_STACK_PER_LEVEL`), or no thread to be had, the value is walked
-    first as before."""
+    The pickle runs on one thread kept for them (`_BigStackWorker`), or on
+    a thread of its own while that one runs another thread's. It runs in a
+    copy of this thread's context, and takes this thread's keying
+    (`one_keying`), `met_by_reference` collector and `reducers_run` depth.
+    With a recursion limit too high for the stack (`_STACK_PER_LEVEL`), or
+    no thread to be had, the value is walked first as before."""
     if not BIG_STACK_BYTES or sys.getrecursionlimit() * _STACK_PER_LEVEL > BIG_STACK_BYTES:
         return _NO_BIG_STACK
     context = contextvars.copy_context()
@@ -630,21 +632,23 @@ def _on_big_stack(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         except BaseException as exc:  # noqa: BLE001 - raised again on the caller's thread
             outcome.append((False, exc))
         finally:
+            # The kept thread runs the next pickle: it holds nothing of this one.
+            _KEYING.now = _MET.found = None
+            _IN_A_CACHED_CALL.depth = 0
             done.release()
 
-    with _STACK_SIZE_LOCK:
+    worker = _BIG_STACK_WORKER
+    if worker.busy.acquire(blocking=False):
         try:
-            before = threading.stack_size(BIG_STACK_BYTES)
-        except (ValueError, RuntimeError):  # a platform that sets no size
-            return _NO_BIG_STACK
-        try:
-            # Not counted as the user's: neither its function nor its starter is.
-            threading.Thread(target=run, name="cash-pickle", daemon=True).start()
-        except (RuntimeError, MemoryError):  # no memory for it, or shutting down
-            return _NO_BIG_STACK
+            if not worker.run(run):
+                return _NO_BIG_STACK
+            done.acquire()
         finally:
-            threading.stack_size(before)
-    done.acquire()
+            worker.busy.release()
+    elif not _start_big_stack_thread(run):
+        return _NO_BIG_STACK
+    else:
+        done.acquire()
     ok, result = outcome.pop()
     if ok:
         return result
@@ -652,6 +656,62 @@ def _on_big_stack(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         raise result
     finally:
         del result
+
+
+def _start_big_stack_thread(target: Callable[[], None]) -> bool:
+    """Start a daemon thread with a stack of `BIG_STACK_BYTES` running
+    *target*; False when none can be had."""
+    with _STACK_SIZE_LOCK:
+        try:
+            before = threading.stack_size(BIG_STACK_BYTES)
+        except (ValueError, RuntimeError):  # a platform that sets no size
+            return False
+        try:
+            # Not counted as the user's: neither its function nor its starter is.
+            threading.Thread(target=target, name="cash-pickle", daemon=True).start()
+        except (RuntimeError, MemoryError):  # no memory for it, or shutting down
+            return False
+        finally:
+            threading.stack_size(before)
+    return True
+
+
+class _BigStackWorker:
+    """The thread `_on_big_stack` hands its pickles to, started once (again
+    in a forked child): a thread started for each pickle of a value not
+    surely shallow was a start or more for every statement of a cell, each
+    through cash's own ``Thread.start`` patch. One caller at a time
+    (*busy*); another meanwhile starts a thread of its own."""
+
+    def __init__(self) -> None:
+        self.busy = threading.Lock()
+        self._ready = threading.Semaphore(0)
+        self._job: Callable[[], None] | None = None
+        self._pid: int | None = None
+
+    def run(self, job: Callable[[], None]) -> bool:
+        """Hand *job* to the thread, starting it first when there is none;
+        False when none can be had. The caller holds *busy*."""
+        if self._pid != os.getpid():
+            if not _start_big_stack_thread(self._serve):
+                return False
+            self._pid = os.getpid()
+        self._job = job
+        self._ready.release()
+        return True
+
+    def _serve(self) -> None:
+        while True:
+            self._ready.acquire()
+            job, self._job = self._job, None
+            if job is not None:
+                job()  # never raises: `_on_big_stack`'s job keeps what it raised
+            # Holds the value it pickled: a statement's share check would
+            # find it held by something else till the next pickle.
+            job = None
+
+
+_BIG_STACK_WORKER = _BigStackWorker()
 
 
 #: How many objects deep the pickler is let follow a value on `FLAT_FIRST`
