@@ -52,6 +52,7 @@ from . import tree_memo
 __all__ = [
     "StoredScanMismatch",
     "enabled",
+    "exit_store_dir",
     "load_record",
     "read_json",
     "save_record",
@@ -163,12 +164,41 @@ def _slot_file(directory: Path, kind: str, path: str) -> Path:
     return directory / f"{slot}.json"
 
 
+#: The last store folder `_store_dir` found, for the writes at exit
+#: (`exit_store_dir`).
+_LAST_DIR: list[Path] = []
+
+
 def _store_dir() -> Path | None:
     try:
         with untracked():
-            return _dir()
+            directory = _dir()
     except OSError:
         return None
+    if directory is not None and _LAST_DIR[-1:] != [directory]:
+        _LAST_DIR[:] = [directory]
+    return directory
+
+
+def exit_store_dir() -> Path | None:
+    """Where the records still held go at exit: `store_dir`, else the folder
+    an earlier lookup in this process found, while its cache dir is still
+    there.
+
+    At exit no call is running, so the folder of a ``Cash(cache_dir=...)``
+    the user built (not the default instance) is not the active one: the
+    records its calls worked out were written nowhere, and every process
+    walked the same helpers again. What they hold is a function of source
+    texts, this Python and this cash (the folder's name), never of the cache
+    dir they sit in."""
+    directory = _store_dir()
+    if directory is not None or not _LAST_DIR:
+        return directory
+    last = _LAST_DIR[-1]
+    if _setting().lower() in ("1", "true", "yes", "on") and not os.path.isdir(last.parent.parent):
+        # The cache dir was removed: the store never makes one of its own.
+        return None
+    return last
 
 
 def enabled() -> bool:
@@ -237,13 +267,13 @@ def _save(kind: str, path: str, record: dict) -> None:
     _write(directory, _slot_file(directory, kind, path), record)
 
 
-def flush() -> None:
+def flush(*, at_exit: bool = False) -> None:
     """Write the records held for a cache dir that did not exist yet, once
-    it does; nothing before then."""
+    it does; nothing before then. *at_exit*: into `exit_store_dir`."""
     if not _PENDING:
         return
     try:
-        directory = _store_dir()
+        directory = exit_store_dir() if at_exit else _store_dir()
     except Exception:  # noqa: BLE001 - at exit: a store that cannot be found keeps nothing
         return
     if directory is None:
@@ -254,7 +284,7 @@ def flush() -> None:
         _write(directory, _slot_file(directory, kind, path), record)
 
 
-atexit.register(flush)
+atexit.register(flush, at_exit=True)
 
 
 def _load(file: Path, kind: str, digest: str) -> dict | None:

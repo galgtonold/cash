@@ -162,7 +162,7 @@ def kept(
     return answer
 
 
-def flush() -> None:
+def flush(*, at_exit: bool = False) -> None:
     """Write what this process worked out since the last flush, merged into
     what is on disk now. Best effort."""
     with _LOCK:
@@ -171,7 +171,7 @@ def flush() -> None:
         pending = dict(_PENDING)
         _PENDING.clear()
         try:
-            directory = scan_store.store_dir()
+            directory = scan_store.exit_store_dir() if at_exit else scan_store.store_dir()
         except Exception:  # noqa: BLE001 - at exit: a store that cannot be found keeps nothing
             return
         if directory is None:
@@ -197,4 +197,4 @@ def forget() -> None:
         _USED.clear()
 
 
-atexit.register(flush)
+atexit.register(flush, at_exit=True)

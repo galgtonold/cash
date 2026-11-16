@@ -847,8 +847,10 @@ def _spelled_root(root: tuple[str, tuple[str, ...], str]) -> list:
     return [root[0], list(root[1]), root[2]]
 
 
-def _file(root: tuple[str, tuple[str, ...], str]) -> Any:
-    directory = scan_store.store_dir()
+def _file(root: tuple[str, tuple[str, ...], str], directory: Any = None) -> Any:
+    """The file of *root*'s reports in *directory*, by default `store_dir`."""
+    if directory is None:
+        directory = scan_store.store_dir()
     if directory is None:
         return None
     name = f"{_KIND}\0{root[0]}\0{'.'.join(root[1])}\0{root[2]}"
@@ -1036,12 +1038,12 @@ def _entry(func: Any, report: PurityReport, walk: Any, text: str) -> dict:
     }
 
 
-def flush() -> None:
+def flush(*, at_exit: bool = False) -> None:
     """Write the records worked out so far, once the cache dir exists."""
     if not _PENDING:
         return
     try:
-        directory = scan_store.store_dir()
+        directory = scan_store.exit_store_dir() if at_exit else scan_store.store_dir()
     except Exception:  # noqa: BLE001 - at exit: a store that cannot be found keeps nothing
         return
     if directory is None:
@@ -1052,9 +1054,7 @@ def flush() -> None:
     for root, entry in pending:
         by_root.setdefault(root, []).append(entry)
     for root, new in by_root.items():
-        file = _file(root)
-        if file is None:
-            return
+        file = _file(root, directory)
         # Most recently worked out last: a full file drops the oldest.
         entries = [e for e in _entries(file, root) if e not in new]
         entries = (entries + new)[-_MAX_ENTRIES:]
@@ -1080,4 +1080,4 @@ def verify(func: Any, loaded: PurityReport, walked: PurityReport) -> None:
         raise StoredReportMismatch(f"stored report of {func.__qualname__} differs from walking it again")
 
 
-atexit.register(flush)
+atexit.register(flush, at_exit=True)
