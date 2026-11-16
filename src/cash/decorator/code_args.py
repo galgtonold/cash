@@ -33,7 +33,7 @@ from ..loaded_code import class_functions
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, is_runtime_machinery
 from . import class_memo, code_trace, walk_scope
 from .arg_hashing import is_opaque, is_plain_data
-from .call_state import CARRIER_LOOKUPS
+from .call_state import CARRIER_LOOKUPS, held_by_name
 from .class_data import class_surface_functions, implicit_access_functions
 from .closure_fold import CLASS_BODY_CELLS
 from .module_identity import namespace_module
@@ -992,7 +992,9 @@ class CodeArgs:
         proof = class_memo.proof_for(carrier, "carrier", lambda: self._carrier_reports(carrier))
         if proof is None:
             return self._user_carrier_parts_now(carrier, func_name, param, owner_code, env)
-        key = (id(carrier), func_name, param, bool(_EXPLAINING.get()), walk_scope.building_now())
+        # The classes of module data are folded by their surface or in full
+        # (`HELD_BY_NAME`): a build of each kind keeps its own parts.
+        key = (id(carrier), func_name, param, bool(_EXPLAINING.get()), walk_scope.building_now(), held_by_name())
         entry = self._carrier_memo.get(key, proof)
         if entry is not class_memo.MISS and entry[0] is owner_code and class_memo.replayable(entry[1]):
             if class_memo.VERIFY:
