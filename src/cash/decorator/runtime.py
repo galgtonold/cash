@@ -2484,7 +2484,12 @@ class CallRunner:
             unit = call.trace_unit
             run.lib_reads = (
                 library_reads.build(
-                    code_trace.library_codes(unit), unit.lib_items, unit.lib_cells, unit.lib_keys, unit.lib_first
+                    code_trace.library_codes(unit),
+                    unit.lib_items,
+                    unit.lib_cells,
+                    unit.lib_keys,
+                    unit.lib_first,
+                    {**unit.receivers, **unit.lib_receivers},
                 )
                 if unit is not None
                 else (None, None)
@@ -2932,7 +2937,8 @@ class CallRunner:
             func_name,
             "library_state_unseen",
             f"{func_name} reaches library code and {where}, so a library setting changed between calls "
-            "(sklearn.set_config, np.seterr, pandas options, a ContextVar, ...) is not detected: a later "
+            "(sklearn.set_config, np.seterr, pandas options, a ContextVar, an attribute set on a library's class, ...) "
+            "is not detected: a later "
             "call could be served a result made under the old setting. Said once per process.",
             code="KEY-LIBRARY-STATE-UNSEEN",
             fix="run on Python 3.12+ with tracing on (the default), pass the setting in as an argument, "

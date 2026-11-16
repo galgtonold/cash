@@ -2230,7 +2230,7 @@ class HitMemo:
             direct
             and h.deadline is None
             and not h.files
-            and not h.lib
+            and (not h.lib or library_reads.classes_watched(h.lib, _cw.world_watch_type))
             and (self.family is None or (self.family.below is None and not self.family.probes))
         )
         # Never the hit credited with a warm-up: the ordinary hit before it was.

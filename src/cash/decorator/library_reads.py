@@ -50,6 +50,14 @@ the call set, a hit finds set the same. What is kept:
     its C helpers' addresses), or an entry of one: compared in the process
     that stored it; in another, only that the chain still reaches the
     compiled module's table;
+``("t", module, "Cls.name", fingerprint)``
+    an attribute of a library's class a method that ran reads off ``self``
+    or ``cls`` (`self_names`), by the class it ran on (`class_reads`): an
+    atom, an enum member or a tuple of them, which a program sets on the
+    class (``Model.scale = 5``) as a setting, as the method first read it.
+    Checked as a ``"v"`` item; a fast hit needs no check while the class is
+    watched (`classes_watched`). A method that may read one is never `QUIET`
+    (`_reads_class_settings`): each traced miss sees the class it runs on;
 ``("s", name, "", fingerprint)``
     state kept in C that no chain reaches: NumPy's error handling
     (``np.errstate``, ``np.seterr``) for a call that reached NumPy,
@@ -485,6 +493,174 @@ def _step(v: Any, name: str) -> Any:
         return _MISSING
 
 
+#: code -> the attributes it loads off its first argument (`self_names`).
+_SELF_NAMES: _weak.WeakKeyDictionary[types.CodeType, tuple[str, ...]] = _weak.WeakKeyDictionary()
+
+
+def self_names(code: types.CodeType) -> tuple[str, ...]:
+    """The attributes *code* loads off its first argument (``self.scale``,
+    ``cls.scale``), dunders left out: what a method reads of its class's
+    attributes. Empty for code with no argument. Read off its bytecode, once."""
+    held = _SELF_NAMES.get(code)
+    if held is not None:
+        return held
+    names: set[str] = set()
+    if code.co_argcount or code.co_posonlyargcount:
+        first = code.co_varnames[0]
+        on_first = False
+        try:
+            for ins in dis.get_instructions(code):
+                if on_first and ins.opname == "LOAD_ATTR" and isinstance(ins.argval, str):
+                    if not ins.argval.startswith("__"):
+                        names.add(ins.argval)
+                if ins.opname.startswith("LOAD_FAST"):
+                    val = ins.argval
+                    on_first = (val[-1] if isinstance(val, tuple) and val else val) == first
+                else:
+                    on_first = False
+        except Exception:  # noqa: BLE001 - unreadable bytecode: nothing read off it
+            names = set()
+    held = tuple(sorted(names))
+    with _lock:
+        _SELF_NAMES[code] = held
+    return held
+
+
+def receiver_class(code: types.CodeType, frame: Any) -> type | None:
+    """The class of what a method reading attributes off its first argument
+    is starting on (the class itself for ``cls``), as it starts in *frame*."""
+    if not self_names(code):
+        return None
+    try:
+        recv = frame.f_locals.get(code.co_varnames[0])
+    except Exception:  # noqa: BLE001 - unreadable locals: no receiver
+        return None
+    if recv is None:
+        return None
+    return recv if isinstance(recv, type) else type(recv)
+
+
+def _frozen_plain(v: Any) -> bool:
+    """Is *v* plain data that cannot change in place: an atom, an enum
+    member, or a tuple or frozenset of such? A class's list, dict or set is
+    most often a cache its methods fill (a registry, a memo): another in the
+    next process, never a setting a program assigns."""
+    t = type(v)
+    if t in _ATOMS or isinstance(v, enum.Enum):
+        return True
+    if t is tuple or t is frozenset:
+        return all(_frozen_plain(x) for x in v)
+    return False
+
+
+def _class_name(cls: Any) -> tuple[str, str] | None:
+    """``(module, qualname)`` under which *cls* is found again (`_resolve`),
+    or None for a class no name finds."""
+    module = getattr(cls, "__module__", None)
+    qualname = getattr(cls, "__qualname__", None)
+    if not isinstance(module, str) or not isinstance(qualname, str) or "<" in qualname:
+        return None
+    try:
+        if _resolve(module, tuple(qualname.split("."))) is not cls:
+            return None
+    except Exception:  # noqa: BLE001 - not found by its name
+        return None
+    return module, qualname
+
+
+def _setting_on(cls: type, name: str) -> Any:
+    """The library class of *cls*'s MRO that holds *name* as a class
+    setting (`_frozen_plain`), or None."""
+    for k in getattr(cls, "__mro__", ()):
+        held = k.__dict__.get(name, _MISSING)
+        if held is _MISSING:
+            continue
+        if _frozen_plain(held) and _library_owner(_owner(k)) and not _compiled(k.__module__):
+            return k
+        return None
+    return None
+
+
+def class_reads(code: types.CodeType, cls: Any) -> dict[tuple[str, str], str]:
+    """The attributes of a library's class *code* (a method that ran on
+    *cls* or an instance of it) reads off ``self``/``cls``, plain data that
+    cannot change in place: ``(module, "Cls.name")`` -> fingerprint now.
+    Assigned on the class by the program (``Model.scale = 5``), one is what
+    a later call reads: a key holding the library by its version alone
+    served the old result."""
+    found: dict[tuple[str, str], str] = {}
+    if not isinstance(cls, type):
+        return found
+    holder: Any = _MISSING
+    for name in self_names(code):
+        k = _setting_on(cls, name)
+        if k is None:
+            continue
+        if holder is _MISSING:
+            # The receiver's class by its name; a class only the program
+            # holds (a user's subclass) by the library class the attribute
+            # is on.
+            holder = _class_name(cls) if _library_owner(_owner(cls)) else None
+        where = holder or _class_name(k)
+        if where is None:
+            continue
+        try:
+            fp = fingerprint(getattr(_resolve(where[0], tuple(where[1].split("."))), name))
+        except Exception:  # noqa: BLE001 - not read again by its name: not kept
+            fp = None
+        if fp is not None:
+            found[(where[0], f"{where[1]}.{name}")] = fp
+    return found
+
+
+#: code -> may it read a class setting (`_reads_class_settings`).
+_CLASS_READERS: _weak.WeakKeyDictionary[types.CodeType, bool] = _weak.WeakKeyDictionary()
+#: The most subclasses `_reads_class_settings` looks through.
+_MAX_SUBCLASSES = 512
+
+
+def _reads_class_settings(code: types.CodeType, g: Mapping[str, Any]) -> bool:
+    """May *code*, a library's method, read a class setting off
+    ``self``/``cls`` (`class_reads`) on some class it can run on: its own
+    class or any subclass of it now loaded? Then it is never `QUIET`: each
+    traced miss sees the class it runs on, so a call running it on a class
+    whose attribute the program set is checked, whatever class an earlier
+    call ran it on. True when its class cannot be found."""
+    held = _CLASS_READERS.get(code)
+    if held is not None:
+        return held
+    names = self_names(code)
+    verdict = False
+    if names:
+        owner: Any = _MISSING
+        qualname = code.co_qualname
+        if "<" not in qualname and "." in qualname:
+            owner = g.get(qualname.split(".")[0], _MISSING)
+            for part in qualname.split(".")[1:-1]:
+                owner = getattr(owner, part, _MISSING) if owner is not _MISSING else _MISSING
+        if not isinstance(owner, type):
+            verdict = True
+        else:
+            seen: set[int] = set()
+            todo = [owner]
+            while todo and not verdict:
+                cls = todo.pop()
+                if id(cls) in seen:
+                    continue
+                seen.add(id(cls))
+                if len(seen) > _MAX_SUBCLASSES:
+                    verdict = True
+                    break
+                verdict = any(_setting_on(cls, name) is not None for name in names)
+                try:
+                    todo.extend(type.__subclasses__(cls))
+                except TypeError:
+                    pass
+    with _lock:
+        _CLASS_READERS[code] = verdict
+    return verdict
+
+
 def deref_roots(code: types.CodeType) -> tuple[str, ...]:
     """The closure variables of *code* a chain starts from."""
     return tuple(sorted({chain[0][1:] for chain in _chains(code)[0] if chain[0].startswith(DEREF)}))
@@ -667,12 +843,13 @@ def _plan(
     plan = (tuple(kept), frozenset(specials))
     if not memo:
         return plan
+    quiet = not (kept or specials) and not user and not _reads_class_settings(code, g)
     with _lock:
         _PLANS[code] = (g, user, tuple(roots.items()), *plan)
-        if kept or specials:
-            QUIET.discard(code)
-        elif not user:
+        if quiet:
             QUIET.add(code)
+        else:
+            QUIET.discard(code)
     return plan
 
 
@@ -954,6 +1131,7 @@ def first_reads(
     user: bool,
     cells: Mapping[str, Any] | None = None,
     keys: set[str | None] | None = None,
+    receiver: type | None = None,
 ) -> list[tuple[tuple[str, str, str], tuple[str | None, dict | None]]]:
     """What *code* (with globals *g*) is about to read, as it starts:
     ``((kind, module, dotted), (fingerprint, entries))`` each, *entries*
@@ -966,16 +1144,20 @@ def first_reads(
     name = g.get("__name__")
     if code.co_name == "<module>" or not isinstance(name, str):
         return []
+    out: list = []
+    if receiver is not None:
+        # *receiver*: the class a method reading off ``self``/``cls`` runs on.
+        for (where, dotted), fp in class_reads(code, receiver).items():
+            out.append((("t", where, dotted), (fp, None)))
     if cells:
         g = _WithCells(g, cells)
         kept, _found = _plan(code, g, user, memo=False)
     else:
         kept, _found = _plan(code, g, user)
     if not kept:
-        return []
+        return out
     spec = KEYED_READERS.get((name, code.co_qualname))
     keyed = _chains(code)[2]
-    out = []
     for chain in kept:
         paths: set | None
         if spec is not None and chain == (spec[0],):
@@ -1056,6 +1238,7 @@ def build(
     cells: Mapping[types.CodeType, Mapping[str, Any]] | None = None,
     keys: Mapping[types.CodeType, set[str | None]] | None = None,
     first: Mapping[tuple[str, str, str], tuple[str | None, dict | None]] | None = None,
+    receivers: Mapping[types.CodeType, type] | None = None,
 ) -> tuple[list[tuple] | None, str | None]:
     """The items the code a body ran reads (*codes*: code -> ``(its
     globals, whether it is the user's)``), with those of the entries
@@ -1063,7 +1246,8 @@ def build(
     *keys*: a `KEYED_READERS` code -> the keys its starts read. *first*:
     ``(kind, module, dotted)`` -> its fingerprint as the call first read
     it, and a small dict's entries' (`first_reads`); a place not in it is
-    read as the body left it."""
+    read as the body left it. *receivers*: a method's code that ran -> the
+    class it first ran on (`class_reads`)."""
     items: set[tuple] = set()
     wants, specials, stores, latched = _wants(codes, keys or {}, cells)
     first = first or {}
@@ -1132,6 +1316,22 @@ def build(
                 places[same] = fp
             if fp is not None:
                 items.add((kind, where, dotted, fp))
+    if receivers:
+        attr_stores = {name for names in stores.values() for name in names if name.startswith(".")}
+        for code, cls in receivers.items():
+            for (where, dotted), fp in class_reads(code, cls).items():
+                held = first.get(("t", where, dotted))
+                if held is not None:
+                    # As the method first read it: the value its result came of.
+                    fp = held[0]
+                elif "." + dotted.rpartition(".")[2] in attr_stores:
+                    continue  # set by the code that ran: a counter of its own
+                same = (where, tuple(dotted.split(".")))
+                if same in places:
+                    continue
+                places[same] = fp
+                if fp is not None:
+                    items.add(("t", where, dotted, fp))
     for item in served:
         item = tuple(item)
         same = _served_place(item)
@@ -1159,6 +1359,29 @@ def changed(items: Any) -> str | None:
         if not same:
             return check.text()
     return None
+
+
+def classes_watched(items: Any, watch: Any) -> bool:
+    """Are *items* all attributes of classes (``"t"``), each class and its
+    bases now watched by *watch* (``world_watch_type``: a change to one
+    moves the world epoch, which ends every fast hit)? Then a fast hit
+    needs no check of its own."""
+    for item in items:
+        if item[0] != "t":
+            return False
+        try:
+            cls = _resolve(item[1], tuple(item[2].split("."))[:-1])
+        except Exception:  # noqa: BLE001 - not found again: checked on each hit
+            return False
+        if not isinstance(cls, type):
+            return False
+        for k in cls.__mro__:
+            if k.__flags__ & _HEAPTYPE and watch(k) is None:
+                return False
+    return True
+
+
+_HEAPTYPE = 1 << 9
 
 
 def note_served(items: Iterable[Any]) -> None:

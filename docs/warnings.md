@@ -1532,7 +1532,8 @@ Cash says this once per process, the first time such a call is stored.
 **Why it matters.** A setting changed between two calls with the same
 arguments is not seen: `sklearn.set_config(...)`, `np.seterr(...)`,
 `pd.set_option(...)`, `sc.settings.n_jobs = ...`, `decimal`'s context, a
-`ContextVar`. The later call is served the result made under the old
+`ContextVar`, an attribute set on a library's class (`Model.scale = 5`). The
+later call is served the result made under the old
 setting. Library versions, environment variables and your own globals are
 still keyed.
 
