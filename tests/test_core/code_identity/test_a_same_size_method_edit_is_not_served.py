@@ -28,6 +28,19 @@ from tests._scripts import run_python
 
 pytestmark = pytest.mark.core
 
+#: Windows cannot see a same-size save in place that puts the mtime back:
+#: its ``st_ctime`` is the creation time, which such a save keeps, as it
+#: keeps the file's index, so the file's stat (`source_reading.file_version`)
+#: is the one from before. What cash memoised from the file once its mtime
+#: had settled stays in use until the next save that moves the stat -- the
+#: limit `source_reading.file_version` and `loaded_code` document.
+PUT_BACK_UNSEEN = os.name == "nt"
+
+_WINDOWS_LIMIT = (
+    "Windows keeps the stat of a same-size save in place with its mtime put back "
+    "(st_ctime is the creation time), so what cash read from the file before is kept"
+)
+
 SHAPES = textwrap.dedent("""
     import cash
 
@@ -100,7 +113,12 @@ def _out(proj, cache, disable=False):
 
 @pytest.mark.parametrize("settled", [False, True], ids=["just-saved", "settled"])
 @pytest.mark.parametrize("put_back", [False, True], ids=["new-mtime", "mtime-put-back"])
-def test_a_reloaded_module_s_same_size_edit_runs_the_new_method(tmp_path, put_back, settled):
+def test_a_reloaded_module_s_same_size_edit_runs_the_new_method(request, tmp_path, put_back, settled):
+    if put_back and PUT_BACK_UNSEEN:
+        # Whether the first run read the file after its mtime had settled
+        # (served stale then) depends on how long the interpreter took to
+        # start: the documented limit, for this case only.
+        request.applymarker(pytest.mark.xfail(reason=_WINDOWS_LIMIT, strict=False))
     main = f"PUT_BACK = {put_back}\n" + IN_PROCESS
     proj = _project(tmp_path, main, settled)
     cached = _out(proj, tmp_path / "cache")
@@ -149,8 +167,17 @@ def _rewrite_putting_the_mtime_back(path):
     assert os.stat(path).st_size == st.st_size
 
 
+def _move_the_mtime(path):
+    """A later save of the same text: the stat moves on every platform."""
+    later = time.time() + 1
+    os.utime(path, (later, later))
+
+
 def test_source_read_after_the_edit_is_the_new_text(settled_module):
-    """``inspect`` alone answers the old text here; cash's reads do not."""
+    """``inspect`` alone answers the old text here; cash's reads do not.
+
+    On Windows the edit is not seen (`PUT_BACK_UNSEEN`): every read answers
+    the old text until a save moves the stat, and then the new one."""
     module, path = settled_module
     assert "x * 1" in source_reading.getsource(module.Base.scale)
     assert "x * 1" in source_reading.getsource(module.Base)
@@ -158,6 +185,10 @@ def test_source_read_after_the_edit_is_the_new_text(settled_module):
     _rewrite_putting_the_mtime_back(path)
     module = importlib.reload(module)
 
+    if PUT_BACK_UNSEEN:
+        assert "x * 1" in source_reading.getsource(module.Base.scale)
+        assert "x * 1" in source_reading.getsource(module.Base)
+        _move_the_mtime(path)
     assert "x * 2" in source_reading.getsource(module.Base.scale)
     assert "x * 2" in source_reading.getsource(module.Base)
     assert "x * 2" in inspect.getsource(module.Base.scale)
@@ -177,6 +208,10 @@ def test_a_memo_of_a_file_is_not_kept_across_the_edit(settled_module, read):
     before = read(str(path))
     assert read(str(path)) == before
     _rewrite_putting_the_mtime_back(path)
+    if PUT_BACK_UNSEEN:
+        # The documented limit: the memo is kept until the stat moves.
+        assert read(str(path)) == before
+        _move_the_mtime(path)
     assert read(str(path)) != before
 
 
