@@ -1666,6 +1666,9 @@ class _Found:
         #: class)``: a method met on each of many objects of one class is
         #: read once (`_method_effects`).
         self._method_effects: dict[tuple[Any, type], tuple[bool, bool]] = {}
+        #: The (code, class) of methods found not to change their object,
+        #: nor any method they reach on it (`_changes_its_first_argument`).
+        self._unchanging: set[tuple[Any, type]] = set()
         #: `_method_key` of the methods `_callable` read that neither change
         #: their object nor reach through it: the same method of another
         #: object of that class adds nothing.
@@ -2397,7 +2400,7 @@ class _Found:
         key = (fn.__code__, cls)
         effects = self._method_effects.get(key)
         if effects is None:
-            changes = _changes_its_first_argument(fn, cls, source)
+            changes = _changes_its_first_argument(fn, cls, source, self._unchanging)
             effects = (changes, changes and _reaches_its_class(source))
             self._method_effects[key] = effects
         return effects
@@ -3679,24 +3682,26 @@ def _reaches_its_class(source: str) -> bool:
     return False
 
 
-def _changes_its_first_argument(
-    fn: types.FunctionType, cls: type, source: str, seen: frozenset[int] = frozenset()
-) -> bool:
-    """Whether calling the method *fn* of *cls* changes the object it is
-    bound to (``self.seen.append(v)``, ``self.n += 1``), itself or through
-    another method of the class it calls on it. A call on something the
-    object holds (``self.model.fit(x)``) counts unless the method is known
-    not to change anything: what it does is not read."""
+@functools.lru_cache(maxsize=4096)
+def _first_argument_facts(source: str) -> tuple[bool, tuple[str, ...]]:
+    """What the method *source* does to its first argument by itself:
+    ``(changes, methods)``. *changes* when it changes the object
+    (``self.n += 1``), calls a method on something the object holds that
+    is not known pure (``self.model.fit(x)``), or cannot be read; *methods*
+    the names it calls on the object itself (``self.helper()``), in the
+    order they appear, which `_changes_its_first_argument` resolves on the
+    class. Purely syntactic, so memoised on the text: a method's source is
+    parsed once, not once per caller that reaches it on every call."""
     node = parse_function_source(source)
     if node is None:
-        return True
+        return True, ()
     params = [a.arg for a in (*node.args.posonlyargs, *node.args.args)]
     if not params:
-        return False
+        return False, ()
     first = params[0]
     if first in params_mutated_in_function(node):
-        return True
-    seen = seen | {id(fn)}
+        return True, ()
+    methods: list[str] = []
     for call in walk_tree(node):
         if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Attribute):
             continue
@@ -3710,19 +3715,62 @@ def _changes_its_first_argument(
         method = call.func.attr
         if depth > 1:
             if not chain_is_pure(method, frozenset()):
-                return True
+                return True, ()
             continue
-        member = _class_member(cls, method)
-        if instance_of(member, (staticmethod, classmethod)):
-            member = member.__func__
-        if instance_of(member, types.FunctionType):
-            if id(member) in seen:
-                continue
-            inner = _source_of(member)
-            if inner is None or _changes_its_first_argument(member, cls, inner, seen):
-                return True
-        elif method in MUTATING_METHODS or member is None:
+        methods.append(method)
+    return False, tuple(methods)
+
+
+def _changes_its_first_argument(
+    fn: types.FunctionType, cls: type, source: str, unchanging: set[tuple[Any, type]] | None = None
+) -> bool:
+    """Whether calling the method *fn* of *cls* changes the object it is
+    bound to (``self.seen.append(v)``, ``self.n += 1``), itself or through
+    another method of the class it calls on it. A call on something the
+    object holds (``self.model.fit(x)``) counts unless the method is known
+    not to change anything: what it does is not read.
+
+    The methods it calls on the object are resolved on *cls* as it is now,
+    every call; each one's own source is read once (`_first_argument_facts`).
+    Each method reached is looked at once: the answer is whether any method
+    reachable from *fn* that way changes the object, which a walk of every
+    path from *fn* gave too, at a cost growing with the number of paths (a
+    class whose 30 methods call one another: hundreds of parses a call).
+
+    *unchanging*, when given, holds the ``(code, class)`` of methods an
+    earlier walk on the same class found not to change the object, nor
+    any it reaches: they are not walked again, and when this walk finds
+    nothing, every method it reached is added. Valid while the class is
+    not changed: for the walks of one question.
+    """
+    if unchanging is not None and (fn.__code__, cls) in unchanging:
+        return False
+    pending = [source]
+    seen = {id(fn)}
+    reached = [fn.__code__]
+    while pending:
+        changes, methods = _first_argument_facts(pending.pop())
+        if changes:
             return True
+        for method in methods:
+            member = _class_member(cls, method)
+            if instance_of(member, (staticmethod, classmethod)):
+                member = member.__func__
+            if instance_of(member, types.FunctionType):
+                if id(member) in seen:
+                    continue
+                seen.add(id(member))
+                if unchanging is not None and (member.__code__, cls) in unchanging:
+                    continue
+                inner = _source_of(member)
+                if inner is None:
+                    return True
+                reached.append(member.__code__)
+                pending.append(inner)
+            elif method in MUTATING_METHODS or member is None:
+                return True
+    if unchanging is not None:
+        unchanging.update((code, cls) for code in reached)
     return False
 
 
