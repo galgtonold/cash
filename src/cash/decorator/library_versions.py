@@ -113,6 +113,8 @@ def _packages_distributions() -> tuple[dict[str, list[tuple[str, Any]]], dict[st
     by_top: dict[str, list[tuple[str, Any]]] = {}
     saved: dict[str, list] | None = {}
     for dist in importlib_metadata.distributions():
+        if _backport_distribution(dist):
+            continue  # found again from the same folder by `PathFinder`
         name = dist.metadata["Name"]
         if not name:
             continue
@@ -226,12 +228,32 @@ def _distribution_map() -> dict[str, list[tuple[str, Any]]]:
     return by_top
 
 
+def _backport_path_finder(finder: Any) -> bool:
+    """Is *finder* the ``importlib_metadata`` backport's own path finder?
+
+    Importing the backport (a dependency of many packages on Python 3.10)
+    appends it to ``sys.meta_path``. It searches ``sys.path`` as
+    ``PathFinder`` does, so it names the same distributions again: the map
+    leaves them out (`_packages_distributions`) and may be saved."""
+    kind = type(finder)
+    return kind.__module__ == "importlib_metadata" and kind.__qualname__ == "MetadataPathFinder"
+
+
+def _backport_distribution(dist: Any) -> bool:
+    """Is *dist* one the backport's path finder named (`_backport_path_finder`)?"""
+    return type(dist).__module__ == "importlib_metadata" and type(dist).__qualname__ == "PathDistribution"
+
+
 def _fingerprint_header() -> list | None:
     """The interpreter and environment, and each ``sys.path`` entry: which
     saved map (`_slot`) this process may read. None when something else may
     name distributions too (a finder of its own on ``sys.meta_path``)."""
     for finder in sys.meta_path:
-        if getattr(finder, "find_distributions", None) is not None and finder is not importlib_machinery.PathFinder:
+        if (
+            getattr(finder, "find_distributions", None) is not None
+            and finder is not importlib_machinery.PathFinder
+            and not _backport_path_finder(finder)
+        ):
             return None
     return [
         sys.version,
