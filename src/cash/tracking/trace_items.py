@@ -54,6 +54,7 @@ from collections.abc import Iterable, Iterator, Mapping
 from typing import Any
 
 from ..kept_state import global_rng_stand_in
+from ..pint_values import pint_kind, registry_digest
 
 __all__ = [
     "SURFACE",
@@ -253,6 +254,8 @@ class _SetsInOrder(pickle.Pickler):
             if len(obj) > _NODES:
                 raise _Opaque
             return t.__name__ + "|" + "|".join(sorted(map(value_digest, obj)))
+        if pint_kind(t) == "registry":
+            return "pint|" + _registry_digest(obj)
         return None
 
     def reducer_override(self, obj: Any) -> Any:
@@ -261,6 +264,14 @@ class _SetsInOrder(pickle.Pickler):
         # takes it: its state is fresh entropy in each process unseeded, and
         # the global RNG channel, not the value, accounts for it.
         return global_rng_stand_in(obj) or NotImplemented
+
+
+def _registry_digest(registry: Any) -> str:
+    """`registry_digest`, or `_Opaque` for a registry it cannot key."""
+    try:
+        return registry_digest(registry)
+    except TypeError as exc:
+        raise _Opaque from exc
 
 
 _SCALARS = (int, float, complex, bool, type(None), type(Ellipsis))
@@ -337,6 +348,16 @@ class _Digester:
 
     def _compound(self, v: Any, t: type) -> None:
         h = self.h
+        if pint_kind(t) == "registry":
+            # A pint unit registry (xclim's ``units``, read by every
+            # indicator) by its definitions, as a key holds one
+            # (`cash.pint_values`): its pickle names only the class, and its
+            # state holds caches it derived and a weak index. One whose
+            # definitions cannot be keyed is opaque. Asked first: an
+            # attribute read of a registry (``nbytes``) parses it as a unit
+            # and adds that unit to its definitions.
+            h.update(b"pint" + _registry_digest(v).encode())
+            return
         if t is tuple or t is list:
             h.update(t.__name__.encode() + struct.pack("<q", len(v)))
             for x in v:

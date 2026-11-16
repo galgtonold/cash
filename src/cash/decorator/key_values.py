@@ -13,6 +13,7 @@ from typing import Any
 
 from .._type_memo import TypeMemo, type_key
 from ..analysis.helper_code import is_mock, renamed
+from ..generated_docs import keyed_state_doc
 from ..jit_functions import jit_python_function
 from ..kept_state import without_filled_caches
 from ..pint_values import pint_kind
@@ -151,7 +152,16 @@ def carried_payload(value: Any) -> Any:
     if is_user_class(type(value), own_package(type(value))):
         state = getattr(value, "__dict__", None)
         if isinstance(state, dict):
-            return ("instance", without_filled_caches(value, dict(state)))
+            kept = without_filled_caches(value, dict(state))
+            if "__doc__" in kept:
+                # A docstring given at run time: an input only where code
+                # reads it (`generated_docs`).
+                keep, form = keyed_state_doc(value, kept["__doc__"])
+                if keep:
+                    kept["__doc__"] = form
+                else:
+                    del kept["__doc__"]
+            return ("instance", kept)
         return ("instance", reduced_state(value))
     held = held_partials(value)
     return ("wrapped partials", held) if held else None
@@ -304,11 +314,22 @@ def _stabilized(v: Any, hash_callable, _path: frozenset[int], carried: bool) -> 
         and state
         and not issubclass(type(v), (type, types.ModuleType))
         and _state_is_its_dict(type(v))
-        # A record of plain values holds no code: nothing to rewrite.
-        and not all(type(x) in _NO_CODE_LEAVES for x in state.values())
     ):
-        rewritten, changed = _stabilized(state, hash_callable, _path | {id(v)}, carried)
-        if changed:
+        # A docstring the object was given at run time: an input only where
+        # code reads it, and then by what it says, not by how this process
+        # rendered a value the object holds (`generated_docs`).
+        keep, doc_now = keyed_state_doc(v, state.get("__doc__"))
+        doc_moved = "__doc__" in state and (not keep or doc_now != state["__doc__"])
+        if doc_moved or not all(type(x) in _NO_CODE_LEAVES for x in state.values()):
+            # A record of plain values holds no code: nothing to rewrite.
+            rewritten, changed = _stabilized(state, hash_callable, _path | {id(v)}, carried)
+            if doc_moved:
+                rewritten = {k: x for k, x in rewritten.items() if k != "__doc__"}
+                if keep:
+                    rewritten["__doc__"] = ("__cash_doc__", doc_now)
+        else:
+            changed = False
+        if changed or doc_moved:
             t = type(v)
             return ("__cash_object__", f"{t.__module__}.{t.__qualname__}", rewritten), True
     return v, False
