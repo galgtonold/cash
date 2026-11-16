@@ -580,7 +580,92 @@ static int world_quiet_name(PyObject *d, PyObject *key) {
     return r;
 }
 
-static inline void world_bump(void) { world_epoch++; c_world_bumps++; }
+/* `core_epoch` moves with every change but a scoped name's (below): what
+ * the hit memo's state compares, besides the scoped names it reads. */
+static uint64_t core_epoch = 1;
+static inline void world_bump(void) { world_epoch++; core_epoch++; c_world_bumps++; }
+
+/* Scoped names (`world_scope`): keys of world dicts that libraries set and
+ * put back around nearly every call -- ``warnings.filters`` and the display
+ * hooks around each ``warnings.catch_warnings`` (pandas runs one in
+ * ``DataFrame.to_string``), ``sys.stderr`` around each
+ * ``contextlib.redirect_stderr``. Once any scanned code named one, each such
+ * write moved the world, and no cached function in the process was served
+ * from its fast path again. A change to a scoped name that scanned code
+ * names (and that is not a callable's or a module's change, unless quiet)
+ * moves `world_epoch` (every other memo compares it) and the name's own
+ * epoch, not `core_epoch`: a hit memo keeps ``(name, epoch)`` among its
+ * cells for the scoped names its scan met (`scoped_cells`), and `still_held`
+ * compares them.
+ *
+ * A write that puts back what the latest change of that name replaced, in
+ * the same dict, with no other change since (`core_epoch` the same, the
+ * name's changes undone last-in first-out) brings the name's epoch back to
+ * the one it had: the name is as it was. Each change is pushed with the
+ * value it replaced, held so its address is not another object's later.
+ * Every other change takes a fresh epoch, never one used before. */
+#define SCOPED_MAX 8
+#define SCOPED_DEPTH 64
+typedef struct { uintptr_t dict; PyObject *old; uint64_t prev, core; } SPush;
+static struct {
+    PyObject *name;   /* strong */
+    uint64_t epoch;
+    int depth;
+    SPush stack[SCOPED_DEPTH];
+} scoped[SCOPED_MAX];
+static int nscoped = 0;
+static uint64_t scoped_fresh = 1;
+static unsigned long long c_scoped_moves, c_scoped_restores;
+
+static int str_equal(PyObject *a, PyObject *b);
+
+static int scoped_index(PyObject *key) {
+    for (int i = 0; i < nscoped; i++)
+        if (scoped[i].name == key) return i;
+    for (int i = 0; i < nscoped; i++)
+        if (str_equal(scoped[i].name, key)) return i;
+    return -1;
+}
+
+static void scoped_change(int i, PyObject *d, PyObject *old, PyObject *nv) {
+    world_epoch++;   /* the total: what every other memo compares */
+    c_scoped_moves++;
+    int depth = scoped[i].depth;
+    if (depth > 0) {
+        SPush *t = &scoped[i].stack[depth - 1];
+        if (t->dict == (uintptr_t)d && t->old == nv) {
+            int restored = t->core == core_epoch;
+            uint64_t prev = t->prev;
+            scoped[i].depth--;
+            /* old is nv: the writer holds it and the dict is about to, so
+             * this frees nothing (and runs no Python code) */
+            Py_XDECREF(t->old);
+            t->old = NULL;
+            if (restored) { scoped[i].epoch = prev; c_scoped_restores++; return; }
+            scoped[i].epoch = ++scoped_fresh;
+            return;
+        }
+    }
+    if (depth < SCOPED_DEPTH) {
+        SPush *t = &scoped[i].stack[depth];
+        t->dict = (uintptr_t)d; t->old = Py_XNewRef(old); t->prev = scoped[i].epoch; t->core = core_epoch;
+        scoped[i].depth = depth + 1;
+    } else {
+        /* not pushed: no change below it may be undone into an epoch */
+        for (int j = 0; j < depth; j++) scoped[i].stack[j].core = 0;
+    }
+    scoped[i].epoch = ++scoped_fresh;
+}
+
+/* d is freed: another dict may come at its address */
+static void scoped_forget(PyObject *d) {
+    for (int i = 0; i < nscoped; i++)
+        for (int j = 0; j < scoped[i].depth; j++)
+            if (scoped[i].stack[j].dict == (uintptr_t)d) scoped[i].stack[j].core = 0;
+}
+
+/* (name, epoch) of a scoped name still that epoch? (`still_held`) */
+static int scoped_holds(PyObject *name, PyObject *held);
 
 static inline int codeish(PyObject *o) { return o != NULL && (PyCallable_Check(o) || PyModule_Check(o)); }
 
@@ -668,6 +753,7 @@ static void world_dict_event(WEnt *e, PyDict_WatchEvent ev, PyObject *d, PyObjec
          * the cells a memo starts from are held by it). A function or
          * lambda made and dropped per call would stop every memo here. */
         e->addr = WTOMB; wds_used--; wds_tomb++;
+        if (nscoped) scoped_forget(d);
         if (world_quiet != NULL) {   /* its address may be a new dict's next */
             PyObject *at = PyLong_FromVoidPtr(d);
             if (at && PyDict_DelItem(world_quiet, at) < 0) PyErr_Clear();
@@ -685,18 +771,26 @@ static void world_dict_event(WEnt *e, PyDict_WatchEvent ev, PyObject *d, PyObjec
         if (old == NULL && PyErr_Occurred()) PyErr_Clear();
         else if (old == nv) { c_world_ignored++; return; }
     }
+    int scoped_i = -1;
+    PyObject *scoped_old = NULL;
     if ((e->flags & WD_UNKEYED) == 0 && key != NULL && PyUnicode_CheckExact(key) && world_names != NULL &&
         (ev == PyDict_EVENT_ADDED || ev == PyDict_EVENT_MODIFIED || ev == PyDict_EVENT_DELETED)) {
         /* str hashes are cached and compared without running Python code */
         int named = PySet_Contains(world_names, key);
         if (named < 0) { PyErr_Clear(); named = 1; }
+        PyObject *old = ev == PyDict_EVENT_ADDED ? NULL : PyDict_GetItem(d, key);  /* borrowed */
+        int plain = !codeish(old) && !codeish(nv);
         if (!named) {
-            PyObject *old = ev == PyDict_EVENT_ADDED ? NULL : PyDict_GetItem(d, key);  /* borrowed */
-            if (!codeish(old) && !codeish(nv)) { c_world_ignored++; return; }
+            if (plain) { c_world_ignored++; return; }
             if (world_quiet_name(d, key)) { c_world_ignored++; return; }
+        } else if (nscoped && (plain || world_quiet_name(d, key))) {
+            /* a change only memos naming it see (see `scoped`) */
+            scoped_i = scoped_index(key);
+            scoped_old = old;
         }
     }
     if (expected_write(ev, d, key, nv)) { c_world_ignored++; return; }
+    if (scoped_i >= 0) { scoped_change(scoped_i, d, scoped_old, nv); return; }
     world_bump();
 }
 
@@ -2548,6 +2642,61 @@ static PyObject *py_info(PyObject *self, PyObject *o) {
 
 /* ------------------------------------------------------------ world API (decorator hit path) */
 static PyObject *py_world_epoch(PyObject *self, PyObject *noargs) { return PyLong_FromUnsignedLongLong(world_epoch); }
+static PyObject *py_core_epoch(PyObject *self, PyObject *noargs) { return PyLong_FromUnsignedLongLong(core_epoch); }
+
+static int scoped_holds(PyObject *name, PyObject *held) {
+    int i = scoped_index(name);
+    return i >= 0 && epoch_is(held, scoped[i].epoch);
+}
+
+/* world_scope(iterable of str): names whose changes only the memos naming
+ * them see (see `scoped`); at most SCOPED_MAX */
+static PyObject *py_world_scope(PyObject *self, PyObject *it) {
+    PyObject *iter = PyObject_GetIter(it);
+    if (!iter) return NULL;
+    PyObject *x;
+    while ((x = PyIter_Next(iter)) != NULL) {
+        if (!PyUnicode_CheckExact(x)) { Py_DECREF(x); continue; }
+        if (scoped_index(x) < 0) {
+            if (nscoped == SCOPED_MAX) {
+                Py_DECREF(x); Py_DECREF(iter);
+                PyErr_SetString(PyExc_ValueError, "world_scope: too many scoped names");
+                return NULL;
+            }
+            PyUnicode_InternInPlace(&x);
+            scoped[nscoped].name = x;   /* takes the reference */
+            scoped[nscoped].epoch = ++scoped_fresh;
+            scoped[nscoped].depth = 0;
+            nscoped++;
+            continue;
+        }
+        Py_DECREF(x);
+    }
+    Py_DECREF(iter);
+    if (PyErr_Occurred()) return NULL;
+    Py_RETURN_NONE;
+}
+
+/* scoped_cells(names: set) -> (name, epoch, ...): the scoped names among
+ * names, as `still_held` compares them */
+static PyObject *py_scoped_cells(PyObject *self, PyObject *names) {
+    if (!PyAnySet_Check(names)) { PyErr_SetString(PyExc_TypeError, "scoped_cells(set of str)"); return NULL; }
+    PyObject *out = PyList_New(0);
+    if (!out) return NULL;
+    for (int i = 0; i < nscoped; i++) {
+        int has = PySet_Contains(names, scoped[i].name);
+        if (has < 0) { Py_DECREF(out); return NULL; }
+        if (!has) continue;
+        PyObject *ep = PyLong_FromUnsignedLongLong(scoped[i].epoch);
+        if (!ep || PyList_Append(out, scoped[i].name) < 0 || PyList_Append(out, ep) < 0) {
+            Py_XDECREF(ep); Py_DECREF(out); return NULL;
+        }
+        Py_DECREF(ep);
+    }
+    PyObject *t = PyList_AsTuple(out);
+    Py_DECREF(out);
+    return t;
+}
 static PyObject *py_cash_epoch(PyObject *self, PyObject *noargs) { return PyLong_FromUnsignedLongLong(cash_epoch); }
 static PyObject *py_bump_cash(PyObject *self, PyObject *noargs) { cash_epoch++; Py_RETURN_NONE; }
 static PyObject *py_bump_world(PyObject *self, PyObject *noargs) { world_bump(); Py_RETURN_NONE; }
@@ -2749,11 +2898,13 @@ static PyObject *py_world_add_names(PyObject *self, PyObject *it) {
 }
 
 static PyObject *py_world_info(PyObject *self, PyObject *noargs) {
-    return Py_BuildValue("{sKsKsnsnsnsKsKsKsK}", "world_epoch", (unsigned long long)world_epoch,
+    return Py_BuildValue("{sKsKsKsnsnsnsKsKsKsKsKsK}", "world_epoch", (unsigned long long)world_epoch,
+                         "core_epoch", (unsigned long long)core_epoch,
                          "cash_epoch", (unsigned long long)cash_epoch, "dicts", (Py_ssize_t)wds_used,
                          "types", (Py_ssize_t)wts_used, "names", world_names ? PySet_GET_SIZE(world_names) : 0,
                          "bumps", c_world_bumps, "ignored", c_world_ignored, "fast_hits", c_fast_hits,
-                         "fast_declined", c_fast_misses);
+                         "fast_declined", c_fast_misses, "scoped_moves", c_scoped_moves,
+                         "scoped_restores", c_scoped_restores);
 }
 
 /* -- the memo key: the call's arguments as a typed, hashable tuple ------- */
@@ -3020,6 +3171,7 @@ static int epoch_is(PyObject *o, uint64_t want) {
  * reports set (a name not ending the qualname is keyed: `renamed`). */
 static inline int still_held(PyObject *c, PyObject *held) {
     if (PyCell_Check(c)) return PyCell_GET(c) == held;
+    if (PyUnicode_CheckExact(c)) return scoped_holds(c, held);
     if (PyFunction_Check(c) && PyTuple_CheckExact(held) && PyTuple_GET_SIZE(held) == 2) {
         PyFunctionObject *f = (PyFunctionObject *)c;
         return f->func_name == PyTuple_GET_ITEM(held, 0) && f->func_qualname == PyTuple_GET_ITEM(held, 1);
@@ -3038,7 +3190,7 @@ static PyObject *py_fast_lookup(PyObject *self, PyObject *const *args, Py_ssize_
     PyObject *memo = args[0];
     if (!PyList_CheckExact(memo) || PyList_GET_SIZE(memo) < 4 || !PyTuple_CheckExact(args[1])) goto declined;
     if (wg_check() < 0) goto declined;
-    if (!epoch_is(PyList_GET_ITEM(memo, 0), world_epoch)) goto declined;
+    if (!epoch_is(PyList_GET_ITEM(memo, 0), core_epoch)) goto declined;
     PyObject *cells = PyList_GET_ITEM(memo, 2), *types = PyList_GET_ITEM(memo, 3);
     if (!PyTuple_CheckExact(cells) || !PyTuple_CheckExact(types)) goto declined;
     for (Py_ssize_t i = 0; i + 1 < PyTuple_GET_SIZE(cells); i += 2)
@@ -3329,7 +3481,7 @@ static PyObject *py_fast_call(PyObject *self, PyObject *const *args, Py_ssize_t 
     }
     PyObject *st = args[0];
     if (!PyList_Check(st) || PyList_GET_SIZE(st) < S_NSLOTS) goto miss;
-    if (!epoch_is(PyList_GET_ITEM(st, S_WORLD), world_epoch)) goto miss;
+    if (!epoch_is(PyList_GET_ITEM(st, S_WORLD), core_epoch)) goto miss;
     PyObject *entries = PyList_GET_ITEM(st, S_ENTRIES);
     if (!PyDict_CheckExact(entries) || PyDict_GET_SIZE(entries) == 0) goto miss;
     if (offers_open || !cv_is_none(cv_call_entry) || !cv_is_none(cv_tracker) || !cv_is_none(cv_nested)) goto miss;
@@ -3448,6 +3600,9 @@ static PyMethodDef methods[] = {
     {"stats", py_stats, METH_NOARGS, ""},
     {"info", py_info, METH_O, ""},
     {"world_epoch", py_world_epoch, METH_NOARGS, ""},
+    {"core_epoch", py_core_epoch, METH_NOARGS, ""},
+    {"world_scope", py_world_scope, METH_O, ""},
+    {"scoped_cells", py_scoped_cells, METH_O, ""},
     {"cash_epoch", py_cash_epoch, METH_NOARGS, ""},
     {"bump_cash", py_bump_cash, METH_NOARGS, ""},
     {"bump_world", py_bump_world, METH_NOARGS, ""},
