@@ -220,6 +220,7 @@ def _unit_class() -> type:
             "lookups_followed",
             "lib_cells",
             "lib_codes",
+            "lib_first",
             "lib_items",
             "lib_keys",
             "sites",
@@ -254,6 +255,9 @@ def _unit_class() -> type:
             #: User code -> the library modules its closure holds under the
             #: names a chain it reads starts from (`library_reads.deref_roots`).
             self.lib_cells: dict[types.CodeType, dict[str, Any]] = {}
+            #: ``(kind, module, dotted)`` of a library setting -> its
+            #: fingerprint as the call first read it (`library_reads.first_reads`).
+            self.lib_first: dict[tuple[str, str, str], str | None] = {}
             #: A traced call's: code of a function that writes through its
             #: parameters -> ``(caller code, offset of the call)`` for each
             #: start of it (`_Recorder.site_codes`, `cash.analysis.out_arguments`).
@@ -302,6 +306,7 @@ def _recorder_class() -> type:
     from .library_reads import CodeSet as LibraryCodes
     from .library_reads import counts_file
     from .library_reads import deref_roots as library_deref_roots
+    from .library_reads import first_reads as library_first_reads
     from .library_reads import keyed_argument as library_keyed_argument
 
     DISABLE = sys.monitoring.DISABLE
@@ -566,15 +571,45 @@ def _recorder_class() -> type:
                 key = None
             if not isinstance(key, str):
                 key = None
+            fresh = []
             for unit in self.active:
-                unit.lib_keys.setdefault(code, set()).add(key)
+                read = unit.lib_keys.setdefault(code, set())
+                if key not in read:
+                    read.add(key)
+                    fresh.append(unit)
+            if fresh:
+                self._first_reads(fresh, code, frame.f_globals, False, keys={key})
 
         def _seen_library(self, code: types.CodeType, g: dict) -> None:
             if own_work_inside():
                 own_work_left_out(code)
                 return
-            for unit in self.active:
-                unit.lib_codes.setdefault(code, g)
+            fresh = [unit for unit in self.active if code not in unit.lib_codes]
+            for unit in fresh:
+                unit.lib_codes[code] = g
+            if fresh:
+                self._first_reads(fresh, code, g, False)
+
+        def _first_reads(
+            self, units: list[Any], code: types.CodeType, g: dict, user: bool, cells: Any = None, keys: Any = None
+        ) -> None:
+            """*code* starts in *units* for the first time: the library
+            settings it reads, as they are before it runs, for those that
+            have not read them yet (`library_reads.first_reads`)."""
+            if self._in_callback:
+                return
+            self._in_callback = True
+            try:
+                with untracked():
+                    found = library_first_reads(code, g, user, cells, keys)
+            except Exception:  # noqa: BLE001 - not taken: read after the body
+                found = ()
+            finally:
+                self._in_callback = False
+            for unit in units:
+                first = unit.lib_first
+                for place, fp in found:
+                    first.setdefault(place, fp)
 
         def _on_library(self, code: types.CodeType) -> Any:
             if code in library_quiet:
@@ -873,6 +908,7 @@ def _recorder_class() -> type:
                 if lined:
                     self._arm_lines(code, lined)
             inside_collection = collecting()
+            fresh = [unit for unit in self.active if code not in unit.codes]
             for unit in units:
                 rec.note_collected(unit, code, inside_collection)
                 unit.codes.setdefault(code, (g, module))
@@ -881,6 +917,9 @@ def _recorder_class() -> type:
                     unit.cells.setdefault(code, started)
                 if recv is not None:
                     unit.receivers.setdefault(code, recv if issubclass(type(recv), type) else type(recv))
+            fresh = [unit for unit in fresh if hasattr(unit, "lib_first")]
+            if fresh:
+                self._first_reads(fresh, code, g, True, fresh[0].lib_cells.get(code))
 
         def _closure_modules(self, code: types.CodeType, frame: Any) -> None:
             """The library modules *code*'s closure holds that a chain it
