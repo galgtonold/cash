@@ -1466,6 +1466,48 @@ def _frame_namespace(module: str, filename: str) -> dict | None:
     return None
 
 
+def _instance_holder(cls: type, holders: list) -> tuple[str, str] | None:
+    """``(module, name)`` of a module global holding an instance of *cls*
+    (or *cls* itself): the namespaces the call used first, then every
+    module of the user's. None when there is none."""
+    spaces = [*holders, *(vars(m) for m in list(sys.modules.values()) if _user_module(m))]
+    for ns in spaces:
+        module = ns.get("__name__")
+        if not isinstance(module, str) or _namespace(module) is not ns:
+            continue
+        for name, value in list(ns.items()):
+            if isinstance(name, str) and not name.startswith("__") and (value is cls or type(value) is cls):
+                return module, name
+    return None
+
+
+def _type_of_digest(module: str, name: str, kind: str) -> str | None:
+    """The digest (*kind* ``surface`` or ``class``) of the class of global
+    *name* of *module*, or of that global, a class."""
+    from ..tracking.trace_items import class_surface_digest, remembered_class_digest
+
+    ns = _namespace(module)
+    if ns is None or name not in ns:
+        return None
+    held = ns[name]
+    cls = held if isinstance(held, type) else type(held)
+    return class_surface_digest(cls) if kind == "surface" else remembered_class_digest(cls)
+
+
+def _type_held_digest(module: str, name: str, qualname: str, attr: str) -> str | None:
+    """The digest of attribute *attr* of the class *qualname* in the MRO of
+    the class of global *name* of *module* (or of that global, a class)."""
+    ns = _namespace(module)
+    if ns is None or name not in ns:
+        return None
+    held = ns[name]
+    cls = held if isinstance(held, type) else type(held)
+    for klass in cls.__mro__:
+        if klass.__qualname__ == qualname and attr in vars(klass):
+            return _digest(vars(klass)[attr])
+    return None
+
+
 def _find(module: str, qualname: str) -> Any:
     """The object *qualname* names in *module* now, or None."""
     from ..tracking.trace_items import inspect_getattr
@@ -1693,6 +1735,14 @@ class _Build:
             for kind, target, _name in unit.lookups.values()
             if kind == "getattr" and issubclass(type(target), types.ModuleType)
         ]
+        # And the namespace of every function that ran: a decorated function
+        # it calls by a global name (``check_valid``, a stub
+        # ``boltons.funcutils.wraps`` built) holds the decorator's wrapper.
+        held = {id(h) for h in self.holders}
+        for _code, (g, _module) in unit.codes.items():
+            if id(g) not in held and _namespace(_module) is g:
+                held.add(id(g))
+                self.holders.append(g)
         for code, (g, _module) in list(unit.codes.items()):
             if code.co_flags & 0x1:
                 # Keyed or not: a module the key could not read before it
@@ -1911,7 +1961,41 @@ class _Build:
             # digest holds it, by code and defaults.
             self._class(cls, ran)
             return
+        if self._class_held(code):
+            return
         raise _Unnamed(f"it ran {module}.{qn}, which no name of {module} holds")
+
+    def _class_held(self, code: types.CodeType) -> bool:
+        """Is *code* that of a function held as an attribute of a class a
+        method ran on (``compute = staticmethod(stub)`` on an indicator
+        class ``type(...)`` built)? Then it is checked by that attribute,
+        found again through a module global holding an instance of the
+        class (``type_held``): such a class often has no name of its own.
+        True when an item was added."""
+        from ..tracking.trace_items import candidates
+
+        classes = list(dict.fromkeys(self.unit.receivers.values()))
+        for cls in classes:
+            for klass in cls.__mro__:
+                if not _user_class(klass):
+                    continue
+                for attr, value in list(vars(klass).items()):
+                    if not isinstance(attr, str) or attr.startswith("__") or isinstance(value, type):
+                        continue
+                    if not any(c.__code__ is code for c in candidates(value)):
+                        continue
+                    where = _instance_holder(cls, self.holders)
+                    if where is None:
+                        return False
+                    module, name = where
+                    self.add(
+                        ("type_held", module, name, klass.__qualname__, attr),
+                        _type_held_digest(module, name, klass.__qualname__, attr),
+                        f"{code.co_qualname} holds values that cannot be checked",
+                    )
+                    self.functions.extend(c for c in candidates(value) if c.__code__ is code)
+                    return True
+        return False
 
     def _class(self, cls: type, ran: set[str], *, receiver: bool = False) -> None:
         from ..tracking.trace_items import class_surface_digest, remembered_class_digest
@@ -1921,6 +2005,14 @@ class _Build:
             if qn.rsplit(".<locals>.", 1)[0] in ran:
                 return
             raise _Unnamed(f"it ran a method of {qn}, a class no name holds")
+        where = _instance_holder(cls, self.holders) if _find(cls.__module__, qn) is not cls else None
+        if where is not None:
+            # No name finds it (``type(...)`` built it, as xclim builds each
+            # indicator's class): found again through a module global that
+            # holds an instance of it.
+            kind = "surface" if receiver and self.narrow and class_surface_digest(cls) is not None else "class"
+            self.add(("type_of", *where, kind), _type_of_digest(*where, kind), "")
+            return
         if receiver and self.narrow:
             # The class a method ran on: its methods that ran have code
             # items of their own, so the rest go by name. A class that
@@ -2673,6 +2765,10 @@ def _item_now(
         ns = _namespace(item[1])
         now = None if ns is None else (_digest(ns[item[2]]) if item[2] in ns else _ABSENT)
         return now, (f"{item[1]}.{item[2]}" if kind == "held" else f"the global {item[1]}.{item[2]}")
+    if kind == "type_of":
+        return _type_of_digest(*item[1:4]), f"the class of {item[1]}.{item[2]}"
+    if kind == "type_held":
+        return _type_held_digest(*item[1:5]), f"{item[1]}.{item[2]}: {item[3]}.{item[4]}"
     if kind == "alias":
         return _alias_digest(_namespace(item[1]), item[1], item[2]), f"the type alias {item[1]}.{item[2]}"
     if kind in ("class", "surface"):
