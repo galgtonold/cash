@@ -90,7 +90,7 @@ if TYPE_CHECKING:
 __all__ = ["ENABLED", "VERIFY", "HitMemo", "HitMemoMismatch", "bump", "flush_all", "status"]
 
 _cw = _native.cwatch
-if _cw is not None and not hasattr(_cw, "fast_lookup"):
+if _cw is not None and not hasattr(_cw, "scoped_cells"):
     _cw = None
 
 
@@ -109,7 +109,20 @@ if ENABLED:
 
     _warning_state.watch(_cw)
 _world_epoch = _cw.world_epoch if ENABLED else None
+_core_epoch = _cw.core_epoch if ENABLED else None
 _cash_epoch = _cw.cash_epoch if ENABLED else None
+
+#: World-dict keys libraries set and put back around nearly every call:
+#: ``warnings.filters`` and the display hooks (each ``catch_warnings``,
+#: which pandas runs in ``DataFrame.to_string``), ``sys.stderr`` and
+#: ``sys.stdout`` (each ``contextlib.redirect_stderr``). Once any scanned
+#: code named one, each such write moved the world for every memo of the
+#: process. A change to one moves only the memos whose scan named it
+#: (`scoped_cells`, compared with the cells), and putting back what it
+#: replaced brings them back (see `scoped` in ``cwatch.c``).
+_SCOPED_NAMES = ("filters", "showwarning", "_showwarnmsg_impl", "stderr", "stdout")
+if ENABLED:
+    _cw.world_scope(_SCOPED_NAMES)
 
 
 class HitMemoMismatch(AssertionError):
@@ -1338,7 +1351,7 @@ def scan(
     s.finish()
     _watch_modules()
     s.commit()
-    cells = tuple(x for pair in s.cells for x in pair)
+    cells = tuple(x for pair in s.cells for x in pair) + _cw.scoped_cells(s.names)
     tags = tuple(x for pair in s.types.values() for x in pair)
     return cells, tags, s.callees, s.family()
 
@@ -1379,7 +1392,7 @@ def scan_trace(spec: CachedFunction, registry: Any, items: list) -> tuple[tuple,
     s.finish()
     _watch_modules()
     s.commit()
-    cells = tuple(x for pair in s.cells for x in pair)
+    cells = tuple(x for pair in s.cells for x in pair) + _cw.scoped_cells(s.names)
     tags = tuple(x for pair in s.types.values() for x in pair)
     return cells, tags, s.callees, s.family()
 
@@ -1892,6 +1905,11 @@ class _Hit:
     __slots__ = ("metadata", "deadline", "files", "lib", "ttl", "ram", "backend", "copy", "value", "md")
 
 
+def _scoped_part(cells: tuple) -> tuple:
+    """The ``(name, epoch)`` pairs of a scan's flat *cells* (`scoped_cells`)."""
+    return tuple(x for i in range(0, len(cells) - 1, 2) if type(cells[i]) is str for x in cells[i : i + 2])
+
+
 class HitMemo:
     """One cached function's fast hits (see the module doc)."""
 
@@ -1924,6 +1942,8 @@ class HitMemo:
         self.served_since_scan = 0
         #: What the key read of the classes met that no watcher sees.
         self.family: _Family | None = None
+        #: The ``(name, epoch)`` cells of the scoped names the scans met.
+        self.scoped: tuple = ()
         _MEMOS.add(self)
 
     # -- served ----------------------------------------------------------
@@ -2046,7 +2066,10 @@ class HitMemo:
         state = self.state
         if world_now != before[0] or _cash_epoch() != before[1] or state[S_ENTRIES] is not before[2]:
             return  # something moved while the key was built
-        if state[S_WORLD] != world_now:
+        # The memo is at the core epoch, and at the epochs of the scoped
+        # names its scans met (`_SCOPED_NAMES`), kept among its cells.
+        core_now = _core_epoch()
+        if state[S_WORLD] != core_now or (self.scoped and not _cw.world_holds(self.scoped, ())):
             if self.failed_epoch == world_now:
                 return
             self.slow_since_scan += 1
@@ -2064,6 +2087,7 @@ class HitMemo:
                 self.failed_epoch = world_now
                 return
             self.family = family
+            self.scoped = _scoped_part(cells)
             state[S_GUARD] = family.guard if family is not None else None
             for callee in callees:
                 if callee is not state:
@@ -2071,11 +2095,11 @@ class HitMemo:
             # What changed between the key build and the watch is not
             # proven: this call is not remembered, the next one is.
             state[S_CELLS], state[S_TYPES] = cells, tags
-            state[S_WORLD] = world_now
+            state[S_WORLD] = core_now
             self.traces = {}
             return
         trace = call.metadata.code_trace if call.metadata is not None else None
-        if trace and not self._watch_trace(trace, world_now):
+        if trace and not self._watch_trace(trace, core_now):
             return
         entry = self._entry(call, hit)
         if entry is None:
@@ -2147,6 +2171,7 @@ class HitMemo:
                 _DEPENDENTS.setdefault(callee, _weak.WeakSet()).add(self)
         state[S_CELLS] = state[S_CELLS] + cells
         state[S_TYPES] = state[S_TYPES] + tags
+        self.scoped += _scoped_part(cells)
         self.traces[key] = world_now
         return False
 
