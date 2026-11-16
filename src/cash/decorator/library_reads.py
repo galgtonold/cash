@@ -24,7 +24,8 @@ no entry of is a cache (``"a"`` and ``"w"`` below). What a module the body
 imports sets as it loads is read after the body. A name or attribute the
 code that ran binds before any of it read it, or binds only to constants (a
 latch set once, numba's ``_already_initialized = True``), is not kept: what
-the call set, a hit finds set the same. What is kept:
+the call set, a hit finds set the same. Nor is a value of `PROCESS_STATE`, a
+library's counter its source shows only names what it makes. What is kept:
 
 ``("v", module, "a.b", fingerprint)``
     plain data: an atom, an enum member, or lists, tuples, sets and dicts of
@@ -608,7 +609,7 @@ def class_reads(code: types.CodeType, cls: Any) -> dict[tuple[str, str], str]:
             fp = fingerprint(getattr(_resolve(where[0], tuple(where[1].split("."))), name))
         except Exception:  # noqa: BLE001 - not read again by its name: not kept
             fp = None
-        if fp is not None:
+        if fp is not None and (where[0], f"{where[1]}.{name}") not in PROCESS_STATE:
             found[(where[0], f"{where[1]}.{name}")] = fp
     return found
 
@@ -1048,6 +1049,8 @@ def _targets(
         # setting a program changes.
         return []
     dotted = ".".join(upto)
+    if (where, dotted) in PROCESS_STATE:
+        return []
     if kind == "c":
         return [("c", where, dotted, (where, upto), v, written, None)]
     ext = _exported(v)
@@ -1070,6 +1073,38 @@ def _targets(
 #: ``_<project>_editable``, and the ``editables`` package's (hatchling's,
 #: pdm-backend's) ``_editable_impl_<project>`` and its redirector.
 _HOOK_NAME = re.compile(r"^(__editable___\w+_finder|_\w+_editable|_editable_impl_\w+|editables(\..+)?)$")
+
+
+#: Values of a library's module or class that are state of the process, not
+#: settings: ``(module, dotted)`` as `_targets` and `class_reads` name them.
+#: Each only names or numbers what the library makes as it runs and never
+#: reaches a result. A call served from the cache skips the work that
+#: bumps it, so the next process holds another value, and a call checked on
+#: it there missed (stumpy: one ``njit`` served, the next one's compile read
+#: the counter lower). Curated from each library's source, never inferred:
+#: a counter a body bumps can as well be what its result comes of.
+PROCESS_STATE: frozenset[tuple[str, str]] = frozenset(
+    {
+        # numba/core/ir_utils.py: ``mk_unique_var(prefix)`` returns
+        # ``prefix + "." + str(_unique_var_count)`` and bumps it; the name
+        # of a generated IR variable, read nowhere else.
+        ("numba.core.ir_utils", "_unique_var_count"),
+        # numba/parfors/array_analysis.py, ``ArrayAnalysis.run``: saved as
+        # ``aa_count_save`` and bumped, read only by the
+        # ``config.DEBUG_ARRAY_OPT`` prints ("Starting ArrayAnalysis:").
+        ("numba.parfors.array_analysis", "ArrayAnalysis.aa_count"),
+        # numba/parfors/parfor.py, ``Parfor.__init__``: ``self.id =
+        # type(self).id_counter`` then bumped; ``Parfor.id`` keys the
+        # diagnostics (``fusion_info``, ``hoist_info``, the parallel report)
+        # and its ``repr``, nothing the lowered code computes with.
+        ("numba.parfors.parfor", "Parfor.id_counter"),
+        # numba/stencils/stencil.py, ``StencilFunc.__init__``: the same
+        # pattern; ``self.id`` names the typing class
+        # (``"StencilFuncTyping_" + str(self.id)``) and the generated
+        # function (``"__numba_stencil_%s_%s"``).
+        ("numba.stencils.stencil", "StencilFunc.id_counter"),
+    }
+)
 
 
 def _import_hook(module: str) -> bool:
@@ -1137,7 +1172,9 @@ def first_reads(
     ``((kind, module, dotted), (fingerprint, entries))`` each, *entries*
     the fingerprint of each entry of a small dict (`_entries`). The recorder takes them
     at a code's first start in a call, and `build` keeps the first one
-    taken for each place: the call's result came of the value it read, not
+    taken for each place, and for a dict, list or set also as
+    ``(kind, "obj", id, [keys])``, so the earliest read of one container
+    under any of its names wins: the call's result came of the value it read, not
     of what it (or an optimizer step filling ``cached_backends``) left
     there. *keys*: for a `KEYED_READERS` code, the key this start reads;
     without it, its dict is left to that start."""
@@ -1171,7 +1208,7 @@ def first_reads(
             targets = _targets(g, chain, user, paths)
         except Exception:  # noqa: BLE001 - not followed now: read after the body
             continue
-        for kind, where, dotted, _same, v, _written, _ext in targets:
+        for kind, where, dotted, same, v, _written, _ext in targets:
             if kind == "c" and _SPECIAL_VARS.get(v.name):
                 continue
             if _initializing(where):
@@ -1186,13 +1223,26 @@ def first_reads(
             except Exception:  # noqa: BLE001 - unreadable now: read after the body
                 continue
             out.append(((kind, where, dotted), (fp, entries)))
+            if same[0] == "obj":
+                # The container itself, whatever name reached it: the
+                # earliest read of it under any name is what the call read
+                # first (`build`).
+                out.append(((kind, *same), (fp, entries)))
     return out
 
 
 def _initializing(name: str) -> bool:
-    """Is module *name* still running its own top-level code?"""
-    spec = getattr(sys.modules.get(name), "__spec__", None)
-    return bool(getattr(spec, "_initializing", False))
+    """Is module *name*, or a package it is in, still running its own
+    top-level code? A package imported inside the body loads its
+    submodules and then fills their tables (numba's ``__init__`` adding to
+    a cache-prefix list of ``numba.core``'s): a submodule done loading is
+    still filled until its package is."""
+    while name:
+        spec = getattr(sys.modules.get(name), "__spec__", None)
+        if getattr(spec, "_initializing", False):
+            return True
+        name = name.rpartition(".")[0]
+    return False
 
 
 #: The most entries a dict the call fills is checked entry by entry with.
@@ -1261,7 +1311,15 @@ def build(
         except Exception:  # noqa: BLE001 - a chain that cannot be followed is not kept
             continue
         for kind, where, dotted, same, v, written, ext in targets:
-            held = first.get((kind, where, dotted))
+            # A container reached under two names (pandas' ``_global_config``
+            # as ``pandas._config.config``'s and ``pandas._config``'s) is
+            # taken as first read under either: xarray's ``infer_freq``
+            # reads it by one name before its ``option_context`` and by the
+            # other inside it, and which name a want came under first
+            # decided which value was kept.
+            held = first.get((kind, *same)) if same[0] == "obj" else None
+            if held is None:
+                held = first.get((kind, where, dotted))
             if written and (held is None or written in latches):
                 # Bound by the code that ran and never read before it was:
                 # what the call set, a hit finds set the same. Or bound
