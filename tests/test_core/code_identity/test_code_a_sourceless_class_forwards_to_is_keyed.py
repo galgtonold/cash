@@ -1,4 +1,4 @@
-"""The code a class with no source forwards to is keyed.
+"""The code a class with no source forwards to is keyed and traced.
 
 xclim builds each indicator class with ``type(...)`` and sets its
 ``compute`` to a function ``boltons.funcutils.wraps`` compiled: a stub with
@@ -83,3 +83,41 @@ def test_an_edit_behind_the_stub_is_not_served(tmp_path, trace):
     assert run(7, 2) == (17, 0)
     # The function the stub's ``__wrapped__`` names.
     assert run(7, 3) == (22, 0)
+
+
+BY_NAME = textwrap.dedent("""
+    import cash
+    import tools
+
+    c = cash.Cash(cache_dir=".cash")
+
+
+    @c.cache
+    def run(name, x):
+        # Picks its code by name: served only on a trace of what it ran.
+        return getattr(tools, name)(x)
+
+
+    info = run.cache_info
+    print(run("TOOL", 5), info()["hits"], len(info()["warnings"]))
+""")
+
+
+def test_a_call_that_needs_its_trace_finds_the_stub_through_the_class(tmp_path):
+    # The wrapper ran from no module name: it is held by the stub a class
+    # attribute holds, and the class by no name but the instance's type.
+    # The trace finds it there, so the call is stored and served on it, and
+    # an edit behind the stub is still seen.
+    (tmp_path / "tools.py").write_text(TOOLS, encoding="utf-8")
+    (tmp_path / "main.py").write_text(BY_NAME, encoding="utf-8")
+
+    def run(offset, factor):
+        (tmp_path / "ops.py").write_text(OPS.format(offset=offset, factor=factor), encoding="utf-8")
+        proc = run_python("main.py", cwd=tmp_path)
+        return tuple(map(int, proc.stdout.split()))
+
+    assert run(1, 2) == (11, 0, 0)
+    assert run(1, 2) == (11, 1, 0)
+    assert run(7, 2) == (17, 0, 0)
+    assert run(7, 3) == (22, 0, 0)
+    assert run(7, 3) == (22, 1, 0)

@@ -454,6 +454,15 @@ class _Digester:
             if isinstance(state, dict):
                 h.update(b"o")
                 self._type(t)
+                if "__doc__" in state:
+                    # A docstring given at run time: an input only where
+                    # code reads it (`generated_docs`), as in a key.
+                    from ..generated_docs import keyed_state_doc
+
+                    keep, form = keyed_state_doc(v, state["__doc__"])
+                    state = {k: x for k, x in state.items() if k != "__doc__"}
+                    if keep:
+                        state["__doc__"] = form
                 self.feed(state)
                 return
         h.update(b"p" + f"{t.__module__}.{t.__qualname__}".encode())
@@ -492,6 +501,11 @@ class _Digester:
             if got is None:
                 raise _Opaque
             h.update(b"c" + got.encode())
+        for name, forward in private_forwards(fn):
+            # What an ``exec``-built stub forwards to: the stub's own code is
+            # the same for every function its decorator wraps.
+            h.update(b"g" + name.encode())
+            self.feed(forward)
 
     def _alias(self, alias: Any) -> None:
         """A ``type X = ...`` alias by what defines it, read or not: the
@@ -937,6 +951,10 @@ def candidates(obj: Any) -> Iterable[types.FunctionType]:
             wrapped = o.__dict__.get("__wrapped__") if o.__dict__ else None
             if wrapped is not None:
                 stack.append(wrapped)
+            # A stub ``exec`` built (``boltons.funcutils.wraps``) stands for
+            # what it calls through its private globals too: its
+            # ``__wrapped__`` skips the decorator's own wrapper.
+            stack.extend(f for _, f in private_forwards(o))
         elif issubclass(type(o), (types.MethodType, staticmethod, classmethod)):
             stack.append(o.__func__)
         elif isinstance(o, property):
@@ -956,6 +974,26 @@ def candidates(obj: Any) -> Iterable[types.FunctionType]:
                 stack.append(jitted)
             else:
                 stack.extend(_held_functions(o))
+
+
+def private_forwards(fn: types.FunctionType) -> list[tuple[str, types.FunctionType]]:
+    """``(name, function)`` for each function *fn* calls through globals
+    of its own: a namespace ``exec`` built for it alone, not a module's.
+    A signature-preserving decorator (``boltons.funcutils.wraps``,
+    ``makefun``) compiles a stub that forwards to the decorator's wrapper
+    held there (``_call``). Empty for a function of a module."""
+    g = fn.__globals__
+    if g.get("__file__"):
+        return []
+    module = sys.modules.get(g.get("__name__") or "")
+    if getattr(module, "__dict__", None) is g:
+        return []
+    out = []
+    for name in sorted(set(fn.__code__.co_names)):
+        held = g.get(name)
+        if type(held) is types.FunctionType and held is not fn:
+            out.append((name, held))
+    return out
 
 
 #: Where a descriptor or wrapper of a library's keeps the function it stands
