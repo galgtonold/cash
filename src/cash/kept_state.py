@@ -1579,7 +1579,7 @@ class _KeepDict(dict):
             if _drops_dict(t):
                 reducer = _reducer_with_dict(self._protocol, self._unshared, self._keyed)
             else:
-                reducer = operator.methodcaller("__reduce_ex__", self._protocol)
+                reducer = _plain_reducer(t, self._protocol)
             if cached_properties(t) and (self._keyed or _leaves_views_out(t)):
                 which = None if self._keyed else stored_views
                 reducer = functools.partial(_reduce_without_views, reducer=reducer, which=which)
@@ -1611,10 +1611,60 @@ class _KeepDict(dict):
         if _drops_dict(t):
             reducer = _reducer_with_dict(self._protocol, self._unshared)
         else:
-            reducer = operator.methodcaller("__reduce_ex__", self._protocol)
+            reducer = _plain_reducer(t, self._protocol)
         if cached_properties(t) and _leaves_views_out(t):
             reducer = functools.partial(_reduce_without_views, reducer=reducer, which=stored_views)
         return reducer
+
+
+def _plain_reducer(t: type, protocol: int) -> Any:
+    """The reducer for *t* that its own ``__reduce_ex__`` is: the one
+    pickle calls, but for astropy's uncertainties (`_quiet_uncertainty`)."""
+    if protocol >= 2 and _quiet_uncertainty(t):
+        return functools.partial(_reduce_uncertainty_quietly, protocol=protocol)
+    return operator.methodcaller("__reduce_ex__", protocol)
+
+
+def _quiet_uncertainty(t: type) -> bool:
+    """Is *t* astropy's ``NDUncertainty`` or a subclass that pickles as it
+    does (its ``__getstate__``, no reduce or new-arguments of its own)?
+
+    That ``__getstate__`` reads the ``parent_nddata`` property, which logs
+    an INFO line ("the associated NDData object was deleted ...") when the
+    weak reference to its parent is dead. specutils' arithmetic leaves such
+    uncertainties behind; every key, mutation check and store pickle of one
+    printed that line, where the user's code printed nothing."""
+    base = next(
+        (
+            klass
+            for klass in t.__mro__
+            if klass.__qualname__ == "NDUncertainty" and klass.__module__ == "astropy.nddata.nduncertainty"
+        ),
+        None,
+    )
+    if base is None or getattr(t, "__getstate__", None) is not base.__dict__.get("__getstate__"):
+        return False
+    if issubclass(t, (list, dict)) or hasattr(t, "__getnewargs_ex__") or hasattr(t, "__getnewargs__"):
+        return False
+    return t.__reduce_ex__ is object.__reduce_ex__ and t.__reduce__ is object.__reduce__
+
+
+def _reduce_uncertainty_quietly(obj: Any, protocol: int) -> Any:
+    """``obj.__reduce_ex__(protocol)`` (protocol 2 or more) for an astropy
+    uncertainty (`_quiet_uncertainty`), with the state its ``__getstate__``
+    gives -- ``(array, unit, parent or None)`` -- read off the attributes
+    that property reads, not through it, so nothing is logged. A live
+    parent goes through ``__getstate__`` itself, which logs nothing then."""
+    try:
+        parent = obj.__dict__["_parent_nddata"]
+    except (AttributeError, KeyError):
+        parent = None
+    if isinstance(parent, weakref.ref):
+        if parent() is not None:
+            return obj.__reduce_ex__(protocol)
+        parent = None
+    state = (obj._array, obj._unit, parent)
+    return copyreg.__newobj__, (type(obj),), state, None, None  # type: ignore[attr-defined]
 
 
 def dead_weak_proxy() -> None:
