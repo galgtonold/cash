@@ -481,6 +481,11 @@ class _Scan:
         #: The state memo's scan: data no watcher sees (a list, a numpy
         #: array) is read again on every reuse instead (`ContentProbe`).
         self.content = False
+        #: The state memo's scan: the names of the properties of a library
+        #: metaclass met that answer from more than the class holds
+        #: (`_metaclass_ok`); the scan fails if the scanned code reads one
+        #: (`finish`).
+        self.meta_props: set[str] = set()
         self.count = 0
 
     def _first(self, key: Any, obj: Any) -> bool:
@@ -1072,7 +1077,13 @@ class _Scan:
         ``type`` does: no ``__getattr__`` or ``__getattribute__`` of its
         own, and no property but one returning what the class holds
         (`_plain_getter`); any other could answer a read from state no
-        watcher sees."""
+        watcher sees. Except a library metaclass's property that is not a
+        dunder (bokeh's ``MetaHasProps.model_class_reverse_map``, answering
+        from a module global): a key reads a library class's attributes
+        from ``vars()`` along its MRO (`_library_class_attr_parts`), never
+        through its metaclass, so such a property only runs when the
+        scanned code reads it by name; its name is noted and the scan
+        fails then (`finish`)."""
         meta = type(cls)
         if meta is enum.EnumMeta:
             return True
@@ -1094,10 +1105,13 @@ class _Scan:
                     # from the class, which is watched: its setter writes
                     # the class, a type event. The attributes it reads are
                     # looked into as named ones (`finish`).
-                    read = _plain_getter(attr) if not _is_dunder(name) else None
-                    if read is None:
+                    if _is_dunder(name):
                         return False
-                    self.names.update(read)
+                    read = _plain_getter(attr)
+                    if read is None:
+                        self.meta_props.add(name)
+                    else:
+                        self.names.update(read)
             if id(k) not in self.types:
                 tag = _cw.world_watch_type(k)
                 if tag is None:
@@ -1107,9 +1121,18 @@ class _Scan:
 
     def finish(self) -> None:
         """Look into the attributes of the library classes met that the
-        scanned code names, until no new name is met."""
+        scanned code names, until no new name is met. Then fail if the
+        scanned code names a library metaclass's property that answers
+        from more than its class holds (`_metaclass_ok`)."""
         from .key_values import plain_data_kind
 
+        self._library_class_attrs(plain_data_kind)
+        read = self.meta_props & self.names
+        if read:
+            raise Ineligible(f"a metaclass property read by name ({min(read)})")
+
+    def _library_class_attrs(self, plain_data_kind: Any) -> None:
+        """`finish`'s look into the library classes' named attributes."""
         done: set[tuple[int, str]] = set()
         while True:
             pending = []
