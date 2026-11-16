@@ -1276,9 +1276,16 @@ def fresh_flow_nodes(func_def: ast.AST, calls: frozenset[int]) -> frozenset[int]
         if isinstance(node, (ast.Global, ast.Nonlocal)):
             excluded.update(node.names)
     flow = _FreshFlow(frozenset(excluded), _escaped_names(func_def))
+    # A function's own ``**kwargs`` is a new dict on every call: CPython
+    # builds it afresh even for ``f(**d)``, so a write to the dict itself
+    # (``kwargs.update(...)``, ``kwargs[k] = v``, ``kwargs.pop(k)``) touches
+    # nothing the caller holds. Shallow only: its values are the caller's.
+    arguments = getattr(func_def, "args", None)
+    star = getattr(arguments, "kwarg", None)
+    entry = {star.arg} if star is not None and star.arg not in excluded else set()
     token = _FRESH_CALLS.set(calls)
     try:
-        flow.block(getattr(func_def, "body", []), set())
+        flow.block(getattr(func_def, "body", []), entry)
     finally:
         _FRESH_CALLS.reset(token)
     return frozenset(k for k, v in flow.marks.items() if v)

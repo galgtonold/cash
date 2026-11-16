@@ -868,6 +868,39 @@ class KeyBuilder:
             HELD_BY_NAME.reset(token)
         return built._replace(narrowed=True) if narrow else built
 
+    def full_key_folded(self, spec: CachedFunction, args: tuple, kwargs: dict) -> FoldedCode | None:
+        """The code a key of this call built with the classes of module
+        data keyed by all their code (`HELD_BY_NAME` off) folds, or None
+        when it cannot be built.
+
+        What the strict trace of a narrowed call accepts
+        (`CallRunner._trace_of`): narrowing keys a held class by its
+        surface and leaves its methods to the trace, which checks each
+        one that ran with its own item; the strict check is for code
+        that no key of the call covers at all, so it judges against what
+        the key would fold unnarrowed, as it did before narrowing. One
+        build per miss of such a call. No watch, ledger or warnings of its
+        own: the call's key build gave them.
+        """
+        folded = FoldedCode()
+        tokens = (
+            (FOLDED_CODE, FOLDED_CODE.set(folded)),
+            (STATE_LEDGER, STATE_LEDGER.set({})),
+            (CAPTURE_WATCH, CAPTURE_WATCH.set({})),
+            (CARRIER_LOOKUPS, CARRIER_LOOKUPS.set([])),
+            (_EXPLAINING, _EXPLAINING.set(True)),
+            (HELD_BY_NAME, HELD_BY_NAME.set(False)),
+        )
+        try:
+            with shared_nodes():
+                self._build(spec, args, kwargs, frozenset())
+        except Exception:  # noqa: BLE001 - no full key: the strict trace judges against the call's own
+            return None
+        finally:
+            for var, token in reversed(tokens):
+                var.reset(token)
+        return folded
+
     def _build(self, spec: CachedFunction, args: tuple, kwargs: dict, split: frozenset[int]) -> BuiltKey:
         func, func_name = spec.func, spec.name
         iterators = iterator_arguments(spec.signature, args, kwargs) if args or kwargs else []
@@ -1672,6 +1705,11 @@ class CallRunner:
                 handed.ran_body = False
                 self._hand_back_entry(call, hit, call.metadata, getattr(call.metadata, "storage", None))
         else:
+            if call.needs_trace and call.narrowed and copies is None:
+                # Before the body changes the arguments; not for an
+                # iterator argument, whose key copy is read (that call's
+                # strict trace judges against its narrowed key alone).
+                call.full_folded = self._keys.full_key_folded(spec, args, kwargs)
             # Before the body runs: the mutation check compares against it.
             with call_polars(call.polars_args):
                 if copies is not None:
@@ -2734,6 +2772,12 @@ class CallRunner:
         # of an argument's class) is in the key as the function's own code
         # is: the strict check judges only code the key never saw.
         accepted = code_trace.folded_codes(call.folded_code) if call.needs_trace else None
+        if call.needs_trace and call.full_folded is not None:
+            # A narrowed key holds a held class by its surface, and the
+            # trace checks each of its methods that ran with its own item:
+            # the strict check judges only code no key of the call covers,
+            # as for a key built unnarrowed (`KeyBuilder.full_key_folded`).
+            accepted = (accepted or set()) | (code_trace.folded_codes(call.full_folded) or set())
         owners = frozenset(
             id(entry[1].obj)
             for entry in (getattr(run, "args_before", None) or {}).values()

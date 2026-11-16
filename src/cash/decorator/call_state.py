@@ -119,6 +119,7 @@ class Call:
         "trace_unit",
         "ran_unit",
         "folded_code",
+        "full_folded",
         "unread",
         "trace_for_unread",
         "narrowed",
@@ -175,6 +176,10 @@ class Call:
         self.ran_unit: Any = None
         #: The key's `BuiltKey.folded_code`.
         self.folded_code: Any = None
+        #: For a call that needs its trace and whose key was narrowed: the
+        #: code its key would fold unnarrowed (`KeyBuilder.full_key_folded`),
+        #: which its strict trace accepts.
+        self.full_folded: Any = None
         #: The key's `BuiltKey.unread`.
         self.unread: frozenset = frozenset()
         self.trace_for_unread = False
