@@ -253,6 +253,45 @@ def test_an_egg_info_file_on_the_path_still_lets_the_map_be_saved(site, monkeypa
     assert len(scans) == 1
 
 
+def _backport_finder():
+    """What importing the ``importlib_metadata`` backport appends to
+    ``sys.meta_path``: a finder of its own searching ``sys.path`` again,
+    whose distributions are its own ``PathDistribution``."""
+    import importlib.machinery
+    import importlib.metadata
+
+    class PathDistribution(importlib.metadata.PathDistribution):
+        pass
+
+    class MetadataPathFinder:
+        def find_distributions(self, context=importlib.metadata.DistributionFinder.Context()):
+            for dist in importlib.machinery.PathFinder.find_distributions(context):
+                yield PathDistribution(dist._path)
+
+        def find_spec(self, *args, **kwargs):
+            return None
+
+    for kind in (PathDistribution, MetadataPathFinder):
+        kind.__module__ = "importlib_metadata"
+        kind.__qualname__ = kind.__name__
+    return MetadataPathFinder()
+
+
+def test_the_importlib_metadata_backport_on_the_meta_path_still_lets_the_map_be_saved(site, monkeypatch):
+    """Python 3.10 environments import the backport (a dependency of many
+    packages); its finder names every distribution again. The map is still
+    saved, names each distribution once, and a new process reads it."""
+    _fill(site)
+    monkeypatch.setattr(sys, "meta_path", [*sys.meta_path, _backport_finder()])
+    scans = _scans(monkeypatch)
+    first = _lookups()
+    assert first == {"realpkg": ["fake_real"], "toppkg": ["fake_top"], "ghostpkg": [], "newpkg": []}
+    assert os.path.exists(library_versions._map_path())
+    _new_process()
+    assert _lookups() == first
+    assert len(scans) == 1
+
+
 def test_a_pth_file_changed_alone_builds_the_map_again(site, monkeypatch):
     _fill(site)
     _lookups()
