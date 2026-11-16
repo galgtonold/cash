@@ -147,15 +147,24 @@ def _settle(cached, fn, path, *args):
     path, until it is served from the memo, and check that it is. Another
     test's leftovers in the process (xdist) can move the world now and
     then, and the memo then waits before it looks again
-    (`HitMemo.RESCAN_AFTER_S`): it is given a few of those."""
+    (`HitMemo.RESCAN_AFTER_S`): it is given a few of those.
+
+    Plain *fn* runs once, before the wait: its body sets and puts back
+    ``sys.stderr`` or ``warnings.filters``, and once any code cash scanned in
+    the process names that key, each such write moves the world and no
+    memo is served until it is scanned again. Run between the cached
+    calls, it kept the memo from ever arming."""
     for _ in range(3):
         _same(cached, fn, *args)
     if path != "fast":
         return
+    # As after a test whose cached code named them: the worst case, always.
+    hit_memo._cw.world_add_names(("stderr", "filters"))
+    want = _plain(fn, *args)
     deadline = time.monotonic() + 5 * hit_memo.HitMemo.RESCAN_AFTER_S + 1.0
     while True:
         before = hit_memo.status()["fast_hits"]
-        _same(cached, fn, *args)
+        assert _plain(cached, *args) == want
         if hit_memo.status()["fast_hits"] > before:
             return
         assert time.monotonic() < deadline, "not served from the fast path: the test proves nothing"

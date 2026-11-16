@@ -113,15 +113,24 @@ def plugin(tmp_path, monkeypatch):
 
 def _settle(cached, plain, path, *args):
     """Call until served without running the body; on the fast path, until
-    served from the memo, for one it serves (`FAST`)."""
+    served from the memo, for one it serves (`FAST`).
+
+    Plain *plain* runs once, before the wait: pandas puts
+    ``warnings.filters`` back around its work (``catch_warnings``), and once
+    any code cash scanned in the process names ``filters``, each such write
+    moves the world and no memo is served until it is scanned again. Run
+    between the cached calls, it kept the memo from ever arming."""
     for _ in range(3):
         assert cached(*args) == plain(*args)
     if path != "fast" or plain not in FAST:
         return
+    # As after a test whose cached code named it: the worst case, always.
+    hit_memo._cw.world_add_names(("filters",))
+    want = plain(*args)
     deadline = time.monotonic() + 5 * hit_memo.HitMemo.RESCAN_AFTER_S + 1.0
     while True:
         before = hit_memo.status()["fast_hits"]
-        assert cached(*args) == plain(*args)
+        assert cached(*args) == want
         if hit_memo.status()["fast_hits"] > before:
             return
         assert time.monotonic() < deadline, "not served from the fast path: the test proves nothing"
