@@ -16,6 +16,8 @@ and a key set to the object it already holds is no change at all.
 from __future__ import annotations
 
 import collections
+import io
+import sys
 import warnings
 
 import pytest
@@ -145,15 +147,56 @@ def test_the_warning_hooks_move_the_world_only_when_swapped_for_something_new():
 
     cw = _native.cwatch
     Cash(backend="memory", register_magic=False).cache(clear_sky)(TIMES, _weather(), 0.5, 0.0)  # watches modules
-    epoch = cw.world_epoch()
+    # The epoch the memos compare. ``warnings.filters``, which
+    # ``catch_warnings`` sets and puts back, moves the total world epoch
+    # once any code scanned earlier in the process named it, and only
+    # its own epoch besides (`hit_memo._SCOPED_NAMES`).
+    epoch = cw.core_epoch()
     with warnings.catch_warnings(record=True):
         warnings.warn("recorded", UserWarning, stacklevel=1)
-    assert cw.world_epoch() == epoch
+    assert cw.core_epoch() == epoch
     hook = warnings.formatwarning
     warnings.formatwarning = hook  # the object it holds: no change
-    assert cw.world_epoch() == epoch
+    assert cw.core_epoch() == epoch
     try:
         warnings.formatwarning = lambda *a, **k: ""  # a new callable under a name a key may call
-        assert cw.world_epoch() != epoch
+        assert cw.core_epoch() != epoch
     finally:
         warnings.formatwarning = hook
+
+
+def reads_the_filters(x):
+    return x + len(warnings.filters)
+
+
+def writes_to_stderr(x):
+    return x + (type(sys.stderr) is io.StringIO)
+
+
+@needs_memo
+@pytest.mark.parametrize(
+    ("func", "module", "name", "new"),
+    [
+        (reads_the_filters, warnings, "filters", lambda: [*warnings.filters, ("ignore", None, Warning, None, 0)]),
+        (writes_to_stderr, sys, "stderr", io.StringIO),
+    ],
+    ids=["warnings.filters", "sys.stderr"],
+)
+def test_a_name_set_and_kept_moves_the_segment_that_read_it(c, monkeypatch, func, module, name, new):
+    """``warnings.filters`` and ``sys.stderr`` are scoped (`hit_memo._SCOPED_NAMES`):
+    set and put back, they leave the core epoch the state memo compares
+    alone. Rebound for good, the segment that read the name is not reused
+    (the scan keeps the name's epoch among its cells, `state_memo._holds`),
+    and the call answers for what the name holds now."""
+    monkeypatch.setattr(state_memo, "VERIFY", True)
+    f = c.cache(func)
+    for x in range(3):
+        f(x)
+    before = state_memo.STATS["reused"]
+    held = {f(x) - x for x in range(3, 6)}  # what the body sees, inside a call
+    assert len(held) == 1
+    assert state_memo.STATS["reused"] > before, "the segment is not being reused: the test proves nothing"
+    monkeypatch.setattr(module, name, new())
+    before = dict(state_memo.STATS)
+    assert f(6) - 6 == f(7) - 7 == held.pop() + 1, "served for what the name held before"
+    assert state_memo.STATS["scans"] > before["scans"], "the segment that read the name was reused"

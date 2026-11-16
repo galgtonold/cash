@@ -30,6 +30,7 @@ not a view of it was filled meanwhile.
 
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import itertools
 import pickle
@@ -77,32 +78,35 @@ class HashBudgetExceeded(Exception):
     """A hash taken under `value_hash.budgeted_hash` ran past its budget."""
 
 
-#: What a digest past its deadline asks on this thread for a later one
-#: (`running_on`).
-_overrun = threading.local()
+#: What a digest past its deadline asks for a later one (`running_on`). A
+#: context variable, not a thread's own: a pickle `kept_state` runs on a
+#: thread with a large stack (`kept_state._on_big_stack`, Python 3.10 on
+#: Windows) runs in a copy of the caller's context, and asks it there too.
+_overrun: contextvars.ContextVar[Callable[[float, int], float | None] | None] = contextvars.ContextVar(
+    "cash_overrun", default=None
+)
 
 
 @contextmanager
 def running_on(ask: Callable[[float, int], float | None]) -> Iterator[None]:
-    """While this runs, a digest on this thread that passes its deadline
+    """While this runs, a digest in this context that passes its deadline
     asks *ask*, with that deadline and the bytes it has pickled so far, for
     a later deadline to run on to, and stops (`HashBudgetExceeded`) when it
     gives none (`value_hash.budgeted_hash`, which knows what the value came
     to before and how long the check may take, and gives none for a
     deadline that is not its own)."""
-    outer = getattr(_overrun, "ask", None)
-    _overrun.ask = ask
+    token = _overrun.set(ask)
     try:
         yield
     finally:
-        _overrun.ask = outer
+        _overrun.reset(token)
 
 
 def run_on(deadline: float, done: int) -> float:
     """The later deadline a digest past its own, *deadline*, runs on to,
     *done* bytes into its pickle (`running_on`); `HashBudgetExceeded` when
     there is none."""
-    ask = getattr(_overrun, "ask", None)
+    ask = _overrun.get()
     later = ask(deadline, done) if ask is not None else None
     if later is None or perf_counter() > later:
         raise HashBudgetExceeded

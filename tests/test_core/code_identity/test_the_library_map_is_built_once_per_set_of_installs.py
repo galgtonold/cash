@@ -257,7 +257,6 @@ def _backport_finder():
     """What importing the ``importlib_metadata`` backport appends to
     ``sys.meta_path``: a finder of its own searching ``sys.path`` again,
     whose distributions are its own ``PathDistribution``."""
-    import importlib.machinery
     import importlib.metadata
 
     class PathDistribution(importlib.metadata.PathDistribution):
@@ -265,7 +264,7 @@ def _backport_finder():
 
     class MetadataPathFinder:
         def find_distributions(self, context=importlib.metadata.DistributionFinder.Context()):
-            for dist in importlib.machinery.PathFinder.find_distributions(context):
+            for dist in importlib.metadata.MetadataPathFinder.find_distributions(context):
                 yield PathDistribution(dist._path)
 
         def find_spec(self, *args, **kwargs):
@@ -286,6 +285,27 @@ def test_the_importlib_metadata_backport_on_the_meta_path_still_lets_the_map_be_
     scans = _scans(monkeypatch)
     first = _lookups()
     assert first == {"realpkg": ["fake_real"], "toppkg": ["fake_top"], "ghostpkg": [], "newpkg": []}
+    assert os.path.exists(library_versions._map_path())
+    _new_process()
+    assert _lookups() == first
+    assert len(scans) == 1
+
+
+def test_the_backport_taking_over_from_the_standard_finder_still_names_every_distribution(site, monkeypatch):
+    """Importing the real backport also deletes ``PathFinder.find_distributions``
+    (``importlib_metadata._compat.disable_stdlib_finder``): its distributions
+    are then the only ones. The map names them all, a cached function
+    reaching numpy is still versioned, and the map is saved."""
+    import importlib.machinery
+
+    _fill(site)
+    finder = _backport_finder()
+    monkeypatch.delattr(importlib.machinery.PathFinder, "find_distributions", raising=False)
+    monkeypatch.setattr(sys, "meta_path", [*sys.meta_path, finder])
+    scans = _scans(monkeypatch)
+    first = _lookups()
+    assert first == {"realpkg": ["fake_real"], "toppkg": ["fake_top"], "ghostpkg": [], "newpkg": []}
+    assert any(name == "numpy" for name, _ in library_versions.library_versions([_reaches_numpy], None))
     assert os.path.exists(library_versions._map_path())
     _new_process()
     assert _lookups() == first

@@ -112,9 +112,13 @@ def _packages_distributions() -> tuple[dict[str, list[tuple[str, Any]]], dict[st
     """
     by_top: dict[str, list[tuple[str, Any]]] = {}
     saved: dict[str, list] | None = {}
+    folders: set[str] = set()
     for dist in importlib_metadata.distributions():
-        if _backport_distribution(dist):
-            continue  # found again from the same folder by `PathFinder`
+        path = getattr(dist, "_path", None)
+        if isinstance(path, os.PathLike):
+            if _backport_distribution(dist) and os.fspath(path) in folders:
+                continue  # found already from the same folder by another finder
+            folders.add(os.fspath(path))
         name = dist.metadata["Name"]
         if not name:
             continue
@@ -149,7 +153,9 @@ def _metadata_folder(dist: Any) -> str | None:
     """The ``.dist-info`` folder *dist* is read from, when it is one on disk:
     what `_on_disk` reads it from again in a process given the saved map."""
     path = getattr(dist, "_path", None)
-    if type(dist) is not importlib_metadata.PathDistribution or not isinstance(path, os.PathLike):
+    if not isinstance(path, os.PathLike):
+        return None
+    if type(dist) is not importlib_metadata.PathDistribution and not _backport_distribution(dist):
         return None
     folder = os.fspath(path)
     return folder if os.path.isdir(folder) else None
@@ -234,7 +240,11 @@ def _backport_path_finder(finder: Any) -> bool:
     Importing the backport (a dependency of many packages on Python 3.10)
     appends it to ``sys.meta_path``. It searches ``sys.path`` as
     ``PathFinder`` does, so it names the same distributions again: the map
-    leaves them out (`_packages_distributions`) and may be saved."""
+    leaves out each one whose folder was named already
+    (`_packages_distributions`) and may be saved. The real backport also
+    deletes ``PathFinder.find_distributions``, and then its distributions are
+    the only ones from ``sys.path``: the map keeps them, and saves their
+    folders as it does ``PathFinder``'s."""
     kind = type(finder)
     return kind.__module__ == "importlib_metadata" and kind.__qualname__ == "MetadataPathFinder"
 

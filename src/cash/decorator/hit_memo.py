@@ -528,7 +528,9 @@ class _Scan:
                 self.module(v, names)
             return
         if self.shallow and (t is types.FunctionType or (isinstance(v, type) and not self._folds_class(v))):
-            if self._first(("named", id(v)), v):
+            # Once per way it is met: read as a module's attribute it is
+            # also followed one level (`_named`), whichever way came first.
+            if self._first(("named", id(v), self.in_module), v):
                 self._named(v, t, names)
             return
         if not self._first(id(v), v):
@@ -874,7 +876,8 @@ class _Scan:
         if type(md) is not dict:
             raise Ineligible("a module without a plain namespace")
         self.watch(md, False)
-        library = self.content and self._library_module(mod)
+        # Both scans: a helper's globals fold is part of the key too.
+        library = self._library_module(mod)
         in_module, self.in_module = self.in_module, self.shallow
         try:
             for name in names:
@@ -916,8 +919,15 @@ class _Scan:
         names = frozenset(own)
         g = f.__globals__
         self.watch(g, False)
+        # A library's function is keyed by its name (`code_ref_part`): an
+        # object of the library's its code names is no data a key folds, as
+        # read through its module (`module`). Python 3.14's ``warnings``
+        # reads its context from a ``ContextVar`` and a settings object.
+        library = not own_code_is_user(f, self.root_module)
         for name in names:
             if name in g:
+                if library and _unread_object(g[name]):
+                    continue
                 self.value(g[name], names)
 
     def _named(self, v: Any, t: type, names: frozenset) -> None:
