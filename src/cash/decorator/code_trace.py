@@ -595,8 +595,13 @@ def _recorder_class() -> type:
         ) -> None:
             """*code* starts in *units* for the first time: the library
             settings it reads, as they are before it runs, for those that
-            have not read them yet (`library_reads.first_reads`)."""
-            if self._in_callback:
+            have not read them yet (`library_reads.first_reads`). Taken on
+            the thread a call runs on only: what another thread runs
+            meanwhile (a test's in-process S3 server counting requests,
+            moto's ``request_count += 1``) is no read of the call's."""
+            me = threading.get_ident()
+            units = [unit for unit in units if getattr(unit, "thread", me) == me]
+            if not units or self._in_callback:
                 return
             self._in_callback = True
             try:
