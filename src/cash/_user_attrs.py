@@ -483,7 +483,35 @@ def held_attribute(obj: Any, name: str) -> Any:
     try:
         state = object.__getattribute__(obj, "__dict__")
     except (AttributeError, TypeError):
-        return NOT_HELD
+        state = None
     if type(state) is dict and name in state:
         return state[name]
+    if found is NOT_HELD:
+        return _pydantic_private(obj, cls, name)
     return NOT_HELD
+
+
+def _pydantic_private(obj: Any, cls: type, name: str) -> Any:
+    """A pydantic model's private attribute (``PrivateAttr``), read where
+    pydantic's own ``BaseModel.__getattr__`` reads it: the model's
+    ``__pydantic_private__`` dict, for a name in its class's
+    ``__private_attributes__`` whose default is no descriptor. Only for a
+    class whose ``__getattr__`` is pydantic's own, so the read runs no
+    other code; `NOT_HELD` for anything else."""
+    pydantic = sys.modules.get("pydantic")
+    base = getattr(pydantic, "BaseModel", None) if pydantic is not None else None
+    if base is None or not isinstance(obj, base):
+        return NOT_HELD
+    getattr_ = next((k.__dict__["__getattr__"] for k in cls.__mro__ if "__getattr__" in k.__dict__), None)
+    if getattr_ is None or getattr_ is not base.__dict__.get("__getattr__"):
+        return NOT_HELD
+    try:
+        declared = object.__getattribute__(obj, "__private_attributes__")
+        private = object.__getattribute__(obj, "__pydantic_private__")
+    except AttributeError:
+        return NOT_HELD
+    if type(declared) is not dict or name not in declared or hasattr(declared[name], "__get__"):
+        return NOT_HELD
+    if type(private) is not dict or name not in private:
+        return NOT_HELD
+    return private[name]

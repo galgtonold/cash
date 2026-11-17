@@ -108,7 +108,9 @@ def _wrapped(obj: Any) -> Any:
 
 def _descend(live: Any, target: Any) -> str | None:
     """The steps from *live* to *target*: ``f`` for ``__func__`` (a method
-    read off its class), ``w`` for ``__wrapped__``; None when none lead."""
+    read off its class), ``p`` for a property's getter or a
+    ``cached_property``'s function (read off its class, the descriptor
+    itself), ``w`` for ``__wrapped__``; None when none lead."""
     steps = ""
     for _ in range(_MAX_STEPS):
         if live is target:
@@ -121,10 +123,26 @@ def _descend(live: Any, target: Any) -> str | None:
         if type(live) is types.MethodType:
             live, steps = live.__func__, steps + "f"
             continue
+        getter = _getter(live)
+        if getter is not None:
+            live, steps = getter, steps + "p"
+            continue
         inner = _wrapped(live)
         if inner is None:
             return None
         live, steps = inner, steps + "w"
+    return None
+
+
+def _getter(live: Any) -> Any:
+    """The function a property (its getter) or a ``cached_property`` runs,
+    or None: a factory's getter (``scanpy``'s ``preset_property``) has no
+    name of its own, and the class attribute holding it is the way back."""
+    kind = type(live)
+    if kind is property:
+        return live.fget if type(live.fget) is types.FunctionType else None
+    if kind is functools.cached_property:
+        return live.func if type(live.func) is types.FunctionType else None
     return None
 
 
@@ -134,6 +152,10 @@ def _follow(live: Any, steps: str) -> Any:
             if type(live) is not types.MethodType:
                 return UNRESOLVED
             live = live.__func__
+        elif step == "p":
+            live = _getter(live)
+            if live is None:
+                return UNRESOLVED
         else:
             live = _wrapped(live)
             if live is None:
@@ -217,12 +239,35 @@ def _holder_homes(obj: Any) -> list[tuple[str, tuple[str, ...]]]:
     if not isinstance(qualname, str) or "<" in qualname or "." not in qualname:
         return []
     chain = tuple(qualname.split("."))
-    found = []
-    for name, module in list(sys.modules.items()):
-        namespace = getattr(module, "__dict__", None)
-        held = namespace.get(chain[0]) if type(namespace) is dict else None
-        if isinstance(held, type) and getattr(held, "__module__", None) == name:
-            found.append((name, chain))
+    return [(name, chain) for name in _class_holders(chain[0]) if _holds_own_class(name, chain[0])]
+
+
+#: Class name -> (how many modules were loaded, the modules that held a
+#: class of that name defined in them then): `_class_holders`.
+_HOLDERS: dict[str, tuple[int, tuple[str, ...]]] = {}
+
+
+def _holds_own_class(name: str, attr: str) -> bool:
+    namespace = getattr(sys.modules.get(name), "__dict__", None)
+    held = namespace.get(attr) if type(namespace) is dict else None
+    return isinstance(held, type) and getattr(held, "__module__", None) == name
+
+
+def _class_holders(attr: str) -> tuple[str, ...]:
+    """The loaded modules that hold a class named *attr* defined in them,
+    looked up in every module again only once another module was loaded:
+    the methods of one class reach `_holder_homes` one after another, and
+    each lookup read thousands of namespaces. The caller checks each module
+    again; a module that came to hold such a class without a module being
+    loaded since is left out, which leaves a report unstored, never wrong."""
+    count = len(sys.modules)
+    kept = _HOLDERS.get(attr)
+    if kept is not None and kept[0] == count:
+        return kept[1]
+    found = tuple(name for name in list(sys.modules) if _holds_own_class(name, attr))
+    if len(_HOLDERS) > 4096:
+        _HOLDERS.clear()
+    _HOLDERS[attr] = (count, found)
     return found
 
 

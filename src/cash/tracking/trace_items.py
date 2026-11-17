@@ -44,6 +44,7 @@ import dis
 import functools
 import hashlib
 import inspect
+import logging
 import pickle
 import struct
 import sys
@@ -722,6 +723,32 @@ def value_digest(value: Any) -> str:
     except Exception:  # noqa: BLE001 - a value that breaks on being read
         return "opaque:" + type(value).__qualname__
     return h.hexdigest()
+
+
+def logger_method_digest(obj: Any, name: str) -> str | None:
+    """The digest of method *name* of *obj*, a ``logging.Logger`` (a
+    subclass's own log method, scanpy's ``settings._root_logger.hint``),
+    when reading it runs no code: a plain function of its class that the
+    instance does not shadow, on a class without a lookup of its own. By
+    the function (its code, as any function read as data, `value_digest`) and the
+    logger's class, name, level, ``disabled`` and ``propagate``; None for
+    anything else, digested whole as before."""
+    if not isinstance(obj, logging.Logger):
+        return None
+    cls = type(obj)
+    if cls.__getattribute__ is not object.__getattribute__:
+        return None
+    func = next((k.__dict__[name] for k in cls.__mro__ if name in k.__dict__), None)
+    if type(func) is not types.FunctionType:
+        return None
+    state = getattr(obj, "__dict__", None)
+    if type(state) is not dict or name in state:
+        return None
+    own = value_digest(types.MethodType(func, obj))
+    plain = value_digest((cls.__module__, cls.__qualname__, obj.name, obj.level, obj.disabled, obj.propagate))
+    if own.startswith("opaque:") or plain.startswith("opaque:"):
+        return None
+    return hashlib.blake2b(f"logger-method:{own}:{plain}".encode(), digest_size=12).hexdigest()
 
 
 #: Not what a class holds: ``__slotnames__`` is copyreg's cache, set the

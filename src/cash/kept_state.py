@@ -3125,6 +3125,8 @@ def _reduce_by_reference_for_key(obj: Any, reducer: Any) -> Any:
     reduced = reducer(obj)
     if not stands_by_reference(reduced):
         return reduced
+    if isinstance(obj, logging.RootLogger) and obj is not logging.root and type(reduced) is tuple:
+        return _detached_root_logger(obj, reduced)
     _note_met(obj, reduced)
     if not _FOLDING.get():
         return reduced
@@ -3138,6 +3140,23 @@ def _reduce_by_reference_for_key(obj: Any, reducer: Any) -> Any:
     if isinstance(reduced, str):
         return _by_name_reduce(obj, reduced, attrs)
     return (reduced[0], reduced[1], attrs, *reduced[3:])
+
+
+def _detached_root_logger(obj: logging.RootLogger, reduced: tuple) -> tuple:
+    """A ``RootLogger`` that is not the root (scanpy's ``settings._root_logger``,
+    a subclass made on its own) for a key. It pickles as ``getLogger()``,
+    which finds the root and not it: keyed as that, a logger swapped for
+    one of another class, whose methods return something else, keyed the
+    same. Keyed by its class and the state its log methods read."""
+    cls = type(obj)
+    state = {
+        "class": f"{cls.__module__}.{cls.__qualname__}",
+        "name": obj.name,
+        "level": obj.level,
+        "disabled": obj.disabled,
+        "propagate": obj.propagate,
+    }
+    return (reduced[0], reduced[1], state, *reduced[3:])
 
 
 def _reduce_index_for_key(index: Any, reducer: Any) -> Any:
