@@ -147,24 +147,56 @@ def test_a_write_to_a_variable_read_moves_the_key(c, mods, monkeypatch, var, mem
     assert _reused(c, f) == fresh
 
 
-@pytest.mark.parametrize("memo_kind", ["honest", "sabotaged"])
-def test_a_write_to_a_variable_code_a_global_holds_reads_moves_the_key(c, mods, monkeypatch, memo_kind):
-    if memo_kind == "sabotaged":
-        # Takes every variable for unchanged: what the check guards against.
-        monkeypatch.setattr(state_memo, "VERIFY", False)
-        monkeypatch.setattr(state_memo, "_env_holds", lambda env: True)
-    f = c.cache(mods[0].through_table)
+def _through_table(c, mod, setenv, sabotaged: bool) -> None:
+    f = c.cache(mod.through_table)
     assert f(1) == (1, None)
     old = _reused(c, f)
-    monkeypatch.setenv(f"{READ}_D", "on")
+    setenv(f"{READ}_D", "on")
     got, fresh = _state(c, f)
     assert fresh != old, "the write did not move the segment: the scenario proves nothing"
-    if memo_kind == "sabotaged":
-        assert got == old
+    if sabotaged:
+        assert got == old, "the sabotaged check was not reached: the scenario proves nothing"
         return
     assert got == fresh
     assert f(1) == (1, "on")
     assert _reused(c, f) == fresh
+
+
+SABOTAGED = textwrap.dedent("""
+    def main():
+        import importlib, importlib.util, os, sys, warnings
+        warnings.simplefilter("ignore")
+        sys.path.insert(0, {path!r})
+        from cash import Cash
+        from cash.decorator import state_memo
+        # Takes every variable for unchanged: what the check guards against.
+        state_memo.VERIFY = False
+        state_memo._env_holds = lambda env: True
+        spec = importlib.util.spec_from_file_location("sabotaged_scenario", {test!r})
+        t = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(t)
+        c = Cash(cache_dir={cache!r}, register_magic=False)
+        t._through_table(c, importlib.import_module({mod!r}), os.environ.__setitem__, sabotaged=True)
+        print("ok")
+
+    main()
+""")
+
+
+@pytest.mark.parametrize("memo_kind", ["honest", "sabotaged"])
+def test_a_write_to_a_variable_code_a_global_holds_reads_moves_the_key(c, mods, monkeypatch, tmp_path, memo_kind):
+    if memo_kind == "honest":
+        _through_table(c, mods[0], monkeypatch.setenv, sabotaged=False)
+        return
+    # The sabotage shows only while the write leaves the world epoch alone.
+    # Once any function in the process has held ``os.environ`` itself (a
+    # module global bound to it, as `through_global`), the mapping is
+    # watched for good and every write moves the epoch, so the segment is
+    # built again whatever the check says: run it in a process of its own.
+    script = SABOTAGED.format(path=str(tmp_path), test=__file__, cache=str(tmp_path / "child"), mod=mods[0].__name__)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_TEST_STATE_ENV")}
+    out = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True, text=True)
+    assert out.returncode == 0 and out.stdout.split() == ["ok"], out.stderr
 
 
 CHILD = textwrap.dedent("""
