@@ -362,10 +362,24 @@ def _code_names(code: types.CodeType, into: set[str]) -> None:
 _SIGNATURE_NAMES: LruMemo[str, frozenset[str]] = LruMemo(CODE_OBJECTS)
 
 
+#: A source this long or shorter is parsed (`_parse_signature_names`)
+#: rather than looked up in the store while this process has not read the
+#: store's file: a few lines parse in tens of microseconds, and the file, read
+#: whole on the first lookup, held every answer of every earlier process.
+_PARSED_FROM = 1000
+#: How many characters of source a process parses so (`_PARSED_FROM`) before
+#: it reads the store after all: ~4 ms of parsing.
+_PARSED_BUDGET = [10_000]
+
+
 def _signature_names(source: str) -> frozenset[str]:
     """The names the annotations in *source*'s ``def`` line read (a key may
     resolve them); every identifier of *source* when it does not parse."""
     found = _SIGNATURE_NAMES.get(source)
+    if found is None and len(source) <= min(_PARSED_FROM, _PARSED_BUDGET[0]) and not text_store.held("signature-names"):
+        # The same answer the store keeps: a function of the text alone.
+        _PARSED_BUDGET[0] -= len(source)
+        found = _SIGNATURE_NAMES[source] = frozenset(_parse_signature_names(source))
     if found is None:
         # A function of the text alone, kept across processes (`text_store`).
         found = _SIGNATURE_NAMES[source] = text_store.kept(
