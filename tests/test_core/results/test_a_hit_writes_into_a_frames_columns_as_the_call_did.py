@@ -112,7 +112,10 @@ def test_a_write_into_a_column_reaches_a_name_for_it_after_a_hit(disk_cash, how)
     plain = run(body)
     cached(make())  # stored from a frame no name of a column's array is kept for
     got = [run(cached) for _ in range(2)]
-    assert cached.cache_info()["hits"] == 2
+    info = cached.cache_info()
+    # Why each call missed, and what cash warned, so a run that misses says why.
+    why = {key: info.get(key) for key in ("misses", "miss_reasons", "changed", "warnings")}
+    assert info["hits"] == 2, why
     assert got == [plain] * 2, (plain, got)
 
 
