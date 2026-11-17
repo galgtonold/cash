@@ -92,7 +92,15 @@ def check_choice(name: str, value: Any) -> None:
         raise ValueError(f"{name}={value!r}: must be {span}{unset}")
 
 
-def _setting_changed() -> None:
+#: Set on a config once its fields are in (`__post_init__`): only a change
+#: after that is a setting changed. Each field set while a config is built
+#: (a fresh merge of the config layers, as `active_config` makes with no
+#: default instance) moved cash's generation and so broke every proof the
+#: memos had taken, for a config no code ran under.
+_BUILT = "_cash_built"
+
+
+def setting_changed() -> None:
     """A setting changed: no hit the decorator's fast path remembered is
     served again before an ordinary call (`cash.decorator.hit_memo`)."""
     from .._native import cwatch
@@ -180,9 +188,14 @@ class TierConfig:
 
     def __setattr__(self, name: str, value: Any) -> None:
         object.__setattr__(self, name, value)
-        _setting_changed()
+        if _BUILT in self.__dict__:
+            setting_changed()
 
     def __post_init__(self) -> None:
+        self._check()
+        object.__setattr__(self, _BUILT, True)
+
+    def _check(self) -> None:
         if self.type not in TIER_TYPES:
             raise ValueError(f"Unknown tier type: {self.type!r}. Supported: {sorted(TIER_TYPES)}")
         # The factory is what reads a tier's keys, so it says which ones a
@@ -377,7 +390,13 @@ class CashConfig:
 
     def __setattr__(self, name: str, value: Any) -> None:
         object.__setattr__(self, name, value)
-        _setting_changed()
+        # A config still being built is no one's setting yet, and the
+        # internal fields (where it came from) are no setting at all.
+        if _BUILT in self.__dict__ and not name.startswith("_"):
+            setting_changed()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, _BUILT, True)
 
     def to_dict(self) -> dict[str, Any]:
         """Public field-value mapping (skips internal ``_source``)."""

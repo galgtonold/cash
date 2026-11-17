@@ -446,12 +446,12 @@ def validated_overrides(overrides: dict[str, Any]) -> dict[str, Any]:
 
 def _build_config(merged: dict[str, Any], source: str) -> CashConfig:
     """Materialise the merged dict into a typed CashConfig instance."""
-    cfg = CashConfig()
     valid = {f.name for f in fields(CashConfig) if not f.name.startswith("_")}
+    settings: dict[str, Any] = {}
     for key, value in merged.items():
         if key == "tiers":
-            cfg.tiers = _build_tiers(value or [])
+            settings["tiers"] = _build_tiers(value or [])
         elif key in valid:
-            setattr(cfg, key, value)
-    cfg._source = source
-    return cfg
+            settings[key] = value
+    # Built whole: a config no code runs under yet changes no setting.
+    return CashConfig(**settings, _source=source)

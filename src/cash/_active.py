@@ -68,6 +68,10 @@ def set_default_cash(instance: Cash | None) -> None:
     previous, _default = _default, instance
     if previous is instance:
         return
+    # Code outside a call now runs under the new default's settings.
+    from .config.schema import setting_changed
+
+    setting_changed()
     if previous is not None:
         _forget_settings()
     elif instance is not None and _inherited:
