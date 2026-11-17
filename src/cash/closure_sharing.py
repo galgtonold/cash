@@ -81,6 +81,18 @@ CLOSURE_CHECK_FLOOR_S = 1.0
 _CLOCK_EVERY = 4096
 #: Items of a level taken in at once between two reads of the clock.
 _CHUNK = 1 << 20
+#: An object's key in a walk's places: its address as ``object``'s hash
+#: gives it, one to one with ``id()`` (the address turned by four bits),
+#: whatever hash its class has. Not ``id()``, which raises an audit event
+#: per object: with a Python audit hook (cash's, before Python 3.12) the
+#: ids of a 300,000-node trie took longer than building it. Turned, the
+#: keys of objects 16 bytes apart no longer meet in a dict's table.
+_PLACE = object.__hash__
+#: Where a walk keeps what it met, a `_KeptSet` or the C kernels'
+#: ``PlaceSet``: ``_PLACE(obj) in places`` asks for an object, and each one
+#: put in is held until the walk ends, so an address stands for one object
+#: only.
+Places = Any
 
 
 class ClosureCheck(NamedTuple):
@@ -127,7 +139,7 @@ def closures_sharing(captured_vars: Mapping[str, Any], seconds: float) -> Closur
     # Each object is kept until the answer, so an id stands for one object
     # only: a reduce's temporary freed a level later gave its id to another,
     # which was then taken as met and not read.
-    places: dict[int, Any] = {}
+    places = _places()
     functions: list[tuple[str, types.FunctionType]] = []
     for name, value in captured_vars.items():
         if name not in plain and not _walk(name, value, places, functions, limit):
@@ -185,7 +197,7 @@ def _holds_a_closure(captured_vars: Mapping[str, Any], seconds: float) -> bool |
             return None
         if not found:
             values.append(value)
-    seen: dict[int, Any] = {}
+    seen = _places()
     level = _fresh([values], seen, limit)
     while level:
         held: list[Iterable[Any]] = []
@@ -195,8 +207,8 @@ def _holds_a_closure(captured_vars: Mapping[str, Any], seconds: float) -> bool |
             if kind in _SEQUENCES:
                 held.append(chain.from_iterable(group))
             elif kind is dict:
-                held.append(chain.from_iterable(group))  # the keys
-                held.append(chain.from_iterable(map(dict.values, group)))
+                held.append(_Dicts((group, False)))  # the keys
+                held.append(_Dicts((group, True)))
             elif kind is types.FunctionType:
                 if any(fn.__closure__ for fn in group):
                     return True
@@ -257,7 +269,7 @@ def _arrow_type_without_code(array: Any) -> bool:
     return True
 
 
-def _walk(name: str, value: Any, places: dict[int, Any], functions: list, limit: CpuLimit) -> bool:
+def _walk(name: str, value: Any, places: Places, functions: list, limit: CpuLimit) -> bool:
     """Add to *places* every object *value* holds, by its id, and to
     *functions* each function with a closure among them, with *name*;
     False when *limit* ran out first. A level's builtin containers are read
@@ -273,8 +285,8 @@ def _walk(name: str, value: Any, places: dict[int, Any], functions: list, limit:
             if kind in _SEQUENCES:
                 held.append(chain.from_iterable(group))
             elif kind is dict:
-                held.append(chain.from_iterable(group))  # the keys
-                held.append(chain.from_iterable(map(dict.values, group)))
+                held.append(_Dicts((group, False)))  # the keys
+                held.append(_Dicts((group, True)))
             elif kind is types.FunctionType:
                 functions.extend((name, fn) for fn in group if fn.__closure__)
             elif not issubclass(kind, _OPAQUE):
@@ -294,26 +306,95 @@ def _walk(name: str, value: Any, places: dict[int, Any], functions: list, limit:
     return True
 
 
-def _fresh(held: list[Iterable[Any]], places: dict[int, Any], limit: CpuLimit) -> list | None:
+def _fresh(held: list[Iterable[Any]], places: Places, limit: CpuLimit) -> list | None:
     """What *held* yields that is not an atom and not in *places*, each
     once, now added to it; None when *limit* ran out first. Taken in
-    chunks, each a few passes in C: a level of ten million strings is
+    chunks, the clock read after each: with the C kernels in one pass
+    (``fresh_items``) into a ``PlaceSet``, else `_fresh_in_python`, which
+    is what the kernel answers as. A trie of 300,000 slotted nodes spent
+    most of its look in the Python version's passes and its dict of ids,
+    and on Python 3.14 the look took longer than building the trie had."""
+    if type(places) is _KeptSet:
+        return _fresh_in_python(held, places, limit)
+    return _FRESH_ITEMS(held, _CHUNK, _leaves(), _LEAVES, places, limit.passed, _Dicts)
+
+
+#: ``fresh_items`` and ``PlaceSet`` of the C kernels, or None: the Python
+#: walk runs, with a dict of each object by its `_PLACE`.
+_FRESH_ITEMS = getattr(_KERNELS, "fresh_items", None)
+_PLACE_SET = getattr(_KERNELS, "PlaceSet", None)
+
+
+def _places() -> Places:
+    """A new, empty `Places`: a ``PlaceSet`` with the C kernels, else a
+    `_KeptSet`."""
+    if _FRESH_ITEMS is not None and _PLACE_SET is not None:
+        return _PLACE_SET()
+    return _KeptSet()
+
+
+class _Dicts(tuple):
+    """``(dicts, values)``, a part of a level for `_fresh`: the keys of each
+    of *dicts* (exact dicts) in turn, or with *values* true their values.
+    ``fresh_items`` reads them in C without an iterator per dict."""
+
+    __slots__ = ()
+
+    def __iter__(self):
+        dicts, values = tuple.__iter__(self)
+        return chain.from_iterable(map(dict.values, dicts) if values else dicts)
+
+
+class _KeptSet(set):
+    """`Places` without the C kernels: the `_PLACE` of each object met,
+    and in *kept* the lists that hold the objects themselves."""
+
+    __slots__ = ("kept",)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.kept: list[list] = []
+
+
+def _fresh_in_python(held: list[Iterable[Any]], places: _KeptSet, limit: CpuLimit) -> list | None:
+    """`_fresh` without the C kernels, and the reference they answer as.
+    Each chunk is a few passes in C: a level of ten million strings is
     typed and dropped, never remembered one by one."""
     leaves = _leaves()
     items = chain.from_iterable(held)
     fresh: list = []
     while chunk := list(islice(items, _CHUNK)):
-        if not leaves.issuperset(map(type, chunk)):
-            chunk = _without_leaf_records(chunk)
-            chunk = list(compress(chunk, map(operator.not_, map(leaves.__contains__, map(type, chunk)))))
-            new = dict(zip(map(id, chunk), chunk))
-            for key in places.keys() & new.keys():
-                del new[key]
-            places.update(new)
-            fresh.extend(new.values())
+        kinds = set(map(type, chunk))
+        if not leaves.issuperset(kinds):
+            if not leaves.isdisjoint(kinds):
+                chunk = list(compress(chunk, map(operator.not_, map(leaves.__contains__, map(type, chunk)))))
+            if tuple in kinds:
+                chunk = _without_leaf_records(chunk)
+            fresh.extend(_new_in(chunk, places))
         if limit.passed():
             return None
     return fresh
+
+
+def _new_in(chunk: list, places: _KeptSet) -> list:
+    """The objects of *chunk* not in *places*, each once in first-met
+    order, now put in it. Most often all of them, told by two passes over
+    the set: a tree's nodes are met once each."""
+    keys = list(map(_PLACE, chunk))
+    if places.isdisjoint(keys):
+        before = len(places)
+        places.update(keys)
+        if len(places) - before == len(keys):
+            places.kept.append(chunk)
+            return chunk
+        places.difference_update(keys)  # one met twice: none was in before
+    new = dict(zip(keys, chunk))
+    for key in places.intersection(new):
+        del new[key]
+    places.update(new)
+    chunk = list(new.values())
+    places.kept.append(chunk)
+    return chunk
 
 
 def _of_kind(level: list, kind: type) -> list:
@@ -537,7 +618,7 @@ def _reduced(item: Any, kind: type) -> list:
     return parts
 
 
-def _reaches(fn: types.FunctionType, places: dict[int, Any], limit: CpuLimit) -> bool | None:
+def _reaches(fn: types.FunctionType, places: Places, limit: CpuLimit) -> bool | None:
     """Does what *fn*'s closure holds reach an object in *places*? None
     when *limit* ran out first. Another function met on the way is not
     followed: its own check is its own."""
@@ -547,10 +628,10 @@ def _reaches(fn: types.FunctionType, places: dict[int, Any], limit: CpuLimit) ->
             held.append(cell.cell_contents)
         except ValueError:  # an empty cell
             continue
-    reached: dict[int, Any] = {}
+    reached = _places()
     level = _fresh([held], reached, limit)
     while level:
-        if any(id(item) in places for item in level if not issubclass(type(item), _OPAQUE)):
+        if any(_PLACE(item) in places for item in level if not issubclass(type(item), _OPAQUE)):
             return True
         parts: list = []
         for done, item in enumerate(level, 1):

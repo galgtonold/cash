@@ -542,6 +542,411 @@ static PyObject *py_new_in(PyObject *self, PyObject *const *args, Py_ssize_t nar
 }
 
 /*
+ * fresh_items(held, n, leaves, record_leaves, places, passed, dicts_kind)
+ *     -> list | None
+ *
+ * closure_sharing._fresh_in_python in one pass: of what the parts of *held*
+ * yield in turn (chain.from_iterable(held)), each object that is
+ *     not of a type in *leaves*,
+ *     not an exact tuple whose items are all of types in *record_leaves*
+ *         (closure_sharing._without_leaf_records; an empty tuple neither),
+ *     and not yet in *places* (a PlaceSet, where the Python walk keeps a
+ *         dict of each object by its closure_sharing._PLACE),
+ * is put in *places* and returned, once, in first-met order. As in Python, the objects are taken in chunks of *n*,
+ * and after each chunk that took one *passed()* is asked: true, the answer
+ * is None, *places* keeping what it took. A part that fails (a generator
+ * raising) loses its chunk: what that chunk put in *places* comes out
+ * again, and the error is raised.
+ *
+ * A part of exact class *dicts_kind* (closure_sharing._Dicts, a tuple
+ * (dicts, values)) yields the keys of each of its exact dicts in turn, or
+ * with values true their values, read here without an iterator per dict;
+ * an exact list or tuple is read by index, anything else through its
+ * iterator. The iterators run Python code (a generator, a reduce's
+ * iterator), so the collector is not paused, every container read is held
+ * while it is read, and every type asked about while its answer is
+ * remembered.
+ */
+#define FRESH_CACHE 8
+typedef struct {
+    PyObject *set;
+    PyTypeObject *type[FRESH_CACHE];
+    char in[FRESH_CACHE];
+    int n, next;
+} HeldTypes;
+
+/* 1: t in ht's set, 0: not, -1: error. The type is held while cached. */
+static int ht_has(HeldTypes *ht, PyTypeObject *t) {
+    for (int i = 0; i < ht->n; i++)
+        if (ht->type[i] == t) return ht->in[i];
+    int r = PySet_Contains(ht->set, (PyObject *)t);
+    if (r < 0) return -1;
+    if (!plain_meta(t)) return r; /* a metaclass of its own: asked each time */
+    int at = ht->n < FRESH_CACHE ? ht->n++ : ht->next++ % FRESH_CACHE;
+    Py_XSETREF(ht->type[at], (PyTypeObject *)Py_NewRef(t));
+    ht->in[at] = (char)r;
+    return r;
+}
+
+static void ht_clear(HeldTypes *ht) {
+    for (int i = 0; i < ht->n; i++) Py_CLEAR(ht->type[i]);
+}
+
+/* closure_sharing._PLACE: object.__hash__(o) */
+static PyObject *place_key(PyObject *o) { return PyLong_FromSsize_t(PyBaseObject_Type.tp_hash(o)); }
+
+/*
+ * PlaceSet(): the places of a closure_sharing walk, for fresh_items. Holds
+ * each object put in it, by identity, until it is freed itself: an object
+ * kept stands for its address only, never another object's later at the
+ * same address. `key in places` asks for the object whose
+ * object.__hash__ (closure_sharing._PLACE, its address turned) is *key*,
+ * as the dict of the Python walk answers for its keys. No Python int is
+ * made per object: a trie of 300,000 nodes spent more on its dict of ids
+ * than on reading the trie.
+ */
+typedef struct {
+    PyObject_HEAD
+    PyObject **slot; /* NULL: free, PS_GONE: taken out, else a held object */
+    Py_ssize_t size, used, filled;
+} PlaceSet;
+
+static char ps_gone_marker;
+#define PS_GONE ((PyObject *)&ps_gone_marker)
+#define PS_FIRST 64
+
+static size_t ps_hash(PyObject *o) {
+    uint64_t h = (uint64_t)(uintptr_t)o >> 4;
+    return (size_t)((h * 11400714819323198485ull) >> 32);
+}
+
+/* The slot of o, or of the first free one on its probe. */
+static Py_ssize_t ps_find(PlaceSet *ps, PyObject *o, int *found) {
+    size_t mask = (size_t)ps->size - 1, i = ps_hash(o) & mask;
+    Py_ssize_t gone = -1;
+    for (;;) {
+        PyObject *s = ps->slot[i];
+        if (s == o) { *found = 1; return (Py_ssize_t)i; }
+        if (s == NULL) { *found = 0; return gone >= 0 ? gone : (Py_ssize_t)i; }
+        if (s == PS_GONE && gone < 0) gone = (Py_ssize_t)i;
+        i = (i + 1) & mask;
+    }
+}
+
+static int ps_resize(PlaceSet *ps, Py_ssize_t size) {
+    PyObject **old = ps->slot;
+    Py_ssize_t old_size = ps->size;
+    PyObject **slot = PyMem_Calloc((size_t)size, sizeof(PyObject *));
+    if (!slot) { PyErr_NoMemory(); return -1; }
+    ps->slot = slot;
+    ps->size = size;
+    ps->filled = ps->used;
+    for (Py_ssize_t i = 0; i < old_size; i++) {
+        PyObject *o = old[i];
+        if (o == NULL || o == PS_GONE) continue;
+        size_t mask = (size_t)size - 1, j = ps_hash(o) & mask;
+        while (slot[j]) j = (j + 1) & mask;
+        slot[j] = o;
+    }
+    PyMem_Free(old);
+    return 0;
+}
+
+/* 1: o put in, now held; 0: there already; -1: error */
+static int ps_add(PlaceSet *ps, PyObject *o) {
+    if ((ps->filled + 1) * 2 > ps->size) {
+        /* grown (or cleared of what was taken out) to a quarter full */
+        Py_ssize_t size = PS_FIRST;
+        while ((ps->used + 1) * 4 > size) size *= 2;
+        if (ps_resize(ps, size) < 0) return -1;
+    }
+    int found;
+    Py_ssize_t i = ps_find(ps, o, &found);
+    if (found) return 0;
+    if (ps->slot[i] == NULL) ps->filled++;
+    ps->slot[i] = Py_NewRef(o);
+    ps->used++;
+    return 1;
+}
+
+/* Take o out again (it was put in). */
+static void ps_discard(PlaceSet *ps, PyObject *o) {
+    int found;
+    Py_ssize_t i = ps_find(ps, o, &found);
+    if (!found) return;
+    ps->slot[i] = PS_GONE;
+    ps->used--;
+    Py_DECREF(o);
+}
+
+static PyObject *ps_new(PyTypeObject *type, PyObject *args, PyObject *kwargs) {
+    if (PyTuple_GET_SIZE(args) || (kwargs && PyDict_GET_SIZE(kwargs))) {
+        PyErr_SetString(PyExc_TypeError, "PlaceSet() takes no arguments");
+        return NULL;
+    }
+    PlaceSet *ps = (PlaceSet *)type->tp_alloc(type, 0);
+    if (!ps) return NULL;
+    ps->slot = PyMem_Calloc(PS_FIRST, sizeof(PyObject *));
+    if (!ps->slot) { Py_DECREF(ps); return PyErr_NoMemory(); }
+    ps->size = PS_FIRST;
+    return (PyObject *)ps;
+}
+
+static int ps_traverse(PlaceSet *ps, visitproc visit, void *arg) {
+    for (Py_ssize_t i = 0; i < ps->size; i++)
+        if (ps->slot[i] && ps->slot[i] != PS_GONE) Py_VISIT(ps->slot[i]);
+    return 0;
+}
+
+static int ps_clear(PlaceSet *ps) {
+    PyObject **slot = ps->slot;
+    Py_ssize_t size = ps->size;
+    if (!slot) return 0;
+    ps->slot = PyMem_Calloc(PS_FIRST, sizeof(PyObject *));
+    ps->size = ps->slot ? PS_FIRST : 0;
+    ps->used = ps->filled = 0;
+    for (Py_ssize_t i = 0; i < size; i++)
+        if (slot[i] && slot[i] != PS_GONE) Py_DECREF(slot[i]);
+    PyMem_Free(slot);
+    return 0;
+}
+
+static void ps_dealloc(PlaceSet *ps) {
+    PyObject_GC_UnTrack(ps);
+    Py_TRASHCAN_BEGIN(ps, ps_dealloc)
+    ps_clear(ps);
+    PyMem_Free(ps->slot);
+    ps->slot = NULL;
+    Py_TYPE(ps)->tp_free((PyObject *)ps);
+    Py_TRASHCAN_END
+}
+
+static Py_ssize_t ps_len(PlaceSet *ps) { return ps->used; }
+
+/* key in places: is the object whose object.__hash__ is key held? */
+static int ps_contains(PlaceSet *ps, PyObject *key) {
+    if (!PyLong_Check(key) || !ps->size) return 0;
+    Py_ssize_t h = PyLong_AsSsize_t(key);
+    if (h == -1 && PyErr_Occurred()) {
+        if (!PyErr_ExceptionMatches(PyExc_OverflowError)) return -1;
+        PyErr_Clear();
+        return 0;
+    }
+    /* object.__hash__ turns the address right by four bits */
+    size_t bits = 8 * sizeof(size_t), u = (size_t)h;
+    PyObject *o = (PyObject *)(uintptr_t)((u << 4) | (u >> (bits - 4)));
+    if (o == NULL || o == PS_GONE) return 0;
+    int found;
+    ps_find(ps, o, &found);
+    return found;
+}
+
+/* keys() -> list: object.__hash__ of each held object, in no order */
+static PyObject *ps_keys(PlaceSet *ps, PyObject *unused) {
+    PyObject *out = PyList_New(0);
+    if (!out) return NULL;
+    for (Py_ssize_t i = 0; i < ps->size; i++) {
+        PyObject *o = ps->slot[i];
+        if (!o || o == PS_GONE) continue;
+        PyObject *k = place_key(o);
+        if (!k || PyList_Append(out, k) < 0) { Py_XDECREF(k); Py_DECREF(out); return NULL; }
+        Py_DECREF(k);
+    }
+    return out;
+}
+
+static PySequenceMethods ps_as_sequence = {
+    .sq_length = (lenfunc)ps_len,
+    .sq_contains = (objobjproc)ps_contains,
+};
+
+static PyMethodDef ps_methods[] = {
+    {"keys", (PyCFunction)ps_keys, METH_NOARGS, "keys() -> list of object.__hash__ of each held object"},
+    {NULL, NULL, 0, NULL}};
+
+static PyTypeObject PlaceSetType = {
+    PyVarObject_HEAD_INIT(NULL, 0).tp_name = "cash._cwatch.PlaceSet",
+    .tp_basicsize = sizeof(PlaceSet),
+    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
+    .tp_doc = "PlaceSet(): the objects a closure_sharing walk met, held by identity (fresh_items)",
+    .tp_new = ps_new,
+    .tp_dealloc = (destructor)ps_dealloc,
+    .tp_traverse = (traverseproc)ps_traverse,
+    .tp_clear = (inquiry)ps_clear,
+    .tp_as_sequence = &ps_as_sequence,
+    .tp_methods = ps_methods,
+};
+
+typedef struct {
+    HeldTypes leaves, records;
+    PlaceSet *places;
+    PyObject *fresh, *passed;
+    Py_ssize_t n, taken, chunk_start;
+    int stop; /* passed() said the time is up */
+} FreshCtx;
+
+/* Take one object x (borrowed). 0, or -1 with an error set. */
+static int fresh_take(FreshCtx *cx, PyObject *x) {
+    int r = ht_has(&cx->leaves, Py_TYPE(x));
+    if (r == 0 && PyTuple_CheckExact(x)) {
+        /* a record of leaves alone is dropped */
+        r = 1;
+        for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(x) && r == 1; i++)
+            r = ht_has(&cx->records, Py_TYPE(PyTuple_GET_ITEM(x, i)));
+    }
+    if (r < 0) return -1;
+    if (r == 0) {
+        int added = ps_add(cx->places, x);
+        if (added < 0) return -1;
+        if (added && PyList_Append(cx->fresh, x) < 0) {
+            ps_discard(cx->places, x);
+            return -1;
+        }
+    }
+    if (++cx->taken == cx->n) {
+        /* a chunk is done: the clock is read */
+        cx->taken = 0;
+        cx->chunk_start = PyList_GET_SIZE(cx->fresh);
+        PyObject *res = PyObject_CallNoArgs(cx->passed);
+        if (!res) return -1;
+        int up = PyObject_IsTrue(res);
+        Py_DECREF(res);
+        if (up < 0) return -1;
+        cx->stop = up;
+    }
+    return 0;
+}
+
+/* The keys (values 0) or values of the exact dict d, as its iterator gives
+ * them. 0, or -1 with an error set. */
+static int fresh_dict(FreshCtx *cx, PyObject *d, int values) {
+    Py_ssize_t pos = 0, size = PyDict_GET_SIZE(d);
+    PyObject *k, *v;
+    while (!cx->stop && PyDict_Next(d, &pos, &k, &v)) {
+        PyObject *x = Py_NewRef(values ? v : k);
+        int r = fresh_take(cx, x);
+        Py_DECREF(x);
+        if (r < 0) return -1;
+        if (PyDict_GET_SIZE(d) != size) {
+            PyErr_SetString(PyExc_RuntimeError, "dictionary changed size during iteration");
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/* One part of held. 0, or -1 with an error set. */
+static int fresh_part(FreshCtx *cx, PyObject *part, PyObject *dicts_kind) {
+    if ((PyObject *)Py_TYPE(part) == dicts_kind && PyTuple_GET_SIZE(part) == 2 &&
+        PyList_CheckExact(PyTuple_GET_ITEM(part, 0))) {
+        PyObject *dicts = PyTuple_GET_ITEM(part, 0);
+        int values = PyObject_IsTrue(PyTuple_GET_ITEM(part, 1));
+        if (values < 0) return -1;
+        for (Py_ssize_t i = 0; !cx->stop && i < PyList_GET_SIZE(dicts); i++) {
+            PyObject *d = Py_NewRef(PyList_GET_ITEM(dicts, i));
+            int r;
+            if (PyDict_CheckExact(d)) {
+                r = fresh_dict(cx, d, values);
+            } else { /* not an exact dict: as Python reads it */
+                PyObject *of = values ? PyObject_CallMethod(d, "values", NULL) : Py_NewRef(d);
+                PyObject *it = of ? PyObject_GetIter(of) : NULL;
+                Py_XDECREF(of);
+                r = it ? 0 : -1;
+                PyObject *x;
+                while (r == 0 && !cx->stop && (x = PyIter_Next(it))) {
+                    r = fresh_take(cx, x);
+                    Py_DECREF(x);
+                }
+                if (r == 0 && PyErr_Occurred()) r = -1;
+                Py_XDECREF(it);
+            }
+            Py_DECREF(d);
+            if (r < 0) return -1;
+        }
+        return 0;
+    }
+    if (PyList_CheckExact(part) || PyTuple_CheckExact(part)) {
+        for (Py_ssize_t i = 0; !cx->stop && i < PySequence_Fast_GET_SIZE(part); i++) {
+            PyObject *x = Py_NewRef(PySequence_Fast_ITEMS(part)[i]);
+            int r = fresh_take(cx, x);
+            Py_DECREF(x);
+            if (r < 0) return -1;
+        }
+        return 0;
+    }
+    if (PyDict_CheckExact(part)) return fresh_dict(cx, part, 0);
+    PyObject *it = PyObject_GetIter(part);
+    if (!it) return -1;
+    PyObject *x;
+    int r = 0;
+    while (!cx->stop && (x = PyIter_Next(it))) {
+        r = fresh_take(cx, x);
+        Py_DECREF(x);
+        if (r < 0) break;
+    }
+    Py_DECREF(it);
+    if (r == 0 && PyErr_Occurred()) r = -1;
+    return r;
+}
+
+static PyObject *py_fresh_items(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs != 7 || !PyList_CheckExact(args[0]) || !PyLong_CheckExact(args[1]) || !is_typeset(args[2]) ||
+        !is_typeset(args[3]) || !Py_IS_TYPE(args[4], &PlaceSetType) || !PyCallable_Check(args[5]) ||
+        !PyType_Check(args[6])) {
+        PyErr_SetString(PyExc_TypeError, "fresh_items(list, int, set of types, set of types, PlaceSet, callable, type)");
+        return NULL;
+    }
+    PyObject *held = args[0], *dicts_kind = args[6];
+    FreshCtx cx = {.leaves = {.set = args[2]}, .records = {.set = args[3]}, .places = (PlaceSet *)args[4], .passed = args[5]};
+    cx.n = PyLong_AsSsize_t(args[1]);
+    if (cx.n == -1 && PyErr_Occurred()) return NULL;
+    if (cx.n < 1) {
+        PyErr_SetString(PyExc_ValueError, "a chunk takes one object at least");
+        return NULL;
+    }
+    cx.fresh = PyList_New(0);
+    if (!cx.fresh) return NULL;
+    Py_INCREF(held);
+    Py_INCREF((PyObject *)cx.places);
+    Py_INCREF(cx.passed);
+    Py_INCREF(dicts_kind);
+    int err = 0;
+    for (Py_ssize_t i = 0; !err && !cx.stop && i < PyList_GET_SIZE(held); i++) {
+        PyObject *part = Py_NewRef(PyList_GET_ITEM(held, i));
+        err = fresh_part(&cx, part, dicts_kind) < 0;
+        Py_DECREF(part);
+    }
+    if (!err && !cx.stop && cx.taken) {
+        /* the last chunk, short: the clock is read after it as well */
+        cx.chunk_start = PyList_GET_SIZE(cx.fresh);
+        PyObject *res = PyObject_CallNoArgs(cx.passed);
+        int up = res ? PyObject_IsTrue(res) : -1;
+        Py_XDECREF(res);
+        if (up < 0) err = 1;
+        else cx.stop = up;
+    }
+    if (err) {
+        /* the chunk is not taken: what it put in places comes out */
+        PyObject *exc = PyErr_GetRaisedException();
+        for (Py_ssize_t i = cx.chunk_start; i < PyList_GET_SIZE(cx.fresh); i++)
+            ps_discard(cx.places, PyList_GET_ITEM(cx.fresh, i));
+        PyErr_SetRaisedException(exc);
+    }
+    ht_clear(&cx.leaves);
+    ht_clear(&cx.records);
+    Py_DECREF(held);
+    Py_DECREF((PyObject *)cx.places);
+    Py_DECREF(cx.passed);
+    Py_DECREF(dicts_kind);
+    if (err || cx.stop) {
+        Py_DECREF(cx.fresh);
+        if (err) return NULL;
+        Py_RETURN_NONE;
+    }
+    return cx.fresh;
+}
+
+/*
  * type_set(objects) -> set: set(map(type, objects)) for a list.
  */
 static PyObject *py_type_set(PyObject *self, PyObject *lst) {
@@ -2431,6 +2836,8 @@ static PyMethodDef cwalk_methods[] = {
     {"split_level", (PyCFunction)(void (*)(void))py_split_level, METH_FASTCALL,
      "split_level(children, skipped, extra) -> [(type, list)] | NotImplemented"},
     {"new_in", (PyCFunction)(void (*)(void))py_new_in, METH_FASTCALL, "new_in(group, by_identity, seen) -> list"},
+    {"fresh_items", (PyCFunction)(void (*)(void))py_fresh_items, METH_FASTCALL,
+     "fresh_items(held, n, leaves, record_leaves, places, passed, dicts_kind) -> list | None"},
     {"type_set", py_type_set, METH_O, "type_set(list) -> set(map(type, list))"},
     {"values_in_tuples", (PyCFunction)(void (*)(void))py_values_in_tuples, METH_FASTCALL,
      "values_in_tuples(items, exact, levels) -> bool | NotImplemented"},
@@ -2464,7 +2871,11 @@ static PyMethodDef cwalk_methods[] = {
      "reduce_apart(apart, names, protocol, obj) -> reduce value"},
     {NULL, NULL, 0, NULL}};
 
-int cwalk_add_functions(PyObject *m) { return PyModule_AddFunctions(m, cwalk_methods); }
+int cwalk_add_functions(PyObject *m) {
+    if (PyType_Ready(&PlaceSetType) < 0) return -1;
+    if (PyModule_AddObjectRef(m, "PlaceSet", (PyObject *)&PlaceSetType) < 0) return -1;
+    return PyModule_AddFunctions(m, cwalk_methods);
+}
 
 #else /* Py_GIL_DISABLED: no kernels; cash runs the Python walks */
 
