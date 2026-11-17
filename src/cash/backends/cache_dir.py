@@ -151,7 +151,8 @@ WRITTEN_IN_PLACE_FILENAME = "_written_in_place.log"
 #: The analytics database, in the per-user cache root.
 ANALYTICS_DB_FILENAME = "analytics.db"
 #: Which installed distribution provides each top-level module, in the
-#: per-user cache root (`library_versions`).
+#: per-user cache root (`library_versions`): ``_library_map.<slot>.json``,
+#: a file per environment and search path.
 LIBRARY_MAP_FILENAME = "_library_map.json"
 #: A digest of each installed distribution's file list, by its ``RECORD``'s
 #: stat, in the per-user cache root (`library_versions`).
@@ -260,7 +261,15 @@ def _is_temp_of(name: str, owner: Callable[[str], bool]) -> bool:
 
 
 def _is_cash_name(name: str) -> bool:
-    return name in _CASH_FILE_NAMES or name.endswith(ENTRY_SUFFIX)
+    return name in _CASH_FILE_NAMES or name.endswith(ENTRY_SUFFIX) or _is_library_map_slot(name)
+
+
+def _is_library_map_slot(name: str) -> bool:
+    """``_library_map.<slot>.json``: one saved library map (`library_versions`)."""
+    stem, dot, ext = LIBRARY_MAP_FILENAME.rpartition(".")
+    head = f"{stem}."
+    tail = f".{ext}"
+    return name.startswith(head) and name.endswith(tail) and _is_hex(name[len(head) : -len(tail)])
 
 
 def _is_hex(text: str) -> bool:
