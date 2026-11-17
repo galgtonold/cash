@@ -31,7 +31,7 @@ lists them in the notebook, and `%cash_help NAME` prints one magic's usage.
 ## Turning caching on and off
 
 ### `%cash_on`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_on @1426a61e -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_on @6f433e77 -->
 
 **Usage:** `%cash_on [ttl=N]`
 

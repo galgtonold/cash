@@ -43,17 +43,26 @@ def test_a_top_level_block_caches_a_statement_that_writes(nb_runner, tmp_path):
     assert counter.read_bytes() == b"xxx"
 
 
-def test_a_cached_function_defined_in_a_cell_honours_the_block(nb_runner):
+def test_a_cached_function_defined_in_a_cell_honours_the_block(nb_runner, tmp_path):
+    # A file write is a finding cash reports (`impure_call`); the block
+    # waives it, and the same write outside a block is reported.
+    out = tmp_path / "written"
     nb_runner.create_notebook(
         [
-            "import cash, os, warnings\nwarnings.simplefilter('always')",
+            "import cash, warnings\nwarnings.simplefilter('always')",
             "@cash.cache\n"
             "def waived(n):\n"
             "    with cash.assume_safe():\n"
-            "        os.getpid()\n"
+            f"        with open(r'{out}', 'w') as fh:\n"
+            "            fh.write(str(n))\n"
             "    return n * 2\n"
             "print(waived(2))",
-            "@cash.cache\ndef plain(n):\n    os.getpid()\n    return n * 2\nprint(plain(2))",
+            "@cash.cache\n"
+            "def plain(n):\n"
+            f"    with open(r'{out}', 'w') as fh:\n"
+            "        fh.write(str(n))\n"
+            "    return n * 2\n"
+            "print(plain(2))",
         ]
     )
     nb_runner.start_kernel()

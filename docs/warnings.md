@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @6cf2d9d1 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @321b8342 -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -54,7 +54,7 @@ import warnings
 warnings.filterwarnings("ignore", message=r"\[CACHE-THRASH\]")
 ```
 
-<!-- claim: cash/diagnostics.py:warn_diagnostic @c0737e05 -->
+<!-- claim: cash/diagnostics.py:warn_diagnostic @61e48045 -->
 Every warning also carries its code on `.code`, so a handler can test
 `w.message.code == "CACHE-THRASH"` instead of matching the wording. Filtering
 by class catches many codes at once (each code's section names its class);
@@ -172,7 +172,7 @@ Caching happened, or refused to, and it is worth saying. Every code here starts 
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks._report_written_back @87eba24c -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks._report_written_back @f2c5cb4d -->
 **What happened.** The call changed an argument in place (`np.clip(a, 0, 1,
 out=a)`, `v.sort()`), and cash could take the state it left the argument in.
 That state is stored with the result, and a hit writes it into the argument
@@ -202,7 +202,7 @@ argument back. See [Silencing one code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/core.py:Cash.cache @470582df -->
+<!-- claim: cash/core.py:Cash.cache @ef0577dc -->
 **What happened.** You put `@cash.cache` on an async generator (an
 `async def` that `yield`s). cash does not cache those, so it returned your
 function unwrapped.
@@ -311,7 +311,7 @@ keeps happening, the cap is too small for what you use.
 room (the message says how much is free). If it does not, cache smaller
 results, or move `cache_dir` to a bigger volume.
 
-<!-- claim: cash/decorator/explain.py:MissHistory.absent_entry_reason @27204896 -->
+<!-- claim: cash/decorator/explain.py:MissHistory.absent_entry_reason @f48a9e33 -->
 **When it is safe to ignore.** When the result is rarely needed and a
 recompute now and then is cheaper than the disk it would take. It is said once
 per function or statement per process. Cheaper recomputes are not warned
@@ -837,7 +837,7 @@ before passing it.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/config/resolve.py:_validated_layer @ea2b7c73, cash/config/sources.py:_warn_toml_malformed @7aa948bd, cash/config/sources.py:load_toml_layer @b8dfea05, cash/config/resolve.py:_build_tiers @d17e1cb5, cash/config/schema.py:TierConfig.__post_init__ @099eecbf -->
+<!-- claim: cash/config/resolve.py:_validated_layer @ea2b7c73, cash/config/sources.py:_warn_toml_malformed @7aa948bd, cash/config/sources.py:load_toml_layer @b8dfea05, cash/config/resolve.py:_build_tiers @d17e1cb5, cash/config/schema.py:TierConfig.__post_init__ @0ed9c588 -->
 **What happened.** cash could not use part of its configuration:
 
 * a value of the wrong type in a config file or `CASH_*` variable (that
@@ -956,12 +956,12 @@ first). A hit that skips one only leaves the runtime to compile again.
 once and will not happen again. If the next step relies on them, later runs
 behave differently from the first.
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @d4f3bed4, cash/decorator/purity_checks.py:PurityChecks.check_argument_mutation @9371bb18 -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @a4c15474, cash/decorator/purity_checks.py:PurityChecks.check_argument_mutation @f55c7b84 -->
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks.argument_identities @0b1d9a15, cash/_plain_data.py:identity_changed @c64ac6c0 -->
 A call that changes an argument is **not stored**, so it runs every time,
 unless cash can write the argument's new state back on a hit
 ([which arguments](decorator-limitations.md#results-cash-refuses-to-store)).
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks._report_written_back @87eba24c -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks._report_written_back @f2c5cb4d -->
 When it can write back every argument the call changed, the warning is one
 line under its own code, [CACHE-ARG-WRITTEN-BACK](#cache-arg-written-back),
 with nothing to fix.
@@ -990,7 +990,7 @@ mutation, return a modified copy instead. If the effect is incidental (a log
 file, a temp file), put `# @cash:assume-safe` on the line the message names, or
 run the code in `with cash.assume_safe():`.
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @2d8839cd -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @987ecb33 -->
 **When it is safe to ignore.** When everything listed is bookkeeping nobody
 reads back. Only the path this call took was watched, so an empty report does
 not prove the function is pure.
@@ -1005,10 +1005,12 @@ code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.learn_mutating_captures @c9607cda -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.learn_mutating_captures @3b83edeb -->
 **What happened.** The function reads a module global or captured variable,
-and calling the function changed it. The message names the variable and the
-line that changes it, which may be in a helper. A callable object that changes
+and calling the function changed it. Binding one of its attributes or entries
+to a new object counts too, even when the new value is equal
+(`HELD.last = [n]`): a hit would leave the old object there. The message names
+the variable and the line that changes it, which may be in a helper. A callable object that changes
 what it holds when called (an instance memoising into `self`, a library
 wrapper filling its cache) is not reported: cash just stops folding what it
 holds, after one extra miss. Nor is a random generator the body draws from:
@@ -1036,7 +1038,7 @@ code if you must. See [Silencing one code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @c395765d -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @045afef4 -->
 **What happened.** Before the first call, cash read the source of the
 function and its helpers and found shapes that make a cached result doubtful.
 Each finding has a line number and a label:
@@ -1053,7 +1055,7 @@ Each finding has a line number and a label:
 | `network_read` | A GET request or a read-only SQL query | [KEY-NETWORK-READ](#key-network-read) |
 | `untrackable_dep` | `eval` / `exec` / `compile`, a call to a function that `exec` / `eval` built from a string into a namespace of no module (`ns = {}; exec(rules_text, ns)`), `getattr(obj, name)()`, `globals()[name]()`, `globals().get(name)()` or `vars(mod)[name]()`, `operator.attrgetter(name)` or `methodcaller(name)` with a run-time name, `importlib.import_module`, `sys.modules[name]` | [KEY-UNTRACKABLE-DEP](#key-untrackable-dep) |
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks._hold_argument_mutations @9cc0c5ec, cash/decorator/purity_checks.py:PurityChecks.surface_held_mutations @bed8413c -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks._hold_argument_mutations @594f6769, cash/decorator/purity_checks.py:PurityChecks.surface_held_mutations @bed8413c -->
 A line of the function's own body that changes one of its arguments in place
 (`rows.sort()`) is reported once that first call has run, and only when cash
 cannot write the argument's new state back on a hit; when it can, the one line
@@ -1092,7 +1094,7 @@ several lines in a row, wrap them in `with cash.assume_safe():` instead. A line
 that changes an argument in place is better fixed than waived: return a
 modified copy.
 
-<!-- claim: cash/decorator/reporting.py:Notices._not_shown_before @7e3fc337, cash/decorator/reporting.py:Notices.warn_once @f09f4b16 -->
+<!-- claim: cash/decorator/reporting.py:Notices._not_shown_before @7e3fc337, cash/decorator/reporting.py:Notices.warn_once @26b61dee -->
 **When it is safe to ignore.** When every line is a `print` to stdout or a
 progress bar: you only lose the printout on hits. Never ignore
 `mutable_global` or `dynamic_pattern`. This warning is shown once per cache,
@@ -1235,7 +1237,7 @@ program runs.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @2826880c -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @4ced0037 -->
 **What happened.** Something raised while cash built the cache key. The
 message names the exception and, when it can, the argument type. The call ran
 and returned its real result, uncached.
@@ -1311,7 +1313,7 @@ no longer changes, remove `dynamic_depends_on=`.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/code_args.py:CodeArgs._warn_untrackable_in_carrier_once @d6b2be24 -->
+<!-- claim: cash/decorator/code_args.py:CodeArgs._warn_untrackable_in_carrier_once @85d43471 -->
 **What happened.** An object you passed to a cached function carries code, and
 that code picks what it calls at run time: `getattr(module, name)()` with
 `name` in a variable, `eval`, a dynamic import. The message names the method,
@@ -1343,7 +1345,7 @@ code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @2571147a -->
+<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @5653b253 -->
 **What happened.** A function marked `@cash.cache(frozen=True)` promised its
 result is not modified, and a later check found one of its results modified.
 
@@ -1451,7 +1453,7 @@ time.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/closure_fold.py:ClosureFold.fold_bound_self @06de34b5 -->
+<!-- claim: cash/decorator/closure_fold.py:ClosureFold.fold_bound_self @4ca85ea2 -->
 **What happened.** You cached a bound method (`c.cache(obj.method)`) and the
 instance could not be hashed, so cash keyed on the object's in-memory identity.
 
@@ -1552,7 +1554,7 @@ code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">both</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/notebook/callee_reach.py:_holds_a_draw @1990aae3 -->
+<!-- claim: cash/notebook/callee_reach.py:_holds_a_draw @4bd590bd -->
 **What happened.** Your code set a value on a library's module
 (`textwrap.rows = ...`), and code you run reads it. Cash looks inside such a
 value for an iterator, an open file or a random generator, because reading
@@ -1624,7 +1626,7 @@ line of its own above the statement the message names.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @c395765d, cash/analysis/purity_policy.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @91df07f5 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @045afef4, cash/analysis/purity_policy.py:DECORATOR_POLICY @44b8bc03, cash/effects.py:MODULE_CALLS @91df07f5 -->
 <!-- claim: cash/analysis/purity_visitor.py:_opens_tracked_database @0e105084 -->
 **What happened.** The function fetches from a server (`requests.get`,
 `httpx.get`, `urlopen(url)`) or queries a database (`cur.execute("SELECT
@@ -1668,7 +1670,7 @@ code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/code_args.py:is_user_code_carrier @16845be0, cash/install_paths.py:is_user_module @a54a6d7a, cash/decorator/user_code.py:is_user_code_object @07d4f95a -->
+<!-- claim: cash/decorator/code_args.py:is_user_code_carrier @16845be0, cash/install_paths.py:is_user_module @c8e57159, cash/decorator/user_code.py:is_user_code_object @ad8c35e2 -->
 **What happened.** A function, class or object from your own code reached a
 cached call (as an argument or a default), and cash could not hash its code.
 The typical case is a class of yours whose behaviour comes from a compiled
@@ -1715,13 +1717,13 @@ message, so cash can record that read.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/loaded_code.py:loaded_code_matches_disk @1bf4a975, cash/decorator/function_identity.py:warn_source_changed_since_load @96528104 -->
+<!-- claim: cash/loaded_code.py:loaded_code_matches_disk @d6f79fec, cash/decorator/function_identity.py:warn_source_changed_since_load @66c0eeb3 -->
 <!-- claim: cash/loaded_code.py:_pyc_proves_unchanged @42e99e55 -->
 **What happened.** A file holding a cached function or a helper was edited
 after this process imported it, or the import loaded bytecode compiled from an
 earlier save of it. The process runs the old code.
 
-<!-- claim: cash/decorator/function_identity.py:OwnSourcePins.pin_own_source @fb1cadae -->
+<!-- claim: cash/decorator/function_identity.py:OwnSourcePins.pin_own_source @80db33e3 -->
 **Why it matters.** cash keys that code by what is actually running, so
 results in this process are correct, and they are not reused after a restart
 on the new code.
@@ -1783,7 +1785,7 @@ first cached call differs between runs. Turn the check off with
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @2826880c -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @4ced0037 -->
 **What happened.** An argument could not be hashed, so no key could be built.
 The message names the type, says the value is nested in a container, or says
 it is nested too deeply to key: deeper than pickle follows, such as a long
@@ -1868,7 +1870,7 @@ connection, a lock, a logger), leave it out of the key with `ignore=` or
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @94b2b412 -->
+<!-- claim: cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @cb57665a -->
 **What happened.** The function (or a helper) reads a module global that
 could not be hashed, so it was left out of the key.
 
@@ -1890,7 +1892,7 @@ code if you must. See [Silencing one code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashImpurityWarning</span>
 
-<!-- claim: cash/analysis/code_analyzer.py:CodeAnalyzer.find_called_functions_and_gaps @cebaabb8 -->
+<!-- claim: cash/analysis/code_analyzer.py:CodeAnalyzer.find_called_functions_and_gaps @21619bec -->
 <!-- claim: cash/decorator/registry.py:FunctionRegistry.unresolved_gaps @02dff8c9 -->
 **What happened.** The function calls something through an object of your own
 code whose attribute is a property, or whose class answers missing names with
@@ -1922,7 +1924,7 @@ you must. See [Silencing one code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks._warn_untrackable @48448c14, cash/decorator/registry.py:FunctionRegistry.refresh_helper_bindings @0c3b1253 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks._warn_untrackable @54508976, cash/decorator/registry.py:FunctionRegistry.refresh_helper_bindings @2963b97c -->
 **What happened.** The function, or a helper it calls, picks the code it runs
 by a name known only at run time: `getattr(module, name)()`,
 `globals()[name]()`, `vars(module)[name]()`,
@@ -1931,7 +1933,7 @@ by a name known only at run time: `getattr(module, name)()`,
 the line. The function runs uncached, and so does every cached function that
 calls it.
 
-<!-- claim: cash/decorator/code_trace.py:build @1876c28d, cash/decorator/code_trace.py:verify @d9d3bac9 -->
+<!-- claim: cash/decorator/code_trace.py:build @15896dc1, cash/decorator/code_trace.py:verify @d7b90163 -->
 On Python 3.12 and newer, a lookup by name (`getattr(module, name)`,
 `importlib.import_module(name)`, `__import__(name)`) is cached instead: cash
 records the code the call ran and what each lookup found, and serves a later
@@ -1941,14 +1943,14 @@ side effects or reads the clock, changed a global that code reads in place
 (`heapq.heappush(HEAP, x)`: a hit would not change it again), a function no
 name finds, a value too big to digest, or it left a thread running.
 
-<!-- claim: cash/analysis/helper_walk.py:HelperWalk._note_decided_at_run_time @1454635c -->
+<!-- claim: cash/analysis/helper_walk.py:HelperWalk._note_decided_at_run_time @03d5623b -->
 Before Python 3.12 (or with `CASH_TRACE=0`) the same warning names an
 `isinstance(x, Kind)` or `issubclass(c, Kind)` that Kind's own metaclass
 answers with an `__instancecheck__` or `__subclasscheck__` of yours: what it
 reads, such as a set its `register()` fills, is state the class keeps, and no
 key holds it. On 3.12 and newer the record of what the call ran covers it.
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._tell_looked_up_by_string @160908ca -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._tell_looked_up_by_string @ed87cf4c -->
 In a notebook, a statement whose function looks names up this way, and whose
 trace cannot follow the lookup (`m = importlib.import_module(name)`, then
 `m.scale(x)`), runs every time: the warning comes once per statement.
@@ -2193,7 +2195,7 @@ last ran. It is shown once for each cell text.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/upstream/mismatch_classifier.py:MismatchClassifier._reject_read_only_input @4c86c0cd, cash/notebook/upstream/changed_below.py:warn_changed_below @8bd3d1a3, cash/notebook/upstream/changed_below.py:held_objects @31b2cf0e -->
+<!-- claim: cash/notebook/upstream/mismatch_classifier.py:MismatchClassifier._reject_read_only_input @4c2a23d5, cash/notebook/upstream/changed_below.py:warn_changed_below @6cef43a5, cash/notebook/upstream/changed_below.py:held_objects @31b2cf0e -->
 **What happened.** You re-ran a cell on its own, and a cell below it had
 changed one of its inputs in place (`s.iloc[0] = 1e9`, `rows.append(r)`).
 cash gives the re-run the input as the cells above leave it, as a run from the
@@ -2227,7 +2229,7 @@ leaves it, and will run the cells below again.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/upstream/stale_values.py:StaleValueGuard._class_state_at_start @d3ee5473, cash/notebook/upstream/class_state.py:ClassState.put_back @b3b3a5bc, cash/analysis/mutation_effects.py:_object_protocol_effects @a52fa72c -->
+<!-- claim: cash/notebook/upstream/stale_values.py:StaleValueGuard._class_state_at_start @d3ee5473, cash/notebook/upstream/class_state.py:ClassState.put_back @b3b3a5bc, cash/analysis/mutation_effects.py:_object_protocol_effects @b6b366d6 -->
 **What happened.** You re-ran on its own a cell whose constructor or method
 calls change an attribute of the class itself (`Widget.count += 1` in
 `__init__`, a registry the class appends to), and another cell changes that
@@ -2319,7 +2321,7 @@ such as a checkpoint read after a restart, never gives this warning.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/notebook/upstream/notebook_vetting.py:NotebookVetter._refuse_forward_references @a173133d, cash/notebook/ipython/upstream_phase.py:UpstreamResolution._step_aside @fbf69e5b -->
+<!-- claim: cash/notebook/upstream/notebook_vetting.py:NotebookVetter._refuse_forward_references @a173133d, cash/notebook/ipython/upstream_phase.py:UpstreamResolution._step_aside @d30f0709 -->
 **What happened.** The cell reads, at module level, a name that only a later
 cell binds (`y = x + 1` above `x = 10`). It works now because that cell already
 ran, so the cell runs as plain Jupyter runs it, on the value in memory, but
@@ -2339,7 +2341,7 @@ the top.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/statement/identity_holders.py:identity_held_reason @db97719f, cash/notebook/statement/processor.py:StatementProcessor._warn_identity_held @a5aa8bda, cash/notebook/statement/processor.py:_pointed_into @41961608 -->
+<!-- claim: cash/notebook/statement/identity_holders.py:identity_held_reason @db67b352, cash/notebook/statement/processor.py:StatementProcessor._warn_identity_held @a5aa8bda, cash/notebook/statement/processor.py:_pointed_into @3af0c4e3 -->
 **What happened.** A value the statement binds finds another object by
 identity, not by holding it: a weak reference (`wr = weakref.ref(p.child)`,
 a `WeakValueDictionary`) to an object the value does not hold, or an `int`
@@ -2357,9 +2359,9 @@ are looked through, and an `id()` turned into text (`hex(id(x))`,
 `str(id(x))`) counts as one. Another library's object is not looked
 inside: a value holding one next to an `id()` or a weak reference runs
 every time too, since that object could hold one as well. So does a value
-of more than 200,000 objects, or one whose `id()` could be of an object
-below more than 200,000 the notebook holds. It is shown once per
-statement.
+of more than 200,000 objects, one whose `id()` could be of an object
+below more than 200,000 the notebook holds, or one that raises while cash
+looks through it. It is shown once per statement.
 
 A loop that changes an object in place (`p.update(i)`) is not restored
 into it either when the notebook holds a weak reference to, or the `id()`
@@ -2540,7 +2542,7 @@ bottom once. It is shown once per session.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/statement/reducer_writes.py:refuses @899c820d, cash/notebook/statement/reducer_writes.py:_decide @dea98a7c, cash/notebook/statement/processor.py:StatementProcessor._move_what_reducers_wrote @457595bf, cash/notebook/statement/reducer_writes.py:_handed_to_libraries @b809130a, cash/decorator/store.py:_store_error @150ddaae, cash/kept_state.py:reducers_run @8e0732c4 -->
+<!-- claim: cash/notebook/statement/reducer_writes.py:refuses @899c820d, cash/notebook/statement/reducer_writes.py:_decide @dea98a7c, cash/notebook/statement/processor.py:StatementProcessor._move_what_reducers_wrote @457595bf, cash/notebook/statement/reducer_writes.py:_handed_to_libraries @00ebddef, cash/decorator/store.py:_store_error @150ddaae, cash/kept_state.py:reducers_run @8e0732c4 -->
 **What happened.** cash pickles a statement's values to hash and store
 them, and pickling runs the value's own `__reduce__`, `__reduce_ex__`,
 `__getstate__` or `__getnewargs__` (or a reducer you registered with
@@ -2616,7 +2618,7 @@ purpose and no cell reads it any more.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/notebook/upstream/replay.py:StatementReplay._failure @e96a67b5, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._unclosed_read @9ffb9999, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._overwritten_read @9c2c1ae1, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._reopen_drawn_inputs @9261f967, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._failing_import_left_out @8ffec13c, cash/notebook/upstream/checker.py:UpstreamChecker._put_back @d0bf8f4e, cash/notebook/ipython/upstream_phase.py:UpstreamResolution._step_aside @fbf69e5b, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._writes_what_was_defined_again @11388d44, cash/notebook/upstream/replay.py:StatementReplay._defined_again_gap @e35826e2 -->
+<!-- claim: cash/notebook/upstream/replay.py:StatementReplay._failure @e96a67b5, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._unclosed_read @ea5b2914, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._overwritten_read @9c2c1ae1, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._reopen_drawn_inputs @9261f967, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._failing_import_left_out @8ffec13c, cash/notebook/upstream/checker.py:UpstreamChecker._put_back @38708141, cash/notebook/ipython/upstream_phase.py:UpstreamResolution._step_aside @d30f0709, cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._writes_what_was_defined_again @11388d44, cash/notebook/upstream/replay.py:StatementReplay._defined_again_gap @e35826e2 -->
 **What happened.** To give the cell what a run from the top gives, cash re-ran
 statements above it, and one of them failed because cash did not re-run first
 a statement above it that sets what it reads, or because it pickled a value
@@ -2705,7 +2707,7 @@ of which hit or column it was taken from.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._record_shared_object_edges @ac4b7eb5, cash/notebook/shared_objects.py:referring_names @df8a1772, cash/notebook/statement/processor.py:StatementProcessor.record_structure_share_edges @a99dfa6a -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._record_shared_object_edges @24c0cabb, cash/notebook/shared_objects.py:referring_names @d7fcff9d, cash/notebook/statement/processor.py:StatementProcessor.record_structure_share_edges @7ac0bc53 -->
 **What happened.** After a statement ran, cash looked for the other variables
 that hold an object of its outputs, or are held in one (`data = raw`,
 `config = {"features": features}`), so that a later change through either
@@ -2732,7 +2734,7 @@ place, through any name.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/upstream/stale_values.py:StaleValueGuard._kept_for_partner_below @bebe6e19 -->
+<!-- claim: cash/notebook/upstream/stale_values.py:StaleValueGuard._kept_for_partner_below @6f16072b -->
 **What happened.** You re-ran on its own a cell that changes a value in place
 (`history.append(x)`), and a cell below makes another name share that value
 (`log = history`, `cfg = {"features": features}`). cash normally rebuilds the
@@ -2755,7 +2757,7 @@ or applying it twice does not change the result (`s.add(x)` on a set).
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/background_threads.py:BackgroundThreads.cell_ends @35f8017f, cash/notebook/background_threads.py:user_code_of @65db4b5c, cash/notebook/statement/processor.py:StatementProcessor._left_work_running @c31e1740 -->
+<!-- claim: cash/notebook/background_threads.py:BackgroundThreads.cell_ends @f75a995c, cash/notebook/background_threads.py:user_code_of @65db4b5c, cash/notebook/statement/processor.py:StatementProcessor._left_work_running @8eb714bc -->
 **What happened.** A cell started a thread and finished while the thread
 was still running. The message names the cell, the thread and the function
 it runs. Only a thread that runs your own code counts: a pool's idle
@@ -2780,7 +2782,7 @@ such as a progress display or a server you query from outside the notebook.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._refuse_unseen_writes @9c832c99, cash/notebook/statement/unseen_writes.py:unseen_writers @7c530088, cash/notebook/statement/unseen_writes.py:own_writes @6e4e16cd, cash/notebook/statement/unseen_writes.py:writers_without_a_trace @25806177 -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._refuse_unseen_writes @ac167d12, cash/notebook/statement/unseen_writes.py:unseen_writers @2c9a3e07, cash/notebook/statement/unseen_writes.py:own_writes @6e4e16cd, cash/notebook/statement/unseen_writes.py:writers_without_a_trace @25806177 -->
 **What happened.** A function of yours ran while a statement ran, on a path
 cash does not read from the statement's text, and it changes something the
 statement does not name: `Vec.__add__` appending to a global list, run by
@@ -2815,6 +2817,13 @@ one of your classes that hold only them, after the first of each class; their
 items are only counted, up to those ten million. Should cash fail to look through what a
 statement reads at all, the statement runs every time and the message says
 that instead.
+
+A finalizer that runs during the statement (`weakref.finalize(obj,
+LOG.append, x)`, a weak reference's callback) counts as such a function. When
+what changes things ran only inside a garbage collection, which may be
+collecting what earlier work left behind, there is no warning: the statement
+is not stored, and its next run collects that garbage first and is stored
+unless a finalizer still runs inside it.
 
 Once a statement was not stored for a function, a later run of it that did
 not call that function (a `functools.cached_property` it filled the first
@@ -2901,7 +2910,7 @@ A cached value that randomness makes non-reproducible. Every code here starts `R
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashRandomnessWarning</span>
 
-<!-- claim: cash/notebook/statement/held_generators.py:HeldGenerators.before_run @57d870a1, cash/tracking/randomness/detect.py:attribute_draws @9a5150b6 -->
+<!-- claim: cash/notebook/statement/held_generators.py:HeldGenerators.before_run @57d870a1, cash/tracking/randomness/detect.py:attribute_draws @aafad2aa -->
 **What happened.** You ran a cell on its own (again, or not right after the
 cell above it), and a statement in it draws from a generator reached through
 an attribute: `c.rng.normal()` with `rng` a class attribute, `mod.rng`,
@@ -2969,7 +2978,7 @@ reproducible, seed with a fixed number instead.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashRandomnessWarning</span>
 
-<!-- claim: cash/notebook/upstream/rng_rewind.py:RngRewind._warn_not_restored @9d160ded -->
+<!-- claim: cash/notebook/upstream/rng_rewind.py:RngRewind._warn_not_restored @b1e4daf3 -->
 **What happened.** A cell, or a statement above it that cash runs again to
 bring it up to date, draws from a seeded global stream (`np.random`,
 `random`, `torch`). Cash puts such a stream where a run from the top has it
@@ -2999,7 +3008,7 @@ random source.
 first result is returned from then on, and clearing the cache or running on
 another machine gives a different frozen value.
 
-<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @ff4dc78c, cash/tracking/randomness/detect.py:RandomnessDetector.analyze_code @4890c3ec -->
+<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @6e1e1f8a, cash/tracking/randomness/detect.py:RandomnessDetector.analyze_code @4890c3ec -->
 In a notebook, a draw too cheap to cache is frozen too when it comes from the
 `random`, `numpy.random` or `torch` stream, because cash rewinds those streams
 before a re-run. A cheap draw from a generator held in a variable
@@ -3040,7 +3049,7 @@ warns. When cash cannot read the setting (a variable, or `PCA()`, whose
 `svd_solver='auto'` picks by the data's shape), the message says what the draw
 depends on rather than that one happened.
 
-<!-- claim: cash/notebook/statement/randomness.py:StatementRandomness._warn_hidden_unseeded @b4547041 -->
+<!-- claim: cash/notebook/statement/randomness.py:StatementRandomness._warn_hidden_unseeded @4f7660a1 -->
 In a notebook the same library calls warn when a statement makes them without
 a seed (`df.sample(100)`, `train_test_split(X)`), as does a statement that
 calls one of your functions which builds its own unseeded generator
@@ -3049,7 +3058,7 @@ generator (`z = np.random.default_rng().normal()`). A pandas or scikit-learn
 call left at `random_state=None` draws from numpy's global stream, so after
 `np.random.seed(0)` it is reproducible and does not warn; a polars call does.
 
-<!-- claim: cash/decorator/rng.py:RngWatch.warn_observed_draw @4bad64b0, cash/notebook/statement/randomness.py:StatementRandomness.flag_observed_hidden_draw @71b1e7ff, cash/tracking/randomness/lineage.py:unseeded_streams @5abf622f -->
+<!-- claim: cash/decorator/rng.py:RngWatch.warn_observed_draw @4bad64b0, cash/notebook/statement/randomness.py:StatementRandomness.flag_observed_hidden_draw @71b1e7ff, cash/tracking/randomness/lineage.py:unseeded_streams @4c50325a -->
 A draw that neither the function's source nor the statement's shows is caught
 as it happens: cash compares the global streams (Python's `random`, numpy's
 `np.random`, and torch's default generator when torch is imported) before and
@@ -3060,7 +3069,8 @@ a scikit-learn transformer left at `random_state=None` inside a
 `ColumnTransformer` a helper builds, which subsamples large data from numpy's
 stream. A seed counts when it was set before the call, by the caller, or inside
 the call before the draw (`np.random.seed(0)`, `random.seed(0)`,
-`torch.manual_seed(0)`); `seed(None)` does not. Some library code takes a
+`torch.manual_seed(0)`); `seed(None)` does not, and in a notebook neither
+does a seed that only a cell below set, on an earlier run. Some library code takes a
 number from the stream and then does not use it (scikit-learn's `SVC()` and
 `Lasso()` take one for settings they are not using), so the message says the
 value is frozen if the result depends on that draw. A returned estimator left
@@ -3198,7 +3208,7 @@ call.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/file_deps.py:FileDeps.code_moved_since_keyed @b425daba, cash/decorator/registry.py:FunctionRegistry.code_functions @f4899cd2 -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.code_moved_since_keyed @74117bb6, cash/decorator/registry.py:FunctionRegistry.code_functions @f4899cd2 -->
 **What happened.** A file holding the function, a helper, or a cached function
 it depends on changed on disk during the call, in code this call runs. The
 result was returned but not stored.
@@ -3263,7 +3273,7 @@ memo nothing else reads.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/store.py:ResultStore.store @00a3421c -->
+<!-- claim: cash/decorator/store.py:ResultStore.store @c5fd2627 -->
 **What happened.** The result was computed, but writing it to the cache
 failed. The message names the backend and the exception. Whatever the
 exception, the call returns its result; a failed write never fails the call.
@@ -3291,9 +3301,9 @@ defining `greedy` and `rep` ran again).
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/file_deps.py:FileDeps.inputs_moved_during_call @7d2264c0, cash/tracking/file_tracker.py:FileAccessTracker.inputs_changed_since_read @f0c98a2c -->
-<!-- claim: cash/tracking/file_tracker.py:FileAccessTracker._digest_now @4364ed7d, cash/tracking/file_dep_snapshot.py:snapshot_file_deps @ef9f35ad -->
-<!-- claim: cash/notebook/statement/store.py:StatementStore.inputs_moved @0d1369aa, cash/notebook/statement/processor.py:StatementProcessor._post_execute @a8c3dc59 -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.inputs_moved_during_call @7d2264c0, cash/tracking/file_tracker.py:FileAccessTracker.inputs_changed_since_read @803cd545 -->
+<!-- claim: cash/tracking/file_tracker.py:FileAccessTracker._digest_now @4364ed7d, cash/tracking/file_dep_snapshot.py:snapshot_file_deps @c2002cea -->
+<!-- claim: cash/notebook/statement/store.py:StatementStore.inputs_moved @0669c2ad, cash/notebook/statement/processor.py:StatementProcessor._post_execute @a8c3dc59 -->
 === "Decorator"
 
     **What happened.** A file the function read changed before it returned.
@@ -3384,7 +3394,7 @@ interrupted write.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/result_parts.py:split_by_a_hit @0ed503f3, cash/closure_sharing.py:closures_sharing @6a20c918 -->
+<!-- claim: cash/decorator/result_parts.py:split_by_a_hit @0ed503f3, cash/closure_sharing.py:closures_sharing @dd301eb1 -->
 **What happened.** The result holds two parts over the same memory: two
 numpy arrays whose data overlap, such as `return a, a[2:5]`, a numpy
 array and a polars or pandas frame made over it, such as
@@ -3417,7 +3427,7 @@ time, which is what the code means.
 
 <span class="md-tag cash-warning-path">both</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/closure_sharing.py:closures_sharing @6a20c918, cash/closure_sharing.py:closure_check_budget @f0cbe2b2 -->
+<!-- claim: cash/closure_sharing.py:closures_sharing @dd301eb1, cash/closure_sharing.py:closure_check_budget @f0cbe2b2 -->
 **What happened.** Before storing a result, cash looks through it for a
 function whose closure holds another part of it, `return arr, lambda: arr`
 (see [STORE-PARTS-SHARED](#store-parts-shared)). The look takes at most
@@ -3486,11 +3496,12 @@ before it writes, or write a copy of the result.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/runtime.py:CallRunner._inputs_moved_check @2dd33f3d, cash/decorator/runtime.py:KeyBuilder.ledger_now @355ab3b5 -->
+<!-- claim: cash/decorator/runtime.py:CallRunner._inputs_moved_check @3600e131, cash/decorator/runtime.py:KeyBuilder.ledger_now @e7d3ef24 -->
 **What happened.** A global, a class attribute or other program state the
 function's key read changed while the call was running: another thread
 reloaded a config, say. The result was returned but not stored. The check
-runs only while other threads are running (or for a coroutine function).
+runs only while other threads are running, not counting cash's own (or for
+a coroutine function).
 
 **Why it matters.** The key was built from the old value and the body may have
 used the new one, so storing it could serve the wrong result to every later
@@ -3506,7 +3517,7 @@ time, pass the value in as an argument.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
 
-<!-- claim: cash/decorator/file_deps.py:FileDeps.work_outlived_call @0f141a00, cash/tracking/reader_patches.py:_patch_thread_pool_submit @b3742318, cash/tracking/reader_patches.py:_patch_thread_start @1b59e2a1, cash/tracking/file_tracker.py:FileAccessTracker.__exit__ @25e13332 -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.work_outlived_call @0f141a00, cash/tracking/reader_patches.py:_patch_thread_pool_submit @b3742318, cash/tracking/reader_patches.py:_patch_thread_start @1b59e2a1, cash/tracking/file_tracker.py:FileAccessTracker.__exit__ @690809e9 -->
 **What happened.** The function handed work to a `ThreadPoolExecutor`
 (`submit`, `map`) or started a `threading.Thread`, and returned while some of
 it was still running: it never waited for the future or joined the thread,
