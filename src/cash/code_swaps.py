@@ -23,9 +23,19 @@ import operator
 import types
 from typing import Any
 
+from . import _native
 from .loaded_code import code_objects_of
 
-__all__ = ["FOLDED_CODE", "FoldedCode", "note_owner", "note_report", "settable"]
+__all__ = ["FOLDED_CODE", "FoldedCode", "function_sets", "note_owner", "note_report", "settable"]
+
+_func_sets = getattr(_native.cwatch, "func_sets", None)
+
+
+def function_sets() -> int | None:
+    """How many times any function's ``__code__`` or defaults were set
+    since the extension's function watcher went on (on the first call
+    here), or None without it."""
+    return None if _func_sets is None else _func_sets()
 
 
 class FoldedCode:

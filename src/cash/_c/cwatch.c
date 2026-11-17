@@ -1031,9 +1031,19 @@ static int on_type(PyTypeObject *t) {
     return 0;
 }
 
+/* Every function's ``__code__`` set since the watchers were installed,
+ * watched or not, and its ``__defaults__`` or ``__kwdefaults__`` set once it
+ * had some (`func_sets`): not a function given its first defaults as it is
+ * made, which ``collections.namedtuple`` does to each ``__new__``. */
+static uint64_t func_sets = 0;
+
 static int on_func(PyFunction_WatchEvent ev, PyFunctionObject *f, PyObject *nv) {
     (void)nv;
     if (ev == PyFunction_EVENT_CREATE) return 0;
+    if (ev == PyFunction_EVENT_MODIFY_CODE
+        || (ev == PyFunction_EVENT_MODIFY_DEFAULTS && f->func_defaults != NULL)
+        || (ev == PyFunction_EVENT_MODIFY_KWDEFAULTS && f->func_kwdefaults != NULL))
+        func_sets++;
     if (ev != PyFunction_EVENT_DESTROY) world_bump();
     long s = ht_slot((uintptr_t)f);
     if (s < 0) return 0;
@@ -2642,6 +2652,12 @@ static PyObject *py_info(PyObject *self, PyObject *o) {
 
 /* ------------------------------------------------------------ world API (decorator hit path) */
 static PyObject *py_world_epoch(PyObject *self, PyObject *noargs) { return PyLong_FromUnsignedLongLong(world_epoch); }
+/* func_sets() -> how many times any function's code or defaults were set
+ * since the watchers were installed (installs them on the first call) */
+static PyObject *py_func_sets(PyObject *self, PyObject *noargs) {
+    if (ensure_watchers() < 0) return NULL;
+    return PyLong_FromUnsignedLongLong(func_sets);
+}
 static PyObject *py_core_epoch(PyObject *self, PyObject *noargs) { return PyLong_FromUnsignedLongLong(core_epoch); }
 
 static int scoped_holds(PyObject *name, PyObject *held) {
@@ -3601,6 +3617,7 @@ static PyMethodDef methods[] = {
     {"info", py_info, METH_O, ""},
     {"world_epoch", py_world_epoch, METH_NOARGS, ""},
     {"core_epoch", py_core_epoch, METH_NOARGS, ""},
+    {"func_sets", py_func_sets, METH_NOARGS, ""},
     {"world_scope", py_world_scope, METH_O, ""},
     {"scoped_cells", py_scoped_cells, METH_O, ""},
     {"cash_epoch", py_cash_epoch, METH_NOARGS, ""},

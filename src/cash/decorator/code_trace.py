@@ -2624,6 +2624,7 @@ def build(
     accepted: set[types.CodeType] | None = None,
     owners: frozenset[int] = frozenset(),
     narrow: bool = False,
+    also_accepted: Callable[[], set[types.CodeType] | None] | None = None,
 ) -> tuple[list[tuple] | None, str]:
     """The items of a traced call's finished *unit*, or None and why the
     call's result cannot be served from a trace. *static_codes* are the
@@ -2637,7 +2638,10 @@ def build(
     of module data by their surface only (`HELD_BY_NAME`), so every class
     here is digested by its surface too, and its methods that ran are
     checked by their code items; code that ran and that no name holds
-    leaves no trace at all then, since the key no longer stands for it."""
+    leaves no trace at all then, since the key no longer stands for it.
+    *also_accepted*: more code to accept, asked for only when the strict
+    check refused what ran against *accepted* (a fold built late, at a
+    cost), and judged again without it."""
     from ..tracking.trace_items import SURFACE, call_starts
 
     try:
@@ -2655,7 +2659,16 @@ def build(
             note_line_status(static_codes)
             if accepted:
                 note_line_status(accepted)
-        why = (_refusal_in(judged, unit, owners) or _changed_global(items, unit.global_starts)) if strict else None
+        why = _refusal_in(judged, unit, owners) if strict else None
+        if why is not None and also_accepted is not None:
+            more = also_accepted()
+            if more:
+                note_line_status(more)
+                rest = [f for f in judged if f.__code__ not in more]
+                if len(rest) < len(judged):
+                    why = _refusal_in(rest, unit, owners)
+        if why is None and strict:
+            why = _changed_global(items, unit.global_starts)
         if why is not None:
             return None, why
         return items, ""
