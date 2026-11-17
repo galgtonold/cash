@@ -72,7 +72,7 @@ from .unloaded_modules import source_digest
 __all__ = ["STATS", "StoredReportMismatch", "flush", "load", "save", "status"]
 
 #: Layout of a stored file; a change makes every older one a miss.
-_FORMAT = 5
+_FORMAT = 6
 _KIND = "purity-report"
 #: Reports kept per function: its recent texts, and the worlds they ran in.
 _MAX_ENTRIES = 8
@@ -110,7 +110,9 @@ def _descend(live: Any, target: Any) -> str | None:
     """The steps from *live* to *target*: ``f`` for ``__func__`` (a method
     read off its class), ``p`` for a property's getter or a
     ``cached_property``'s function (read off its class, the descriptor
-    itself), ``w`` for ``__wrapped__``; None when none lead."""
+    itself), ``w`` for ``__wrapped__``, ``r(<module>|<qualname>)`` for the
+    implementation a ``functools.singledispatch`` function's ``registry``
+    holds for that class; None when none lead."""
     steps = ""
     for _ in range(_MAX_STEPS):
         if live is target:
@@ -120,6 +122,9 @@ def _descend(live: Any, target: Any) -> str | None:
             # the same function bound to the same object is the same method.
             if live.__func__ is target.__func__ and live.__self__ is target.__self__:
                 return steps
+        dispatched = _registry_step(live, target)
+        if dispatched is not None:
+            return steps + dispatched
         if type(live) is types.MethodType:
             live, steps = live.__func__, steps + "f"
             continue
@@ -132,6 +137,43 @@ def _descend(live: Any, target: Any) -> str | None:
             return None
         live, steps = inner, steps + "w"
     return None
+
+
+def _registry(live: Any) -> Any:
+    """A ``functools.singledispatch`` function's ``registry`` (class ->
+    implementation), or None."""
+    if type(live) is not types.FunctionType:
+        return None
+    registry = live.__dict__.get("registry")
+    return registry if isinstance(registry, types.MappingProxyType) else None
+
+
+def _registry_step(live: Any, target: Any) -> str | None:
+    """``r(<module>|<qualname>)`` when *live*'s singledispatch registry
+    holds *target* for a class a name leads to: an implementation
+    registered under a throwaway name (``def _``), which no module holds
+    by its own name. Read back, the registry is asked for that class again
+    (`_follow`), and what it holds then is checked like any other visited
+    callable."""
+    registry = _registry(live)
+    if registry is None or type(target) is not types.FunctionType:
+        return None
+    position = None
+    for at, (cls, impl) in enumerate(list(registry.items())):
+        if impl is not target:
+            continue
+        home = _home(cls)
+        if home is None or resolve_binding(*home) is not cls:
+            # A class no name leads to (a stand-in for a library that is
+            # not installed): its place in the registry, which the order
+            # the module registers in decides.
+            position = at if position is None else position
+            continue
+        module, chain = home
+        if any(c in part for part in (module, *chain) for c in "()|#"):
+            continue
+        return f"r({module}|{'.'.join(chain)})"
+    return None if position is None else f"r(#{position})"
 
 
 def _getter(live: Any) -> Any:
@@ -147,7 +189,10 @@ def _getter(live: Any) -> Any:
 
 
 def _follow(live: Any, steps: str) -> Any:
-    for step in steps:
+    at = 0
+    while at < len(steps):
+        step = steps[at]
+        at += 1
         if step == "f":
             if type(live) is not types.MethodType:
                 return UNRESOLVED
@@ -156,11 +201,41 @@ def _follow(live: Any, steps: str) -> Any:
             live = _getter(live)
             if live is None:
                 return UNRESOLVED
+        elif step == "r":
+            end = steps.find(")", at)
+            if steps[at : at + 1] != "(" or end < 0:
+                return UNRESOLVED
+            live = _dispatched(_registry(live), steps[at + 1 : end])
+            at = end + 1
+            if live is UNRESOLVED:
+                return UNRESOLVED
         else:
             live = _wrapped(live)
             if live is None:
                 return UNRESOLVED
     return live
+
+
+def _dispatched(registry: Any, spelled: str) -> Any:
+    """What *registry* holds for the class *spelled* names (``module|qualname``)
+    or at the place it spells (``#<n>``), or ``UNRESOLVED``."""
+    if registry is None:
+        return UNRESOLVED
+    if spelled.startswith("#"):
+        try:
+            position = int(spelled[1:])
+        except ValueError:
+            return UNRESOLVED
+        impls = list(registry.values())
+        return impls[position] if 0 <= position < len(impls) else UNRESOLVED
+    module, _, dotted = spelled.partition("|")
+    cls = resolve_binding(module, tuple(dotted.split(".")))
+    if cls is UNRESOLVED:
+        return UNRESOLVED
+    try:
+        return registry.get(cls, UNRESOLVED)
+    except TypeError:  # an unhashable object where a class was
+        return UNRESOLVED
 
 
 def _home(obj: Any) -> tuple[str, tuple[str, ...]] | None:
@@ -195,9 +270,14 @@ def _owner_homes(obj: Any) -> list[tuple[str, tuple[str, ...]]]:
     function whose qualified name leads nowhere: a method a ``dataclass``
     generated (``__create_fn__.<locals>.__repr__``, held as ``Mount.__repr__``
     behind ``reprlib.recursive_repr``'s wrapper). `_descend` follows such a
-    wrapper's ``__wrapped__`` from the class attribute to *obj*."""
+    wrapper's ``__wrapped__`` from the class attribute to *obj*. Also a
+    function made in a factory whose names ``functools.wraps`` copied from
+    another (scanpy's ``_LegacyRng`` sets one per ``Generator`` method, each
+    named ``Generator.<method>``): its code still says where it was made."""
     base = obj.__func__ if type(obj) is types.MethodType else obj
-    if type(base) is not types.FunctionType or "<" not in base.__qualname__:
+    if type(base) is not types.FunctionType:
+        return []
+    if "<" not in base.__qualname__ and "<" not in getattr(base.__code__, "co_qualname", ""):
         return []
     name = base.__name__
     found = []
@@ -211,6 +291,26 @@ def _owner_homes(obj: Any) -> list[tuple[str, tuple[str, ...]]]:
             qualname = held.__qualname__
             if isinstance(qualname, str) and "<" not in qualname:
                 found.append((module, (*qualname.split("."), name)))
+    return found
+
+
+def _dispatcher_homes(obj: Any) -> list[tuple[str, tuple[str, ...]]]:
+    """Where the module that defined *obj* holds a ``functools.singledispatch``
+    function whose registry holds it: an implementation registered as
+    ``def _``, whose own name holds whichever was defined last. `_descend`
+    takes the registry step from there."""
+    base = obj.__func__ if type(obj) is types.MethodType else obj
+    if type(base) is not types.FunctionType:
+        return []
+    found = []
+    for module in dict.fromkeys((base.__module__, base.__globals__.get("__name__"))):
+        namespace = getattr(sys.modules.get(module) if isinstance(module, str) else None, "__dict__", None)
+        if not isinstance(namespace, dict):
+            continue
+        for name, held in list(namespace.items()):
+            registry = _registry(held)
+            if registry is not None and any(impl is base for impl in list(registry.values())):
+                found.append((module, (name,)))
     return found
 
 
@@ -264,11 +364,18 @@ def _class_holders(attr: str) -> tuple[str, ...]:
     kept = _HOLDERS.get(attr)
     if kept is not None and kept[0] == count:
         return kept[1]
-    found = tuple(name for name in list(sys.modules) if _holds_own_class(name, attr))
+    found = []
+    for name, module in list(sys.modules.items()):
+        # `_holds_own_class`, without looking the module up again: this
+        # reads every loaded module.
+        namespace = getattr(module, "__dict__", None)
+        held = namespace.get(attr) if type(namespace) is dict else None
+        if held is not None and isinstance(held, type) and getattr(held, "__module__", None) == name:
+            found.append(name)
     if len(_HOLDERS) > 4096:
         _HOLDERS.clear()
-    _HOLDERS[attr] = (count, found)
-    return found
+    _HOLDERS[attr] = (count, tuple(found))
+    return tuple(found)
 
 
 def _path_of(obj: Any, *also: tuple[str, tuple[str, ...]] | None) -> list:
@@ -277,7 +384,10 @@ def _path_of(obj: Any, *also: tuple[str, tuple[str, ...]] | None) -> list:
     the module it was defined in, a class there that holds it, the object
     a method is bound to, or the class a library made a method for."""
     # The class holders last: they are looked up in every loaded module.
-    for paths in ((_home(obj), *also, _defining_home(obj), *_owner_homes(obj), *_instance_homes(obj)), _holder_homes):
+    for paths in (
+        (_home(obj), *also, _defining_home(obj), *_owner_homes(obj), *_dispatcher_homes(obj), *_instance_homes(obj)),
+        _holder_homes,
+    ):
         for path in paths if isinstance(paths, tuple) else paths(obj):
             if path is None:
                 continue
@@ -875,17 +985,73 @@ def _read(spelled: dict, objects: list[Any]) -> PurityReport:
 
 
 def _root_path(func: Any) -> tuple[str, tuple[str, ...], str] | None:
-    """Where a module holds *func*: ``(module, chain, steps)`` as `_path_of`
-    spells it. Only a plain function a name leads back to has its report
-    stored (a function an ``lru_cache`` or ``functools.wraps`` wrapper holds
-    is found through the wrapper)."""
+    """Where *func*'s reports are kept: where its code is written, its
+    module, qualified name, file and first line (`_place`). Only a plain
+    function is stored (a function an ``lru_cache`` or ``functools.wraps``
+    wrapper holds is found through the wrapper).
+
+    Only the store's slot: an entry proves it is about *func* by the path
+    it records for it (`_root_found`). Named by where the code is, not by a
+    name that leads to it, because finding a name can read every loaded
+    module (`_holder_homes`), in every process, for each root."""
     if type(func) is not types.FunctionType:
         return None
-    try:
-        module, chain, steps = _path_of(func)
-    except _Unstorable:
+    return _place(func)
+
+
+#: The steps of a root path `_root_spelled` names by `_place`: no name leads to it.
+_CODE_ROOT = "@"
+
+
+def _place(func: types.FunctionType) -> tuple[str, tuple[str, ...], str] | None:
+    """*func*'s module, qualified name, file and first line, or None for code
+    with no file of its own."""
+    code = func.__code__
+    module = func.__module__
+    qualname = func.__qualname__
+    if not isinstance(module, str) or not isinstance(qualname, str) or is_pseudo_filename(code.co_filename):
         return None
-    return module, tuple(chain), steps
+    return module, (qualname, code.co_filename, str(code.co_firstlineno)), _CODE_ROOT
+
+
+def _code_root(func: types.FunctionType) -> tuple[str, tuple[str, ...], str] | None:
+    """`_place`, for a root no name leads to: a function a library decorates
+    into another object (``typing.Literal``, whose name holds the
+    ``_SpecialForm`` built around it) is analysed when a call reaches it as
+    data, in every process, and nothing but where it is written finds it
+    again.
+
+    Only a function defined at a module's top level or in a class there,
+    running in that module's namespace, with no closure: nothing but its
+    text (`_text`) and what its names are bound to (the guards) tells two
+    such functions apart. A closure is not: the report of one belongs to
+    that function object alone, which another process cannot name."""
+    if func.__closure__ or "<" in func.__qualname__:
+        return None
+    if func.__globals__ is not getattr(sys.modules.get(func.__module__), "__dict__", None):
+        return None
+    return _place(func)
+
+
+def _root_found(path: list, func: Any) -> Any:
+    """What the root path *path* of a stored entry leads to, checked by
+    `_check`: *func* when `_code_root` spells it so, as `_find` otherwise."""
+    if path[2] != _CODE_ROOT:
+        return _find(path)
+    root = _code_root(func) if type(func) is types.FunctionType else None
+    return func if root is not None and _spelled_root(root) == path else UNRESOLVED
+
+
+def _root_spelled(func: Any) -> list:
+    """The path `_entry` and `verify` record for the root: a name that leads
+    to it, or where `_code_root` says it is written."""
+    try:
+        return _path_of(func)
+    except _Unstorable:
+        root = _code_root(func) if type(func) is types.FunctionType else None
+        if root is None:
+            raise
+        return _spelled_root(root)
 
 
 def _spelled_root(root: tuple[str, tuple[str, ...], str]) -> list:
@@ -948,8 +1114,8 @@ def load(func: Callable[..., Any]) -> PurityReport | None:
 
 def _check(entry: dict, func: Any) -> PurityReport | None:
     objects = []
-    for path in entry["paths"]:
-        obj = _find(path)
+    for at, path in enumerate(entry["paths"]):
+        obj = _root_found(path, func) if at == 0 else _find(path)
         if obj is UNRESOLVED:
             return None
         objects.append(obj)
@@ -1041,7 +1207,7 @@ def save(func: Callable[..., Any], report: PurityReport, walk: Any, seconds: flo
 
 def _entry(func: Any, report: PurityReport, walk: Any, text: str) -> dict:
     objects: list[Any] = [func]
-    paths: list[list] = [_path_of(func)]
+    paths: list[list] = [_root_spelled(func)]
     seen = {id(func)}
     names = walk.visited_names()
     owners: list[list] = []
@@ -1114,10 +1280,10 @@ def verify(func: Any, loaded: PurityReport, walked: PurityReport) -> None:
     STATS["verified"] += 1
     try:
         objects: list[Any] = [func]
-        paths: list[list] = [_path_of(func)]
+        paths: list[list] = [_root_spelled(func)]
         want = _spell(walked, objects, paths, {})
         objects2: list[Any] = [func]
-        paths2: list[list] = [_path_of(func)]
+        paths2: list[list] = [_root_spelled(func)]
         got = _spell(loaded, objects2, paths2, {})
     except _Unstorable as e:
         raise StoredReportMismatch(f"stored report of {func.__qualname__}: {e}") from None
