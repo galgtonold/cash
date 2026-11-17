@@ -26,6 +26,13 @@ instead: ``codecs.register`` (wrapped here, from the first snapshot on),
 Python raises to the hooks already installed: cash's own is,
 `io_watch`) and the environment ``os.putenv`` and ``os.unsetenv`` change
 outside ``os.environ`` (their audit events).
+
+An environment write the user waived where it was made (``with
+cash.assume_safe():`` around it, ``# @cash:assume-safe`` on its line, as a
+file write is waived: `register_env_waiver`) is not counted, and the key it
+wrote is left out when ``os.environ`` is compared. Every write through
+``os.environ`` calls ``os.putenv`` or ``os.unsetenv``, so a later write of
+that key the user did not waive is still counted.
 """
 
 from __future__ import annotations
@@ -50,6 +57,7 @@ __all__ = [
     "finalizers_made",
     "importing",
     "register_atexit",
+    "register_env_waiver",
     "registering_imports",
     "snapshot",
     "unregister_atexit",
@@ -83,6 +91,13 @@ _AUDIT_HOOKS = [0]
 #: Calls of ``os.putenv`` and ``os.unsetenv``: they change the environment
 #: a child process and C code read, and not ``os.environ``.
 _NATIVE_ENVIRONMENT = [0]
+#: The keys of the environment (as ``os.environ`` holds them) a waived
+#: ``os.putenv`` or ``os.unsetenv`` wrote: not compared (`_same_environment`).
+_WAIVED_ENVIRONMENT: set[Any] = set()
+#: Asked, in order, whether the user waived the environment write being
+#: audited: True or False, or None to leave it to the next. None from all:
+#: not waived.
+_ENV_WAIVERS: list[Callable[[], bool | None]] = []
 _counting = False
 #: ``callback -> times registered`` through ``atexit.register`` since
 #: counting began, and how many of those ``atexit.unregister`` took back
@@ -159,6 +174,37 @@ def _count_atexit() -> None:
     atexit.unregister = counted_unregister  # type: ignore[assignment]
 
 
+def register_env_waiver(waiver: Callable[[], bool | None], first: bool = False) -> None:
+    """Ask *waiver*, from now on, whether the user waived an ``os.putenv``
+    or ``os.unsetenv`` being audited (``with cash.assume_safe():``, ``#
+    @cash:assume-safe``): True or False where it can tell (a cached call it
+    observes), None to leave it to the others. *first*: asked before those
+    registered already."""
+    if first:
+        _ENV_WAIVERS.insert(0, waiver)
+    else:
+        _ENV_WAIVERS.append(waiver)
+
+
+def _env_write_waived() -> bool:
+    for waiver in tuple(_ENV_WAIVERS):
+        try:
+            verdict = waiver()
+        except Exception:  # noqa: BLE001 - a waiver that cannot tell does not waive
+            return False
+        if verdict is not None:
+            return verdict
+    return False
+
+
+def _environment_key(key: Any) -> Any:
+    """*key* of an ``os.putenv`` event as ``os.environ`` holds it: upper
+    case on Windows, bytes as given elsewhere."""
+    if os.name == "nt" and isinstance(key, str):
+        return key.upper()
+    return key
+
+
 def _count_calls() -> None:
     """Start counting what cannot be read (see the module docstring)."""
     global _counting
@@ -185,7 +231,10 @@ def _count_calls() -> None:
 
     io_watch.subscribe_always("sys.addaudithook", added)
 
-    def set_natively(_args: tuple) -> None:
+    def set_natively(args: tuple) -> None:
+        if args and _env_write_waived():
+            _WAIVED_ENVIRONMENT.add(_environment_key(args[0]))
+            return
         _NATIVE_ENVIRONMENT[0] += 1
 
     io_watch.subscribe_always(("os.putenv", "os.unsetenv"), set_natively)
@@ -292,6 +341,18 @@ def _environment() -> tuple[dict[Any, Any], int]:
     return (dict(data) if isinstance(data, dict) else dict(os.environ)), _NATIVE_ENVIRONMENT[0]
 
 
+def _same_environment(old: tuple[dict[Any, Any], int], new: tuple[dict[Any, Any], int]) -> bool:
+    """The same but for the keys a waived write changed (`_WAIVED_ENVIRONMENT`):
+    each write of the user's not waived is counted, and the count compared."""
+    if old[1] != new[1]:
+        return False
+    if old[0] == new[0]:
+        return True
+    waived = _WAIVED_ENVIRONMENT
+    keys = (old[0].keys() | new[0].keys()) - waived
+    return all(old[0].get(key, _MISSING) == new[0].get(key, _MISSING) for key in keys)
+
+
 def _matplotlib() -> dict[str, Any] | None:
     matplotlib = sys.modules.get("matplotlib")
     params = attribute_or(matplotlib, "rcParams", None) if matplotlib is not None else None
@@ -373,7 +434,7 @@ _REGISTRIES: tuple[tuple[str, Callable[[], Any], Callable[[Any, Any], bool] | No
     ("the codec search functions (codecs.register)", lambda: _CODECS[0], None),
     ("the audit hooks (sys.addaudithook)", lambda: _AUDIT_HOOKS[0], None),
     ("where imports are found (sys.path, sys.meta_path, sys.path_hooks)", _imports, None),
-    ("the environment (os.environ, os.putenv, os.unsetenv)", _environment, None),
+    ("the environment (os.environ, os.putenv, os.unsetenv)", _environment, _same_environment),
     ("the working directory (os.chdir)", os.getcwd, None),
     ("matplotlib's rcParams", _matplotlib, None),
     ("NumPy's error handling or print options (np.seterr, np.set_printoptions)", _numpy, None),

@@ -34,7 +34,7 @@ from cash._user_attrs import attribute_or
 from cash.analysis.namespace_effects import code_waived_lines
 from cash.install_paths import is_user_code_file
 from cash.purity import is_pure
-from cash.tracking import io_watch
+from cash.tracking import io_watch, process_registries
 from cash.tracking.file_dep_snapshot import forget_young_digests
 from cash.tracking.read_classification import is_runtime_cache_path, own_lstat, own_stat
 
@@ -367,6 +367,16 @@ for _event in _UNSEEN_WRITERS:
     io_watch.subscribe(_event, _on_unseen_writer(_event))
 io_watch.subscribe("os.rename", _on_move)
 io_watch.subscribe("os.replace", _on_move)
+
+
+def _env_write_waived() -> bool | None:
+    """Whether the user waived the environment write being audited inside
+    an observed block, as a file write is waived (`_write_waived`); None
+    outside one (`process_registries.register_env_waiver`)."""
+    return _write_waived() if _active.get() else None
+
+
+process_registries.register_env_waiver(_env_write_waived)
 
 
 @contextmanager
