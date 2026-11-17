@@ -144,6 +144,35 @@ class LoopSplitStore(VersionedJsonStore[int]):
         self._items[source_hash] = k
         self._write()
 
+    def rest_after(self, source_hash: str) -> int | None:
+        """The pass after which the loop *source_hash*, run with its first
+        passes one by one, last sent its rest as one unit that was stored
+        (`REST_NEVER`: it ran every pass one by one, each stored), or None.
+
+        Kept apart from the split verdicts (`get`), which the simulation
+        reads: this only says where the runtime switched."""
+        self._ensure_loaded()
+        return self._items.get(_REST_PREFIX + source_hash)
+
+    def record_rest_after(self, source_hash: str, k: int) -> None:
+        """Remember the pass after which the loop *source_hash* sent its rest
+        as one stored unit (`REST_NEVER`: none). Rewritten when it moves: it
+        names the entries the last stored run left, which a run whose
+        passes are all served finds again by switching at the same pass."""
+        self._ensure_loaded()
+        key = _REST_PREFIX + source_hash
+        if self._items.get(key) == k:
+            return
+        self._items[key] = k
+        self._write()
+
+
+#: The key prefix of a loop's recorded switch pass (`LoopSplitStore.rest_after`):
+#: no source hash starts with it, so no split verdict is read from one.
+_REST_PREFIX = "rest:"
+#: `LoopSplitStore.rest_after` for a loop that ran every pass one by one.
+REST_NEVER = 2**31 - 1
+
 
 # One store per cache dir, process-wide.
 #
