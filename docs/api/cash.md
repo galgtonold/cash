@@ -28,7 +28,7 @@ for some functions.
 
 ## Signatures at a glance
 
-<!-- claim: cash/core.py:Cash.__init__ @9f4080df, cash/core.py:Cash.cache @470582df -->
+<!-- claim: cash/core.py:Cash.__init__ @d6897bc2, cash/core.py:Cash.cache @ef0577dc -->
 ```text
 Cash(
     backend=None, cache_dir=None, backends=None, compress=None,
@@ -69,7 +69,7 @@ and also has these attributes:
 | Attribute | What it does |
 |---|---|
 | `f.explain(*args, **kwargs)` | Returns a [`CacheExplanation`](cash.md#cash.CacheExplanation): whether a call with these arguments would hit, and why. Runs nothing and changes nothing. |
-| `f.cache_info()` | Returns a dict: `hits`, `misses`, `hit_rate`, `total_time_saved` (seconds), `miss_reasons` (count per reason, such as `"new arguments"`), `changed` (the `code or state changed` misses counted by what changed, such as `"helper ticks._parse changed"`) and `warnings` (the last 20, each with `category`, `code`, `message`, `timestamp`, in full even when the printed line was short). |
+| `f.cache_info()` | Returns a dict: `hits`, `misses`, `hit_rate`, `total_time_saved` (seconds), `miss_reasons` (count per reason, such as `"new arguments"`), `changed` (the `code or state changed` misses counted by what changed, such as `"helper ticks._parse changed"`), `warnings` (the last 20, each with `category`, `code`, `message`, `timestamp`, in full even when the printed line was short) and `phase_times` (where the calls' time went, empty unless `CASH_PHASE_TIMES=1`). |
 | `f.cache_clear()` | Deletes this function's entries and resets its statistics and warning log, so its warnings are shown again. |
 | `f.__wrapped__` | The undecorated function; calling it bypasses the cache. |
 

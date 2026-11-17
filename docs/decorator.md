@@ -34,7 +34,7 @@ slow_square(1_000_000)   # cache hit: returns the stored result
 
 That is all the setup there is. A few rules hold for every cached function:
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @d4f3bed4, cash/decorator/store.py:ResultStore.store @00a3421c, cash/decorator/store.py:ResultStore.restore_identity @2e52815d -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @a4c15474, cash/decorator/store.py:ResultStore.store @c5fd2627, cash/decorator/store.py:ResultStore.restore_identity @2e52815d -->
 - **Exceptions are never cached.** If the body raises, nothing is stored and the
   exception reaches you as usual. The next call runs the body again.
 - **A hit does not replay output.** Anything the body printed or logged appears
@@ -76,11 +76,13 @@ takes a backend instance or a backend type name (`backend="sqlite"`). See the
 
 ## Where results are stored
 
-<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @f269c827, cash/backends/tiered_backend.py:TieredBackend.set @d0ef54da -->
+<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @f269c827, cash/backends/tiered_backend.py:TieredBackend.set @34e7db12, cash/backends/tiered_backend.py:TieredBackend._waits_for_a_hit @d085eeb3 -->
 **Every result is written to disk.** However cheap the call was, a decorated
 result goes to the RAM tier and to the disk tier, so the next process finds it.
-A big result, of which the RAM tier would have to copy 64 MB or more, goes to
-the disk tier alone, and each hit reads it from disk.
+A result holding 1 MiB or more of arrays goes to the disk tier first: its
+first hit reads it back and keeps it in RAM for the hits after. A big result,
+of which the RAM tier would have to copy 64 MB or more, goes to the disk tier
+alone, and each hit reads it from disk.
 There are two exceptions, and each stays in RAM for this process with a
 warning: a value too big for every disk tier's size cap
 ([`CACHE-VALUE-TOO-BIG`](warnings.md#cache-value-too-big)), and the result of
@@ -156,7 +158,7 @@ cash.storage: caching in /srv/proj/.cash, up to 26.0 GiB (a quarter of the free 
 
 ### Clearing the cache
 
-<!-- claim: cash/decorator/wrappers.py:Wrappers._cache_clear.cache_clear @968ec74a, cash/__main__.py:cmd_clear @fd92c8a3, cash/decorator/maintenance.py:Maintenance.delete_function_entries @bd12fb09 -->
+<!-- claim: cash/decorator/wrappers.py:Wrappers._cache_clear.cache_clear @f5dbe0ab, cash/__main__.py:cmd_clear @fd92c8a3, cash/decorator/maintenance.py:Maintenance.delete_function_entries @bd12fb09 -->
 Pick the narrowest tool that does the job:
 
 | To remove | Run |
@@ -226,7 +228,7 @@ entries up and storing results. When it is larger, the line ends with
 nothing can be saved, and storing is paid once for each new call. The next
 run shows what the cache is worth.
 
-<!-- claim: cash/decorator/explain.py:describe_state_change @58a52664, cash/decorator/explain.py:MissHistory.absent_entry_reason @27204896 -->
+<!-- claim: cash/decorator/explain.py:describe_state_change @58a52664, cash/decorator/explain.py:MissHistory.absent_entry_reason @f48a9e33 -->
 **One line per call.** `CASH_DEBUG=1` logs every call to stderr, with cash's
 other debug records. `CASH_VERBOSE=1` gives only the call lines:
 
@@ -300,7 +302,7 @@ purity, in-place-change and trace checks after a body.
 If your program configures `logging`, these lines go to your handlers in your
 format instead of stderr.
 
-<!-- claim: cash/diagnostics.py:warn_diagnostic @c0737e05, cash/config/schema.py:CashConfig.warning_detail == "short" -->
+<!-- claim: cash/diagnostics.py:warn_diagnostic @61e48045, cash/config/schema.py:CashConfig.warning_detail == "short" -->
 **Warnings.** cash's warnings are Python warnings, not log records, and each
 prints as one line: the code, what happened, the fix, and a link to its entry
 on [Warnings](warnings.md). The `file:line` in front is the call in your code
@@ -325,7 +327,7 @@ last use; `cash inspect --function NAME` lists one function's entries. See the
 With a bare `@cash.cache`, a call recomputes when anything in the first list
 changed. The second list is what cash does not see, and what to do about it.
 
-<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @8e272f43, cash/decorator/runtime.py:CallRunner._analyze_dependencies @6f5bcbac, cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @94b2b412, cash/decorator/code_args.py:CodeArgs.fold_code_args @58904680 -->
+<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @1738c84b, cash/decorator/runtime.py:CallRunner._analyze_dependencies @6f5bcbac, cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @cb57665a, cash/decorator/code_args.py:CodeArgs.fold_code_args @58904680, cash/decorator/runtime.py:KeyBuilder.held_by_name_for @f5d8cae7 -->
 <div class="grid cards" markdown>
 
 -   **Tracked for you: a change recomputes**
@@ -347,7 +349,11 @@ changed. The second list is what cash does not see, and what to do about it.
       global naming a library class or a builtin (`DTYPE = np.float32`,
       `AGG = sum`) counts by what it names.
     - The **classes it uses**: their code, their class attributes, and the
-      module globals their methods read, inherited ones included.
+      module globals their methods read, inherited ones included. On Python
+      3.12 and newer, a class of yours reached through module data (an
+      object in a module global, a table of classes) counts by its name, its
+      bases, what it holds and its method names, plus the code of the
+      methods a call runs: editing a method no call runs keeps the entries.
     - Another **cached function** it reaches, directly, through a helper or
       an import in the body, on any `Cash` instance, or passes on
       (`pool.map(inner, xs)`), with what that function reads.
@@ -423,7 +429,7 @@ only needs as data out of the first group and into the second.
 
 ### Pass data in, don't load inside { #pass-data-in }
 
-<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @8e272f43 -->
+<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @1738c84b -->
 Here `signals` loads its own input:
 
 <!-- test:skip reason="the layout the next fence replaces; it defines the same names" -->
@@ -504,7 +510,7 @@ After an edit like this, `f.explain(...)` names the helper that changed and
 the call whose result `f` could be passed instead
 ([Methods on a cached function](#methods-on-a-cached-function)).
 
-<!-- claim: cash/tracking/file_dep_snapshot.py:snapshot_is_fresh @1bef4411 -->
+<!-- claim: cash/tracking/file_dep_snapshot.py:snapshot_is_fresh @bdf20abb -->
 Hand an intermediate result on the same way, as a value, rather than writing
 it to a file and reading it back: a file written again can get new bytes
 although its data is the same (an Excel file records when it was saved), and
@@ -513,7 +519,7 @@ the last step.
 
 ### Split parameter objects { #split-parameter-objects }
 
-<!-- claim: cash/decorator/code_args.py:CodeArgs.fold_code_args @58904680, cash/decorator/runtime.py:KeyBuilder.build @a23b2b7c -->
+<!-- claim: cash/decorator/code_args.py:CodeArgs.fold_code_args @58904680, cash/decorator/runtime.py:KeyBuilder.build @89847a2a -->
 An object passed in is keyed by all of its content and by the code of its
 class. With one `Params` holding both the signal settings and the trading
 costs, a new fee value, or a new cost field, reruns every signal search,
@@ -560,7 +566,7 @@ argument carries stays in the key whatever the key function returns
 
 ## Parameters
 
-<!-- claim: cash/core.py:Cash.cache @470582df -->
+<!-- claim: cash/core.py:Cash.cache @ef0577dc -->
 All parameters are keyword-only and optional:
 
 | Parameter | Default | What it does |
@@ -666,7 +672,7 @@ def lookup(key):
     return cache_backend.get_or_none(key)
 ```
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @d4f3bed4 -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @a4c15474 -->
 The predicate runs after the body returns. It decides what is **written**, not
 what is served: a `None` stored before you added the predicate is still
 returned. Clear the function after adding or tightening one.
@@ -760,7 +766,7 @@ same for `async def` functions and generators. `key=` and ignored parameters
 cannot be combined: leave those arguments out of what the key function
 returns.
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @a23b2b7c -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @89847a2a -->
 Only the arguments' value part of the key changes. The function's code, its
 helpers, the globals and files it reads, `depends_on=`, the random seed and
 the rest stay in the key as before, and so does the code the arguments carry:
@@ -832,7 +838,7 @@ entry. That holds whenever the seed was set: before the function was
 decorated, or before `import cash` in the same script. A function
 whose own body seeds the stream is not keyed by where the caller left it.
 
-<!-- claim: cash/decorator/rng.py:replay_rng_state @42b65738, cash/decorator/runtime.py:CallRunner.finish_miss @6e9e7867 -->
+<!-- claim: cash/decorator/rng.py:replay_rng_state @42b65738, cash/decorator/runtime.py:CallRunner.finish_miss @402f005a -->
 The same holds for a generator in a module global that the body draws from
 (`rng = np.random.default_rng(42)` at module level, `rng.normal()` inside): the
 key includes where `rng` stands, and a hit moves `rng` on to where the computed
@@ -848,7 +854,7 @@ a miss.
 
 ### `frozen=` and large arguments
 
-<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @2571147a, cash/decorator/frozen.py:FrozenResults.warn_has_no_effect @46f8683e -->
+<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @5653b253, cash/decorator/frozen.py:FrozenResults.warn_has_no_effect @46f8683e -->
 An argument is keyed by its content at the time of the call, so a big array or
 frame is hashed on every call it is passed to. When a result comes from another
 cached function and nothing changes it afterwards, say so on the producer:
@@ -875,7 +881,7 @@ back read-only, and
 frozen result was changed after all. [`CACHE-NET-LOSS`](warnings.md#cache-net-loss)
 warns when hashing an argument costs more than the cache saves.
 
-<!-- claim: cash/decorator/store.py:ResultStore.attach_lineage @f47f5d75, cash/decorator/frozen.py:FrozenResults.container_hash @cfd38330 -->
+<!-- claim: cash/decorator/store.py:ResultStore.attach_lineage @1dbbcf06, cash/decorator/frozen.py:FrozenResults.container_hash @cfd38330 -->
 `frozen=True` covers the very object the function returns, in the process
 that called it:
 
@@ -892,11 +898,13 @@ function, and build a container you pass on inside a frozen function of its
 own. `frozen=` has no effect together with `ttl=`: such a result is keyed by
 its content.
 
-<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @2571147a, cash/decorator/frozen.py:FrozenResults.remember_array @59fe65cc -->
+<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @5653b253, cash/decorator/frozen.py:FrozenResults.remember_array @3bb58fef -->
 A frozen numpy array comes back read-only, so a write raises. A frozen pandas
 frame or any other object stays writable, and writing into it breaks the
 promise: the calls after the write can be served results computed for its
-old content. cash checks a frozen result only now and then;
+old content. cash sees a change of size (a frame's shape or dtypes, a list's
+or dict's length) on every use, but a value overwritten in place only when it
+checks the content, now and then;
 [`KEY-FROZEN-MUTATED`](warnings.md#key-frozen-mutated) names the producer
 when a check finds a change. Modify a copy (`df = df.copy()`).
 
@@ -907,7 +915,7 @@ when the cell restores `model` from the cache instead of calling `train`. Once
 a cell changes `model` (`model.set_params(...)`), it is keyed as a changed
 value.
 
-<!-- claim: cash/decorator/frozen.py:FrozenResults.remember_container @1e8af0c7, cash/decorator/store.py:ResultStore.attach_lineage @f47f5d75 -->
+<!-- claim: cash/decorator/frozen.py:FrozenResults.remember_container @1e8af0c7, cash/decorator/store.py:ResultStore.attach_lineage @1dbbcf06 -->
 **Big inputs: path in, data passed on.** [Pass data in](#pass-data-in) and
 `frozen=` work together. Give the file path to a cached loader marked
 `frozen=True`, parse inside it, and pass what it returns to the functions
@@ -961,7 +969,7 @@ did (a file written, a request sent, a line printed) does not happen again. On
 the first call, cash reads the function and its helpers and reports what a hit
 would skip or get wrong:
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @c395765d, cash/analysis/purity_policy.py:DECORATOR_POLICY @44b8bc03, cash/analysis/purity_report.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @045afef4, cash/analysis/purity_policy.py:DECORATOR_POLICY @44b8bc03, cash/analysis/purity_report.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
 | The body... | cash |
 |---|---|
 | Writes, posts, prints to stdout, or changes state outside the function | Warns ([`IMPURE-SIDE-EFFECTS`](warnings.md#impure-side-effects)) and caches |
@@ -1004,7 +1012,7 @@ property of an object of your class that the body reads by a global name
 (`BAG['k']`, `BAG.value`) is read as a helper: a global it changes is reported
 as one the body changes.
 
-<!-- claim: cash/effect_observer.py:EffectObserver @8cce17b9 broad="the observed-effect contract is the class as a whole", cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @2d8839cd, cash/effect_observer.py:EffectObserver.record_write @659fb0d2 -->
+<!-- claim: cash/effect_observer.py:EffectObserver @967f0f75 broad="the observed-effect contract is the class as a whole", cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @987ecb33, cash/effect_observer.py:EffectObserver.record_write @659fb0d2 -->
 cash also **watches the first call**. Library code is not read, so a
 `session.post` or an SDK request is invisible to the analysis above.
 
@@ -1060,7 +1068,7 @@ works there too.
 On the `def` line it covers findings about the whole body. In a helper it
 covers every caller of that helper.
 
-<!-- claim: cash/analysis/annotations.py:assume_safe_block_lines @8b9e6cfa, cash/effect_observer.py:EffectObserver.record_effect @dce8a421, cash/source_norm.py:drop_waiver_blocks @358fa0bc -->
+<!-- claim: cash/analysis/annotations.py:assume_safe_block_lines @29dff9a1, cash/effect_observer.py:EffectObserver.record_effect @dce8a421, cash/source_norm.py:drop_waiver_blocks @358fa0bc -->
 **Several lines at once.** Wrap them in `with cash.assume_safe():`. It waives
 what the comment waives, on every line inside the block. While the block runs,
 it also waives the effects cash observes, including those of helpers it calls.
@@ -1095,7 +1103,7 @@ To tell cash about a helper it cannot judge, mark it with `@cash.pure` or
 
 ## Methods on a cached function
 
-<!-- claim: cash/decorator/wrappers.py:Wrappers._cache_info.cache_info @f5c264d2 -->
+<!-- claim: cash/decorator/wrappers.py:Wrappers._cache_info.cache_info @8d1dea45 -->
 **`f.cache_info()`** returns this process's counters:
 
 ```python
@@ -1112,11 +1120,13 @@ print(double.cache_info())
  'total_time_saved': 1e-05,
  'miss_reasons': {'no entry yet': 1, 'new arguments': 1},
  'changed': {},
- 'warnings': []}
+ 'warnings': [],
+ 'phase_times': {}}
 ```
 
 `changed` counts the `code or state changed` misses by what changed
-(`{'helper ticks._parse changed': 3}`). `warnings` holds the last 20 cash warnings for the function, even when a
+(`{'helper ticks._parse changed': 3}`). `phase_times` stays empty unless
+`CASH_PHASE_TIMES=1` is set ([Seeing what cash did](#seeing-what-cash-did)). `warnings` holds the last 20 cash warnings for the function, even when a
 warnings filter hid them. The counters belong to the wrapper, so they start at
 zero in each process.
 
@@ -1173,7 +1183,7 @@ for example in a test.
 
 ## Common questions
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @a23b2b7c, cash/decorator/arg_hashing.py:ArgHasher.arg_hash @afd2fc9d -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @89847a2a, cash/decorator/arg_hashing.py:ArgHasher.arg_hash @f9304393 -->
 **Do new command-line flags make every cached function miss?** No. Only a
 function that reads `sys.argv` or calls `parse_args()` itself, or through a
 helper, is keyed by the command line. One that gets the parsed values as

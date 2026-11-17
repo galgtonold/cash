@@ -8,11 +8,12 @@ cases that need a change on your side, and what that change is.
 
 ## Arguments cash cannot hash
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @7fa6c84b -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @95df02aa -->
 An argument that cannot be pickled (a lock, an open file, a live connection)
 cannot be keyed. The call runs uncached and warns
-[`KEY-UNHASHABLE-ARG`](warnings.md#key-unhashable-arg); any other failure while
-building the key does the same. Pass a plain value that identifies the object
+[`KEY-UNHASHABLE-ARG`](warnings.md#key-unhashable-arg). Any other failure while
+building the key also runs the call uncached, and warns
+[`KEY-BUILD-FAILED`](warnings.md#key-build-failed). Pass a plain value that identifies the object
 instead. For a class of yours, give it a
 [`__cash_key__`](tutorials/feature-guides/custom-hashers.md#cash-key)
 method that returns one. For a type you don't own, register a hasher that
@@ -54,7 +55,7 @@ returns its old result for the table: write through pandas
 
 ## An argument that does not change the result
 
-<!-- claim: cash/core.py:Cash.cache @470582df -->
+<!-- claim: cash/core.py:Cash.cache @ef0577dc -->
 Every argument is part of the key, so a logger, a progress callback or a
 `verbose=` flag splits the cache: `fit(data, verbose=True)` misses after
 `fit(data)` ran. Leave such a parameter out with `ignore=["verbose"]` or a
@@ -142,7 +143,7 @@ with `@cash.opaque`; see [Purity markers](tutorials/feature-guides/purity-decora
 
 ## Dispatch tables and strategy registries {#dispatch-tables}
 
-<!-- claim: cash/analysis/purity_visitor.py:PurityVisitor._table_is_reachable_from_the_key @9018bbca, cash/decorator/global_values.py:GlobalValues.data_callable_identity @042f7322 -->
+<!-- claim: cash/analysis/purity_visitor.py:PurityVisitor._table_is_reachable_from_the_key @9018bbca, cash/decorator/global_values.py:GlobalValues.data_callable_identity @76331cf7 -->
 A cached function that picks a function from a table caches correctly. The
 table can be a dict of functions, a registry a `@register` decorator fills, a
 dict of classes, or a `.get()` on any of them, and it can live at module level,
@@ -196,7 +197,7 @@ calls, so editing `mean_reversion` keeps the `momentum` entries. A hit costs
 about what a direct call to a cached strategy costs (around 0.7 ms with seven
 small pandas strategies, against about 2 ms for the table form).
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks._warn_untrackable @48448c14 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks._warn_untrackable @54508976 -->
 Looking the function up by a name at run time, with `getattr(module, name)()`
 or `importlib.import_module(name)`, is not keyed. On Python 3.12 and newer the
 call is cached anyway, on a record of the code it ran that is checked before
@@ -206,7 +207,7 @@ warning. A table is keyed on every version.
 
 ## Code in installed packages
 
-<!-- claim: cash/install_paths.py:in_own_package @168c5d1e, cash/install_paths.py:is_user_path @34c85fa5, cash/dependency_state.py:DependencyStateHasher.compute @8e272f43 -->
+<!-- claim: cash/install_paths.py:in_own_package @168c5d1e, cash/install_paths.py:is_user_path @34c85fa5, cash/dependency_state.py:DependencyStateHasher.compute @1738c84b -->
 cash follows the code a cached function calls, and puts it in the key, when
 that code is yours. Yours means:
 
@@ -278,7 +279,7 @@ scikit-learn `n_jobs=`). Each task then runs under a tracker of its own in the
 worker: about 20 µs a task, which only shows for tiny tasks sent one at a time
 (`pool.imap` with the default `chunksize=1`).
 
-<!-- claim: cash/decorator/file_deps.py:FileDeps.track_scanned_files @3260dfbc -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.track_scanned_files @3887040a -->
 A polars `LazyFrame` argument from `scan_csv` or `scan_parquet` names its file
 by path, so cash records the files its plan scans as reads of the call, as if
 the body had opened them: an edited file recomputes, and so does a new file
@@ -316,8 +317,8 @@ paths from the project root or pass absolute paths.
 - A result that can't be pickled is not stored
   ([`STORE-FAILED`](warnings.md#store-failed)), unless the function is
   `frozen=True`.
-<!-- claim: cash/decorator/runtime.py:CallRunner.arguments_left @5d0fd426, cash/decorator/runtime.py:CallRunner._arguments_to_write @0f1ce035, cash/rewrite_in_place.py:refusal @cece1b9e -->
-<!-- claim: cash/decorator/runtime.py:CallRunner.arguments_before @b57998e9, cash/decorator/arg_hashing.py:ContentKeyed.covers @4d5faf1a -->
+<!-- claim: cash/decorator/runtime.py:CallRunner.arguments_left @c293daef, cash/decorator/runtime.py:CallRunner._arguments_to_write @57069cf7, cash/rewrite_in_place.py:refusal @cece1b9e -->
+<!-- claim: cash/decorator/runtime.py:CallRunner.arguments_before @50acf221, cash/decorator/arg_hashing.py:ContentKeyed.covers @4d5faf1a -->
 - A call that changed its argument in place is stored with the state it left
   the argument in when the argument is a NumPy array (not of objects), a
   pandas frame or Series whose index, columns and dtypes it kept (a Series of
@@ -358,7 +359,7 @@ paths from the project root or pass absolute paths.
   argument (a list of lists, a frame given a new column, an object of your
   class changed other than as the next item says) are not stored, so they
   run every time. Return a modified copy instead (`rows = sorted(rows)`).
-<!-- claim: cash/decorator/attribute_replay.py:AttrVerdict.of @5152391a, cash/rewrite_in_place.py:attribute_refusal @40074681, cash/rewrite_in_place.py:AttrState.replay @0e4c9439, cash/decorator/attribute_replay.py:find @6c04b2c5 -->
+<!-- claim: cash/decorator/attribute_replay.py:AttrVerdict.of @5152391a, cash/rewrite_in_place.py:attribute_refusal @a163557b, cash/rewrite_in_place.py:AttrState.replay @0e4c9439, cash/decorator/attribute_replay.py:find @6c04b2c5 -->
 - A call that only binds, rebinds or deletes **attributes of an object it
   was handed** (`est.fit(X)` setting `self.coef_` and returning `self`, a
   resampler's `fit_resample` setting `self.sampling_strategy_`, or a
@@ -454,7 +455,7 @@ See [Async functions](tutorials/feature-guides/async-caching.md).
 
 ## Edits inside a running process
 
-<!-- claim: cash/loaded_code.py:code_objects_of @dc8caae4, cash/decorator/function_identity.py:warn_source_changed_since_load @96528104 -->
+<!-- claim: cash/loaded_code.py:code_objects_of @906e9b7c, cash/decorator/function_identity.py:warn_source_changed_since_load @66c0eeb3 -->
 cash keys a function by the code that is running. An edit saved while a
 long-running process works is seen by the next process, or in this one once
 the module is reloaded (`importlib.reload`, IPython's `%autoreload`): the

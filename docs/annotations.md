@@ -86,7 +86,7 @@ Results that took longer than 0.1 s are usually on disk already.
 
 ### `# @cash:no-cache`
 
-<!-- claim: cash/analysis/cacheability_decision.py:cacheability_verdict @12a71910 -->
+<!-- claim: cash/analysis/cacheability_decision.py:cacheability_verdict @19feb564 -->
 The statement runs every time and nothing is stored, including the calls inside
 it. The badge shows a plain `EXECUTED` row. A statement below that reads its
 result is cached as usual and computed again when the value changes.
@@ -126,7 +126,7 @@ The value is still cached and replayed. To get a new draw every run, use
 
 ### `# @cash:assume-safe`
 
-<!-- claim: cash/analysis/cacheability_decision.py:cacheability_verdict @12a71910, cash/analysis/annotations.py:leading_cell_annotation @0d279828 -->
+<!-- claim: cash/analysis/cacheability_decision.py:cacheability_verdict @19feb564, cash/analysis/annotations.py:leading_cell_annotation @0d279828 -->
 cash runs a statement with a side effect every time, and it judges effects by
 name: it cannot tell a POST that creates an order from a POST that runs a search.
 `assume-safe` tells it the effect is harmless to skip, so the statement is cached
@@ -196,7 +196,7 @@ The statement around a cached call is then stored only for its own work; see
 The statement's `ttl=`, `persist` and `assume-safe` apply to the calls inside it,
 and `no-cache` switches them off.
 
-<!-- claim: cash/notebook/call_entries.py:CallEntries.storable @e186dff5, cash/notebook/call_entries.py:reached_objects @76728b32, cash/notebook/shared_objects.py:view_bases @051bf79b -->
+<!-- claim: cash/notebook/call_entries.py:CallEntries.storable @e2c500bd, cash/notebook/call_entries.py:reached_objects @76728b32, cash/notebook/shared_objects.py:view_bases @051bf79b -->
 A hit hands back a copy of the stored result. So a call is not cached, and
 runs every time, when its result has to be the very object it is:
 
