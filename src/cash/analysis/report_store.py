@@ -277,7 +277,11 @@ def _owner_homes(obj: Any) -> list[tuple[str, tuple[str, ...]]]:
     base = obj.__func__ if type(obj) is types.MethodType else obj
     if type(base) is not types.FunctionType:
         return []
-    if "<" not in base.__qualname__ and "<" not in getattr(base.__code__, "co_qualname", ""):
+    code = base.__code__
+    # Before Python 3.11 a code object has no ``co_qualname``: a name that
+    # differs from the code's own (``wraps`` copied it) says the same there.
+    made_elsewhere = "<" in code.co_qualname if hasattr(code, "co_qualname") else code.co_name != base.__name__
+    if "<" not in base.__qualname__ and not made_elsewhere:
         return []
     name = base.__name__
     found = []
