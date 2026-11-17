@@ -13,6 +13,7 @@ the functions it calls through its private globals.
 
 from __future__ import annotations
 
+import sys
 import textwrap
 
 import pytest
@@ -116,6 +117,15 @@ def test_a_call_that_needs_its_trace_finds_the_stub_through_the_class(tmp_path):
         proc = run_python("main.py", cwd=tmp_path)
         return tuple(map(int, proc.stdout.split()))
 
+    if sys.version_info < (3, 12):
+        # No trace below 3.12 (sys.monitoring): the call picks its code by
+        # a run-time name the key cannot capture, so it runs uncached each
+        # time, with one warning, and every edit is seen.
+        assert run(1, 2) == (11, 0, 1)
+        assert run(1, 2) == (11, 0, 1)
+        assert run(7, 2) == (17, 0, 1)
+        assert run(7, 3) == (22, 0, 1)
+        return
     assert run(1, 2) == (11, 0, 0)
     assert run(1, 2) == (11, 1, 0)
     assert run(7, 2) == (17, 0, 0)
