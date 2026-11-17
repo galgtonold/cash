@@ -62,7 +62,7 @@ says how the folder is chosen and capped.
 A `pyproject.toml` marks a project only when it has a `[project]`,
 `[build-system]`, `[tool.poetry]` or `[tool.cash]` table.
 
-<!-- claim: cash/config/schema.py:CashConfig @78378872 broad="the field table is a claim about every field of the dataclass" -->
+<!-- claim: cash/config/schema.py:CashConfig @018d7546 broad="the field table is a claim about every field of the dataclass" -->
 ## All settings
 
 Every setting is named by its field. In a TOML file the key is the field
@@ -209,7 +209,7 @@ A tier's `type` decides which other keys it uses (details under
 not use does nothing, and cash warns
 [`CONFIG-INVALID`](../warnings.md#config-invalid).
 
-<!-- claim: cash/backends/factory.py:TIER_FIELDS @e9cbbb70, cash/config/schema.py:TierConfig.__post_init__ @099eecbf -->
+<!-- claim: cash/backends/factory.py:TIER_FIELDS @e9cbbb70, cash/config/schema.py:TierConfig.__post_init__ @0ed9c588 -->
 | `type` | Keys |
 |---|---|
 | `memory` | `max_entries`, `max_size_bytes` |

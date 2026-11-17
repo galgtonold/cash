@@ -30,7 +30,7 @@ section when a cell does something you did not expect.
 
 This is the one home for randomness in notebooks; other pages link here.
 
-<!-- claim: cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @c92fc293, cash/tracking/randomness/state.py:restore_rng_state @e78610bb, cash/tracking/randomness/state.py:capture_rng_state @ff4dc78c, cash/notebook/statement/carrier_advances.py:advance_carriers @98d0397f -->
+<!-- claim: cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @14702bda, cash/tracking/randomness/state.py:restore_rng_state @e78610bb, cash/tracking/randomness/state.py:capture_rng_state @6e1e1f8a, cash/notebook/statement/carrier_advances.py:advance_carriers @98d0397f -->
 **Symptom:** re-running a cell returns the same random numbers.
 
 An unseeded draw is cached like any other value, so a re-run shows the stored
@@ -75,7 +75,7 @@ its closure (`arr = make_data()`). A draw from the global `random`,
 `np.random` or torch stream inside a helper is flagged once the statement has
 run, by comparing the streams.
 
-<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @ff4dc78c, cash/notebook/statement/carrier_advances.py:advance_carriers @98d0397f, cash/tracking/randomness/lineage.py:advanced_carrier_lineage @eaa66fca, cash/notebook/upstream/statement_lineage.py:StatementLineage._recorded_draws @3b7507d9, cash/notebook/upstream/statement_lineage.py:StatementLineage._reachable_generators @bb6221ba -->
+<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @6e1e1f8a, cash/notebook/statement/carrier_advances.py:advance_carriers @98d0397f, cash/tracking/randomness/lineage.py:advanced_carrier_lineage @eaa66fca, cash/notebook/upstream/statement_lineage.py:StatementLineage._recorded_draws @3b7507d9, cash/notebook/upstream/statement_lineage.py:StatementLineage._reachable_generators @bb6221ba -->
 A statement that draws from a generator held in a variable, or calls a function
 that does (also one the generator is handed to, as in `paths =
 simulate(n, rng)`), counts as changing that variable. It is stored like any
@@ -153,7 +153,7 @@ Each of these misses a change, or applies one a second time.
 
 ### Mutating through an alias
 
-<!-- claim: cash/notebook/statement/derivation_edges.py:record_shared_object_edges @1d3cdc8d, cash/notebook/statement/derivation_edges.py:bump_derived_lineages @9b06fe13, cash/notebook/shared_objects.py:share_group @d4373d63, cash/notebook/shared_objects.py:view_base_names @c9f314c6, cash/notebook/statement/processor.py:StatementProcessor.record_structure_share_edges @a99dfa6a, cash/notebook/statement/processor.py:StatementProcessor._link_inputs_kept_by @e8a315ab -->
+<!-- claim: cash/notebook/statement/derivation_edges.py:record_shared_object_edges @1d3cdc8d, cash/notebook/statement/derivation_edges.py:bump_derived_lineages @a018e4c3, cash/notebook/shared_objects.py:share_group @120f06ea, cash/notebook/shared_objects.py:view_base_names @3dee76b9, cash/notebook/statement/processor.py:StatementProcessor.record_structure_share_edges @7ac0bc53, cash/notebook/statement/processor.py:StatementProcessor._link_inputs_kept_by @081d504a -->
 When a statement leaves two names sharing an object, cash links them:
 
 - an alias: `log = history`;
@@ -200,7 +200,7 @@ pick.__defaults__[0].append("vat")  # changes features via the default
 **Fix:** change the object through its own name (`x.append(5)`), or rebind
 (`x = x + [5]`).
 
-<!-- claim: cash/notebook/upstream/stale_values.py:StaleValueGuard._kept_for_partner_below @bebe6e19 -->
+<!-- claim: cash/notebook/upstream/stale_values.py:StaleValueGuard._kept_for_partner_below @6f16072b -->
 A cell that changes a value in place (`history.append(x)`) and is re-run on its
 own normally starts from the value as the cells above leave it, so the change
 is not applied twice. When a cell below has made another name share that value
@@ -262,7 +262,7 @@ state in the notebook, or pass it in and return it.
 
 ### A helper memoised with `functools.cache`
 
-<!-- claim: cash/notebook/helper_memos.py:unfilled @2fec4958, cash/notebook/helper_memos.py:used @74f20f00, cash/notebook/helper_memos.py:clears @bc3fe4e5, cash/notebook/helper_memos.py:MAX_KEYED == 4096, cash/notebook/helper_memos.py:watching_clears @a5f41663, cash/notebook/helper_memos.py:_cleared_change @db1300a1, cash/notebook/helper_memos.py:_plain_keys @b1c572b1 -->
+<!-- claim: cash/notebook/helper_memos.py:unfilled @2fec4958, cash/notebook/helper_memos.py:used @771d08b1, cash/notebook/helper_memos.py:clears @bc3fe4e5, cash/notebook/helper_memos.py:MAX_KEYED == 4096, cash/notebook/helper_memos.py:watching_clears @59e249cb, cash/notebook/helper_memos.py:_cleared_change @db1300a1, cash/notebook/helper_memos.py:_plain_keys @b1c572b1 -->
 A statement served from the cache does not run, so a `@functools.cache` or
 `@functools.lru_cache` helper it calls keeps what it held. A run leaves the
 answers in it, and a later call of the helper uses them without running its
@@ -439,7 +439,7 @@ function a function that calls what it is given (`map(lambda f: f(3), fns)`,
 
 ### Setting state on one of your modules
 
-<!-- claim: cash/notebook/statement/mutation_routing.py:MutationRouting.route @6491bb06, cash/notebook/callee_reach.py:module_state_writes @db4744c6, cash/notebook/call_unit.py:_rebound_unwatched @2d452d22 -->
+<!-- claim: cash/notebook/statement/mutation_routing.py:MutationRouting.route @6491bb06, cash/notebook/callee_reach.py:module_state_writes @dc5f24be, cash/notebook/call_unit.py:_rebound_unwatched @2d452d22 -->
 A statement that sets state on one of your modules runs every time, so that
 after a restart, or an edit of the module's file, the module holds what a
 top-to-bottom run leaves in it. That covers `mylib.K = slow()`,
@@ -460,7 +460,7 @@ adds to a module (the registry its first warning creates) is not a setting.
 
 ### A setting on your module or the environment, run out of order
 
-<!-- claim: cash/notebook/cache_key.py:_recorded_reads_component @f1b01bbf, cash/notebook/recorded_reads.py:choose @515ac169 -->
+<!-- claim: cash/notebook/cache_key.py:_recorded_reads_component @e43c1d1d, cash/notebook/recorded_reads.py:choose @515ac169 -->
 A cell that sets data on one of your modules (`mylib.K = 7`,
 `mylib.CONFIG["k"] = 7`, `mylib.set_k(7)`) or an environment variable
 (`os.environ["MODE"] = "b"`) reaches the statements that read it, in your
@@ -520,7 +520,7 @@ out = summarize(s)  # cell 2: re-run this alone...
 s.iloc[0] = 1e9     # cell 3: ...and it does not see this
 ```
 
-<!-- claim: cash/notebook/upstream/changed_below.py:warn_changed_below @8bd3d1a3 -->
+<!-- claim: cash/notebook/upstream/changed_below.py:warn_changed_below @6cef43a5 -->
 cash answers cell 2 as a top-to-bottom run would: it rebuilds `s` as cell 1
 leaves it, so cell 2 computes with `0.0`, and `s` holds `0.0` until cell 3 runs
 again. cash warns [NOTEBOOK-CHANGED-BELOW](warnings.md#notebook-changed-below)
@@ -593,7 +593,7 @@ print("end", file=log)       # cell 3: re-run alone, "end" twice
 <!-- claim: cash/analysis/code_analyzer.py:_cell_magic_body @3566e904, cash/analysis/code_analyzer.py:_is_magic_line @d120bf9b, cash/notebook/statement/processor.py:StatementProcessor.forget_rebound @70d43250 -->
 cash reads a cell's Python, not what IPython makes of its magics. A magic or a
 shell command runs every time, uncached, and cash never runs one for you.
-<!-- claim: cash/notebook/magic_effects.py:magic_effects @420435ff, cash/notebook/upstream/simulator.py:NotebookSimulator._warn_stale_magic @777a3665, cash/notebook/magic_effects.py:is_rerun_magic @17c29890, cash/notebook/statement/mutations.py:MutationClassifier.magic_snapshots @24994a9f, cash/analysis/code_analyzer.py:magic_python @1a6291b3, cash/notebook/magic_effects.py:magic_base @0d0485ca -->
+<!-- claim: cash/notebook/magic_effects.py:magic_effects @6264ffc7, cash/notebook/upstream/simulator.py:NotebookSimulator._warn_stale_magic @777a3665, cash/notebook/magic_effects.py:is_rerun_magic @54502903, cash/notebook/statement/mutations.py:MutationClassifier.magic_snapshots @24994a9f, cash/analysis/code_analyzer.py:magic_python @0500c2fa, cash/notebook/magic_effects.py:magic_base @0d0485ca -->
 The names it binds or changes (`files = !ls`, `t = %time f()`,
 `%time x = f()`, the receiver of `%time model.fit()`, an argument
 `%time train(model)` was seen changing in place) keep the value it left,
@@ -648,7 +648,7 @@ a name bound through the namespace, `eval`, `exec` of a computed string and
 
 ### An object found by a lookup cash does not see
 
-<!-- claim: cash/tracking/lookups_seen.py:_note_object @417935ea, cash/tracking/lookups_seen.py:collecting @9163f1c2, cash/tracking/lookups_seen.py:_may_note @d506a15c, cash/tracking/lookups_seen.py:_note_globals @68b1cf88, cash/tracking/lookups_seen.py:_note_value @6396f5f3, cash/tracking/lookups_seen.py:_on_call @a5e765f6, cash/tracking/lookups_seen.py:_on_start @182191e3, cash/tracking/lookups_seen.py:_on_return @69918c95, cash/tracking/lookups_seen.py:arm @621f5c02 -->
+<!-- claim: cash/tracking/lookups_seen.py:_note_object @417935ea, cash/tracking/lookups_seen.py:collecting @9163f1c2, cash/tracking/lookups_seen.py:_may_note @d506a15c, cash/tracking/lookups_seen.py:_note_globals @c4fe6755, cash/tracking/lookups_seen.py:_note_value @6396f5f3, cash/tracking/lookups_seen.py:_on_call @c61001a7, cash/tracking/lookups_seen.py:_on_start @182191e3, cash/tracking/lookups_seen.py:_on_return @67b31a62, cash/tracking/lookups_seen.py:arm @621f5c02 -->
 A logger pickles by its name, so a statement can find it without any
 variable holding it: `seen = logging.getLogger("app").level`. On Python 3.12
 and newer, cash checks such an object when a call written in Python returns
@@ -722,7 +722,7 @@ cash does not store the statement that left it running, nor one that reads a
 variable the thread's function can reach, so those run every time. An earlier
 cell re-run can still see the changed data.
 
-<!-- claim: cash/notebook/background_threads.py:BackgroundThreads.cell_ends @35f8017f -->
+<!-- claim: cash/notebook/background_threads.py:BackgroundThreads.cell_ends @f75a995c -->
 cash names a cell that ends while a thread it started, running your code, is
 still alive: [NOTEBOOK-THREAD-ALIVE](warnings.md#notebook-thread-alive).
 **Fix:** join the thread before the cell ends (`t.join()`).
@@ -736,7 +736,7 @@ that stops the stream, and use the copy.
 
 ### A class whose pickling changes other values
 
-<!-- claim: cash/notebook/statement/reducer_writes.py:refuses @899c820d, cash/notebook/statement/reducer_writes.py:_handed_to_libraries @b809130a, cash/notebook/statement/reducer_writes.py:_changed_through_copies @ab946b78, cash/notebook/statement/reducer_writes.py:reach @70dbe7da -->
+<!-- claim: cash/notebook/statement/reducer_writes.py:refuses @899c820d, cash/notebook/statement/reducer_writes.py:_handed_to_libraries @00ebddef, cash/notebook/statement/reducer_writes.py:_changed_through_copies @5918fc8e, cash/notebook/statement/reducer_writes.py:reach @70dbe7da -->
 cash pickles values to hash and store them, and pickling runs a class's own
 `__getstate__` or `__reduce__`. One that changes something else (a module's
 list, a global array, the object being pickled) would change it where plain
@@ -784,7 +784,7 @@ plain Python has two objects too.
 
 ### A loop variable changed before it is read
 
-<!-- claim: cash/notebook/control_structures/for_handler.py:ForLoopHandler._process_one_iteration @5304abe8 -->
+<!-- claim: cash/notebook/control_structures/for_handler.py:ForLoopHandler._process_one_iteration @16dbe3ea -->
 This one can give a wrong answer on the first Run All. cash keys each iteration
 on the loop variable's value when the `for` binds it. A body that changes that
 value, or computes a new body-local variable, before the cached work is not seen:
@@ -875,7 +875,7 @@ whose modification time is put back afterwards (`os.utime`, `shutil.copystat`,
 `robocopy /COPY:T`), and a write through a memory map
 (`np.memmap(path, mode="r+")`).
 
-<!-- claim: cash/tracking/written_in_place.py:_on_mmap @e4a5b9ed, cash/tracking/written_in_place.py:is_written_in_place @90fefb25, cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @d1bb21b4 -->
+<!-- claim: cash/tracking/written_in_place.py:_on_mmap @e4a5b9ed, cash/tracking/written_in_place.py:is_written_in_place @90fefb25, cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @627feb62 -->
 A file mapped to write (`np.memmap` in `r+` or `w+` mode,
 `np.load(mmap_mode="r+")`, `mmap.mmap` with write access) in a process that
 had imported cash is read at every check from then on, in that process and
@@ -893,7 +893,7 @@ reads its content, and if it changed, everything that read it runs again.
 
 ### A change no folder reports
 
-<!-- claim: cash/tracking/file_watch.py:FileWatch.current @31588dc6, cash/tracking/file_watch.py:_Volume.take @b5586eb4 -->
+<!-- claim: cash/tracking/file_watch.py:FileWatch.current @2cd31e7a, cash/tracking/file_watch.py:_Volume.take @70786983 -->
 Between cells, cash takes a file in a watched folder as unchanged while the
 folder's change notifications report nothing
 ([how files are checked](how-it-works/invalidation.md)). A few writes send
@@ -958,7 +958,7 @@ pass. **Fix** when that is slow: bind it first (`rows = make_rows()`, then
 `for x in rows:`). An array built from a list (`enumerate(np.array(lines))`)
 counts as long as the list.
 
-<!-- claim: cash/notebook/control_structures/single_unit_policy.py:header_may_be_left_to_the_unit @7aa22163, cash/notebook/control_structures/processor.py:ControlStructureProcessor.execute_as_single_unit @39ec9448 -->
+<!-- claim: cash/notebook/control_structures/single_unit_policy.py:header_may_be_left_to_the_unit @7aa22163, cash/notebook/control_structures/processor.py:ControlStructureProcessor.execute_as_single_unit @f379c535 -->
 A loop's header is evaluated once, as plain Python evaluates it, so the loop
 gets the same items as without cash: one random draw
 (`np.random.permutation(n)`, `df.sample(n=300).index`), a queue drained once,
@@ -978,7 +978,7 @@ out = [fetch(e) for e in entities]
 
 ### The first run of a loop hashes what it hands to a library
 
-<!-- claim: cash/notebook/loop_watch.py:LoopWatch.start @31a0eadb, cash/analysis/namespace_effects.py:rewatch_exempt @e0de76f8 -->
+<!-- claim: cash/notebook/loop_watch.py:LoopWatch.start @3d8a0f2f, cash/analysis/namespace_effects.py:rewatch_exempt @abda7273 -->
 cash cannot tell from the text whether a library function changes what it is
 handed (`heapq.heappush(h, x)` does, `np.mean(a)` does not), nor whether a
 function of yours that hands its argument or a global to one changes it

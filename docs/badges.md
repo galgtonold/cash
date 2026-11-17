@@ -129,7 +129,7 @@ reads or the function's own code.
 
 <iframe class="cash-badge" title="cash badge example: file changed" src="/_badges/miss_file_changed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
-<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @d1bb21b4 -->
+<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @627feb62 -->
 A file the statement read (through `pd.read_csv`, `np.load`, `open` and the
 other [tracked readers](how-it-works/invalidation.md#what-counts-as-a-change))
 has different contents. A new timestamp alone does not count: cash compares
@@ -220,7 +220,7 @@ the value it is handed, so only the change itself repeats.
   NOT CACHED: m = make_model()  (1.30s) - 'm' holds an object another variable or container also holds; a restored copy would not be that object, so the statement re-runs every time
 ```
 
-<!-- claim: cash/notebook/statement/output_refusals.py:_alias_refusal @be5da5dd, cash/notebook/statement/output_refusals.py:unrestorable_output_reason @b38f1f6f -->
+<!-- claim: cash/notebook/statement/output_refusals.py:_alias_refusal @906ea75f, cash/notebook/statement/output_refusals.py:unrestorable_output_reason @eb059662 -->
 A value restored from the cache is a copy. Some values must stay the very
 object they are, or keep sharing memory with another variable, so cash runs
 the statement every time instead of storing it:
@@ -238,7 +238,7 @@ the statement every time instead of storing it:
   a library's registry or a closure, or the statement is in a loop body. See
   [Mutating an object created in an earlier cell](known-limitations.md#mutating-an-object-created-in-an-earlier-cell).
 
-<!-- claim: cash/notebook/statement/identity_holders.py:identity_held_reason @db97719f -->
+<!-- claim: cash/notebook/statement/identity_holders.py:identity_held_reason @db67b352 -->
 - **Holds a weak reference, or the `id()` of an object the notebook holds**:
   `wr = weakref.ref(p.child)`, a `WeakValueDictionary`, `reg = {id(p): ...}`.
   Restored, the value would point at the object as it was when it was
