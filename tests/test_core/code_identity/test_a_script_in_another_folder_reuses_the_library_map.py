@@ -12,6 +12,7 @@ or the same folders in another order (which install wins), is another map.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 
@@ -158,3 +159,56 @@ def test_a_metadata_folder_is_checked_from_one_listing(site, monkeypatch):
     record = os.stat(site / "fake_real-1.0.dist-info" / "RECORD")
     assert by_name["RECORD"][:3] == [record.st_mtime_ns, record.st_ctime_ns, record.st_size]
     assert by_name["top_level.txt"] == []
+
+
+_MAIN = """
+import json, sys
+sys.path.insert(1, sys.argv[1])
+import cash
+import otherlib
+import shadowed
+
+@cash.cache
+def f(x):
+    return shadowed.value() + otherlib.ONE * x
+
+value = f(1)
+print(json.dumps({"value": value, "hits": f.cache_info()["hits"], "file": shadowed.__file__}))
+"""
+
+
+def test_a_script_folders_own_module_named_like_a_library_is_still_its_code(tmp_path):
+    """The shared map says which distribution may provide a name; whether a
+    module is a library's is decided by where it was loaded from. A script
+    folder's own ``shadowed.py``, named like an installed top-level module,
+    is the user's code: an edit to it recomputes."""
+    from tests._scripts import run_python
+
+    site = tmp_path / "site"
+    (site / "shadowed").mkdir(parents=True)
+    (site / "shadowed" / "__init__.py").write_text("def value():\n    return 100\n", encoding="utf-8")
+    _dist(site, "fake_shadowed", "1.0", ["shadowed/__init__.py"])
+    _package(site, "otherlib")
+    (site / "otherlib" / "__init__.py").write_text("ONE = 1\n", encoding="utf-8")
+    _dist(site, "fake_other", "1.0", ["otherlib/__init__.py"])  # a library the call reaches: the map is read
+    one, two = tmp_path / "one", tmp_path / "two"
+    for folder in (one, two):
+        folder.mkdir()
+        (folder / "main.py").write_text(_MAIN, encoding="utf-8")
+    own = two / "shadowed.py"
+    own.write_text("def value():\n    return 1\n", encoding="utf-8")
+    env = {"XDG_CACHE_HOME": str(tmp_path / "xdg"), "LOCALAPPDATA": str(tmp_path / "xdg")}
+
+    def run(folder):
+        out = run_python("main.py", str(site), cwd=folder, cache_dir=str(tmp_path / "cache"), env=env)
+        return json.loads(out.stdout.strip().splitlines()[-1])
+
+    assert run(one)["value"] == 101  # the installed one: builds and saves the map
+    first = run(two)
+    assert os.path.samefile(first["file"], own) and first["value"] == 2
+    assert run(two) == {**first, "hits": 1}
+    own.write_text("def value():\n    return 5\n", encoding="utf-8")
+    edited = run(two)
+    assert edited["value"] == 6 and edited["hits"] == 0
+    maps = [p.name for p in (tmp_path / "xdg").rglob("_library_map.*.json")]
+    assert len(maps) == 3, maps  # folder one's, two's, and the shared one two's was taken from
