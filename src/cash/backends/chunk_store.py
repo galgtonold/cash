@@ -122,6 +122,95 @@ PACK_ALIGN = 64
 Place = tuple[str, int, int, bytes]
 
 
+#: The reversed crc32 polynomial, as zlib uses it.
+_CRC_POLY = 0xEDB88320
+
+
+def _crc_mult(a: int, b: int) -> int:
+    """``a * b`` modulo the crc32 polynomial, both reflected (zlib's ``multmodp``)."""
+    m = 1 << 31
+    p = 0
+    while True:
+        if a & m:
+            p ^= b
+            if not a & (m - 1):
+                return p
+        m >>= 1
+        b = (b >> 1) ^ _CRC_POLY if b & 1 else b >> 1
+
+
+def _crc_powers() -> list[int]:
+    out, p = [], 1 << 30  # x
+    for _ in range(32):
+        out.append(p)
+        p = _crc_mult(p, p)
+    return out
+
+
+#: ``x ** (2 ** k)`` modulo the polynomial, for ``k`` in ``range(32)``.
+_CRC_X2N = _crc_powers()
+
+
+def crc32_combine(crc1: int, crc2: int, len2: int) -> int:
+    """The crc32 of ``A + B`` from ``crc32(A)``, ``crc32(B)`` and ``len(B)``
+    (zlib's ``crc32_combine``, which Python's ``zlib`` does not offer)."""
+    p, k = 1 << 31, 3  # x ** 0; a byte is x ** 8 = x ** (2 ** 3)
+    n = len2
+    while n:
+        if n & 1:
+            p = _crc_mult(_CRC_X2N[k & 31], p)
+        n >>= 1
+        k += 1
+    return _crc_mult(p, crc1) ^ crc2
+
+
+#: A buffer at least this big has its crc32 taken in parts on several
+#: threads (`crc32_of`): zlib releases the GIL while it sums.
+CRC_PARALLEL_MIN_BYTES = 4 * PARALLEL_MIN_BYTES
+
+
+def crc32_of(data: Any) -> bytes:
+    """The crc32 of *data*'s bytes (4 bytes, big endian), the same number
+    ``zlib.crc32`` gives. A big buffer is cut into parts summed on several
+    threads and the parts' sums combined (`crc32_combine`): one core sums
+    a 400 MB array in over 100 ms, which every hit of it waited on."""
+    view = memoryview(data)
+    if view.ndim != 1 or view.itemsize != 1:
+        view = view.cast("B")
+    size = view.nbytes
+    threads = min(hashing_threads(), size // (CRC_PARALLEL_MIN_BYTES // 4))
+    if size < CRC_PARALLEL_MIN_BYTES or threads < 2:
+        return zlib.crc32(view).to_bytes(4, "big")
+    bounds = [size * k // threads for k in range(threads + 1)]
+    sums: list[Any] = [None] * threads
+    errors: list[BaseException] = []
+
+    def run(k: int) -> None:
+        try:
+            sums[k] = zlib.crc32(view[bounds[k] : bounds[k + 1]])
+        except BaseException as exc:  # noqa: BLE001 - re-raised on the caller's thread
+            errors.append(exc)
+
+    workers = []
+    for k in range(1, threads):
+        worker = threading.Thread(target=run, args=(k,), name="cash-crc", daemon=True)
+        try:
+            worker.start()
+        except RuntimeError:  # no new threads (interpreter shutting down): do it here
+            run(k)
+            continue
+        workers.append(worker)
+    run(0)
+    for worker in workers:
+        worker.join()
+    if errors:
+        raise errors[0]
+    crc = sums[0]
+    for k in range(1, threads):
+        crc = crc32_combine(crc, sums[k], bounds[k + 1] - bounds[k])
+    return crc.to_bytes(4, "big")
+
+
 def chunk_name(digest: bytes) -> str:
     return digest.hex() + CHUNK_SUFFIX
 
@@ -303,7 +392,7 @@ def read_chunk(cache_dir: str, digest: bytes, nbytes: int, crc: bytes) -> Any:
                 if not k:
                     raise ChunkError(f"chunk {path}: truncated")
                 got += k
-    if zlib.crc32(data).to_bytes(4, "big") != crc:
+    if crc32_of(data) != crc:
         _discard(path)
         raise ChunkError(f"chunk {path}: checksum does not match its entry -- the value will be recomputed")
     return data
@@ -391,7 +480,7 @@ class ChunkStore:
             if crc is not None:
                 self._note_own(name, path)
                 return digest, crc, 0
-            crc = zlib.crc32(view).to_bytes(4, "big")
+            crc = crc32_of(view)
             added = self._write(path, view, crc)
             self._note_own(name, path)
         except BaseException:
@@ -534,7 +623,7 @@ class ChunkStore:
                             if pad:
                                 write_all(fd, bytes(pad))
                                 offset += pad
-                            crc = zlib.crc32(view).to_bytes(4, "big")
+                            crc = crc32_of(view)
                             write_all(fd, view)
                             write_all(fd, crc)
                             placed[digest] = (name, offset, view.nbytes, crc)
@@ -1104,7 +1193,7 @@ def _read_pack(path: str, members: list[tuple[int, int, int, bytes]]) -> dict[in
                     if not k:
                         raise ChunkError(f"chunk {path}: truncated")
                     got += k
-            if zlib.crc32(data).to_bytes(4, "big") != crc:
+            if crc32_of(data) != crc:
                 # Only this chunk's holders go (`ChunkStore.damaged`): the
                 # rest of the pack is other entries' chunks, still good.
                 raise DamagedChunk(path, offset)
