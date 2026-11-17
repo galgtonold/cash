@@ -315,7 +315,74 @@ def stored_reducers(*, for_write: bool = False) -> dict | None:
     chunked = getattr(sys.modules.get("pyarrow"), "ChunkedArray", None)
     if for_write and isinstance(chunked, type):
         reducers[chunked] = _reduce_chunked_array
+    geometry_array = getattr(sys.modules.get("geopandas.array"), "GeometryArray", None)
+    if for_write and isinstance(geometry_array, type):
+        reducers[geometry_array] = _reduce_geometry_array
     return reducers or None
+
+
+def _reduce_geometry_array(value: Any) -> Any:
+    """A geopandas ``GeometryArray`` as the WKB of each distinct geometry
+    object it holds, written once into one buffer, and which of them each
+    row holds (`content_hashers.distinct_objects`); rebuilt by
+    `_geometry_array_from_wkb`.
+
+    geopandas pickles the array as one WKB ``bytes`` per row, each pickled
+    on its own, and a frame joined many-to-many holds each geometry on
+    every row it matched: 740,000 rows over 195,000 polygons took 1.26 s
+    and 240 MB to store. The WKB is the one geopandas writes (shapely's
+    defaults), so each geometry reads back equal to the one it reads back,
+    and rows that held one object hold one object again. The CRS is kept,
+    as geopandas keeps it; its spatial index is not, as geopandas' is not.
+    Any other array, as geopandas pickles it.
+    """
+    try:
+        import numpy as np
+        import shapely
+
+        from ..content_hashers import distinct_objects
+
+        data = value._data
+        if type(data) is not np.ndarray or data.dtype != object or data.ndim != 1:
+            raise TypeError("not an object array of geometries")
+        distinct, index = distinct_objects(data)
+        missing = np.fromiter((item is None for item in distinct), dtype=bool, count=len(distinct))
+        if not shapely.is_geometry(distinct[~missing]).all():
+            raise TypeError("holds something besides geometries and None")
+        wkb = shapely.to_wkb(distinct[~missing])
+        lengths = np.zeros(len(distinct), dtype=np.int64)
+        lengths[~missing] = np.fromiter(map(len, wkb), dtype=np.int64, count=len(wkb))
+        blob = np.frombuffer(b"".join(wkb), dtype=np.uint8)
+        crs = value._crs
+    except Exception:  # not the layout this expects: geopandas' own pickle
+        logger.debug("pickling a %s the geopandas way", type(value).__name__, exc_info=True)
+        return value.__reduce_ex__(5)
+    if len(distinct) == len(data):
+        rows = None  # no row shares an object: they are *distinct* in order
+    else:
+        rows = index.astype(np.int32 if len(distinct) < 2**31 else np.int64)
+    return _geometry_array_from_wkb, (type(value), blob, lengths, rows, crs)
+
+
+def _geometry_array_from_wkb(cls: type, blob: Any, lengths: Any, rows: Any, crs: Any) -> Any:
+    """The array `_reduce_geometry_array` stored: the geometries *blob*
+    holds one after another, *lengths* bytes each (0 for a missing row),
+    placed at *rows* (each row its own when None), with *crs*, through
+    geopandas' own ``__setstate__``."""
+    import numpy as np
+    import shapely
+
+    raw = memoryview(blob).cast("B").tobytes()
+    ends = np.cumsum(lengths)
+    present = lengths > 0
+    starts = (ends - lengths)[present].tolist()
+    pieces = [raw[start:end] for start, end in zip(starts, ends[present].tolist())]
+    distinct = np.full(len(lengths), None, dtype=object)
+    distinct[present] = shapely.from_wkb(np.array(pieces, dtype=object))
+    data = distinct if rows is None else distinct[rows]
+    array = cls.__new__(cls)
+    array.__setstate__({"_data": data, "_crs": crs, "_sindex": None, "base": None})
+    return array
 
 
 def _reduce_chunked_array(value: Any) -> Any:
