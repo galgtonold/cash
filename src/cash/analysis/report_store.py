@@ -217,12 +217,35 @@ def _holder_homes(obj: Any) -> list[tuple[str, tuple[str, ...]]]:
     if not isinstance(qualname, str) or "<" in qualname or "." not in qualname:
         return []
     chain = tuple(qualname.split("."))
-    found = []
-    for name, module in list(sys.modules.items()):
-        namespace = getattr(module, "__dict__", None)
-        held = namespace.get(chain[0]) if type(namespace) is dict else None
-        if isinstance(held, type) and getattr(held, "__module__", None) == name:
-            found.append((name, chain))
+    return [(name, chain) for name in _class_holders(chain[0]) if _holds_own_class(name, chain[0])]
+
+
+#: Class name -> (how many modules were loaded, the modules that held a
+#: class of that name defined in them then): `_class_holders`.
+_HOLDERS: dict[str, tuple[int, tuple[str, ...]]] = {}
+
+
+def _holds_own_class(name: str, attr: str) -> bool:
+    namespace = getattr(sys.modules.get(name), "__dict__", None)
+    held = namespace.get(attr) if type(namespace) is dict else None
+    return isinstance(held, type) and getattr(held, "__module__", None) == name
+
+
+def _class_holders(attr: str) -> tuple[str, ...]:
+    """The loaded modules that hold a class named *attr* defined in them,
+    looked up in every module again only once another module was loaded:
+    the methods of one class reach `_holder_homes` one after another, and
+    each lookup read thousands of namespaces. The caller checks each module
+    again; a module that came to hold such a class without a module being
+    loaded since is left out, which leaves a report unstored, never wrong."""
+    count = len(sys.modules)
+    kept = _HOLDERS.get(attr)
+    if kept is not None and kept[0] == count:
+        return kept[1]
+    found = tuple(name for name in list(sys.modules) if _holds_own_class(name, attr))
+    if len(_HOLDERS) > 4096:
+        _HOLDERS.clear()
+    _HOLDERS[attr] = (count, found)
     return found
 
 
