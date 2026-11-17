@@ -25,6 +25,15 @@ write failed). So the import succeeds as it would outside: a process-wide
 ``sys.dont_write_bytecode`` cost another thread's import its ``.pyc``, and
 reset the user's own. The same steps from the value's own code are refused.
 
+A finalizer a garbage collection runs while the rebuild runs is let
+through, as is anything it imports: the collection can start at any
+allocation, and frees garbage earlier work left (a finished kernel's
+``KernelManager`` removing its connection file in ``__del__``), which plain
+Python ran wherever the collection fell. Refused, the finalizer failed and
+a result as plain as ``4`` was not stored. Garbage in a cycle the rebuild
+itself made is freed by whichever collection comes next, inside the
+rebuild or after it, so the check never stood between it and a file.
+
 A library's first import may write its own caches (matplotlib's font
 list): refused inside the rebuild, the library is then imported as the
 program would import it, outside the check, and the rebuild is tried again
@@ -45,6 +54,7 @@ import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+from .._gc_context import collecting
 from ..tracking import io_watch
 from ..tracking.process_registries import IMPORT_STEP_CODE
 
@@ -108,6 +118,8 @@ class NoFileWrites:
         self.tempdir = tempdir
 
     def __call__(self, event: str, args: tuple) -> None:
+        if collecting():
+            return  # a finalizer of garbage a collection frees: not the rebuild's
         if event == "import":
             if args and isinstance(args[0], str):
                 self.imported.append(args[0])
