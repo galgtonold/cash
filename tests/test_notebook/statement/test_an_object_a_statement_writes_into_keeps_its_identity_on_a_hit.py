@@ -21,6 +21,7 @@ import weakref
 import pytest
 
 from cash.notebook.cache_status import CacheStatus
+from cash.notebook.control_structures import single_unit_policy
 from cash.notebook.statement import processor
 from tests._cell_driver import run_cash_cell
 
@@ -80,6 +81,12 @@ def test_an_id_or_weak_reference_taken_after_the_store_still_finds_the_object(
     # time: a loop pass costs microseconds, so its check may take only the
     # floor, which a busy runner overran for one pass of ten.
     monkeypatch.setattr(processor, "SHARE_CHECK_FLOOR_S", 5.0)
+    # The loop case runs pass by pass, each run alike. Whether its rest goes
+    # as one unit is timed (`rest_worth_one_unit`: 10 ms of bookkeeping a
+    # pass), and a macOS runner crossed that between runs: one run took the
+    # rest as a unit after a pass the stored run had not, which no entry
+    # held. The rest as one unit is pinned below, on its own.
+    monkeypatch.setattr(single_unit_policy, "rest_worth_one_unit", lambda overheads, remaining: False)
     ns = cash_magics.shell.user_ns
     cells = [MAKE, body]
     for cell in cells:
@@ -122,7 +129,6 @@ def test_a_loop_whose_rest_ran_as_one_unit_keeps_its_array_on_a_hit(cash_magics,
     the stored copy, and with ``reg = {id(arr): 'a'}`` taken since, every hit
     refused it and the loop ran each time. The stored state is written into
     the live array instead, so it is served and keeps its object."""
-    from cash.notebook.control_structures import single_unit_policy
 
     monkeypatch.setattr(single_unit_policy, "passes_were_cheap", lambda shares: len(shares) >= 5)
     monkeypatch.setattr(single_unit_policy, "rest_worth_one_unit", lambda overheads, rest: rest > 0 and bool(overheads))

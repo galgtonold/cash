@@ -29,13 +29,23 @@ pytest.importorskip("pandas")
 from cash.analysis.annotations import get_statement_annotations
 from cash.backends import FileBackend, InMemoryBackend, TieredBackend, sampled_cost
 from cash.notebook.cache_status import CacheStatus
-from cash.notebook.statement import in_place, store
+from cash.notebook.statement import in_place, processor, store
 from cash.notebook.statement.processor import StatementProcessor
 from cash.notebook.statement.rebuild_cost import RebuildCostLedger
 from tests._cell_driver import run_cash_cell
 
 SETUP = "import time\nimport pandas as pd\nt = pd.DataFrame({'user': ['s10'] * 3, 'n': [1, 2, 3]})"
 BUILD = "frames = [t.copy() for _ in range(1000)]"
+
+
+@pytest.fixture(autouse=True)
+def share_check_to_spare(monkeypatch):
+    """What is pinned is the store's price, not the share check's time: the
+    check of 1,000 tables gets the floor (a tenth of a second) next to a
+    ~15 ms statement, which a busy runner overran, and the entry the control
+    expects was never written. Past it the statement only re-runs, with no
+    skipped_reason to show."""
+    monkeypatch.setattr(processor, "SHARE_CHECK_FLOOR_S", 5.0)
 
 
 @pytest.fixture

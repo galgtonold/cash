@@ -38,7 +38,7 @@ from ...value_hash import compute_hash
 from .. import heavy_loops
 from ..cache_status import CacheStatus
 from ..lineage_store import statement_tag
-from ..loop_split import loop_source_hash, split_nodes
+from ..loop_split import REST_NEVER, loop_source_hash, split_nodes
 from ..restored_var import identity_digest
 from ..statement.run import NO_LOOP_ITERABLE
 from . import helpers as _helpers
@@ -144,6 +144,23 @@ def _work(metrics: Sequence) -> float:
         elif status == CacheStatus.RESTORED:
             work += m.get("saved_time", 0.0)
     return work
+
+
+def _all_kept(metrics: Sequence[Any]) -> bool:
+    """Whether every statement of *metrics* was served from the cache or
+    stored: then the entries a run switching where this one did would look
+    up are there. One computed and not stored (refused, too cheap, an
+    error) leaves a gap, so where the loop switched is not recorded."""
+    if not metrics:
+        return False
+    for m in metrics:
+        status = CacheStatus.parse(m.get("status")) if isinstance(m, dict) else None
+        if status is CacheStatus.RESTORED:
+            continue
+        if status is CacheStatus.COMPUTED and m.get("storage") and not m.get("skipped_reason"):
+            continue
+        return False
+    return True
 
 
 def _rebound_names(node: ast.For) -> set[str]:
@@ -719,6 +736,10 @@ class ForLoopHandler:
         )
         if cheap_rest:
             source = iter(iterable)
+        # Where this loop switched when its entries were last stored
+        # (`_recorded_switch`): while every pass so far is served, it
+        # switches there again, not where this run's timing would.
+        switch_store, switch_at = self._recorded_switch(node) if cheap_rest else (None, None)
         run_rest = False
         # The share of each pass's time its statements' own work took
         # (`single_unit_policy.passes_were_cheap`).
@@ -784,6 +805,13 @@ class ForLoopHandler:
                     work_shares.append(work / wall if wall > 0 else 1.0)
                     overheads.append(max(0.0, wall - work))
                     measured = len(all_metrics)
+                if cheap_rest and switch_at is not None and cached_iterations == total_iterations:
+                    # Every pass so far was served: the stored run went on
+                    # to its switch, whose entries are there.
+                    if total_iterations == switch_at and sized > total_iterations:
+                        run_rest = True
+                        break
+                    continue
                 if (
                     cheap_rest
                     and single_unit_policy.passes_were_cheap(work_shares)
@@ -824,7 +852,12 @@ class ForLoopHandler:
                 rest_metrics.extend(rest.metrics)
             if not rest.success:
                 raise rest.error or RuntimeError("Error in the rest of the loop")
+            if switch_store is not None and _all_kept([*all_metrics[loop_metrics_start:], *rest.metrics]):
+                switch_store.record_rest_after(loop_source_hash(node), total_iterations)
             total_iterations += 1
+        elif switch_store is not None and total_iterations and _all_kept(all_metrics[loop_metrics_start:]):
+            # Every pass ran one by one, each served or stored.
+            switch_store.record_rest_after(loop_source_hash(node), REST_NEVER)
 
         if probe_n is not None:
             self._split_policy.record_verdict(node, probe_elapsed, probe_n)
@@ -884,6 +917,24 @@ class ForLoopHandler:
             entry=None if run_rest else _helpers.structure_entry(all_metrics, moved),
         )
         return total_iterations, cached_iterations
+
+    def _recorded_switch(self, node: ast.For) -> tuple[Any, int | None]:
+        """The split store and the pass after which *node* last sent its
+        rest as one stored unit (`LoopSplitStore.rest_after`), or None.
+
+        That pass is timed (`single_unit_policy.rest_worth_one_unit`), so
+        it moves between runs; a run that switched elsewhere than the stored
+        one found no entry for its unit, or none for the passes it ran one by
+        one, and ran them again. The loop's source names it, so an edited
+        loop finds none."""
+        try:
+            store = self._split_policy.store()
+            if store is None:
+                return None, None
+            return store, store.rest_after(loop_source_hash(node))
+        except (OSError, ValueError, RecursionError):
+            logger.debug("[CONTROL] could not read where the loop last switched", exc_info=True)
+            return None, None
 
     def _warn_target_changed(self, node: ast.For, target_names: list, raw_cell: str | None, loop_annotation) -> None:
         """KEY-LOOP-VAR-CHANGED, once per loop, when its body changes the loop
