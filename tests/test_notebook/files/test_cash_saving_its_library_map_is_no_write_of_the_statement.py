@@ -2,7 +2,7 @@
 that made it look.
 
 The first statement to call into a library made cash save which installed
-distribution provides each module (``_library_map.json``) and a digest of
+distribution provides each module (``_library_map.<slot>.json``) and a digest of
 each one's files (``_library_records.json``), in the per-user cache folder.
 The write observer took those for the statement's own writes, which a hit
 would skip, and refused it (p27's ``load`` and ``design``).
@@ -19,7 +19,7 @@ def test_neither_saved_file_is_a_write_of_the_block(tmp_path, monkeypatch):
     with observe_writes() as written:
         library_versions._save_map({"header": ["h"]}, {"pkg": [["dist", None]]})
         library_versions._save_records({"dist": "digest"})
-    assert (tmp_path / "_library_map.json").exists()
+    assert (tmp_path / f"_library_map.{library_versions._slot(['h'])}.json").exists()
     assert (tmp_path / "_library_records.json").exists()
     assert kept_writes(written) == []
 

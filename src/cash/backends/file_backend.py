@@ -241,8 +241,7 @@ def _watch_listings() -> None:
         return
     from ..tracking import io_watch
 
-    for event in ("os.scandir", "os.listdir"):
-        io_watch.subscribe_always(event, _finish_before_listing)
+    io_watch.subscribe_always(("os.scandir", "os.listdir"), _finish_before_listing)
     _listing_watched = True
 
 

@@ -188,8 +188,7 @@ def _count_calls() -> None:
     def set_natively(_args: tuple) -> None:
         _NATIVE_ENVIRONMENT[0] += 1
 
-    io_watch.subscribe_always("os.putenv", set_natively)
-    io_watch.subscribe_always("os.unsetenv", set_natively)
+    io_watch.subscribe_always(("os.putenv", "os.unsetenv"), set_natively)
 
 
 _SIGNALS: tuple[int, ...] | None = None

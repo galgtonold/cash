@@ -200,7 +200,7 @@ def _dists_for(top: str) -> list[str]:
     return names
 
 
-#: How many maps the saved file keeps (`_slot`): environments, and the
+#: How many maps are kept (`_slot`), a file each: environments, and the
 #: working folders a notebook or ``python -c`` puts on ``sys.path``.
 _SAVED_MAPS = 16
 
@@ -363,13 +363,43 @@ def _map_digest(by_top: Any) -> str:
     return hashlib.sha256(json.dumps(by_top, sort_keys=True).encode("utf-8")).hexdigest()
 
 
-def _read_saved() -> dict:
+def _slot_path(slot: str) -> str:
+    """The file *slot*'s map is kept in, beside `_map_path`: one file per
+    slot, so a process reads its own map alone. All of them in one file
+    (16 slots, 1 MB) were read and parsed by every process's first key that
+    reached a library, 15-35 ms, and written back whole when a working
+    folder moved."""
+    root, ext = os.path.splitext(_map_path())
+    return f"{root}.{slot}{ext}"
+
+
+def _read_saved(slot: str) -> dict:
     try:
-        with untracked(), open(_map_path(), encoding="utf-8") as fh:
+        with untracked(), open(_slot_path(slot), encoding="utf-8") as fh:
             data = json.load(fh)
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _prune_saved(keep: str) -> None:
+    """Remove all but the `_SAVED_MAPS` most recently written slot files."""
+    root = os.path.splitext(_map_path())[0]
+    folder, prefix = os.path.dirname(root), os.path.basename(root) + "."
+    found = []
+    with os.scandir(folder) as children:
+        for child in children:
+            if child.name.startswith(prefix) and child.name.endswith(".json") and child.path != keep:
+                try:
+                    found.append((child.stat().st_mtime_ns, child.path))
+                except OSError:
+                    continue
+    found.sort()
+    for _mtime, path in found[: max(0, len(found) - (_SAVED_MAPS - 1))]:
+        try:
+            os.remove(path)
+        except OSError:
+            continue
 
 
 def _saved_map(header: list) -> dict[str, list[tuple[str, Any]]] | None:
@@ -377,7 +407,7 @@ def _saved_map(header: list) -> dict[str, list[tuple[str, Any]]] | None:
     saved, the installs changed, or the saved one is not whole (it is then
     built again and saved over)."""
     try:
-        saved = _read_saved().get(_slot(header))
+        saved = _read_saved(_slot(header))
         fingerprint, by_top = saved["fingerprint"], saved["map"]
         if fingerprint["header"] != header or saved["digest"] != _map_digest(by_top):
             return None
@@ -414,28 +444,25 @@ def _save_map(fingerprint: dict, by_top: dict[str, list] | None, closures: dict 
     """Keep *by_top* for the next process with these installs, and with it
     *closures* (`_SAVED_CLOSURES`). With *by_top* None, only *closures*, and
     only into a slot saved under this same *fingerprint*. Best-effort."""
-    path = _map_path()
     slot = _slot(fingerprint["header"])
+    path = _slot_path(slot)
     try:
         # Cash's own file, written while a statement runs (its first look
         # at a library): no write of the statement's (`io_watch.own_work`),
         # which refused it as one a hit would skip (p27's ``load``).
         with untracked(), io_watch.own_work():
-            data = _read_saved()
-            held = data.pop(slot, None)
             if by_top is None:
-                if not isinstance(held, dict) or held.get("fingerprint") != fingerprint:
+                held = _read_saved(slot)
+                if held.get("fingerprint") != fingerprint:
                     return  # the installs changed since: these may be stale
                 held["closures"] = closures or {}
-                data[slot] = held
             else:
-                data[slot] = {"fingerprint": fingerprint, "map": by_top, "digest": _map_digest(by_top)}
+                held = {"fingerprint": fingerprint, "map": by_top, "digest": _map_digest(by_top)}
                 if closures:
-                    data[slot]["closures"] = closures
-            for old in list(data)[:-_SAVED_MAPS]:
-                del data[old]
+                    held["closures"] = closures
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            _write_json(path, data)
+            _write_json(path, held)
+            _prune_saved(path)
     except (OSError, TypeError, ValueError):
         pass
 
@@ -444,7 +471,7 @@ def _write_json(path: str, data: Any) -> None:
     """Write *data* to *path* as JSON, by way of a temporary file.
 
     Encoded in one go: ``json.dump`` to a file takes ``json``'s pure-Python
-    encoder, ~60 ms for the ~1 MB map file where ``json.dumps`` takes 14."""
+    encoder, ~60 ms for 1 MB of maps where ``json.dumps`` takes 14."""
     text = json.dumps(data)
     temp = f"{path}.{os.getpid()}.tmp"
     with open(temp, "w", encoding="utf-8") as fh:

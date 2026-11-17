@@ -50,6 +50,18 @@ def site(tmp_path, monkeypatch):
     library_versions.forget()
 
 
+def _saved_files():
+    """The saved maps, a file per slot beside `_map_path`."""
+    root, ext = os.path.splitext(library_versions._map_path())
+    folder = os.path.dirname(root)
+    if not os.path.isdir(folder):
+        return []
+    prefix = os.path.basename(root) + "."
+    return sorted(
+        os.path.join(folder, name) for name in os.listdir(folder) if name.startswith(prefix) and name.endswith(ext)
+    )
+
+
 def _new_process():
     """What a new process starts with: no map in memory."""
     library_versions.forget()
@@ -138,8 +150,9 @@ def test_a_changed_search_path_builds_its_own_map(site, tmp_path, monkeypatch):
 def test_an_unreadable_saved_map_is_built_again(site, monkeypatch):
     _fill(site)
     first = _lookups()
-    with open(library_versions._map_path(), "w", encoding="utf-8") as fh:
-        fh.write("{not json")
+    for path in _saved_files():
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("{not json")
     _new_process()
     scans = _scans(monkeypatch)
     assert _lookups() == first
@@ -247,7 +260,7 @@ def test_an_egg_info_file_on_the_path_still_lets_the_map_be_saved(site, monkeypa
     scans = _scans(monkeypatch)
     first = {**_lookups(), "eggpkg": library_versions._dists_for("eggpkg")}
     assert first["realpkg"] == ["fake_real"]
-    assert os.path.exists(library_versions._map_path())
+    assert _saved_files()
     _new_process()
     assert {**_lookups(), "eggpkg": library_versions._dists_for("eggpkg")} == first
     assert len(scans) == 1
@@ -285,7 +298,7 @@ def test_the_importlib_metadata_backport_on_the_meta_path_still_lets_the_map_be_
     scans = _scans(monkeypatch)
     first = _lookups()
     assert first == {"realpkg": ["fake_real"], "toppkg": ["fake_top"], "ghostpkg": [], "newpkg": []}
-    assert os.path.exists(library_versions._map_path())
+    assert _saved_files()
     _new_process()
     assert _lookups() == first
     assert len(scans) == 1
@@ -306,7 +319,7 @@ def test_the_backport_taking_over_from_the_standard_finder_still_names_every_dis
     first = _lookups()
     assert first == {"realpkg": ["fake_real"], "toppkg": ["fake_top"], "ghostpkg": [], "newpkg": []}
     assert any(name == "numpy" for name, _ in library_versions.library_versions([_reaches_numpy], None))
-    assert os.path.exists(library_versions._map_path())
+    assert _saved_files()
     _new_process()
     assert _lookups() == first
     assert len(scans) == 1
@@ -337,13 +350,12 @@ def test_another_interpreter_or_environment_never_reads_this_ones_map(site, tmp_
 def _rewrite_saved(change):
     import json
 
-    path = library_versions._map_path()
-    with open(path, encoding="utf-8") as fh:
-        data = json.load(fh)
-    for record in data.values():
+    for path in _saved_files():
+        with open(path, encoding="utf-8") as fh:
+            record = json.load(fh)
         change(record)
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(data, fh)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(record, fh)
 
 
 def _emptied(record):
@@ -435,3 +447,27 @@ def test_metadata_appearing_in_a_working_folder_builds_the_map_again(site, tmp_p
     _dist(work, "fake_new", "1.0", ["newpkg/__init__.py"])
     _new_process()
     assert library_versions._dists_for("newpkg") == ["fake_new"]
+
+
+def test_each_slot_is_its_own_file_and_only_the_newest_are_kept(site, monkeypatch):
+    """A process reads its own slot's map alone: one file holding every
+    slot's (1 MB for 16) was parsed by each process's first key reaching a
+    library, and written back whole when a working folder moved."""
+    _fill(site)
+    _lookups()
+    assert len(_saved_files()) == 1
+    monkeypatch.setattr(library_versions, "_SAVED_MAPS", 3)
+    for k in range(5):
+        monkeypatch.setattr(sys, "prefix", f"/env-{k}")
+        _new_process()
+        _lookups()
+    assert len(_saved_files()) == 3
+    from cash.backends.cache_dir import is_cash_file
+
+    assert all(is_cash_file(os.path.basename(path)) for path in _saved_files())
+    reads = []
+    real = library_versions._read_saved
+    monkeypatch.setattr(library_versions, "_read_saved", lambda slot: reads.append(slot) or real(slot))
+    _new_process()
+    _lookups()
+    assert len(set(reads)) == 1
