@@ -33,7 +33,7 @@ from .key_values import (
     plain_data_kind,
 )
 from .module_identity import module_ref_part
-from .user_code import is_user_class, own_package
+from .user_code import is_user_class, own_package, unregistered_namespace_code
 
 if TYPE_CHECKING:
     from .class_data import ClassDataFold
@@ -492,6 +492,20 @@ class GlobalsFold:
         ref = self._values.code_ref_part(v, getattr(fold.func, "__module__", None), fold.func_name, name)
         if ref is not None:
             fold.parts.append((f"{name}#ref", ref))
+        if unregistered_namespace_code(v):
+            # No module holds it, so the helper walk cannot find it again by
+            # name and keys none of its code: keyed here by what its code
+            # is now, and the code that reaches (`code_surface_hash`).
+            surface = self._code.code_surface_hash(v)
+            if surface is not None:
+                fold.parts.append((f"{name}#code", surface))
+            fn = getattr(v, "__func__", v)
+            if type(fn) is types.FunctionType:
+                # And what it reads, as the walk folds a helper's reads:
+                # a class attribute, a global, the helpers it calls there.
+                reads = self.fold_read_globals(fn, fold.func_name, "", owner_code=fold.drift_owner, seen=fold.seen)
+                if reads:
+                    fold.parts.append((f"{name}#reads", reads))
 
     def _fold_value(self, fold: _ReadsFold, name: str, v: Any, plain: str | None) -> bool:
         """Add the digest of global *name*'s value *v* to *fold*, watched by

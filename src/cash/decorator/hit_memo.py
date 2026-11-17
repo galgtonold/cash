@@ -82,7 +82,14 @@ from ..source_reading import own_source
 from ..tracking.tracker_context import active_tracker
 from . import library_reads
 from .call_state import NESTED_CASH_SECONDS
-from .user_code import cash_wrapped, is_cash_wrapper, is_user_class, is_user_code_object, own_package
+from .user_code import (
+    cash_wrapped,
+    is_cash_wrapper,
+    is_user_class,
+    is_user_code_object,
+    own_package,
+    unregistered_namespace_code,
+)
 
 if TYPE_CHECKING:
     from .cached_function import CachedFunction
@@ -923,7 +930,7 @@ class _Scan:
         # object of the library's its code names is no data a key folds, as
         # read through its module (`module`). Python 3.14's ``warnings``
         # reads its context from a ``ContextVar`` and a settings object.
-        library = not own_code_is_user(f, self.root_module)
+        library = not _users(f, self.root_module)
         for name in names:
             if name in g:
                 if library and _unread_object(g[name]):
@@ -983,7 +990,7 @@ class _Scan:
             if inner is not None:
                 self.value(inner, frozenset())
             return
-        if not own_code_is_user(f, self.root_module):
+        if not _users(f, self.root_module):
             # Library code: keyed by its name, which the module watch covers.
             return
         # Its names: setting ``__name__`` moves the key (`renamed`) but no
@@ -1208,6 +1215,13 @@ _WATCHED_MODULES: set[int] = set()
 _WATCH_LOCK = threading.Lock()
 
 
+def _users(f: types.FunctionType, root_module: str | None) -> bool:
+    """Is *f* code the key reads into: the user's by the helper walk's
+    rule, or ``exec``'d into a namespace no module holds, whose code and
+    reads the globals fold keys (`unregistered_namespace_code`)."""
+    return own_code_is_user(f, root_module) or unregistered_namespace_code(f)
+
+
 def world_epochs() -> tuple[int, int] | None:
     """``(world epoch, cash epoch)``, or None without the fast path."""
     if not ENABLED:
@@ -1222,7 +1236,7 @@ def watch_helper(helper: Any, root_module: str | None) -> tuple:
     the function and its names), which no watcher sees and `cells_hold`
     compares. Raises `Ineligible` for a helper of library code (its reads
     are not watched here) or one whose world holds what no watcher sees."""
-    if type(helper) is not types.FunctionType or not own_code_is_user(helper, root_module):
+    if type(helper) is not types.FunctionType or not _users(helper, root_module):
         raise Ineligible("a helper the scan does not watch")
     s = _Scan(root_module)
     s.shallow, s.shallow_pkg = True, own_package(helper)

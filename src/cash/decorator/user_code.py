@@ -59,7 +59,10 @@ def is_user_class(cls: Any, own_pkg: str | None = None) -> bool:
     if in_own_package(name, own_pkg):
         return True
     mod = sys.modules.get(name or "")
-    return mod is not None and is_user_code_module(mod)
+    if mod is not None and is_user_code_module(mod):
+        return True
+    # One ``exec``'d into a namespace no module holds is the user's too.
+    return unregistered_namespace_code(cls)
 
 
 _HEAPTYPE = 1 << 9
@@ -280,6 +283,51 @@ def unnamed_library_class(cls: type) -> bool:
     ``module:qualname`` does not find, so the name stands for another?"""
     mod = sys.modules.get(getattr(cls, "__module__", None) or "")
     return mod is not None and not qualname_resolves_in(mod, cls) and built_by_library(cls)
+
+
+def unregistered_namespace_code(obj: Any) -> bool:
+    """Is *obj*, a function or class of the user's, code no module in
+    ``sys.modules`` holds: ``exec``'d into a namespace of its own (``ns =
+    {}``, a ``types.ModuleType`` never registered)?
+
+    The helper walk keys the user code it finds through a module it can
+    look up again on each call, by name; code in such a namespace has
+    none, so the walk takes it for a library's and keys only its name.
+    A method replaced on such a class, or a helper redefined there, then
+    served the result of the old one."""
+    fn = getattr(obj, "__func__", obj)
+    home = sys.modules.get(getattr(fn, "__module__", None) or "")
+    if home is not None and qualname_resolves_in(home, fn):
+        # Found by its name (a namedtuple's ``__new__`` is made in a
+        # namespace of its own, its class is found): keyed as any other.
+        return False
+    if type(fn) is types.FunctionType:
+        code = fn.__code__
+        # No ``co_qualname`` before 3.11: its ``co_name`` then.
+        if code.co_qualname != fn.__qualname__ if hasattr(code, "co_qualname") else code.co_name != fn.__name__:
+            # Named after what it stands for by the code that made it (a
+            # namedtuple's ``__new__``, a lambda ``collections`` built):
+            # a library's, judged as before.
+            return False
+        g = fn.__globals__
+        name = g.get("__name__")
+        mod = sys.modules.get(name) if isinstance(name, str) else None
+        return getattr(mod, "__dict__", None) is not g and is_user_code_object(fn)
+    if isinstance(obj, type):
+        # By its methods: a class says nothing of where it was built (one
+        # ``exec``'d into a bare ``{}`` calls itself ``builtins``).
+        try:
+            members = list(vars(obj).values())
+        except TypeError:
+            return False
+        for member in members:
+            if isinstance(member, (staticmethod, classmethod)):
+                member = member.__func__
+            elif isinstance(member, property):
+                member = member.fget
+            if type(member) is types.FunctionType and unregistered_namespace_code(member):
+                return True
+    return False
 
 
 def qualname_resolves_in(mod: Any, obj: Any) -> bool:
