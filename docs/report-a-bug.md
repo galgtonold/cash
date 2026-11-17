@@ -33,11 +33,11 @@ first try.
 
 === "Notebook"
 
-    <!-- claim: cash/notebook/badge_renderer/view_builder.py:_bug_report_url @83c876f0 -->
+    <!-- claim: cash/notebook/badge_renderer/view_builder.py:_bug_report_url @aaff1635 -->
     Open the badge's panel: it ends with a **Report incorrect caching**
-    link. The link opens a new issue filled in with the badge's rows, the
-    source of the notebook's cells, your cash and Python versions and the
-    backend. Read it before you submit and remove anything private.
+    link. The link opens a new issue filled in with the badge's rows, as
+    much of the notebook's cell source as fits in a link, your cash and
+    Python versions and the backend. Read it before you submit and remove anything private.
 
     For a problem the badge does not show, turn on the debug log, run the
     cells again and paste what it prints:
