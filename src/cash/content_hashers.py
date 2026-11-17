@@ -1106,9 +1106,10 @@ class _GeometryDigests:
             self._start_again()
 
     def _start_again(self) -> None:
-        np = _numpy()
-        self._addresses = np.empty(0, dtype=np.uintp)
-        self._pieces = np.empty(0, dtype=object)
+        # The arrays are made at the first remembered geometry, so that
+        # importing cash never imports numpy.
+        self._addresses: Any = None
+        self._pieces: Any = None
         #: ``id(reference) -> (reference, address)`` of each object remembered.
         self._refs: dict[int, tuple[Any, int]] = {}
         self._gone.clear()
@@ -1123,13 +1124,13 @@ class _GeometryDigests:
             entry = self._refs.pop(id(self._gone.popleft()), None)
             if entry is not None:
                 gone.append(entry[1])
-        if gone:
+        if gone and self._addresses is not None:
             keep = ~np.isin(self._addresses, np.array(gone, dtype=np.uintp))
             self._addresses = self._addresses[keep]
             self._pieces = self._pieces[keep]
 
     def __len__(self) -> int:
-        return len(self._addresses)
+        return 0 if self._addresses is None else len(self._addresses)
 
     def joined(self, data: Any) -> bytes:
         """The pieces of the geometries in the 1-d object array *data*
@@ -1148,7 +1149,7 @@ class _GeometryDigests:
         with self._lock:
             self._forget_gone()
             known = self._addresses
-            if len(known):
+            if known is not None and len(known):
                 at = np.searchsorted(known, addresses).clip(max=len(known) - 1)
                 found = known[at] == addresses
                 pieces = np.empty(len(distinct), dtype=object)
@@ -1179,8 +1180,11 @@ class _GeometryDigests:
 
     def _remember(self, addresses: Any, pieces: Any, objects: Any) -> None:
         np = _numpy()
-        if len(self._addresses) + len(addresses) > self.MAX_HELD:
+        if len(self) + len(addresses) > self.MAX_HELD:
             self._start_again()
+        if self._addresses is None:
+            self._addresses = np.empty(0, dtype=np.uintp)
+            self._pieces = np.empty(0, dtype=object)
         made = _weak.refs(objects.tolist(), self._on_gone)
         self._refs.update(zip(map(id, made), zip(made, addresses.tolist())))
         merged = np.concatenate([self._addresses, addresses])
