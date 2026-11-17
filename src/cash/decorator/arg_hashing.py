@@ -537,6 +537,13 @@ def _frame_memory(
     holders: dict[int, Any] = {}
     todo: list = []
     caches: set[int] = set()
+    #: The reference lists already walked. Every view of an index (each
+    #: Series built over one ``DatetimeIndex``, each result of an operation
+    #: on them) shares its index's list; walking it again for each view held
+    #: made the walk quadratic: 100 live Series over one index took 10,000
+    #: steps a frame, and a ``pvlib`` call over five of them spent most of
+    #: its cash time here.
+    walked: set[int] = set()
     #: The object arrays whose items were vouched for (`_object_view`).
     vouched: set[tuple] = set()
 
@@ -612,7 +619,7 @@ def _frame_memory(
             for level in holder._levels:
                 hold(level)
             hold(holder._codes)  # a list indexes made by ``_view`` share
-            shared = holder._references.referenced_blocks if holder._references is not None else []
+            shared = holder._references.referenced_blocks if holder._references is not None else ()
             _hold_cached_indexes(holder, hold, pd)
         elif isinstance(holder, pd.RangeIndex):
             continue
@@ -647,10 +654,13 @@ def _frame_memory(
                 # pandas' lookup table for the labels; indexes made from this
                 # one by ``_view`` share it, so it is counted once, as a holder.
                 hold(engine)
-            shared = holder._references.referenced_blocks if holder._references is not None else []
+            shared = holder._references.referenced_blocks if holder._references is not None else ()
             _hold_cached_indexes(holder, hold, pd)
         else:
             return None
+        if id(shared) in walked:
+            continue
+        walked.add(id(shared))
         for ref in shared:
             other = ref()
             if other is not None and not is_pin(other):  # the RAM tier's mark on a frozen block
