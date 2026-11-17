@@ -33,7 +33,7 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
 
     A statement recomputes when any of these changed:
 
-    <!-- claim: cash/notebook/held_modules.py:held_module_parts @ce3d3076, cash/notebook/held_modules.py:held_data_part @7f1477b6, cash/notebook/held_functions.py:held_notebook_code @c5f1b92d, cash/notebook/ipython/autoreload_hook.py:in_place_reload @1a058feb -->
+    <!-- claim: cash/notebook/held_modules.py:held_module_parts @ce3d3076, cash/notebook/held_modules.py:held_data_part @7f1477b6, cash/notebook/held_functions.py:held_notebook_code @fd53b6c3, cash/notebook/ipython/autoreload_hook.py:in_place_reload @1a058feb -->
     - **Its source.**
     - **An input's lineage**, which changes whenever anything upstream of that
       input changed ([below](#lineage-propagation)).
@@ -95,7 +95,7 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
     - **A file it or an input read** ([files](#files), below).
     - **An environment variable it reads** by name, in its own text or in a
       function or method of yours it calls, defined in a cell or a module.
-    <!-- claim: cash/tracking/reference_states.py:changed @1949e458, cash/notebook/statement/processor.py:StatementProcessor._note_reference_states @24a22d30, cash/tracking/reference_states.py:for_call @fafe1936, cash/tracking/lookups_seen.py:_on_call @a5e765f6, cash/tracking/lookups_seen.py:_note_reads @025b3e9f, cash/tracking/lookups_seen.py:_note_globals @68b1cf88, cash/tracking/lookups_seen.py:_warn_unseen_once @71cd55a2 -->
+    <!-- claim: cash/tracking/reference_states.py:changed @1949e458, cash/notebook/statement/processor.py:StatementProcessor._note_reference_states @24a22d30, cash/tracking/reference_states.py:for_call @fafe1936, cash/tracking/lookups_seen.py:_on_call @c61001a7, cash/tracking/lookups_seen.py:_note_reads @025b3e9f, cash/tracking/lookups_seen.py:_note_globals @c4fe6755, cash/tracking/lookups_seen.py:_warn_unseen_once @71cd55a2 -->
     - **An object that pickles by reference** (by its name, as a logger
       pickles as `getLogger(name)`) held by a value it reads, or by a global
       a function it calls reads, or by a value it reads was made from. Its
@@ -115,7 +115,7 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
       each is the same; so is a call the call cache keeps. A statement or a
       kept call that changed one runs again the next time, as a hit could
       not change it again.
-      <!-- claim: cash/kept_state.py:logger_state @37d45541, cash/kept_state.py:_handler_state @5efc2fe1, cash/kept_state.py:buffering_handlers @83e6a999, cash/kept_state.py:_reduce_by_reference_for_key @3e124d7b -->
+      <!-- claim: cash/kept_state.py:logger_state @37d45541, cash/kept_state.py:_handler_state @5efc2fe1, cash/kept_state.py:buffering_handlers @83e6a999, cash/kept_state.py:_reduce_by_reference_for_key @62e37a1b -->
       A standard library logger's state is what its output follows: its
       name, level, parent, `propagate`, `disabled`, handlers (each with
       its level, formatter, filters and the file or stream it writes to,
@@ -181,7 +181,7 @@ the old result, with no warning. For a file read that way, name it with
 `file_depends_on=` on the decorator, or see
 [custom file sources](../tutorials/feature-guides/custom-file-sources.md).
 
-<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @d1bb21b4, cash/tracking/file_dep_snapshot.py:_note_settled @ec6408ac -->
+<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @627feb62, cash/tracking/file_dep_snapshot.py:_note_settled @ec6408ac -->
 When the result is stored, each file is recorded with its size, modification
 time and a content hash. Before the result is reused:
 
@@ -220,7 +220,7 @@ In a notebook, a statement is checked against the files it read itself and
 the files its inputs were built from, so a changed CSV invalidates the whole
 chain that read it.
 
-<!-- claim: cash/tracking/file_watch.py:FileWatch.current @31588dc6, cash/tracking/file_watch.py:FileWatch.record @dc554483, cash/notebook/run_memo.py:stats_this_run @bc8bc3db, cash/tracking/file_watch.py:_VolumeChanges.add @bbc71473, cash/tracking/file_watch.py:status_line @05f76dc5 -->
+<!-- claim: cash/tracking/file_watch.py:FileWatch.current @2cd31e7a, cash/tracking/file_watch.py:FileWatch.record @158d090d, cash/notebook/run_memo.py:stats_this_run @24fad834, cash/tracking/file_watch.py:_VolumeChanges.add @bbc71473, cash/tracking/file_watch.py:status_line @05f76dc5 -->
 In a notebook, cash also asks the operating system to report changes to each
 folder holding a file it checked (inotify on Linux; on Windows one
 `ReadDirectoryChangesW` per drive, from its root, so no folder of yours is
@@ -264,7 +264,7 @@ lineages and miss, however many cells separate them.
 
 ### Upstream simulation
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @ec79c8f1, cash/notebook/upstream/simulator.py:NotebookSimulator.simulate_upstream @c9c50888 -->
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @3a57e3a7, cash/notebook/upstream/simulator.py:NotebookSimulator.simulate_upstream @3c17a94b -->
 You edit cell 1, then run cell 3 directly. Before cell 3 runs, cash reads the
 notebook's current cells and *simulates* the cells above: it computes, from
 their code alone and without running them, the lineage each statement would
@@ -277,6 +277,9 @@ the name has and warns ([A name a magic binds](../known-limitations.md#a-name-a-
 So is what a cell that raised part way left: cash keeps it, and what was built
 from it, as they are, and warns
 ([NOTEBOOK-FAILED-CELL](../warnings.md#notebook-failed-cell)).
+So is a value that shares an object with a module a statement above put it
+into (`holder.items = sessions`): a rebuild would not reach the object the
+module holds, so cash keeps the value, and the module, as they are.
 
 Only what the cell you run depends on is considered. A stale chart or export
 above it that it does not read stays as it is. A statement that writes a file
@@ -287,7 +290,7 @@ ran runs again too, whatever the cell reads.
 
 ### Finding your notebook
 
-<!-- claim: cash/notebook/server_discovery.py:NotebookCellReaders.read @d0b4a970, cash/notebook/server_discovery.py:get_notebook_path @94e1bc3d, cash/notebook/server_discovery.py:_collect_running_servers @1cd179a1, cash/notebook/server_discovery.py:_search_servers_for_notebook @630038cc -->
+<!-- claim: cash/notebook/server_discovery.py:NotebookCellReaders.read @9011fcb8, cash/notebook/server_discovery.py:get_notebook_path @94e1bc3d, cash/notebook/server_discovery.py:_collect_running_servers @1cd179a1, cash/notebook/server_discovery.py:_search_servers_for_notebook @630038cc -->
 To simulate, cash needs the notebook's current cells. It tries, in order:
 cells pushed by cash's JupyterLab extension before each run, Colab's
 frontend, and VS Code's unsaved-changes backup. All three see edits you have

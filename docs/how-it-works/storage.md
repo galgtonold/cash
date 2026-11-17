@@ -96,7 +96,7 @@ less; [the CLI page](../cli.md) has every option.
 
 ## The tiers
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @b5941cce, cash/backends/memory_backend.py:_cheap_to_keep @f12d65f9 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @a3ccd8f3, cash/backends/memory_backend.py:_cheap_to_keep @f12d65f9 -->
 | Tier | Where | Survives a restart? |
 |------|-------|---------------------|
 | Memory | RAM | No |
@@ -105,13 +105,15 @@ less; [the CLI page](../cli.md) has every option.
 A read tries memory first. A polars `DataFrame`, `Series` or `LazyFrame`
 found on disk is kept in memory for the next read without a copy (see below). Any other value found on disk, a pandas table among them, is
 copied into memory on its second read from disk in the same process, so a
-value read once after a restart costs no extra copy. Neither is kept when it
+value read once after a restart costs no extra copy. A decorated function's
+result that holds 1 MiB or more of arrays goes to disk alone when it is
+stored, and into memory on its first hit. Neither is kept when it
 would take more than 90% of the memory cap. A value of which the memory tier
 would have to copy 64 MB or more goes to the disk tier alone when it is
 stored, and is not kept in memory when it is read either; when no disk tier
 takes it, memory keeps it as usual.
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._copy_frame @333f803c, cash/backends/frame_sharing.py:_freeze @8890809b, cash/backends/frame_sharing.py:own_parts @5b3bb403, cash/backends/tiered_backend.py:TieredBackend.get @b5941cce, cash/backends/memory_backend.py:_copy_polars @d34b28a6 -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend._copy_frame @94031dc3, cash/backends/frame_sharing.py:_freeze @8890809b, cash/backends/frame_sharing.py:own_parts @bd7577a7, cash/backends/tiered_backend.py:TieredBackend.get @a3ccd8f3, cash/backends/memory_backend.py:_copy_polars @d34b28a6 -->
 The memory tier keeps a copy of each value that only it holds, so nothing you
 do to a value you were handed reaches the stored one, or the other way round.
 Under pandas copy-on-write (pandas 3, or `pd.options.mode.copy_on_write = True`
@@ -164,7 +166,7 @@ The Python objects in an `Object` column are copied.
 tiers; see
 [choosing a backend](../tutorials/feature-guides/choosing-a-backend.md).
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @b5941cce, cash/backends/_base.py:effective_ttl @c0f1dab8 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.get @a3ccd8f3, cash/backends/_base.py:effective_ttl @c0f1dab8 -->
 An entry's ttl is checked on every tier's copy as it is read, so the memory
 copy expires with the disk copy, and a backend used on its own applies the
 same rule. The ttl is the decorator's `ttl=`, or else the shorter of the ttl
@@ -176,7 +178,8 @@ the entry was written with and the tier's current `default_ttl`.
 === "Decorator"
 
     Every result is written to memory and to disk, however quick it was to
-    compute. The only thing that stops the disk write is a size cap (below).
+    compute (one holding 1 MiB or more of arrays reaches memory on its first
+    hit). The only thing that stops the disk write is a size cap (below).
 
 === "Notebook"
 
@@ -190,7 +193,7 @@ the entry was written with and the tier's current `default_ttl`.
     `%cash_persist on` writes it anyway. The [cost model](../cost-model.md)
     explains the prediction and every setting.
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @d0ef54da -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @34e7db12 -->
 Each tier turns down a single value too large for its cap, so a 20 MB frame
 can be stored in memory and on disk while skipping a Redis tier limited to
 10 MB. When a value was meant for disk but every disk tier refused it, cash
@@ -263,7 +266,7 @@ notebook statement also drops its older versions when the new one is written.
 
 ## When a result reaches the disk
 
-<!-- claim: cash/backends/_writes.py:PendingWrites.wait_for_backlog @252b9ad2, cash/backends/_writes.py:MAX_BACKLOG_S == 2.0, cash/backends/_writes.py:_finish_before_child @342230fe, cash/backends/file_backend.py:_finish_before_listing @891535e1, cash/backends/file_backend.py:FileBackend.get @02a106e6 -->
+<!-- claim: cash/backends/_writes.py:PendingWrites.wait_for_backlog @252b9ad2, cash/backends/_writes.py:MAX_BACKLOG_S == 2.0, cash/backends/_writes.py:_finish_before_child @342230fe, cash/backends/file_backend.py:_finish_before_listing @891535e1, cash/backends/file_backend.py:FileBackend.get @6a217499 -->
 The disk write runs on a background thread, and your code carries on while it
 does. cash waits for a write only when something needs it on disk:
 
@@ -331,7 +334,7 @@ killed process was still writing is missing, and is computed again.
 
 ## Turning objects into bytes
 
-<!-- claim: cash/decorator/store.py:ResultStore.store @00a3421c, cash/backends/serialization.py:PickleSerializer.serialize @d8e20083 -->
+<!-- claim: cash/decorator/store.py:ResultStore.store @c5fd2627, cash/backends/serialization.py:PickleSerializer.serialize @d8e20083 -->
 Every result is stored with `pickle` (protocol 5), pandas DataFrames
 included, so a hit hands back the same frame: its class, index, dtypes, cell
 types, `attrs` and `flags`. Pickle is several times faster than Parquet to
@@ -346,7 +349,7 @@ stored as its Arrow chunks, written as they are: pandas' own pickle first
 joins a column's chunks into one copy. A short slice of a long column is
 copied down to its rows, so `df.head()` does not write the whole column.
 
-<!-- claim: cash/backends/datetime_columns.py:reduce_datetime_objects @8d8f381c, cash/backends/datetime_columns.py:_encode @0be5b714, cash/backends/datetime_columns.py:_encode_timestamps @73324abc -->
+<!-- claim: cash/backends/datetime_columns.py:reduce_datetime_objects @48f2d771, cash/backends/datetime_columns.py:_encode @0be5b714, cash/backends/datetime_columns.py:_encode_timestamps @73324abc -->
 A pandas column of Python dates and times (object dtype holding
 `datetime.datetime`, `datetime.date` or `pandas.Timestamp` objects, with
 `None` or `NaT` for missing ones) is stored as columns of numbers, the
@@ -360,7 +363,7 @@ before: a subclass of `datetime`, items in two zones or in a zone other than
 item (a `NaN` for missing), Timestamps of two units, or fewer than 1,024
 items.
 
-<!-- claim: cash/backends/text_columns.py:encode @31f23856, cash/backends/text_columns.py:encode_column @d8db128e, cash/backends/serialization.py:_reduce_text_for_write @72acdb39, cash/backends/serialization.py:reduce_text_objects @840b0ff4 -->
+<!-- claim: cash/backends/text_columns.py:encode @738da182, cash/backends/text_columns.py:encode_column @e0182210, cash/backends/serialization.py:_reduce_text_for_write @72acdb39, cash/backends/serialization.py:reduce_text_objects @840b0ff4 -->
 A pandas column of Python strings (pandas 3's `str` columns without
 `pyarrow`, `string[python]`, or an object column holding only strings and
 missing values) is stored as its strings joined in one UTF-8 buffer, with
@@ -371,7 +374,9 @@ code per row, and a hit shares them as the column did. It comes back as it
 went in: its dtype, each missing value of its kind (`nan`, `None`,
 `pd.NA`), every string. A column holding a string UTF-8 cannot encode (a
 lone surrogate) or a NUL character, or with fewer than 8,192 items, is
-pickled item by item as before. A column stored again, unchanged (each
+pickled item by item as before, and so is one of long strings (more than 128
+characters on average) that are each their own object, where the buffer
+gains nothing. A column stored again, unchanged (each
 result of a loop holding its input's columns), is not converted or read
 again.
 
@@ -387,7 +392,7 @@ in a new process.
 
 <span id="shared-buffers"></span>
 
-<!-- claim: cash/backends/chunk_store.py:ChunkStore.put @1a6e2443, cash/backends/chunk_store.py:CHUNK_MIN_BYTES @fdf218ec, cash/backends/file_backend.py:FileBackend._write_cache_files @6054b55e -->
+<!-- claim: cash/backends/chunk_store.py:ChunkStore.put @1d12848c, cash/backends/chunk_store.py:CHUNK_MIN_BYTES @fdf218ec, cash/backends/file_backend.py:FileBackend._write_cache_files @6054b55e -->
 Each buffer of a megabyte or more that a value is written with (a column of
 a table, an array's data) is stored once per cache folder, in its `chunks`
 folder, known by a digest of its bytes. The buffers one write adds go together
@@ -401,7 +406,7 @@ other digests of big data (BLAKE3, or SHA-256 where `blake3` cannot load),
 and the digest says which, so installs hashing differently never share a
 chunk. With `compress` on, values are not split this way.
 
-<!-- claim: cash/backends/chunk_store.py:read_chunk @aa8ba979, cash/backends/entry_format.py:_read_apart @ba190100 -->
+<!-- claim: cash/backends/chunk_store.py:read_chunk @1e5fc3bc, cash/backends/entry_format.py:_read_apart @ba190100 -->
 A chunk is checked against the checksum its entry recorded each time it is
 read. A chunk that is missing or damaged makes the entry a miss, computed
 again. The entries holding a damaged chunk are removed, so the next write
@@ -438,7 +443,7 @@ restart, an out-of-memory kill) leaves that file behind. The first write of a
 later process on the same machine removes it; one left by another machine
 goes once nobody has written to it for a day.
 
-<!-- claim: cash/backends/entry_format.py:update_metadata_in_place @ec1993ba, cash/backends/file_backend.py:FileBackend.get @02a106e6 -->
+<!-- claim: cash/backends/entry_format.py:update_metadata_in_place @ec1993ba, cash/backends/file_backend.py:FileBackend.get @6a217499 -->
 Several processes can share one folder. Each one counts the reads of the
 entries it used and writes those counts back later. When another process has
 stored a new result under the same entry meanwhile, the next read takes the

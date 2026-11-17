@@ -151,7 +151,7 @@ the hasher return something that changes with it, or name it with
   identity only if it really identifies the value, such as a version you
   control.
 
-<!-- claim: cash/content_hashers.py:hash_numpy @06ba30de -->
+<!-- claim: cash/content_hashers.py:hash_numpy @bd352f01 -->
 To check a hasher, call it on two equal but separately built instances. The
 strings must match. `evaluate.explain(model, data).cache_key` shows the key a
 call would use.
@@ -201,13 +201,14 @@ data changes.
 
 ## Overriding a built-in content hasher
 
-<!-- claim: cash/content_hashers.py:builtin_hash @54c21e7f broad="the list enumerates every type the builtin dispatcher recognises", cash/content_hashers.py:builtin_hash_family @b0c04a56 -->
+<!-- claim: cash/content_hashers.py:builtin_hash @9e1b386d broad="the list enumerates every type the builtin dispatcher recognises", cash/content_hashers.py:builtin_hash_family @f68d990f -->
 cash hashes these types by their full content, before it looks at your
 registrations:
 
 | Type | Hashed from |
 |---|---|
 | pandas `DataFrame`, `Series` | schema (names, dtypes with their categories, index and its `freq`), `attrs` and every value |
+| geopandas `GeoDataFrame`, `GeoSeries` | as pandas, with each geometry column by its CRS and its geometries' WKB, and the active geometry column |
 | numpy `ndarray` | shape, dtype, memory order and the full buffer |
 | polars `DataFrame`, `Series`, `LazyFrame` | schema and row hashes, an `Object` column by its values' content; a `LazyFrame` by its serialized plan |
 | PyArrow `Table`, `RecordBatch`, `Array`, `ChunkedArray` | schema or type and every row, dictionaries included |
@@ -229,7 +230,7 @@ cash.register_hasher(
 )
 ```
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @cba92fc6 -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @95df02aa -->
 Your hasher then becomes the value's whole identity: two frames it hashes alike
 share one entry, and the second call gets the first one's result.
 

@@ -31,7 +31,7 @@ field(np.linspace(0.0, 1.0, 200))     # back to 200: cache hit
 assert CALLS == []
 ```
 
-<!-- claim: cash/content_hashers.py:hash_numpy @06ba30de -->
+<!-- claim: cash/content_hashers.py:hash_numpy @bd352f01 -->
 `np.linspace(0.0, 1.0, 200)` builds the same array bit for bit every time, so
 the third call is a plain hit. Sweeping a resolution down until accuracy breaks
 and stepping back costs nothing.
@@ -47,7 +47,7 @@ coarse = np.linspace(0.0, 1.0, 200)
 assert len(np.intersect1d(coarse, np.linspace(0.0, 1.0, 240))) == 2
 ```
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @cba92fc6 -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @95df02aa -->
 The axis is one argument, and 240 points from `linspace` are 240 new
 coordinates: only the two endpoints survive. There is no earlier work to reuse.
 

@@ -31,7 +31,7 @@ print(load_features.explain())
     /home/you/project/data/features.csv: content changed
 ```
 
-<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @d1bb21b4 -->
+<!-- claim: cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @627feb62 -->
 The check is by **content**. A `touch`, or a re-save of identical bytes, still
 hits. A same-size edit within the same second still recomputes.
 
@@ -59,11 +59,11 @@ A file opened for writing is not a dependency: the entry would then depend on
 its own output. cash reports the write as a side effect instead
 ([Side effects](../../decorator.md#side-effects)).
 
-<!-- claim: cash/tracking/read_classification.py:incidental_read @8e477e98 -->
+<!-- claim: cash/tracking/read_classification.py:incidental_read @88eb04b7 -->
 Some reads are left out on purpose because they are not your data: files of the
 Python installation, package metadata, reads a library makes while it is
-imported, and an installed package reading its own files (fonts, templates,
-time zones). A library reading a file you named, such as `pd.read_csv(p)` or
+imported, and files inside an installed package or the system time zone
+database (fonts, templates, time zones), whoever reads them. A library reading a file you named, such as `pd.read_csv(p)` or
 `torch.load(p)`, is tracked, and so is a data file of your own package read
 with `pkgutil.get_data` or `importlib.resources`.
 

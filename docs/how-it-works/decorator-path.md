@@ -37,14 +37,14 @@ A key has four parts, joined by colons: `function:state:dynamic:args`.
 
 ## What goes into the state
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @a23b2b7c, cash/dependency_state.py:DependencyStateHasher.compute @8e272f43, cash/decorator/closure_fold.py:HelperIdentity._captures_of @8e0e279e, cash/decorator/global_values.py:GlobalValues.code_ref_part @012a244d, cash/decorator/code_args.py:CodeArgs._installed_code @0898110a, cash/jit_functions.py:jit_options @6d1473a7 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @89847a2a, cash/dependency_state.py:DependencyStateHasher.compute @1738c84b, cash/decorator/closure_fold.py:HelperIdentity._captures_of @ca61ef59, cash/decorator/global_values.py:GlobalValues.code_ref_part @33832ea2, cash/decorator/code_args.py:CodeArgs._installed_code @0898110a, cash/jit_functions.py:jit_options @0603176f -->
 The state starts from source code and then folds in, on every call, each input
 that can change the result without changing an argument:
 
 | Folded in | Detail |
 |---|---|
 | The function's source | Parsed and rendered back (`ast.unparse`) without docstrings (code that reads one at run time, through `__doc__` or `inspect.getdoc`, keys the docstrings it reaches as data), so comments, blank lines, indentation, quote style, trailing commas, redundant parentheses and line breaks do not count: running `ruff format` or `black` keeps the cache. `# @cash:` directives count, except the waivers: a `# @cash:assume-safe` comment and a `with cash.assume_safe():` wrapper (not the code inside it) are dropped, so adding or removing one keeps the cache. A function with no readable source (`python -c`, a `python - <<EOF` heredoc, `exec`) is keyed by its bytecode, and its helpers and globals are found from the names that bytecode looks up. |
-| Helpers it calls | Followed transitively through your own modules (an editable install counts) and the package the cached function itself is in, wherever it is installed; any other installed package is where it stops, your team's own included when it is installed without `-e`. A function of a compiled extension built in your project (`build_ext --inplace`) is keyed by the content of its built file; a Cython function is keyed instead by the Cython code it can reach (its own block, the functions and classes it names, the module header and directives, the `.pxd`/`.pxi` files and the build configuration), so an edit to another function of the same `.pyx` does not re-run it. With `cdef extern`, extra `sources` or compile flags, or a `.pyx` newer than the build, the built file is keyed. A numba-compiled function (`@njit`, `@jit`, `@vectorize`, `@guvectorize`, `@cfunc`) is keyed as the Python function it compiles, followed like any other helper, plus the options it was compiled with (`fastmath`, `error_model`, `parallel`, but not `cache`), whether it is called by name, through its module, held in a global or passed as an argument. `depends_on=` adds more. |
+| Helpers it calls | Followed transitively through your own modules (an editable install counts) and the package the cached function itself is in, wherever it is installed; any other installed package is where it stops, your team's own included when it is installed without `-e`. A function of a compiled extension built in your project (`build_ext --inplace`) is keyed by the content of its built file; a Cython function is keyed instead by the Cython code it can reach (its own block, the functions and classes it names, the module header and directives, the `.pxd`/`.pxi` files and the build configuration), so an edit to another function of the same `.pyx` does not re-run it. With `cdef extern`, extra `sources` or compile flags, or a `.pyx` newer than the build, the built file is keyed. A numba-compiled function (`@njit`, `@jit`, `@vectorize`, `@guvectorize`, `@cfunc`, `@stencil`) is keyed as the Python function it compiles, followed like any other helper, plus the options it was compiled with (`fastmath`, `error_model`, `parallel`, its `locals` types, a declared signature or layout, a stencil's mode and options, but not `cache`), whether it is called by name, through its module, held in a global or passed as an argument. `depends_on=` adds more. |
 | Classes its code reaches | Classes it constructs, names or annotates, transitively. For a cached method: the class-level code and constants it reaches. For every class of yours it reaches (also as `module.Class`, or through an instance): its class attributes, re-read on every call (an Enum's member values, a namedtuple's fields and defaults), and the module globals its functions read, inherited methods, properties and `__init__` included. A class attribute the class's own code writes (a counter, a registry) is state, not an input, and is left out. |
 | Module globals it reads | Data globals read by the function or a helper: a threshold, a config dict, and an attribute read through a module however it is spelled (`conf.RATE`, `pkg.conf.RATE`, `m = pkg.conf; m.RATE`). Modules, functions and classes are tracked as code instead. A name bound to a module (`FFTLIB = numpy.fft`), read directly, through a helper that returns it, as `settings.BACKEND`, from a closure, a function attribute or a table, is keyed by the module's import name (plus its file for a module not importable by that name), so switching it to `scipy.fft` recomputes; a lazily loaded module keys the same before and after it loads. A name bound to a class or to a library or builtin function (`DTYPE = np.float32`, `AGG = sum`, `E = ValueError`), read directly, as `settings.AGG` or from a closure, is also keyed by what it names, so changing it to `np.float64` or `max`, in the file or while the program runs, recomputes. So is a function or a class of yours held inside a data global, a class attribute, a closure or a `functools.partial`, in a dict, a list or an object's attribute (`CFG = {"b": Box(lambda x: x + 1)}`, `REG = {"double": Double}`): editing it recomputes. |
 | Closures, defaults, a bound method's instance | The values a closure captured, the cached function's own and those of a helper a factory made (`score = make_scorer(weights)` over an array, a data frame or a model it calls methods on); a captured module: its name and the code of the functions and classes read from it. Parameter defaults by value (a function default also by the globals it reads: `fn=lambda v: v + K`), data stored on a function (`scale.k`), and the `self` of `cash.cache(obj.method)`. |
@@ -55,7 +55,7 @@ that can change the result without changing an argument:
 | Environment reads | A digest of each `os.getenv("NAME")`, `os.environ["NAME"]`, `"NAME" in os.environ` or working-directory (`os.getcwd()`, `Path.cwd()`, `os.path.abspath(p)`) value the function, its helpers or the cached functions it calls read with the name written out. A new value is a new entry. |
 | The random seed | For a function seen drawing from the global `random` or `numpy.random` stream: which seed is in force. In a notebook that is the seeding statement. In a script it is where the seeded stream stands at the call, for a `random.seed()` or `np.random.seed()` made at any time before it, by the caller too (module level, or an outer function before it calls this one), and before `import cash` too: numpy's stream shows a seed set before cash watched it, and for `random` cash reads the lines of the script (or the notebook cells) that ran before `import cash`. Re-seeding recomputes, and two draws in a row under one seed are two entries. |
 
-<!-- claim: cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @94b2b412 -->
+<!-- claim: cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @cb57665a -->
 Two limits. A global that cannot be hashed (a lock, a live connection) is left
 out with a [`KEY-UNHASHABLE-GLOBAL`](../warnings.md#key-unhashable-global)
 warning. And reachability is static: code picked at run time, from a dict or
@@ -86,14 +86,14 @@ coroutine function, whose bodies are not recorded; the first such call that
 reaches library code says so once per process with a
 [`KEY-LIBRARY-STATE-UNSEEN`](../warnings.md#key-library-state-unseen) warning.
 
-<!-- claim: cash/decorator/rng.py:RngWatch.fold_rng_epoch @8346a209 -->
+<!-- claim: cash/decorator/rng.py:RngWatch.fold_rng_epoch @ce63bf83 -->
 An unseeded draw is not a change. The first value is stored and returned on
 every later call, with a [`RANDOM-UNSEEDED`](../warnings.md#random-unseeded)
 warning; `allow_random=True` accepts that on purpose.
 
 ## How arguments are hashed
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @cba92fc6, cash/decorator/arg_hashing.py:ArgHasher._nested_hasher @2c40e74b -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.hash_payload @95df02aa, cash/decorator/arg_hashing.py:ArgHasher._nested_hasher @1b6f7959 -->
 Each argument is fingerprinted by the first rule that applies:
 
 1. A hasher you registered with `cash.register_hasher(T, fn, override=True)`.
@@ -101,8 +101,8 @@ Each argument is fingerprinted by the first rule that applies:
    [`__cash_key__`](../tutorials/feature-guides/custom-hashers.md#cash-key)
    method, when its class has one and no hasher is registered for it: what it
    returns, with the class's name and the method's code.
-3. A built-in content hasher: pandas, numpy, polars, pyarrow, modin, dask and
-   scipy.sparse values are hashed by content.
+3. A built-in content hasher: pandas, geopandas, numpy, polars, pyarrow,
+   modin, dask and scipy.sparse values are hashed by content.
 4. An identity tag cash keeps current, such as the one a `frozen=True`
    cached function puts on its result.
 5. A hasher you registered without `override=True`.
@@ -126,7 +126,7 @@ pickled, such as a lock, is keyed by its type; one that holds the object
 leaving it out is keyed by its content, as pickle stores the cycle. A
 library's class is keyed by what it pickles.
 
-<!-- claim: cash/kept_state.py:logger_state @37d45541, cash/kept_state.py:_handler_state @5efc2fe1, cash/kept_state.py:_stream_key @a8ddcfa6, cash/kept_state.py:_held_key @016e4acc, cash/kept_state.py:_formatter_state @42510fc6, cash/tracking/reference_states.py:_describe @c8b61130, cash/kept_state.py:_own_attrs @43743a23, cash/kept_state.py:_reduce_by_reference_for_key @3e124d7b, cash/kept_state.py:stands_by_reference @930b26cd -->
+<!-- claim: cash/kept_state.py:logger_state @37d45541, cash/kept_state.py:_handler_state @5efc2fe1, cash/kept_state.py:_stream_key @8b5b191e, cash/kept_state.py:_held_key @016e4acc, cash/kept_state.py:_formatter_state @42510fc6, cash/tracking/reference_states.py:_describe @c8b61130, cash/kept_state.py:_own_attrs @43743a23, cash/kept_state.py:_reduce_by_reference_for_key @62e37a1b, cash/kept_state.py:stands_by_reference @930b26cd -->
 An object that pickles by reference, by its name or by a call that looks it
 up (a logger pickles as `getLogger(name)`), is keyed with the attributes it
 holds, as a pickle by value would hold them, in an argument and in a global
@@ -168,7 +168,7 @@ the function it compiles and its compile options, as a function is by its
 name; the code of either is keyed with the state, as code passed as an
 argument.
 
-<!-- claim: cash/canonical_form.py:holds_content_data @c313e890, cash/decorator/arg_hashing.py:ArgHasher._memo_content_digest @709cd512 -->
+<!-- claim: cash/canonical_form.py:holds_content_data @a741db46, cash/decorator/arg_hashing.py:ArgHasher._memo_content_digest @482746c6 -->
 An object that holds frames, arrays or tables, directly or in a list, tuple or
 dict attribute, is keyed part by part rather than pickled whole: each frame
 by its content, the rest as pickle would store it. That happens when it holds
@@ -186,7 +186,7 @@ A categorical column is checked like any other; one you wrote through an
 array pandas handed you (`s.values`, `s.array`, `pd.Categorical(s,
 copy=False)`) is read again on the next call.
 
-<!-- claim: cash/canonical_form.py:_object_steps @00d5669c, cash/canonical_form.py:SORTED_SET_MIN == 256 -->
+<!-- claim: cash/canonical_form.py:_object_steps @da2c041a, cash/canonical_form.py:SORTED_SET_MIN == 256 -->
 A frozenset of 256 or more numbers, strings and bytes is put in its sorted
 order once and recognised after that for as long as it exists, so a repeat
 call with a big frozenset costs milliseconds; a set, or a frozenset holding
@@ -209,7 +209,7 @@ registration.
 
 ## When you choose the arguments
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @a23b2b7c, cash/decorator/arg_key.py:keyed_arguments @d9fd1022 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @89847a2a, cash/decorator/arg_key.py:keyed_arguments @d9fd1022 -->
 `ignore=`, a `cash.Ignore` annotation and `key=` change only the `args` part.
 The call is first bound to the signature with its defaults filled in. Ignored
 parameters are then dropped; a key function is called with the bound
@@ -232,7 +232,7 @@ the entry records that hash, so `explain()` can say when a hit was matched by
 
 ## When there is no key
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @2826880c -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.resolve @4ced0037 -->
 If any part of the key cannot be built, the call runs uncached and cash warns.
 It never caches under a partial key. The usual causes:
 
@@ -257,7 +257,7 @@ change ([`IMPURE-HANDED-CALLABLE`](../warnings.md#impure-handed-callable)).
 
 ## Files
 
-<!-- claim: cash/decorator/file_deps.py:FileDeps.fold_declared_files @3db80a70, cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @d1bb21b4 -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.fold_declared_files @3db80a70, cash/tracking/file_dep_snapshot.py:file_dep_is_fresh @627feb62 -->
 A file the body reads through a tracked reader, and every file named in
 `file_depends_on=`, is recorded with its content hash when the entry is
 written. Before a stored value is returned, each file is checked; if one
@@ -286,7 +286,7 @@ side effects and still caches:
 - a clock read or a fresh UUID warns
   [`KEY-AMBIENT-READ`](../warnings.md#key-ambient-read).
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @c395765d -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @045afef4 -->
 One case is not cached: a body that picks code from a run-time value
 (`eval`, `exec`, `getattr(obj, name)()`, `importlib.import_module`) runs
 uncached with [`KEY-UNTRACKABLE-DEP`](../warnings.md#key-untrackable-dep),
@@ -305,9 +305,10 @@ The [decorator guide](../decorator.md#side-effects) covers
 
 ## Storing and returning
 
-<!-- claim: cash/decorator/store.py:ResultStore.store @00a3421c -->
+<!-- claim: cash/decorator/store.py:ResultStore.store @c5fd2627 -->
 A result is written to the RAM tier and to disk, however cheap it was (a big
-one to disk alone), unless a tier's size cap refuses it or a source it depends on cannot be pickled or
+one to disk alone, and one holding 1 MiB or more of arrays to disk first and
+to the RAM tier on its first hit), unless a tier's size cap refuses it or a source it depends on cannot be pickled or
 recorded; see
 [where results are stored](../decorator.md#where-results-are-stored). A hit returns a copy rebuilt from the
 stored bytes, not the object the first call returned, and it does not replay
