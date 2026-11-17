@@ -108,7 +108,9 @@ def _wrapped(obj: Any) -> Any:
 
 def _descend(live: Any, target: Any) -> str | None:
     """The steps from *live* to *target*: ``f`` for ``__func__`` (a method
-    read off its class), ``w`` for ``__wrapped__``; None when none lead."""
+    read off its class), ``p`` for a property's getter or a
+    ``cached_property``'s function (read off its class, the descriptor
+    itself), ``w`` for ``__wrapped__``; None when none lead."""
     steps = ""
     for _ in range(_MAX_STEPS):
         if live is target:
@@ -121,10 +123,26 @@ def _descend(live: Any, target: Any) -> str | None:
         if type(live) is types.MethodType:
             live, steps = live.__func__, steps + "f"
             continue
+        getter = _getter(live)
+        if getter is not None:
+            live, steps = getter, steps + "p"
+            continue
         inner = _wrapped(live)
         if inner is None:
             return None
         live, steps = inner, steps + "w"
+    return None
+
+
+def _getter(live: Any) -> Any:
+    """The function a property (its getter) or a ``cached_property`` runs,
+    or None: a factory's getter (``scanpy``'s ``preset_property``) has no
+    name of its own, and the class attribute holding it is the way back."""
+    kind = type(live)
+    if kind is property:
+        return live.fget if type(live.fget) is types.FunctionType else None
+    if kind is functools.cached_property:
+        return live.func if type(live.func) is types.FunctionType else None
     return None
 
 
@@ -134,6 +152,10 @@ def _follow(live: Any, steps: str) -> Any:
             if type(live) is not types.MethodType:
                 return UNRESOLVED
             live = live.__func__
+        elif step == "p":
+            live = _getter(live)
+            if live is None:
+                return UNRESOLVED
         else:
             live = _wrapped(live)
             if live is None:
