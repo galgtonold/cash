@@ -10,6 +10,8 @@ the key is still its content: equal geometries in other objects key alike.
 
 from __future__ import annotations
 
+import gc
+
 import pytest
 
 from cash import Cash, FileBackend, content_hashers
@@ -148,3 +150,32 @@ def test_a_cached_pipeline_hits_on_equal_geometries(tmp_path, written_rows):
     moved.geometry.values._data[0] = shapely.affinity.translate(joined.geometry.values._data[0], 1.0)
     area(moved)
     assert area.cache_info()["misses"] == 2
+
+
+def test_a_deleted_frame_takes_its_geometries_with_it(written_rows):
+    left, joined = _joined()
+    builtin_hash(joined)
+    before = len(_digests())
+    del left, joined
+    gc.collect()
+    other = _polygons(300, 7, 1.0)
+    builtin_hash(other)
+    # Only the new frame's geometries are remembered: the deleted ones
+    # were held weakly, and their memory went with them.
+    assert len(_digests()) == len(other) < before
+
+
+def test_geometries_made_where_deleted_ones_were_key_by_their_own_content(written_rows):
+    for seed in range(4):
+        frame = _polygons(400, seed, 1.0 + seed)
+        key = builtin_hash(frame)
+        copy = frame.copy()
+        copy.geometry.values._data[:] = shapely.from_wkb(shapely.to_wkb(frame.geometry.values._data))
+        assert builtin_hash(copy) == key
+        del frame, copy
+        gc.collect()
+    # Each round's geometries may sit where the last round's were: keyed
+    # with a fresh memo, they key alike.
+    keys = [builtin_hash(_polygons(400, seed, 1.0 + seed)) for seed in range(4)]
+    _digests().clear()
+    assert [builtin_hash(_polygons(400, seed, 1.0 + seed)) for seed in range(4)] == keys

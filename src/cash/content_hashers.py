@@ -18,6 +18,7 @@ their canonical key form (`cash.canonical_form.canonical_bytes`).
 
 from __future__ import annotations
 
+import collections
 import hashlib
 import json
 import logging
@@ -963,7 +964,7 @@ class _GeometryPieces:
     by the array: ``id -> (weak reference, a copy of it, piece)``.
 
     A shapely geometry (2.0 and later) cannot change, and the copy keeps
-    each one alive, so while the array holds the very objects the copy
+    each one alive while the array lives (an entry goes with its array), so while the array holds the very objects the copy
     holds -- its pointers, compared as one buffer -- the piece holds: a
     frame of 14,400 polygons handed to a cached function again was turned
     to WKB anew on every call, 0.15 s of a 0.16 s hit. A row written since
@@ -992,11 +993,20 @@ class _GeometryPieces:
     def note(self, data: Any, piece: bytes) -> None:
         if len(data) < self.MIN_ROWS or _addresses(data) is None:
             return
+        key = id(data)
+
+        def gone(reference: Any) -> None:
+            # The copy goes with the array: it kept the array's geometries
+            # alive after the user dropped them.
+            entry = self._entries.peek(key)
+            if entry is not None and entry[0] is reference:
+                self._entries.pop(key, None)
+
         try:
-            ref = _weak.ref(data)
+            ref = _weak.ref(data, gone)
         except TypeError:
             return
-        self._entries[id(data)] = (ref, data.copy(), piece)
+        self._entries[key] = (ref, data.copy(), piece)
 
     def clear(self) -> None:
         self._entries.clear()
@@ -1039,8 +1049,8 @@ def distinct_objects(data: Any) -> tuple[Any, Any]:
 
 class _GeometryDigests:
     """What each shapely geometry adds to the digest of an array holding
-    it (its piece), by the geometry object, held with the object itself:
-    its WKB with its SRID when that is at most `INLINE_MAX` bytes (a
+    it (its piece), by the geometry object, which it holds weakly: its
+    WKB with its SRID when that is at most `INLINE_MAX` bytes (a
     point), else ``0x02`` and the SHA-256 of that WKB. A WKB starts with
     its byte order, 0 or 1, so the two kinds cannot be taken for each
     other, and WKB is self-delimiting: its type and counts say where it
@@ -1054,9 +1064,12 @@ class _GeometryDigests:
     ``transform``) returns a new geometry. The one way to rewrite one in
     place is calling ``__setstate__`` on it by hand, the hook that reads
     a pickle of a shapely 1.x geometry, which no code does on a geometry
-    in use. So a geometry's piece holds for as long as the object lives,
-    and the object is kept alive (``_held``) for as long as its piece is
-    remembered: its address cannot be taken by another object meanwhile.
+    in use. So a geometry's piece holds for as long as the object lives.
+    Each object is held by a weak reference (shapely's geometries take
+    one), whose callback queues its address when the object goes; the
+    queue is emptied before every lookup, so an address a new object took
+    since never finds the old object's piece, and a frame the user deletes
+    takes its geometries' memory with it.
 
     A pipeline hands the same geometries from stage to stage -- joined,
     filtered, with a column added -- each stage a new array over the same
@@ -1064,11 +1077,12 @@ class _GeometryDigests:
     per stage for 740,000 joined rows over 195,000 polygons. Each object
     is now written once, and an array is hashed as one piece per row.
 
-    At most `MAX_HELD` geometries are held; past that the memo starts
-    again, and an array holding more than that is read without it."""
+    At most `MAX_HELD` geometries are remembered (about 250 bytes each);
+    past that the memo starts again, and an array holding more than that
+    is read without it."""
 
-    #: The most geometries held (and pieces remembered) at once.
-    MAX_HELD = 2_000_000
+    #: The most geometries remembered at once.
+    MAX_HELD = 1_000_000
 
     #: Arrays shorter than this are read without the memo.
     MIN_ROWS = 256
@@ -1081,14 +1095,38 @@ class _GeometryDigests:
         self._lock = threading.Lock()
         #: Geometries written to WKB, for tests and measuring.
         self.written = 0
+        #: The references of the objects that went, queued by their
+        #: callback (a deque: appended to and emptied without a lock).
+        self._gone: collections.deque = collections.deque()
+        self._on_gone = _weak.callback(self._gone.append)
         self.clear()
 
     def clear(self) -> None:
-        np = _numpy()
         with self._lock:
-            self._addresses = np.empty(0, dtype=np.uintp)
-            self._pieces = np.empty(0, dtype=object)
-            self._held: list[Any] = []
+            self._start_again()
+
+    def _start_again(self) -> None:
+        np = _numpy()
+        self._addresses = np.empty(0, dtype=np.uintp)
+        self._pieces = np.empty(0, dtype=object)
+        #: ``id(reference) -> (reference, address)`` of each object remembered.
+        self._refs: dict[int, tuple[Any, int]] = {}
+        self._gone.clear()
+
+    def _forget_gone(self) -> None:
+        """Drop the pieces of the objects that went since the last lookup."""
+        if not self._gone:
+            return
+        np = _numpy()
+        gone = []
+        while self._gone:
+            entry = self._refs.pop(id(self._gone.popleft()), None)
+            if entry is not None:
+                gone.append(entry[1])
+        if gone:
+            keep = ~np.isin(self._addresses, np.array(gone, dtype=np.uintp))
+            self._addresses = self._addresses[keep]
+            self._pieces = self._pieces[keep]
 
     def __len__(self) -> int:
         return len(self._addresses)
@@ -1108,6 +1146,7 @@ class _GeometryDigests:
             return b"".join(self._read(distinct)[index])
         addresses = np.fromiter(map(id, distinct), dtype=np.uintp, count=len(distinct))
         with self._lock:
+            self._forget_gone()
             known = self._addresses
             if len(known):
                 at = np.searchsorted(known, addresses).clip(max=len(known) - 1)
@@ -1141,14 +1180,13 @@ class _GeometryDigests:
     def _remember(self, addresses: Any, pieces: Any, objects: Any) -> None:
         np = _numpy()
         if len(self._addresses) + len(addresses) > self.MAX_HELD:
-            self._addresses = np.empty(0, dtype=np.uintp)
-            self._pieces = np.empty(0, dtype=object)
-            self._held = []
+            self._start_again()
+        made = _weak.refs(objects.tolist(), self._on_gone)
+        self._refs.update(zip(map(id, made), zip(made, addresses.tolist())))
         merged = np.concatenate([self._addresses, addresses])
         order = np.argsort(merged, kind="stable")
         self._addresses = merged[order]
         self._pieces = np.concatenate([self._pieces, pieces])[order]
-        self._held.append(objects)
 
 
 #: The process's `_GeometryDigests`.

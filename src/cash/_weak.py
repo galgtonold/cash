@@ -20,6 +20,7 @@ cached_fn.cache_clear)`` hands cash's code to a reference of the user's.
 
 from __future__ import annotations
 
+import itertools
 import types
 import weakref
 from collections.abc import Callable
@@ -30,10 +31,12 @@ __all__ = [
     "WeakSet",
     "WeakValueDictionary",
     "GONE",
+    "callback",
     "callback_of",
     "finalize",
     "is_cash_ref",
     "ref",
+    "refs",
 ]
 
 
@@ -58,9 +61,29 @@ class _Callback:
 GONE = _Callback(None)
 
 
+def callback(fn: Callable[[Any], object]) -> _Callback:
+    """*fn* as the callback of a reference `ref` makes, made once for the
+    many references a memo makes with one callback."""
+    return _Callback(fn)
+
+
+def refs(objects: Any, callback: _Callback) -> list[weakref.ReferenceType]:
+    """A `ref` to each of *objects*, all with *callback* (made by
+    `callback`), made in one pass: a memo of many objects makes them by the
+    hundred thousand."""
+    if type(callback) is not _Callback:
+        raise TypeError("refs takes a callback made by callback()")
+    return list(map(weakref.ref, objects, itertools.repeat(callback)))
+
+
 def ref(obj: Any, callback: Callable[[Any], object] | None = None) -> weakref.ReferenceType:
-    """``weakref.ref(obj, callback)``, known as cash's (`is_cash_ref`)."""
-    return weakref.ref(obj, GONE if callback is None else _Callback(callback))
+    """``weakref.ref(obj, callback)``, known as cash's (`is_cash_ref`).
+    A *callback* `callback` made is used as it is."""
+    if callback is None:
+        callback = GONE
+    elif type(callback) is not _Callback:
+        callback = _Callback(callback)
+    return weakref.ref(obj, callback)
 
 
 class finalize(weakref.finalize):
