@@ -110,7 +110,7 @@ call with the same arguments at once, use a bare `RedisBackend`.
 - **Prove the tests, not the cache.** Run the suite once with `CASH_DISABLE=1`,
   and give each run its own cache folder. See
   [Testing your code](testing-your-code.md).
-- <!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @c395765d -->
+- <!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @045afef4 -->
   **Fail the build on side effects.** `@cash.cache(strict=True)` raises
   `CashImpureFunctionError` on the first call of a function with a side effect
   cash would skip on a hit. It honours `# @cash:assume-safe` and
@@ -133,7 +133,7 @@ application's cache and configuration: the app's `cash.configure(...)` calls,
 its `[tool.cash]` table and its `CASH_*` variables all apply to your functions.
 Own a private instance instead:
 
-<!-- claim: cash/core.py:Cash.__init__ @9f4080df -->
+<!-- claim: cash/core.py:Cash.__init__ @d6897bc2 -->
 <!-- test:skip reason="illustrative: a two-file library layout" -->
 ```python { title="mylib/_cache.py" }
 from cash import Cash

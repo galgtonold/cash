@@ -106,7 +106,7 @@ again. See
 
 #### Method calls
 
-<!-- claim: cash/analysis/mutation_effects.py:classify_receivers @5d508fb1, cash/analysis/mutations.py:KNOWN_PURE_METHODS @b44508ae, cash/analysis/mutations.py:chain_is_pure @404cc05d, cash/analysis/mutations.py:_TopLevelCallCollector._bare_call @6775632d, cash/analysis/mutation_effects.py:captured_call_receivers @5c64aa71, cash/analysis/namespace_effects.py:call_arguments @85a3aac6 -->
+<!-- claim: cash/analysis/mutation_effects.py:classify_receivers @5d508fb1, cash/analysis/mutations.py:KNOWN_PURE_METHODS @abbc2ea0, cash/analysis/mutations.py:chain_is_pure @404cc05d, cash/analysis/mutations.py:_TopLevelCallCollector._bare_call @6775632d, cash/analysis/mutation_effects.py:captured_call_receivers @976a2a6a, cash/analysis/namespace_effects.py:call_arguments @fbcae3a2 -->
 A method call has no assignment target, so cash classifies its object:
 
 - **Not a change.** A call on a module (`np.mean(x)`, `time.sleep(1)`), a call
@@ -135,14 +135,16 @@ A method call has no assignment target, so cash classifies its object:
   time the statement runs, unless cash knows its methods: a builtin container,
   a frame, an array or a random generator. One that cannot be fingerprinted
   counts as changed. A variable handed to a function of your own (one defined
-  in the notebook or in a module of your project) is fingerprinted wherever
-  the call is: `summary = add_features(df)`, `r = work(s.d)` (the whole of `s`),
+  in the notebook or in a module of your project), or to a method of a class of
+  your own, is fingerprinted wherever the call is: `summary =
+  add_features(df)`, `out = m.go(df)`, `r = work(s.d)` (the whole of `s`),
   `rs = [work(d) for d in ds]` (all of `ds`), and so are the items a
   comprehension or `map` calls a method on (`[r.update(tax=1) for r in
   records]`, `map(lambda r: r.update(tax=1), records)`: all of `records`), what
   a comprehension or a lambda hands to a library function
   (`[heapq.heappush(h, x) for x in xs]`: `h`), and a global that a function of
-  your own hands to one (`def push(x): heapq.heappush(H, x)`: `H`). A
+  your own, or a method of one of your classes, hands to one (`def push(x):
+  heapq.heappush(H, x)`: `H`). A
   statement whose record says it changed nothing is fingerprinted again when it
   runs on inputs not seen before in the session. There one that cannot be
   fingerprinted, such as a database connection, does not count as changed. A
@@ -233,7 +235,7 @@ cash spots side effects from the statement's source, without running it. So:
   package is not looked into, and neither is a method called on an object
   (`report.build()`): put `# @cash:no-cache` on such a statement.
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._kept_writes_reason @30148a78, cash/notebook/write_observer.py:kept_writes @0c645058 -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._kept_writes_reason @b133b2f3, cash/notebook/write_observer.py:kept_writes @c1f82a30 -->
 - In your function, deleting, moving or creating a file or folder by name
   counts too (`p.touch()`, `p.unlink()`, `os.remove(p)`, `shutil.move(a, b)`,
   `os.makedirs(d)`). A write on a handle passed in (`f.write(...)`) does not,
@@ -275,7 +277,7 @@ When a side effect is harmless to skip, put `# @cash:assume-safe` on the
 statement: it is cached, and a hit skips the call. It waives side effects
 only; a change in place, the clock and `input()` still make the statement run.
 
-<!-- claim: cash/analysis/file_effects.py:statement_write_repeatability @5af2a939 -->
+<!-- claim: cash/analysis/file_effects.py:statement_write_repeatability @fb314da9 -->
 A statement that wrote a file is re-run when a later statement reads that file
 and it is out of date. cash tells repeatable writes (`to_parquet`, `savefig`,
 which replace the file) from appending ones (`open(p, "a")`,
@@ -309,7 +311,7 @@ draws are reproducible and do not warn. A generator object
 (`rng = np.random.default_rng()`) counts as seeded only if it was built with a
 seed; seeding `np.random` says nothing about it.
 
-<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @ff4dc78c -->
+<!-- claim: cash/tracking/randomness/state.py:capture_rng_state @6e1e1f8a -->
 A draw too cheap to cache is held too when it comes from the `random`,
 `numpy.random` or `torch` module stream: before a re-run, cash rewinds those
 streams to where the cell started, so the draw repeats. cash does not rewind a
@@ -324,7 +326,7 @@ The badge marks the row `seed`, `random` (a seeded draw) or `unseeded`. A cached
 
 ### Values that cannot survive a round trip
 
-<!-- claim: cash/notebook/statement/derivation_edges.py:is_uncacheable_alias @d4ac17e9, cash/analysis/cacheability_decision.py:identity_coupled_reason @77bfb1cc, cash/notebook/borrowed_memory.py:borrowed_memory_names @d988c657 -->
+<!-- claim: cash/notebook/statement/derivation_edges.py:is_uncacheable_alias @03635f4a, cash/analysis/cacheability_decision.py:identity_coupled_reason @77bfb1cc, cash/notebook/borrowed_memory.py:borrowed_memory_names @d988c657 -->
 Three kinds of value are refused after the statement runs, because restoring
 a copy would break them: a view of another variable (a numpy slice, a pandas
 `groupby` object), which would come back detached from its base; a frame or
@@ -337,7 +339,10 @@ numpy view counts wherever it sits, also inside a list, tuple or dict
 (`parts = np.split(a, 2)`), and its base counts as another variable's whenever
 something besides the view holds it: a name, a dict (`w = data['x'][2:5]`), an
 attribute or another view. A view of an array only it holds
-(`np.arange(10).reshape(2, 5)`) is cached.
+(`np.arange(10).reshape(2, 5)`) is cached. So is an object that keeps, deeper
+inside it, a view of a variable's data (a fitted `KNeighborsRegressor` keeps
+`y.to_numpy()`): cash records which variable the view belongs to and builds it
+on that variable's data again when it restores the object.
 
 ## Related
 

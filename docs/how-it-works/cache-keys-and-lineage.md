@@ -25,7 +25,7 @@ key, and a miss.
 
 ## Hashing values
 
-<!-- claim: cash/content_hashers.py:builtin_hash @54c21e7f, cash/value_hash.py:compute_hash @ebd76d97 -->
+<!-- claim: cash/content_hashers.py:builtin_hash @9e1b386d, cash/value_hash.py:compute_hash @fb15f5df -->
 Both paths fingerprint data values with the same built-in hashers. The
 decorator uses them for arguments; the notebook uses them wherever it hashes
 a value: a loop iteration's values, the arguments of a cached call inside a
@@ -41,6 +41,7 @@ value the watchers cannot fully cover is hashed every time.
 | Type | Library | What is hashed |
 |------|---------|----------------|
 | `DataFrame`, `Series` | pandas | column and index labels and axis names, dtypes (with a categorical's categories and order), an index's `freq`, `attrs`, and every value: numbers, booleans and dates from their memory, text columns of the Arrow-backed `str` type from their Arrow memory, other Python objects and strings by their pickled form, so `1` and `'1'` differ (a column holding only floats, only bools or only ints as the typed array it converts to; lists and tuples of plain values holding dates, such as `(action, datetime)` records, as their values written out with a tag each) |
+| `GeoDataFrame`, `GeoSeries` | geopandas | as pandas, with each geometry column by its CRS and every geometry's WKB, and a frame's active geometry column |
 | `ndarray` | numpy | shape, dtype, memory order and every byte; an object array by its items, column by column |
 | `DataFrame`, `Series` | polars | schema and every value, each column from its Arrow memory; an `Object` column by its values' content |
 | `LazyFrame` | polars | the serialised plan, including in-memory data; a plan reading a file holds the path, and the decorator records the files it scans as the call's reads |
@@ -49,7 +50,7 @@ value the watchers cannot fully cover is hashed every time.
 | `DataFrame`, `Series` | modin | converted to pandas, then hashed as pandas |
 | any collection | dask | the task-graph keys and the schema |
 
-<!-- claim: cash/content_hashers.py:ArrowDigests.digest @55bde937, cash/backends/frame_sharing.py:arrow_data_owned @d173c9fa -->
+<!-- claim: cash/content_hashers.py:ArrowDigests.digest @e6cbc708, cash/backends/frame_sharing.py:arrow_data_owned @2cb434fe -->
 A pyarrow value whose memory Arrow allocated itself (read from a file,
 computed by Arrow, built from Python values) cannot change, so it is read
 once and then recognised for as long as it exists. One over memory something
@@ -74,7 +75,7 @@ order-sensitive code can treat them differently; a strided view and its
 contiguous copy share a key. The dtypes are in a pandas key, so `int64` and
 `Int64` columns, or a tz-naive and a tz-aware series, never share an entry.
 
-<!-- claim: cash/value_hash.py:_pickle_digest @5b9dad60, cash/content_hashers.py:hash_sparse @b0bdb6a6, cash/stored_pickle.py:pickle_value @429b664a -->
+<!-- claim: cash/value_hash.py:_pickle_digest @5b9dad60, cash/content_hashers.py:hash_sparse @b0bdb6a6, cash/stored_pickle.py:pickle_value @a6c9227e -->
 Any other value, such as a networkx graph or a fitted model, is pickled and
 the pickle is hashed, so it is compared by content too, at the cost of
 pickling it. That pickle is the one cash stores the value as, its large
@@ -84,7 +85,7 @@ something a key must see (an attribute a class's own pickling leaves out),
 the key is taken over a pickle that keeps it, in the same format. To key a
 type faster, or one that cannot be pickled, register a hasher; see [custom hashers](../tutorials/feature-guides/custom-hashers.md).
 
-<!-- claim: cash/core.py:Cash.register_hasher @f8a61573, cash/value_hash.py:compute_hash @ebd76d97 -->
+<!-- claim: cash/core.py:Cash.register_hasher @f8a61573, cash/value_hash.py:compute_hash @fb15f5df -->
 === "Decorator"
 
     Registered hashers apply to call arguments and to the values inside a
@@ -104,7 +105,7 @@ type faster, or one that cannot be pickled, register a hasher; see [custom hashe
 
 ### The statement key
 
-<!-- claim: cash/notebook/cache_key.py:compute_cache_key @c33a4ecd -->
+<!-- claim: cash/notebook/cache_key.py:compute_cache_key @c59f40bb -->
 Every statement key is built by one function. It joins these parts with
 colons, in this order, and hashes the result:
 
@@ -163,7 +164,7 @@ variable the read produced, and it is checked again before each reuse; see
 [what counts as a change](invalidation.md#what-counts-as-a-change).
 
 ??? warning "Keys survive a restart, not a move to another machine"
-    <!-- claim: cash/notebook/statement/file_deps.py:compute_file_hash_component @58a44a29 -->
+    <!-- claim: cash/notebook/statement/file_deps.py:compute_file_hash_component @29ef2395 -->
     A statement that reads a file folds the file's modification time, size
     and inode change time into its lineage, and one that only checks whether
     a path exists folds whether it is there. A file rewritten with the same
@@ -225,7 +226,7 @@ c = a + b      # lineage(c) folds in lineage(a) and lineage(b)
 d = c * 2      # lineage(d) folds in lineage(c)
 ```
 
-<!-- claim: cash/notebook/value_cutoff.py:ValueCutoff.lineage_for @7f9a2f17, cash/notebook/value_cutoff.py:_COMPARED @18236e1f, cash/notebook/value_cutoff.py:_refitted @b0ffca7a, cash/notebook/statement/lineage.py:fitted_in_place @62ad3c00, cash/notebook/statement/lineage.py:StatementLineageBuilder._hash_once @5f30bf0b -->
+<!-- claim: cash/notebook/value_cutoff.py:ValueCutoff.lineage_for @db416285, cash/notebook/value_cutoff.py:_COMPARED @18236e1f, cash/notebook/value_cutoff.py:_refitted @b0ffca7a, cash/notebook/statement/lineage.py:fitted_in_place @62ad3c00, cash/notebook/statement/lineage.py:StatementLineageBuilder._hash_once @5f30bf0b -->
 **A value rebuilt to the same content keeps its lineage.** When a statement
 runs again because an input moved on, and the pandas frame or series, numpy
 array or networkx graph (`Graph`, `DiGraph`, `MultiGraph`, `MultiDiGraph`)
@@ -251,7 +252,7 @@ does; the library calls inside it that are keyed on the value are served.
 A statement's inputs come from the names it mentions. Two real dependencies
 are not among them, and each has its own part of the key.
 
-<!-- claim: cash/tracking/randomness/lineage.py:hidden_lineage_reads @ea0de309, cash/tracking/randomness/lineage.py:hidden_lineage_writes @4b64944a, cash/tracking/randomness/lineage.py:advanced_rng_lineage @d2d070a9, cash/tracking/randomness/lineage.py:drawn_rng_vars @9ec87297, cash/notebook/callee_reach.py:helper_seeded_modules @8917bd4e, cash/notebook/statement/randomness.py:StatementRandomness.adopt_seeds_set_by @1ca29ec1, cash/notebook/statement/randomness.py:StatementRandomness._record_hidden_draws @89bd0e14, cash/tracking/randomness/lineage.py:close_seed_watch @81f78688, cash/tracking/randomness/lineage.py:streams_set_by_the_statement @9492d857 -->
+<!-- claim: cash/tracking/randomness/lineage.py:hidden_lineage_reads @ea0de309, cash/tracking/randomness/lineage.py:hidden_lineage_writes @4b64944a, cash/tracking/randomness/lineage.py:advanced_rng_lineage @d2d070a9, cash/tracking/randomness/lineage.py:drawn_rng_vars @9ec87297, cash/notebook/callee_reach.py:helper_seeded_modules @8c4f7c34, cash/notebook/statement/randomness.py:StatementRandomness.adopt_seeds_set_by @1ca29ec1, cash/notebook/statement/randomness.py:StatementRandomness._record_hidden_draws @89bd0e14, cash/tracking/randomness/lineage.py:close_seed_watch @48aab758, cash/tracking/randomness/lineage.py:streams_set_by_the_statement @9492d857 -->
 **The random seed.** `x = np.random.rand(3)` mentions no variable, so editing
 `np.random.seed(0)` above it would change nothing. Each global random module
 therefore gets a hidden lineage variable: a `seed()` call writes it, and a draw
@@ -325,7 +326,7 @@ r = a(3)                       # cell 3: 8
 
 ### Resolving an input
 
-<!-- claim: cash/notebook/lineage_store.py:resolve_lineage @778e6d73, cash/value_hash.py:compute_hash @ebd76d97 -->
+<!-- claim: cash/notebook/lineage_store.py:resolve_lineage @778e6d73, cash/value_hash.py:compute_hash @fb15f5df -->
 For each input variable, the statement key uses the first of these that
 exists:
 

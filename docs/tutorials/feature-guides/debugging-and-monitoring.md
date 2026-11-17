@@ -148,7 +148,7 @@ explains the size caps.
 
 ## Scripted access
 
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_status @d0186748 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_status @17cd0ee5 -->
 `status = %cash_status dict` returns the last cell's statements (status, code,
 times) and the session's tracking state, for tools and agents. It uses the enum
 names `COMPUTED` (the badge's EXECUTED) and `RESTORED` (CACHED), and `MIXED`
@@ -156,7 +156,7 @@ for a statement that ran while calls inside it came from the cache.
 `%cash_provenance NAME` shows how a variable was computed: the code, its inputs
 and its history. See [Magic commands](../../magics.md).
 
-<!-- claim: cash/analytics.py:AnalyticsManager.__init__ @162a2e71 -->
+<!-- claim: cash/analytics.py:AnalyticsManager.__init__ @9ea7217b -->
 cash also records per-session hit and miss events in a small `analytics.db` in
 your user cache folder, which `cash.show_stats()` reads. Deleting it is always
 safe. `CASH_ANALYTICS=0` turns it off.

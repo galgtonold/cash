@@ -15,7 +15,7 @@ which value it was computed from.
 
 ## `use_locking=True`: compute once
 
-<!-- claim: cash/decorator/runtime.py:CallRunner.compute_with_lock @b4c5c8c2, cash/core.py:Cash.__init__ @9f4080df -->
+<!-- claim: cash/decorator/runtime.py:CallRunner.compute_with_lock @b4c5c8c2, cash/core.py:Cash.__init__ @d6897bc2 -->
 Turn on locking on the `Cash` instance. It is not a decorator parameter, and it
 applies to every function registered through that instance:
 
