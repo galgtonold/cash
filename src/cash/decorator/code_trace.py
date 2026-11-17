@@ -665,6 +665,8 @@ def _recorder_class() -> type:
             if own_work_inside():
                 own_work_left_out(code)
                 return
+            if self._for_no_call(frame):
+                return
             g = frame.f_globals
             fresh = [unit for unit in self.active if code not in unit.lib_codes]
             cls = library_receiver_class(code, frame) if fresh else None
@@ -716,6 +718,8 @@ def _recorder_class() -> type:
                 self.rearm.add(code)
             if self.active:
                 frame = sys._getframe(rec.WATCHED_FRAME + 1)
+                if self._for_no_call(frame):
+                    return None  # left armed: the call's own start of it is still seen
                 self._seen_library(code, frame)
                 if code in self.keyed_codes:
                     # Each start reads its own entry: left armed while a
@@ -880,6 +884,8 @@ def _recorder_class() -> type:
                     return None
             if self.active or self.stack:
                 frame = sys._getframe(rec.WATCHED_FRAME)
+                if not self.stack and self._for_no_call(frame):
+                    return None  # left armed: the call's own start of it is still seen
                 g = frame.f_globals
                 kind = self._kinds.get(id(g))
                 if kind is None or kind[0] is not g:
@@ -888,6 +894,21 @@ def _recorder_class() -> type:
             # Code a garbage collection runs (a ``__del__``) is left armed: a
             # run of it by the unit's own code is told apart (`Unit.collected`).
             return None if inside_collection or watched else DISABLE
+
+        def _for_no_call(self, frame: Any) -> bool:
+            """Does this start run on a thread none of the calls in progress
+            runs on, that does none of the program's work
+            (`trace_recorder.works_for_no_call`)? What pytest-xdist's
+            channel thread ran while a call was in progress was taken for
+            the call's: its code put in the trace and its class attributes
+            in the library settings the entry is checked on, which a hit
+            then found moved (or code no scan watches), and the call was
+            computed again, or never served from its memo."""
+            me = threading.get_ident()
+            for unit in self.active:
+                if unit.thread == me:
+                    return False
+            return rec.works_for_no_call(frame)
 
         def _note_site(self, code: types.CodeType, frame: Any) -> None:
             caller = frame.f_back
@@ -935,6 +956,8 @@ def _recorder_class() -> type:
                 # Run by cash's own pickling of a value, not by the user's
                 # program (`cash._own_work`): armed again once that ends.
                 own_work_left_out(code)
+                return
+            if not self.stack and self._for_no_call(frame):
                 return
             units = self.active
             stack = self.stack

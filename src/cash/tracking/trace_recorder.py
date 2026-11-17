@@ -447,6 +447,26 @@ def _hosts_unlisted(frame: Any) -> bool:
     return root == "cash" or root in HOST_PACKAGES
 
 
+#: The packages of a host's message channel, whose thread runs none of the
+#: program's work: pytest-xdist's (execnet's, started unlisted by
+#: `threading`), which runs execnet's protocol code whenever the runner sends
+#: a worker its next tests -- in the middle of whatever call is running.
+CHANNEL_PACKAGES = frozenset({"execnet"})
+
+
+def works_for_no_call(frame: Any) -> bool:
+    """Does the thread running *frame* do none of the program's work:
+    cash's own, the host's (`HOST_PACKAGES`) or a host's message channel
+    (`CHANNEL_PACKAGES`), by the module of its outermost frame?"""
+    while frame.f_back is not None:
+        frame = frame.f_back
+    name = frame.f_globals.get("__name__")
+    if not isinstance(name, str):
+        return False
+    root = name.partition(".")[0]
+    return root == "cash" or root in HOST_PACKAGES or root in CHANNEL_PACKAGES
+
+
 def _code_of(t: threading.Thread) -> Any:
     """What *t* runs: a Timer's function, its target, or its own ``run``."""
     if isinstance(t, threading.Timer):
