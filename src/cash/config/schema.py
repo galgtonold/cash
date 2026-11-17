@@ -136,7 +136,8 @@ class TierConfig:
             ``max_memory_entries``.
         cache_dir: file and sqlite tiers: the cache directory. Defaults to
             ``cache_dir``.
-        compress: file tier: gzip each entry. Defaults to ``compress``.
+        compress: file tier: compress each entry (zstd on Python 3.14+,
+            else zlib). Defaults to ``compress``.
         flush_interval: file tier: seconds between metadata flushes.
             Defaults to ``flush_interval``.
         db_path: sqlite tier: path to the database file. Defaults to a file
@@ -235,8 +236,8 @@ class CashConfig:
     later ``os.chdir()`` does not move the cache."""
 
     compress: bool = False
-    """gzip each entry on disk. Trades CPU for space; worth it mainly for
-    text-like values."""
+    """Compress each entry on disk (zstd on Python 3.14+, else zlib). Trades
+    CPU for space; worth it mainly for text-like values."""
 
     max_cache_size: int | None = None
     """Disk cache cap in bytes, or a size such as ``"5GB"``. ``None`` sizes it
