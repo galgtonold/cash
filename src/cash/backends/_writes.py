@@ -214,8 +214,7 @@ def _watch_child_processes() -> None:
             return
         from ..tracking import io_watch
 
-        for event in _CHILD_PROCESS_EVENTS:
-            io_watch.subscribe_always(event, _finish_before_child)
+        io_watch.subscribe_always(_CHILD_PROCESS_EVENTS, _finish_before_child)
         _child_watch_installed = True
 
 

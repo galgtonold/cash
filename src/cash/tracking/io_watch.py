@@ -181,15 +181,19 @@ def subscribe(event: str, consumer: Consumer, *, outside_scopes: bool = False) -
         _rebuild()
 
 
-def subscribe_always(event: str, consumer: Consumer) -> None:
-    """Deliver *event* to *consumer* from now on, scope or no scope.
+def subscribe_always(event: str | Iterable[str], consumer: Consumer) -> None:
+    """Deliver *event* (one name, or several) to *consumer* from now on,
+    scope or no scope.
 
     For what must happen whatever the process is doing: the write queues
     finishing their writes before a child process starts (``_writes``).
+    Several names are subscribed with one rebuild of the tables: one each
+    was a dozen rebuilds on the first call of a process.
     """
     with _lock:
         _ensure_hook()
-        _always.setdefault(event, []).append(consumer)
+        for name in (event,) if isinstance(event, str) else event:
+            _always.setdefault(name, []).append(consumer)
         _rebuild()
 
 
