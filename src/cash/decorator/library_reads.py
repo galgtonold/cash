@@ -93,7 +93,7 @@ import re
 import sys
 import threading
 import types
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from contextvars import ContextVar
 from typing import Any
 
@@ -115,8 +115,6 @@ _STDLIB = frozenset(getattr(sys, "stdlib_module_names", ())) | {"builtins", "__f
 _SPECIAL_TOPS = frozenset({"numpy", "decimal", "_decimal", "_pydecimal"})
 
 _lock = threading.Lock()
-#: code -> ``(chains, globals it binds)`` of its bytecode.
-_CHAINS: _weak.WeakKeyDictionary[types.CodeType, tuple] = _weak.WeakKeyDictionary()
 
 
 class CodeSet:
@@ -138,6 +136,10 @@ class CodeSet:
     def __len__(self) -> int:
         return len(self._refs)
 
+    def __iter__(self) -> Iterator[types.CodeType]:
+        """The code held, alive."""
+        return iter([code for code in (ref() for ref in list(self._refs.values())) if code is not None])
+
     def add(self, code: types.CodeType) -> None:
         key = id(code)
         refs = self._refs
@@ -151,6 +153,60 @@ class CodeSet:
     def discard(self, code: types.CodeType) -> None:
         if code in self:
             del self._refs[id(code)]
+
+
+class CodeMap:
+    """Code object -> a value, held weakly and by identity (see `CodeSet`).
+
+    Not a ``WeakKeyDictionary``: a code object does not keep its hash, so
+    each lookup there hashed the code's bytecode, names and constants
+    again, about 4 us for a pandas method. The recorder looks code up
+    several times at each start of a library's code a traced call runs:
+    a ``pvlib`` call starting 160 of pandas' methods spent more on those
+    hashes than on its own body."""
+
+    __slots__ = ("_held",)
+
+    def __init__(self) -> None:
+        self._held: dict[int, tuple[Any, Any]] = {}
+
+    def get(self, code: Any, default: Any = None) -> Any:
+        found = self._held.get(id(code))
+        if found is None or found[0]() is not code:
+            return default
+        return found[1]
+
+    def __contains__(self, code: Any) -> bool:
+        found = self._held.get(id(code))
+        return found is not None and found[0]() is code
+
+    def __getitem__(self, code: Any) -> Any:
+        found = self._held.get(id(code))
+        if found is None or found[0]() is not code:
+            raise KeyError(code)
+        return found[1]
+
+    def __setitem__(self, code: types.CodeType, value: Any) -> None:
+        key = id(code)
+        held = self._held
+        found = held.get(key)
+        if found is not None and found[0]() is code:
+            held[key] = (found[0], value)
+            return
+
+        def gone(ref: Any, key: int = key) -> None:
+            entry = held.get(key)
+            if entry is not None and entry[0] is ref:
+                del held[key]
+
+        held[key] = (_weak.ref(code, gone), value)
+
+    def __len__(self) -> int:
+        return len(self._held)
+
+
+#: code -> ``(chains, globals it binds)`` of its bytecode.
+_CHAINS = CodeMap()
 
 
 #: A library's code that reads no setting: every chain it follows ends on
@@ -495,7 +551,7 @@ def _step(v: Any, name: str) -> Any:
 
 
 #: code -> the attributes it loads off its first argument (`self_names`).
-_SELF_NAMES: _weak.WeakKeyDictionary[types.CodeType, tuple[str, ...]] = _weak.WeakKeyDictionary()
+_SELF_NAMES = CodeMap()
 
 
 def self_names(code: types.CodeType) -> tuple[str, ...]:
@@ -615,7 +671,7 @@ def class_reads(code: types.CodeType, cls: Any) -> dict[tuple[str, str], str]:
 
 
 #: code -> may it read a class setting (`_reads_class_settings`).
-_CLASS_READERS: _weak.WeakKeyDictionary[types.CodeType, bool] = _weak.WeakKeyDictionary()
+_CLASS_READERS = CodeMap()
 #: The most subclasses `_reads_class_settings` looks through.
 _MAX_SUBCLASSES = 512
 
@@ -807,7 +863,7 @@ def _checks(items: Any) -> tuple[_Check, ...]:
 
 #: code -> ``(globals, user, roots, kept chains, specials)``: what `_plan`
 #: found, standing while every root name holds the object it held.
-_PLANS: _weak.WeakKeyDictionary[types.CodeType, tuple] = _weak.WeakKeyDictionary()
+_PLANS = CodeMap()
 
 
 def _plan(

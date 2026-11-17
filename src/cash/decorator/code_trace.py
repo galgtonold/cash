@@ -375,6 +375,7 @@ def _recorder_class() -> type:
     from ..tracking import trace_recorder as rec
     from .library_reads import KEYED_NAMES as library_keyed_names
     from .library_reads import QUIET as library_quiet
+    from .library_reads import CodeMap as LibraryCodeMap
     from .library_reads import CodeSet as LibraryCodes
     from .library_reads import counts_file
     from .library_reads import deref_roots as library_deref_roots
@@ -455,14 +456,14 @@ def _recorder_class() -> type:
             #: (`_arm_lines`): each line costs one callback, which disables
             #: it; `line_dirty` holds the code a line of fired in since, armed
             #: again when the next strict call begins.
-            self.line_on: weakref.WeakSet[types.CodeType] = _weak.WeakSet()
+            self.line_on = LibraryCodes()
             self.line_dirty: set[types.CodeType] = set()
             #: A library's code, armed so each traced call sees it run
             #: (`_arm_library`); its events are in `user_codes` too.
             self.lib_codes = LibraryCodes()
             #: The library's code of `library_reads.KEYED_READERS` seen ->
             #: the argument naming the entry it reads.
-            self.keyed_codes: _weak.WeakKeyDictionary[types.CodeType, str] = _weak.WeakKeyDictionary()
+            self.keyed_codes = LibraryCodeMap()
             #: LINE callbacks run, for the tests of what watching lines costs.
             self.line_events = 0
             free = [tool for tool in self.tool_ids if mon.get_tool(tool) is None]
