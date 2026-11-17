@@ -66,8 +66,8 @@ from typing import Any
 
 from .analysis.annotations import line_assumes_safe
 from .effects import EffectKind
-from .install_paths import is_user_path, norm_dir, normcase_path
-from .tracking import io_watch
+from .install_paths import is_user_code_file, is_user_path, norm_dir, normcase_path
+from .tracking import io_watch, process_registries
 from .tracking.read_classification import is_runtime_cache_path
 
 logger = logging.getLogger(__name__)
@@ -145,6 +145,12 @@ def line_waived(filename: str, lineno: int) -> bool:
     return above.lstrip().startswith("#") and line_assumes_safe(above)
 
 
+def _cash_frame(frame: Any) -> bool:
+    """Does *frame* run cash's own code?"""
+    name = frame.f_globals.get("__name__")
+    return isinstance(name, str) and (name == "cash" or name.startswith("cash."))
+
+
 class _AssumeSafe(contextlib.AbstractContextManager):
     """What `assume_safe` returns. One contextvar set and reset, and only
     while a cached call is being observed; nothing at all otherwise."""
@@ -209,6 +215,18 @@ def _on_spawn(args: tuple) -> None:
     """The ``subprocess.Popen`` audit event: ``(executable, args, cwd, env)``."""
     if active_observer.get() is not None:
         _record(_LABELS[EffectKind.SUBPROCESS], f"spawned {_describe_argv(args[1])}")
+
+
+def _env_write_waived() -> bool | None:
+    """Whether the observed call waived the environment write being
+    audited (`EffectObserver.waives_here`); None outside an observed call.
+    Asked first (`process_registries.register_env_waiver`): inside a cached
+    call, a waiver around the call does not reach into it."""
+    observer = active_observer.get()
+    return None if observer is None else observer.waives_here()
+
+
+process_registries.register_env_waiver(_env_write_waived, first=True)
 
 
 # Audit events rather than wrappers on `socket.socket.connect` and
@@ -436,6 +454,32 @@ class EffectObserver:
                 self._scratch_writes.append((scratch, (kind, detail)))
             return
         self.record(kind, detail)
+
+    def waives_here(self) -> bool:
+        """Is an effect performed on the stack right now waived, as
+        `record_effect` waives it: a ``with cash.assume_safe():`` block
+        entered during this observed call is open, or ``#
+        @cash:assume-safe`` is on a line of the user's on the way."""
+        if waived_observer.get() is self:
+            return True
+        # The user's frames from the write up to the cached function's own,
+        # a cell's included (``is_user_code_file``: linecache holds its
+        # lines), and no further: the first of cash's frames above them runs
+        # the call, and a waiver in its caller is not the function's word.
+        # (The frame that entered this observer is a suspended generator's,
+        # not on the way.)
+        frame = sys._getframe(1)
+        seen_user = False
+        while frame is not None:
+            if _cash_frame(frame):
+                if seen_user:
+                    return False
+            elif is_user_code_file(frame.f_code.co_filename):
+                seen_user = True
+                if line_waived(frame.f_code.co_filename, frame.f_lineno):
+                    return True
+            frame = frame.f_back
+        return False
 
     def _user_sites(self) -> list[tuple[str, int]]:
         """``(file, line)`` of the user's frames inside the observed call,

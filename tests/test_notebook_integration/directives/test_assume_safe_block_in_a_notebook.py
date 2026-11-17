@@ -71,3 +71,37 @@ def test_a_cached_function_defined_in_a_cell_honours_the_block(nb_runner, tmp_pa
     # drops a cash warning's line, and by default the link is on that line.
     assert "#impure-side-effects" not in nb_runner.get_raw_output(2), nb_runner.get_raw_output(2)
     assert "#impure-side-effects" in nb_runner.get_raw_output(3), "control: the same code without the block warns"
+
+
+_ENV_CELL = (
+    "@cash.cache\n"
+    "def {name}(v):\n"
+    "    fd = os.open(r'{counter}', os.O_WRONLY | os.O_APPEND | os.O_CREAT)  # @cash:assume-safe\n"
+    "    os.write(fd, b'x')\n"
+    "    os.close(fd)\n"
+    "{write}"
+    "    return v * 2\n"
+    "print({name}(3), {name}(3))"
+)
+
+
+@pytest.mark.parametrize(
+    ("write", "stored"),
+    [
+        ("    with cash.assume_safe():\n        os.putenv('CASH_TEST_KERNEL_ENV', str(v))\n", True),
+        ("    os.environ['CASH_TEST_KERNEL_ENV'] = str(v)  # @cash:assume-safe\n", True),
+        ("    with cash.assume_safe():\n        pass\n    os.environ['CASH_TEST_KERNEL_ENV'] = str(v)\n", False),
+    ],
+    ids=["putenv-block", "environ-comment", "outside-the-block"],
+)
+def test_a_cached_function_s_waived_environment_write_is_stored(nb_runner, tmp_path, write, stored):
+    """A ``@cash.cache`` function in a cell that changes the environment is
+    stored when the write is waived; the same write outside the block keeps
+    every call running."""
+    counter = tmp_path / "runs"
+    nb_runner.create_notebook(["import cash, os", _ENV_CELL.format(name="setenv", counter=counter, write=write)])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert "6 6" in nb_runner.get_output(2)
+    assert counter.read_bytes() == (b"x" if stored else b"xx")
+    assert ("#impure-observed-effects" in nb_runner.get_raw_output(2)) is not stored
