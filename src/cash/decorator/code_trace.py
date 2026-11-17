@@ -2289,14 +2289,14 @@ def _log_call_chain(module: str, chain: tuple[str, ...]) -> bool:
 
 
 def _chain_digest(module: str, chain: str) -> str | None:
-    from ..tracking.trace_items import inspect_getattr
+    from ..tracking.trace_items import inspect_getattr, logger_method_digest
 
     ns = _namespace(module)
     parts = chain.split(".")
     if ns is None or parts[0] not in ns:
         return _ABSENT
     obj = ns[parts[0]]
-    for p in parts[1:]:
+    for i, p in enumerate(parts[1:], 2):
         if not issubclass(type(obj), types.ModuleType):
             # Past a module, the attribute the code read where it is data
             # the object holds (``settings.preset.leiden.flavor``): that
@@ -2304,6 +2304,10 @@ def _chain_digest(module: str, chain: str) -> str | None:
             # the walk, and the object is digested whole, as before.
             held = held_attribute(obj, p)
             if held is NOT_HELD:
+                if i == len(parts):
+                    method = logger_method_digest(obj, p)
+                    if method is not None:
+                        return method
                 break
             obj = held
             continue
