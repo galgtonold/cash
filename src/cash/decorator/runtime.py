@@ -29,7 +29,7 @@ from ..analysis.out_arguments import attribute_bound_parameter, mutated_paramete
 from ..analysis.purity_report import UNREAD_MODULE, PurityReport, describe_untrackable, unread_module
 from ..backends._base import ttl_expired, written_at
 from ..canonical_form import WALKED_INDEXES
-from ..code_swaps import FOLDED_CODE, FoldedCode, note_owner
+from ..code_swaps import FOLDED_CODE, FoldedCode, function_sets, note_owner
 from ..dependency_state import STATE_LEDGER, ledger_note
 from ..exceptions import (
     CashCacheIneffectiveWarning,
@@ -1236,6 +1236,10 @@ class CallRunner:
         #: func_name -> how many calls in a row ran code other than their
         #: key folded (`_code_swapped`).
         self._code_swaps: dict[str, int] = {}
+        #: Functions a miss of which needed the code its key folds unnarrowed
+        #: and could not build it after the body (`_late_full_fold`): their
+        #: misses build it before the body.
+        self._full_fold_first: set[str] = set()
 
     def _run_uncached(self, spec: CachedFunction, call: Call, why: MissReason) -> Any:
         """Run a call that has no key, log it as a miss, and hand back its result."""
@@ -1706,10 +1710,18 @@ class CallRunner:
                 self._hand_back_entry(call, hit, call.metadata, getattr(call.metadata, "storage", None))
         else:
             if call.needs_trace and call.narrowed and copies is None:
-                # Before the body changes the arguments; not for an
-                # iterator argument, whose key copy is read (that call's
-                # strict trace judges against its narrowed key alone).
-                call.full_folded = self._keys.full_key_folded(spec, args, kwargs)
+                # Not for an iterator argument, whose key copy is read (that
+                # call's strict trace judges against its narrowed key alone).
+                # Built after the body only when the strict trace refuses
+                # what ran against the narrowed key's code (a fold of every
+                # held class's code, hundreds of ms for a library's), and
+                # only while nothing it reads moved since here; before the
+                # body for a function that once moved it.
+                gate = None if spec.name in self._full_fold_first else self._full_fold_gate()
+                if gate is None:
+                    call.full_folded = self._keys.full_key_folded(spec, args, kwargs)
+                else:
+                    call.full_fold_gate = gate
             # Before the body runs: the mutation check compares against it.
             with call_polars(call.polars_args):
                 if copies is not None:
@@ -2779,12 +2791,18 @@ class CallRunner:
         # of an argument's class) is in the key as the function's own code
         # is: the strict check judges only code the key never saw.
         accepted = code_trace.folded_codes(call.folded_code) if call.needs_trace else None
+        # A narrowed key holds a held class by its surface, and the trace
+        # checks each of its methods that ran with its own item: the strict
+        # check judges only code no key of the call covers, as for a key
+        # built unnarrowed (`KeyBuilder.full_key_folded`).
         if call.needs_trace and call.full_folded is not None:
-            # A narrowed key holds a held class by its surface, and the
-            # trace checks each of its methods that ran with its own item:
-            # the strict check judges only code no key of the call covers,
-            # as for a key built unnarrowed (`KeyBuilder.full_key_folded`).
             accepted = (accepted or set()) | (code_trace.folded_codes(call.full_folded) or set())
+        more = None
+        if call.needs_trace and call.full_fold_gate is not None:
+
+            def more() -> set | None:
+                return code_trace.folded_codes(self._late_full_fold(spec, call))
+
         owners = frozenset(
             id(entry[1].obj)
             for entry in (getattr(run, "args_before", None) or {}).values()
@@ -2799,7 +2817,53 @@ class CallRunner:
             # A call that needs its trace is checked on all of each class's
             # code, as before: the strict build judges what ran.
             narrow=call.narrowed and not call.needs_trace,
+            also_accepted=more,
         )
+
+    @staticmethod
+    def _full_fold_gate() -> tuple[int, frozenset[str]] | None:
+        """What a fold built after the body is compared against
+        (`_late_full_fold`): how many times any function's code or defaults
+        were set (`function_sets`), and the modules other than cash's own
+        that are loaded. None without the extension's function watcher:
+        the fold is built before the body then."""
+        sets = function_sets()
+        return None if sets is None else (sets, frozenset(sys.modules.copy()))
+
+    def _late_full_fold(self, spec: CachedFunction, call: Call) -> FoldedCode | None:
+        """The code the call's key would fold unnarrowed
+        (`KeyBuilder.full_key_folded`), built after the body for a strict
+        trace that refused what ran against the narrowed key's code; None
+        when the body may have moved what it reads (`_world_held`). Built so, it could hold code the body bound
+        that no key before it held, and the strict check would skip it:
+        the call is refused, and the function's later misses build it
+        before the body."""
+        gate, call.full_fold_gate = call.full_fold_gate, None
+        if gate is None or not self._world_held(spec, call, gate):
+            self._full_fold_first.add(spec.name)
+            return None
+        return self._keys.full_key_folded(spec, call.args, call.kwargs)
+
+    def _world_held(self, spec: CachedFunction, call: Call, gate: tuple[int, frozenset[str]]) -> bool:
+        """Is what a key of *call* reads as it was at *gate*, before its
+        body (`_full_fold_gate`): no function's code or defaults set, no
+        module imported or dropped but cash's own, and the arguments' hash
+        the same? A module global the code that ran read and the body
+        rebound refuses the call by itself (`code_trace._changed_global`)."""
+        sets, modules = gate
+        if function_sets() != sets or call.call_args_hash is None:
+            return False
+        now = sys.modules.copy()
+        if len(now) != len(modules) or not modules.issuperset(now):
+            moved = modules.symmetric_difference(now)
+            if any(name != "cash" and not name.startswith("cash.") for name in moved):
+                return False
+        try:
+            with call_polars(call.polars_args), content_only(call.by_content), quiet_digests():
+                after = self._purity.checked_arguments_hash(spec.name, *(call.checked or (call.args, call.kwargs)))
+        except Exception:  # noqa: BLE001 - not hashed: taken as changed
+            return False
+        return after == call.call_args_hash
 
     def _code_swapped(self, spec: CachedFunction, call: Call) -> str | None:
         """Why a call is not stored when code its key folded was replaced

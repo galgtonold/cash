@@ -120,6 +120,7 @@ class Call:
         "ran_unit",
         "folded_code",
         "full_folded",
+        "full_fold_gate",
         "unread",
         "trace_for_unread",
         "narrowed",
@@ -180,6 +181,11 @@ class Call:
         #: code its key would fold unnarrowed (`KeyBuilder.full_key_folded`),
         #: which its strict trace accepts.
         self.full_folded: Any = None
+        #: Else, for such a call: what the world was before the body
+        #: (`CallRunner._full_fold_gate`), so that the strict trace builds
+        #: that code after the body only when it refuses what ran against
+        #: the narrowed key's, and only while nothing it reads has moved.
+        self.full_fold_gate: Any = None
         #: The key's `BuiltKey.unread`.
         self.unread: frozenset = frozenset()
         self.trace_for_unread = False
