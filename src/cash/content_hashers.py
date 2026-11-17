@@ -927,12 +927,14 @@ _TYPED_ITEMS = {float: "<f8", bool: "?", int: "<i8"}
 
 def _fold_geometries(h: Any, array: Any) -> bool:
     """Fold a geopandas ``GeometryArray`` into *h*: its CRS (as WKT, which
-    two spellings of one CRS share) and each geometry's WKB with its SRID
-    and every dimension it has (Z, M), which is all a shapely geometry
-    holds -- its type, its parts and rings and their coordinates -- with
-    which rows are missing. Written by shapely for the whole array at once,
-    and for a big array remembered (`_GeometryPieces`) while it holds the
-    same geometries. False, folding nothing, for an array of another kind."""
+    two spellings of one CRS share), which rows are missing, and each
+    geometry's WKB with its SRID and every dimension it has (Z, M), which
+    is all a shapely geometry holds -- its type, its parts and rings and
+    their coordinates -- as itself or, past a point's size, as its digest
+    (`GEOMETRY_DIGESTS`, which writes each geometry object once and
+    remembers it). For a big array, what it folded
+    is remembered too (`_GeometryPieces`) while it holds the same
+    geometries. False, folding nothing, for an array of another kind."""
     import shapely
 
     data = getattr(array, "_data", None)
@@ -943,14 +945,12 @@ def _fold_geometries(h: Any, array: Any) -> bool:
     piece = GEOMETRY_PIECES.find(data)
     if piece is None:
         into = _PieceRecorder(h)
-        wkb = shapely.to_wkb(data, hex=False, include_srid=True)
         missing = shapely.is_missing(data)
         if missing.any():
             into.update(b"|missing|")
             fold_buffer(into, missing)
-            wkb = wkb[~missing]
-        # WKB is self-delimiting: its type and counts say where it ends.
-        fold_buffer(into, b"".join(wkb))
+        into.update(b"|wkb-pieces|")
+        fold_buffer(into, GEOMETRY_DIGESTS.joined(data[~missing] if missing.any() else data))
         if into.piece is not None:
             GEOMETRY_PIECES.note(data, into.piece)
     else:
@@ -1017,6 +1017,142 @@ def _addresses(data: Any) -> Any:
 
 #: The process's `_GeometryPieces`.
 GEOMETRY_PIECES = _GeometryPieces(64)
+
+
+def distinct_objects(data: Any) -> tuple[Any, Any]:
+    """``(distinct, index)`` for a 1-d object array *data*: the distinct
+    objects it holds, by identity, in order of first appearance, and for
+    each row the position of its object in *distinct* (``intp``), so
+    ``distinct[index]`` holds the very objects *data* does. A geopandas
+    frame joined many-to-many (``sjoin``) holds each geometry on every row
+    it matched: 740,000 rows over 195,000 objects."""
+    np = _numpy()
+    addresses = _addresses(data)
+    if addresses is None:
+        addresses = np.fromiter(map(id, data), dtype=np.uintp, count=len(data))
+    _, first, index = np.unique(addresses, return_index=True, return_inverse=True)
+    order = np.argsort(first, kind="stable")
+    rank = np.empty_like(order)
+    rank[order] = np.arange(len(order))
+    return data[first[order]], rank[index.reshape(-1)]
+
+
+class _GeometryDigests:
+    """What each shapely geometry adds to the digest of an array holding
+    it (its piece), by the geometry object, held with the object itself:
+    its WKB with its SRID when that is at most `INLINE_MAX` bytes (a
+    point), else ``0x02`` and the SHA-256 of that WKB. A WKB starts with
+    its byte order, 0 or 1, so the two kinds cannot be taken for each
+    other, and WKB is self-delimiting: its type and counts say where it
+    ends.
+
+    A shapely geometry (2.0 and later) cannot change: its class has no
+    ``__dict__`` (``__slots__ = []`` on ``BaseGeometry`` over the C type
+    ``shapely.lib.Geometry``), no property of it has a setter (``g.x = 1``
+    raises ``AttributeError``), its ``coords`` hand out a copy of the
+    coordinates, and every operation (``set_srid``, ``set_precision``,
+    ``transform``) returns a new geometry. The one way to rewrite one in
+    place is calling ``__setstate__`` on it by hand, the hook that reads
+    a pickle of a shapely 1.x geometry, which no code does on a geometry
+    in use. So a geometry's piece holds for as long as the object lives,
+    and the object is kept alive (``_held``) for as long as its piece is
+    remembered: its address cannot be taken by another object meanwhile.
+
+    A pipeline hands the same geometries from stage to stage -- joined,
+    filtered, with a column added -- each stage a new array over the same
+    objects, which were written to WKB anew at every stage: 0.5 to 1.1 s
+    per stage for 740,000 joined rows over 195,000 polygons. Each object
+    is now written once, and an array is hashed as one piece per row.
+
+    At most `MAX_HELD` geometries are held; past that the memo starts
+    again, and an array holding more than that is read without it."""
+
+    #: The most geometries held (and pieces remembered) at once.
+    MAX_HELD = 2_000_000
+
+    #: Arrays shorter than this are read without the memo.
+    MIN_ROWS = 256
+
+    #: The longest WKB that is its own piece: a point in four dimensions
+    #: with its SRID is 41 bytes.
+    INLINE_MAX = 48
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        #: Geometries written to WKB, for tests and measuring.
+        self.written = 0
+        self.clear()
+
+    def clear(self) -> None:
+        np = _numpy()
+        with self._lock:
+            self._addresses = np.empty(0, dtype=np.uintp)
+            self._pieces = np.empty(0, dtype=object)
+            self._held: list[Any] = []
+
+    def __len__(self) -> int:
+        return len(self._addresses)
+
+    def joined(self, data: Any) -> bytes:
+        """The pieces of the geometries in the 1-d object array *data*
+        (none missing), joined in row order."""
+        import shapely
+
+        np = _numpy()
+        if len(data) < self.MIN_ROWS or not shapely.get_type_id(data).any():
+            # Few, or only points: each is its own WKB, cheaper written
+            # again than looked up.
+            return b"".join(self._read(data))
+        distinct, index = distinct_objects(data)
+        if len(distinct) > self.MAX_HELD:
+            return b"".join(self._read(distinct)[index])
+        addresses = np.fromiter(map(id, distinct), dtype=np.uintp, count=len(distinct))
+        with self._lock:
+            known = self._addresses
+            if len(known):
+                at = np.searchsorted(known, addresses).clip(max=len(known) - 1)
+                found = known[at] == addresses
+                pieces = np.empty(len(distinct), dtype=object)
+                pieces[found] = self._pieces[at[found]]
+            else:
+                found = np.zeros(len(distinct), dtype=bool)
+                pieces = np.empty(len(distinct), dtype=object)
+            new = ~found
+            if new.any():
+                fresh = distinct[new]
+                pieces[new] = read = self._read(fresh)
+                self._remember(addresses[new], read, fresh)
+        return b"".join(pieces[index] if len(distinct) < len(data) else pieces)
+
+    def _read(self, data: Any) -> Any:
+        """The pieces of the geometries in *data*, as an object array."""
+        import shapely
+
+        np = _numpy()
+        self.written += len(data)
+        wkb = shapely.to_wkb(data, hex=False, include_srid=True)
+        lengths = np.fromiter(map(len, wkb), dtype=np.intp, count=len(wkb))
+        long = lengths > self.INLINE_MAX
+        if long.any():
+            sha256 = hashlib.sha256
+            wkb[long] = [b"\x02" + sha256(item).digest() for item in wkb[long]]
+        return wkb
+
+    def _remember(self, addresses: Any, pieces: Any, objects: Any) -> None:
+        np = _numpy()
+        if len(self._addresses) + len(addresses) > self.MAX_HELD:
+            self._addresses = np.empty(0, dtype=np.uintp)
+            self._pieces = np.empty(0, dtype=object)
+            self._held = []
+        merged = np.concatenate([self._addresses, addresses])
+        order = np.argsort(merged, kind="stable")
+        self._addresses = merged[order]
+        self._pieces = np.concatenate([self._pieces, pieces])[order]
+        self._held.append(objects)
+
+
+#: The process's `_GeometryDigests`.
+GEOMETRY_DIGESTS = _GeometryDigests()
 
 
 def _fold_object_items(h: Any, array: Any) -> None:
