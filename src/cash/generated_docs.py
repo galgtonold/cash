@@ -34,6 +34,8 @@ import types
 import weakref
 from typing import Any
 
+from . import _weak
+
 #: An address in a repr (``<function f at 0x7f...>``).
 _ADDRESS = re.compile(r"\bat 0x([0-9a-fA-F]+)")
 #: A set display with no braces inside it.
@@ -48,7 +50,7 @@ _HELD_DEPTH = 8
 _DOC_NAMES = frozenset({"__doc__", "getdoc", "cleandoc"})
 
 #: code -> does it (or code nested in it) load a docstring name.
-_CODE_READS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_CODE_READS: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()
 
 
 def reads_own_doc(t: type) -> bool:
@@ -64,7 +66,7 @@ def reads_own_doc(t: type) -> bool:
 #: class -> (its members then, their ids, whether its own code reads a
 #: docstring). Weak: a class dropped is forgotten. The members are kept so
 #: their ids are not reused while the entry stands.
-_CLASS_READS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_CLASS_READS: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()
 
 
 def _class_reads_doc(klass: type) -> bool:
