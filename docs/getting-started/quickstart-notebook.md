@@ -76,6 +76,9 @@ From here on:
   re-run. The rest of the cell stays cached.
 - Change `large_dataset.csv` on disk and the statements that read it re-run.
 - Restart the kernel and run the cell: expensive results come back from disk.
+- Run a plot again with nothing changed, and with the inline backend cash
+  shows the stored image instead of drawing it again
+  ([Plots shown from the cache](../notebook_caching_api.md#plots-shown-from-the-cache)).
 
 Slow fits are cached too, `model.fit(X, y)` as well as
 `model = Ridge().fit(X, y)`, so a restart and Run All bring the trained model

@@ -31,7 +31,7 @@ big inputs and computes them again; it never serves one install's entry to
 the other. Give every machine that shares a cache (a team's S3 or Redis
 backend, CI and laptops) the same install to keep their hits.
 
-<!-- claim: cash/_native.py:_load @6f4f7018, cash/__main__.py:cmd_info @1442fa70, cash/notebook/ipython/magics.py:CashMagics.cash_status @17cd0ee5 -->
+<!-- claim: cash/_native.py:_load @6f4f7018, cash/__main__.py:cmd_info @1442fa70, cash/notebook/ipython/magics.py:CashMagics.cash_status @17cd0ee5, cash/backends/set_order.py:restore @d4e04f7d -->
 ## The C fast path
 
 On CPython 3.12 or newer, pip installs a wheel with a small C extension for
@@ -43,7 +43,9 @@ configuring.
 Everywhere else, on Python 3.10 and 3.11, other interpreters or other
 platforms, pip installs the pure-Python wheel and cash hashes those values
 as it always does. Results, cache keys and cache folders are the same with
-and without the extension, so installs of both kinds share a cache. When pip
+and without the extension, so installs of both kinds share a cache. One
+thing only the extension does (on CPython 3.12 to 3.14): a set restored from
+the cache iterates in the order the stored set did. When pip
 builds cash from source, it compiles the extension if it finds a C compiler
 and installs without it if it does not; the install never fails over it.
 

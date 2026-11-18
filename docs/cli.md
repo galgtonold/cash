@@ -60,7 +60,7 @@ Cash v<!-- docnum:version -->0.15.0<!-- /docnum -->
               `cash inspect` lists them, with what each one saves
   Max size:   RAM 4.0 GiB (auto), disk 16.4 GiB (auto)
   Persist:    cost model (0.1s compute floor, 20% savings required; notebook statements: 0.01s store floor, 0.05s restore budget)
-  Fast path:  on (C extension cash._cwatch, API 1)
+  Fast path:  on (C extension cash._cwatch, API 7)
   File hook:  on (14 slots in 3 libraries)
   File watch: on (inotify)
   Config files:

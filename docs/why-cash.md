@@ -16,8 +16,8 @@ and later runs get them back instead of recomputing them.
 | Edit a helper function | Recomputes | Recomputes |
 | Change a data file | Recomputes | Recomputes |
 | Change an object in place | Stored with the argument's new state when cash can write it back into an array, frame or plain container; otherwise not stored | Detected: statements below see the change; an array, frame or plain container is stored with its new state |
-| Written to disk | Every result | Results that took more than 0.1 s and reload faster than they recompute |
-| Side effects | Warned about; they run on the first call only | The statement is not cached |
+| Written to disk | Every result | Results that took more than 0.1 s, reload faster than they recompute, and save more on a re-run than writing them takes |
+| Side effects | Warned about; they run on the first call only. A change to a process setting (`np.seterr`, a logger's level) runs every time | The statement is not cached |
 | Shows what it did | `f.explain()`, `f.cache_info()` | A badge above each cell, `%cash_stats` |
 | Needs IPython | No | Yes |
 
