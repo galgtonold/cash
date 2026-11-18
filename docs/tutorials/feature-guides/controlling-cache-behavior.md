@@ -123,7 +123,7 @@ It waives the side effect only; a statement that reads the clock, or changes
 an object in place in a way cash cannot store, still runs every time. Add a
 `ttl` when the answer can go stale.
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._refuse_process_registries @e3f710f2 -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._refuse_process_registries @69800c34 -->
 It also waives a setting the process keeps that the statement changes, such as
 `np.seterr(...)` or `atexit.register(...)`: put it on such a statement only
 when a hit, or a restarted kernel, may leave the setting unmade. In a

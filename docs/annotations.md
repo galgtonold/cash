@@ -141,7 +141,7 @@ and a hit returns the stored answer without sending the request:
 hits = session.post(SEARCH_URL, json=query).json()   # @cash:assume-safe
 ```
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._refuse_process_registries @e3f710f2 -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._refuse_process_registries @69800c34 -->
 It also waives a change to a setting the process keeps outside any variable
 (`np.seterr`, `atexit.register`, `plt.style.use`,
 `sys.setrecursionlimit`), which otherwise makes the statement run every

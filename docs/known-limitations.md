@@ -526,7 +526,7 @@ top-to-bottom run: the setting runs again over the outside value.
 
 ### A process setting two statements write
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._refuse_process_registries @e3f710f2 -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._refuse_process_registries @69800c34 -->
 A statement that changes a setting the process keeps outside any variable
 (`logging.getLogger("lib").setLevel(10)`, `atexit.register(save)`,
 `np.seterr(...)`) runs every time: cash compares those settings before and

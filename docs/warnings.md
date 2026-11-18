@@ -2858,7 +2858,7 @@ functools.partial(setattr, points[7])` made in a cell above. Cash cannot
 tell which variable changes before the statement runs, so it takes every
 variable as changed: what reads any of them after it runs again.
 
-<!-- claim: cash/tracking/process_registries.py:snapshot @bdd98c66, cash/notebook/statement/processor.py:StatementProcessor._refuse_process_registries @e3f710f2, cash/tracking/process_registries.py:registering_imports @f4d937d7, cash/decorator/runtime.py:CallRunner._refuse_registries @1938b99d -->
+<!-- claim: cash/tracking/process_registries.py:snapshot @bdd98c66, cash/notebook/statement/processor.py:StatementProcessor._refuse_process_registries @69800c34, cash/tracking/process_registries.py:registering_imports @f4d937d7, cash/decorator/runtime.py:CallRunner._refuse_registries @1938b99d -->
 It names, too, a statement that registers something with the process, in
 its own text or in a function or library it calls: `atexit.register(flush)`,
 `signal.signal(...)`, `sys.excepthook = hook`, `sys.setprofile(...)`,
