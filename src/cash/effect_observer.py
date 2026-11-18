@@ -145,6 +145,73 @@ def line_waived(filename: str, lineno: int) -> bool:
     return above.lstrip().startswith("#") and line_assumes_safe(above)
 
 
+#: ``code -> (its lines ``# @cash:assume-safe`` waives, whether its ``def``
+#: line waives the whole body)`` for the user's functions; None when neither.
+_CODE_WAIVERS: dict[Any, tuple[frozenset[int], bool] | None] = {}
+#: Files of code that is not the user's: no waiver is read there.
+_NOT_USER_FILES: set[str] = set()
+
+
+def _def_line(filename: str, code: Any) -> int | None:
+    """The line of *code*'s ``def``, past any decorators; None for code that
+    is not a ``def`` (a lambda, a comprehension, a module)."""
+    if code.co_name.startswith("<"):
+        return None
+    lineno = code.co_firstlineno
+    for _ in range(64):
+        text = linecache.getline(filename, lineno).lstrip()
+        if not text:
+            return None
+        if text.startswith(("def ", "async def ")):
+            return lineno
+        lineno += 1
+    return None
+
+
+def code_waivers(code: Any) -> tuple[frozenset[int], bool] | None:
+    """What ``# @cash:assume-safe`` waives in *code*, a function of the
+    user's: the lines it is on (or alone above), and the whole body when it
+    is on the ``def`` line. None when it waives nothing there."""
+    try:
+        return _CODE_WAIVERS[code]
+    except KeyError:
+        pass
+    filename = code.co_filename
+    if filename in _NOT_USER_FILES:
+        return None
+    if not is_user_code_file(filename) or _is_cash_file(filename):
+        _NOT_USER_FILES.add(filename)
+        return None
+    lines = frozenset(line for _start, _end, line in code.co_lines() if line and line_waived(filename, line))
+    first = _def_line(filename, code)
+    whole = first is not None and line_waived(filename, first)
+    found = (lines, whole) if lines or whole else None
+    _CODE_WAIVERS[code] = found
+    return found
+
+
+def code_carries_waiver(code: Any) -> bool:
+    """Does ``# @cash:assume-safe`` waive anything in *code*, or in a
+    function, lambda or comprehension defined inside it?"""
+    if code_waivers(code) is not None:
+        return True
+    return any(code_carries_waiver(const) for const in code.co_consts if type(const) is type(code))
+
+
+def frame_waived(frame: Any) -> bool:
+    """Is what *frame* does right now waived by ``# @cash:assume-safe``:
+    on its current line, or on the ``def`` line of its function?"""
+    found = code_waivers(frame.f_code)
+    return found is not None and (found[1] or frame.f_lineno in found[0])
+
+
+_CASH_DIR = os.path.dirname(os.path.abspath(__file__)) + os.sep
+
+
+def _is_cash_file(filename: str) -> bool:
+    return os.path.abspath(filename).startswith(_CASH_DIR)
+
+
 def _cash_frame(frame: Any) -> bool:
     """Does *frame* run cash's own code?"""
     name = frame.f_globals.get("__name__")
@@ -152,20 +219,27 @@ def _cash_frame(frame: Any) -> bool:
 
 
 class _AssumeSafe(contextlib.AbstractContextManager):
-    """What `assume_safe` returns. One contextvar set and reset, and only
-    while a cached call is being observed; nothing at all otherwise."""
+    """What `assume_safe` returns. One contextvar set and reset, and the
+    process settings read where the block begins and ends
+    (`EffectObserver.open_waiver`), only while a cached call is being
+    observed; nothing at all otherwise."""
 
     def __init__(self) -> None:
-        self._tokens: list[contextvars.Token | None] = []
+        self._tokens: list[tuple[contextvars.Token, EffectObserver] | None] = []
 
     def __enter__(self) -> None:
         observer = active_observer.get()
-        self._tokens.append(None if observer is None else waived_observer.set(observer))
+        if observer is None:
+            self._tokens.append(None)
+            return
+        self._tokens.append((waived_observer.set(observer), observer))
+        observer.open_waiver()
 
     def __exit__(self, *exc_info: Any) -> None:
-        token = self._tokens.pop() if self._tokens else None
-        if token is not None:
-            reset_in_any_context(waived_observer, token)
+        entry = self._tokens.pop() if self._tokens else None
+        if entry is not None:
+            reset_in_any_context(waived_observer, entry[0])
+            entry[1].close_waiver()
 
 
 def assume_safe() -> contextlib.AbstractContextManager[None]:
@@ -215,6 +289,97 @@ def _on_spawn(args: tuple) -> None:
     """The ``subprocess.Popen`` audit event: ``(executable, args, cwd, env)``."""
     if active_observer.get() is not None:
         _record(_LABELS[EffectKind.SUBPROCESS], f"spawned {_describe_argv(args[1])}")
+
+
+def _waiver_trace(frame: Any, event: str, arg: Any) -> Any:
+    """The global trace function `WaiverTrace` installs: for the frames of
+    the user's code that ``# @cash:assume-safe`` waives something in, a
+    local one that tells the observed call where a waived stretch begins
+    and ends (`EffectObserver.open_waiver`); None, and no line events, for
+    every other frame."""
+    found = code_waivers(frame.f_code)
+    if found is None:
+        return None
+    observer = active_observer.get()
+    if observer is None or _cash_frame(frame):
+        return None
+    lines, whole = found
+    is_open = [whole]
+    if whole:
+        observer.open_waiver()
+
+    def local(frame: Any, event: str, arg: Any) -> Any:
+        if event == "line" and not whole:
+            waived = frame.f_lineno in lines
+            if waived is not is_open[0]:
+                is_open[0] = waived
+                if waived:
+                    observer.open_waiver()
+                else:
+                    observer.close_waiver()
+        elif event == "return" and is_open[0]:
+            is_open[0] = False
+            observer.close_waiver()
+        return local
+
+    return local
+
+
+def _both(first: Any, second: Any) -> Any:
+    """One local trace function that runs *first* and *second*."""
+    if first is None:
+        return second
+    if second is None:
+        return first
+    pair = [first, second]
+
+    def both(frame: Any, event: str, arg: Any) -> Any:
+        for index, each in enumerate(pair):
+            if each is not None:
+                pair[index] = each(frame, event, arg)
+        return both if pair[0] is not None or pair[1] is not None else None
+
+    return both
+
+
+class WaiverTrace:
+    """While a missing call runs whose code carries ``# @cash:assume-safe``
+    (`code_carries_waiver`), trace the frames of the functions that carry
+    it on this thread, so the process settings a waived line, or a function
+    waived from its ``def`` line, changes are left out
+    (`process_registries.waive_since`) as its file writes are. A trace
+    function already set (a debugger, coverage) keeps running alongside,
+    and ``sys.gettrace()`` reads as that one meanwhile."""
+
+    __slots__ = ("_installed", "_replaced")
+
+    def __init__(self) -> None:
+        self._installed: Any = None
+        self._replaced: Any = None
+
+    def begin(self) -> None:
+        replaced = sys.gettrace()
+        if replaced is None:
+            installed: Any = _waiver_trace
+        else:
+
+            def installed(frame: Any, event: str, arg: Any) -> Any:
+                return _both(replaced(frame, event, arg), _waiver_trace(frame, event, arg))
+
+        process_registries.stand_in_trace(installed, replaced)
+        self._installed, self._replaced = installed, replaced
+        sys.settrace(installed)
+
+    def end(self) -> None:
+        installed = self._installed
+        if installed is None:
+            return
+        self._installed = None
+        # A trace function the body set since is the body's: left in place.
+        if sys.gettrace() is installed:
+            sys.settrace(self._replaced)
+        process_registries.drop_trace_stand_in(installed)
+        self._replaced = None
 
 
 def _env_write_waived() -> bool | None:
@@ -323,6 +488,12 @@ class EffectObserver:
         # (`norm_dir`): ``.cash_exports`` beside ``.cash`` is the user's.
         self._exclude = norm_dir(exclude_under) if exclude_under else None
         self._tokens: list[contextvars.Token] = []
+        #: The process settings as the call found them
+        #: (`process_registries.snapshot`), set by the decorator: a waived
+        #: stretch of the call is left out of them (`open_waiver`).
+        self.registries: Any = None
+        self._waiver_depth = 0
+        self._waiver_start: list[Any] | None = None
         #: A ``unittest.mock`` object was called while the block ran: the
         #: result may be a test's fake, and must not be stored as the answer.
         self.mock_called = False
@@ -399,6 +570,30 @@ class EffectObserver:
     def resume(self, token) -> None:
         reset_in_any_context(active_observer, token)
 
+    def open_waiver(self) -> None:
+        """A waived stretch of the call begins: a ``with cash.assume_safe():``
+        block, a line ``# @cash:assume-safe`` is on, a function it is on the
+        ``def`` line of (`WaiverTrace`). What the process settings change
+        until it ends is left out (`process_registries.waive_since`). Nested
+        stretches count as the outermost."""
+        self._waiver_depth += 1
+        if self._waiver_depth == 1 and self.registries is not None:
+            self._waiver_start = process_registries.read_registries()
+
+    def close_waiver(self) -> None:
+        """The stretch `open_waiver` began ends."""
+        if self._waiver_depth == 0:
+            return
+        self._waiver_depth -= 1
+        if self._waiver_depth == 0 and self._waiver_start is not None:
+            start, self._waiver_start = self._waiver_start, None
+            process_registries.waive_since(self.registries, start)
+
+    def drop_waivers(self) -> None:
+        """Forget a stretch still open as the call ends: not waived."""
+        self._waiver_depth = 0
+        self._waiver_start = None
+
     # -- recording ---------------------------------------------------------
     @property
     def effects(self) -> list[tuple[str, str]]:
@@ -442,6 +637,8 @@ class EffectObserver:
         """
         if waived_observer.get() is self:
             return
+        if self._frame_waived_on_way():
+            return
         sites = self._user_sites()
         if any(line_waived(filename, lineno) for filename, lineno in sites):
             return
@@ -476,8 +673,23 @@ class EffectObserver:
                     return False
             elif is_user_code_file(frame.f_code.co_filename):
                 seen_user = True
-                if line_waived(frame.f_code.co_filename, frame.f_lineno):
+                if line_waived(frame.f_code.co_filename, frame.f_lineno) or frame_waived(frame):
                     return True
+            frame = frame.f_back
+        return False
+
+    def _frame_waived_on_way(self) -> bool:
+        """Is a function of the user's inside the observed call, on the way
+        to the effect being recorded, waived from its ``def`` line?"""
+        stop = self._outer[-1] if self._outer else None
+        try:
+            frame = sys._getframe(2)
+        except ValueError:
+            return False
+        while frame is not None and frame is not stop:
+            found = code_waivers(frame.f_code)
+            if found is not None and found[1]:
+                return True
             frame = frame.f_back
         return False
 

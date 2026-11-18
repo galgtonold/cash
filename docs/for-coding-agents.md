@@ -83,12 +83,12 @@ the output it printed, so a print marker shows up either way. A cached
 5. **Side effects run on the first call only.** A purity warning is advisory.
    Put `# @cash:assume-safe` on each audited line, or wrap several in
    `with cash.assume_safe():`; `assume_safe=True` waives the whole function,
-   including anything added later. A change to a process setting
+   including anything added later. A call that changes a process setting
    (`np.seterr`, a logger's level, `warnings.simplefilter`, `sys.path`,
-   `atexit.register`) is not stored: such a call runs every time unless the
-   function has `assume_safe=True`; a line comment or a `with` block does not
-   waive it, except for an environment write (`os.environ`, `os.putenv`). In
-   a notebook, `# @cash:assume-safe` on the statement waives it.
+   `atexit.register`, `os.environ`) is not stored and runs every time unless
+   the change is waived where it is made: the comment on its line or the
+   `def` line, or a `with cash.assume_safe():` block around it. In a
+   notebook, `# @cash:assume-safe` on the statement waives it.
 6. **Verify with `f.explain(*args)`** (`[HIT]` / `[MISS]` and why) or
    `%cash_stats`. In a notebook, `f.cache_info()` resets whenever the defining
    cell re-runs.

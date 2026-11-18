@@ -28,11 +28,16 @@ Python raises to the hooks already installed: cash's own is,
 outside ``os.environ`` (their audit events).
 
 An environment write the user waived where it was made (``with
-cash.assume_safe():`` around it, ``# @cash:assume-safe`` on its line, as a
-file write is waived: `register_env_waiver`) is not counted, and the key it
-wrote is left out when ``os.environ`` is compared. Every write through
-``os.environ`` calls ``os.putenv`` or ``os.unsetenv``, so a later write of
-that key the user did not waive is still counted.
+cash.assume_safe():`` around it, ``# @cash:assume-safe`` on its line or on
+the ``def`` line of a function on the way, as a file write is waived:
+`register_env_waiver`) is not counted, and the key it wrote is left out when
+``os.environ`` is compared. Every write through ``os.environ`` calls
+``os.putenv`` or ``os.unsetenv``, so a later write of that key the user did
+not waive is still counted.
+
+What a waived stretch of a cached call changes in the other registries is
+left out the way an import's is: `read_registries` where the stretch
+begins, `waive_since` where it ends (`cash.effect_observer`).
 """
 
 from __future__ import annotations
@@ -54,13 +59,17 @@ __all__ = [
     "IMPORT_FINALIZERS",
     "IMPORT_STEP_CODE",
     "changed",
+    "drop_trace_stand_in",
     "finalizers_made",
     "importing",
+    "read_registries",
     "register_atexit",
     "register_env_waiver",
     "registering_imports",
     "snapshot",
+    "stand_in_trace",
     "unregister_atexit",
+    "waive_since",
 ]
 
 #: ``atexit`` callbacks cash registered (`register_atexit`): not the user's.
@@ -259,6 +268,28 @@ def _signals() -> tuple[Any, ...]:
     return tuple(map(_signal.getsignal, _SIGNALS))
 
 
+#: ``id(trace function) -> (it, the trace function it stands in for)``: one
+#: cash installs for a while (`stand_in_trace`), read as the one it replaced.
+_TRACE_STAND_INS: dict[int, tuple[Any, Any]] = {}
+
+
+def stand_in_trace(installed: Any, replaced: Any) -> None:
+    """Read ``sys.gettrace()`` as *replaced* while it is *installed*, a
+    trace function of cash's own (`drop_trace_stand_in` ends it)."""
+    _TRACE_STAND_INS[id(installed)] = (installed, replaced)
+
+
+def drop_trace_stand_in(installed: Any) -> None:
+    """Read ``sys.gettrace()`` as it is again once *installed* is gone."""
+    _TRACE_STAND_INS.pop(id(installed), None)
+
+
+def _trace() -> Any:
+    current = sys.gettrace()
+    stand_in = _TRACE_STAND_INS.get(id(current)) if _TRACE_STAND_INS else None
+    return stand_in[1] if stand_in is not None and stand_in[0] is current else current
+
+
 def _hooks() -> tuple[Any, ...]:
     return (
         sys.excepthook,
@@ -266,7 +297,7 @@ def _hooks() -> tuple[Any, ...]:
         sys.breakpointhook,
         sys.unraisablehook,
         threading.excepthook,
-        sys.gettrace(),
+        _trace(),
         sys.getprofile(),
         threading.gettrace(),
         threading.getprofile(),
@@ -536,16 +567,40 @@ def _load_unlocked(spec: Any) -> Any:
                 continue
             registered = True
             for each in watching:
-                start = each.before[index]
-                # Already where the import left it: another thread's import
-                # running meanwhile ended first and moved it on.
-                if not _same_read(index, start, old) and not _same_read(index, start, new):
-                    each.found.add(_REGISTRIES[index][0])
-                each.before[index] = new
+                _start_from(each, index, old, new)
         name = attribute_or(spec, "name", None)
         if registered and isinstance(name, str) and name in sys.modules:
             for each in watching:
                 each.imported.append(name)
+
+
+def _start_from(each: Snapshot, index: int, old: Any, new: Any) -> None:
+    """*each* starts registry *index* from *new*, which a stretch it does not
+    count (an import, a waiver) moved it to from *old*: a change of the
+    caller's own made before the stretch is noted first."""
+    start = each.before[index]
+    # Already where the stretch left it: another thread's import running
+    # meanwhile ended first and moved it on.
+    if not _same_read(index, start, old) and not _same_read(index, start, new):
+        each.found.add(_REGISTRIES[index][0])
+    each.before[index] = new
+
+
+def read_registries() -> list[Any]:
+    """Each registry as it is now, where a waived stretch of a call begins
+    (`waive_since`)."""
+    return _read()
+
+
+def waive_since(before: Snapshot, start: list[Any]) -> None:
+    """Leave out of *before* (`snapshot`) what the registries changed since
+    *start* (`read_registries`): a stretch of the call the user waived
+    (``with cash.assume_safe():``, ``# @cash:assume-safe``). What the call
+    changed before it, or changes after it, still counts."""
+    now = _read()
+    for index, (old, new) in enumerate(zip(start, now, strict=True)):
+        if not _same_read(index, old, new):
+            _start_from(before, index, old, new)
 
 
 def importing() -> bool:

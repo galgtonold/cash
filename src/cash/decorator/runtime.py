@@ -16,6 +16,7 @@ import pickle
 import sys
 import threading
 import time
+import types
 from collections.abc import Callable, Collection, Iterator
 from typing import TYPE_CHECKING, Any, NamedTuple
 
@@ -31,6 +32,7 @@ from ..backends._base import ttl_expired, written_at
 from ..canonical_form import WALKED_INDEXES
 from ..code_swaps import FOLDED_CODE, FoldedCode, function_sets, note_owner
 from ..dependency_state import STATE_LEDGER, ledger_note
+from ..effect_observer import WaiverTrace, code_carries_waiver
 from ..exceptions import (
     CashCacheIneffectiveWarning,
     CashCacheStoreFailedWarning,
@@ -2447,6 +2449,10 @@ class CallRunner:
         # And the registries the process keeps outside any variable: a hit
         # would not set ``np.seterr`` or a logger's level again.
         run.registries = process_registries.snapshot()
+        run.observer.registries = run.registries
+        # What a waived line, or a function waived from its ``def`` line,
+        # changes of them is left out: only for code that carries a waiver.
+        waiver_trace = WaiverTrace() if self._carries_waiver(spec) else None
         with run.tracker, run.observer:
             threads_at_start = THREADS_IN_CALLS[0]
             # What a call that picks code by name ran, for its trace. Begun
@@ -2466,7 +2472,14 @@ class CallRunner:
                 self._files.track_declared_files(run.tracker, spec)
                 self._files.track_scanned_files(run.tracker, args, kwargs)
                 with recording_env_reads() as run.env_reads, warning_state.recording() as run.warned:
-                    yield run
+                    if waiver_trace is not None:
+                        waiver_trace.begin()
+                    try:
+                        yield run
+                    finally:
+                        if waiver_trace is not None:
+                            waiver_trace.end()
+                        run.observer.drop_waivers()
             except Exception as exc:  # the user's body can raise anything; logged, then re-raised
                 self._calls.log_raised(func_name, exc, call.call_start)
                 raise
@@ -2934,13 +2947,31 @@ class CallRunner:
             "levels cash cannot read before they are; the next call keys their code"
         )
 
+    def _carries_waiver(self, spec: CachedFunction) -> bool:
+        """Does ``# @cash:assume-safe`` waive something in the code a call of
+        *spec* runs, as far as cash follows it (`code_functions`): its
+        misses then trace those functions (`WaiverTrace`)."""
+        if self._registry.purity_mode(spec.name) == "silent":
+            return False
+        for fn in self._registry.code_functions(spec.func, spec.name):
+            try:
+                code = getattr(inspect.unwrap(fn), "__code__", None)
+            except ValueError:  # a cycle of __wrapped__
+                continue
+            if isinstance(code, types.CodeType) and code_carries_waiver(code):
+                return True
+        return False
+
     def _refuse_registries(self, spec: CachedFunction, run: BodyRun) -> str | None:
         """Why a call that set a registry the process keeps is not stored:
         ``np.seterr(...)``, ``logging.getLogger("lib").setLevel(10)``,
         ``atexit.register(f)`` (`process_registries`). A hit would not set
         it again, and a new process would find it unset. Every later call
         of the function too, also one that finds it set already: it still
-        sets it. ``assume_safe=True`` waives it."""
+        sets it. ``assume_safe=True`` waives it, and so does a waiver where
+        the change is made: ``# @cash:assume-safe`` on its line or on the
+        ``def`` line of a function on the way, or a ``with
+        cash.assume_safe():`` block around it (`EffectObserver.open_waiver`)."""
         func_name = spec.name
         if self._registry.purity_mode(func_name) == "silent":
             return None
@@ -2957,8 +2988,9 @@ class CallRunner:
             f"@cash.cache on {func_name}: the call changed {what}, which no variable holds; a cache hit would "
             "not change it again (in a new process it would never be set), so calls run uncached.",
             code="IMPURE-OBSERVED-EFFECTS",
-            fix="make the setting outside the cached function; @cash.cache(assume_safe=True) caches the call "
-            "anyway if the setting does not matter.",
+            fix="make the setting outside the cached function. If it does not matter that a hit skips it, put "
+            "`# @cash:assume-safe` on the line that makes it (or on the `def` line), or `with "
+            "cash.assume_safe():` around it; @cash.cache(assume_safe=True) waives the whole function instead.",
         )
         return f"it changed {what}, which no variable holds and a hit would not change again"
 

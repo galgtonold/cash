@@ -998,17 +998,16 @@ mutation, return a modified copy instead. If the effect is incidental (a log
 file, a temp file), put `# @cash:assume-safe` on the line the message names, or
 run the code in `with cash.assume_safe():`.
 
-<!-- claim: cash/decorator/runtime.py:CallRunner._refuse_registries @a3042403, cash/tracking/process_registries.py:register_env_waiver @9b695bf5 -->
-A process setting is waived differently. Make it outside the cached function
-if you can. Otherwise only `@cash.cache(assume_safe=True)` caches a call that
-changes one (`np.seterr`, a logger's level, `atexit.register`): a
-`# @cash:assume-safe` comment, on the line or on the `def` line, and a
-`with cash.assume_safe():` block do not, and the call still runs every time.
-An environment write (`os.environ["MODE"] = "b"`, `os.putenv`) is the
-exception: a comment on its line or a `with cash.assume_safe():` block
-around it waives it, as it does a file write. In a notebook,
-`# @cash:assume-safe` on the statement that changes a process setting does
-cache it.
+<!-- claim: cash/decorator/runtime.py:CallRunner._refuse_registries @1938b99d -->
+A call that changes a process setting (`np.seterr`, a logger's level,
+`atexit.register`, `os.environ`) is not stored, and runs every time. Make
+the setting outside the cached function if you can. If a hit may skip it,
+waive it where it is made, as a file write: `# @cash:assume-safe` on its
+line or on the `def` line, or `with cash.assume_safe():` around it. A
+waiver around the call of the cached function does not reach into it
+([details](how-it-works/decorator-path.md#side-effects)). In a notebook,
+`# @cash:assume-safe` on the statement that changes a process setting
+caches it.
 
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @987ecb33 -->
 **When it is safe to ignore.** When everything listed is bookkeeping nobody
@@ -1018,8 +1017,8 @@ not prove the function is pure.
 **Silencing it.** Per line: `# @cash:assume-safe` on the line the message
 names (an argument mutation names no line). Per block:
 `with cash.assume_safe():` around the code that performs the effect. Whole
-function: `@cash.cache(assume_safe=True)`. A process setting other than an
-environment write is waived only by the whole-function form (above). See
+function: `@cash.cache(assume_safe=True)`. A process setting is waived the
+same ways (above). See
 [Silencing one code](#silencing-one-code).
 
 ### IMPURE-SCOPE-MUTATION {#impure-scope-mutation}
@@ -2859,7 +2858,7 @@ functools.partial(setattr, points[7])` made in a cell above. Cash cannot
 tell which variable changes before the statement runs, so it takes every
 variable as changed: what reads any of them after it runs again.
 
-<!-- claim: cash/tracking/process_registries.py:snapshot @bdd98c66, cash/notebook/statement/processor.py:StatementProcessor._refuse_process_registries @e3f710f2, cash/tracking/process_registries.py:registering_imports @f4d937d7, cash/decorator/runtime.py:CallRunner._refuse_registries @a3042403 -->
+<!-- claim: cash/tracking/process_registries.py:snapshot @bdd98c66, cash/notebook/statement/processor.py:StatementProcessor._refuse_process_registries @e3f710f2, cash/tracking/process_registries.py:registering_imports @f4d937d7, cash/decorator/runtime.py:CallRunner._refuse_registries @1938b99d -->
 It names, too, a statement that registers something with the process, in
 its own text or in a function or library it calls: `atexit.register(flush)`,
 `signal.signal(...)`, `sys.excepthook = hook`, `sys.setprofile(...)`,

@@ -978,14 +978,14 @@ did (a file written, a request sent, a line printed) does not happen again. On
 the first call, cash reads the function and its helpers and reports what a hit
 would skip or get wrong:
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @045afef4, cash/analysis/purity_policy.py:DECORATOR_POLICY @44b8bc03, cash/analysis/purity_report.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep", cash/decorator/runtime.py:CallRunner._refuse_registries @a3042403 -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @045afef4, cash/analysis/purity_policy.py:DECORATOR_POLICY @44b8bc03, cash/analysis/purity_report.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep", cash/decorator/runtime.py:CallRunner._refuse_registries @1938b99d -->
 | The body... | cash |
 |---|---|
 | Writes, posts, prints to stdout, or changes state outside the function | Warns ([`IMPURE-SIDE-EFFECTS`](warnings.md#impure-side-effects)) and caches |
 | Reads the network or a database (`requests.get`, `pd.read_sql`) | Warns ([`KEY-NETWORK-READ`](warnings.md#key-network-read)) and caches. `ttl=` answers it and silences the warning |
 | Reads the clock, a random UUID, or an environment variable by computed name | Warns ([`KEY-AMBIENT-READ`](warnings.md#key-ambient-read)) and caches the first value |
 | Reads an environment variable by literal name, the working directory, or the command line (`sys.argv`, `parser.parse_args()`) | Puts the value in the key. No warning |
-| Changes a setting the process keeps outside any variable: `np.seterr`, a library logger's level or handler, `warnings.simplefilter`, `os.environ`, `os.chdir`, `sys.path`, `atexit.register` | Warns ([`IMPURE-OBSERVED-EFFECTS`](warnings.md#impure-observed-effects)) and runs uncached, every time: a hit, or a new process, would leave the setting unmade. Only `@cash.cache(assume_safe=True)` caches it again: a `# @cash:assume-safe` comment, on the line or on the `def` line, and a `with cash.assume_safe():` block do not. An environment write (`os.environ`, `os.putenv`) is the exception: a comment on its line or a block around it waives it, as it does a file write ([details](how-it-works/decorator-path.md#side-effects)) |
+| Changes a setting the process keeps outside any variable: `np.seterr`, a library logger's level or handler, `warnings.simplefilter`, `os.environ`, `os.chdir`, `sys.path`, `atexit.register` | Warns ([`IMPURE-OBSERVED-EFFECTS`](warnings.md#impure-observed-effects)) and runs uncached, every time: a hit, or a new process, would leave the setting unmade. A waiver where the change is made caches it, as for a file write: `# @cash:assume-safe` on its line or on the `def` line, or a `with cash.assume_safe():` block around it ([details](how-it-works/decorator-path.md#side-effects)) |
 | Uses `eval`/`exec`, `importlib`, or `getattr(obj, name)()` with a computed name, or calls a function `exec`/`eval` built from a string (rules or formulas loaded from a file) | Warns ([`KEY-UNTRACKABLE-DEP`](warnings.md#key-untrackable-dep)) and runs uncached, because edits to that code can't be tracked; on Python 3.12+ a `getattr` or `importlib` lookup is cached on a checked record of the code it ran instead. `strict=True` raises `CashImpureFunctionError` |
 
 **When writing a file is part of the job** (a report, a thumbnail, a saved
@@ -1022,7 +1022,7 @@ property of an object of your class that the body reads by a global name
 (`BAG['k']`, `BAG.value`) is read as a helper: a global it changes is reported
 as one the body changes.
 
-<!-- claim: cash/effect_observer.py:EffectObserver @3de2afeb broad="the observed-effect contract is the class as a whole", cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @987ecb33, cash/effect_observer.py:EffectObserver.record_write @659fb0d2 -->
+<!-- claim: cash/effect_observer.py:EffectObserver @6fa7c0fb broad="the observed-effect contract is the class as a whole", cash/decorator/purity_checks.py:PurityChecks.report_observed_effects @987ecb33, cash/effect_observer.py:EffectObserver.record_write @659fb0d2 -->
 cash also **watches the first call**. Library code is not read, so a
 `session.post` or an SDK request is invisible to the analysis above.
 
@@ -1041,7 +1041,7 @@ Three observations stop the result from being stored, because a hit could not
 reproduce them: the call changed an argument in place that cash cannot write
 back ([which ones it can](decorator-limitations.md#results-cash-refuses-to-store)),
 it called a `unittest.mock` object, or it changed a setting the process keeps
-outside any variable (the table above; only `assume_safe=True` caches that). A call that only sets attributes on an
+outside any variable (the table above; a waiver where it is made caches that). A call that only sets attributes on an
 object it was handed, as an estimator's `fit` sets `self.coef_`, is stored
 with them, and a hit sets them again on the object you pass
 ([when](decorator-limitations.md#results-cash-refuses-to-store)).
@@ -1077,16 +1077,16 @@ names the line of the method it is about (`.to_csv(path)`), and the comment
 works there too.
 
 On the `def` line it covers findings about the whole body. In a helper it
-covers every caller of that helper. Neither placement waives a change to a
-process setting other than an environment write; only `assume_safe=True`
-does ([above](#side-effects)).
+covers every caller of that helper. A change to a process setting
+(`np.seterr`, a logger's level) is waived where it is made: on its line, in
+a function called from that line, or anywhere in a function with the comment
+on its `def` line ([details](how-it-works/decorator-path.md#side-effects)).
 
-<!-- claim: cash/analysis/annotations.py:assume_safe_block_lines @29dff9a1, cash/effect_observer.py:EffectObserver.record_effect @dce8a421, cash/source_norm.py:drop_waiver_blocks @358fa0bc -->
+<!-- claim: cash/analysis/annotations.py:assume_safe_block_lines @29dff9a1, cash/effect_observer.py:EffectObserver.record_effect @2f5ea303, cash/source_norm.py:drop_waiver_blocks @358fa0bc -->
 **Several lines at once.** Wrap them in `with cash.assume_safe():`. It waives
 what the comment waives, on every line inside the block. While the block runs,
 it also waives the effects cash observes, including those of helpers it calls.
-Like the comment, it does not waive a change to a process setting other than
-an environment write. It is code, so your editor completes it and a typo fails on the first run. Like
+That includes a change to a process setting made while it runs. It is code, so your editor completes it and a typo fails on the first run. Like
 the comment, it is not part of the key: adding or removing it keeps the stored
 results.
 

@@ -148,9 +148,9 @@ It also waives a change to a setting the process keeps outside any variable
 time: a hit, or a restarted kernel, leaves the setting unmade, so use it only
 when that does not matter. A statement that sets a logger's level still runs
 every time, since it changes the logger, an object cash cannot store, and so
-does an environment write. In a `@cash.cache` function the comment does not
-waive a process setting other than an environment write; only
-`assume_safe=True` does
+does an environment write. In a `@cash.cache` function the comment waives a
+change to a process setting made on its line, or anywhere in the function
+when it is on the `def` line
 ([which settings](how-it-works/decorator-path.md#side-effects)). It waives effects only: a statement that reads the
 clock or calls `input()` still runs every time, and so does one that
 changes in place an object cash cannot store. It applies to its own

@@ -289,7 +289,7 @@ side effects and still caches:
 - a clock read or a fresh UUID warns
   [`KEY-AMBIENT-READ`](../warnings.md#key-ambient-read).
 
-<!-- claim: cash/decorator/runtime.py:CallRunner._refuse_registries @a3042403, cash/tracking/process_registries.py:changed @8df4390a, cash/tracking/process_registries.py:register_env_waiver @9b695bf5 -->
+<!-- claim: cash/decorator/runtime.py:CallRunner._refuse_registries @1938b99d, cash/tracking/process_registries.py:changed @8df4390a, cash/tracking/process_registries.py:waive_since @d2426c38, cash/effect_observer.py:EffectObserver.open_waiver @8142c6ef -->
 While a miss runs, cash also compares the settings the process keeps
 outside any variable, such as NumPy's error handling and print options, a logger's
 level, handlers or filters, the warnings filters and how warnings are shown,
@@ -298,15 +298,29 @@ and `signal` handlers, `copyreg`, the working directory, the environment,
 matplotlib's `rcParams`, `decimal`'s context. A call that changed one is not
 stored, and the function runs every time from then on, with an
 [`IMPURE-OBSERVED-EFFECTS`](../warnings.md#impure-observed-effects) warning:
-a hit, or a new process, would leave the setting unmade. Only
-`@cash.cache(assume_safe=True)` caches such a call. A `# @cash:assume-safe`
-comment, on the line or on the `def` line, and a `with cash.assume_safe():`
-block do not waive it. An environment write (`os.environ["MODE"] = "b"`,
-`os.putenv`) is the exception: a comment on its line or a
-`with cash.assume_safe():` block around it waives it, as it does a file
-write. In a notebook, `# @cash:assume-safe` on the statement that changes a
-process setting does cache it
+a hit, or a new process, would leave the setting unmade.
+
+The waivers that accept a file write accept such a change too, with the
+same reach. `# @cash:assume-safe` on a line waives the changes that line
+makes, including in the functions it calls. On the `def` line it waives
+every change the function makes. A `with cash.assume_safe():` block waives
+the changes made while it runs. The call is then stored, and a hit skips
+the change. A change made outside every waiver still keeps the call from
+being stored, and so does a waiver around the call of the cached function:
+a waiver is the function's own word, written in its code or a helper's.
+`@cash.cache(assume_safe=True)` waives every change the function makes. In
+a notebook, `# @cash:assume-safe` on the statement that changes a process
+setting caches it
 ([what gets cached](../notebook_caching_api.md#what-gets-cached)).
+
+<!-- claim: cash/decorator/runtime.py:CallRunner._carries_waiver @2533857f, cash/effect_observer.py:WaiverTrace.begin @1b84d2c0 -->
+A comment on a line, or on the `def` line of a helper, is seen as the line
+runs: a miss of a function whose code, or a helper's that cash follows,
+carries the comment runs those functions under `sys.settrace` on its
+thread, alongside any trace function already set. A helper cash does not
+follow (one picked at run time) may run untraced, so a comment inside it
+may not waive a process setting; a comment on the line that calls it, or a
+`with cash.assume_safe():` block around the call, does.
 
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @045afef4 -->
 One case is not cached: a body that picks code from a run-time value

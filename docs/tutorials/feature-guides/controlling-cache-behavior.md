@@ -127,7 +127,8 @@ an object in place in a way cash cannot store, still runs every time. Add a
 It also waives a setting the process keeps that the statement changes, such as
 `np.seterr(...)` or `atexit.register(...)`: put it on such a statement only
 when a hit, or a restarted kernel, may leave the setting unmade. In a
-`@cash.cache` function only `assume_safe=True` waives such a setting
+`@cash.cache` function the comment waives such a setting made on its line,
+or anywhere in the function when it is on the `def` line
 ([which settings](../../how-it-works/decorator-path.md#side-effects)).
 
 ## Stop caching calls inside a statement: `no-cache-calls`

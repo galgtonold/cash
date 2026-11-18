@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- In a `@cash.cache` function, `# @cash:assume-safe` and
+  `with cash.assume_safe():` now waive a change to a process setting
+  (`atexit.register`, `np.seterr`, a logger's level or handler,
+  `warnings.simplefilter`, `sys.path`, `sys.setrecursionlimit`,
+  `signal.signal`, `os.chdir`, `rcParams`, `copyreg`,
+  `warnings.formatwarning` and the rest) as they waive a file write, so the
+  call is stored instead of running every time. The comment on a line waives
+  the changes that line makes, including in the functions it calls; on the
+  `def` line, every change the function makes, an environment write
+  included; the block, the changes made while it runs. A change outside
+  every waiver, or a waiver around the call of the cached function, still
+  keeps the call from being stored, and the warning now names these fixes.
+
 ## [0.15.0] - 2026-11-18
 
 This release caches work that used to run every time, and closes more gaps

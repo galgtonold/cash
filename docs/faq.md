@@ -90,8 +90,9 @@ link to the page that has the details.
     the call changed something a hit would not change again: an argument cash
     cannot write back, or a setting the process keeps outside any variable
     (`np.seterr`, a logger's level, `warnings.simplefilter`). The warning
-    names the line and the fix; for a process setting only
-    `assume_safe=True` waives it
+    names the line and the fix; a process setting is waived like a file
+    write, by the comment on its line or the `def` line, or a
+    `with cash.assume_safe():` block around it
     ([which settings](how-it-works/decorator-path.md#side-effects)).
 
 ??? question "Why does a cache hit not print anything?"

@@ -481,17 +481,16 @@ paths from the project root or pass absolute paths.
   the result holds it. Elsewhere a `for` loop may meet the items in another
   order than in the call that made it, and so may a set of strings in a new
   process, as in plain Python. Use `sorted(s)` where the order matters.
-<!-- claim: cash/decorator/runtime.py:CallRunner._refuse_registries @a3042403 -->
+<!-- claim: cash/decorator/runtime.py:CallRunner._refuse_registries @1938b99d -->
 - A call that changes a setting the process keeps outside any variable
   (`np.seterr`, a library logger's level, `warnings.simplefilter`,
   `os.environ`, `sys.path`) is not stored, and runs every time: a hit, or a
   new process, would leave the setting unmade
   ([`IMPURE-OBSERVED-EFFECTS`](warnings.md#impure-observed-effects)). Make
   the setting outside the cached function, or, when skipping it is fine,
-  pass `@cash.cache(assume_safe=True)`: a `# @cash:assume-safe` comment and
-  a `with cash.assume_safe():` block do not waive it, except for an
-  environment write
-  ([which settings](how-it-works/decorator-path.md#side-effects)).
+  waive it where it is made: `# @cash:assume-safe` on its line or on the
+  `def` line, or a `with cash.assume_safe():` block around it
+  ([which settings, and the waivers' reach](how-it-works/decorator-path.md#side-effects)).
 
 ## Generators and async functions
 
