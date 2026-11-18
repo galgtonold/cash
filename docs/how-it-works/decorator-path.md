@@ -332,9 +332,9 @@ call log and the warnings count such a hit like any other.
 
 A call is keyed in full, as above, when:
 
-- an argument is not a number, string, bytes, `None`, a tuple, or a small
-  list or dict of these, nor a large list or dict the extension already
-  watches;
+- an argument is not a number (a NumPy number such as `np.int64(3)`
+  counts), string, bytes, `None`, a tuple, or a small list or dict of
+  these, nor a large list or dict the extension already watches;
 - what the key reads holds a value no watcher covers: a list or set global,
   an instance of your own class, a random generator, an environment variable,
   a data source;

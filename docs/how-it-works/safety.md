@@ -98,10 +98,10 @@ statement is not cached.
 | numpy `out=` | `np.add(a, 1, out=a)` | Not cached, unless cash can write the new state back ([below](#method-calls)) |
 
 <!-- claim: cash/analysis/mutations.py:selfref_inplace_write_vars @c8102f53 -->
-The "Cached" rows hold only when the variable was made in the same cell. A
-variable that comes into the cell from above and is changed in place is reset
-to its value at the start of the cell, so the statement that changes it runs
-again. See
+A variable that comes into the cell from above and is changed in place is
+first put back to its value at the start of the cell when you re-run the cell,
+so the change is not applied twice. The statement is then served from the
+cache under the rules below. See
 [mutating an object created in an earlier cell](../known-limitations.md#mutating-an-object-created-in-an-earlier-cell).
 
 #### Method calls
