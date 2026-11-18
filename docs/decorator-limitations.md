@@ -53,6 +53,18 @@ somewhere else and you made writable is not seen, and the cached function
 returns its old result for the table: write through pandas
 (`df.loc[...] = ...`) instead.
 
+## A table served from memory
+
+<!-- claim: cash/backends/frame_sharing.py:_warn_at_write @3bda0831 -->
+Within one process, a pandas table a hit serves from memory shares its
+memory with the cache's copy, so pandas copies a column before you write
+into it. A NumPy array you took from the table before the write
+(`v = df["t"].to_numpy()`) then keeps the old values, where plain Python
+would show the new ones. cash warns at the write
+([`CACHE-SERVED-VIEW`](warnings.md#cache-served-view)). Take the array after
+the write, or copy the table first (`df = df.copy()`). A table read back
+from disk is your own and behaves as the one your code built.
+
 ## An argument that does not change the result
 
 <!-- claim: cash/core.py:Cash.cache @ef0577dc -->
@@ -259,6 +271,19 @@ to watch:
   function's own code counts, not the functions it calls. Name each function
   whose change matters.
 
+## Library settings before Python 3.12
+
+<!-- claim: cash/decorator/runtime.py:CallRunner._warn_settings_unseen @074f4377 -->
+On Python 3.12 and newer, cash checks the library settings a call read
+(`sklearn.set_config(...)`, `pd.set_option(...)`, `np.seterr(...)`, a
+`ContextVar`) before it serves the entry. Before 3.12, with `CASH_TRACE=0`,
+for an `async` function, or for code a returned iterator runs, it cannot see
+those reads: a call made after such a setting changed is served the result
+made under the old one. cash says so once per process
+([`KEY-LIBRARY-STATE-UNSEEN`](warnings.md#key-library-state-unseen)). Pass
+the setting in as an argument, or clear the function's entries after
+changing it.
+
 ## Reads cash cannot see
 
 <!-- claim: cash/tracking/reader_patches.py:_patch_multiprocessing_pool @9fac5b09, cash/tracking/reader_patches.py:_patch_process_pool_submit @a7865b21, cash/tracking/reader_patches.py:_patch_thread_start @1b59e2a1 -->
@@ -326,7 +351,9 @@ paths from the project root or pass absolute paths.
   strings and the like. A hit checks that the
   argument handed in is in the state the entry was stored from, then writes
   the stored state into that very object, so your other names for it and the
-  views of an array see the change. The cache key already holds such an
+  views of an array see the change
+  ([`CACHE-ARG-WRITTEN-BACK`](warnings.md#cache-arg-written-back) notes it).
+  The cache key already holds such an
   argument by its content, so the first call is stored and the next call
   with the same values is a hit; nothing is hashed a second time for it.
   A hit writes a frame's columns as the call did: into the column's own
@@ -441,9 +468,21 @@ paths from the project root or pass absolute paths.
     # test:inject: assert d.uns == {"total": 3}
     ```
 
-- A set in a result comes back with the same items, but a `for` loop may
-  meet them in a different order than in the call that made it: Python does
-  not keep a set's order. Use `sorted(s)` where the order matters.
+<!-- claim: cash/backends/set_order.py:restore @d4e04f7d -->
+- A set in a result comes back with the same items. With the
+  [C extension](getting-started/installation.md#the-c-fast-path) on CPython
+  3.12 to 3.14, it also iterates in the order the stored set did, wherever
+  the result holds it. Elsewhere a `for` loop may meet the items in another
+  order than in the call that made it, and so may a set of strings in a new
+  process, as in plain Python. Use `sorted(s)` where the order matters.
+<!-- claim: cash/decorator/runtime.py:CallRunner._refuse_registries @a3042403 -->
+- A call that changes a setting the process keeps outside any variable
+  (`np.seterr`, a library logger's level, `warnings.simplefilter`,
+  `os.environ`, `sys.path`) is not stored, and runs every time: a hit, or a
+  new process, would leave the setting unmade
+  ([`IMPURE-OBSERVED-EFFECTS`](warnings.md#impure-observed-effects)). Make
+  the setting outside the cached function, or, when skipping it is fine,
+  see [Side effects](decorator.md#side-effects).
 
 ## Generators and async functions
 
