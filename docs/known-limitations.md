@@ -107,6 +107,16 @@ isolated re-run:
   be saved and put back, so a cache hit leaves it where it was. Put
   `# @cash:no-cache` above such draws when later draws must match a clean run.
 
+<!-- claim: cash/notebook/upstream/rng_rewind.py:RngRewind._warn_not_restored @b1e4daf3 -->
+A global stream (`np.random`, `random`, `torch`) is put where a run from the
+top has it before a cell draws: by a position cash recorded, by the position
+a restored result left, or by running a bare `seed(...)` call again. When the
+statement above that last moved the stream also does other work, cash does
+not run it again for the stream alone. The draw then starts from where the
+stream stands, and cash warns
+[RANDOM-STREAM-UNRESTORED](warnings.md#random-stream-unrestored). **Fix:** run
+the notebook from the top, or seed the stream in the cell before it draws.
+
 To silence the warning everywhere, filter it:
 
 ```python
@@ -213,17 +223,26 @@ last one, as a plain re-run does, and says so with
 
 <!-- test:skip reason="illustrative: in-place changes to a frame from an earlier cell" -->
 ```python { .nb-cell }
-# df came from an earlier cell
+# df and rows came from an earlier cell
 df["score"] = expensive(df)            # cached
+rows.append(expensive(df))             # cached: a hit refills rows
 # runs every time, but expensive(df) is cached
 df.insert(1, "rank", expensive(df))
 ```
 
+<!-- claim: cash/rewrite_in_place.py:refusal @cece1b9e, cash/rewrite_in_place.py:mismatch @a0f73ac9, cash/notebook/statement/in_place.py:refusal @8cccfaec -->
 A new column assigned to a frame from an earlier cell (`df["score"] = ...`) is
-cached like any other statement. A statement that changes such an object
-through a method (`df.insert(...)`, `lst.append(...)`) runs every time, but a
-slow call inside it is cached on the values it is handed, `df` included, so
-only the cheap change itself repeats. When
+cached like any other statement. So is a statement that changes such an object
+through a method, when the object is a NumPy array (not of objects), a pandas
+frame or Series that keeps its index, columns and dtypes, or a list, dict or
+set of plain values (`rows.append(...)`, `d.update(...)`, `W, H = fit_nmf(X, k)`
+with `fit_nmf` writing into `X`). The entry keeps the state the statement left
+the object in, and a hit writes that state into the object the name holds, so
+it stays the same object and other names for it see the change. Any other
+change through a method (`df.insert(...)` adding a column, `lst.append(...)` on
+a list of lists) runs every time, but a slow call
+inside it is cached on the values it is handed, `df` included, so only the
+cheap change itself repeats. When
 another variable holds that object too (`d = dfs[0]`, `b = a`), directly or in
 a list, dict, `deque`, `UserDict`, object array or attribute of one (a
 `__slots__` attribute too), or the result holds an object that already
@@ -915,7 +934,7 @@ then checked before every cell, which is slower for many files.
 
 ### A long `for`-append loop can stop caching
 
-<!-- claim: cash/notebook/control_structures/single_unit_policy.py:should_run_as_single_unit @54928083, cash/notebook/control_structures/single_unit_policy.py:MIN_ITERATIONS_FOR_SINGLE_UNIT == 50, cash/notebook/control_structures/single_unit_policy.py:PER_STMT_OVERHEAD_SEC == 0.008, cash/notebook/control_structures/single_unit_policy.py:MIN_OVERHEAD_SEC == 1.0, cash/notebook/control_structures/single_unit_policy.py:ASSUMED_INNER_ITERATIONS == 10 -->
+<!-- claim: cash/notebook/statement/in_place.py:refusal @8cccfaec, cash/notebook/control_structures/single_unit_policy.py:should_run_as_single_unit @54928083, cash/notebook/control_structures/single_unit_policy.py:MIN_ITERATIONS_FOR_SINGLE_UNIT == 50, cash/notebook/control_structures/single_unit_policy.py:PER_STMT_OVERHEAD_SEC == 0.008, cash/notebook/control_structures/single_unit_policy.py:MIN_OVERHEAD_SEC == 1.0, cash/notebook/control_structures/single_unit_policy.py:ASSUMED_INNER_ITERATIONS == 10 -->
 cash caches a `for` loop per iteration. A long loop is run as one unit instead
 when all three hold: more than about 50 iterations of known length (a loop
 inside the body counts each iteration ten times, as it usually runs about that
@@ -924,8 +943,10 @@ often per pass), per-statement bookkeeping estimated above one second (about
 and no file write, move or delete written in the loop body. A loop that only
 reads files qualifies: the unit depends on every file and folder it read, so
 an edited, added or deleted file runs it again. A loop that appends to a list
-is an in-place change, so as one unit it is not cached at all. The badge row
-then shows `In-place mutation on: out`. A shorter loop runs pass by pass:
+is an in-place change: as one unit, it is stored with the list it filled, and
+a hit refills that same list. A list cash cannot refill safely (one holding
+itself, or too many objects to check) is not cached as one unit, and the badge
+row then shows `In-place mutation on: out`. A shorter loop runs pass by pass:
 each `append` runs, and the expensive call inside it comes from the cache.
 
 <!-- claim: cash/notebook/heavy_loops.py:is_heavy @908c4eba, cash/notebook/heavy_loops.py:HEAVY_FACTOR == 4, cash/notebook/heavy_loops.py:MIN_HEAVY_ITER_SEC == 0.01, cash/notebook/heavy_loops.py:header_identity @ba179718, cash/notebook/heavy_loops.py:HeavyLoopStore._find @d8473e07, cash/notebook/control_structures/for_handler.py:ForLoopHandler._prefers_iterations @b5475b31 -->
@@ -1044,6 +1065,14 @@ JupyterLab's autosave runs on a timer, so a quick edit-then-run can miss it. Whe
 the cell you run is itself unsaved, cash can tell and adds a "Notebook file is
 stale" warning row.
 
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._warn_unplaced @88641af4 -->
+A new cell that is not saved yet, or one whose edit is not saved, is not in
+the notebook file at all. cash then cannot tell which cells are above it, so
+it does not check them: an edit above that has not run since does not reach
+the cell. cash says so with
+[NOTEBOOK-CELL-UNPLACED](warnings.md#notebook-cell-unplaced), once per cell
+text. **Fix:** save, and run the cell again.
+
 <!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._as_run @73be869e, cash/notebook/upstream/checker.py:UpstreamChecker._refuse_to_undo @bc9c4f06 -->
 A cell you ran with an unsaved edit is not undone by the cells below it. When
 the frontend sends cell ids, cash reads that cell as it ran until the file
@@ -1108,13 +1137,18 @@ default argument or base class does. **Fix:** move the binding above this cell.
   after a restore can write a file a few bytes off from the one plain Python
   writes, which loads to the same model. Compare such files by loading them,
   not by their bytes or a checksum.
-- **A restored set may loop in a different order.** A set holds the same
-  items after a restore, but the order a `for` loop meets them in can differ
-  from the run that made it: Python does not keep a set's order, and a set
-  rebuilt from its items lays them out afresh (`copy.deepcopy` and
-  multiprocessing do the same). Results are equal; only code that depends on
-  that order sees a difference, such as the key order of a dict built by
-  looping over the set. Use `sorted(s)` where the order matters.
+<!-- claim: cash/backends/set_order.py:restore @d4e04f7d, cash/backends/set_order.py:record @4ef5b353, cash/backends/set_order.py:MAX_NODES == 5_000_000 -->
+- **A restored set may loop in a different order.** A set rebuilt from its
+  items (read back from the cache, `copy.deepcopy`, multiprocessing) lays them
+  out afresh, so a `for` loop can meet them in another order than in the run
+  that made it. cash notes where each item sat when it stores a value and puts
+  the items back there on a hit, so a restored set iterates as the stored one
+  did. That needs Python 3.12 to 3.14 with cash's C extension, and a value of
+  at most 5 million objects. Elsewhere, and for a set of strings read in
+  another process (strings hash differently in each one), the restored set
+  keeps the order the rebuild gave it. Results are equal; only code that
+  depends on that order sees a difference, such as the key order of a dict
+  built by looping over the set. Use `sorted(s)` where the order matters.
 - **Equal sets of strings that iterate in different orders share an
   entry.** Strings hash differently in every Python process, so cash keys
   a set of strings by its items alone, never by its order; only the
