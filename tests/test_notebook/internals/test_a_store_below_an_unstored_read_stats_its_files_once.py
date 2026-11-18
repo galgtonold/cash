@@ -203,15 +203,27 @@ def test_an_entry_below_goes_stale_when_an_inherited_file_changes(cash_magics, c
     assert cash_magics.shell.user_ns["b"][123] == "PHO", "the edit was not seen"
 
 
-def test_a_statement_too_cheap_to_store_below_takes_no_stat_of_the_files(cash_magics, photos, store_stats):
+CHEAP = "Y = X[:]"
+
+
+def test_a_statement_too_cheap_to_store_below_takes_no_stat_of_the_files(cash_magics, photos, store_stats, monkeypatch):
     """``positive_patches = faces.images`` below the unstored read stores
     no entry: the records of the read's files are not taken for it, which
     cost the cell that read 13,000 photos a stat of each."""
+    # The floor is asked of the wall clock, and a stall on a busy runner
+    # carried the copy past it, stored and so rightly stat'ed: it is asked
+    # of no time at all here, through every other check of the gate.
+    real = StatementStore._too_cheap_to_store
+
+    def too_cheap(self, run, execution, seconds):
+        return real(self, run, execution, 0.0 if run.code == CHEAP else seconds)
+
+    monkeypatch.setattr(StatementStore, "_too_cheap_to_store", too_cheap)
     for cell in CELLS[:2]:
         run_cash_cell(cash_magics, cell, cells=CELLS)
     store_stats()
 
-    cells = [*CELLS[:2], "Y = X[:]", f"e = ({WAIT}, [len(y) for y in Y])[1]"]
+    cells = [*CELLS[:2], CHEAP, f"e = ({WAIT}, [len(y) for y in Y])[1]"]
     run_cash_cell(cash_magics, cells[2], cells=cells)
     assert store_stats() <= FILES // 4, "the store of a statement too cheap to keep stat'ed the files"
     assert not cash_magics._cash_instance.backend.peek_metadata(cash_magics.tracking_state.variable_sources["Y"])
