@@ -320,8 +320,10 @@ Then:
 
 - Cached functions and statements that change a process setting
   (`np.seterr`, a logger's level, `warnings.simplefilter`, `os.putenv`) now
-  run every time; if skipping the setting on a hit is fine, add
-  `# @cash:assume-safe` on the line the warning names, or `assume_safe=True`.
+  run every time. If skipping the setting on a hit is fine: in a notebook,
+  add `# @cash:assume-safe` to the statement; for a decorated function, put
+  `# @cash:assume-safe` on its `def` line, wrap the setting change in
+  `with cash.assume_safe():`, or pass `assume_safe=True`.
 - If a notebook's file checks misbehave (a write through a memory map by
   another process, a file another program keeps open on Windows), set
   `CASH_FILE_WATCH=0` before starting the kernel to check every file before
