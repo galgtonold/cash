@@ -66,7 +66,8 @@ for example a read from a live source:
 live = fetch_price("AAPL")     # runs every time, nothing stored
 ```
 
-The badge shows a plain `EXECUTED` row. It also gives a random draw a new value
+The badge shows a plain `EXECUTED` row, whose detail says it is marked
+`no-cache`. It also gives a random draw a new value
 each run (see [Randomness](../../known-limitations.md#randomness)).
 
 `no-cache` applies only while the comment is there, and it leaves an entry
@@ -118,8 +119,14 @@ session = SearchSession()
 hits = session.post("https://search.example.com", json={"q": "cash"})
 ```
 
-It waives the side effect only; a statement that changes an object in place or
-reads the clock still runs every time. Add a `ttl` when the answer can go stale.
+It waives the side effect only; a statement that reads the clock, or changes
+an object in place in a way cash cannot store, still runs every time. Add a
+`ttl` when the answer can go stale.
+
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._refuse_process_registries @e3f710f2 -->
+It also waives a setting the process keeps that the statement changes, such as
+`np.seterr(...)` or a logger's level: put it on such a statement only when a
+hit, or a restarted kernel, may leave the setting unmade.
 
 ## Stop caching calls inside a statement: `no-cache-calls`
 

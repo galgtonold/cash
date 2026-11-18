@@ -117,9 +117,11 @@ After a `cash clear`, restart the kernel. See the [CLI reference](../../cli.md).
 ### A cell I did not change runs again
 
 Open the row. `FUNC CHANGED`, `MODULE RELOADED` and "file changed" name the
-cause. "Input lineage changed" means an upstream statement ran again: open that
-row to see why. An `unstable key` row means something upstream runs on every
-run. If the badge names nothing, compare the `[CACHE_KEY]` lines of two runs.
+cause, and the row's **Miss** line says what changed since its last run, such
+as `input changed: df`. A changed input means an upstream statement ran again:
+open that row to see why. An `unstable key` row means something upstream runs
+on every run. If the badge names nothing, compare the `[CACHE_KEY]` lines of
+two runs.
 
 ### A cell I changed still shows the old result
 
@@ -132,8 +134,9 @@ it. To start over, run `!cash clear --all` and restart the kernel.
 ### Nothing seems to be cached
 
 - The work is in the `%cash_on` cell. Nothing there is cached; move it down.
-- The statements are under 10 ms. They show plain `EXECUTED` rows and appear in
-  `%cash_stats` as "too cheap to cache".
+- The statements are under 10 ms. They show plain `EXECUTED` rows, whose
+  detail says how long they took, and appear in `%cash_stats` as "too cheap
+  to cache".
 - The rows say `NOT CACHED`: the reason names a side effect or an in-place
   change. See [What gets cached](../../notebook_caching_api.md#what-gets-cached).
 - `%cash_stats` shows discarded writes.

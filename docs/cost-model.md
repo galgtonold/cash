@@ -83,8 +83,12 @@ when restoring both is predicted to cost less than running the statement.
 
 ## What the badge shows
 
-A statement under 10 ms shows as a plain `EXECUTED` row with no reason: nothing
-was stored, so there is nothing to explain.
+<!-- claim: cash/notebook/statement/store.py:StatementStore._too_cheap_to_store @a1023f2e, cash/notebook/statement/unstored.py:MEMORY_ONLY @792ec258 -->
+A statement under 10 ms shows as a plain `EXECUTED` row. When it runs again,
+its detail says why it was not stored: `it took 0.2 ms, under the 10 ms a
+statement must take to be stored`. A statement over 0.1 s that was kept in
+memory only says so after a restart: `it was kept in memory only when it
+last ran (not worth the disk it would take), and a restart clears memory`.
 
 When a value is too big to be worth storing, the row detail (and the text badge)
 gives the arithmetic:
@@ -226,8 +230,8 @@ flowchart TB
 2. **Write it to disk?** Only when the compute time is over
    0.1 s, reading the value back from disk beats computing it by
    `min_cache_savings_pct`, and one re-run saves more than the write takes
-   ([the write](#the-write)). A value that fails stays in memory, with no
-   reason shown.
+   ([the write](#the-write)). A value that fails stays in memory; after a
+   restart, its row says it was kept in memory only.
 3. **Worth its bytes?** At most 128 MiB of disk per second of
    compute saved, as above.
 
