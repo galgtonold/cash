@@ -29,21 +29,28 @@ flowchart TB
     R2 --> BD
 ```
 
-<!-- claim: cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell @179a3816, cash/notebook/statement/processor.py:StatementProcessor.process_statement @7132c6f2 -->
+<!-- claim: cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell @179a3816, cash/notebook/statement/processor.py:StatementProcessor.process_statement @7132c6f2, cash/notebook/upstream/checker.py:UpstreamChecker._put_back @38708141, cash/notebook/statement/mutation_routing.py:MutationRouting._store_in_place @b4f1f1e6, cash/notebook/statement/last_runs.py:LastRuns.reason @f57e2525 -->
 1. **Inputs.** cash reads from the cell's source which variables it uses.
 2. **Upstream check.** If an input is missing (after a restart) or a cell above
    it was edited, cash works out from the notebook's code which statements
    above are out of date, restores what is still valid and re-runs the rest.
    [Knowing when to recompute](invalidation.md#upstream-simulation) explains
-   how.
+   how. When a statement above cannot be re-run as a run from the top would
+   run it, cash puts back what it rebound and runs the cell as written, on
+   the values in memory, uncached, with
+   [NOTEBOOK-REPAIR-GAP](../warnings.md#notebook-repair-gap).
 3. **Statements.** cash splits the cell into statements. For each one it
    decides whether it is safe to cache
    ([knowing when not to cache](safety.md)). If it is, cash builds its
    [key](cache-keys-and-lineage.md) and looks it up: a hit restores the
    variables and replays the output; a miss runs the statement and stores the
-   result. A statement that is not safe to cache runs without a lookup.
+   result. A statement that changed an earlier cell's array, frame or list in
+   place is stored with the object's new state, and a hit writes that state
+   back into the object. A statement that is not safe to cache runs without a
+   lookup.
 4. **Badge.** cash prints a badge with one row per statement: `CACHED`,
-   `EXECUTED`, `NOT CACHED` (with the reason) or `SKIPPED`.
+   `EXECUTED` (with what changed since its last run), `NOT CACHED` (with the
+   reason) or `SKIPPED`.
    [Reading the badge](../badges.md#statuses) lists every status.
 
 cash caches statements rather than whole cells so that editing one line keeps
@@ -187,7 +194,7 @@ Only a list, a dict, a set, an object of your own class pickled the default
 way, or a NumPy array, DataFrame or Series a call in the loop changes (as for
 [a statement](safety.md#method-calls)) is restored into. An object of another
 kind the loop only assigns into
-(`arr[i] = v` on a NumPy array) is bound to the stored copy, as before, when
+(`arr[i] = v` on a NumPy array) is bound to the stored copy, as any output is, when
 nothing the notebook holds points at it by a `weakref` or its `id()`, asked
 again at each restore. The
 loop runs again when an object it changes in place is of another kind,
@@ -212,7 +219,7 @@ interpreter's, that is `sys.stdout` or `sys.stderr` when it is stored is
 stored as that name, and a restored bar writes to the output of the kernel it
 is restored in, as a bar made there would. A lock an object keeps for itself
 is stored as a new free lock when no one holds it. Neither is keyed: a cached
-function given one runs and warns as before. A bar on any other file (also a
+function given one still runs and warns. A bar on any other file (also a
 file of yours bound to `sys.stdout` as the bar is made), a held lock, and a
 bar whose parts hold the bar itself (tqdm's) are not stored, and the loop runs
 again, with the reason in the badge.

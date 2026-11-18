@@ -88,14 +88,17 @@ Results that took longer than 0.1 s are usually on disk already.
 
 <!-- claim: cash/analysis/cacheability_decision.py:cacheability_verdict @19feb564 -->
 The statement runs every time and nothing is stored, including the calls inside
-it. The badge shows a plain `EXECUTED` row. A statement below that reads its
-result is cached as usual and computed again when the value changes.
+it. The badge shows an `EXECUTED` row whose reason reads `marked # @cash:no-cache,
+so it runs every time`. A statement below that reads its result is cached as
+usual and computed again when the value changes.
 
 Use it for what cash cannot see for itself: a read whose answer must be fresh
 every run (a GET for a live price), a helper with an effect hidden from cash, or
 a helper that reads the clock. You do not need it for file writes, POSTs,
-`datetime.now()` or plots written in the statement: cash already runs those every
-time. See [What gets cached](notebook_caching_api.md#what-gets-cached).
+`datetime.now()` or a change to a process setting (`np.seterr`, a logger's
+level) written in the statement: cash already runs those every time. A plot is
+drawn again whenever its inputs or matplotlib's settings change. See
+[What gets cached](notebook_caching_api.md#what-gets-cached).
 
 `no-cache` also gives a random draw a fresh value each run; see
 [Randomness](known-limitations.md#randomness).
@@ -137,10 +140,17 @@ and a hit returns the stored answer without sending the request:
 hits = session.post(SEARCH_URL, json=query).json()   # @cash:assume-safe
 ```
 
-It waives side effects only. A statement that changes an object in place, reads
-the clock or calls `input()` still runs every time. It applies to its own
-statement, even at the top of a cell. Add `# @cash:ttl=N` when the answer can go
-stale.
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._refuse_process_registries @e3f710f2, cash/tracking/process_registries.py:register_env_waiver @9b695bf5 -->
+It also waives a change to a setting the process keeps outside any variable
+(`np.seterr(...)`, `logging.getLogger("lib").setLevel(10)`,
+`warnings.simplefilter(...)`, `os.putenv(...)`), which otherwise makes the
+statement run every time. Use it there only when skipping the setting on a
+hit, or after a restart, does not matter.
+
+It waives effects only. A statement that changes an object in place in a way
+cash cannot write back, reads the clock or calls `input()` still runs every
+time. It applies to its own statement, even at the top of a cell. Add
+`# @cash:ttl=N` when the answer can go stale.
 
 <!-- claim: cash/analysis/annotations.py:get_statement_annotations @7fbe4d48, cash/analysis/annotations.py:is_assume_safe_block @e4c86526 -->
 In a cell, use this comment rather than `with cash.assume_safe():`, the form

@@ -61,7 +61,10 @@ result = daily.rolling(7).mean()   # edit: only this runs again
   for `%autoreload`.
 - **Files you read are tracked.** Change a file read through `pd.read_csv`,
   `np.load`, `open` or another [tracked reader](how-it-works/invalidation.md#what-counts-as-a-change),
-  and the statements that read it run again.
+  and the statements that read it run again. On Linux and Windows cash
+  watches the folders of those files, so a cell does not wait for a check of
+  every file before it runs
+  ([where it cannot](known-limitations.md#many-files-read-where-no-folder-is-watched)).
   <!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @fa9f8714 -->
   A polars scan in one cell (`lf = pl.scan_parquet("data/*.parquet")`) and
   its `.collect()` in a later one count too: a changed or added file runs both
@@ -103,7 +106,7 @@ Some statements always run, because a cache hit would skip something that has to
 happen or would freeze a value that has to change. Others are cached although
 they talk to the outside world.
 
-<!-- claim: cash/notebook/pyplot_state.py:pyplot_state @2ff00995, cash/analysis/file_effects.py:NOTEBOOK_POLICY @5ffd29f3, cash/notebook/consumables.py:drawn_stream_inputs @4b74ed91, cash/notebook/shared_objects.py:shared_names @f3939b22, cash/notebook/shared_objects.py:share_group @120f06ea, cash/notebook/lineage_formula.py:keep_held_lineage @85b3ea17, cash/notebook/shared_objects.py:output_history @5816a6e5, cash/analysis/mutation_effects.py:captured_call_receivers @976a2a6a, cash/notebook/consumables.py:watched_call_receivers @1fefab60, cash/analysis/namespace_effects.py:user_callee_using_pyplot @4fba2d2a, cash/notebook/anchors.py:resolve_anchors @7b88094e -->
+<!-- claim: cash/notebook/pyplot_state.py:pyplot_state @2ff00995, cash/analysis/file_effects.py:NOTEBOOK_POLICY @5ffd29f3, cash/notebook/consumables.py:drawn_stream_inputs @4b74ed91, cash/notebook/shared_objects.py:shared_names @f3939b22, cash/notebook/shared_objects.py:share_group @120f06ea, cash/notebook/lineage_formula.py:keep_held_lineage @85b3ea17, cash/notebook/shared_objects.py:output_history @5816a6e5, cash/analysis/mutation_effects.py:captured_call_receivers @976a2a6a, cash/notebook/consumables.py:watched_call_receivers @1fefab60, cash/analysis/namespace_effects.py:user_callee_using_pyplot @4fba2d2a, cash/notebook/anchors.py:resolve_anchors @7b88094e, cash/notebook/statement/processor.py:StatementProcessor._refuse_process_registries @e3f710f2 -->
 | A statement that... | What cash does |
 |---|---|
 | writes a file (`open(p, "w")`, `df.to_csv`, `fig.savefig`), directly or through a function you wrote (in the notebook or your own module) | runs every time |
@@ -118,6 +121,7 @@ they talk to the outside world.
 | sets state on one of your modules (`mylib.K = slow()`, `metrics.increment(5)` adding to a counter the module keeps, the same function handed to a call as `s.apply(metrics.increment)`, `importlib.reload(mylib)`) | runs every time |
 | hands a call a function of yours that changes state (`s.apply(ops["dbl"])` appending to a list, `s.apply(tracker.record)` changing `tracker`, `run_steps([f], data)`) | runs every time, as calling it by name does |
 | changes an environment variable or the working directory (`os.environ["MODE"] = "b"`, `os.chdir(d)`), itself or in a function of yours it calls | runs every time; after a kernel restart it runs again before a cell below it you run on its own |
+| changes a setting the process keeps outside any variable (`np.seterr(...)`, a logger's level or handler, `warnings.simplefilter(...)`, `sys.setrecursionlimit(...)`, `atexit.register(...)`, `signal.signal(...)`, `os.putenv(...)`), itself or in a function it calls | runs every time: a hit, or a restarted kernel, would leave the setting unmade. Mark it [`# @cash:assume-safe`](annotations.md#cashassume-safe) when skipping the setting on a hit does not matter |
 | reads from an iterator or open file held in a variable (`next(rows)`, `fh.readline()`, `islice(src, 3)`) | runs every time: a hit would not move the iterator on; a slow call inside it is still cached |
 | keeps or changes an object another variable also holds, directly or in a list, dict or attribute of one (`models = {"m": m}`, `a["x"] = ...` after `b = a`, `d["a"] = ...` after `d = dfs[0]`) | cached together with those variables: a hit restores them as one object graph, so `models["m"] is m` and `dfs[0] is d` again. A method bound to it counts as holding it (`hooks = {"log": tracker.log}`). When something else holds it (a closure, a library's module or registry, a pandas `.attrs`), when it is held through a closure or a builtin method (`hooks = {"add": results.append}`), or in a loop body (`for d in dfs:`), it runs every time: a restored copy would not be that object. The exception is an object a variable holds that the statement leaves as it was (`grid_search.fit(X, y)` keeps `full_pipeline` as it is): the entry keeps it as that variable, a hit binds the live object, which everything else still holds, and the statement runs when that variable's content, or which object another variable shares with it, changed. A NumPy slice of another array the statement reads and keeps as it is (`knn.fit(X_train, y)` keeps `X_train = X[:1000]` itself) is kept the same way, checked by its content: a hit binds the live `X_train`, which still shares memory with `X`. A read-only view of an input's data that a kept value holds (a fitted model keeping `y.to_numpy()`) is stored as its place in that data: a hit builds it on the live input again. IPython's output history (`Out`, `_`) holding a value you displayed does not count. A variable the statement leaves as it was keeps its place, so what is built on it is still served (`pre.fit_transform(X)` fits clones of the `cat_pipeline` that `pre` holds) |
 | keeps what a method returns and the call changed the object it was called on (`history = net.fit(X)`, `out = trainer.train()`) | runs every time; cash watches the object around the statement's first run, and one it cannot pickle counts as changed. An iterator, queue or open file is left to the iterator row, so `n = q.qsize()` is cached |
@@ -191,7 +195,7 @@ branch) or delete one (`del tmp`), itself or through a helper of yours
 `fig` and `ax` are there afterwards as in a run from the top; only a module
 it imports (`import seaborn as sns`) is bound again, while that module is
 imported.
-It is also drawn again, as before, when:
+It is also drawn again when:
 
 - the cell's last line echoes a figure, axes or other matplotlib object
   (`ax.set_title(...)`, `plt.plot(...)` without a `;` or `plt.show()`), or a
@@ -248,12 +252,15 @@ fits the already fitted model, so it runs again too.
 
 ## After a restart
 
+<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.pays_for_its_write @fee6df3b -->
 The cache is on disk, so a fresh kernel picks up where you left off. Run a cell
 after a restart and cash restores its inputs from the cache instead of running
 the cells that built them, after checking that the code and files behind them
 have not changed. Two thresholds decide what is there to restore: a
 statement under 10 ms is not cached at all, and one under 0.1 s is kept in
-memory only, so both run again after a restart.
+memory only, so both run again after a restart. A value is also kept in
+memory only when writing it to disk would take longer than one re-run that
+reads it back saves.
 [Restarts and persistence](tutorials/feature-guides/smart-persistence.md) has the
 details, and the [cost model](cost-model.md) has the exact rules.
 

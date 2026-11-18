@@ -49,6 +49,18 @@ unless its own settings rule a draw out: `Ridge()` uses the seed only with
 `'liblinear'`, `Lasso()` only with `selection='random'`, `SVC()` only with
 `probability=True`.
 
+<!-- claim: cash/notebook/upstream/rng_rewind.py:RngRewind._warn_not_restored @b1e4daf3, cash/notebook/statement/processor.py:StatementProcessor._refuse_entropy_seed @02888d14 -->
+When cash re-runs or restores statements above a cell to bring it up to
+date, it puts each global stream where a run from the top has it at each
+draw: by a position it recorded, by the position a restored result left, or
+by running a bare `seed(...)` line again. It never runs a whole cell again
+for the stream alone. When none of these is possible, the draw starts from
+where the stream stands, and cash warns
+[RANDOM-STREAM-UNRESTORED](warnings.md#random-stream-unrestored). A statement
+that seeds from the system's entropy (`np.random.seed()` or `random.seed()`
+with no argument) is never served from the cache, so the draws after it
+change on every run, as in plain Python.
+
 | You want | Do this |
 |---|---|
 | A new draw every run | `# @cash:no-cache` on the statement, on the line above it or at the end of its line. The draw then continues the stream from where it stood before cash rewound it, so it changes every run, also below a frozen draw. |
@@ -185,7 +197,8 @@ A loop that changes the items it walks (`for r in rows: r.append(0)`) changes
 `rows`. A pyplot call that draws on the current figure (`plt.plot(...)`,
 `plt.title(...)`) changes the names bound to that figure and its axes, or to a
 list, tuple or dict holding them (`figs = {"main": plt.figure()}`); such a
-call runs every time.
+call is not stored on its own. A whole plot whose inputs did not change can
+still be [shown from the cache](notebook_caching_api.md#plots-shown-from-the-cache).
 
 A change made through an object cash cannot link to a name is invisible, and
 the cells that read the name keep their cached results:
@@ -213,17 +226,25 @@ last one, as a plain re-run does, and says so with
 
 <!-- test:skip reason="illustrative: in-place changes to a frame from an earlier cell" -->
 ```python { .nb-cell }
-# df came from an earlier cell
+# df and lst came from an earlier cell
 df["score"] = expensive(df)            # cached
+lst.append(expensive(df))              # cached, written back into lst
 # runs every time, but expensive(df) is cached
 df.insert(1, "rank", expensive(df))
 ```
 
+<!-- claim: cash/notebook/statement/mutation_routing.py:MutationRouting._store_in_place @b4f1f1e6, cash/rewrite_in_place.py:refusal @cece1b9e, cash/rewrite_in_place.py:mismatch @a0f73ac9 -->
 A new column assigned to a frame from an earlier cell (`df["score"] = ...`) is
 cached like any other statement. A statement that changes such an object
-through a method (`df.insert(...)`, `lst.append(...)`) runs every time, but a
-slow call inside it is cached on the values it is handed, `df` included, so
-only the cheap change itself repeats. When
+through a method or a function (`lst.append(...)`, `W, H = fit_nmf(X, k)`
+writing into `X`) is cached with the object's new state when the object is a
+NumPy array (not of objects), a frame or Series whose index, columns and
+dtypes stay as they were, or a list, dict or set of plain values. A hit
+writes that state back into the object the name holds, so it keeps its
+identity and other names for it see the change. Any other change in place
+(`df.insert(...)` adds a column, a list of lists, an object of your class)
+runs every time, but a slow call inside it is cached on the values it is
+handed, `df` included, so only the cheap change itself repeats. When
 another variable holds that object too (`d = dfs[0]`, `b = a`), directly or in
 a list, dict, `deque`, `UserDict`, object array or attribute of one (a
 `__slots__` attribute too), or the result holds an object that already
@@ -911,6 +932,23 @@ kernel restarts:
 **Fix:** set `CASH_FILE_WATCH=0` before starting the kernel. Every file is
 then checked before every cell, which is slower for many files.
 
+### Many files read where no folder is watched
+
+<!-- claim: cash/tracking/file_watch.py:DIR_LIMIT == 8192, cash/tracking/file_watch.py:status_line @05f76dc5 -->
+**Symptom:** every cell starts slowly in a notebook that has read thousands
+of files.
+
+Folders are watched only on Linux and Windows. On **macOS**, on a network
+drive or another file system that sends no change reports, past 8,192
+watched folders, and for a symbolic link or a file with a second hard link,
+cash checks each file the statements above read before every cell, so the
+wait grows with the number of files. The `File watch` line of `cash info`
+and the `file_watch` entry of [`%cash_status`](magics.md#cash_status) say
+whether folders are watched, how many cannot be, and why.
+
+**Fix:** keep the many small files on a local drive, or read them once into
+one file (a Parquet or `.npz` file) and read that.
+
 ## Loops
 
 ### A long `for`-append loop can stop caching
@@ -1044,6 +1082,13 @@ JupyterLab's autosave runs on a timer, so a quick edit-then-run can miss it. Whe
 the cell you run is itself unsaved, cash can tell and adds a "Notebook file is
 stale" warning row.
 
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._warn_unplaced @88641af4 -->
+When cash cannot find the cell you run in the saved notebook at all (a new
+cell, or one edited and not saved), it does not check the cells above it:
+the cell runs on the values in memory, and cash warns
+[NOTEBOOK-CELL-UNPLACED](warnings.md#notebook-cell-unplaced). Save and run it
+again.
+
 <!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._as_run @73be869e, cash/notebook/upstream/checker.py:UpstreamChecker._refuse_to_undo @bc9c4f06 -->
 A cell you ran with an unsaved edit is not undone by the cells below it. When
 the frontend sends cell ids, cash reads that cell as it ran until the file
@@ -1066,12 +1111,13 @@ jupyter labextension enable cash-live-cells
 
 ### `AmbiguousCellError`
 
-<!-- claim: cash/exceptions.py:AmbiguousCellError @cc4cd1fd broad="the claim is about when this exception is raised at all" -->
+<!-- claim: cash/exceptions.py:AmbiguousCellError @cc4cd1fd broad="the claim is about when this exception is raised at all", cash/notebook/upstream/checker.py:UpstreamChecker._find_current_cell_index @d6e58b10 -->
 Two cells have byte-identical content and cash cannot get a cell ID to tell
 them apart, so it refuses to guess: which cell runs decides what it must show
-(the state at that point of a run from the top). JupyterLab and VS Code
-normally supply cell IDs; IPython before 8.3 does not pass them on. **Fix:** add
-a comment to one of the cells, or update IPython and save the notebook.
+(the state at that point of a run from the top). The error names the code
+cells that share the text. JupyterLab and VS Code normally supply cell IDs;
+IPython before 8.3 does not pass them on. **Fix:** add a comment to one of
+the cells, or update IPython to 8.3 or later and save the notebook.
 
 ### A cell reads a name a later cell binds
 
@@ -1108,9 +1154,14 @@ default argument or base class does. **Fix:** move the binding above this cell.
   after a restore can write a file a few bytes off from the one plain Python
   writes, which loads to the same model. Compare such files by loading them,
   not by their bytes or a checksum.
-- **A restored set may loop in a different order.** A set holds the same
-  items after a restore, but the order a `for` loop meets them in can differ
-  from the run that made it: Python does not keep a set's order, and a set
+- **A restored set may loop in a different order without the C extension.**
+  <!-- claim: cash/backends/set_order.py:restore @d4e04f7d, cash/backends/set_order.py:_KERNELS @7108289b -->
+  With the [C extension](getting-started/installation.md#the-c-fast-path)
+  on Python 3.12 to 3.14, cash records where a stored set's items sit and a
+  restore puts them back there, so a `for` loop meets them in the order the
+  run that made it did, also for a set inside a list, dict, tuple, another
+  set or an object's attributes. Without it, and for a set of strings after
+  a restart (strings hash differently in every Python process), a set
   rebuilt from its items lays them out afresh (`copy.deepcopy` and
   multiprocessing do the same). Results are equal; only code that depends on
   that order sees a difference, such as the key order of a dict built by

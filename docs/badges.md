@@ -49,8 +49,10 @@ with its parts numbered as in the list below; in a notebook it starts closed.
    size cap), a timing bar and the time.
 6. **Overhead.** cash's own time for the cell: `upstream` (re-checking earlier
    cells), `cache` (hashing and storing results), `badge` and `other`.
-7. **Report incorrect caching.** Opens a pre-filled GitHub issue with the badge
-   attached.
+7. **Report incorrect caching.** Opens a pre-filled GitHub issue with the
+   badge's rows, your cash and Python versions, and the notebook's cells (each
+   cut to a few hundred characters) when they fit in a link; when they do
+   not, the issue asks you to paste the cells that matter.
 
 ## Statuses
 
@@ -125,6 +127,26 @@ moved: an argument, a variable it reads, or a global its function uses. Nothing
 is named on the first run in a kernel, or when what moved was a file the call
 reads or the function's own code.
 
+### Other reasons
+
+<!-- claim: cash/notebook/statement/last_runs.py:LastRuns.reason @f57e2525, cash/notebook/statement/unstored.py:MEMORY_ONLY @792ec258, cash/notebook/statement/processor.py:NO_CACHE_REASON @68873902, cash/notebook/statement/processor.py:IMPORT_REASON @1e465223, cash/notebook/upstream/rng_rewind.py:RERUN_REASON == "re-run to restore the random stream" -->
+An `EXECUTED` row that ran again names what changed since its last run, or
+why there was nothing to serve. Some of the texts:
+
+- `input changed since it last ran: df`: an input was rebuilt.
+- `not stored when it last ran under this key: it took 2.1 ms, under the 10
+  ms a statement must take to be stored`: too quick to store.
+- `marked # @cash:no-cache, so it runs every time`.
+- `an import is never stored: it runs whenever what it binds is not already
+  in place`.
+- `the entry stored under this key when it last ran is no longer in the
+  cache`: it was removed, or kept in memory only and lost to a restart.
+- `re-run to restore the random stream`: cash ran a bare seed line again so
+  a draw below starts where a run from the top has it.
+
+After a restart, the row names the input that moved, or says that the
+statement was kept in memory only when it last ran.
+
 ### File changed
 
 <iframe class="cash-badge" title="cash badge example: file changed" src="/_badges/miss_file_changed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
@@ -172,8 +194,8 @@ every time. The row names the reason.
 
 Two things that are not cached do **not** show as NOT CACHED: a statement too
 cheap to be worth an entry (under 10 ms, see the [cost model](cost-model.md)),
-and one marked `# @cash:no-cache`. Both show as a plain `EXECUTED` row with no
-reason.
+and one marked `# @cash:no-cache`. Both show as an `EXECUTED` row; when it
+runs again, the row says why ([Other reasons](#other-reasons)).
 
 ### Side effects
 
@@ -197,17 +219,20 @@ runs a search, mark it [`# @cash:assume-safe`](annotations.md#cashassume-safe).
 
 <iframe class="cash-badge" title="cash badge example: NOT CACHED, in-place mutation" src="/_badges/not_cached_mutation.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
-The statement changes an object made in an earlier cell (`out.append(...)`,
-`d[k] = v`, `df.sort_values(inplace=True)`) instead of producing a new value.
-There is nothing to restore that would repeat the change, so the statement runs
-every time and cash marks everything downstream as changed. The same holds for a
-bare call that changes its argument, such as
-`sc.pp.calculate_qc_metrics(adata, inplace=True)`, and for a function of your
-own that changes its argument and returns a result, such as
-`summary = add_features(df)`: cash compares the arguments before and after,
-and runs the call every time from then on. A slow call inside the statement
-that only reads the object (`df.insert(1, "c", slow(df))`) is still cached on
-the value it is handed, so only the change itself repeats.
+<!-- claim: cash/notebook/statement/mutation_routing.py:MutationRouting._store_in_place @b4f1f1e6, cash/rewrite_in_place.py:refusal @cece1b9e -->
+The statement changes an object made in an earlier cell instead of producing
+a new value, and cash cannot write the change back on a hit. A change to a
+NumPy array, to a frame or Series that keeps its index, columns and dtypes,
+or to a list, dict or set of plain values is cached: a hit writes the stored
+state back into the object. Any other change runs every time, and cash marks
+everything downstream as changed: `df.sort_values(inplace=True)` (its index
+moves), `df.insert(...)` (a new column), an append to a list of lists, or a
+change to an object of your own class or a library's, such as
+`sc.pp.calculate_qc_metrics(adata, inplace=True)` or a function of yours
+that changes such an argument and returns a result
+(`summary = add_features(adata)`). A slow call inside the statement that
+only reads the object (`df.insert(1, "c", slow(df))`) is still cached on the
+value it is handed, so only the change itself repeats.
 
 **Fix:** assign a new value instead: `out = [f(e) for e in items]`,
 `df = df.sort_values(...)`. A fit is cached; see

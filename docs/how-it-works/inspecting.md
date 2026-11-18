@@ -82,7 +82,9 @@ function in a script.
     Set `verbose = true` (or `CASH_VERBOSE=1`) to log one `cash.calls` line
     per call: a hit, or a miss and why. `debug = true` logs those lines along
     with cash's other debug records. `CASH_SUMMARY=1` prints one table of hits,
-    misses and time saved per function when the process ends. See
+    misses and time saved per function when the process ends.
+    `CASH_PHASE_TIMES=1` adds where each call's time went (building the key,
+    reading the entry, checks, the body, storing) to `cache_info()`. See
     [Seeing what cash did](../decorator.md#seeing-what-cash-did).
 
 === "Notebook"
@@ -95,10 +97,10 @@ function in a script.
 
 ### The badge
 
-<!-- claim: cash/notebook/badge_renderer/view_builder.py:_statement_row @38bc6e18 -->
+<!-- claim: cash/notebook/badge_renderer/view_builder.py:_statement_row @38bc6e18, cash/notebook/statement/last_runs.py:LastRuns.reason @f57e2525 -->
 Every cell run under `%cash_on` prints a badge: which statements came from the
-cache, which ran, which ran without being stored and why, and the time each
-took. The code shown on each row is your own source. Comments are not part of
+cache, which ran and what changed since its last run, which ran without being
+stored and why, and the time each took. The code shown on each row is your own source. Comments are not part of
 the key, so editing one changes what the row shows but still hits.
 [Reading the badge](../badges.md) explains every field.
 
