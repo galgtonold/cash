@@ -50,6 +50,16 @@ value the watchers cannot fully cover is hashed every time.
 | `DataFrame`, `Series` | modin | converted to pandas, then hashed as pandas |
 | any collection | dask | the task-graph keys and the schema |
 
+<!-- claim: cash/canonical_form.py:_xarray_holds_content_data @33dde68f, cash/content_hashers.py:hash_pandas_index @f4a35a88, cash/pint_values.py:registry_digest @e746b012 -->
+A few more values are keyed by content inside the canonical form rather than
+by a hasher of their own. An xarray `DataArray`, `Dataset` or `Variable`
+holding a big array has each array keyed by content, as an array argument
+is. A pandas index on its own (an xarray coordinate, a frame subclass's
+labels) is keyed by its class, names, dtypes, `freq` and labels, not by what
+pandas has cached about it. A pint quantity is keyed by its magnitude, its
+units and the definitions of its unit registry, so `1 widget` under two
+registries that define `widget` apart keys apart.
+
 <!-- claim: cash/content_hashers.py:ArrowDigests.digest @e6cbc708, cash/backends/frame_sharing.py:arrow_data_owned @2cb434fe -->
 A pyarrow value whose memory Arrow allocated itself (read from a file,
 computed by Arrow, built from Python values) cannot change, so it is read

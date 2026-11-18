@@ -118,7 +118,11 @@ A method call has no assignment target, so cash classifies its object:
   result is used (`out = raw.sort("ts")`, `raw.sort("ts").head()`) is the kind
   that returns a new object, not `list.sort`. A
   module setting such as `plt.style.use(...)` or `pd.set_option(...)` counts
-  as changing the module, so it is replayed after a restart. A `set_*` call
+  as changing the module, so it is replayed after a restart. One that also
+  changes a setting the process keeps outside any variable, as
+  `plt.style.use(...)` changes matplotlib's `rcParams` and `np.seterr(...)`
+  NumPy's error handling, is never stored either: it runs every time
+  ([what gets cached](../notebook_caching_api.md#what-gets-cached)). A `set_*` call
   that changes the variable it is handed (`nx.set_node_attributes(G, ...)`)
   changes that variable, not the module.
 - **Always a change.** Any call on a live matplotlib `Figure` or `Axes`, or

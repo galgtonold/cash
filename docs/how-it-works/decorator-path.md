@@ -102,7 +102,10 @@ Each argument is fingerprinted by the first rule that applies:
    method, when its class has one and no hasher is registered for it: what it
    returns, with the class's name and the method's code.
 3. A built-in content hasher: pandas, geopandas, numpy, polars, pyarrow,
-   modin, dask and scipy.sparse values are hashed by content.
+   modin, dask and scipy.sparse values are hashed by content
+   ([the table](cache-keys-and-lineage.md#hashing-values)). An xarray array
+   or dataset, a pandas index and a pint quantity are keyed by content too,
+   inside the canonical form.
 4. An identity tag cash keeps current, such as the one a `frozen=True`
    cached function puts on its result.
 5. A hasher you registered without `override=True`.
@@ -285,6 +288,25 @@ side effects and still caches:
   silences;
 - a clock read or a fresh UUID warns
   [`KEY-AMBIENT-READ`](../warnings.md#key-ambient-read).
+
+<!-- claim: cash/decorator/runtime.py:CallRunner._refuse_registries @a3042403, cash/tracking/process_registries.py:changed @8df4390a, cash/tracking/process_registries.py:register_env_waiver @9b695bf5 -->
+While a miss runs, cash also compares the settings the process keeps
+outside any variable, such as NumPy's error handling and print options, a logger's
+level, handlers or filters, the warnings filters and how warnings are shown,
+the interpreter's hooks and `sys.setrecursionlimit`, `sys.path`, `atexit`
+and `signal` handlers, `copyreg`, the working directory, the environment,
+matplotlib's `rcParams`, `decimal`'s context. A call that changed one is not
+stored, and the function runs every time from then on, with an
+[`IMPURE-OBSERVED-EFFECTS`](../warnings.md#impure-observed-effects) warning:
+a hit, or a new process, would leave the setting unmade. Only
+`@cash.cache(assume_safe=True)` caches such a call. A `# @cash:assume-safe`
+comment, on the line or on the `def` line, and a `with cash.assume_safe():`
+block do not waive it. An environment write (`os.environ["MODE"] = "b"`,
+`os.putenv`) is the exception: a comment on its line or a
+`with cash.assume_safe():` block around it waives it, as it does a file
+write. In a notebook, `# @cash:assume-safe` on the statement that changes a
+process setting does cache it
+([what gets cached](../notebook_caching_api.md#what-gets-cached)).
 
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @045afef4 -->
 One case is not cached: a body that picks code from a run-time value

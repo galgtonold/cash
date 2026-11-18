@@ -88,16 +88,18 @@ Results that took longer than 0.1 s are usually on disk already.
 
 ### `# @cash:no-cache`
 
-<!-- claim: cash/analysis/cacheability_decision.py:cacheability_verdict @19feb564 -->
+<!-- claim: cash/analysis/cacheability_decision.py:cacheability_verdict @19feb564, cash/notebook/statement/processor.py:NO_CACHE_REASON @68873902 -->
 The statement runs every time and nothing is stored, including the calls inside
-it. The badge shows a plain `EXECUTED` row. A statement below that reads its
+it. The badge shows an `EXECUTED` row; run again, its reason reads `marked
+# @cash:no-cache, so it runs every time`. A statement below that reads its
 result is cached as usual and computed again when the value changes.
 
 Use it for what cash cannot see for itself: a read whose answer must be fresh
 every run (a GET for a live price), a helper with an effect hidden from cash, or
 a helper that reads the clock. You do not need it for file writes, POSTs,
-`datetime.now()` or plots written in the statement: cash already runs those every
-time. See [What gets cached](notebook_caching_api.md#what-gets-cached).
+`datetime.now()` or a change to a process setting (`np.seterr`) written in the
+statement: cash already runs those every time. A plot is drawn again
+whenever its inputs or matplotlib's settings change. See [What gets cached](notebook_caching_api.md#what-gets-cached).
 
 `no-cache` also gives a random draw a fresh value each run; see
 [Randomness](known-limitations.md#randomness).
@@ -141,10 +143,15 @@ hits = session.post(SEARCH_URL, json=query).json()   # @cash:assume-safe
 
 <!-- claim: cash/notebook/statement/processor.py:StatementProcessor._refuse_process_registries @e3f710f2 -->
 It also waives a change to a setting the process keeps outside any variable
-(`np.seterr`, a library logger's level, `warnings.simplefilter`,
-`atexit.register`), which otherwise makes the statement run every time: a
-hit, or a restarted kernel, leaves the setting unmade, so use it only when
-that does not matter. It waives effects only: a statement that reads the
+(`np.seterr`, `atexit.register`, `plt.style.use`,
+`sys.setrecursionlimit`), which otherwise makes the statement run every
+time: a hit, or a restarted kernel, leaves the setting unmade, so use it only
+when that does not matter. A statement that sets a logger's level still runs
+every time, since it changes the logger, an object cash cannot store, and so
+does an environment write. In a `@cash.cache` function the comment does not
+waive a process setting other than an environment write; only
+`assume_safe=True` does
+([which settings](how-it-works/decorator-path.md#side-effects)). It waives effects only: a statement that reads the
 clock or calls `input()` still runs every time, and so does one that
 changes in place an object cash cannot store. It applies to its own
 statement, even at the top of a cell. Add `# @cash:ttl=N` when the answer

@@ -386,6 +386,12 @@ paths from the project root or pass absolute paths.
   argument (a list of lists, a frame given a new column, an object of your
   class changed other than as the next item says) are not stored, so they
   run every time. Return a modified copy instead (`rows = sorted(rows)`).
+  <!-- claim: cash/decorator/store.py:ResultStore.restore_identity @2e52815d -->
+  A call that fills its `out=` argument and returns it (a body ending
+  `np.multiply(x, 2, out=out); return out`) is stored the same way: a hit
+  writes the stored state into the `out` you pass and returns that very
+  object, so `result is out` holds
+  ([`CACHE-ARG-WRITTEN-BACK`](warnings.md#cache-arg-written-back)).
 <!-- claim: cash/decorator/attribute_replay.py:AttrVerdict.of @5152391a, cash/rewrite_in_place.py:attribute_refusal @a163557b, cash/rewrite_in_place.py:AttrState.replay @0e4c9439, cash/decorator/attribute_replay.py:find @6c04b2c5 -->
 - A call that only binds, rebinds or deletes **attributes of an object it
   was handed** (`est.fit(X)` setting `self.coef_` and returning `self`, a
@@ -482,7 +488,10 @@ paths from the project root or pass absolute paths.
   new process, would leave the setting unmade
   ([`IMPURE-OBSERVED-EFFECTS`](warnings.md#impure-observed-effects)). Make
   the setting outside the cached function, or, when skipping it is fine,
-  see [Side effects](decorator.md#side-effects).
+  pass `@cash.cache(assume_safe=True)`: a `# @cash:assume-safe` comment and
+  a `with cash.assume_safe():` block do not waive it, except for an
+  environment write
+  ([which settings](how-it-works/decorator-path.md#side-effects)).
 
 ## Generators and async functions
 

@@ -37,20 +37,22 @@ flowchart TB
   read the clock or read the environment. Environment reads become part of the
   key on both paths; what happens on the rest differs (below).
 - **File freshness.** A file that tracked code reads is recorded with a content
-  hash and checked again before its result is reused. See
+  hash and checked again before its result is reused. In a notebook on
+  Linux and Windows, cash watches the folders of those files and checks a
+  file again only when its folder reports a change. See
   [what counts as a change](invalidation.md#what-counts-as-a-change).
 - **Storage.** Both write to the same backends and the same cache folder. See
   [where your cache lives](storage.md).
 
 ## Where they differ
 
-<!-- claim: cash/backends/persistence_policy.py:COMPUTE_FLOOR_S == 0.1 -->
+<!-- claim: cash/backends/persistence_policy.py:COMPUTE_FLOOR_S == 0.1, cash/backends/persistence_policy.py:PersistencePolicy.pays_for_its_write @fee6df3b -->
 | | Decorator | Notebook |
 |---|---|---|
 | What is cached | a call's return value | a statement's assigned variables; each loop iteration on its own |
 | Key | function name, state, dynamic dependencies, arguments | statement source, input lineages, called functions |
 | A side effect | a file write or POST warns, then caches, and a hit skips it; a changed process setting (`np.seterr`, a logger's level) or an argument cash cannot write back runs every time | refuses to cache the statement; it runs every time |
-| Written to disk | always, unless a size cap refuses it | when it took at least 0.1 s and restoring beats recomputing |
+| Written to disk | always, unless a size cap refuses it | when it took at least 0.1 s, restoring beats recomputing, and one re-run saves more than the write takes |
 | On a hit | returns the value; `print` output is not replayed | restores the variables and replays the statement's output |
 
 Both engines recompute when something they track changes, and both keep the

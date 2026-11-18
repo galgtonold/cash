@@ -117,6 +117,12 @@ stream stands, and cash warns
 [RANDOM-STREAM-UNRESTORED](warnings.md#random-stream-unrestored). **Fix:** run
 the notebook from the top, or seed the stream in the cell before it draws.
 
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._refuse_entropy_seed @02888d14 -->
+A statement that seeds a global stream from the system's entropy
+(`np.random.seed()` or `random.seed()` with no argument) is never served
+from the cache, so the draws after it change on every run, as in plain
+Python ([RANDOM-SEED-NONE](warnings.md#random-seed-none)).
+
 To silence the warning everywhere, filter it:
 
 ```python
@@ -195,7 +201,8 @@ A loop that changes the items it walks (`for r in rows: r.append(0)`) changes
 `rows`. A pyplot call that draws on the current figure (`plt.plot(...)`,
 `plt.title(...)`) changes the names bound to that figure and its axes, or to a
 list, tuple or dict holding them (`figs = {"main": plt.figure()}`); such a
-call runs every time.
+call is not stored on its own. A whole plot whose inputs did not change can
+still be [shown from the cache](notebook_caching_api.md#plots-shown-from-the-cache).
 
 A change made through an object cash cannot link to a name is invisible, and
 the cells that read the name keep their cached results:
@@ -930,6 +937,24 @@ kernel restarts:
 **Fix:** set `CASH_FILE_WATCH=0` before starting the kernel. Every file is
 then checked before every cell, which is slower for many files.
 
+### Many files read where no folder is watched
+
+<!-- claim: cash/tracking/file_watch.py:DIR_LIMIT == 8192, cash/tracking/file_watch.py:status_line @05f76dc5 -->
+**Symptom:** every cell starts slowly in a notebook that has read thousands
+of files.
+
+Folders are watched only on Linux and Windows. On **macOS**, on a network
+drive or another file system that sends no change reports, past 8,192
+watched folders, and for a file reached through a symbolic link or with a
+second hard link, cash checks each file the statements above read before
+every cell, so the wait grows with the number of files. The `File watch`
+line of `cash info` and the `file_watch` entry of
+[`%cash_status`](magics.md#cash_status) say whether folders are watched, how
+many cannot be, and whether the limit was reached.
+
+**Fix:** keep the many small files on a local drive, or read them once into
+one file (a Parquet or `.npz` file) and read that.
+
 ## Loops
 
 ### A long `for`-append loop can stop caching
@@ -1095,12 +1120,14 @@ jupyter labextension enable cash-live-cells
 
 ### `AmbiguousCellError`
 
-<!-- claim: cash/exceptions.py:AmbiguousCellError @cc4cd1fd broad="the claim is about when this exception is raised at all" -->
+<!-- claim: cash/exceptions.py:AmbiguousCellError @cc4cd1fd broad="the claim is about when this exception is raised at all", cash/notebook/upstream/checker.py:UpstreamChecker._find_current_cell_index @d6e58b10 -->
 Two cells have byte-identical content and cash cannot get a cell ID to tell
 them apart, so it refuses to guess: which cell runs decides what it must show
-(the state at that point of a run from the top). JupyterLab and VS Code
-normally supply cell IDs; IPython before 8.3 does not pass them on. **Fix:** add
-a comment to one of the cells, or update IPython and save the notebook.
+(the state at that point of a run from the top). The error names the code
+cells that share the text, by their number among the code cells. JupyterLab
+and VS Code normally supply cell IDs; IPython before 8.3 does not pass them
+on. **Fix:** add a comment to one of the cells, or update IPython to 8.3 or
+later and save the notebook.
 
 ### A cell reads a name a later cell binds
 

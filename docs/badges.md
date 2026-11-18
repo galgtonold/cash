@@ -49,8 +49,12 @@ with its parts numbered as in the list below; in a notebook it starts closed.
    size cap), a timing bar and the time.
 6. **Overhead.** cash's own time for the cell: `upstream` (re-checking earlier
    cells), `cache` (hashing and storing results), `badge` and `other`.
-7. **Report incorrect caching.** Opens a pre-filled GitHub issue with the badge
-   attached.
+<!-- claim: cash/notebook/badge_renderer/view_builder.py:_bug_report_url @aaff1635 -->
+7. **Report incorrect caching.** Opens a pre-filled GitHub issue with the
+   badge's rows, your cash and Python versions and the backend. The
+   notebook's cells are included when the link can hold all of them, each
+   cut to 300 characters, or else to 150; when even that is too long, none
+   are, and the issue asks you to paste the cells that matter.
 
 ## Statuses
 

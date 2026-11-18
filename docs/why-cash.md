@@ -68,7 +68,7 @@ Click a column header to sort.
 </div>
 
 <ol class="cash-matrix-notes">
-<li id="matrix-note-1"><code>%cash_on</code>, survives a restart: only results over 0.1 s that reload faster than they recompute.</li>
+<li id="matrix-note-1"><code>%cash_on</code>, survives a restart: only results over 0.1 s that reload faster than they recompute and save more on a re-run than writing them takes.</li>
 <li id="matrix-note-2">Manual pickle, survives a restart: only if you remember to dump and load.</li>
 <li id="matrix-note-3"><code>jupyter-cache</code>, survives a restart: stores executed outputs for a book build, not for a live kernel.</li>
 <li id="matrix-note-4"><code>jupyter-cache</code>, recomputes when a cell changes: re-runs the whole notebook when any code cell changes.</li>

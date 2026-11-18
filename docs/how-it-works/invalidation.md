@@ -27,6 +27,15 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
       `Path.resolve()` on a path that may be relative).
     - **The random seed in force**, for a function that draws from a global
       random stream.
+    <!-- claim: cash/decorator/library_reads.py:fingerprint @9946acbe, cash/decorator/warning_state.py:holds @5f6685de, cash/kept_state.py:logger_state @37d45541 -->
+    - **A library setting the call read**, on Python 3.12 and newer:
+      `sklearn.set_config(...)`, `pd.set_option(...)`, `np.seterr(...)`, a
+      `ContextVar`, an attribute your program set on a library's class
+      ([details](decorator-path.md#what-goes-into-the-state)).
+    - **The warnings filters and display hooks**, for a call that warned
+      when it ran. A call that never warned is served under any filters.
+    - **A logger held by an argument or a global it reads**, by its level,
+      handlers and filters. A call that only logs changes nothing.
     - **Its age**, when `ttl=` is set and the entry is older.
 
 === "Notebook"
@@ -235,7 +244,7 @@ and so does a lost notification, or a folder whose path now leads somewhere
 else. Files cash cannot rely on the notifications for are checked before
 every cell as described above: on macOS, on a network drive or another
 file system without local notifications, through a symbolic link, with a
-second hard link, and past about 8,000 watched folders. Set
+second hard link, and past 8,192 watched folders. Set
 `CASH_FILE_WATCH=0` to check every file before every cell. `cash info`
 (`File watch`) and `%cash_status` (`file_watch`) say whether the watch is
 on, and if not, why. What the

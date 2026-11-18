@@ -171,7 +171,7 @@ result whose code changed in a way the key missed runs again. `CASH_TRACE=0`
 turns that check off. Calls that pick code by a run-time name are still
 recorded, since they are only cached on that record.
 
-<!-- claim: cash/tracking/file_watch.py:ENV == "CASH_FILE_WATCH", cash/tracking/native_reads.py:ENV == "CASH_NATIVE_FILE_HOOK", cash/phase_times.py:ON @978388aa -->
+<!-- claim: cash/tracking/file_watch.py:ENV == "CASH_FILE_WATCH", cash/tracking/native_reads.py:ENV == "CASH_NATIVE_FILE_HOOK", cash/phase_times.py:ON @978388aa, cash/decorator/hit_memo.py:ENABLED @cfb847dd, cash/decorator/state_memo.py:ENABLED @52f5927c, cash/decorator/class_memo.py:ENABLED @8db3d48c -->
 | Variable | What it does |
 |---|---|
 | `CASH_TRACE=0` | Turns off the record of the code each call ran, above. |
@@ -179,6 +179,9 @@ recorded, since they are only cached on that record.
 | `CASH_NATIVE_FILE_HOOK=0` | Stops cash from seeing the files C libraries open themselves ([the native file hook](../known-limitations.md#reads-through-a-loader-cash-cannot-see)). |
 | `CASH_PHASE_TIMES=1` | <span class="md-tag">decorator only</span> Times every cached call phase by phase, in `f.cache_info()["phase_times"]` ([Seeing what cash did](../decorator.md#seeing-what-cash-did)). `CASH_PHASE_TIMES_FILE` also writes them to a file. |
 | `CASH_PURE_PYTHON=1` | Runs without the C extension ([The C fast path](installation.md#the-c-fast-path)). |
+| `CASH_HITPATH=0` | <span class="md-tag">decorator only</span> Turns off the path that serves a hit met again without building its key ([A hit met again](../how-it-works/decorator-path.md#a-hit-met-again)). |
+| `CASH_STATE_MEMO=0`, `CASH_CLASS_MEMO=0` | <span class="md-tag">decorator only</span> Rebuild the code part of every key, and what each class folds to, instead of reusing them while nothing they read moved. |
+| `CASH_HITPATH_VERIFY=1`, `CASH_STATE_MEMO_VERIFY=1`, `CASH_CLASS_MEMO_VERIFY=1` | <span class="md-tag">decorator only</span> Build the key again behind each reuse and raise if the two differ. For testing cash itself; slow. |
 
 ### Backend
 

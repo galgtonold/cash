@@ -985,7 +985,7 @@ would skip or get wrong:
 | Reads the network or a database (`requests.get`, `pd.read_sql`) | Warns ([`KEY-NETWORK-READ`](warnings.md#key-network-read)) and caches. `ttl=` answers it and silences the warning |
 | Reads the clock, a random UUID, or an environment variable by computed name | Warns ([`KEY-AMBIENT-READ`](warnings.md#key-ambient-read)) and caches the first value |
 | Reads an environment variable by literal name, the working directory, or the command line (`sys.argv`, `parser.parse_args()`) | Puts the value in the key. No warning |
-| Changes a setting the process keeps outside any variable: `np.seterr`, a library logger's level or handler, `warnings.simplefilter`, `os.environ`, `os.chdir`, `sys.path`, `atexit.register` | Warns ([`IMPURE-OBSERVED-EFFECTS`](warnings.md#impure-observed-effects)) and runs uncached, every time: a hit, or a new process, would leave the setting unmade. `assume_safe=True`, `# @cash:assume-safe` on the `def` line, or a `with cash.assume_safe():` block around the change caches it again |
+| Changes a setting the process keeps outside any variable: `np.seterr`, a library logger's level or handler, `warnings.simplefilter`, `os.environ`, `os.chdir`, `sys.path`, `atexit.register` | Warns ([`IMPURE-OBSERVED-EFFECTS`](warnings.md#impure-observed-effects)) and runs uncached, every time: a hit, or a new process, would leave the setting unmade. Only `@cash.cache(assume_safe=True)` caches it again: a `# @cash:assume-safe` comment, on the line or on the `def` line, and a `with cash.assume_safe():` block do not. An environment write (`os.environ`, `os.putenv`) is the exception: a comment on its line or a block around it waives it, as it does a file write ([details](how-it-works/decorator-path.md#side-effects)) |
 | Uses `eval`/`exec`, `importlib`, or `getattr(obj, name)()` with a computed name, or calls a function `exec`/`eval` built from a string (rules or formulas loaded from a file) | Warns ([`KEY-UNTRACKABLE-DEP`](warnings.md#key-untrackable-dep)) and runs uncached, because edits to that code can't be tracked; on Python 3.12+ a `getattr` or `importlib` lookup is cached on a checked record of the code it ran instead. `strict=True` raises `CashImpureFunctionError` |
 
 **When writing a file is part of the job** (a report, a thumbnail, a saved
@@ -1037,10 +1037,11 @@ LLM or HTTP SDK shows up this way, as a network read
 ([`KEY-NETWORK-READ`](warnings.md#key-network-read)): `ttl=` silences it, and
 under `strict=True` it raises unless a `ttl=` is set.
 
-Two observations stop the result from being stored, because a hit could not
+Three observations stop the result from being stored, because a hit could not
 reproduce them: the call changed an argument in place that cash cannot write
 back ([which ones it can](decorator-limitations.md#results-cash-refuses-to-store)),
-or it called a `unittest.mock` object. A call that only sets attributes on an
+it called a `unittest.mock` object, or it changed a setting the process keeps
+outside any variable (the table above; only `assume_safe=True` caches that). A call that only sets attributes on an
 object it was handed, as an estimator's `fit` sets `self.coef_`, is stored
 with them, and a hit sets them again on the object you pass
 ([when](decorator-limitations.md#results-cash-refuses-to-store)).
@@ -1076,13 +1077,16 @@ names the line of the method it is about (`.to_csv(path)`), and the comment
 works there too.
 
 On the `def` line it covers findings about the whole body. In a helper it
-covers every caller of that helper.
+covers every caller of that helper. Neither placement waives a change to a
+process setting other than an environment write; only `assume_safe=True`
+does ([above](#side-effects)).
 
 <!-- claim: cash/analysis/annotations.py:assume_safe_block_lines @29dff9a1, cash/effect_observer.py:EffectObserver.record_effect @dce8a421, cash/source_norm.py:drop_waiver_blocks @358fa0bc -->
 **Several lines at once.** Wrap them in `with cash.assume_safe():`. It waives
 what the comment waives, on every line inside the block. While the block runs,
 it also waives the effects cash observes, including those of helpers it calls.
-It is code, so your editor completes it and a typo fails on the first run. Like
+Like the comment, it does not waive a change to a process setting other than
+an environment write. It is code, so your editor completes it and a typo fails on the first run. Like
 the comment, it is not part of the key: adding or removing it keeps the stored
 results.
 
@@ -1139,6 +1143,12 @@ print(double.cache_info())
 `CASH_PHASE_TIMES=1` is set ([Seeing what cash did](#seeing-what-cash-did)). `warnings` holds the last 20 cash warnings for the function, even when a
 warnings filter hid them. The counters belong to the wrapper, so they start at
 zero in each process.
+
+<!-- claim: cash/core.py:Cash._decorated_before @6fe6cd52 -->
+Decorating the same function again with the same parameters, as a library
+that caches through a factory does (`cash.cache(func)(*args)` on every
+call), returns the wrapper made the first time, with its counters. Other
+parameters, or a function whose code changed, get a new wrapper.
 
 <!-- claim: cash/decorator/explain.py:Explainer.explain @e18309b7, cash/decorator/explain.py:Explainer._absent_entry @28c80c9d, cash/decorator/explain.py:callee_to_pass_in @eadc3715 -->
 **`f.explain(*args, **kwargs)`** says whether that call would hit, and why. It
@@ -1226,9 +1236,9 @@ after an edit: its result is a new value, or, from a `frozen=True` function,
 a new call. Look one step up: the function that made the argument says
 `code or state changed`.
 
-<!-- claim: cash/code_digest.py:callable_identity @38daa9e0 -->
+<!-- claim: cash/code_digest.py:callable_identity @38daa9e0, cash/jit_functions.py:jit_options @0603176f -->
 **Can I cache code that calls numba?** Yes. A function compiled with
-`@njit` or `@jit` is keyed like any helper, by the Python source it compiles
+`@njit`, `@jit` or `@stencil` is keyed like any helper, by the Python source it compiles
 and its compile options (`fastmath`, `parallel`, ...), so editing a kernel
 reruns the cached functions that call it. Put `@cash.cache` on a plain
 Python function that calls the kernels, or on top of `@njit` itself.

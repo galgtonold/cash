@@ -28,6 +28,9 @@ function's code and its helpers, the arguments, and the data it reads. So:
   installed version of each library it uses, so a machine with another pandas
   misses the entries a colleague stored. Entries are pickled, too. Pin
   versions, and let everyone who reads a shared store run the same Python.
+- **Same cash version** for a shared cache folder. A cash that finds the
+  folder written in another storage format clears it
+  ([The cache format](../../versioning.md#the-cache-format)).
 
 ## Point everyone at a shared backend
 

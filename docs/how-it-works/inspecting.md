@@ -98,10 +98,10 @@ function in a script.
 
 ### The badge
 
-<!-- claim: cash/notebook/badge_renderer/view_builder.py:_statement_row @38bc6e18 -->
+<!-- claim: cash/notebook/badge_renderer/view_builder.py:_statement_row @38bc6e18, cash/notebook/statement/last_runs.py:LastRuns.reason @f57e2525 -->
 Every cell run under `%cash_on` prints a badge: which statements came from the
-cache, which ran, which ran without being stored and why, and the time each
-took. The code shown on each row is your own source. Comments are not part of
+cache, which ran and what changed since its last run, which ran without being
+stored and why, and the time each took. The code shown on each row is your own source. Comments are not part of
 the key, so editing one changes what the row shows but still hits.
 [Reading the badge](../badges.md) explains every field.
 

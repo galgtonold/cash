@@ -125,8 +125,10 @@ an object in place in a way cash cannot store, still runs every time. Add a
 
 <!-- claim: cash/notebook/statement/processor.py:StatementProcessor._refuse_process_registries @e3f710f2 -->
 It also waives a setting the process keeps that the statement changes, such as
-`np.seterr(...)` or a logger's level: put it on such a statement only when a
-hit, or a restarted kernel, may leave the setting unmade.
+`np.seterr(...)` or `atexit.register(...)`: put it on such a statement only
+when a hit, or a restarted kernel, may leave the setting unmade. In a
+`@cash.cache` function only `assume_safe=True` waives such a setting
+([which settings](../../how-it-works/decorator-path.md#side-effects)).
 
 ## Stop caching calls inside a statement: `no-cache-calls`
 

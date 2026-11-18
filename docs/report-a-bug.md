@@ -13,6 +13,7 @@ first try.
 
 - The versions: `cash version`, `python --version` and your OS. For a
   notebook, also the frontend (JupyterLab, VS Code, Colab).
+- What `cash info` prints: the settings in effect and where each came from.
 - The smallest code that shows the problem, and what you expected instead.
 - What cash said about it, from the steps below for your path.
 

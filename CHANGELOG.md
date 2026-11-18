@@ -154,9 +154,12 @@ recomputed.** Read **Breaking** before upgrading, and **Upgrading** at the end.
   `sys.setrecursionlimit`, `atexit.register`, `signal.signal`,
   `warnings.simplefilter`, rebinding `warnings.formatwarning`, `os.putenv`,
   `os.chdir`, `rcParams`, `copyreg`, `sys.path`) is no longer stored: a hit,
-  or a new process or a restarted kernel, left the setting unmade. Each can be cached again with `# @cash:assume-safe` or
-  `assume_safe=True`; a `with cash.assume_safe():` block now waives an
-  environment write made inside it too.
+  or a new process or a restarted kernel, left the setting unmade. In a
+  notebook, `# @cash:assume-safe` on the statement caches it again. In a
+  decorated function only `@cash.cache(assume_safe=True)` does: a line or
+  `def`-line comment and a `with cash.assume_safe():` block do not, except
+  for an environment write (`os.environ`, `os.putenv`), which a comment on
+  its line or a `with cash.assume_safe():` block around it now waives.
 - **Dropping a call's return value is no longer reported.**
   `p = make_pipeline(...); p.fit(X, y)` caches with no
   `IMPURE-SIDE-EFFECTS` warning; a call is judged by what it does.
@@ -321,9 +324,9 @@ Then:
 - Cached functions and statements that change a process setting
   (`np.seterr`, a logger's level, `warnings.simplefilter`, `os.putenv`) now
   run every time. If skipping the setting on a hit is fine: in a notebook,
-  add `# @cash:assume-safe` to the statement; for a decorated function, put
-  `# @cash:assume-safe` on its `def` line, wrap the setting change in
-  `with cash.assume_safe():`, or pass `assume_safe=True`.
+  add `# @cash:assume-safe` to the statement; for a decorated function, pass
+  `@cash.cache(assume_safe=True)` (a `# @cash:assume-safe` comment and a
+  `with cash.assume_safe():` block waive only an environment write).
 - If a notebook's file checks misbehave (a write through a memory map by
   another process, a file another program keeps open on Windows), set
   `CASH_FILE_WATCH=0` before starting the kernel to check every file before

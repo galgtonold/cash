@@ -86,6 +86,14 @@ link to the page that has the details.
     `assume_safe=True` for the whole function.
     See [Side effects](decorator.md#side-effects).
 
+    If it warns [`IMPURE-OBSERVED-EFFECTS`](warnings.md#impure-observed-effects),
+    the call changed something a hit would not change again: an argument cash
+    cannot write back, or a setting the process keeps outside any variable
+    (`np.seterr`, a logger's level, `warnings.simplefilter`). The warning
+    names the line and the fix; for a process setting only
+    `assume_safe=True` waives it
+    ([which settings](how-it-works/decorator-path.md#side-effects)).
+
 ??? question "Why does a cache hit not print anything?"
     A hit returns the stored value without running the function body, so its
     prints and other side effects do not happen again.
