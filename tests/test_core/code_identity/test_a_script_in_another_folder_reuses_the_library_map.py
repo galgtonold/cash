@@ -197,7 +197,10 @@ def test_a_script_folders_own_module_named_like_a_library_is_still_its_code(tmp_
         (folder / "main.py").write_text(_MAIN, encoding="utf-8")
     own = two / "shadowed.py"
     own.write_text("def value():\n    return 1\n", encoding="utf-8")
-    env = {"XDG_CACHE_HOME": str(tmp_path / "xdg"), "LOCALAPPDATA": str(tmp_path / "xdg")}
+    # Each platform's per-user cache root under tmp_path: macOS takes it
+    # from HOME (~/Library/Caches), Linux from XDG, Windows from LOCALAPPDATA.
+    xdg = str(tmp_path / "xdg")
+    env = {"XDG_CACHE_HOME": xdg, "LOCALAPPDATA": xdg, "HOME": xdg}
 
     def run(folder):
         out = run_python("main.py", str(site), cwd=folder, cache_dir=str(tmp_path / "cache"), env=env)
