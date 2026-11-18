@@ -268,20 +268,36 @@ def _signals() -> tuple[Any, ...]:
     return tuple(map(_signal.getsignal, _SIGNALS))
 
 
-#: ``id(trace function) -> (it, the trace function it stands in for)``: one
-#: cash installs for a while (`stand_in_trace`), read as the one it replaced.
-_TRACE_STAND_INS: dict[int, tuple[Any, Any]] = {}
+#: ``id(trace function) -> [it, the trace function it stands in for, how
+#: many installs of it are live]``: one cash installs for a while
+#: (`stand_in_trace`), read as the one it replaced. Counted, because the
+#: same function stands in on several threads at once (a thread pool of
+#: waived calls), and one thread's call ending must not end another's.
+_TRACE_STAND_INS: dict[int, list[Any]] = {}
+_STAND_INS_LOCK = threading.Lock()
 
 
 def stand_in_trace(installed: Any, replaced: Any) -> None:
     """Read ``sys.gettrace()`` as *replaced* while it is *installed*, a
     trace function of cash's own (`drop_trace_stand_in` ends it)."""
-    _TRACE_STAND_INS[id(installed)] = (installed, replaced)
+    with _STAND_INS_LOCK:
+        entry = _TRACE_STAND_INS.get(id(installed))
+        if entry is not None and entry[0] is installed:
+            entry[2] += 1
+        else:
+            _TRACE_STAND_INS[id(installed)] = [installed, replaced, 1]
 
 
 def drop_trace_stand_in(installed: Any) -> None:
-    """Read ``sys.gettrace()`` as it is again once *installed* is gone."""
-    _TRACE_STAND_INS.pop(id(installed), None)
+    """Read ``sys.gettrace()`` as it is again once *installed* is gone
+    (on every thread, once each `stand_in_trace` of it has ended)."""
+    with _STAND_INS_LOCK:
+        entry = _TRACE_STAND_INS.get(id(installed))
+        if entry is None or entry[0] is not installed:
+            return
+        entry[2] -= 1
+        if entry[2] <= 0:
+            del _TRACE_STAND_INS[id(installed)]
 
 
 def _trace() -> Any:
