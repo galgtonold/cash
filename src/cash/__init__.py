@@ -167,7 +167,7 @@ def opaque(cls: type) -> type:
     return cls
 
 
-__version__ = "0.14.0"
+__version__ = "0.15.0"
 
 
 def _get_global_cash():
