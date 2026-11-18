@@ -34,7 +34,15 @@ from ...value_hash import costly_after
 from ...value_types import BUILTIN_NAMES
 from ..cache_key import statement_source_hash
 from ..call_key import changes_its_closure
-from ..callee_reach import CWD, ENVIRON, module_state_names, module_state_writes, process_state_writes, state_holders
+from ..callee_reach import (
+    CWD,
+    ENVIRON,
+    REGISTRY,
+    module_state_names,
+    module_state_writes,
+    process_state_writes,
+    state_holders,
+)
 from ..loop_watch import watch_candidates
 from ..shared_objects import history_names
 from . import in_place
@@ -810,7 +818,7 @@ def sharing_a_cell(writers: set[str], user_ns: Mapping[str, Any]) -> set[str]:
     }
 
 
-_PROCESS_WORDS = {ENVIRON: "environment", CWD: "working directory"}
+_PROCESS_WORDS = {ENVIRON: "environment", CWD: "working directory", REGISTRY: "process's settings"}
 
 
 def _assigned_into(node: ast.AST) -> set[str]:

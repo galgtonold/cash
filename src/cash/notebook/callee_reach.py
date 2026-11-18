@@ -265,9 +265,13 @@ def module_state_writes(code: str, namespace: Mapping[str, Any] | None) -> froze
 
 #: What a statement can change of the process the notebook runs in, which a
 #: kernel restart puts back as the shell started it: its environment
-#: variables, and its working directory.
+#: variables, its working directory, and a registry the process keeps
+#: outside any variable (`cash.tracking.process_registries`: the warnings
+#: filters, a logger's level, ``np.seterr``, ``sys.setrecursionlimit``,
+#: ``atexit.register``), seen changed as the statement ran.
 ENVIRON = "environ"
 CWD = "cwd"
+REGISTRY = "registry"
 
 #: Methods of ``os.environ`` that change it.
 _ENVIRON_SETTING_METHODS = frozenset({"update", "pop", "popitem", "setdefault", "clear", "__setitem__", "__delitem__"})
