@@ -81,6 +81,8 @@ right spelling (`nocache` → `no-cache`).
 Stores the result on disk even when it took less than the 0.1 s that disk storage
 normally needs, so it survives a kernel restart. It skips every floor and gate of
 the [cost model](cost-model.md); only a storage tier's size cap still applies.
+The check for other variables holding its outputs' objects, which is otherwise
+cut to what the statement took, gets at least a second.
 Results that took longer than 0.1 s are usually on disk already.
 `%cash_persist on` does the same for every statement.
 

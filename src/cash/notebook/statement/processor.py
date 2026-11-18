@@ -300,6 +300,12 @@ _LOG_PROCESSOR = "[PROCESSOR]"
 #: the budget the statement only re-runs, which costs what it is worth.
 SHARE_CHECK_FACTOR = 2.0
 SHARE_CHECK_FLOOR_S = 0.1
+#: The least time that share check takes for a statement marked
+#: ``@cash:persist``: the user has said storing it is worth its cost, so the
+#: check is not cut to what the statement took. A loop of 1,500 small frames
+#: ran 0.03 s, and walking what they hold took 0.10 to 0.16 s of the 0.1 s
+#: floor, so the persisted loop ran again three runs in four.
+SHARE_CHECK_PERSIST_FLOOR_S = 1.0
 #: The least time the search for the variables sharing an object with a
 #: statement's outputs takes when the share check could not say
 #: (`referring_names`).
@@ -418,6 +424,14 @@ def _holds_one_of(value: Any, ids: set[int]) -> bool:
 def share_check_budget(cost: float) -> float:
     """Seconds the share check of a statement that took *cost* may take."""
     return max(SHARE_CHECK_FLOOR_S, SHARE_CHECK_FACTOR * cost)
+
+
+def store_share_budget(cost: float, persist: bool) -> float:
+    """Seconds the share check that decides whether a statement that took
+    *cost* is stored may take: `share_check_budget`, and at least
+    `SHARE_CHECK_PERSIST_FLOOR_S` under ``@cash:persist`` (*persist*)."""
+    budget = share_check_budget(cost)
+    return max(budget, SHARE_CHECK_PERSIST_FLOOR_S) if persist else budget
 
 
 _LOG_DEBUG = "[DEBUG]"
@@ -4170,7 +4184,8 @@ class StatementProcessor:
         # The check may not take longer than the statement is worth: a hit
         # saves `cost`, and finding the holders of a loop variable that is
         # an element of a list of 40,000 sessions took 6 s after a 0.1 s loop.
-        budget = share_check_budget(cost)
+        # Under ``@cash:persist`` the user has said it is worth more.
+        budget = store_share_budget(cost, run.force_persist)
         if holders is not None and not run.memo_changes and self._given_up_again(run, captured_vars):
             run.share_unchecked = True
             run.share_gave_up = None
@@ -4666,7 +4681,7 @@ class StatementProcessor:
         hidden = attribute_or(self.shell, "user_ns_hidden", None) or {}
         cash_held = [*self._calls.held_call_results(), echo, run.metrics, *history]
         gave_up = GaveUp()
-        budget = share_check_budget(cost)
+        budget = store_share_budget(cost, run.force_persist)
         try:
             with walk_budget(budget):
                 share_group(
