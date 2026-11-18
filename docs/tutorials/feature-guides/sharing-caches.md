@@ -23,9 +23,11 @@ function's code and its helpers, the arguments, and the data it reads. So:
   and name, so `features.build` imported from a shared package matches across
   machines. The same function pasted into a notebook cell is a different
   function and does not share entries with it.
-- **Same library and Python versions.** cash keys your code, not your
-  dependencies, and entries are pickled. Pin versions, and let everyone who
-  reads a shared store run the same Python.
+- <!-- claim: cash/decorator/environment_fold.py:EnvironmentFold._fold_library_versions @9c6400f4 -->
+  **Same library and Python versions.** A decorated function's key holds the
+  installed version of each library it uses, so a machine with another pandas
+  misses the entries a colleague stored. Entries are pickled, too. Pin
+  versions, and let everyone who reads a shared store run the same Python.
 
 ## Point everyone at a shared backend
 

@@ -5,7 +5,7 @@
     cash identifies them.
 
 cash hashes every argument of a cached call to build the key. Built-in values
-and most plain classes are pickled and hashed. pandas, numpy, polars, PyArrow,
+and most plain classes are pickled and hashed. pandas, geopandas, numpy, polars, PyArrow,
 modin, dask and scipy.sparse values get content hashers of their own. Tell
 cash what identifies a value instead when:
 

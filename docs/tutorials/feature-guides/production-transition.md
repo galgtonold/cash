@@ -76,9 +76,12 @@ Most `# @cash:` comments do not steer a decorated function. Use these instead:
   its arguments and the globals it reads. Statements inside it are not cached
   one by one, and notebook lineage does not carry over: a decorated function
   sees only its arguments, not how they were computed.
-- **Side effects are not refused.** A decorated function that writes a file or
-  sends a request is still cached, with a warning at its first call; a hit skips
-  the effect. Keep such effects outside cached functions.
+- **Most side effects are not refused.** A decorated function that writes a
+  file or sends a request is still cached, with a warning at its first call; a
+  hit skips the effect. Keep such effects outside cached functions. A call
+  that changes a setting the process keeps (`np.seterr(...)`, a logger's
+  level, `warnings.simplefilter(...)`) is not stored and runs every time, as
+  in a notebook ([`IMPURE-OBSERVED-EFFECTS`](../../warnings.md#impure-observed-effects)).
 - **Prints are not replayed.** A cached call returns its value without printing
   again, where a restored notebook statement replays its output.
 - **No badge.** Run a script with `CASH_SUMMARY=1` for a summary at exit, or call

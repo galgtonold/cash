@@ -168,8 +168,11 @@ run. Edit the simulation and everything after it recomputes, as it should.
 
 ## Reproducibility over months
 
-- **Pin your libraries.** Keys cover your code, not numpy's or your solver's. A
-  library upgrade that changes results does not invalidate anything.
+- <!-- claim: cash/decorator/environment_fold.py:EnvironmentFold._fold_library_versions @9c6400f4 -->
+  **Pin your libraries.** cash does not read numpy's or your solver's code;
+  it puts each library's installed version in the key. An upgrade recomputes
+  every call that uses the library, so pin versions to keep the cache, and
+  your figures, from moving.
 - **Keep the cache folder** with the project's other outputs if you rely on it
   to reproduce a figure.
 - **GPU and hardware.** CUDA kernels are non-deterministic unless you ask

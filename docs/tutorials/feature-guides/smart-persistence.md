@@ -10,8 +10,9 @@ disk comes back.
 
 ## What survives a restart
 
-A statement's result goes to disk when it took more than **0.1 s** to compute
-and reading it back is clearly faster than computing it again. Quicker results
+A statement's result goes to disk when it took more than **0.1 s** to compute,
+reading it back is clearly faster than computing it again, and one re-run
+saves more than writing it takes on this machine. Quicker results
 stay in memory, and results under 10 ms are not stored at all. The
 [cost model](../../cost-model.md) has the exact rules and the settings that tune
 them.

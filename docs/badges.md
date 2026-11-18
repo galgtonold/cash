@@ -62,12 +62,13 @@ A row and the cell header use the same word for the same state.
 | **EXECUTED** | ochre | It ran. On the header: running took more time than restoring saved. |
 | **NOT CACHED** | ochre | It ran and cash did not store it, so it runs every time. The row gives the reason. |
 | **SKIPPED** | green | Nothing to do, such as an `import` whose names are already bound. |
-| **MIXED** | — | A loop where some iterations came from the cache and some ran. |
+| **MIXED** | ochre | A loop where some iterations came from the cache and some ran. |
 | **FUNC CHANGED** | red | A function this statement calls was edited. |
 | **MODULE RELOADED** | red | A local module you import was edited, and cash reloaded it. |
 | **WARNING** | red | Something to look at, such as a notebook file older than what the kernel ran. |
 | **ERROR** | red | The statement raised. |
-| **BYPASSED** | red | Header only. cash handed the cell straight to IPython, usually because of a syntax error. If the cell looks fine, the kernel log names the error after `Cash auto-caching failed`. |
+| **RUNNING** | ochre | Header only, while the cell runs. It turns into the final badge when the cell is done. |
+| **BYPASSED** | ochre | Header only. cash handed the cell straight to IPython, usually because of a syntax error. If the cell looks fine, the kernel log names the error after `Cash auto-caching failed`. |
 
 The header's counters (`EXEC`, `NOT CACHED`, `CACHED`, `WARN`) count rows, so
 `EXEC 1 · CACHED 1` under an `EXECUTED` header means one statement ran and one
@@ -100,6 +101,15 @@ redrawn. The text badge shows the same pills as `[seed]`, `[random]` and
 [Randomness](known-limitations.md#randomness).
 
 ## Why did this run again?
+
+<!-- claim: cash/notebook/statement/last_runs.py:LastRuns.reason @f57e2525, cash/notebook/statement/input_change.py:stored_input_change_reason @7ed27a07 -->
+Open an `EXECUTED` row that ran before: its **Miss** line names what changed
+since its last run, such as an input (`input changed: features`), a function
+it calls (`code it calls changed: score_rows`), a module, a random stream or
+a pass of a loop. When there was nothing to serve, it says why: the statement
+was too quick to store, is marked `# @cash:no-cache`, is an import, or its
+entry is no longer in the cache. After a restart it names the input that
+moved since the entry was stored. The first run of a statement names nothing.
 
 ### First time seeing this code
 
@@ -170,10 +180,13 @@ that leaves the module unable to load fails the cell instead
 A **NOT CACHED** row ran, and cash did not store the result, so it runs again
 every time. The row names the reason.
 
+<!-- claim: cash/notebook/statement/store.py:StatementStore._too_cheap_to_store @a1023f2e, cash/notebook/statement/processor.py:NO_CACHE_REASON @68873902 -->
 Two things that are not cached do **not** show as NOT CACHED: a statement too
 cheap to be worth an entry (under 10 ms, see the [cost model](cost-model.md)),
-and one marked `# @cash:no-cache`. Both show as a plain `EXECUTED` row with no
-reason.
+and one marked `# @cash:no-cache`. Both show as a plain `EXECUTED` row. When
+it runs again, its detail says why (`it took 0.2 ms, under the 10 ms a
+statement must take to be stored`, or `marked # @cash:no-cache, so it runs
+every time`).
 
 ### Side effects
 
@@ -197,17 +210,23 @@ runs a search, mark it [`# @cash:assume-safe`](annotations.md#cashassume-safe).
 
 <iframe class="cash-badge" title="cash badge example: NOT CACHED, in-place mutation" src="/_badges/not_cached_mutation.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
+<!-- claim: cash/rewrite_in_place.py:refusal @cece1b9e, cash/rewrite_in_place.py:shape_change @496efe57 -->
 The statement changes an object made in an earlier cell (`out.append(...)`,
 `d[k] = v`, `df.sort_values(inplace=True)`) instead of producing a new value.
-There is nothing to restore that would repeat the change, so the statement runs
-every time and cash marks everything downstream as changed. The same holds for a
-bare call that changes its argument, such as
-`sc.pp.calculate_qc_metrics(adata, inplace=True)`, and for a function of your
-own that changes its argument and returns a result, such as
-`summary = add_features(df)`: cash compares the arguments before and after,
-and runs the call every time from then on. A slow call inside the statement
-that only reads the object (`df.insert(1, "c", slow(df))`) is still cached on
-the value it is handed, so only the change itself repeats.
+When that object is a NumPy array, a pandas frame or Series, or a list, dict
+or set of plain values, cash stores the statement with the object's new
+state, and a hit writes that state back into the object. For anything else there is nothing to restore
+that would repeat the change: a list of objects of your own class
+(`obs.append(Item())`), a frame given a column by a method or a function
+(`df.insert(...)`), or an AnnData changed by
+`sc.pp.calculate_qc_metrics(adata, inplace=True)`. Such a statement runs
+every time, and cash marks everything downstream as changed. The same holds
+for a function of your own that changes its argument that way and returns a
+result, such as `summary = add_features(df)` adding a column: cash compares
+the arguments before and after, and runs the call every time from then on. A
+slow call inside the statement that only reads the object
+(`df.insert(1, "c", slow(df))`) is still cached on the value it is handed, so
+only the change itself repeats.
 
 **Fix:** assign a new value instead: `out = [f(e) for e in items]`,
 `df = df.sort_values(...)`. A fit is cached; see

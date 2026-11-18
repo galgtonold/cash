@@ -129,6 +129,16 @@ accept it.
 - **Storing runs on the event loop.** On a miss, serializing the result
   happens before your `await` returns, so a very large result blocks the loop
   briefly.
+- **A call that changes an argument in place runs every time.** On a sync
+  function cash stores the state it leaves an array, frame or plain list in
+  and writes it back on a hit; it does not follow a coroutine that closely,
+  so `np.clip(a, 0, 1, out=a)` in an `async def` is not stored
+  ([`IMPURE-OBSERVED-EFFECTS`](../../warnings.md#impure-observed-effects)).
+  Return a modified copy instead. For the same reason, the library settings
+  the body reads (`pd.set_option(...)`, `sklearn.set_config(...)`) are not
+  checked, and
+  [`KEY-LIBRARY-STATE-UNSEEN`](../../warnings.md#key-library-state-unseen)
+  says so once.
 - **A cancelled call is not counted** in `cache_info()`, and nothing is stored.
 
 ## Related

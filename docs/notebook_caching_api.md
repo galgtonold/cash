@@ -61,7 +61,10 @@ result = daily.rolling(7).mean()   # edit: only this runs again
   for `%autoreload`.
 - **Files you read are tracked.** Change a file read through `pd.read_csv`,
   `np.load`, `open` or another [tracked reader](how-it-works/invalidation.md#what-counts-as-a-change),
-  and the statements that read it run again.
+  and the statements that read it run again. On Linux and Windows, the
+  operating system tells cash which folders changed, so a notebook that read
+  thousands of files does not check each one before every cell
+  ([details](how-it-works/invalidation.md#files)).
   <!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @fa9f8714 -->
   A polars scan in one cell (`lf = pl.scan_parquet("data/*.parquet")`) and
   its `.collect()` in a later one count too: a changed or added file runs both
@@ -115,9 +118,11 @@ they talk to the outside world.
 | calls a function you wrote that reads pyplot's current figure (`len(plt.gca().lines)`, `plt.gcf().axes`), however deep the call: a method of your class, pyplot handed in (`nlines(plt)`), kept as a default (`get=plt.gca`) or imported inside it included | runs every time, as `plt.gca()` in the statement does: no key holds the figure it reads. On Python 3.12+, where cash records what runs, only a run that reached pyplot counts: `run(tsp, cities, plot=False)`, whose plotting branch is not taken, is cached |
 | calls a function marked [`@stateful`](tutorials/feature-guides/controlling-cache-behavior.md#stateful-helpers) | runs every time |
 | changes an object made in an earlier cell through a method (`df.insert(...)`, `lst.append(...)`) or a function (`W, H = fit_nmf(X, k)` writing into `X`) | cached with the object's new state when it is an array, a frame or Series whose index, columns and dtypes stay as they were, or a list, dict or set of plain values: a hit writes that state back into the object, which keeps its identity ([details](how-it-works/safety.md#the-mutation-problem)). Otherwise (`df.insert(...)` adds a column) it runs every time; a slow call inside it is cached on the values it is handed (`df.insert(1, "c", slow(df))` reuses `slow(df)` while `df` holds the same data) |
+| fills or empties a `functools.cache` helper of yours (`d = fib(300)` with `fib` under `@functools.cache`) | cached with the answers it put into the helper: a hit puts them back, so later calls find them as after a run. A bounded `lru_cache(maxsize=128)`, or a statement that names `cache_info`, runs every time ([details](known-limitations.md#a-helper-memoised-with-functoolscache)) |
 | sets state on one of your modules (`mylib.K = slow()`, `metrics.increment(5)` adding to a counter the module keeps, the same function handed to a call as `s.apply(metrics.increment)`, `importlib.reload(mylib)`) | runs every time |
 | hands a call a function of yours that changes state (`s.apply(ops["dbl"])` appending to a list, `s.apply(tracker.record)` changing `tracker`, `run_steps([f], data)`) | runs every time, as calling it by name does |
 | changes an environment variable or the working directory (`os.environ["MODE"] = "b"`, `os.chdir(d)`), itself or in a function of yours it calls | runs every time; after a kernel restart it runs again before a cell below it you run on its own |
+| changes a setting the process keeps outside any variable (`np.seterr(...)`, `logging.getLogger("lib").setLevel(10)`, `warnings.simplefilter(...)`, `sys.path.append(...)`, `atexit.register(f)`, `plt.style.use(...)`), itself or in a function or library it calls | runs every time: a hit, or a restarted kernel, would leave the setting unmade ([`NOTEBOOK-UNSEEN-WRITES`](warnings.md#notebook-unseen-writes)). Add `# @cash:assume-safe` when skipping it is fine |
 | reads from an iterator or open file held in a variable (`next(rows)`, `fh.readline()`, `islice(src, 3)`) | runs every time: a hit would not move the iterator on; a slow call inside it is still cached |
 | keeps or changes an object another variable also holds, directly or in a list, dict or attribute of one (`models = {"m": m}`, `a["x"] = ...` after `b = a`, `d["a"] = ...` after `d = dfs[0]`) | cached together with those variables: a hit restores them as one object graph, so `models["m"] is m` and `dfs[0] is d` again. A method bound to it counts as holding it (`hooks = {"log": tracker.log}`). When something else holds it (a closure, a library's module or registry, a pandas `.attrs`), when it is held through a closure or a builtin method (`hooks = {"add": results.append}`), or in a loop body (`for d in dfs:`), it runs every time: a restored copy would not be that object. The exception is an object a variable holds that the statement leaves as it was (`grid_search.fit(X, y)` keeps `full_pipeline` as it is): the entry keeps it as that variable, a hit binds the live object, which everything else still holds, and the statement runs when that variable's content, or which object another variable shares with it, changed. A NumPy slice of another array the statement reads and keeps as it is (`knn.fit(X_train, y)` keeps `X_train = X[:1000]` itself) is kept the same way, checked by its content: a hit binds the live `X_train`, which still shares memory with `X`. A read-only view of an input's data that a kept value holds (a fitted model keeping `y.to_numpy()`) is stored as its place in that data: a hit builds it on the live input again. IPython's output history (`Out`, `_`) holding a value you displayed does not count. A variable the statement leaves as it was keeps its place, so what is built on it is still served (`pre.fit_transform(X)` fits clones of the `cat_pipeline` that `pre` holds) |
 | keeps what a method returns and the call changed the object it was called on (`history = net.fit(X)`, `out = trainer.train()`) | runs every time; cash watches the object around the statement's first run, and one it cannot pickle counts as changed. An iterator, queue or open file is left to the iterator row, so `n = q.qsize()` is cached |
@@ -276,9 +281,10 @@ script in `proj/` with `cache_dir = ".cash"` in `proj/pyproject.toml`
 therefore share `proj/.cash`, unless `proj/notebooks/` has a `pyproject.toml`
 of its own.
 
-<!-- claim: cash/backends/adaptive_caps.py:DISK_FLOOR, cash/backends/adaptive_caps.py:DISK_CEILING, cash/backends/adaptive_caps.py:RAM_FLOOR, cash/backends/adaptive_caps.py:RAM_CEILING -->
+<!-- claim: cash/backends/adaptive_caps.py:DISK_FLOOR, cash/backends/adaptive_caps.py:DISK_CEILING, cash/backends/adaptive_caps.py:DISK_SAFETY == 0.8, cash/backends/adaptive_caps.py:RAM_FLOOR, cash/backends/adaptive_caps.py:RAM_CEILING -->
 By default the disk cache may use a quarter of the free disk space, at least
-8 GiB and at most 100 GiB, and the in-memory cache a fifth of your RAM, between
+8 GiB and at most 100 GiB, and never more than 80% of what is free; the
+in-memory cache may use a fifth of your RAM, between
 512 MiB and 4 GiB. When either is full, cash removes the entries least worth
 keeping. See [Where your cache lives](how-it-works/storage.md#where-the-cache-folder-is).
 

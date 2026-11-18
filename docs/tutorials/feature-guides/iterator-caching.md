@@ -125,6 +125,11 @@ own; it is never split. To opt out of chunking, return a list.
   (`time.time()`, `datetime.now()`) inside the loop gets the same warning as any
   cached function, and `assume_safe=`, `with cash.assume_safe():` and
   `strict=` work unchanged.
+- **Library settings the generator reads are not checked.** The generator's
+  code runs after the call returns, where cash does not record it, so a
+  setting such as `pd.set_option(...)` changed between two calls is not
+  seen. [`KEY-LIBRARY-STATE-UNSEEN`](../../warnings.md#key-library-state-unseen)
+  says so once.
 - **Async generators are not cached**; see [Async functions](async-caching.md).
   A coroutine that *returns* a sync generator is cached like any iterator.
 
