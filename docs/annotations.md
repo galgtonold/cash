@@ -139,10 +139,16 @@ and a hit returns the stored answer without sending the request:
 hits = session.post(SEARCH_URL, json=query).json()   # @cash:assume-safe
 ```
 
-It waives side effects only. A statement that changes an object in place, reads
-the clock or calls `input()` still runs every time. It applies to its own
-statement, even at the top of a cell. Add `# @cash:ttl=N` when the answer can go
-stale.
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._refuse_process_registries @e3f710f2 -->
+It also waives a change to a setting the process keeps outside any variable
+(`np.seterr`, a library logger's level, `warnings.simplefilter`,
+`atexit.register`), which otherwise makes the statement run every time: a
+hit, or a restarted kernel, leaves the setting unmade, so use it only when
+that does not matter. It waives effects only: a statement that reads the
+clock or calls `input()` still runs every time, and so does one that
+changes in place an object cash cannot store. It applies to its own
+statement, even at the top of a cell. Add `# @cash:ttl=N` when the answer
+can go stale.
 
 <!-- claim: cash/analysis/annotations.py:get_statement_annotations @7fbe4d48, cash/analysis/annotations.py:is_assume_safe_block @e4c86526 -->
 In a cell, use this comment rather than `with cash.assume_safe():`, the form
@@ -217,10 +223,12 @@ runs every time, when its result has to be the very object it is:
 
 With a copy, writes through the result would no longer reach the original.
 
+<!-- claim: cash/notebook/call_unit.py:CallUnit._run_miss @d6093a97 -->
 !!! warning "A cached call skips effects cash cannot see"
     cash does not serve a call from the cache when it sees the function change
-    an argument, rebind a variable of its closure, draw random numbers or write
-    a file, and it restores a change the function makes to a global or to a
+    an argument, rebind a variable of its closure, draw random numbers, write
+    a file or change a process setting (a logger's level, `np.seterr`), and
+    it restores a change the function makes to a global or to a
     list, dict or set its closure holds. Any other effect is skipped on a hit. Use
     `no-cache-calls` on the statement, or mark the function [`@stateful`](tutorials/feature-guides/controlling-cache-behavior.md#stateful-helpers),
     when you are not sure.
