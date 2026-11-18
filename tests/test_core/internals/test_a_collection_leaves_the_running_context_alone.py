@@ -25,6 +25,7 @@ import pytest
 
 import cash  # noqa: F401 - importing cash is what sets collections apart
 from cash._native import cwatch
+from tests._scripts import run_python
 
 RUNNING = contextvars.ContextVar("running", default="none")
 
@@ -212,4 +213,74 @@ def test_a_collection_at_the_recursion_limit_raises_nothing():
     result = subprocess.run(
         [sys.executable, "-c", DEEP_WITH_EVERY_ALLOCATION], capture_output=True, text=True, timeout=120
     )
+    assert result.returncode == 0 and result.stdout.strip() == "ok", (result.stdout[-500:], result.stderr[-2000:])
+
+
+CUT_SHORT = textwrap.dedent(
+    """
+    import contextvars, gc, os, sys, tempfile
+    import cash
+    from cash._gc_context import collecting
+    from cash.backends.no_file_writes import WouldWriteAFile, no_file_writes
+
+    callback = next(cb for cb in gc.callbacks if getattr(cb, "_cash_own_context", False))
+    RUNNING = contextvars.ContextVar("running", default="none")
+    RUNNING.set("the code")
+
+
+    class Alarm(Exception):
+        pass
+
+
+    real = sys.getrecursionlimit
+
+
+    def ring():
+        sys.getrecursionlimit = real
+        raise Alarm
+
+
+    gc.disable()  # this script plays the collection itself
+    callback("start", {})
+    assert collecting()
+    if sys.argv[1] == "raised":
+        # A signal handler's exception as the stop begins: what
+        # pytest-timeout's alarm raised there on macOS 3.10.
+        sys.getrecursionlimit = ring
+        try:
+            callback("stop", {})
+        except Alarm:
+            pass
+        else:
+            raise AssertionError("the alarm did not go off in the stop")
+    # else: the stop never ran its body (from 3.11 a handler runs as a
+    # function starts, before any ``try``): the next collection makes up for it
+    gc.enable()
+    gc.collect()
+    assert not collecting(), "the thread stayed in the collection's context"
+    assert RUNNING.get() == "the code"
+    target = os.path.join(tempfile.mkdtemp(), "kept.txt")
+    try:
+        with no_file_writes():
+            open(target, "w").close()
+    except WouldWriteAFile:
+        pass
+    assert not os.path.exists(target), "a rebuild's write went through"
+    print("ok")
+    """
+)
+
+
+@pytest.mark.parametrize("stop", ["raised", "never_ran"])
+def test_a_stop_cut_short_leaves_no_context_of_a_collection_behind(tmp_path, stop):
+    """A signal handler that raises inside the collection's callback
+    (pytest-timeout's alarm, a Ctrl-C) cut its stop short before it left the
+    collection's context: the thread stayed in it for good, `collecting`
+    read True, and `no_file_writes` let every later rebuild of a stored
+    value write files (a user's ``.pyc`` overwritten, macOS 3.10). The
+    stop now leaves it whatever raised, and the next collection leaves one
+    a stop never got to. Run with the Python callback, which the C
+    extension's replaces where it is built."""
+    (tmp_path / "cut.py").write_text(CUT_SHORT, encoding="utf-8")
+    result = run_python("cut.py", stop, cwd=tmp_path, env={"CASH_PURE_PYTHON": "1"}, check=False)
     assert result.returncode == 0 and result.stdout.strip() == "ok", (result.stdout[-500:], result.stderr[-2000:])

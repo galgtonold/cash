@@ -118,12 +118,46 @@ def _install() -> bool:
     # assignment: deeper than the limit even a call to a list method raises.
     program_limit: int | None = None
 
-    def own_context(phase: str, info: dict[str, Any]) -> None:
+    def leave_newest() -> None:
+        # The stop's own collection's context. One recorded but never
+        # entered (an exception cut its start short) is not the current
+        # context, and leaving it raises: it is only forgotten.
+        if entered:
+            try:
+                leave(entered[-1])
+            except RuntimeError:
+                pass
+            entered.pop()
+
+    def leave_stale() -> None:
+        # Contexts an earlier stop could not leave: from 3.11 Python runs a
+        # signal handler as a function starts, before any ``try`` in it.
+        # Left while current, the newest first; one that is not (another
+        # thread's, or one this thread has entered another context over)
+        # is kept for a later collection.
+        while entered:
+            try:
+                leave(entered[-1])
+            except RuntimeError:
+                return
+            entered.pop()
+
+    def own_context(phase: str, info: dict[str, Any], left: bool = False) -> None:
         # A collection can start at any depth, also a frame short of the
         # recursion limit (a pickler deep in a 20,000-object chain): ctypes
         # checks its argument's type in Python, which then raised there, and
         # the collection ran in the interrupted code's context. The calls
         # get a few frames more than the limit for themselves.
+        #
+        # Python runs a signal handler between steps of Python code, and one
+        # that raised here (pytest-timeout's alarm, a Ctrl-C) cut a stop
+        # short before it left the collection's context: the thread stayed
+        # in it, `collecting` read True from then on, and every later
+        # rebuild of a stored value could change files (`no_file_writes`
+        # lets a collection's finalizers through). So a start records its
+        # context before entering it, and a stop leaves it whatever raised
+        # (*left*: it did). ``try`` comes first: on 3.10 no handler runs
+        # right before one.
         nonlocal program_limit
         try:
             limit = sys.getrecursionlimit()
@@ -133,12 +167,15 @@ def _install() -> bool:
             sys.setrecursionlimit(limit + _HEADROOM)
             try:
                 if phase == "start":
+                    leave_stale()
                     context = contextvars.Context()
-                    enter(context)
                     entered.append(context)
+                    enter(context)
                     marker.set(True)
-                elif entered:
-                    leave(entered.pop())
+                else:
+                    leave_newest()
+                    left = True
+                    leave_stale()
             finally:
                 sys.setrecursionlimit(limit)  # deeper than *limit* now: raises, and the next collection puts it back
                 program_limit = None
@@ -146,6 +183,12 @@ def _install() -> bool:
             # Too deep even with the frames above: the collection runs in the
             # interrupted code's context, as without cash.
             pass
+        finally:
+            if phase == "stop" and not left:
+                try:
+                    leave_newest()
+                except (RecursionError, ctypes.ArgumentError):
+                    pass
 
     own_context._cash_own_context = True  # type: ignore[attr-defined]
     own_context._cash_collecting = marker  # type: ignore[attr-defined]
