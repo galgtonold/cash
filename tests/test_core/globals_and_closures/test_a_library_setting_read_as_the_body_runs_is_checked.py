@@ -158,19 +158,27 @@ def _settle(cached, plain, path, *args, fast=True):
     """Call until a call is served without running the body; on the fast
     path, until it is served from the memo, and check that it is (*fast*:
     for a function the fast path serves; one reading an object's or a
-    class's attributes is not)."""
+    class's attributes is not).
+
+    The calls follow each other with no pause. Once the world moved, the
+    memo scans again, remembers the next call and serves the one after: the
+    world has to hold still across those three calls. Another test's
+    leftovers (xdist) can move it every few milliseconds, and with a pause
+    between the calls no three of them ever met a still world."""
     for _ in range(3):
         assert cached(*args) == plain(*args)
     if path != "fast" or not fast:
         return
-    deadline = time.monotonic() + 5 * hit_memo.HitMemo.RESCAN_AFTER_S + 1.0
+    deadline = time.monotonic() + 20 * hit_memo.HitMemo.RESCAN_AFTER_S + 1.0
     while True:
         before = hit_memo.status()["fast_hits"]
         assert cached(*args) == plain(*args)
         if hit_memo.status()["fast_hits"] > before:
             return
-        assert time.monotonic() < deadline, "not served from the fast path: the test proves nothing"
-        time.sleep(0.01)
+        assert time.monotonic() < deadline, (
+            "not served from the fast path: the test proves nothing",
+            hit_memo.status(),
+        )
 
 
 USER_VAR = contextvars.ContextVar("cash_ut_user_var", default=1)
