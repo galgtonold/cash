@@ -108,6 +108,11 @@ src/cash/
 │                       #   value and by the registry's definitions
 ├── sizing.py           # how big a frame, array or container is
 ├── value_hash.py       # the notebook's value hash (compute_hash)
+├── value_watch.py      # reuses a value's digest while the C watchers
+│                       #   prove it unchanged
+├── cython_digest.py    # a Cython function keyed by the code it reaches
+├── rewrite_in_place.py # writes a stored state back into the object a
+│                       #   call or statement changed in place
 ├── mutation_fingerprint.py # a digest that moves on an in-place edit
 ├── source_norm.py      # normalises source before hashing (comments,
 │                       #   blank lines, docstrings)
@@ -121,6 +126,8 @@ src/cash/
 │                       #   type and backend
 ├── effectiveness.py    # notices when caching costs more than it
 │                       #   saves
+├── phase_times.py      # CASH_PHASE_TIMES: a cached call's time, phase
+│                       #   by phase
 ├── data_source.py      # the DataSource protocol
 ├── file_source.py      # FileDataSource for a local file
 ├── remote_source.py    # RemoteFileDataSource for s3, gs, az and http
@@ -201,7 +208,7 @@ explains claim anchors, skipped examples and derived numbers.
 
 | Folder | What goes there |
 |---|---|
-| `tests/test_core/<feature>/` | the decorator: `code_identity`, `globals_and_closures`, `arguments`, `reads`, `purity`, `results`, `reporting`, `config`, `project` |
+| `tests/test_core/<feature>/` | the decorator: `code_identity`, `globals_and_closures`, `arguments`, `reads`, `purity`, `results`, `reporting`, `config`, `project`, `watchers` (the C watchers' fast path) |
 | `tests/test_backends/` | storage backends |
 | `tests/test_notebook/<feature>/` | notebook unit tests, with a real IPython shell: `session`, `statement`, `calls`, `control_structures`, `upstream`, `lineage`, `files`, `modules`, `restore`, `analysis`, `values`, `randomness`, `badges` |
 | `tests/test_ui/`, `tests/test_cli/` | the dashboard and explorer; the `cash` command |

@@ -40,7 +40,7 @@ flowchart TB
    decides whether it is safe to cache
    ([knowing when not to cache](safety.md)). If it is, cash builds its
    [key](cache-keys-and-lineage.md) and looks it up: a hit restores the
-   variables and replays the output; a miss runs the statement and stores the
+   variables and replays the output (printed text, a plot's image); a miss runs the statement and stores the
    result. A statement that is not safe to cache runs without a lookup.
 4. **Badge.** cash prints a badge with one row per statement: `CACHED`,
    `EXECUTED`, `NOT CACHED` (with the reason) or `SKIPPED`.
@@ -98,8 +98,10 @@ the passes after it, so `loss = score(history, epoch)` in a later pass is keyed
 on what the earlier passes appended, and an edit of `lr` above reaches every
 pass. A change through another name moves the whole with it: the outer loop's
 list when an inner loop appends to its item, `rows` after `r = rows[i];
-r.append(x)`, `model` after `w = model['w']; w.append(x)`. Such a statement runs every time, as the same line does in a cell: a
-restore would bring back only what it binds. A loop that hands an object to a
+r.append(x)`, `model` after `w = model['w']; w.append(x)`. Such a statement runs every time in a loop body, with a slow call
+inside it still served from the cache. On its own in a cell, the same line
+is stored with the state it left the object in
+([details](../known-limitations.md#mutating-an-object-created-in-an-earlier-cell)). A loop that hands an object to a
 library function cash cannot judge (`heapq.heappush(h, x)`, `np.copyto(a, b)`,
 `x = dq.popleft()`, or a function of yours that hands its argument or a
 global to one) is watched the first time each version of the loop runs:

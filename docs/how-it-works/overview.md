@@ -49,7 +49,7 @@ flowchart TB
 |---|---|---|
 | What is cached | a call's return value | a statement's assigned variables; each loop iteration on its own |
 | Key | function name, state, dynamic dependencies, arguments | statement source, input lineages, called functions |
-| A side effect (file write, POST) | warns, then caches; a hit skips the effect | refuses to cache the statement; it runs every time |
+| A side effect | a file write or POST warns, then caches, and a hit skips it; a changed process setting (`np.seterr`, a logger's level) or an argument cash cannot write back runs every time | refuses to cache the statement; it runs every time |
 | Written to disk | always, unless a size cap refuses it | when it took at least 0.1 s and restoring beats recomputing |
 | On a hit | returns the value; `print` output is not replayed | restores the variables and replays the statement's output |
 

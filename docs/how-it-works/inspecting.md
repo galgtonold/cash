@@ -82,8 +82,11 @@ function in a script.
     Set `verbose = true` (or `CASH_VERBOSE=1`) to log one `cash.calls` line
     per call: a hit, or a miss and why. `debug = true` logs those lines along
     with cash's other debug records. `CASH_SUMMARY=1` prints one table of hits,
-    misses and time saved per function when the process ends. See
-    [Seeing what cash did](../decorator.md#seeing-what-cash-did).
+    misses and time saved per function when the process ends.
+    `CASH_PHASE_TIMES=1` times each call phase by phase (building the key,
+    reading the entry, the checks, the body, the store), by outcome, in
+    `func.cache_info()["phase_times"]`, to show where cash's own time goes.
+    See [Seeing what cash did](../decorator.md#seeing-what-cash-did).
 
 === "Notebook"
 
