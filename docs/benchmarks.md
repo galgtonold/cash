@@ -157,7 +157,10 @@ it.
     pays, run the script a second time: its first call reads from disk.
     `build.cache_info()["total_time_saved"]` adds up the compute time recorded
     when each entry was written, so treat it as an upper bound, not a
-    measurement.
+    measurement. To see where cash's own time goes on each call (building
+    the key, reading the entry, checks, storing), set `CASH_PHASE_TIMES=1`
+    and read `build.cache_info()["phase_times"]`; see
+    [Seeing what cash did](decorator.md#seeing-what-cash-did).
 
 === "Notebook"
 

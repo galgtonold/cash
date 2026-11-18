@@ -83,14 +83,14 @@ its warning class.
 | Family | Prefix | Codes | What it reports |
 |---|---|---:|---|
 | [Annotations](#annot-codes) | `ANNOT-` | 2 | A `# @cash:` comment that cash could not honour. |
-| [Caching](#cache-codes) | `CACHE-` | 19 | Caching happened, or refused to, and it is worth saying. |
+| [Caching](#cache-codes) | `CACHE-` | 21 | Caching happened, or refused to, and it is worth saying. |
 | [Configuration](#config-codes) | `CONFIG-` | 3 | A setting cash found but could not act on. |
 | [Side effects](#impure-codes) | `IMPURE-` | 4 | The function does something a cache hit will not repeat. |
-| [Cache keys](#key-codes) | `KEY-` | 27 | Something the result depends on may not be in the cache key. |
-| [Notebook](#notebook-codes) | `NOTEBOOK-` | 16 | Notebook-wide machinery rather than one statement. |
-| [Randomness](#random-codes) | `RANDOM-` | 4 | A cached value that randomness makes non-reproducible. |
+| [Cache keys](#key-codes) | `KEY-` | 30 | Something the result depends on may not be in the cache key. |
+| [Notebook](#notebook-codes) | `NOTEBOOK-` | 30 | Notebook-wide machinery rather than one statement. |
+| [Randomness](#random-codes) | `RANDOM-` | 5 | A cached value that randomness makes non-reproducible. |
 | [Remote files](#remote-codes) | `REMOTE-` | 3 | Checking whether a remote file changed. |
-| [Storing results](#store-codes) | `STORE-` | 8 | The call succeeded, but its result was not written. |
+| [Storing results](#store-codes) | `STORE-` | 15 | The call succeeded, but its result was not written. |
 
 ## Annotations {#annot-codes}
 
@@ -1503,6 +1503,7 @@ the result of that call came from an emptied iterator.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
+<!-- claim: cash/decorator/runtime.py:CallRunner._refuse_library_reads @ce57fc08 -->
 **What happened.** While the body ran, it (or a library it called) read a
 setting kept outside its arguments: a `ContextVar`, or a library's settings
 object. On Python 3.12 and newer cash records such reads as the body runs
@@ -1525,6 +1526,7 @@ for the object), or pass the value in as an argument.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
+<!-- claim: cash/decorator/runtime.py:CallRunner._warn_settings_unseen @074f4377 -->
 **What happened.** A cached call that reaches library code was stored, and
 its body ran unrecorded: on Python below 3.12, with `CASH_TRACE=0`, as a
 coroutine, or returning an iterator whose code runs after the call. Only a recorded body has the library settings it read checked

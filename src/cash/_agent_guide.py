@@ -92,10 +92,15 @@ the output it printed, so a print marker shows up either way. A cached
    ```
    In a notebook, a bare `model.fit(X, y)` is cached too, and restored
    after a kernel restart.
-5. **Side effects run on the first call only.** A purity warning is advisory.
+5. **Side effects run on the first call only.** A file write or a print in a
+   cached body does not happen on a hit. A purity warning is advisory.
    Put `# @cash:assume-safe` on each audited line, or wrap several in
    `with cash.assume_safe():`; `assume_safe=True` waives the whole function,
-   including anything added later.
+   including anything added later. A call that changes a process setting
+   (`np.seterr`, a logger's level, `warnings.simplefilter`) is not stored
+   and runs every time unless waived. On Python 3.12+, a call that changes an
+   array, a frame or a plain list or dict argument in place is stored, and a
+   hit writes the change back into the argument.
 6. **Verify with `f.explain(*args)`** (`[HIT]` / `[MISS]` and why) or
    `%cash_stats`. In a notebook, `f.cache_info()` resets whenever the defining
    cell re-runs.

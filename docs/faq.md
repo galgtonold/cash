@@ -19,8 +19,11 @@ link to the page that has the details.
     [Knowing when to recompute](how-it-works/invalidation.md).
 
 ??? question "Does it work with pandas, numpy, polars, torch or duckdb?"
-    Built-in hashers cover pandas, numpy, polars, PyArrow, modin, dask and
-    scipy.sparse. Any other value that pickles is compared by its pickle. For
+    <!-- claim: cash/content_hashers.py:builtin_hash @9e1b386d, cash/canonical_form.py:_xarray_holds_content_data @33dde68f -->
+    Built-in hashers cover pandas, numpy, polars, PyArrow, modin, dask,
+    scipy.sparse and geopandas, and a big array inside an xarray value is
+    hashed like an array argument. Any other value that pickles is compared
+    by its pickle. For
     a class of your own, a `__cash_key__` method is faster; for a type you do
     not own, register a hasher with `cash.register_hasher`. See
     [Custom hashers](tutorials/feature-guides/custom-hashers.md).
@@ -48,10 +51,11 @@ link to the page that has the details.
     [Where your cache lives](how-it-works/storage.md#cache-size-limit-and-eviction).
 
 ??? question "Is my cache still valid after I upgrade cash?"
-    cash clears a local cache written in an older, incompatible format by
-    itself, and treats any entry it cannot read as a miss. An upgrade can cost
-    you a recompute, never a wrong value. `cash clear --all` only frees space.
-    See [Versioning](versioning.md).
+    A cache folder written in an older, incompatible format is cleared when
+    cash opens it, and any entry cash cannot read is a miss, so an upgrade
+    costs a recompute, never a wrong value. A SQLite, Redis or S3 cache is not
+    cleared: clear it yourself after a minor upgrade. See
+    [The cache format](versioning.md#the-cache-format).
 
 ??? question "Is a 0.x release safe for real work?"
     The decorator is the simpler problem. The notebook path reasons about what
@@ -84,6 +88,12 @@ link to the page that has the details.
     on that line (or `with cash.assume_safe():` around it), or pass
     `assume_safe=True` for the whole function.
     See [Side effects](decorator.md#side-effects).
+
+    If it warns [`IMPURE-OBSERVED-EFFECTS`](warnings.md#impure-observed-effects),
+    the call changed something a hit would not change again: an argument cash
+    cannot write back, or a setting the process keeps outside any variable
+    (`np.seterr`, a logger's level, `warnings.simplefilter`). The warning
+    names the line and the fix.
 
 ??? question "Why does a cache hit not print anything?"
     A hit returns the stored value without running the function body, so its

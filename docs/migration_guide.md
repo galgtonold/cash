@@ -70,6 +70,7 @@ def transform(data, verbose=False):
 joblib hashes the decorated function's own source. cash also follows the
 helpers it calls (`clean` here) and the files it reads.
 
+<!-- claim: cash/core.py:Cash._decorated_before @6fe6cd52 -->
 | `joblib.Memory` | cash |
 |---|---|
 | `Memory("joblib-cache")` | `.cash` at your project root by default. Choose another with `CASH_CACHE_DIR` or `Cash(cache_dir=...)`; see [Cache folder](decorator.md#cache-folder) |
@@ -80,6 +81,7 @@ helpers it calls (`clean` here) and the files it reads.
 | `cache_validation_callback=expires_after(...)` | `ttl=` |
 | `transform.clear()` | `transform.cache_clear()` |
 | `memory.clear()` | `cash clear --all` |
+| `memory.cache(f)(x)` on every call | `cash.cache(f)(x)` works the same way: decorating the same function again with the same options returns the wrapper made the first time, statistics and all |
 
 ## `diskcache`
 

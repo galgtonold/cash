@@ -9,6 +9,7 @@ and later runs get them back instead of recomputing them.
 
 ## What each path does
 
+<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @f269c827 -->
 | | `@cash.cache` (decorator) | `%cash_on` (notebook) |
 |---|---|---|
 | What is cached | One function call | Each top-level statement, and slow calls inside it |
@@ -16,7 +17,7 @@ and later runs get them back instead of recomputing them.
 | Edit a helper function | Recomputes | Recomputes |
 | Change a data file | Recomputes | Recomputes |
 | Change an object in place | Stored with the argument's new state when cash can write it back into an array, frame or plain container; otherwise not stored | Detected: statements below see the change; an array, frame or plain container is stored with its new state |
-| Written to disk | Every result | Results that took more than 0.1 s and reload faster than they recompute |
+| Written to disk | Every result | Results that took more than 0.1 s, reload faster than they recompute, and save more on a re-run than writing them takes |
 | Side effects | Warned about; they run on the first call only | The statement is not cached |
 | Shows what it did | `f.explain()`, `f.cache_info()` | A badge above each cell, `%cash_stats` |
 | Needs IPython | No | Yes |
@@ -68,7 +69,7 @@ Click a column header to sort.
 </div>
 
 <ol class="cash-matrix-notes">
-<li id="matrix-note-1"><code>%cash_on</code>, survives a restart: only results over 0.1 s that reload faster than they recompute.</li>
+<li id="matrix-note-1"><code>%cash_on</code>, survives a restart: only results over 0.1 s that reload faster than they recompute and save more on a re-run than writing them takes.</li>
 <li id="matrix-note-2">Manual pickle, survives a restart: only if you remember to dump and load.</li>
 <li id="matrix-note-3"><code>jupyter-cache</code>, survives a restart: stores executed outputs for a book build, not for a live kernel.</li>
 <li id="matrix-note-4"><code>jupyter-cache</code>, recomputes when a cell changes: re-runs the whole notebook when any code cell changes.</li>

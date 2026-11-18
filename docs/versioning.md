@@ -22,10 +22,22 @@ change in any release.
 ## The cache format
 
 The on-disk cache format is not part of the public API and can change in any
-minor release. You do not need to do anything when it changes: cash clears a
-local cache written in an incompatible format when it opens it, and treats any
-entry it cannot read as a miss. An upgrade can cost a recompute, never a wrong
-value. Run `cash clear --all` only if you want the space back at once.
+minor release.
+
+<!-- claim: cash/backends/cache_dir.py:CacheDirStamp.check @7bdce11c, cash/backends/file_backend.py:FileBackend -->
+A cache folder (the default file cache) carries a stamp of its format. When
+cash opens a folder stamped with another format, it logs a warning with the
+number of files, deletes the entries, and the next run computes them again.
+You do not need to do anything, and any entry cash cannot read is a miss, so
+an upgrade costs a recompute, never a wrong value. The check runs both ways:
+an older cash opening a folder a newer one wrote clears it too, so machines
+that share a folder should run the same version.
+
+A SQLite, Redis or S3 tier carries no stamp and is not cleared. An entry an
+older version stored there can be served for a call the new version runs
+every time, so clear such a tier after a minor upgrade: a SQLite cache with
+`cash clear <dir>`, a Redis database or an S3 prefix with its own tools, or
+`f.cache_clear()` for each cached function.
 
 There is no tool to migrate a cache between versions. The cache is a
 performance layer, not a store of record: write anything you cannot afford to

@@ -108,7 +108,8 @@ See [Knowing when to recompute](how-it-works/invalidation.md).
 *Notebook.* Writing a statement's result from RAM to disk so it survives a
 kernel restart. It happens when the statement took more than 0.1 s and
 the disk write is worth the time it saves: reloading is cheaper than
-recomputing, and the value is not big for how fast it rebuilds.
+recomputing, one re-run saves more than the write takes, and the value is
+not big for how fast it rebuilds.
 `# @cash:persist` forces it. Decorated
 results are always written to disk. See [Cost model](cost-model.md).
 
@@ -120,9 +121,12 @@ results are always written to disk. See [Cost model](cost-model.md).
 ## Purity and side effects
 
 *Both.* Code is pure when it only computes a result: no file writes, network
-or database calls. A notebook statement with a side effect is not cached; a
-decorated function gets a warning, and its side effects run on the first call
-only. `@cash.pure` and `@cash.stateful` state your intent. See
+or database calls. A notebook statement with a side effect is not cached. A
+decorated function gets a warning: a file write or a network call runs on the
+first call only, and a call that changes a setting the process keeps
+(`np.seterr`, a logger's level) runs every time. A change to an argument is
+stored with the result and written back on a hit, when cash can write it
+back. `@cash.pure` and `@cash.stateful` state your intent. See
 [Knowing when not to cache](how-it-works/safety.md).
 
 ## Skip / not cached
