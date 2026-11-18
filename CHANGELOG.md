@@ -7,6 +7,326 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-18
+
+This release caches work that used to run every time, and closes more gaps
+where a hit served a stale answer. A call or notebook statement that changes
+its argument in place (`np.clip(X, ..., out=X)`, `W, H = fit_nmf(X, k)`
+writing into `X`) is now stored, and a hit writes the change back into your
+object; so is a call that only sets attributes on an object it was handed,
+as an estimator's `fit` does. In notebooks, an unchanged plot is shown from
+the cache instead of drawn again, statements that fill or clear a
+`functools.cache` helper are served, and folders are watched for changes so
+cash no longer looks at every file before every cell. On the trust side, a
+library setting the code read (`sklearn.set_config`, `pd.set_option`,
+`np.seterr`, a `ContextVar`), a logger's level, the warnings filters, the
+order of a set of numbers, and calls that set process-wide settings are now
+keyed or run every time. Cython, numba stencils, pint, geopandas, xarray and
+xclim are keyed properly, and many hits, stores and first calls got cheaper.
+1,063 commits in all.
+
+**The cache format changed, so existing cache entries are deleted once and
+recomputed.** Read **Breaking** before upgrading, and **Upgrading** at the end.
+
+### Breaking
+
+- **Existing cache entries are deleted once.** The on-disk cache format went
+  from version 9 to version 11: a notebook statement that filled or emptied a
+  `functools.cache` helper is now stored with the answers it put in, and a
+  statement's entry now refers to the file records of the entries its inputs
+  came from instead of holding a copy. An older cash would read either kind of
+  entry wrongly (serving a statement with the memo left as it was, or after
+  its files changed), and some keys are now taken differently (sets of
+  numbers, pandas indexes, geopandas and xarray values). The first time 0.15
+  opens a cache folder written by an older cash, it logs a warning and
+  deletes the old entries, so the first run afterwards recomputes everything.
+  Going back to 0.14 clears the folder again the same way. SQLite, Redis and
+  S3 tiers carry no format stamp and are not cleared; see **Upgrading**.
+
+### Added
+
+- **Calls that change an argument in place are cached.** A decorated function
+  that writes into an argument used to run every time. It is now stored with
+  the state it left the argument in, when the argument is a NumPy array (not
+  of objects), a pandas frame or Series that keeps its index, columns and
+  dtypes, or a list, dict or set of plain values. A hit checks that the
+  argument you pass is in the state the entry was stored from, then writes
+  the stored state into that very object, so other names for it and views of
+  an array see the change. A call that fills and returns its `out=` argument
+  is stored too, and `result is out` still holds on a hit. Other arguments
+  (an object of your class, a list of lists, a frame given a new column) and
+  calls cash cannot fully see (before Python 3.12, an `async` function, a
+  `key=` function) still run every time. The new `CACHE-ARG-WRITTEN-BACK`
+  warning says when a hit writes a change back.
+- **Calls that set attributes on an object they were handed are cached.**
+  `est.fit(X)` setting `self.coef_` and returning `self`, a resampler's
+  `fit_resample`, or `c.cache(est.fit)`: such a call is stored with the
+  attributes it bound, rebound or deleted, however deep in the call, and a hit
+  sets them again on the object you pass, in the same order. This needs a
+  plain Python class and no other in-place change; a call that writes into a
+  container the object already holds (`self.history.append(x)`) still runs
+  every time, and the warning names the line that stopped it.
+- **Notebook statements that change their input in place are cached** on the
+  same terms: `W, H = fit_nmf(X, k)` with `fit_nmf` writing into `X`, or
+  `lst.append(...)` on a list of plain values from an earlier cell. A hit
+  writes the stored state into the object the name holds, which keeps its
+  identity.
+- **Unchanged plots are shown from the cache.** With the inline backend, a
+  plot whose statements and inputs did not change (same matplotlib settings,
+  same seed and draws) shows its stored image, printed text and echoed value
+  instead of drawing again, after a restart too when it was slow enough to be
+  written to disk. A plot that binds a name (`fig, ax = plt.subplots()`),
+  writes a file, or draws from an unseeded generator is drawn every time.
+- **Statements that fill or clear a `functools.cache` helper are served.** The
+  answers a statement put into an unbounded memo are stored with it and put
+  back into the live memo on a hit, so later calls find them as after a run.
+  A statement that empties the memo before using it is served whatever the
+  memo holds. cash now reads memos of up to 4,096 answers (was 256). Bounded
+  `lru_cache` memos and statements naming `cache_info` still run every time.
+- **Notebooks watch folders instead of checking every file before every
+  cell.** On Linux (inotify) and Windows, cash asks the operating system to
+  report changes in each folder holding a file a cell read, and checks a
+  file again only when its folder reports a change. A notebook that read
+  thousands of files no longer pays for that before every cell. macOS,
+  network drives, symbolic links and files with a second hard link are still
+  checked every time. `CASH_FILE_WATCH=0` turns it off; `cash info` (`File
+  watch`) and `%cash_status` (`file_watch`) say whether it is on, and why not.
+- **`CASH_PHASE_TIMES=1` shows where cash's time goes.** Each cached call is
+  timed phase by phase (building the key, reading the entry, checks, body,
+  store), grouped by outcome, in `f.cache_info()["phase_times"]`.
+  `CASH_PHASE_TIMES_FILE` collects them from many processes into one file.
+- **Library settings are checked on Python 3.12 and later.** A library is
+  keyed by its installed version, so a setting changed between calls
+  (`sklearn.set_config(transform_output="pandas")`, `pd.set_option(...)`,
+  `np.set_printoptions`, `np.seterr`, `decimal`'s context, a `ContextVar`, a
+  settings object such as `scanpy.settings.n_jobs`, `Model.scale = 5` on a
+  library class) served the first call's result. Each call now records the
+  settings the code it ran read, and an entry is served only while they read
+  the same (a miss says `library setting changed`). A `ContextVar` holding
+  something that cannot be compared runs uncached with
+  `KEY-LIBRARY-STATE-UNREAD`; where calls are not recorded (before 3.12,
+  `CASH_TRACE=0`, a coroutine), `KEY-LIBRARY-STATE-UNSEEN` says so once.
+- **Cython helpers are keyed by the code they reach.** A cached function
+  calling a Cython function of your project was keyed by the whole built
+  file, so an edit to any other function in the same `.pyx` reran it. It is
+  now keyed by the Cython code it can reach, the `.pxd`/`.pxi` files it uses
+  and the build configuration, and by the cimported modules it calls into.
+  Rebuilding an unchanged module on Windows no longer moves the key.
+- **More libraries are keyed by content.** geopandas frames and series have
+  a built-in content hasher (geometries by WKB, plus the CRS); xarray arrays
+  are keyed by content; pandas indexes by their labels; pint quantities by
+  value and their registry's definitions; numba `@stencil` functions and more
+  numba options (`locals`, a declared signature) are keyed. Calls into
+  geopandas, xarray, xclim, pint, scanpy and similar libraries that ran
+  uncached, or missed in every new process, are now stored and served.
+- **Notebook misses say why.** A statement that ran again names what changed
+  since its last run (an input, a function, a module, a random stream, a
+  pass of a loop), or why nothing was there to serve (too quick to store,
+  marked `# @cash:no-cache`, an import, the entry gone), instead of
+  "computed, no reason given". After a restart, the miss names the input
+  that moved.
+- **New warnings.** Each has its own entry on the Warnings page:
+  - `CACHE-SERVED-VIEW` and `NOTEBOOK-SERVED-VIEW`: a write into a pandas
+    table served from memory did not reach a NumPy array you took from it
+    before the write.
+  - `STORE-CODE-SWAPPED`: a function's code is replaced in memory during
+    every call; not stored.
+  - `NOTEBOOK-MEMO-UNREAD` and `NOTEBOOK-MEMO-SHARED`: a statement over a
+    memo too big to check, or one whose answers something outside its
+    outputs also holds, runs every time.
+  - `NOTEBOOK-CELL-UNPLACED`: the cell you ran is not in the saved notebook,
+    so the cells above it were not checked; save the notebook.
+  - `NOTEBOOK-LOOKUPS-UNSEEN`: an object a statement finds by a lookup (a
+    logger by its name) cannot be watched here (before Python 3.12).
+  - `NOTEBOOK-REPAIR-GAP`: a statement above the cell, rerun to bring it up
+    to date, could not run as needed, so the cell runs as written, uncached.
+    It used to fail with `UpstreamStateError`.
+  - `RANDOM-STREAM-UNRESTORED`: a draw starts from where the stream stands,
+    not where a run from the top has it.
+  - `NOTEBOOK-CHANGED-BELOW` now also names a variable a cell below bound
+    anew, or one rebuilt on the way that drops a change made below.
+
+### Changed
+
+- **More calls run every time, by design.** A decorated function or notebook
+  statement that changes a setting the process keeps outside any variable
+  (`np.seterr`, a library logger's level or handler,
+  `sys.setrecursionlimit`, `atexit.register`, `signal.signal`,
+  `warnings.simplefilter`, rebinding `warnings.formatwarning`, `os.putenv`,
+  `os.chdir`, `rcParams`, `copyreg`, `sys.path`) is no longer stored: a hit,
+  or a new process or a restarted kernel, left the setting unmade. Each can be cached again with `# @cash:assume-safe` or
+  `assume_safe=True`; a `with cash.assume_safe():` block now waives an
+  environment write made inside it too.
+- **Dropping a call's return value is no longer reported.**
+  `p = make_pipeline(...); p.fit(X, y)` caches with no
+  `IMPURE-SIDE-EFFECTS` warning; a call is judged by what it does.
+  `setattr`, `object.__setattr__` and `operator.setitem` on a global are
+  reported as changes wherever they appear.
+- **An entry is written to disk only when a re-run repays the write.** cash
+  measures how fast this machine writes each kind of value, and writes a
+  value only when one re-run that reads it back saves more than writing it
+  takes. A list of hundreds of small DataFrames is priced by their count, so
+  a loop that builds thousands of them quickly is not stored when storing
+  costs more than a hit saves. Leaving a value off disk never changes a
+  result: it is computed again.
+- **A pandas table read from disk is your own.** After a restart, a table
+  read back from disk is no longer shared read-only between hits; it
+  behaves as the table your code built. Within one process, a table served
+  from memory is still shared, and writing past pandas into it (`.array`)
+  now explains why it is read-only.
+- **A big decorated result goes to disk first.** A result holding 1 MiB or
+  more of arrays is written to disk alone and kept in RAM only from its
+  first hit, so a run of many large results no longer fills memory with
+  results nobody reads again.
+- **Decorating the same function again returns the same wrapper.** Libraries
+  that cache through a factory (`cache(func)(args)` on every call) no longer
+  reset the function's statistics or slow every other cached function.
+- **`AmbiguousCellError` names the cells.** It now lists the code cells that
+  share the same text, says why cash does not guess, and gives the fix (make
+  the cells differ, or update IPython to 8.3 or later).
+- **The bug-report link fits.** The badge's report link takes as much of the
+  notebook's cell source as fits in a link.
+- **Hashing costs less.**
+  - A cached function's key reuses the work for its code, helpers and
+    globals while nothing they read moved (`CASH_STATE_MEMO=0` turns this
+    off), and a library function under its own caching decorator takes the
+    quick hit path.
+  - numpy fixed-size numbers (`np.int64` from iterating an array) take the
+    quick hit path; Fortran-ordered arrays are hashed without a copy; objects
+    holding many small arrays, plain dicts and lists, records holding dates,
+    and frames of records or text are keyed much faster.
+  - A new process reads back what an earlier one worked out about a
+    function and its helpers (including Cython modules) instead of walking
+    and parsing them again.
+- **Storing and restoring cost less.**
+  - pandas columns of Python strings are stored as one UTF-8 buffer, and
+    object columns of dates and times as columns of numbers, both much
+    faster to write and read than pickling each item.
+  - A value kept as pickle bytes is not unpickled again on every hit when
+    nobody kept or changed the last copy; a big graph of small objects
+    stores at about the cost of its pickle; a big chunk's checksum is
+    checked on several threads.
+- **Notebooks cost less.** The checks after each statement on big frames,
+  models and lists of records, the check of the cells above, the identity and
+  share checks, and the VS Code backup scan all do less work; a cell's
+  progress badges share one thread; a loop of cheap passes runs its rest as
+  one unit.
+
+### Fixed
+
+**Wrong or stale answers in decorated functions.**
+
+- **Process and library state the key never saw.** A warnings filter set to
+  `"error"` or a rebound `warnings.showwarning`, a library setting a body
+  changed as it ran (checked on what it first read), a library class's
+  attribute the program set, and the environment set through `os.putenv`
+  are now part of what a hit is checked against. The warnings state is kept
+  only for a call that warned, so a script and a notebook share entries for
+  calls that never warn.
+- **Sets.** `{1, 9}` and `{9, 1}` are equal but iterate differently, so a
+  cached function returning `list(s)` or `s.pop()` was served the other
+  set's answer. A set of numbers now keys by its order, and a set restored
+  from the cache keeps its order wherever it is held. Equal sets that
+  iterate differently no longer cause a needless miss.
+- **Loggers and other objects pickled by name.** `log.setLevel(10)` or
+  `logging.getLogger("app").setLevel(10)` anywhere now changes the key of a
+  call given a value holding the logger; a call that only logs changes
+  nothing.
+- **Code the key never saw.** A method or property bound on a class from
+  outside its body (`Thing.prop = property(newp)`, `Vec.__add__ = _add`),
+  functions a base class's methods call, a name bound to a module
+  (`FFTLIB = numpy.fft`), an `lru_cache` helper, a type alias, a string
+  annotation, code `exec`'d into a plain namespace, code run under a hidden
+  `__main__` (`runpy.run_path`), what an `Enum` member holds besides its
+  value, and a library's unnamed class or function are now keyed by their
+  code. A class reached through module data is keyed by the methods a call
+  ran, so editing a method no call runs keeps the entries.
+- **Same-size edits.** A same-size edit with the modification time put back
+  (`cp -p`, `rsync -t`, `os.utime`) was served the old result; it is now
+  read again, and on Windows a `.pyc` header is not taken as proof.
+- **Results stored that should not have been.** A call that rebinds a global
+  to an equal object, changes the `self` it is bound to, or changed a global
+  its code reads through a library call (`heapq.heappush(HEAP, ...)`), a
+  call whose code a strict check only saw on lines that did not run, and a
+  call whose argument's run-time lookups changed are no longer stored or
+  served stale. A cyclic graph of objects holding sets no longer keys like
+  another graph.
+- **Calls that never cached.** A failed optional import, an uninstalled lazy
+  import, an import of a module no finder knows, a dead `weakref.proxy` in a
+  global, and a `Signature` or `MappingProxyType` default no longer make a
+  call run uncached.
+- **Statistics.** A nested cached call's cash time is no longer counted
+  twice, and a first call's warm-up (a numba compile, a lazy import) is
+  credited once per process. `CACHE-NET-LOSS` on a function with no
+  arguments blames the lookup, not an argument.
+
+**Wrong or stale answers in notebooks.**
+
+- **Random streams.** A statement that seeds from entropy
+  (`np.random.seed()` with no argument) is never served; a seed in a branch
+  not taken or inside a memo helper counts as plain Python would; and
+  the stream above a cell is set by position instead of running whole cells
+  above again, which had rebound later names and repeated their side
+  effects.
+- **Repairs of the cells above.** A repair no longer puts back a name the
+  cell or a cell below bound, keeps an accumulator built from an edited
+  cell, never runs an edited cell's old text, and stops at a cell or import
+  a run from the top could not pass. A cell you ran that is not in the saved
+  notebook now says so instead of skipping the check silently.
+- **Loggers.** A statement reading a logger, directly or through a value
+  holding it, is served only while the logger is as it was.
+- **Shared objects and views.** A slice of another array kept by a fit
+  (`knn.fit(X_train, y)`), a read-only view of an input held by a model, and
+  a frame sharing a column with another variable on pandas 2 are restored
+  so writes through either name behave as in plain Python. A loop over a
+  dict's values counts as changing the dict.
+- **Files.** A temporary file's folder is no longer taken for a write on
+  macOS and Windows, a file rewritten with the same bytes is named as such,
+  and a blank line IPython emptied no longer makes the notebook file look
+  stale.
+
+**Storage and tools.**
+
+- **Hangs and crashes.** Writing the digest table's log no longer hangs on
+  its own lock when the cache folder is spelled another way; Windows no
+  longer refuses the large thread stack a deep pickle runs on; a garbage
+  collection cut short by a signal no longer leaves later restores free to
+  write files (Python 3.10 and 3.11).
+- **Memory.** geopandas geometries and other values cash remembers are held
+  weakly, so a frame you delete is freed; a copy of a frame keeps no
+  reference to your lists.
+- **Warnings.** A cell's warning is filtered under `__main__` and names the
+  right line, and a warning the default filter held back is not reported as
+  shown.
+- **Windows and Python 3.10.** Purity reports are timed with a clock that
+  moves on Windows, so they are stored; functions renamed with
+  `functools.wraps` are found on Python 3.10; the library map is saved when
+  the `importlib_metadata` backport or an egg-info install is present.
+
+### Upgrading
+
+**The cache folder is cleared once.** On first open, 0.15 deletes the entries
+an older cash wrote (it logs how many), and the first run afterwards computes
+everything again. Nothing else needs doing for a file cache. If you share a
+folder between machines, upgrade them together: an older cash opening it
+clears it again.
+
+**SQLite, Redis and S3 tiers are not cleared** automatically. Clear them after
+upgrading (a SQLite cache with `cash clear <dir>`, a Redis database or S3
+prefix with its own tools, or `f.cache_clear()` for each function), so no
+entry an older build stored for a call that now runs every time is served.
+
+Then:
+
+- Cached functions and statements that change a process setting
+  (`np.seterr`, a logger's level, `warnings.simplefilter`, `os.putenv`) now
+  run every time; if skipping the setting on a hit is fine, add
+  `# @cash:assume-safe` on the line the warning names, or `assume_safe=True`.
+- If a notebook's file checks misbehave (a write through a memory map by
+  another process, a file another program keeps open on Windows), set
+  `CASH_FILE_WATCH=0` before starting the kernel to check every file before
+  every cell, as before.
+
 ## [0.14.0] - 2026-10-30
 
 This release is about trust and speed. Another long sweep for stale answers
