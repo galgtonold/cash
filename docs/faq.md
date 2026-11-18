@@ -19,8 +19,9 @@ link to the page that has the details.
     [Knowing when to recompute](how-it-works/invalidation.md).
 
 ??? question "Does it work with pandas, numpy, polars, torch or duckdb?"
-    Built-in hashers cover pandas, numpy, polars, PyArrow, modin, dask and
-    scipy.sparse. Any other value that pickles is compared by its pickle. For
+    Built-in hashers cover pandas, numpy, polars, PyArrow, modin, dask,
+    geopandas and scipy.sparse. Any other value that pickles is compared by
+    its pickle. For
     a class of your own, a `__cash_key__` method is faster; for a type you do
     not own, register a hasher with `cash.register_hasher`. See
     [Custom hashers](tutorials/feature-guides/custom-hashers.md).
@@ -48,10 +49,10 @@ link to the page that has the details.
     [Where your cache lives](how-it-works/storage.md#cache-size-limit-and-eviction).
 
 ??? question "Is my cache still valid after I upgrade cash?"
-    cash clears a local cache written in an older, incompatible format by
-    itself, and treats any entry it cannot read as a miss. An upgrade can cost
-    you a recompute, never a wrong value. `cash clear --all` only frees space.
-    See [Versioning](versioning.md).
+    cash clears a cache folder written in an older, incompatible format by
+    itself, and treats any entry it cannot read as a miss, so the upgrade
+    costs a recompute. A SQLite, Redis or S3 cache is not cleared: clear it
+    yourself after a minor upgrade. See [Versioning](versioning.md#the-cache-format).
 
 ??? question "Is a 0.x release safe for real work?"
     The decorator is the simpler problem. The notebook path reasons about what
