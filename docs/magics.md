@@ -159,7 +159,9 @@ use (`fast_path`: `on`, or `off` with the reason; see
 [The C fast path](getting-started/installation.md#the-c-fast-path)), and
 whether folders are watched for changes to the files cells read
 (`file_watch`: `on` with how many folders, or `off` with the reason; see
-[invalidation](how-it-works/invalidation.md#files)). With no argument it prints JSON and
+[invalidation](how-it-works/invalidation.md#files)), and whether cash sees
+files that C libraries open themselves (`native_file_hook`; see
+[Reads through a loader cash cannot see](known-limitations.md#reads-through-a-loader-cash-cannot-see)). With no argument it prints JSON and
 returns the dict; `dict` returns it without printing; `json` returns a JSON
 string. Statuses use the enum names: `COMPUTED` for the badge's EXECUTED,
 `RESTORED` for CACHED, and `MIXED` for a statement that ran while calls inside
