@@ -67,9 +67,7 @@ the output it printed, so a print marker shows up either way. A cached
    replayed. Seed it: `np.random.seed(0)`, or `np.random.default_rng(42)` for
    a generator (seeding the global does not affect `default_rng()`). Use
    `# @cash:no-cache` for values that must be fresh (timestamps, IDs).
-4. **ML: return the model from a cached function, never a bare `.fit()`.**
-   `model.fit(X, y)` alone changes the model in place and returns nothing for
-   a decorator to cache. Do:
+4. **ML: build, fit and return the model in a cached function.** Do:
    ```python
    import cash
    from sklearn.ensemble import RandomForestClassifier
@@ -78,12 +76,16 @@ the output it printed, so a print marker shows up either way. A cached
    def train(X, y):
        return RandomForestClassifier(random_state=42).fit(X, y)
    ```
-   In a notebook, a bare `model.fit(X, y)` is cached too, and restored
-   after a kernel restart.
+   A cached function that only fits a model it was handed is stored too, and
+   a hit sets the fitted attributes on that model again, but only for a
+   plain Python class and when nothing else changed. In a notebook, a bare
+   `model.fit(X, y)` is cached too, and restored after a kernel restart.
 5. **Side effects run on the first call only.** A purity warning is advisory.
    Put `# @cash:assume-safe` on each audited line, or wrap several in
    `with cash.assume_safe():`; `assume_safe=True` waives the whole function,
-   including anything added later.
+   including anything added later. A change to a process setting
+   (`np.seterr`, a logger's level, `warnings.simplefilter`, `os.environ`) is
+   not stored at all: such a call or statement runs every time.
 6. **Verify with `f.explain(*args)`** (`[HIT]` / `[MISS]` and why) or
    `%cash_stats`. In a notebook, `f.cache_info()` resets whenever the defining
    cell re-runs.

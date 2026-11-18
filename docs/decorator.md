@@ -327,7 +327,7 @@ last use; `cash inspect --function NAME` lists one function's entries. See the
 With a bare `@cash.cache`, a call recomputes when anything in the first list
 changed. The second list is what cash does not see, and what to do about it.
 
-<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @1738c84b, cash/decorator/runtime.py:CallRunner._analyze_dependencies @6f5bcbac, cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @cb57665a, cash/decorator/code_args.py:CodeArgs.fold_code_args @58904680, cash/decorator/runtime.py:KeyBuilder.held_by_name_for @f5d8cae7 -->
+<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @1738c84b, cash/decorator/runtime.py:CallRunner._analyze_dependencies @6f5bcbac, cash/decorator/globals_fold.py:GlobalsFold.fold_read_globals @cb57665a, cash/decorator/code_args.py:CodeArgs.fold_code_args @58904680, cash/decorator/runtime.py:KeyBuilder.held_by_name_for @f5d8cae7, cash/decorator/environment_fold.py:EnvironmentFold._fold_library_versions @9c6400f4, cash/decorator/library_reads.py:changed @e14c794d -->
 <div class="grid cards" markdown>
 
 -   **Tracked for you: a change recomputes**
@@ -385,6 +385,15 @@ changed. The second list is what cash does not see, and what to do about it.
       it: `sys.argv`, and an `argparse` parser's `parse_args()` called
       without a list of its own. Flags your `main()` parses and passes on
       count only as those arguments.
+    - The **installed version** of each library the code calls, and of the
+      packages that library requires: an upgrade recomputes
+      ([Code in installed packages](decorator-limitations.md#code-in-installed-packages)).
+    - **Library settings** the code read, on Python 3.12 and newer:
+      `sklearn.set_config(...)`, `pd.set_option(...)`, NumPy's error
+      handling and print options, `decimal`'s context, a `ContextVar`, an
+      attribute set on a library's class. An entry is served only while they
+      read as they did; the miss says `library setting changed`. For a call
+      that warned, the warnings filters count too.
     - Sources named in `depends_on=` or `dynamic_depends_on=`, and an elapsed
       `ttl`.
 
@@ -394,8 +403,8 @@ changed. The second list is what cash does not see, and what to do about it.
 
     - **Library code** (`site-packages`, a `pip install --target` folder
       outside your project, the standard library), your team's own package
-      too when it is installed without `-e`. The version is not
-      in the key: see
+      too when it is installed without `-e`. cash keys it by its version, not
+      by reading it, so an edit made in place is not seen: see
       [Code in installed packages](decorator-limitations.md#code-in-installed-packages).
     - What a **server or database** returns: set `ttl=`
       ([`KEY-NETWORK-READ`](warnings.md#key-network-read)).
@@ -969,13 +978,14 @@ did (a file written, a request sent, a line printed) does not happen again. On
 the first call, cash reads the function and its helpers and reports what a hit
 would skip or get wrong:
 
-<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @045afef4, cash/analysis/purity_policy.py:DECORATOR_POLICY @44b8bc03, cash/analysis/purity_report.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @045afef4, cash/analysis/purity_policy.py:DECORATOR_POLICY @44b8bc03, cash/analysis/purity_report.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep", cash/decorator/runtime.py:CallRunner._refuse_registries @a3042403 -->
 | The body... | cash |
 |---|---|
 | Writes, posts, prints to stdout, or changes state outside the function | Warns ([`IMPURE-SIDE-EFFECTS`](warnings.md#impure-side-effects)) and caches |
 | Reads the network or a database (`requests.get`, `pd.read_sql`) | Warns ([`KEY-NETWORK-READ`](warnings.md#key-network-read)) and caches. `ttl=` answers it and silences the warning |
 | Reads the clock, a random UUID, or an environment variable by computed name | Warns ([`KEY-AMBIENT-READ`](warnings.md#key-ambient-read)) and caches the first value |
 | Reads an environment variable by literal name, the working directory, or the command line (`sys.argv`, `parser.parse_args()`) | Puts the value in the key. No warning |
+| Changes a setting the process keeps outside any variable: `np.seterr`, a library logger's level or handler, `warnings.simplefilter`, `os.environ`, `os.chdir`, `sys.path`, `atexit.register` | Warns ([`IMPURE-OBSERVED-EFFECTS`](warnings.md#impure-observed-effects)) and runs uncached, every time: a hit, or a new process, would leave the setting unmade. `assume_safe=True`, `# @cash:assume-safe` on the `def` line, or a `with cash.assume_safe():` block around the change caches it again |
 | Uses `eval`/`exec`, `importlib`, or `getattr(obj, name)()` with a computed name, or calls a function `exec`/`eval` built from a string (rules or formulas loaded from a file) | Warns ([`KEY-UNTRACKABLE-DEP`](warnings.md#key-untrackable-dep)) and runs uncached, because edits to that code can't be tracked; on Python 3.12+ a `getattr` or `importlib` lookup is cached on a checked record of the code it ran instead. `strict=True` raises `CashImpureFunctionError` |
 
 **When writing a file is part of the job** (a report, a thumbnail, a saved
@@ -1226,6 +1236,14 @@ Python function that calls the kernels, or on top of `@njit` itself.
 side effects. A miss's run time, and so the time a hit saves, includes any
 compiling the call did.
 
+<!-- claim: cash/cython_digest.py:cython_function_digest @3efb2e1c -->
+**Can I cache code that calls Cython?** Yes. A Cython function of your
+project is keyed by the Cython code it can reach in its `.pyx`, the
+`.pxd` and `.pxi` files it uses, and the build configuration, so editing
+another function in the same `.pyx` keeps the entries. When cash cannot
+match the `.pyx` to the built module (no `.pyx`, or one newer than the
+build), it keys the whole built file instead: any edit then reruns.
+
 <!-- claim: cash/tracking/reader_patches.py:_patch_multiprocessing_pool @9fac5b09 -->
 **Can I use cached functions in a process pool?** Yes: map the cached
 function itself, or a plain function that calls cached ones. Workers share
@@ -1240,17 +1258,21 @@ with its fix:
 
 - <a id="arguments-cash-cannot-hash"></a>[Arguments cash cannot hash](decorator-limitations.md#arguments-cash-cannot-hash):
   a lock, an open file, a connection.
+- [A table served from memory](decorator-limitations.md#a-table-served-from-memory):
+  an array taken from it before a write.
 - [An argument that does not change the result](decorator-limitations.md#an-argument-that-does-not-change-the-result):
   a logger or a `verbose=` flag.
 - <a id="methods-and-self"></a>[Methods and `self`](decorator-limitations.md#methods-and-self)
 - <a id="code-you-pass-as-an-argument"></a>[Code you pass as an argument](decorator-limitations.md#code-you-pass-as-an-argument)
+- [Library settings before Python 3.12](decorator-limitations.md#library-settings-before-python-312)
 - <a id="reads-cash-cannot-see"></a>[Reads cash cannot see](decorator-limitations.md#reads-cash-cannot-see):
   C extensions, subprocesses, threads you start.
 - [An edit that keeps the size and timestamps](decorator-limitations.md#an-edit-that-keeps-the-size-and-timestamps)
   (Windows)
 - <a id="relative-paths-and-working-directories"></a>[Relative paths and working directories](decorator-limitations.md#relative-paths-and-working-directories)
 - <a id="results-cash-refuses-to-store"></a>[Results cash refuses to store](decorator-limitations.md#results-cash-refuses-to-store):
-  figures, unpicklable values, calls that change their arguments.
+  figures, unpicklable values, calls that change their arguments or a
+  process setting.
 - <a id="generators-and-async-functions"></a>[Generators and async functions](decorator-limitations.md#generators-and-async-functions)
 - <a id="edits-inside-a-running-process"></a>[Edits inside a running process](decorator-limitations.md#edits-inside-a-running-process)
 - <a id="using-a-decorated-function-in-a-notebook"></a>[Using a decorated function in a notebook](decorator-limitations.md#using-a-decorated-function-in-a-notebook)

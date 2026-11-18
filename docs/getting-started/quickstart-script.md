@@ -79,10 +79,12 @@ print(pipeline.cache_info())     # {'hits': 1, 'misses': 2, ...}
 
 The answer changed and `misses` went up.
 
-<!-- claim: cash/install_paths.py:is_user_module @c8e57159 -->
+<!-- claim: cash/install_paths.py:is_user_module @c8e57159, cash/decorator/environment_fold.py:EnvironmentFold._fold_library_versions @9c6400f4 -->
 This also works for helpers imported from other modules of your project. cash
-stops at installed code (`site-packages` and the standard library); if a
-third-party function matters to a result, name it with `depends_on=`.
+stops at installed code (`site-packages` and the standard library): it keys a
+library by its installed version, so an upgrade recomputes, but does not read
+its code. See
+[Code in installed packages](../decorator-limitations.md#code-in-installed-packages).
 
 ### Change a file it reads
 

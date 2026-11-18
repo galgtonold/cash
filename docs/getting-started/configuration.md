@@ -124,6 +124,13 @@ faster than `min_execution_time_to_cache_seconds` (10 ms) is not cached at
 all, and one faster than 0.1 s is kept in memory only, never on disk. The
 0.1 s threshold is fixed; `# @cash:persist` or `persist_all` skips both.
 
+<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.pays_for_its_write @fee6df3b, cash/backends/persistence_policy.py:EXPECTED_RERUNS == 1 -->
+A statement over both is written to disk only when one re-run that reads it
+back saves more than writing it takes. cash measures how fast this machine
+writes each kind of value, so on a slow disk a quick statement with a large
+result stays in memory. Leaving a value off disk never changes a result: it
+is computed again.
+
 | Field | Default | Description |
 |---|---|---|
 | `persist_all` | `false` | Cache every statement, skipping the floors below, as if each had `# @cash:persist`. |
@@ -152,13 +159,26 @@ all, and one faster than 0.1 s is kept in memory only, never on disk. The
 | `check_cash_keys` | `true` | <span class="md-tag">decorator only</span> Check each [`__cash_key__`](../tutorials/feature-guides/custom-hashers.md#cash-key) against the data it stands for, once per object per process, on a background thread; one key for two contents warns [`KEY-STALE-CASH-KEY`](../warnings.md#key-stale-cash-key). |
 | `analytics` | `true` | <span class="md-tag">notebook only</span> Record each statement's hit, miss and timing in `analytics.db` under the per-user cache root, for the `cash.show_stats()` dashboard. `false` creates no file. |
 
+### Environment variables only
+
+These switches have no field: set them in the environment before the
+process starts (before the kernel starts, for a notebook).
+
 <!-- claim: cash/decorator/code_trace.py:on @5a4beff8 -->
 On Python 3.12 and newer, cash also records which of your functions each cached
 call and statement ran, and checks that record before serving the result: a
 result whose code changed in a way the key missed runs again. `CASH_TRACE=0`
-turns that check off (an environment variable only, not a field). Calls that
-pick code by a run-time name are still recorded, since they are only cached on
-that record.
+turns that check off. Calls that pick code by a run-time name are still
+recorded, since they are only cached on that record.
+
+<!-- claim: cash/tracking/file_watch.py:ENV == "CASH_FILE_WATCH", cash/tracking/native_reads.py:ENV == "CASH_NATIVE_FILE_HOOK", cash/phase_times.py:ON @978388aa -->
+| Variable | What it does |
+|---|---|
+| `CASH_TRACE=0` | Turns off the record of the code each call ran, above. |
+| `CASH_FILE_WATCH=0` | <span class="md-tag">notebook only</span> Checks every file a cell read before every cell, instead of asking the operating system which folders changed ([invalidation](../how-it-works/invalidation.md#files)). |
+| `CASH_NATIVE_FILE_HOOK=0` | Stops cash from seeing the files C libraries open themselves ([the native file hook](../known-limitations.md#reads-through-a-loader-cash-cannot-see)). |
+| `CASH_PHASE_TIMES=1` | <span class="md-tag">decorator only</span> Times every cached call phase by phase, in `f.cache_info()["phase_times"]` ([Seeing what cash did](../decorator.md#seeing-what-cash-did)). `CASH_PHASE_TIMES_FILE` also writes them to a file. |
+| `CASH_PURE_PYTHON=1` | Runs without the C extension ([The C fast path](installation.md#the-c-fast-path)). |
 
 ### Backend
 

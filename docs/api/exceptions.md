@@ -41,7 +41,7 @@ catches them all.
 | Exception | Cause | Fix |
 |---|---|---|
 | `UpstreamStateError` | An earlier statement the cell needs failed when cash re-ran it. When it failed only because cash left out a statement it needs, the cell runs uncached instead and cash warns [`NOTEBOOK-REPAIR-GAP`](../warnings.md#notebook-repair-gap). | Fix that statement, or run the notebook from the top. |
-| `AmbiguousCellError` | The cell's code appears more than once and cash cannot tell which copy is running. | Save the notebook, or make the copies differ. |
+| `AmbiguousCellError` | The cell's code appears more than once, the editor sent no cell id, and cash cannot tell which copy is running. The message lists the code cells that share the text. | Make the copies differ (a comment is enough), or update IPython to 8.3 or newer and save the notebook, so each cell carries its id. |
 | `ForwardReferenceError` | The cell reads a name only a later cell defines. Not shown as an error: the cell runs uncached and cash warns [`NOTEBOOK-FORWARD-READ`](../warnings.md#notebook-forward-read). | Move the definition above the cell. |
 | `CacheKeyComputationError` | No key could be built for a statement. Not shown as an error: the statement runs uncached and cash warns [`NOTEBOOK-BAILOUT`](../warnings.md#notebook-bailout). | See that code. |
 
