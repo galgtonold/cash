@@ -41,7 +41,7 @@ from typing import Any, TypeVar
 
 from . import scan_store
 
-__all__ = ["STATS", "StoredTextMismatch", "flush", "kept", "status"]
+__all__ = ["STATS", "StoredTextMismatch", "flush", "held", "kept", "status"]
 
 T = TypeVar("T")
 
@@ -96,6 +96,13 @@ def _slot(kind: str) -> dict[str, Any] | None:
             return None
         slot = _SLOTS[kind] = _read_file(directory, kind)
     return slot
+
+
+def held(kind: str) -> bool:
+    """Has this process read *kind*'s file (or found there is none to read)?
+    A caller whose answer is cheaper to work out than that file is to read
+    works small ones out until it is."""
+    return kind in _SLOTS
 
 
 def _digest(kind: str, text: str, extra: str) -> str:

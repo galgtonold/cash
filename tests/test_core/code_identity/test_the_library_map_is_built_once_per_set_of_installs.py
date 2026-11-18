@@ -398,8 +398,10 @@ def test_an_emptied_map_with_a_matching_digest_is_read_as_saved(site, monkeypatc
     assert not scans
 
 
-def test_notebooks_in_two_folders_keep_a_map_each(site, tmp_path, monkeypatch):
-    """A kernel or ``python -c`` puts its working folder on ``sys.path``."""
+def test_notebooks_in_two_folders_build_the_map_once(site, tmp_path, monkeypatch):
+    """A kernel or ``python -c`` puts its working folder on ``sys.path``: one
+    holding no metadata names no distribution, so the map built for one
+    folder is the other's (`_shared_fingerprint`)."""
     _fill(site)
     one, two = tmp_path / "one", tmp_path / "two"
     one.mkdir()
@@ -409,7 +411,7 @@ def test_notebooks_in_two_folders_keep_a_map_each(site, tmp_path, monkeypatch):
         monkeypatch.setattr(sys, "path", [str(folder), *[p for p in sys.path if p not in (str(one), str(two))]])
         _new_process()
         assert _lookups()["realpkg"] == ["fake_real"]
-    assert len(scans) == 2
+    assert len(scans) == 1
 
 
 def test_a_working_folder_is_listed_again_only_when_it_changed(site, tmp_path, monkeypatch):
@@ -455,7 +457,8 @@ def test_each_slot_is_its_own_file_and_only_the_newest_are_kept(site, monkeypatc
     library, and written back whole when a working folder moved."""
     _fill(site)
     _lookups()
-    assert len(_saved_files()) == 1
+    # The map, and the same map without the folders holding no metadata.
+    assert len(_saved_files()) == (1 if library_versions._SHARED_FINGERPRINT is None else 2)
     monkeypatch.setattr(library_versions, "_SAVED_MAPS", 3)
     for k in range(5):
         monkeypatch.setattr(sys, "prefix", f"/env-{k}")

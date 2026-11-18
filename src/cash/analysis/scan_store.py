@@ -94,19 +94,43 @@ def _cash_fingerprint() -> str:
     root = Path(cash.__file__).parent
     h = hashlib.blake2b(digest_size=16)
     h.update(f"{_FORMAT}\0{getattr(cash, '__version__', '')}\0{sys.version}\0{sys.implementation.cache_tag}".encode())
-    entries = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d != "__pycache__"]
-        for name in filenames:
-            if name.endswith(".py"):
-                path = os.path.join(dirpath, name)
-                st = os.stat(path)
-                entries.append(f"{os.path.relpath(path, root)}\0{st.st_size}\0{st.st_mtime_ns}")
+    entries: list[str] = []
+    _py_file_prints(str(root), "", entries)
     for entry in sorted(entries):
         h.update(entry.encode())
         h.update(b"\n")
     _FINGERPRINT.append(h.hexdigest())
     return _FINGERPRINT[0]
+
+
+def _py_file_prints(folder: str, prefix: str, into: list[str]) -> None:
+    """``relative path, size, mtime`` of each ``.py`` file under *folder*,
+    ``__pycache__`` left out, as ``os.walk`` and an ``os.stat`` of each found
+    them: one listing a folder, each file's stat taken from it
+    (``DirEntry.stat``, which Windows answers from the listing: 418 files
+    stat'd one by one were 17 ms of a process's first cached call there). A
+    linked folder is not entered, a folder that cannot be listed is passed
+    over, and a ``.py`` that cannot be stat'd raises, as before."""
+    try:
+        listing = os.scandir(folder)
+    except OSError:
+        return
+    subfolders = []
+    with listing:
+        for entry in listing:
+            try:
+                is_dir = entry.is_dir()
+            except OSError:
+                is_dir = False
+            rel = entry.name if not prefix else os.path.join(prefix, entry.name)
+            if is_dir:
+                if entry.name != "__pycache__" and not entry.is_symlink():
+                    subfolders.append((entry.path, rel))
+            elif entry.name.endswith(".py"):
+                st = entry.stat()
+                into.append(f"{rel}\0{st.st_size}\0{st.st_mtime_ns}")
+    for path, rel in subfolders:
+        _py_file_prints(path, rel, into)
 
 
 def _dir() -> Path | None:

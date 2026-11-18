@@ -29,6 +29,7 @@ import importlib.machinery as importlib_machinery
 import inspect
 import json
 import os
+import pathlib
 import re
 import sys
 import types
@@ -70,6 +71,9 @@ _CLOSURES: dict[str, frozenset[str]] = {}
 #: (`_install_fingerprint`), under which `_closure`'s results are kept for
 #: the next process; None when the map is not saved.
 _SLOT_FINGERPRINT: dict | None = None
+#: The same map's fingerprint with the folders that hold no metadata left
+#: out (`_shared_fingerprint`), under which it is kept too; None when not.
+_SHARED_FINGERPRINT: dict | None = None
 #: distribution name -> ``{"names": [...], "versions": {name: [version,
 #: RECORD path]}}``: what `_closure` found, kept with the saved map: read
 #: from it, and what this process added.
@@ -87,10 +91,23 @@ def _listed_files(dist: Any) -> list[str] | None:
     before it drops the ones not on disk, which it finds by a stat of every
     file (20,000 in an ordinary environment, half a second, and each process
     a parallel call starts paid it). None without a ``RECORD``."""
-    text = dist.read_text("RECORD")
+    return _record_rows(dist.read_text("RECORD"))
+
+
+def _record_rows(text: str | None) -> list[str] | None:
     if text is None:
         return None
     return [row[0] for row in csv.reader(text.splitlines()) if row]
+
+
+def _read_record(folder: str) -> str | None:
+    """``Distribution.at(folder).read_text("RECORD")``, without importing
+    ``importlib.metadata`` (15 ms on Windows) for it: the same file, read
+    the same way, None when it is not there."""
+    try:
+        return pathlib.Path(folder, "RECORD").read_text(encoding="utf-8")
+    except (FileNotFoundError, IsADirectoryError, NotADirectoryError, PermissionError):
+        return None
 
 
 def _packages_distributions() -> tuple[dict[str, list[tuple[str, Any]]], dict[str, list] | None]:
@@ -161,12 +178,18 @@ def _metadata_folder(dist: Any) -> str | None:
     return folder if os.path.isdir(folder) else None
 
 
+def _plain_listed(f: str) -> bool:
+    """Does splitting *f* on ``/`` give the parts ``PackagePath(f)`` does (no
+    root, no empty or ``.`` part)?"""
+    return not ("//" in f or "/." in f or f.startswith(("/", "./")) or f.endswith("/") or f in ("", "."))
+
+
 def _top_of(f: str) -> str:
     """The top-level name a listed file *f* is under, as ``PackagePath(f)``
     gives it; without building one when splitting on ``/`` gives the same
-    parts (no root, no empty or ``.`` part): 20,000 of them cost 0.2 s."""
-    if "//" in f or "/." in f or f.startswith(("/", "./")) or f.endswith("/") or f in ("", "."):
-        path = importlib_metadata.PackagePath(f)
+    parts (`_plain_listed`): 20,000 of them cost 0.2 s."""
+    if not _plain_listed(f):
+        path = pathlib.PurePosixPath(f)  # what ``PackagePath`` is, without importing it
         parts, f = path.parts, str(path)
     else:
         parts = f.split("/")
@@ -178,12 +201,33 @@ def _on_disk(listed: Any, top: str) -> bool:
     if listed is None:
         return True
     if isinstance(listed, str):  # from the saved map: its file list read now
-        dist = importlib_metadata.Distribution.at(listed)
-        listed = (dist, [f for f in _listed_files(dist) or () if _top_of(f) == top])
+        return _on_disk_at(listed, top)
     dist, files = listed
     for f in files:
         try:
             if dist.locate_file(importlib_metadata.PackagePath(f)).exists():
+                return True
+        except (OSError, ValueError):
+            continue
+    return False
+
+
+def _on_disk_at(folder: str, top: str) -> bool:
+    """`_on_disk` for the metadata *folder* the saved map names: its
+    ``RECORD`` read and each file checked as ``Distribution.at(folder)``
+    would (``locate_file(...).exists()``), by ``os.path`` where joining the
+    plain path gives the same file and by ``pathlib`` where it may not, so a process that finds everything in
+    the saved map never imports ``importlib.metadata``."""
+    parent = os.fspath(pathlib.Path(folder).parent)
+    for f in _record_rows(_read_record(folder)) or ():
+        if _top_of(f) != top:
+            continue
+        if _plain_listed(f):
+            if os.path.exists(os.path.join(parent, f)):
+                return True
+            continue
+        try:  # ``PathDistribution.locate_file``: the folder's parent joined with ``PackagePath(f)``
+            if (pathlib.Path(parent) / pathlib.PurePosixPath(f)).exists():
                 return True
         except (OSError, ValueError):
             continue
@@ -213,25 +257,94 @@ def _distribution_map() -> dict[str, list[tuple[str, Any]]]:
     0.15 s for 150 of them, and every process paid it on its first key: each
     worker of a parallel call, each run of a script. What it is built from
     is the metadata folders on ``sys.path`` (`_install_fingerprint`): while
-    those are the same, so is the map, and so is every key.
+    those are the same, so is the map, and so is every key. A process whose
+    ``sys.path`` differs only by folders that hold no metadata (another
+    script's folder, ``python -c``) takes the map saved without them
+    (`_shared_fingerprint`).
     """
-    global _SLOT_FINGERPRINT, _SAVED_CLOSURES
+    global _SLOT_FINGERPRINT, _SHARED_FINGERPRINT, _SAVED_CLOSURES
     _SAVED_CLOSURES = {}
+    _SHARED_FINGERPRINT = None
     try:
+        entries = list(sys.path)
         header = _fingerprint_header()
-        fingerprint = None
+        fingerprint = shared = None
         if header is not None:
             saved = _saved_map(header)
             if saved is not None:
+                _SHARED_FINGERPRINT = _shared_fingerprint(entries, _SLOT_FINGERPRINT)
                 return saved
             fingerprint = _install_fingerprint(header)  # before the build: an install during it rebuilds next time
+            shared = _shared_fingerprint(entries, fingerprint)
+            if shared is not None:
+                saved = _shared_map(fingerprint, shared)
+                if saved is not None:
+                    return saved
         by_top, saveable = _packages_distributions()
     except Exception:  # noqa: BLE001 - broken metadata: no versions to fold
         return {}
     if fingerprint is not None and saveable is not None:
         _save_map(fingerprint, saveable)
         _SLOT_FINGERPRINT = fingerprint
+        if shared is not None:
+            _save_map(shared, saveable)
+            _SHARED_FINGERPRINT = shared
     return by_top
+
+
+def _shared_fingerprint(entries: list, fingerprint: dict | None) -> dict | None:
+    """*fingerprint* without the ``sys.path`` folders that hold no metadata
+    (``bare`` in `_folder_print`), or None when it leaves none out.
+
+    Distributions are found one ``sys.path`` entry at a time, each from the
+    ``*.dist-info`` and ``*.egg-info`` in it alone, so such a folder names
+    none: the map, the versions and the files read are those of the other
+    entries, in their order. The entries are named as spelled
+    (``Distribution._path`` is built from that spelling) and where they
+    resolve, so a different order, or another spelling, is another map."""
+    if fingerprint is None:
+        return None
+    header, prints = fingerprint["header"], fingerprint["paths"]
+    paths = header[-1]
+    if len(entries) != len(paths) or len(prints) != len(paths):
+        return None
+    kept, kept_prints = [], []
+    for entry, path, print_ in zip(entries, paths, prints):
+        if not isinstance(entry, str) or os.path.abspath(entry or ".") != path:
+            return None  # sys.path changed under us: no shared map
+        if print_[0] == "bare":
+            continue
+        kept.append([entry, path])
+        kept_prints.append(print_)
+    if len(kept) == len(paths):
+        return None
+    return {"header": [*header[:-1], "shared", kept], "paths": kept_prints}
+
+
+def _shared_map(fingerprint: dict, shared: dict) -> dict[str, list[tuple[str, Any]]] | None:
+    """The map saved under *shared* (`_shared_fingerprint`) while it is the
+    one saved, kept under *fingerprint* too for the next process; or None."""
+    try:
+        path = _slot_path(_slot(shared["header"]))
+        saved = _read_saved(_slot(shared["header"]))
+        by_top = saved["map"]
+        if saved["fingerprint"] != shared or saved["digest"] != _map_digest(by_top):
+            return None
+        result = _map_rows(by_top)
+        closures = saved.get("closures")
+        closures = closures if isinstance(closures, dict) else {}
+    except Exception:  # noqa: BLE001 - anything off in the file: build it again
+        return None
+    if result is None:
+        return None
+    global _SLOT_FINGERPRINT, _SHARED_FINGERPRINT, _SAVED_CLOSURES
+    _SLOT_FINGERPRINT, _SHARED_FINGERPRINT, _SAVED_CLOSURES = fingerprint, shared, closures
+    _save_map(fingerprint, by_top, closures)
+    try:
+        os.utime(path)  # in use: not among the oldest `_prune_saved` removes
+    except OSError:
+        pass
+    return result
 
 
 def _backport_path_finder(finder: Any) -> bool:
@@ -308,11 +421,7 @@ def _folder_print(path: str) -> list | None:
             for child in children:
                 low = child.name.lower()
                 if low.endswith(("dist-info", "egg-info")):
-                    inside = (
-                        [[name, *_stat_of(os.path.join(child.path, name))] for name in _METADATA_FILES]
-                        if child.is_dir()
-                        else []
-                    )
+                    inside = _metadata_prints(child.path) if child.is_dir() else []
                     listed.append([child.name, *_stat_of(child.path), inside])
                 elif low.endswith(".pth"):
                     listed.append([child.name, *_stat_of(child.path)])
@@ -338,6 +447,42 @@ def _still(saved: list, path: str) -> tuple[bool, list | None]:
 
 #: The files in a metadata folder the map is read from (`_packages_distributions`).
 _METADATA_FILES = ("METADATA", "PKG-INFO", "RECORD", "top_level.txt", "installed-files.txt", "SOURCES.txt")
+
+
+def _metadata_prints(folder: str) -> list:
+    """``[name, *stat]`` for each of `_METADATA_FILES` in the metadata
+    *folder*, the stat empty when it is not there: from one listing of the
+    folder (``DirEntry.stat``, which Windows answers from the listing),
+    not a stat of each name (six for each of 150 folders, every process's
+    first key that reached a library). A name the listing spells otherwise
+    (a case-insensitive disk) is stat'd by its own name, as before."""
+    found: dict[str, list] = {}
+    spelled: set[str] = set()
+    try:
+        with os.scandir(folder) as children:
+            for child in children:
+                spelled.add(child.name.lower())
+                if child.name in _METADATA_FILES:
+                    try:
+                        st = child.stat()
+                    except (OSError, ValueError):
+                        continue
+                    found[child.name] = [st.st_mtime_ns, st.st_ctime_ns, st.st_size, st.st_ino]
+    except OSError:
+        return [[name, *_stat_of(os.path.join(folder, name))] for name in _METADATA_FILES]
+    return [
+        [
+            name,
+            *(
+                found[name]
+                if name in found
+                else _stat_of(os.path.join(folder, name))
+                if name.lower() in spelled
+                else []
+            ),
+        ]
+        for name in _METADATA_FILES
+    ]
 
 
 def _stat_of(path: str) -> list:
@@ -420,14 +565,9 @@ def _saved_map(header: list) -> dict[str, list[tuple[str, Any]]] | None:
             if not same:
                 return None
             refreshed.append(now)
-        result = {}
-        for top, entries in by_top.items():
-            rows = []
-            for name, folder in entries:
-                if not isinstance(name, str) or not (folder is None or isinstance(folder, str)):
-                    return None
-                rows.append((name, folder))
-            result[top] = rows
+        result = _map_rows(by_top)
+        if result is None:
+            return None
         closures = saved.get("closures")
         closures = closures if isinstance(closures, dict) else {}
     except Exception:  # noqa: BLE001 - anything off in the file: build it again
@@ -437,6 +577,19 @@ def _saved_map(header: list) -> dict[str, list[tuple[str, Any]]] | None:
     _SAVED_CLOSURES = closures
     if refreshed != prints:  # a working folder that moved and is still bare
         _save_map(_SLOT_FINGERPRINT, by_top, closures)
+    return result
+
+
+def _map_rows(by_top: Any) -> dict[str, list[tuple[str, Any]]] | None:
+    """A saved map as `_dists_for` reads it, or None when it is not whole."""
+    result = {}
+    for top, entries in by_top.items():
+        rows = []
+        for name, folder in entries:
+            if not isinstance(name, str) or not (folder is None or isinstance(folder, str)):
+                return None
+            rows.append((name, folder))
+        result[top] = rows
     return result
 
 
@@ -840,13 +993,16 @@ def _keep_closures() -> None:
     if _CLOSURES_ADDED and _SLOT_FINGERPRINT is not None:
         _CLOSURES_ADDED = False
         _save_map(_SLOT_FINGERPRINT, None, dict(_SAVED_CLOSURES))
+        if _SHARED_FINGERPRINT is not None:
+            _save_map(_SHARED_FINGERPRINT, None, dict(_SAVED_CLOSURES))
 
 
 def forget() -> None:
     """Read the installed distributions again (tests that install one)."""
-    global _DISTS_BY_TOP, _SLOT_FINGERPRINT, _SAVED_CLOSURES, _CLOSURES_ADDED
+    global _DISTS_BY_TOP, _SLOT_FINGERPRINT, _SHARED_FINGERPRINT, _SAVED_CLOSURES, _CLOSURES_ADDED
     _DISTS_BY_TOP = None
     _SLOT_FINGERPRINT = None
+    _SHARED_FINGERPRINT = None
     _SAVED_CLOSURES = {}
     _CLOSURES_ADDED = False
     _PROVIDERS.clear()
