@@ -118,16 +118,26 @@ def test_elf_and_mach_o_keep_the_plain_hash():
 
 
 def test_a_big_image_costs_about_a_plain_hash():
-    image = _pe32_plus(text_size=5 * 1024 * 1024)
+    # The two are timed in turns and each keeps its fastest run, so a busy
+    # spell of the runner slows both or neither: timed one after the other,
+    # a stall during the second set alone read as a 2.4x cost. The image is
+    # big enough that the fixed allowance is small beside a hash of it: a
+    # cost of twice a plain hash fails every attempt.
+    image = _pe32_plus(text_size=10 * 1024 * 1024)
 
-    def best(fn):
-        times = []
-        for _ in range(5):
-            start = time.perf_counter()
-            fn(image)
-            times.append(time.perf_counter() - start)
-        return min(times)
+    def plain_hash(data):
+        return hashlib.sha256(data).hexdigest()
 
-    plain = best(lambda data: hashlib.sha256(data).hexdigest())
-    stable = best(extension_bytes_digest)
-    assert stable < plain * 1.5 + 0.002
+    def timed(fn):
+        start = time.perf_counter()
+        fn(image)
+        return time.perf_counter() - start
+
+    for _ in range(3):
+        plain = stable = float("inf")
+        for _ in range(15):
+            plain = min(plain, timed(plain_hash))
+            stable = min(stable, timed(extension_bytes_digest))
+        if stable < plain * 1.5 + 0.001:
+            return
+    raise AssertionError(f"the digest took {stable * 1e3:.2f} ms, a plain hash {plain * 1e3:.2f} ms")
