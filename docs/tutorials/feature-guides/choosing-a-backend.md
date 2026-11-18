@@ -44,14 +44,17 @@ which values also go to the slower tiers depends on the path:
 
     <!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @f269c827 -->
     A decorated result goes to **every** tier whose size cap allows it, however
-    cheap it was to compute (with one exception, see the link below). The compute floor and cost model do not apply, and
+    cheap it was to compute (with two exceptions, see the link below). A
+    result holding 1 MiB or more of arrays is written to disk first and kept in
+    RAM only from its first hit. The compute floor and cost model do not apply, and
     a `promotion_policy` you pass has no effect on decorated functions. See
     [Where results are stored](../../decorator.md#where-results-are-stored).
 
 === "Notebook"
 
-    A statement's result goes past RAM when it took longer than 0.1 s and
-    recomputing it costs more than loading it back. `promotion_policy` replaces
+    A statement's result goes past RAM when it took longer than 0.1 s,
+    recomputing it costs more than loading it back, and one re-run saves more
+    than the write takes. `promotion_policy` replaces
     that judgement for entries the cost model has no estimate for, and
     `# @cash:persist` forces a write. See the [cost model](../../cost-model.md).
 

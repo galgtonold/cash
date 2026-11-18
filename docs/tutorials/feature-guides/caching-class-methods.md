@@ -90,6 +90,38 @@ app.register_hasher(ThirdPartyClient, lambda c: c.base_url)
 
 See [Custom hashers](custom-hashers.md#registering-a-hasher).
 
+## Methods that set attributes on `self`
+
+<!-- claim: cash/decorator/attribute_replay.py:AttrVerdict.of @5152391a, cash/rewrite_in_place.py:attribute_refusal @a163557b -->
+A method that only sets attributes on `self`, as a model's `fit` does, is
+cached too. The entry keeps the attributes the call set, and a hit sets them
+again on the instance you call it on:
+
+```python
+import cash
+
+class Model:
+    def __init__(self, k):
+        self.k = k
+
+    @cash.cache
+    def fit(self, xs):
+        self.coef_ = sum(xs) * self.k
+        return self
+
+m = Model(2).fit([1, 2, 3])       # runs
+m2 = Model(2)
+m2.fit([1, 2, 3])                 # a hit: sets m2.coef_
+print(m2.coef_)                   # 12
+# test:inject: fit = Model.fit  # lets the harness read cache_info
+```
+
+This works when `self` is keyed by all it holds, so not with a `__cash_key__`
+or a registered hasher, and when the call changes nothing in place: a method
+that appends to a list `self` already holds (`self.history.append(x)`) runs
+every time, and the warning names the line. The full conditions are in
+[Results cash refuses to store](../../decorator-limitations.md#results-cash-refuses-to-store).
+
 ## Methods that return iterators
 
 A method that yields is cached like any iterator, and `self` is keyed the

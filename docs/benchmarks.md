@@ -28,7 +28,8 @@ costs, and shows how to measure the other half.
 
 Source: `python benchmarks/measure_ser_deser.py`, three repeats per cell,
 committed as `benchmarks/results/ser_deser_matrix.frozen.csv`. The file does
-not record the machine it was measured on, so read the table as shape and
+not record the machine it was measured on or the cash version, and it predates
+the current release, so read the table as shape and
 order of magnitude, and run the script on your own machine for figures you can
 act on. A disk restore is timed in a fresh process reading an entry no process
 has read before, as a later session would.
@@ -104,6 +105,11 @@ Read the figures as order of magnitude, and run the script for your own.
 Decorate a function whose body takes well over a millisecond. For a cheap
 function called in a hot loop, where the cache only needs to last the
 process, `lru_cache` is the better tool.
+
+To see where cash's time goes in your own calls, set `CASH_PHASE_TIMES=1`:
+`f.cache_info()["phase_times"]` then splits each call into building the key,
+reading the entry, the checks, the body and the store
+([Seeing what cash did](decorator.md#seeing-what-cash-did)).
 
 ### Per notebook statement
 

@@ -117,9 +117,10 @@ The loads and the aggregation, the slow part, cost nothing on this run.
 ## Habits that keep it fast
 
 1. **Give slow loads their own cell**, so changes further down never touch them.
-2. **Build new frames instead of changing old ones**: `df = df.sort_values(...)`,
-   not `df.sort_values(..., inplace=True)`, when the frame came from an earlier
-   cell.
+2. **Return new frames from your functions**: a function that adds a column
+   to a frame it is handed (`add_features(df)`), or `df.insert(...)` on a frame
+   from an earlier cell, runs every time. Have it return a new frame
+   (`df = add_features(df)`, with `return df.assign(...)` inside).
 3. **Seed your randomness**: `random_state=42`, `np.random.seed(42)`,
    `df.sample(100, random_state=42)`. cash does not see every random draw, and an
    unseeded one is replayed, not redrawn. See
