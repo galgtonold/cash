@@ -83,14 +83,14 @@ its warning class.
 | Family | Prefix | Codes | What it reports |
 |---|---|---:|---|
 | [Annotations](#annot-codes) | `ANNOT-` | 2 | A `# @cash:` comment that cash could not honour. |
-| [Caching](#cache-codes) | `CACHE-` | 19 | Caching happened, or refused to, and it is worth saying. |
+| [Caching](#cache-codes) | `CACHE-` | 21 | Caching happened, or refused to, and it is worth saying. |
 | [Configuration](#config-codes) | `CONFIG-` | 3 | A setting cash found but could not act on. |
 | [Side effects](#impure-codes) | `IMPURE-` | 4 | The function does something a cache hit will not repeat. |
-| [Cache keys](#key-codes) | `KEY-` | 27 | Something the result depends on may not be in the cache key. |
-| [Notebook](#notebook-codes) | `NOTEBOOK-` | 16 | Notebook-wide machinery rather than one statement. |
-| [Randomness](#random-codes) | `RANDOM-` | 4 | A cached value that randomness makes non-reproducible. |
+| [Cache keys](#key-codes) | `KEY-` | 30 | Something the result depends on may not be in the cache key. |
+| [Notebook](#notebook-codes) | `NOTEBOOK-` | 30 | Only in notebooks: the cells around the one you run, or a statement cash runs every time to stay safe. |
+| [Randomness](#random-codes) | `RANDOM-` | 5 | A cached value that randomness makes non-reproducible. |
 | [Remote files](#remote-codes) | `REMOTE-` | 3 | Checking whether a remote file changed. |
-| [Storing results](#store-codes) | `STORE-` | 8 | The call succeeded, but its result was not written. |
+| [Storing results](#store-codes) | `STORE-` | 15 | The call succeeded, but its result was not written. |
 
 ## Annotations {#annot-codes}
 
@@ -456,6 +456,14 @@ a hit costs is not known.
 is a large argument, such as a big DataFrame, being hashed on every call.
 The check also runs at exit, so a script that calls each function once is
 covered, and several small losers are named together.
+
+<!-- claim: cash/effectiveness.py:_message @431af025 -->
+When almost none of the cost is the key (the function takes no arguments, or
+its costliest argument hashes quickly), the message says the cost is the
+lookup instead: loading the stored result, or copying it into memory and
+writing it, takes longer than running the function. Then drop the decorator,
+or cache something smaller that the rest is computed from (the aggregate
+rather than the rows).
 
 <!-- claim: cash/core.py:Cash.register_hasher @f8a61573 -->
 **What to do.** If a cached function produced the argument and nothing
@@ -941,7 +949,7 @@ outside its return value: a `file write`, a `subprocess`, or an `argument
 mutation` (an object you passed in changed). Or it changed a setting the
 process keeps outside any variable (`np.seterr(...)`,
 `logging.getLogger("lib").setLevel(10)`, `sys.setrecursionlimit(n)`,
-`atexit.register(f)`): that call, and every later call of the function, is
+`atexit.register(f)`, `os.environ["MODE"] = "b"`): that call, and every later call of the function, is
 not stored, since a hit would not make the setting. A connection to a server is a read
 the key cannot see, reported as [KEY-NETWORK-READ](#key-network-read).
 Each effect names the path or address and the line of your code that led to it; the one-line form shows how many there are and the first, and `f.cache_info()["warnings"]` lists them all.
@@ -1976,7 +1984,8 @@ code](#silencing-one-code).
 
 ## Notebook {#notebook-codes}
 
-Notebook-wide machinery rather than one statement. Every code here starts `NOTEBOOK-`.
+Warnings only a notebook gives: about the cells above or below the one you run,
+or a statement cash runs every time to stay safe. Every code here starts `NOTEBOOK-`.
 
 | Code | Applies to | Meaning |
 |---|---|---|
