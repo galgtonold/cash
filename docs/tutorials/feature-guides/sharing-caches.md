@@ -23,9 +23,13 @@ function's code and its helpers, the arguments, and the data it reads. So:
   and name, so `features.build` imported from a shared package matches across
   machines. The same function pasted into a notebook cell is a different
   function and does not share entries with it.
-- **Same library and Python versions.** cash keys your code, not your
-  dependencies, and entries are pickled. Pin versions, and let everyone who
-  reads a shared store run the same Python.
+- **Same library and Python versions.** A decorated call is keyed by the
+  installed versions of the libraries it uses, so another version misses; a
+  notebook statement is not, and entries are pickled. Pin versions, and let
+  everyone who reads a shared store run the same Python.
+- **Same cash version** for a shared cache folder. A cash that finds the
+  folder written in another storage format clears it
+  ([The cache format](../../versioning.md#the-cache-format)).
 
 ## Point everyone at a shared backend
 

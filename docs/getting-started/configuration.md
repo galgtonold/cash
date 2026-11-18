@@ -160,6 +160,25 @@ turns that check off (an environment variable only, not a field). Calls that
 pick code by a run-time name are still recorded, since they are only cached on
 that record.
 
+### Environment variables that are not settings
+
+<!-- claim: cash/_native.py:_switched_off @4ca4c4bc, cash/tracking/native_reads.py:ENV == "CASH_NATIVE_FILE_HOOK", cash/tracking/file_watch.py:ENV == "CASH_FILE_WATCH", cash/decorator/code_trace.py:on @5a4beff8, cash/phase_times.py:ON @978388aa, cash/decorator/hit_memo.py:ENABLED @cfb847dd, cash/decorator/state_memo.py:ENABLED @52f5927c, cash/decorator/class_memo.py:ENABLED @8db3d48c -->
+A few switches are read from the environment alone, once, before any
+setting is: they have no field, no TOML key and no `cash.configure(...)`
+argument. Set them before the process starts.
+
+| Variable | Effect |
+|---|---|
+| `CASH_PURE_PYTHON=1` | Do not load the C extension ([The C fast path](installation.md#the-c-fast-path)). |
+| `CASH_NATIVE_FILE_HOOK=0` | Turn off the hook that records files a C library opens on Linux and Windows ([Reads through a loader](../known-limitations.md#reads-through-a-loader-cash-cannot-see)). |
+| `CASH_FILE_WATCH=0` | <span class="md-tag">notebook only</span> Check every file before every cell instead of watching folders ([Files](../how-it-works/invalidation.md#files)). |
+| `CASH_TRACE=0` | Do not record the code a call or statement ran (above). |
+| `CASH_PHASE_TIMES=1` | <span class="md-tag">decorator only</span> Time each cached call phase by phase into `f.cache_info()["phase_times"]` ([Seeing what cash did](../decorator.md#seeing-what-cash-did)). |
+| `CASH_PHASE_TIMES_FILE=path` | <span class="md-tag">decorator only</span> Also write those times at exit: one JSON line appended to a file, or one file per process in a directory given with a trailing `/`. Turns the timing on. |
+| `CASH_HITPATH=0` | <span class="md-tag">decorator only</span> Turn off the path that serves a hit met again without building its key ([A hit met again](../how-it-works/decorator-path.md#a-hit-met-again)). |
+| `CASH_STATE_MEMO=0`, `CASH_CLASS_MEMO=0` | <span class="md-tag">decorator only</span> Rebuild the code part of every key, and what each class folds to, instead of reusing them while nothing they read moved (same section). |
+| `CASH_HITPATH_VERIFY=1`, `CASH_STATE_MEMO_VERIFY=1`, `CASH_CLASS_MEMO_VERIFY=1` | <span class="md-tag">decorator only</span> Build the key again behind each reuse and raise if the two differ. For testing cash itself; slow. |
+
 ### Backend
 
 | Field | Default | Description |

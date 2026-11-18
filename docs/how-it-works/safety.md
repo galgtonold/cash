@@ -22,6 +22,17 @@ sending a request. The two engines handle this differently.
     decides](decorator-path.md#side-effects) has the details, and the
     [decorator guide](../decorator.md#side-effects) covers `assume_safe`.
 
+    <!-- claim: cash/decorator/runtime.py:CallRunner._refuse_registries @a3042403, cash/tracking/process_registries.py:changed @8df4390a -->
+    Two things a hit cannot redo are handled apart. A call that changes an
+    argument in place, or sets attributes on an object it was handed, is
+    stored with that change when cash can write it back on a hit, and runs
+    every time when it cannot
+    ([which ones](../decorator-limitations.md#results-cash-refuses-to-store)).
+    A call that changes a setting the process keeps outside any variable
+    (`np.seterr`, a logger's level) is not stored, and the function runs
+    every time from then on
+    ([which settings](decorator-path.md#side-effects)).
+
 === "Notebook"
 
     The notebook refuses. A statement that changes a variable it does not
@@ -117,8 +128,11 @@ A method call has no assignment target, so cash classifies its object:
   so does polars' `raw.group_by("host").len().sort("host")`. A `sort` whose
   result is used (`out = raw.sort("ts")`, `raw.sort("ts").head()`) is the kind
   that returns a new object, not `list.sort`. A
-  module setting such as `plt.style.use(...)` or `pd.set_option(...)` counts
-  as changing the module, so it is replayed after a restart. A `set_*` call
+  module setting such as `pd.set_option(...)` counts as changing the module,
+  so it is replayed after a restart. One the process keeps outside any
+  variable, such as `plt.style.use(...)` (matplotlib's `rcParams`) or
+  `np.seterr(...)`, runs every time
+  ([what gets cached](../notebook_caching_api.md#what-gets-cached)). A `set_*` call
   that changes the variable it is handed (`nx.set_node_attributes(G, ...)`)
   changes that variable, not the module.
 - **Always a change.** Any call on a live matplotlib `Figure` or `Axes`, or

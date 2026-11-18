@@ -65,6 +65,7 @@ it runs uncached with a
 [`KEY-UNTRACKABLE-DEP`](../warnings.md#key-untrackable-dep) warning. Name such
 code with `depends_on=[...]` to key it directly.
 
+<!-- claim: cash/decorator/library_reads.py:fingerprint @9946acbe, cash/decorator/runtime.py:CallRunner._refuse_library_reads @ce57fc08, cash/decorator/runtime.py:CallRunner._warn_settings_unseen @074f4377 -->
 A library's settings are not in the key: a library is keyed by its
 installed version. On Python 3.12 and newer each call records, as its body
 runs, the settings the code it ran read: an attribute chain from a module
@@ -102,7 +103,10 @@ Each argument is fingerprinted by the first rule that applies:
    method, when its class has one and no hasher is registered for it: what it
    returns, with the class's name and the method's code.
 3. A built-in content hasher: pandas, geopandas, numpy, polars, pyarrow,
-   modin, dask and scipy.sparse values are hashed by content.
+   modin, dask and scipy.sparse values are hashed by content
+   ([the table](cache-keys-and-lineage.md#hashing-values)). An xarray array
+   or dataset, a pandas index and a pint quantity are keyed by content too,
+   inside the canonical form of rule 7.
 4. An identity tag cash keeps current, such as the one a `frozen=True`
    cached function puts on its result.
 5. A hasher you registered without `override=True`.
@@ -170,7 +174,8 @@ argument.
 
 <!-- claim: cash/canonical_form.py:holds_content_data @a741db46, cash/decorator/arg_hashing.py:ArgHasher._memo_content_digest @482746c6 -->
 An object that holds frames, arrays or tables, directly or in a list, tuple or
-dict attribute, is keyed part by part rather than pickled whole: each frame
+dict attribute (an xarray `DataArray` or `Dataset` too), is keyed part by
+part rather than pickled whole: each frame
 by its content, the rest as pickle would store it. That happens when it holds
 a frame cash can check for changes (below) or an array, frame or table of
 1 MiB or more; an object holding only small ones, such as a fitted
@@ -286,6 +291,25 @@ side effects and still caches:
 - a clock read or a fresh UUID warns
   [`KEY-AMBIENT-READ`](../warnings.md#key-ambient-read).
 
+<!-- claim: cash/analysis/purity_visitor.py:PurityVisitor.visit_Expr @ddff4aea -->
+A call is judged by what it does, not by whether its return value is kept:
+`p = make_pipeline(...); p.fit(X, y)` on a model the body made is not a side
+effect. A write into a global through `setattr`, `object.__setattr__` or
+`operator.setitem` is one, wherever it appears.
+
+<!-- claim: cash/decorator/runtime.py:CallRunner._refuse_registries @a3042403, cash/tracking/process_registries.py:changed @8df4390a -->
+While a miss runs, cash also compares the settings the process keeps
+outside any variable: NumPy's error handling and print options, a logger's
+level, handlers or filters, the warnings filters and display hooks,
+`sys.setrecursionlimit`, `sys.path`, `atexit` and `signal` handlers,
+`copyreg`, the working directory, `os.putenv`, matplotlib's `rcParams`. A
+call that changed one is not stored, and the function runs every time from
+then on, with an
+[`IMPURE-OBSERVED-EFFECTS`](../warnings.md#impure-observed-effects) warning:
+a hit, or a new process, would leave the setting unmade. `assume_safe=True`
+caches it anyway. An environment write inside `with cash.assume_safe():`,
+or on a line marked `# @cash:assume-safe`, is waived too.
+
 <!-- claim: cash/decorator/purity_checks.py:PurityChecks.surface_purity @045afef4 -->
 One case is not cached: a body that picks code from a run-time value
 (`eval`, `exec`, `getattr(obj, name)()`, `importlib.import_module`) runs
@@ -313,6 +337,16 @@ recorded; see
 [where results are stored](../decorator.md#where-results-are-stored). A hit returns a copy rebuilt from the
 stored bytes, not the object the first call returned, and it does not replay
 the body's `print` output.
+
+<!-- claim: cash/decorator/runtime.py:CallRunner._arguments_to_write @57069cf7, cash/rewrite_in_place.py:AttrState.replay @0e4c9439 -->
+A call that changed an argument in place (on Python 3.12 and newer), or
+bound attributes on an object it was handed (`est.fit(X)`), is stored with
+that change, and a hit writes it into the object you pass. A written-back
+argument is announced once with
+[`CACHE-ARG-WRITTEN-BACK`](../warnings.md#cache-arg-written-back). A call
+that fills and returns its `out=` argument hands that very object back, so
+`result is out` holds on a hit too. Which calls qualify is under
+[results cash refuses to store](../decorator-limitations.md#results-cash-refuses-to-store).
 
 In a notebook, a statement that calls a decorated function shows that call's
 hits and misses on the statement's badge; see

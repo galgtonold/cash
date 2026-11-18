@@ -27,6 +27,18 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
       `Path.resolve()` on a path that may be relative).
     - **The random seed in force**, for a function that draws from a global
       random stream.
+    <!-- claim: cash/decorator/library_reads.py:fingerprint @9946acbe, cash/decorator/warning_state.py:holds @5f6685de, cash/kept_state.py:logger_state @37d45541 -->
+    - **A library setting the call read**, on Python 3.12 and newer:
+      `sklearn.set_config(...)`, `pd.set_option(...)`, `np.seterr(...)`, a
+      `ContextVar`, an attribute your program set on a library's class
+      ([details](decorator-path.md#what-goes-into-the-state)).
+    - **The warnings filters and display hooks**, for a call that warned
+      when it ran: a filter set to `"error"`, or `warnings.showwarning`
+      bound to a function of yours. A call that never warned is served
+      under any filters.
+    - **A logger or other object that pickles by name**, held by an argument
+      or a global it reads: `logging.getLogger("app").setLevel(10)` anywhere
+      changes the key. A call that only logs changes nothing.
     - **Its age**, when `ttl=` is set and the entry is older.
 
 === "Notebook"

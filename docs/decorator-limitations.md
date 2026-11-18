@@ -259,6 +259,17 @@ to watch:
   function's own code counts, not the functions it calls. Name each function
   whose change matters.
 
+<!-- claim: cash/decorator/runtime.py:CallRunner._refuse_library_reads @ce57fc08, cash/decorator/runtime.py:CallRunner._warn_settings_unseen @074f4377 -->
+A library's settings are not part of its version. On Python 3.12 and newer
+each call records the settings the code it ran read (`sklearn.set_config`,
+`pd.set_option`, `np.seterr`, a `ContextVar`, an attribute your program set
+on a library's class), and an entry is served only while they read the same;
+see [what goes into the state](how-it-works/decorator-path.md#what-goes-into-the-state).
+Before 3.12, with `CASH_TRACE=0`, or in an `async` function, they are not
+checked, and
+[`KEY-LIBRARY-STATE-UNSEEN`](warnings.md#key-library-state-unseen) says so
+once: pass such a setting in as an argument.
+
 ## Reads cash cannot see
 
 <!-- claim: cash/tracking/reader_patches.py:_patch_multiprocessing_pool @9fac5b09, cash/tracking/reader_patches.py:_patch_process_pool_submit @a7865b21, cash/tracking/reader_patches.py:_patch_thread_start @1b59e2a1 -->
@@ -359,6 +370,12 @@ paths from the project root or pass absolute paths.
   argument (a list of lists, a frame given a new column, an object of your
   class changed other than as the next item says) are not stored, so they
   run every time. Return a modified copy instead (`rows = sorted(rows)`).
+  A call that fills its `out=` argument and returns it (a body ending
+  `np.multiply(x, 2, out=out); return out`) is stored the same way: a hit
+  writes the stored state into the `out` you pass and returns that very
+  object, so `result is out` holds. cash says once that a hit writes an
+  argument back
+  ([`CACHE-ARG-WRITTEN-BACK`](warnings.md#cache-arg-written-back)).
 <!-- claim: cash/decorator/attribute_replay.py:AttrVerdict.of @5152391a, cash/rewrite_in_place.py:attribute_refusal @a163557b, cash/rewrite_in_place.py:AttrState.replay @0e4c9439, cash/decorator/attribute_replay.py:find @6c04b2c5 -->
 - A call that only binds, rebinds or deletes **attributes of an object it
   was handed** (`est.fit(X)` setting `self.coef_` and returning `self`, a
@@ -398,8 +415,8 @@ paths from the project root or pass absolute paths.
       holding an argument, keeps the call running every time. Two
       attributes bound to one new object, or an attribute that is also the
       result, come back as one object.
-  Anything else runs every time, as before, and the warning says why a hit
-  cannot replay it. Sharing cash cannot see stays a limit: an object
+  Anything else runs every time, and the warning says why a hit cannot
+  replay it. Sharing cash cannot see stays a limit: an object
   written in C that holds references without telling the garbage collector
   is not looked into.
 <!-- claim: cash/decorator/attribute_replay.py:also_changed @0c99ff5f, cash/decorator/runtime.py:CallRunner._source_changes @7dad10ee -->
@@ -441,9 +458,19 @@ paths from the project root or pass absolute paths.
     # test:inject: assert d.uns == {"total": 3}
     ```
 
-- A set in a result comes back with the same items, but a `for` loop may
-  meet them in a different order than in the call that made it: Python does
-  not keep a set's order. Use `sorted(s)` where the order matters.
+<!-- claim: cash/backends/set_order.py:restore @d4e04f7d -->
+- A set in a result comes back with the same items, and with the C
+  extension on Python 3.12 to 3.14 in the order the stored one iterated in,
+  wherever it sits in the result. Elsewhere a `for` loop may meet them in a
+  different order than in the call that made it. Use `sorted(s)` where the
+  order matters.
+<!-- claim: cash/decorator/runtime.py:CallRunner._refuse_registries @a3042403 -->
+- A call that changes a **setting the process keeps** outside any variable
+  (`np.seterr(...)`, a library logger's level, `warnings.simplefilter`) is
+  not stored, and the function runs every time from then on. Make the
+  setting outside the cached function, or pass `assume_safe=True` when
+  skipping it on a hit is fine
+  ([which settings](how-it-works/decorator-path.md#side-effects)).
 
 ## Generators and async functions
 

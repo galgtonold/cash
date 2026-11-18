@@ -81,8 +81,10 @@ The answer changed and `misses` went up.
 
 <!-- claim: cash/install_paths.py:is_user_module @c8e57159 -->
 This also works for helpers imported from other modules of your project. cash
-stops at installed code (`site-packages` and the standard library); if a
-third-party function matters to a result, name it with `depends_on=`.
+stops at installed code (`site-packages` and the standard library); an
+installed package is keyed by its version instead, so an upgrade recomputes;
+see
+[Code in installed packages](../decorator-limitations.md#code-in-installed-packages).
 
 ### Change a file it reads
 

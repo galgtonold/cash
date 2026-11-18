@@ -385,6 +385,12 @@ changed. The second list is what cash does not see, and what to do about it.
       it: `sys.argv`, and an `argparse` parser's `parse_args()` called
       without a list of its own. Flags your `main()` parses and passes on
       count only as those arguments.
+    - **Library settings** the call read, on Python 3.12 and newer
+      (`sklearn.set_config(...)`, `pd.set_option(...)`, `np.seterr(...)`, a
+      `ContextVar`): an entry is served only while they read the same
+      ([details](how-it-works/decorator-path.md#what-goes-into-the-state)).
+      Also a logger held by an argument or a global, by its level, handlers
+      and the like, and the warnings filters for a call that warned.
     - Sources named in `depends_on=` or `dynamic_depends_on=`, and an elapsed
       `ttl`.
 
@@ -394,8 +400,8 @@ changed. The second list is what cash does not see, and what to do about it.
 
     - **Library code** (`site-packages`, a `pip install --target` folder
       outside your project, the standard library), your team's own package
-      too when it is installed without `-e`. The version is not
-      in the key: see
+      too when it is installed without `-e`. Its code is not read; its
+      installed version is in the key instead: see
       [Code in installed packages](decorator-limitations.md#code-in-installed-packages).
     - What a **server or database** returns: set `ttl=`
       ([`KEY-NETWORK-READ`](warnings.md#key-network-read)).
@@ -1027,12 +1033,20 @@ LLM or HTTP SDK shows up this way, as a network read
 ([`KEY-NETWORK-READ`](warnings.md#key-network-read)): `ttl=` silences it, and
 under `strict=True` it raises unless a `ttl=` is set.
 
-Two observations stop the result from being stored, because a hit could not
-reproduce them: the call changed an argument in place that cash cannot write
-back ([which ones it can](decorator-limitations.md#results-cash-refuses-to-store)),
-or it called a `unittest.mock` object. A call that only sets attributes on an
-object it was handed, as an estimator's `fit` sets `self.coef_`, is stored
-with them, and a hit sets them again on the object you pass
+Three observations stop the result from being stored, because a hit could
+not reproduce them: the call changed an argument in place that cash cannot
+write back ([which ones it can](decorator-limitations.md#results-cash-refuses-to-store)),
+it called a `unittest.mock` object, or it changed a setting the process keeps
+outside any variable (`np.seterr`, a library logger's level,
+`warnings.simplefilter`, `sys.setrecursionlimit`, `os.putenv`). After the
+last, the function runs every time, since a hit or a new process would leave
+the setting unmade; `assume_safe=True` caches it anyway. A call that changes
+an argument cash can write back is stored, and a hit writes the change into
+the argument you pass
+([`CACHE-ARG-WRITTEN-BACK`](warnings.md#cache-arg-written-back)). A call
+that only sets attributes on an object it was handed, as an estimator's
+`fit` sets `self.coef_`, is stored with them, and a hit sets them again on
+the object you pass
 ([when](decorator-limitations.md#results-cash-refuses-to-store)).
 
 <!-- claim: cash/decorator/runtime.py:KeyBuilder._hands_a_state_changing_callable @1f8f919e -->
@@ -1130,6 +1144,12 @@ print(double.cache_info())
 warnings filter hid them. The counters belong to the wrapper, so they start at
 zero in each process.
 
+<!-- claim: cash/core.py:Cash._decorated_before @6fe6cd52 -->
+Decorating the same function again with the same parameters, as a library
+that caches through a factory does (`cash.cache(func)(*args)` on every
+call), returns the wrapper made the first time, with its counters. Other
+parameters, or a function whose code changed, get a new wrapper.
+
 <!-- claim: cash/decorator/explain.py:Explainer.explain @e18309b7, cash/decorator/explain.py:Explainer._absent_entry @28c80c9d, cash/decorator/explain.py:callee_to_pass_in @eadc3715 -->
 **`f.explain(*args, **kwargs)`** says whether that call would hit, and why. It
 does not run the function, change the counters or write anything:
@@ -1218,7 +1238,7 @@ a new call. Look one step up: the function that made the argument says
 
 <!-- claim: cash/code_digest.py:callable_identity @38daa9e0 -->
 **Can I cache code that calls numba?** Yes. A function compiled with
-`@njit` or `@jit` is keyed like any helper, by the Python source it compiles
+`@njit`, `@jit` or `@stencil` is keyed like any helper, by the Python source it compiles
 and its compile options (`fastmath`, `parallel`, ...), so editing a kernel
 reruns the cached functions that call it. Put `@cash.cache` on a plain
 Python function that calls the kernels, or on top of `@njit` itself.

@@ -168,8 +168,11 @@ run. Edit the simulation and everything after it recomputes, as it should.
 
 ## Reproducibility over months
 
-- **Pin your libraries.** Keys cover your code, not numpy's or your solver's. A
-  library upgrade that changes results does not invalidate anything.
+- **Pin your libraries.** cash does not read numpy's or your solver's code; it
+  keys each call by their installed versions. An upgrade recomputes every
+  call that uses the library, so pin versions to keep the cache across
+  environments; see
+  [Code in installed packages](../../decorator-limitations.md#code-in-installed-packages).
 - **Keep the cache folder** with the project's other outputs if you rely on it
   to reproduce a figure.
 - **GPU and hardware.** CUDA kernels are non-deterministic unless you ask

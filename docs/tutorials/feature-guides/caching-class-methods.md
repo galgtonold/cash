@@ -90,6 +90,38 @@ app.register_hasher(ThirdPartyClient, lambda c: c.base_url)
 
 See [Custom hashers](custom-hashers.md#registering-a-hasher).
 
+## Methods that set attributes on `self`
+
+<!-- claim: cash/decorator/attribute_replay.py:AttrVerdict.of @5152391a, cash/rewrite_in_place.py:AttrState.replay @0e4c9439 -->
+A method that only binds attributes on `self` and returns it, as an
+estimator's `fit` does, is cached: the entry keeps the attributes the call
+bound, and a hit binds them again on the instance you call it on.
+
+```python
+import cash
+
+class Scaler:
+    def __init__(self, factor):
+        self.factor = factor
+
+    @cash.cache
+    def fit(self, values):
+        self.peak_ = max(values) * self.factor
+        return self
+
+s = Scaler(2).fit([1, 5, 3])   # first call: runs
+t = Scaler(2).fit([1, 5, 3])   # cache hit: t.peak_ is set too
+# test:inject: assert t.peak_ == 10
+# test:inject: fit = Scaler.fit  # lets the harness read cache_info
+```
+
+This holds only while the key holds `self` by all it holds: a class with a
+`__cash_key__` or a registered hasher is not replayed this way, and neither
+is a method that writes into a list or dict `self` already holds
+(`self.history.append(x)`). Such a call runs every time, and the warning
+names the line that stopped it. The full rules are under
+[Results cash refuses to store](../../decorator-limitations.md#results-cash-refuses-to-store).
+
 ## Methods that return iterators
 
 A method that yields is cached like any iterator, and `self` is keyed the
