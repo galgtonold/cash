@@ -6,7 +6,9 @@ each changes a registry the process keeps outside any variable. Restored
 from the cache, the statement did not change it again: after a restart
 (here, the registration undone as a new process would not have it) the
 handler was never installed. Each such statement, written in the cell or
-in a function it calls, is not stored (`cash.tracking.process_registries`).
+in a function it calls, is not stored (`cash.tracking.process_registries`),
+and is kept on record for a later kernel: run alone after a restart, a cell
+below gets it run again first, as Restart & Run All runs it.
 """
 
 from __future__ import annotations
@@ -76,6 +78,11 @@ CASES = {
         "any(f[2] is KWarning for f in warnings.filters)",
         "warnings.filters[:] = [f for f in warnings.filters if f[2] is not KWarning]; warnings._filters_mutated()",
     ),
+    "filterwarnings": (
+        "warnings.filterwarnings('error', message='zz', category=KWarning)",
+        "any(f[2] is KWarning for f in warnings.filters)",
+        "warnings.filters[:] = [f for f in warnings.filters if f[2] is not KWarning]; warnings._filters_mutated()",
+    ),
     "logger-level": (
         "logging.getLogger('zz.lib').setLevel(5)",
         "logging.getLogger('zz.lib').level == 5",
@@ -122,25 +129,6 @@ CASES = {
     "decimal": ("decimal.getcontext().prec = 7", "decimal.getcontext().prec == 7", "decimal.getcontext().prec = 28"),
 }
 
-#: Found wrong before (restored, the effect missing), written in the cell.
-#: The others the statement's own text already kept out of the cache.
-IN_THE_CELL = (
-    "rcParams",
-    "rc-function",
-    "style",
-    "np-seterr",
-    "np-random-seed",
-    "random-seed",
-    "atexit",
-    "signal",
-    "setprofile",
-    "recursionlimit",
-    "logger-level",
-    "logger-handler",
-    "copyreg",
-    "codecs",
-)
-
 
 def _codec_found(ns) -> bool:
     import codecs
@@ -161,8 +149,7 @@ def store_everything(cash_instance):
 
 def _params():
     for kind in CASES:
-        if kind in IN_THE_CELL:
-            yield pytest.param(kind, False, id=f"{kind}-in-the-cell")
+        yield pytest.param(kind, False, id=f"{kind}-in-the-cell")
         yield pytest.param(kind, True, id=f"{kind}-in-a-function")
 
 
@@ -199,6 +186,63 @@ def test_the_registration_is_made_again(kind, in_a_function, cash_magics, mock_s
             exec(undo, ns)
         except Exception:
             pass
+
+
+#: Written straight in a cell: kept on record as a change of the process,
+#: so that after a restart a cell below run alone gets it run again first
+#: (``ReexecutionPlanner.unrun_process_writers``; the restart itself is
+#: `test_a_process_setting_written_in_a_cell_holds_after_a_restart`).
+IN_A_CELL_AFTER_A_RESTART = (
+    "simplefilter",
+    "filterwarnings",
+    "np-seterr",
+    "logger-level",
+    "recursionlimit",
+    "atexit",
+)
+
+
+@pytest.mark.usefixtures("store_everything")
+@pytest.mark.parametrize("kind", IN_A_CELL_AFTER_A_RESTART)
+def test_a_setting_in_a_cell_is_kept_for_a_cell_run_alone_after_a_restart(kind, cash_magics, mock_shell):
+    from cash.notebook.cache_key import statement_source_hash
+
+    if kind.startswith("np-"):
+        pytest.importorskip("numpy")
+    statement, _there, undo = CASES[kind]
+    cells = [SETUP, statement]
+    ns = mock_shell.user_ns
+    run_cash_cell(cash_magics, SETUP, cells=cells)
+    ns["COUNT"] = eval("users_atexit()", ns)
+    try:
+        # The first run changes it; the second finds it as it sets it.
+        for _ in range(2):
+            run_cash_cell(cash_magics, statement, cells=cells)
+            writers = cash_magics.tracking_state.process_state_writers
+            assert writers.get(statement_source_hash(statement)) == frozenset({"registry"})
+    finally:
+        try:
+            exec(undo, ns)
+        except Exception:
+            pass
+
+
+@pytest.mark.usefixtures("store_everything")
+def test_a_setting_said_safe_is_not_run_again_for_a_cell_below(cash_magics, mock_shell):
+    """``# @cash:assume-safe`` on the statement: its change does not matter,
+    so it is not kept on record for a later kernel."""
+    from cash.notebook.cache_key import statement_source_hash
+
+    statement = "logging.getLogger('zz.safe').setLevel(5)  # @cash:assume-safe"
+    cells = [SETUP, statement]
+    try:
+        for _ in range(2):
+            for cell in cells:
+                run_cash_cell(cash_magics, cell, cells=cells)
+        writers = cash_magics.tracking_state.process_state_writers
+        assert statement_source_hash(statement) not in writers
+    finally:
+        mock_shell.user_ns["logging"].getLogger("zz.safe").setLevel(0)
 
 
 @pytest.mark.usefixtures("store_everything")

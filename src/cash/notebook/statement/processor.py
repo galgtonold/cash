@@ -192,6 +192,7 @@ from ..borrowed_memory import borrowed_memory_names, lazy_frame_sources
 from ..callee_reach import (
     CWD,
     ENVIRON,
+    REGISTRY,
     import_state_writes,
     library_streams_read,
     module_globals,
@@ -1979,10 +1980,17 @@ class StatementProcessor:
         found = process_registries.changed(before)
         if not found:
             what = self._registry_writers.get(run.code)
-            if what is not None and not run.skip_cache:
-                run.skip_cache = True
-                run.metrics["uncacheable_reasons"].append(what)
+            if what is not None:
+                run.process_state = run.process_state | {REGISTRY}
+                if not run.skip_cache:
+                    run.skip_cache = True
+                    run.metrics["uncacheable_reasons"].append(what)
             return
+        # Kept for a later kernel too (`StatementRecords.note_process_state`):
+        # after a restart, a cell run alone gets the statement run again
+        # first (`ReexecutionPlanner.unrun_process_writers`), as Restart &
+        # Run All runs it.
+        run.process_state = run.process_state | {REGISTRY}
         what = PROCESS_REGISTRY_REASON.format(registries="; ".join(found))
         again = run.code in self._registry_writers
         self._registry_writers[run.code] = what
