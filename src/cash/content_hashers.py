@@ -947,16 +947,77 @@ def _fold_geometries(h: Any, array: Any) -> bool:
     if piece is None:
         into = _PieceRecorder(h)
         missing = shapely.is_missing(data)
-        if missing.any():
-            into.update(b"|missing|")
-            fold_buffer(into, missing)
-        into.update(b"|wkb-pieces|")
-        fold_buffer(into, GEOMETRY_DIGESTS.joined(data[~missing] if missing.any() else data))
+        _fold_geometry_rows(into, missing, lambda: GEOMETRY_DIGESTS.joined(data[~missing] if missing.any() else data))
         if into.piece is not None:
             GEOMETRY_PIECES.note(data, into.piece)
     else:
         h.update(piece)
     return True
+
+
+def _fold_geometry_rows(into: Any, missing: Any, joined: Callable[[], bytes]) -> None:
+    """What `_fold_geometries` folds for an array's rows: which are missing
+    (*missing*, a bool array), then the pieces of the others joined in row
+    order (`_GeometryDigests.joined`)."""
+    if missing.any():
+        into.update(b"|missing|")
+        fold_buffer(into, missing)
+    into.update(b"|wkb-pieces|")
+    fold_buffer(into, joined())
+
+
+def note_geometries_read(data: Any, blob: Any, lengths: Any, rows: Any) -> None:
+    """Remember what `_fold_geometries` folds for *data*, a 1-d object
+    array of shapely geometries without an SRID, from the WKB cash has in
+    hand when it stores or restores a geopandas column
+    (`backends.serialization`): *blob*, the WKB of distinct geometries one
+    after another, *lengths* bytes each (0 for a missing one), and *rows*,
+    which of them each row holds (each row its own when None). That WKB is
+    shapely's with its defaults, which for a geometry without an SRID is
+    the one `_GeometryDigests._read` writes.
+
+    A frame restored from the cache was turned to WKB once more to key the
+    stage it was handed to: 0.08 s of 0.13 s per 300,000 points. Points
+    (every WKB its own piece) in rows of their own fold *blob* as it is."""
+    if len(data) < GEOMETRY_PIECES.MIN_ROWS:
+        return
+    np = _numpy()
+    present = lengths > 0
+    long = lengths > _GeometryDigests.INLINE_MAX
+    if rows is None and not long.any():
+        joined: Any = blob
+    else:
+        view = memoryview(blob).cast("B")
+        ends = np.cumsum(lengths)
+        starts = (ends - lengths).tolist()
+        sha256 = hashlib.sha256
+        pieces = np.full(len(lengths), None, dtype=object)
+        pieces[present] = [
+            b"\x02" + sha256(view[start:end]).digest()
+            if end - start > _GeometryDigests.INLINE_MAX
+            else view[start:end].tobytes()
+            for start, end, there in zip(starts, ends.tolist(), present.tolist())
+            if there
+        ]
+        by_row = pieces if rows is None else pieces[rows]
+        joined = b"".join(by_row[by_row != None])  # noqa: E711 - elementwise, on an object array
+    missing = ~present if rows is None else ~present[rows]
+    into = _PieceRecorder(_NO_HASH)
+    _fold_geometry_rows(into, missing, lambda: joined)
+    if into.piece is not None:
+        GEOMETRY_PIECES.note(data, into.piece)
+
+
+class _NoHash:
+    """A hash that takes bytes and keeps nothing: `_PieceRecorder` keeps them."""
+
+    __slots__ = ()
+
+    def update(self, data: Any) -> None:
+        pass
+
+
+_NO_HASH = _NoHash()
 
 
 class _GeometryPieces:
