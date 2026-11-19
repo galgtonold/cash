@@ -23,6 +23,7 @@ def _write(path, n):
     frame.to_file(path, driver="GeoJSON")
 
 
+@pytest.mark.fresh_kernel  # the hook is switched off when a kernel starts
 def test_the_cell_warns_and_shows_the_edit(nb_runner, monkeypatch):
     monkeypatch.setenv("CASH_NATIVE_FILE_HOOK", "0")
     _write(nb_runner.work_dir / "points.geojson", 2)
