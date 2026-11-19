@@ -1,29 +1,18 @@
-"""A call site does not depend on functions defined BELOW it.
+"""A call site follows a function it calls, whether the function is defined
+above or BELOW the caller.
 
-cash reconstructs dependencies upward. A function whose body calls a name bound
-in a LATER cell therefore has a dependency pointing down the notebook, and the
-call site never learns about it.
+A function whose body calls a name bound in a LATER cell has a dependency
+pointing down the notebook: ``def a`` in cell 2 calls ``b`` from cell 3.
+Lineage flows upward, so the call site must learn about ``b`` from the call
+itself. The tests run the same notebook with the callee above and below the
+caller and check that:
 
-This is about DIRECTION, not recursion — isolated by moving one cell:
+* an edit to the callee refreshes the call site, on Run All and on a rerun of
+  the call site alone;
+* removing the callee and restarting raises, as a plain kernel does, instead of reprinting the old number for code that no longer runs.
 
-* callee defined ABOVE the caller -> everything works, because ``def a`` names
-  ``b`` as an ordinary input and lineage flows normally;
-* callee defined BELOW the caller -> the call site is stale, with no cycle
-  anywhere.
-
-Mutual recursion always contains one (each function references the other before
-it exists), which is how this first surfaced.
-
-The consequence is worse than staleness, which is why the forward case is
-``xfail`` rather than pinned: cash can serve a cached value for code that no
-longer runs at all. Remove the callee, restart, and the call site reprints its
-old number where a plain kernel raises ``NameError`` — a masked error, not a
-stale one.
-
-Fixing it means resolving a function's free names at CALL time and folding the
-callees into the call site's key: a second dependency mechanism alongside the
-existing input-lineage one, with real over-invalidation risk. Deliberately not
-attempted as a patch.
+Mutual recursion always has one function defined below the other, which is how
+this first surfaced.
 """
 
 import pytest
