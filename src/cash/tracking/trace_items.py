@@ -327,7 +327,17 @@ class _Digester:
             h.update(b"m" + str(v.__name__).encode())
             return
         if type(v) is types.FunctionType:
-            self._function(v)
+            # A function its own cells reach (a recursive closure, lmfit's
+            # ``update_constraints._update_param``) ends there, as an object
+            # does: followed, it ran to the node cap, 0.5 s to call it opaque.
+            if id(v) in self.active:
+                h.update(b"cycle")
+                return
+            self.active.add(id(v))
+            try:
+                self._function(v)
+            finally:
+                self.active.discard(id(v))
             return
         if isinstance(v, (types.BuiltinFunctionType, types.BuiltinMethodType)):
             owner = getattr(v, "__self__", None)
@@ -619,12 +629,14 @@ def _cell_digests(closure: Iterable[Any], within: _Digester | None) -> tuple[str
     return tuple(out)
 
 
-def _sub_digest(v: Any, within: _Digester | None, *, own_types: bool = False) -> str | None:
+def _sub_digest(v: Any, within: _Digester | None, *, own_types: bool = False, around: Iterable[int] = ()) -> str | None:
     """*v*'s digest inside another's, sharing its count of what was read
     (a closure that holds itself ends there); None when opaque. With
-    *own_types*, the classes the other went through are gone through again."""
+    *own_types*, the classes the other went through are gone through again.
+    *around*, with no other: the ids of what is being digested around *v*."""
     h = hashlib.blake2b(digest_size=12)
     d = _Digester(h)
+    d.active.update(around)
     if within is not None:
         d.nodes, d.active, d.open = within.nodes, within.active, within.open
         # Own types: the classes digested already are gone through again,
@@ -651,10 +663,24 @@ def start_cells(frame: Any, code: types.CodeType) -> tuple[str | None, ...] | No
         values = [local.get(name, _EMPTY) for name in code.co_freevars]
     except Exception:  # noqa: BLE001 - cells that cannot be read are digested afterwards
         return None
+    # The function that started, when a cell holds it (it calls itself):
+    # digested later, its cells are digested inside it, where it ends.
+    around = [id(v) for v in values if _runs_with(v, code, values)]
     return _StartCells(
-        ("empty" if v is _EMPTY else _AS_IT_IS if isinstance(v, type) else _sub_digest(v, None) for v in values),
+        (
+            "empty" if v is _EMPTY else _AS_IT_IS if isinstance(v, type) else _sub_digest(v, None, around=around)
+            for v in values
+        ),
         _held_identities(values),
     )
+
+
+def _runs_with(v: Any, code: types.CodeType, values: list[Any]) -> bool:
+    """*v* is a function of *code* whose cells hold *values*."""
+    if type(v) is not types.FunctionType or v.__code__ is not code:
+        return False
+    held = _cell_values(v.__closure__ or ())
+    return len(held) == len(values) and all(a is b for a, b in zip(held, values))
 
 
 class _StartCells(tuple):

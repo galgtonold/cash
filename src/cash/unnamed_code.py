@@ -21,8 +21,16 @@ not found by name is keyed by what makes it what it is:
   ``type()`` gave it.
 
 What those hold is pickled as any other part of the key, so a capture
-that cannot be pickled still refuses the key. The user's own code is not
-written this way: the code-argument fold keys it, with what it reads.
+that cannot be pickled still refuses the key.
+
+The user's own code is written this way only where the code-argument fold
+keys it with what it reads: a function in a cached call's arguments, which
+the decorator says (`write_user_functions_when`). Elsewhere (a global's
+value, a helper's default) nothing else keys what it reads, and pickle
+refuses it as before. A function made in a method of the user's and held
+by an object an argument holds (lmfit's ``CompositeModel`` keeps one made
+in its ``__init__``) refused every call's key when the library was the
+user's own checkout.
 """
 
 from __future__ import annotations
@@ -40,6 +48,18 @@ from ._user_attrs import module_file
 #: ``copyreg`` pickles an instance, and the other two are the descriptors
 #: every class with a ``__dict__`` gets.
 _DERIVED_CLASS_ATTRS = frozenset({"__dict__", "__weakref__", "_abc_impl", "__slotnames__"})
+
+
+#: The decorator's say on whether a function of the user's that no name
+#: finds may be written as what defines it (`write_user_functions_when`).
+_USER_FUNCTIONS: list[Callable[[Any], bool] | None] = [None]
+
+
+def write_user_functions_when(check: Callable[[Any], bool]) -> None:
+    """Write a function of the user's that no name finds as what defines
+    it when *check* says so of it: while the arguments of a cached call are
+    keyed, whose code-argument fold keys its code and what that reads."""
+    _USER_FUNCTIONS[0] = check
 
 
 def unnamed_library_code(*parts: Any) -> None:
@@ -96,7 +116,9 @@ def _unnamed_parts(obj: Any, building: set[int]) -> Any:
     elif _class_found_by_name(obj):
         return None
     if _user_code(obj):
-        return None
+        check = _USER_FUNCTIONS[0]
+        if type(obj) is not types.FunctionType or check is None or not check(obj):
+            return None
     name = (getattr(obj, "__module__", None), getattr(obj, "__qualname__", None))
     if id(obj) in building:
         return (unnamed_library_code, ("cycle", *name))

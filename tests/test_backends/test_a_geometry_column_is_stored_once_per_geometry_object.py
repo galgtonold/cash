@@ -87,7 +87,18 @@ def test_a_joined_frame_reads_back_equal_with_its_rows_sharing_as_they_did():
     assert _sharing(back.geometry) == _sharing(joined.geometry)
 
 
-@pytest.mark.parametrize("kind", ["no repeats", "missing rows", "z and m", "empty geometries", "no crs", "mixed types"])
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "no repeats",
+        "missing rows",
+        "z and m",
+        "empty geometries",
+        "no crs",
+        "mixed types",
+        "points ending in zero bytes",
+    ],
+)
 def test_a_geometry_column_reads_back_as_plain_pickle_reads_it(kind):
     frame = _polygons(300, 2, 1.0, crs=None if kind == "no crs" else "EPSG:4326")
     data = frame.geometry.values._data
@@ -101,6 +112,11 @@ def test_a_geometry_column_reads_back_as_plain_pickle_reads_it(kind):
     elif kind == "mixed types":
         data[::3] = shapely.points(np.arange(100), np.arange(100))
         data[1::3] = shapely.linestrings([[[0, 0], [i, 1]] for i in range(100)])
+    elif kind == "points ending in zero bytes":
+        # One WKB length for every row, read back by numpy: a coordinate of
+        # 0.0 ends a point's WKB in eight zero bytes, which must stay.
+        data[:] = shapely.points(np.arange(300) % 3, np.zeros(300))
+        data[7] = None
     back, _ = _round_trip(frame)
     _assert_same(back, frame)
     assert _sharing(back.geometry) == _sharing(frame.geometry)

@@ -346,7 +346,7 @@ def _reduce_geometry_array(value: Any) -> Any:
         if type(data) is not np.ndarray or data.dtype != object or data.ndim != 1:
             raise TypeError("not an object array of geometries")
         distinct, index = distinct_objects(data)
-        missing = np.fromiter((item is None for item in distinct), dtype=bool, count=len(distinct))
+        missing = shapely.is_missing(distinct)  # None, read in C
         if not shapely.is_geometry(distinct[~missing]).all():
             raise TypeError("holds something besides geometries and None")
         wkb = shapely.to_wkb(distinct[~missing])
@@ -361,7 +361,27 @@ def _reduce_geometry_array(value: Any) -> Any:
         rows = None  # no row shares an object: they are *distinct* in order
     else:
         rows = index.astype(np.int32 if len(distinct) < 2**31 else np.int64)
+    _note_geometries(data, blob, lengths, rows, srid_free=distinct[~missing])
     return _geometry_array_from_wkb, (type(value), blob, lengths, rows, crs)
+
+
+def _note_geometries(data: Any, blob: Any, lengths: Any, rows: Any, srid_free: Any = None) -> None:
+    """Hand the WKB of the geometries of *data* (as `_reduce_geometry_array`
+    lays it out: *blob*, *lengths*, *rows*) to the argument hasher
+    (`content_hashers.note_geometries_read`), so a cached function the
+    column is handed to next does not write it to WKB again. Not when a
+    geometry of *srid_free* has an SRID: the hasher's WKB holds it, this
+    one does not. A speedup only: anything it raises is dropped."""
+    try:
+        import shapely
+
+        from ..content_hashers import note_geometries_read
+
+        if srid_free is not None and shapely.get_srid(srid_free).any():
+            return
+        note_geometries_read(data, blob, lengths, rows)
+    except Exception:  # the hasher writes the WKB itself instead
+        logger.debug("geometry pieces not noted", exc_info=True)
 
 
 def _geometry_array_from_wkb(cls: type, blob: Any, lengths: Any, rows: Any, crs: Any) -> Any:
@@ -373,13 +393,20 @@ def _geometry_array_from_wkb(cls: type, blob: Any, lengths: Any, rows: Any, crs:
     import shapely
 
     raw = memoryview(blob).cast("B").tobytes()
-    ends = np.cumsum(lengths)
     present = lengths > 0
-    starts = (ends - lengths)[present].tolist()
-    pieces = [raw[start:end] for start, end in zip(starts, ends[present].tolist())]
+    sizes = lengths[present]
+    if len(sizes) and (sizes == sizes[0]).all():
+        # All of one length (points): cut into bytes objects by numpy, not
+        # one slice at a time in Python (9 ms for 300,000 points, not 48).
+        pieces: Any = np.frombuffer(raw, dtype=f"V{int(sizes[0])}").astype(object)
+    else:
+        ends = np.cumsum(lengths)
+        starts = (ends - lengths)[present].tolist()
+        pieces = np.array([raw[start:end] for start, end in zip(starts, ends[present].tolist())], dtype=object)
     distinct = np.full(len(lengths), None, dtype=object)
-    distinct[present] = shapely.from_wkb(np.array(pieces, dtype=object))
+    distinct[present] = shapely.from_wkb(pieces)
     data = distinct if rows is None else distinct[rows]
+    _note_geometries(data, raw, lengths, rows)
     array = cls.__new__(cls)
     array.__setstate__({"_data": data, "_crs": crs, "_sindex": None, "base": None})
     return array

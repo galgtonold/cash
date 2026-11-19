@@ -242,38 +242,38 @@ DIGESTS = ClassMemo()
 class _SeenAbove(set):
     """A key build's set of classes folded (`CLASSES_FOLDED`) as a captured
     fold sees it: its own additions here, the build's below, each question
-    the build's answered noted."""
+    the build's answered noted, and which it answered "folded"."""
 
     def __init__(self, below: set) -> None:
         super().__init__()
         self.below = below
         self.asked: set = set()
-        self.found = False
+        self.found: set = set()
 
     def __contains__(self, key: object) -> bool:
         if set.__contains__(self, key):
             return True
         self.asked.add(key)
         if key in self.below:
-            self.found = True
+            self.found.add(key)
             return True
         return False
 
 
 class _ReadsAbove(dict):
     """`_SeenAbove` for a key build's record of the globals folds done
-    (`READS_FOLDED`)."""
+    (`READS_FOLDED`): what the build held for each key it answered."""
 
     def __init__(self, below: dict) -> None:
         super().__init__()
         self.below = below
         self.asked: set = set()
-        self.found = False
+        self.found: dict = {}
 
     def _below(self, key: Any) -> bool:
         self.asked.add(key)
         if key in self.below:
-            self.found = True
+            self.found.setdefault(key, self.below[key])
             return True
         return False
 
@@ -295,17 +295,19 @@ class _ReadsAbove(dict):
 
 class Capture:
     """What one fold left in the key build's records, and which of the
-    build's own answers it asked for (each one "not folded yet")."""
+    build's own answers it asked for, with the ones it heard "folded"."""
 
     __slots__ = (
         "classes",
         "classes_asked",
+        "classes_found",
         "digests",
         "ledger",
         "lookups",
         "owners",
         "reads",
         "reads_asked",
+        "reads_found",
         "reports",
         "ttls",
         "watch",
@@ -342,11 +344,12 @@ def _outside() -> tuple:
 def captured(compute: Callable[[], Any]) -> tuple[Capture | None, Any]:
     """Run *compute* (a fold into the key build's records) and return what
     it gave, with a `Capture` of what it left in the records, or None when
-    it cannot be replayed into another build: it asked one of the build's
-    sets of what was folded already and found something there, so its
-    output depends on what ran before it; or it folded something no
-    watcher sees (a random stream, a file, the environment). The records
-    end up as running it in place leaves them."""
+    it cannot be replayed into another build: it folded something no
+    watcher sees (a random stream, a file, the environment). What it found
+    the build had folded already (a class another argument's fold went
+    through first) is kept with it: the capture serves only a build that
+    answers alike (`replayable`). The records end up as running it in
+    place leaves them."""
     from ..code_swaps import FoldedCode
 
     ledger_v, watch_v, code_v, ttls_v, digests_v, lookups_v, classes_v, reads_v = _records()
@@ -380,21 +383,45 @@ def captured(compute: Callable[[], Any]) -> tuple[Capture | None, Any]:
     own_classes, own_reads = own[6], own[7]
     cap.classes = frozenset(own_classes) if own_classes is not None else frozenset()
     cap.classes_asked = frozenset(own_classes.asked) if own_classes is not None else frozenset()
+    cap.classes_found = frozenset(own_classes.found) if own_classes is not None else frozenset()
     cap.reads = dict(own_reads) if own_reads is not None else {}
     cap.reads_asked = frozenset(own_reads.asked) if own_reads is not None else frozenset()
+    cap.reads_found = dict(own_reads.found) if own_reads is not None else {}
     replay(cap)
-    dependent = (own_classes is not None and own_classes.found) or (own_reads is not None and own_reads.found)
-    return (None if dependent or _outside() != before else cap), result
+    return (None if _outside() != before else cap), result
 
 
 def replayable(cap: Capture) -> bool:
     """Would *cap*'s fold, run now, ask the same questions of the key
-    build's records and hear the same answers ("not folded yet")?"""
+    build's records and hear the same answers: "not folded yet" where it
+    heard that, "folded" where it heard that, by the same fold?"""
     _l, _w, _c, _t, _d, _lk, classes_v, reads_v = _records()
     classes, reads = classes_v.get(), reads_v.get()
-    if classes is not None and any(k in classes for k in cap.classes_asked):
+    if classes is not None:
+        if any((k in classes) != (k in cap.classes_found) for k in cap.classes_asked):
+            return False
+    elif cap.classes_found:
         return False
-    return not (reads is not None and any(k in reads for k in cap.reads_asked))
+    if reads is None:
+        return not cap.reads_found
+    for k in cap.reads_asked:
+        if k in cap.reads_found:
+            if k not in reads or not _same_answer(reads[k], cap.reads_found[k]):
+                return False
+        elif k in reads:
+            return False
+    return True
+
+
+def _same_answer(now: Any, then: Any) -> bool:
+    """Is a record of the build (`READS_FOLDED`: the function folded and
+    the globals it skipped) what it was: the same objects, or equal sets
+    and strings?"""
+    if now is then:
+        return True
+    if type(now) is not tuple or type(then) is not tuple or len(now) != len(then):
+        return False
+    return all(a is b or (type(a) is type(b) and type(a) in (frozenset, str) and a == b) for a, b in zip(now, then))
 
 
 def replay(cap: Capture) -> None:

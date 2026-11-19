@@ -52,6 +52,7 @@ from ..content_hashers import (
 from ..exceptions import CashCacheIneffectiveWarning
 from ..jit_functions import is_jit_type, jit_options, jit_python_function
 from ..lineage_tag import own_tag, tags_trusted
+from ..unnamed_code import write_user_functions_when
 from ..value_types import BUILTIN_CONTAINERS, CODELESS_PRIMS, IMMUTABLE_PRIMS, writable_types
 from .cash_key import cash_key_method, cash_key_method_of_type, type_name
 
@@ -238,6 +239,20 @@ def code_value_stand_in(value: Any) -> tuple | None:
     if not defined_in_user_code(value):
         return None
     return ("__cash_code_value__", getattr(value, "__module__", None), getattr(value, "__qualname__", None))
+
+
+def _user_function_in_arguments(fn: types.FunctionType) -> bool:
+    """Is *fn*, a function of the user's no name finds, inside a call's
+    arguments, where the code-argument fold keys it (`code_value_stand_in`)?
+    Then a key pickle writes it as what defines it (`unnamed_code`)."""
+    if not _CALL_ARGUMENTS.get():
+        return False
+    from .code_args import defined_in_user_code  # it imports this module
+
+    return defined_in_user_code(fn)
+
+
+write_user_functions_when(_user_function_in_arguments)
 
 
 def _pickles_by_reference(fn: types.FunctionType) -> bool:
