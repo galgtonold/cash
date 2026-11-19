@@ -1483,8 +1483,8 @@ _EXPLAIN_SCAN = re.compile(r"SCAN \[([^\]]*)\]")
 
 def lazy_frame_sources(value: Any) -> list[str] | None:
     """The files a polars ``LazyFrame``'s plan scans, as written (a glob stays
-    a glob), or None when the plan cannot be read. Remote sources
-    (``s3://...``) are left out; they are keyed by their path as before."""
+    a glob, a remote source stays its URL), or None when the plan cannot be
+    read."""
     found: list[str] = []
     try:
         with warnings.catch_warnings():
@@ -1498,7 +1498,7 @@ def lazy_frame_sources(value: Any) -> list[str] | None:
             return None
         for listed in _EXPLAIN_SCAN.findall(text):
             found.extend(p.strip() for p in listed.split(",") if p.strip() and not p.strip().startswith("..."))
-    return [p for p in dict.fromkeys(found) if "://" not in p]
+    return list(dict.fromkeys(found))
 
 
 def hash_polars(value: Any) -> str | None:
@@ -1530,7 +1530,8 @@ def hash_polars(value: Any) -> str | None:
     serializes the PATH, not the file's contents, so the key alone does not
     move when the file is edited. The decorator records the files the plan
     scans as the call's reads instead (`lazy_frame_sources`), so the entry
-    checks them on every lookup as it does a file the body opened.
+    checks them on every lookup as it does a file the body opened, and a
+    remote one by its store's validator.
     """
     try:
         import polars as pl

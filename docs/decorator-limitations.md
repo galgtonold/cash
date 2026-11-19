@@ -307,12 +307,16 @@ scikit-learn `n_jobs=`). Each task then runs under a tracker of its own in the
 worker: about 20 µs a task, which only shows for tiny tasks sent one at a time
 (`pool.imap` with the default `chunksize=1`).
 
-<!-- claim: cash/decorator/file_deps.py:FileDeps.track_scanned_files @3887040a -->
+<!-- claim: cash/decorator/file_deps.py:FileDeps.track_scanned_files @1e54b5f0 -->
 A polars `LazyFrame` argument from `scan_csv` or `scan_parquet` names its file
 by path, so cash records the files its plan scans as reads of the call, as if
 the body had opened them: an edited file recomputes, and so does a new file
-that matches a scanned glob. A remote source (`s3://...`) is keyed by its path
-only; collect such a frame first.
+that matches a scanned glob. A remote source (`s3://...`) is checked as a
+remote read of the call, by the object's ETag or version (a glob or prefix by
+its listing), so a replaced or new object recomputes. That check finds the
+store through the environment's settings, not the frame's `storage_options=`:
+where it cannot read the object's state, the call runs again every time and
+warns [REMOTE-STATE-UNREADABLE](warnings.md#remote-state-unreadable).
 
 ## An edit that keeps the size and timestamps
 

@@ -14,7 +14,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from .._clock import perf_counter as _perf_counter
-from .._paths import normalize_path
+from .._paths import is_remote_url, normalize_path
 from .._user_attrs import from_family
 from ..code_digest import own_source_digest
 from ..content_hashers import lazy_frame_sources
@@ -360,8 +360,11 @@ class FileDeps:
         path, so after the file was edited the old result was served, with no
         warning (where no native file hook saw polars open it). Recorded as
         reads, like ``file_depends_on=``: a glob counts its matches and new
-        ones, a relative path is resolved here. One container deep, as
-        `argument_paths` reads.
+        ones, a relative path is resolved here. A remote source
+        (``s3://...``) is recorded as a remote read, checked by its store's
+        validator (its ETag, or a prefix's listing) as one the body read: keyed
+        by its path alone, a changed object was served stale. One container
+        deep, as `argument_paths` reads.
         """
         values: list[Any] = [*args, *kwargs.values()]
         for value in list(values):
@@ -374,7 +377,15 @@ class FileDeps:
             if cls.__name__ != "LazyFrame" or not from_family(cls, "polars"):
                 continue
             for path in lazy_frame_sources(value) or ():
-                _track_declared(tracker, path)
+                if is_remote_url(path):
+                    tracker.track_path(path)
+                elif path.startswith("file://"):
+                    from urllib.parse import urlparse
+                    from urllib.request import url2pathname  # heavy: only for a file:// source
+
+                    _track_declared(tracker, url2pathname(urlparse(path).path))
+                else:
+                    _track_declared(tracker, path)
 
     def auto_file_deps_fresh(self, metadata: CacheMetadata, *, quiet: bool = False) -> bool:
         """Return True if every file recorded in ``metadata.auto_file_deps``
