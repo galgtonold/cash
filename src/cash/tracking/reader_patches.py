@@ -29,6 +29,7 @@ import functools
 import glob
 import importlib.abc
 import importlib.util
+import linecache
 import logging
 import os
 import pathlib
@@ -45,7 +46,7 @@ from cash._paths import CELL_NAME_PREFIX, is_pseudo_filename, is_remote_url
 from cash.effect_observer import active_observer as _active_effect_observer
 from cash.install_paths import is_user_code_file, is_user_path
 from cash.remote_source import remember_read_options
-from cash.tracking import io_watch
+from cash.tracking import io_watch, native_reads
 from cash.tracking.read_credit import frame_kind, note_untracked_read
 from cash.tracking.tracker_context import active_tracker
 
@@ -243,6 +244,106 @@ def _make_h5py_init_handler(original: Callable[..., Any]) -> Callable[..., Any]:
     return tracked_init
 
 
+def _call_place(frame: Any) -> str:
+    """Where the code that made the call *frame* made stands, for a warning:
+    the nearest frame of the user's own code (a notebook statement or a file
+    of theirs) at or above *frame*, as ``line 4: img = cv2.imread(p)``, with
+    the file's name when it has one."""
+    first = frame
+    while frame is not None and _who_asked(frame) != "user":
+        frame = frame.f_back
+    if frame is None:
+        frame = first
+    if frame is None:
+        return "where it was called"
+    filename, lineno = frame.f_code.co_filename, frame.f_lineno
+    text = linecache.getline(filename, lineno).strip() if lineno else ""
+    place = f"line {lineno}" if is_pseudo_filename(filename) else f"{filename}:{lineno}"
+    return f"{place}: {text}" if text else place
+
+
+def _note_native_read(reader: str, target: Any, frame: Any) -> None:
+    """*reader* opens *target* in compiled code. With the native file hook
+    on, the hook sees that open; with it off (macOS, or
+    ``CASH_NATIVE_FILE_HOOK=0``) nothing does, so the block's tracker records
+    the read as one it cannot see (`note_native_read_unseen`), unless it
+    already recorded *target* (``xarray.open_dataset`` reaching
+    ``netCDF4.Dataset``, a ``file_depends_on=`` path)."""
+    tracker = active_tracker.get()
+    if tracker is None or native_reads.active():
+        return
+    items = target if isinstance(target, (list, tuple)) else (target,)
+    for item in items:
+        if not isinstance(item, (str, os.PathLike)) or tracker.has_read(item):
+            continue
+        try:
+            text = os.fspath(item)
+            path = text if is_remote_url(text) else os.path.abspath(text)
+        except (TypeError, ValueError):
+            continue
+        tracker.note_native_read_unseen(reader, path, _call_place(frame))
+        return
+
+
+#: `_PATH_KWARGS` and the names `_NATIVE_READERS` take a path under:
+#: DuckDB's and pyogrio's ``path_or_buffer``, osgeo's ``utf8_path``.
+_NATIVE_PATH_KWARGS = (*_PATH_KWARGS, "path_or_buffer", "utf8_path")
+
+
+def _native_reader_handler(reader: str) -> Callable[..., Any]:
+    """The handler factory for *reader* (``cv2.imread``), a reader of a
+    popular library that opens its file in compiled code, which cash does
+    not follow to the file (`_NATIVE_READERS`): its path, the first
+    argument, is a read only the native file hook sees."""
+
+    def factory(original_func: Callable[..., Any], track_callback: Callable[..., Any]) -> Callable[..., Any]:
+        return _noting_native_read(original_func, reader)
+
+    return factory
+
+
+def _noting_native_read(original_func: Callable[..., Any], reader: str) -> Callable[..., Any]:
+    @functools.wraps(original_func)
+    def noted_func(*args, **kwargs):
+        target = args[0] if args else next((kwargs[k] for k in _NATIVE_PATH_KWARGS if k in kwargs), None)
+        if target is not None:
+            _note_native_read(reader, target, sys._getframe(1))
+        return original_func(*args, **kwargs)
+
+    return noted_func
+
+
+def _make_netcdf4_init_handler(original: Callable[..., Any]) -> Callable[..., Any]:
+    """Wrap ``netCDF4.Dataset.__init__(self, filename, mode='r', ...)``:
+    libnetcdf opens the file in C. Opened to write (``'w'``, ``'x'``) it is
+    an output; with ``memory=`` the bytes are given and no file is read."""
+
+    @functools.wraps(original)
+    def noted_init(self, *args, **kwargs):
+        mode = args[1] if len(args) > 1 else kwargs.get("mode", "r")
+        if kwargs.get("memory") is None and _opens_to_read(mode):
+            filename = args[0] if args else kwargs.get("filename")
+            if filename is not None:
+                _note_native_read("netCDF4.Dataset", filename, sys._getframe(1))
+        return original(self, *args, **kwargs)
+
+    return noted_init
+
+
+#: Readers of popular libraries that open the file they are given in compiled
+#: code (OpenCV, DuckDB, GDAL through pyogrio, fiona and osgeo) and that cash
+#: does not follow to the file. The native file hook sees those opens; where
+#: it is off, a call of one inside a tracked block is a read cash cannot see
+#: (`_note_native_read`). Classes are in `_CLASS_READERS`.
+_NATIVE_READERS: dict[str, tuple[str, ...]] = {
+    "cv2": ("imread", "imreadmulti"),
+    "duckdb": ("read_csv", "read_json", "read_parquet", "from_csv_auto", "from_parquet"),
+    "fiona": ("open",),
+    "osgeo.gdal": ("Open", "OpenEx", "OpenShared"),
+    "pyogrio": ("read_dataframe", "read_arrow", "open_arrow", "read_info"),
+}
+
+
 #: Reader CLASSES, by module, with the wrapper each one's ``__init__`` gets:
 #: the class is left in place, so ``isinstance`` still works, and its
 #: ``__init__`` records the path it is given.
@@ -250,6 +351,7 @@ _CLASS_READERS: dict[str, tuple[tuple[str, Callable[[Any], Any]], ...]] = {
     "pyarrow.parquet": (("ParquetFile", _make_init_path_handler),),
     "soundfile": (("SoundFile", _make_soundfile_init_handler),),
     "h5py": (("File", _make_h5py_init_handler),),
+    "netCDF4": (("Dataset", _make_netcdf4_init_handler),),
 }
 
 
@@ -1347,6 +1449,12 @@ class FileDependencyRegistry:
         self.register("rasterio", "open", self._create_read_mode_path_handler)
         for name in ("open_dataset", "open_dataarray", "load_dataset", "load_dataarray", "open_mfdataset"):
             self.register("xarray", name, self._create_path_arg_handler)
+
+        # Readers that open their file in compiled code cash does not follow:
+        # seen by the native file hook, and where it is off, warned about.
+        for module_name, names in _NATIVE_READERS.items():
+            for name in names:
+                self.register(module_name, name, _native_reader_handler(f"{module_name}.{name}"))
 
         # linecache answers from its own cache, so a file read once is not
         # opened again and no audit event reports the next lookup. Source files

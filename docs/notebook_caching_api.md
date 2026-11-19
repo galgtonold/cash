@@ -65,7 +65,7 @@ result = daily.rolling(7).mean()   # edit: only this runs again
   operating system tells cash which folders changed, so a notebook that read
   thousands of files does not check each one before every cell
   ([details](how-it-works/invalidation.md#files)).
-  <!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @fa9f8714 -->
+  <!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @30862715 -->
   A polars scan in one cell (`lf = pl.scan_parquet("data/*.parquet")`) and
   its `.collect()` in a later one count too: a changed or added file runs both
   again.

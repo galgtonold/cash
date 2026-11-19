@@ -127,6 +127,18 @@ def unrecorded_reads(tracker: Any) -> str | None:
     return f"{what} ({error}){more}"
 
 
+def unseen_native_reads(tracker: Any) -> str | None:
+    """What *tracker*'s block read through a library's compiled code that
+    nothing reported, as a phrase for KEY-NATIVE-READ-UNSEEN
+    (``cv2.imread read /data/a.png (line 4: img = cv2.imread(p))``), or None."""
+    unseen = getattr(tracker, "native_reads_unseen", None)
+    if not unseen:
+        return None
+    reader, path, where = unseen[0]
+    more = f" and {len(unseen) - 1} more" if len(unseen) > 1 else ""
+    return f"{reader} read {path} ({where}){more}"
+
+
 class FileAccessTracker:
     """Context manager that intercepts file I/O to record which files a
     statement reads.
@@ -197,6 +209,10 @@ class FileAccessTracker:
         # to record inside the block (a consumer raised, `note_tracking_failed`):
         # what it read is unknown.
         self.tracking_failed: list[tuple[str, str | None, str]] = []
+        # ``(reader, path, where)`` for each read a library made in compiled
+        # code with the native file hook off (`note_native_read_unseen`):
+        # the file it opened is not seen.
+        self.native_reads_unseen: list[tuple[str, str, str]] = []
         # Paths this block looked for and FOUND without reading them -- a flag
         # file, an output folder -- and what they were (``file``, ``dir`` or
         # ``any``). See ``track_present``.
@@ -831,6 +847,34 @@ class FileAccessTracker:
             tracker.unresolved_files.add(name)
             if failure not in tracker.tracking_failed and len(tracker.tracking_failed) < _FAILURES_KEPT:
                 tracker.tracking_failed.append(failure)
+
+    def note_native_read_unseen(self, reader: str, path: str, where: str) -> None:
+        """*reader*, a library function that opens its file in compiled code,
+        read *path* inside the block (called at *where*) while the native file
+        hook is off, so nothing reports the open. Like a failed record, here
+        and on the parents: *path* is stored as never fresh, so the call runs
+        again rather than be served after the file changed, and a notebook
+        statement is not stored. Both warn (KEY-NATIVE-READ-UNSEEN,
+        `unseen_native_reads`)."""
+        seen = (reader, path, where)
+        for tracker in self._self_and_parents():
+            tracker.unresolved_files.add(path)
+            if seen not in tracker.native_reads_unseen and len(tracker.native_reads_unseen) < _FAILURES_KEPT:
+                tracker.native_reads_unseen.append(seen)
+
+    def has_read(self, path: Any) -> bool:
+        """Has the block already recorded a read of *path* (a reader cash
+        watches, ``file_depends_on=``)?"""
+        try:
+            raw = os.fsdecode(path) if isinstance(path, bytes) else os.fspath(path)
+        except TypeError:
+            return False
+        if raw in self.accessed_remote:
+            return True
+        try:
+            return normalize_path(os.path.realpath(raw)) in self.accessed_files
+        except (TypeError, ValueError, OSError):
+            return False
 
     def add_tracked_unresolved(self, path: str) -> None:
         """Record a read that cannot be checked, here and on the parents."""

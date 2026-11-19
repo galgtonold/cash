@@ -852,7 +852,7 @@ read_parquet`).
 **Fix:** read the file through a watched reader, or put `# @cash:no-cache` above
 the statement if the read is cheap.
 
-<!-- claim: cash/tracking/native_reads.py:close_window @0e2917f4, cash/tracking/native_reads.py:_hook_libraries_as_they_load @d228cce2 -->
+<!-- claim: cash/tracking/native_reads.py:close_window @0e2917f4, cash/tracking/native_reads.py:_hook_libraries_as_they_load @d228cce2, cash/tracking/reader_patches.py:_NATIVE_READERS @41501bff -->
 On Linux (glibc, x86-64 or aarch64) and on Windows (x64) the native file hook
 is on by default (`%cash_status` shows it as `native_file_hook`;
 `CASH_NATIVE_FILE_HOOK=0` turns it off). cash then also sees the files a
@@ -868,7 +868,11 @@ code imports or loads with `ctypes` inside the call (`import pyarrow.fs` in
 the function body) is seen from the moment it is loaded. A file such a
 library opens while several cached calls run at once, in different threads, counts for all of them. On
 macOS the hook is not available yet; there the readers listed above are still
-recorded by their entry points.
+recorded by their entry points, and a statement that calls `cv2.imread`,
+`netCDF4.Dataset`, DuckDB's file readers or GDAL through pyogrio, fiona or
+`osgeo.gdal` warns [KEY-NATIVE-READ-UNSEEN](warnings.md#key-native-read-unseen)
+and runs every time. Another library, or a compiled extension of your own,
+that opens a file itself is not seen there.
 
 ### A file read into a memo before cash was imported
 

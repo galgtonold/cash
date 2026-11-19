@@ -286,11 +286,14 @@ changing it.
 
 ## Reads cash cannot see
 
-<!-- claim: cash/tracking/reader_patches.py:_patch_multiprocessing_pool @9fac5b09, cash/tracking/reader_patches.py:_patch_process_pool_submit @a7865b21, cash/tracking/reader_patches.py:_patch_thread_start @1b59e2a1 -->
+<!-- claim: cash/tracking/reader_patches.py:_patch_multiprocessing_pool @9fac5b09, cash/tracking/reader_patches.py:_patch_process_pool_submit @a7865b21, cash/tracking/reader_patches.py:_patch_thread_start @1b59e2a1, cash/tracking/reader_patches.py:_NATIVE_READERS @41501bff -->
 cash does not record a file opened by a subprocess, and on macOS one a C
 extension opens itself (on Linux and Windows the [native
 file hook](known-limitations.md#reads-through-a-loader-cash-cannot-see), on by
-default, records those). Name such a file with `file_depends_on=`. A
+default, records those). On macOS a call of `cv2.imread`, `netCDF4.Dataset`,
+DuckDB's file readers or GDAL through pyogrio, fiona or `osgeo.gdal` warns
+[KEY-NATIVE-READ-UNSEEN](warnings.md#key-native-read-unseen) and runs every
+time. Name such a file with `file_depends_on=`. A
 `threading.Thread` the function starts on code of yours, a lambda or a nested
 function included, reads as part of the call. A thread it starts that is still
 running when the call returns keeps the result from being stored, also one it

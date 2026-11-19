@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @321b8342 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @f40a1c88 -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -1153,6 +1153,7 @@ Something the result depends on may not be in the cache key. Every code here sta
 | [KEY-LIBRARY-VALUE-UNREAD](#key-library-value-unread) | both | a value set on a library's module is too big to look through for an iterator; code reading it runs every time |
 | [KEY-MEMO-BEFORE-IMPORT](#key-memo-before-import) | both | a `functools` memo already held results when cash was imported |
 | [KEY-LOOP-VAR-CHANGED](#key-loop-var-changed) | notebook | a loop body changes its loop variable before work cached for each pass |
+| [KEY-NATIVE-READ-UNSEEN](#key-native-read-unseen) | both | a library read a file in compiled code that cash cannot see without the native file hook (macOS); the call or statement runs every time |
 | [KEY-NETWORK-READ](#key-network-read) | decorator | the body reads from a server or database |
 | [KEY-OPAQUE-CALLABLE](#key-opaque-callable) | decorator | a callable's code cannot be hashed |
 | [KEY-READ-UNRECORDED](#key-read-unrecorded) | both | cash failed to record a read; the call or statement runs every time |
@@ -1641,6 +1642,35 @@ line of its own above the statement the message names.
 
 **When it is safe to ignore.** When the passes never start out equal (each
 `q` differs when bound), or the cached work does not depend on the change.
+
+### KEY-NATIVE-READ-UNSEEN {#key-native-read-unseen}
+
+<span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
+
+<!-- claim: cash/tracking/reader_patches.py:_NATIVE_READERS @41501bff, cash/tracking/reader_patches.py:_note_native_read @a6420ce4, cash/tracking/file_tracker.py:FileAccessTracker.note_native_read_unseen @8c12cc81 -->
+**What happened.** Your code read a file through a library that opens it in
+compiled code: `cv2.imread` or `cv2.imreadmulti`, `netCDF4.Dataset`, DuckDB's
+`read_csv`, `read_json`, `read_parquet`, `from_csv_auto` or `from_parquet`,
+`pyogrio.read_dataframe`, `read_arrow`, `open_arrow` or `read_info` (which
+`geopandas.read_file` calls), `fiona.open`, or `osgeo.gdal.Open`, `OpenEx` or
+`OpenShared`. On Linux and Windows the [native file
+hook](known-limitations.md#reads-through-a-loader-cash-cannot-see) sees that
+open. Where it is off (on macOS, or with `CASH_NATIVE_FILE_HOOK=0`) nothing
+does. The message names the reader, the file and the line that called it. A
+cached function keeps the result, but it is never served: the call runs again
+every time. A notebook statement is not stored, and it runs again every time.
+
+**Why it matters.** The function or statement gets no speed-up from cash.
+Nothing stale is served: with the file missing from the entry, a hit would
+have handed back the old result after the file changed.
+
+**What to do.** For a cached function, name the file with
+`file_depends_on=`, with every file the reader takes with it (a shapefile's
+`.dbf` and `.shx`): cash then checks them by content, and the call is cached
+again. In a notebook, move the read into a function cached that way, or leave
+it: the statement's result is right.
+
+**When it is safe to ignore.** When the call or statement is cheap.
 
 ### KEY-NETWORK-READ {#key-network-read}
 

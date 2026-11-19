@@ -2625,6 +2625,7 @@ class CallRunner:
         args_left = self.arguments_left(spec, run, call.checked or (args, kwargs), call.ran_unit, attrs)
         self._files.credit_remembered_reads(func_name, run.tracker, args, kwargs)
         self._files.warn_unrecorded_reads(func_name, run.tracker)
+        self._files.warn_unseen_native_reads(func_name, run.tracker)
         auto_file_deps = snapshot_tracked_deps(run.tracker, getattr(func, "__module__", None))
         execution_time = _perf_counter() - call.call_start
 

@@ -35,7 +35,7 @@ from ..tracking.file_dep_snapshot import (
     snapshot_is_fresh,
     walk_dataset_dir,
 )
-from ..tracking.file_tracker import unrecorded_reads
+from ..tracking.file_tracker import unrecorded_reads, unseen_native_reads
 from ..tracking.read_credit import credited_reads
 from ..tracking.tracker_context import active_tracker
 from .cache_metadata import CacheMetadata
@@ -481,6 +481,24 @@ class FileDeps:
             f"served from the cache and the call runs again every time.",
             code="KEY-READ-UNRECORDED",
             fix="nothing to change in your code; please report the error so cash can record that read.",
+        )
+
+    def warn_unseen_native_reads(self, func_name: str, tracker: Any) -> None:
+        """KEY-NATIVE-READ-UNSEEN when the body called a reader that opens its
+        file in compiled code with the native file hook off: the entry holds
+        that file as never fresh, so every call runs again."""
+        what = unseen_native_reads(tracker)
+        if what is None:
+            return
+        self._notices.warn_once(
+            CashCacheIneffectiveWarning,
+            func_name,
+            "native_read_unseen",
+            f"@cash.cache on {func_name}: {what}. That library opens the file in compiled code, "
+            f"which cash cannot see on this platform (the native file hook is off), so the result is "
+            f"never served from the cache and the call runs again every time.",
+            code="KEY-NATIVE-READ-UNSEEN",
+            fix="name the file with file_depends_on= so cash checks it, and the call is cached again.",
         )
 
     def credit_remembered_reads(self, func_name: str, tracker: Any, args: tuple, kwargs: dict) -> None:

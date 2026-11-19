@@ -42,7 +42,7 @@ is a new argument for `normalize`, so everything downstream recomputes.
 
 ## Source data
 
-<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @fa9f8714 -->
+<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @30862715 -->
 Files read inside a step are tracked by content, with nothing to declare:
 pandas and polars readers, pyarrow's `csv`, `parquet`, `feather` and `json`
 readers, `open()`. An `s3://` or `gs://` read is tracked by the object's ETag or

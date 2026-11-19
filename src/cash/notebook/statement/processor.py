@@ -136,7 +136,7 @@ from cash.notebook.statement.unstored import MEMORY_ONLY, UnstoredNotes
 from cash.notebook.tracking_state import ENTRY_HISTORY, TrackingState
 from cash.notebook.versioned_json_store import resolve_cache_dir
 from cash.purity import is_known_pure, is_stateful
-from cash.tracking.file_tracker import unrecorded_reads
+from cash.tracking.file_tracker import unrecorded_reads, unseen_native_reads
 
 from ...analysis.analysis_budget import (
     ANALYSIS_BUDGET_REASON,
@@ -3189,6 +3189,22 @@ class StatementProcessor:
                 run.metrics["uncacheable_reasons"].append(workers)
         if execution.result.success:
             self._left_work_running(run, execution)
+        unseen = unseen_native_reads(execution.file_tracker)
+        if unseen is not None:
+            reason = (
+                f"{unseen}, opening the file in compiled code, which cash cannot see on this platform "
+                "(the native file hook is off), so the statement is not stored and runs every time"
+            )
+            warn_diagnostic(
+                CashCacheIneffectiveWarning,
+                "KEY-NATIVE-READ-UNSEEN",
+                f"{reason}.",
+                "nothing, for a right result. To cache the work, move the read into a function "
+                "cached with @cash.cache(file_depends_on=<the file>).",
+            )
+            if not run.skip_cache:
+                run.skip_cache = True
+                run.metrics["uncacheable_reasons"].append(reason)
         unrecorded = unrecorded_reads(execution.file_tracker)
         if unrecorded is not None:
             reason = f"cash failed to record {unrecorded}, so the statement is not stored and runs every time"

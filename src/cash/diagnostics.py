@@ -349,6 +349,9 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         # not be hashed, so editing it changes nothing
         "KEY-STALE-CASH-KEY",  # one __cash_key__ stood for two different
         # contents, so one's results are served for the other
+        "KEY-NATIVE-READ-UNSEEN",  # a library opened a file in compiled code
+        # with the native file hook off (macOS); the call or statement runs
+        # every time
         "KEY-READ-UNRECORDED",  # cash failed to record a read the body made, so
         # the call runs again every time (a statement is not stored)
         "KEY-SOURCE-CHANGED",  # a cached function's or helper's file was edited
