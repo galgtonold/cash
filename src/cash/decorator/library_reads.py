@@ -563,24 +563,86 @@ def self_names(code: types.CodeType) -> tuple[str, ...]:
         return held
     names: set[str] = set()
     if code.co_argcount or code.co_posonlyargcount:
-        first = code.co_varnames[0]
-        on_first = False
         try:
-            for ins in dis.get_instructions(code):
-                if on_first and ins.opname == "LOAD_ATTR" and isinstance(ins.argval, str):
-                    if not ins.argval.startswith("__"):
-                        names.add(ins.argval)
-                if ins.opname.startswith("LOAD_FAST"):
-                    val = ins.argval
-                    on_first = (val[-1] if isinstance(val, tuple) and val else val) == first
-                else:
-                    on_first = False
+            names = _attrs_off_first(code) if _RAW_SCAN else _attrs_off_first_dis(code)
         except Exception:  # noqa: BLE001 - unreadable bytecode: nothing read off it
             names = set()
     held = tuple(sorted(names))
     with _lock:
         _SELF_NAMES[code] = held
     return held
+
+
+def _attrs_off_first_dis(code: types.CodeType) -> set[str]:
+    """`self_names` read through `dis`, where `_attrs_off_first` does not
+    know the bytecode (before Python 3.12)."""
+    names: set[str] = set()
+    first = code.co_varnames[0]
+    on_first = False
+    for ins in dis.get_instructions(code):
+        if on_first and ins.opname == "LOAD_ATTR" and isinstance(ins.argval, str):
+            if not ins.argval.startswith("__"):
+                names.add(ins.argval)
+        if ins.opname.startswith("LOAD_FAST"):
+            val = ins.argval
+            on_first = (val[-1] if isinstance(val, tuple) and val else val) == first
+        else:
+            on_first = False
+    return names
+
+
+def _attrs_off_first(code: types.CodeType) -> set[str]:
+    """`self_names` read off the raw bytecode (Python 3.12 and newer): each
+    ``LOAD_ATTR`` right after a load of local 0, the first argument (the
+    second of a packed pair, ``LOAD_FAST_LOAD_FAST``, which is the one on
+    top), its name ``co_names[arg >> 1]``. An ``EXTENDED_ARG`` is part of
+    the instruction it extends, and a cache entry (opcode 0) is skipped.
+
+    `dis.get_instructions` built an object per instruction: 0.24 ms per
+    pandas method, paid for each library function the first traced call
+    of a process ran (0.1 s of a 0.02 s GeoDataFrame constructor)."""
+    names: set[str] = set()
+    raw = code.co_code
+    co_names = code.co_names
+    on_first = False
+    ext = 0
+    for i in range(0, len(raw), 2):
+        op = raw[i]
+        if op == _CACHE:
+            continue
+        arg = raw[i + 1] | ext
+        if op == _EXTENDED_ARG:
+            ext = arg << 8
+            continue
+        ext = 0
+        if on_first and op == _LOAD_ATTR:
+            name = co_names[arg >> 1]
+            if not name.startswith("__"):
+                names.add(name)
+        if op in _LOAD_LOCAL:
+            on_first = arg == 0
+        elif op in _LOAD_LOCAL_PAIR:
+            on_first = arg & 15 == 0
+        else:
+            on_first = False
+    return names
+
+
+def _raw_scan_opcodes() -> tuple[bool, int, int, int, frozenset[int], frozenset[int]]:
+    """What `_attrs_off_first` reads: whether this Python's bytecode is the
+    one it knows (3.12 and newer), and the opcodes it looks for."""
+    import opcode
+
+    opmap = opcode.opmap
+    single = frozenset(
+        code for name, code in opmap.items() if name.startswith("LOAD_FAST") and name.count("LOAD_FAST") == 1
+    )
+    pair = frozenset(code for name, code in opmap.items() if name.count("LOAD_FAST") == 2)
+    known = sys.version_info >= (3, 12) and opmap.get("CACHE") == 0 and "LOAD_ATTR" in opmap and bool(single)
+    return known, opmap.get("CACHE", -1), opmap.get("EXTENDED_ARG", -1), opmap.get("LOAD_ATTR", -1), single, pair
+
+
+_RAW_SCAN, _CACHE, _EXTENDED_ARG, _LOAD_ATTR, _LOAD_LOCAL, _LOAD_LOCAL_PAIR = _raw_scan_opcodes()
 
 
 def receiver_class(code: types.CodeType, frame: Any) -> type | None:
