@@ -36,13 +36,19 @@ class Session:
         raise TypeError("a live session cannot be pickled")
 
 
+def _lambda_holding(session, body=lambda x, y: x):
+    """A lambda whose closure holds *session*."""
+    return lambda *args, **kwargs: body(*args, **kwargs) if session else None
+
+
 def _messages(rec, code):
     return [str(w.message) for w in rec if f"[{code}]" in str(w.message)]
 
 
 @pytest.mark.parametrize(
     "arg",
-    [functools.partial(make_scaler(2), 1), functools.partial(lambda x, y: x, 1)],
+    # Each holds a live session, so no key can be built from what it holds.
+    [functools.partial(make_scaler(Session()), 1), functools.partial(_lambda_holding(Session()), 1)],
     ids=["partial-of-closure", "partial-of-lambda"],
 )
 def test_a_code_argument_is_not_told_to_register_a_type_wide_hasher(full_warning_text, disk_cash, arg):
@@ -120,7 +126,7 @@ def test_a_frame_next_to_a_partial_of_a_lambda_blames_the_partial(disk_cash):
 
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
-        score(pd.DataFrame({"a": [1, 2]}), functools.partial(lambda d, k: d * k, k=2))
+        score(pd.DataFrame({"a": [1, 2]}), functools.partial(_lambda_holding(Session(), lambda d, k: d * k), k=2))
     found = _messages(rec, "KEY-UNHASHABLE-ARG")
     assert found
     assert "of type partial" in found[0]
