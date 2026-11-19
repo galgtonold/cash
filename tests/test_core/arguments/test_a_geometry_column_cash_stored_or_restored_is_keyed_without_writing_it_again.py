@@ -147,7 +147,8 @@ def test_a_pipeline_restored_in_a_new_process_keys_its_next_stage_without_writin
 
             print(total(load({ROWS})), load.cache_info()["hits"], total.cache_info()["hits"], sum(written))
             """
-        )
+        ),
+        encoding="utf-8",
     )
     first = run_python(script, cwd=tmp_path).stdout.split()
     second = run_python(script, cwd=tmp_path).stdout.split()
