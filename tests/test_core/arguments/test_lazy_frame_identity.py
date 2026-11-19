@@ -141,6 +141,21 @@ def test_a_scan_backed_plan_notices_its_file_changing(tmp_path, hook):
     assert total(pl.scan_csv(csv)) == 60
 
 
+def test_a_file_scanned_by_its_file_uri_is_the_local_file(tmp_path, hook):
+    c = cash.Cash(cache_dir=str(tmp_path / "cache"))
+    csv = pathlib.Path(tmp_path) / "data.csv"
+    csv.write_text("x\n1\n", encoding="utf-8")
+    _settle(csv)
+
+    @c.cache(assume_safe=True)
+    def total(frame):
+        return int(frame.collect()["x"].sum())
+
+    assert total(pl.scan_csv(csv.as_uri())) == 1
+    csv.write_text("x\n10\n20\n", encoding="utf-8")
+    assert total(pl.scan_csv(csv.as_uri())) == 30
+
+
 def test_a_new_file_matching_a_scanned_glob_counts(tmp_path, hook):
     c = cash.Cash(cache_dir=str(tmp_path / "cache"))
     folder = tmp_path / "parts"
