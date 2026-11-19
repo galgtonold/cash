@@ -92,9 +92,9 @@ def _on_open(args: tuple) -> None:
     """The ``open`` audit event: a read is a dependency, a write an effect.
 
     ``mode`` is the raw mode (``r``, ``w+``, ...) of any Python-level open;
-    ``os.open`` reports None there and its *flags*: not watched as a read, but
-    a write like any other. An integer "path" is a descriptor being wrapped,
-    which names no file.
+    ``os.open`` reports None there and its *flags*, which say a read or a
+    write just as a mode does. An integer "path" is a descriptor being
+    wrapped, which names no file.
     """
     path, mode, flags = args
     if not isinstance(path, (str, bytes, os.PathLike)):
@@ -111,8 +111,8 @@ def _on_open(args: tuple) -> None:
         if PENDING:
             settle_before_write(path)
     if not isinstance(mode, str):
-        # ``os.open``: not watched as a read, but a file it creates
-        # (``tempfile.mkstemp``) is the block's own output.
+        # ``os.open``: a file it creates (``tempfile.mkstemp``) is the
+        # block's own output, and one it opens to read is an input.
         if isinstance(flags, int) and _creates(flags):
             tracker = active_tracker.get()
             if tracker is not None:
@@ -129,34 +129,20 @@ def _on_open(args: tuple) -> None:
                 and not is_cash_internal(os.fsdecode(os.fspath(path)))
             ):
                 observer.record_write(path, raw=True)
+        if isinstance(flags, int) and _os_open_reads(flags):
+            # ``fd = os.open(p, os.O_RDONLY); os.read(fd, n)`` reads *p* as
+            # ``open(p, "rb")`` does, and was served stale after *p* changed.
+            # The native hook does not see it either: it leaves the
+            # interpreter's own calls to this event.
+            caller = _audited_caller()
+            if not _opened_by_cash(caller) and not _not_a_read(caller) and not _walks_by_descriptor(caller):
+                _track_read(path, caller, appends=bool(flags & os.O_APPEND))
         return
     caller = _audited_caller()
     if _not_a_read(caller):
         return
     if _is_read_mode(mode):
-        tracker = active_tracker.get()
-        if tracker is None:
-            note_untracked_read(path, caller)
-            return
-        if is_cash_internal(path):
-            # The cache's own lookups: each call a statement keys looks its
-            # entry up, and resolving and probing the path cost ~50 us of a
-            # ~2 us miss, 3 ms of the first 50 calls in `[f(i) for i in xs]`.
-            # The tracker drops these paths anyway, after resolving them.
-            return
-        found = tracker.track_path(path)
-        if "a" not in mode and not found:
-            # A file that was not there is an input too, and the docs say so --
-            # but only the `os.path.exists` spelling recorded it.
-            # `try: open(p) except FileNotFoundError:` kept serving its default
-            # after the file appeared. The event comes before the open, so ask
-            # the disk -- unless resolving the path just found the file there.
-            try:
-                own_stat(path)
-            except FileNotFoundError:
-                tracker.track_absent(path)
-            except (OSError, ValueError):
-                pass
+        _track_read(path, caller, appends="a" in mode)
     elif any(ch in mode for ch in "wax"):
         # Not a dependency -- a WRITE is an effect, not an input, and folding
         # it into the key would invalidate a function on its own output. It is
@@ -173,6 +159,60 @@ def _on_open(args: tuple) -> None:
             tracker = active_tracker.get()
             if tracker is not None:
                 tracker.note_created(path)
+
+
+def _track_read(path: Any, caller: Any, *, appends: bool) -> None:
+    """Record a read of *path* made by *caller*: a dependency of the active
+    tracker, or, outside every tracker, a credit to the code that made it."""
+    tracker = active_tracker.get()
+    if tracker is None:
+        note_untracked_read(path, caller)
+        return
+    if is_cash_internal(path):
+        # The cache's own lookups: each call a statement keys looks its
+        # entry up, and resolving and probing the path cost ~50 us of a
+        # ~2 us miss, 3 ms of the first 50 calls in `[f(i) for i in xs]`.
+        # The tracker drops these paths anyway, after resolving them.
+        return
+    found = tracker.track_path(path)
+    if not appends and not found:
+        # A file that was not there is an input too, and the docs say so --
+        # but only the `os.path.exists` spelling recorded it.
+        # `try: open(p) except FileNotFoundError:` kept serving its default
+        # after the file appeared. The event comes before the open, so ask
+        # the disk -- unless resolving the path just found the file there.
+        try:
+            own_stat(path)
+        except FileNotFoundError:
+            tracker.track_absent(path)
+        except (OSError, ValueError):
+            pass
+
+
+#: ``os.O_DIRECTORY`` where the platform has it: an ``os.open`` of a folder
+#: to hold it as a descriptor, which reads no file.
+_O_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
+
+#: Standard-library modules whose ``os.open`` calls walk a tree by
+#: descriptor (``os.fwalk``, ``shutil.rmtree``): each opens an entry's name
+#: relative to its folder's descriptor (``dir_fd``), which the event does
+#: not report, so the name would be resolved against the working directory.
+#: They open folders to list or remove them, never a file to read.
+_DESCRIPTOR_WALKERS = frozenset({"os", "shutil"})
+
+
+def _os_open_reads(flags: int) -> bool:
+    """Do ``os.open`` *flags* open an existing file to read it?
+    ``O_RDONLY``, and ``O_RDWR`` when it neither appends, creates nor
+    truncates (``r+``). A folder opened as a descriptor is not a read."""
+    if flags & _O_DIRECTORY or flags & os.O_WRONLY:
+        return False
+    return not _os_open_writes(flags) and not flags & os.O_TRUNC
+
+
+def _walks_by_descriptor(frame: Any) -> bool:
+    name = (frame.f_globals.get("__name__") or "") if frame is not None else ""
+    return name in _DESCRIPTOR_WALKERS
 
 
 def _opens_to_write(mode: Any, flags: Any) -> bool:

@@ -288,7 +288,7 @@ changing it.
 
 <!-- claim: cash/tracking/reader_patches.py:_patch_multiprocessing_pool @9fac5b09, cash/tracking/reader_patches.py:_patch_process_pool_submit @a7865b21, cash/tracking/reader_patches.py:_patch_thread_start @1b59e2a1 -->
 cash does not record a file opened by a subprocess, and on macOS one a C
-extension opens itself or `os.open` opens (on Linux and Windows the [native
+extension opens itself (on Linux and Windows the [native
 file hook](known-limitations.md#reads-through-a-loader-cash-cannot-see), on by
 default, records those). Name such a file with `file_depends_on=`. A
 `threading.Thread` the function starts on code of yours, a lambda or a nested

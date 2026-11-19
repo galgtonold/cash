@@ -201,15 +201,23 @@ def test_cash_reading_a_file_for_itself_is_nobodys_dependency(tmp_path, reader):
     assert not any(p.endswith("/helpers.py") for p in _tracked(tracker)), _tracked(tracker)
 
 
-def test_os_open_is_not_a_dependency(tmp_path):
-    """Tests count executions with os.open/os.write precisely because the
-    tracker does not turn them into dependencies."""
+def test_an_os_open_append_is_not_a_dependency(tmp_path):
+    """Tests count executions with an ``os.open`` append and ``os.write``,
+    which the tracker takes for a write, not a dependency."""
     counter = tmp_path / "count.txt"
-    counter.write_text("0", encoding="utf-8")
     tracker = FileAccessTracker()
     with tracker:
-        os.close(os.open(counter, os.O_RDONLY))
+        os.close(os.open(counter, os.O_WRONLY | os.O_APPEND | os.O_CREAT))
     assert not any(p.endswith("/count.txt") for p in _tracked(tracker))
+
+
+def test_an_os_open_read_is_a_dependency(tmp_path):
+    data = tmp_path / "data.txt"
+    data.write_text("0", encoding="utf-8")
+    tracker = FileAccessTracker()
+    with tracker:
+        os.close(os.open(data, os.O_RDONLY))
+    assert any(p.endswith("/data.txt") for p in _tracked(tracker))
 
 
 def test_a_spawned_process_is_observed():

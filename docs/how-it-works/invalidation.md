@@ -151,12 +151,12 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
 
 ### Files
 
-<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @fa9f8714, cash/tracking/read_events.py:_is_read_mode @238e2cb8, cash/tracking/read_events.py:_on_listing @218e8bfc -->
+<!-- claim: cash/tracking/reader_patches.py:FileDependencyRegistry._initialize_defaults @fa9f8714, cash/tracking/read_events.py:_is_read_mode @238e2cb8, cash/tracking/read_events.py:_os_open_reads @176ff7de, cash/tracking/read_events.py:_on_listing @218e8bfc -->
 cash records a file when your code reads it through one of these:
 
 | Library | Readers |
 |---|---|
-| built-in | `open()` in a read mode (`'r'`, `'rb'`, `'r+'`, `'a+'`), and `pathlib.Path.read_text()`, `read_bytes()`, `open()` |
+| built-in | `open()` in a read mode (`'r'`, `'rb'`, `'r+'`, `'a+'`), `os.open` with `O_RDONLY` (or `O_RDWR` without `O_APPEND`, `O_CREAT` or `O_TRUNC`), and `pathlib.Path.read_text()`, `read_bytes()`, `open()` |
 | pandas | every `read_*` function |
 | polars | `read_csv`, `read_parquet`, `read_json`, `read_ndjson`, `read_ipc`, `read_avro`, `read_excel`, and `scan_csv`, `scan_parquet`, `scan_ipc`, `scan_ndjson` |
 | pyarrow | `csv.read_csv`, `csv.open_csv`, `parquet.read_table`, `parquet.read_pandas`, `parquet.ParquetFile`, `feather.read_table`, `feather.read_feather`, `json.read_json`, `orc.read_table`, `dataset.dataset`, `memory_map`, `input_stream`, `ipc.open_file`, `ipc.open_stream` |
