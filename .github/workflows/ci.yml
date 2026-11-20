@@ -107,6 +107,10 @@ jobs:
       # would pass the free plan's 20 parallel jobs, so the limit is 55.
       # --durations lists the slowest tests, so a shard creeping up on the
       # limit shows which tests took the time.
+      # Windows 3.10 runs without the C extension's heap walk, and its late
+      # workers hold ~2M objects, so one share check there can take over 30 s
+      # (each gc.get_referrers call scans the heap): its per-test timeout is
+      # 90 s, since a timeout ends the whole xdist worker.
       - name: Run unit tests
         timeout-minutes: 55
         run: |
@@ -117,7 +121,8 @@ jobs:
             -m "not perf" \
             -p tools.test_selection.shard --shard=${{ matrix.shard }} \
             -n auto --tb=short -q -rs --durations=40 \
-            -o faulthandler_timeout=120
+            -o faulthandler_timeout=120 \
+            ${{ (runner.os == 'Windows' && matrix.python-version == '3.10') && '-o timeout=90' || '' }}
         # Windows defaults to pwsh, where `\` does not continue a line.
         shell: bash
 
