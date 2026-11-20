@@ -23,6 +23,12 @@ import cash.notebook.shared_objects as shared_objects
 #: ``[count]`` while a read is being counted, else empty.
 COUNTING: list[int] = []
 
+#: A read that asked an id per object would ask at least one per filler
+#: object (20,000). What else runs during the read asks a few: weakref
+#: callbacks and finalizers a collection runs (34 on a 3.8M-object macOS
+#: 3.14 worker in CI).
+FEW = 1_000
+
 
 def _hook(event, args):
     if event == "builtins.id" and COUNTING:
@@ -53,7 +59,7 @@ def test_reading_the_heap_asks_no_id_per_object(read):
     finally:
         COUNTING.clear()
 
-    assert ids_asked <= 10, f"{ids_asked} id() calls for a heap of {len(gc.get_objects())} objects"
+    assert ids_asked < FEW, f"{ids_asked} id() calls for a heap of {len(gc.get_objects())} objects"
     found_ids = {id(obj) for obj in found}
     assert all(id(holder) in found_ids for holder in holders)
     assert len(filler) == 20_000
@@ -87,14 +93,14 @@ def test_the_other_reads_of_the_heap_or_a_namespace_ask_no_id_per_object():
     namespace.update({f"f{i}": (lambda i=i: i) for i in range(2_000)})
 
     alive, asked = _ids_asked(unseen_writes._with_objects_alive, [Alive, Gone])
-    assert asked <= 10
+    assert asked < FEW
     assert alive == [Alive]
 
     counts, asked = _ids_asked(shared_objects._module_references, [namespace["target"]], [namespace])
-    assert asked <= 10
+    assert asked < FEW
     assert counts == [1]
 
     holders, asked = _ids_asked(helper_memos._holders, namespace)
-    assert asked <= 10
+    assert asked < FEW
     assert len(holders) == 2_000
     assert len(kept) == 3
