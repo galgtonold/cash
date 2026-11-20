@@ -322,8 +322,10 @@ def test_what_the_loop_assigns_into_is_restored_after_a_restart(nb_runner, make,
     """A NumPy array, or a frame, is bound to the restored copy, as before
     (the weak reference pandas keeps to the frame in itself comes back with
     the copy); a dict of frames is restored into, the weak references pandas keeps between its
-    own blocks coming back with it."""
-    loop = f"for i in range(3000):\n    time.sleep(0.0003)\n    {body}"
+    own blocks coming back with it. Each pass sleeps 1 ms so the loop costs
+    well over storing what it made (3000 frames) on a busy machine too: a
+    loop cheaper than its write is rightly run again, not stored."""
+    loop = f"for i in range(3000):\n    time.sleep(0.001)\n    {body}"
     printed, seen = _run(nb_runner, f"import time\n{make}", loop, f"print({read})")
     assert printed == expected
     assert "RESTORED" in str(seen)

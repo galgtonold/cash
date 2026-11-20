@@ -47,10 +47,18 @@ def _run(cells, tmp_path):
 
 
 def _saved(cell):
-    return [
-        ("stream", o.name, o.text) if o.output_type == "stream" else (o.output_type, dict(o.get("data", {})))
-        for o in cell.outputs
-    ]
+    """The outputs as the notebook shows them: the kernel may flush one
+    ``print`` as two stream messages (its text, then the newline) when the
+    machine is busy, and a notebook shows those as one block."""
+    saved = []
+    for o in cell.outputs:
+        if o.output_type == "stream" and saved and saved[-1][:2] == ("stream", o.name):
+            saved[-1] = ("stream", o.name, saved[-1][2] + o.text)
+        elif o.output_type == "stream":
+            saved.append(("stream", o.name, o.text))
+        else:
+            saved.append((o.output_type, dict(o.get("data", {}))))
+    return saved
 
 
 @pytest.mark.parametrize("cells", [IN_ONE_CELL, ACROSS_CELLS], ids=["in-one-cell", "across-cells"])
