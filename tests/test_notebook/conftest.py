@@ -24,13 +24,16 @@ def _time_limits_a_busy_machine_cannot_trip(request, monkeypatch):
     hit saw it computed. With both at zero, 94 tests here fail that way.
     Pinned far above that, unless a test is about the limits themselves
     (``@pytest.mark.real_time_limits``) or sets them, which wins over this.
+    The share check's pin stays below pytest-timeout (30 s): at 30 s a check
+    on a worker holding ~2M objects (Windows 3.10, late in a run) reached
+    the timeout first, and the timeout ends the whole worker.
     """
     if request.node.get_closest_marker("real_time_limits"):
         return
     from cash.analysis import analysis_budget
     from cash.notebook.statement import processor
 
-    monkeypatch.setattr(processor, "SHARE_CHECK_FLOOR_S", 30.0)
+    monkeypatch.setattr(processor, "SHARE_CHECK_FLOOR_S", 20.0)
     monkeypatch.setattr(analysis_budget, "ANALYSIS_BUDGET_FLOOR_S", 60.0)
 
 

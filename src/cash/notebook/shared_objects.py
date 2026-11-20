@@ -3293,15 +3293,17 @@ def _module_references(objs: list[Any], namespaces: list[dict]) -> list[int] | N
     references each one has; None when anything else holds one of them (or
     holds it uncounted: as a key, or a second time through a name it does
     not see). Read from the namespaces and the reference counts alone, with
-    no read of the heap."""
-    ids = [id(obj) for obj in objs]
+    no read of the heap. Each value is named by `_PLACE`, not ``id()``,
+    which raises an audit event per value of every namespace."""
+    place = _PLACE
+    ids = [place(obj) for obj in objs]
     counts = dict.fromkeys(ids, 0)
     wanted = counts.keys()
     for namespace in namespaces:
         values = namespace.values()
-        if wanted.isdisjoint(map(id, values)):
+        if wanted.isdisjoint(map(place, values)):
             continue
-        for key in map(id, values):
+        for key in map(place, values):
             if key in counts:
                 counts[key] += 1
     refs = _reference_counts(objs)
@@ -3390,13 +3392,19 @@ def _referrers(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
 
 def _referrers_of(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
     """`gc.get_referrers` of *objs*, in one read of the heap whatever their
-    number. The heap's list goes in *stop*."""
-    ids = {id(obj) for obj in objs}
+    number. The heap's list goes in *stop*.
+
+    Read in Python, each referent is named by its address as ``object``'s
+    hash gives it (`_PLACE`), not by ``id()``: Python raises an audit event
+    for every ``id()``, and every audit hook written in Python runs for it
+    (cash's own before 3.12, and any the program added). On Python 3.10 an
+    id per referent of a late test worker's heap, with five such hooks,
+    took one cell past 30 s."""
     heap = gc.get_objects()
     stop.add(id(heap))
     if _REFERRERS_IN is not None:
         # The same read in C, without an id() per referent.
-        found = _REFERRERS_IN(heap, ids)
+        found = _REFERRERS_IN(heap, {id(obj) for obj in objs})
         if found is not NotImplemented:
             # Neither the budget nor Ctrl-C stops the kernel: a 2-million
             # object heap is ~0.3 s, checked once it is read.
@@ -3408,21 +3416,25 @@ def _referrers_of(objs: tuple[Any, ...], stop: set[int]) -> list[Any]:
         _UNREADABLE[0] = True
         raise WalkBudgetExceeded
     found = []
-    referents, misses = get_referents, ids.isdisjoint
+    place = _PLACE
+    referents, misses = get_referents, {place(obj) for obj in objs}.isdisjoint
     # A block of the heap is read in one call, and only a block holding one
     # of *objs* object by object: most hold none, and the heap's order stays.
     for start in range(0, len(heap), _REFERRERS_BLOCK):
         if not start & 4095:
             check_walk_budget()
         block = heap[start : start + _REFERRERS_BLOCK]
-        if misses(map(id, referents(*block))):
+        if misses(map(place, referents(*block))):
             continue
-        found.extend(obj for obj in block if not misses(map(id, referents(obj))))
+        found.extend(obj for obj in block if not misses(map(place, referents(obj))))
     return found
 
 
 #: Heap objects `_referrers_of` reads in one `gc.get_referents` call.
 _REFERRERS_BLOCK = 256
+#: An object's address as ``object``'s hash gives it (turned by four bits:
+#: one per live object, whatever hash its class has), with no audit event.
+_PLACE = object.__hash__
 
 
 def _referrers_by_count(objs: list[Any] | tuple[Any, ...]) -> list[Any] | None:

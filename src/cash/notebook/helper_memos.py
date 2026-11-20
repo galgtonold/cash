@@ -267,8 +267,10 @@ def _holder_values(ns: Mapping[str, Any]) -> list[Any]:
 
 
 def _holders(ns: Mapping[str, Any]) -> tuple[int, ...]:
-    """The ids of `_holder_values`."""
-    return tuple(map(id, _holder_values(ns)))
+    """The addresses of `_holder_values`, as ``object``'s hash gives them:
+    ``id()`` raises an audit event per value, which every Python audit hook
+    runs for, and this runs over a whole module's namespace."""
+    return tuple(map(object.__hash__, _holder_values(ns)))
 
 
 def _same_objects(kept: list[Any], values: list[Any]) -> bool:
