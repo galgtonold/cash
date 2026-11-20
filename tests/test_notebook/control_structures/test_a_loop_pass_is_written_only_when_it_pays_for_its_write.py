@@ -11,8 +11,10 @@ loop half way could read one back. Its last state is what the cell leaves,
 judged at the cell's end by what rebuilding the whole chain would cost, and
 written when that pays for its write.
 
-The disk is made slow here (20 MiB/s, measured) so the verdict does not
-depend on the machine; refusing only ever means the pass runs again.
+The disk is made slow here (8 MiB/s, measured: ~1.9 s per state) so the
+verdict does not depend on the machine, and a pass the runner stalls for
+well over a second still costs less than its write. Refusing only ever
+means the pass runs again.
 """
 
 from __future__ import annotations
@@ -35,7 +37,7 @@ LIB = (
     "    time.sleep(0.25)\n"
     "    return [i] * 10\n"
     "def step(acc, i):\n"
-    "    time.sleep(0.15)\n"
+    "    time.sleep(0.3)\n"
     "    return acc + i\n"
 )
 
@@ -51,14 +53,14 @@ LOOPS = (
 
 
 class _SlowDisk:
-    """A disk measured at 20 MiB/s for every kind, whatever it really does
+    """A disk measured at 8 MiB/s for every kind, whatever it really does
     (the write queue's `write_cost.WriteRates`, its rate pinned)."""
 
     def record(self, kind: str, nbytes: int, seconds: float) -> None:
         return None
 
     def per_byte(self, kind: str) -> float | None:
-        return 1.0 / (20 * MiB)
+        return 1.0 / (8 * MiB)
 
     def slowest_per_byte(self) -> float | None:
         return self.per_byte("")
