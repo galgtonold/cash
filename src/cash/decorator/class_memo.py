@@ -20,8 +20,12 @@ read whole again on every check (`hit_memo.ContentProbe`). A result is
 served while the C extension's world epoch and cash's own generation
 (`state_memo.GEN`) are what they were when it was computed, and every cell,
 class tag and probe of the watch still holds. Anything else -- a class whose
-world reaches a cached function or holds what can be neither watched nor
-read whole -- is folded every time, as before.
+world holds what can be neither watched nor read whole -- is folded every
+time, as before. A class whose world reaches a cached function is watched
+for the code arguments carry (`CodeArgs`), and a fold of it remembered only
+when it asked for no cached function's state (`Capture.callee_states`),
+which is that function's whole world and no part of the watch; the digest
+a trace names is not.
 
 A world that keeps moving would be scanned on every call for nothing: a
 class whose proof broke before it served is scanned again only after a
@@ -44,7 +48,19 @@ from .. import _native, _weak
 from .._memo import LruMemo
 from . import hit_memo, state_memo
 
-__all__ = ["DIGESTS", "ENABLED", "MISS", "STATS", "VERIFY", "ClassMemo", "ClassMemoMismatch", "proof_for", "status"]
+__all__ = [
+    "CALLEE_STATES_BUILT",
+    "DIGESTS",
+    "ENABLED",
+    "MISS",
+    "STATS",
+    "VERIFY",
+    "ClassMemo",
+    "ClassMemoMismatch",
+    "give_up",
+    "proof_for",
+    "status",
+]
 
 
 def _flag(name: str, default: str) -> bool:
@@ -65,6 +81,11 @@ _cw = _native.cwatch
 
 STATS = {"scans": 0, "refused": 0, "served": 0, "recorded": 0, "verified": 0}
 
+#: How many times a cached function's state was asked for
+#: (`KeyBuilder.callee_state`): a fold that asked for none has nothing in
+#: it that a cached function's own world decides (`Capture.callee_states`).
+CALLEE_STATES_BUILT = [0]
+
 
 class ClassMemoMismatch(AssertionError):
     """``CASH_CLASS_MEMO_VERIFY=1``: a remembered class fold is not what
@@ -84,10 +105,28 @@ class _Proof:
     """One watch of a class's world (`hit_memo.watch_class`), at the world
     epoch and generation it was taken at."""
 
-    __slots__ = ("_cls", "backoff", "cells", "family", "gen", "served", "skipped", "stamp", "tags", "world")
+    __slots__ = (
+        "_cls",
+        "backoff",
+        "callees_ok",
+        "cells",
+        "family",
+        "gen",
+        "reaches_cached",
+        "served",
+        "skipped",
+        "stamp",
+        "tags",
+        "world",
+    )
 
-    def __init__(self, cls: type) -> None:
+    def __init__(self, cls: type, callees_ok: bool = False) -> None:
         self._cls = _weak.ref(cls)
+        #: May the world reach a cached function, and does it: a result
+        #: is then remembered only when its fold asked for no cached
+        #: function's state (`Capture.callee_states`).
+        self.callees_ok = callees_ok
+        self.reaches_cached = False
         self.world = -1
         self.gen = -1
         self.stamp = 0
@@ -130,7 +169,9 @@ class _Proof:
             cls = self.cls
             if cls is None:
                 return False
-            cells, tags, self.family = hit_memo.watch_class(cls, found)
+            reached: list = []
+            cells, tags, self.family = hit_memo.watch_class(cls, found, reached if self.callees_ok else None)
+            self.reaches_cached = bool(reached)
             self.cells, self.tags = _weakened(cells), _weakened(tags)
         except Exception:  # noqa: BLE001 - Ineligible, or a scan that broke: folded every time
             STATS["refused"] += 1
@@ -176,20 +217,37 @@ def _strong(flat: tuple) -> tuple | None:
     return tuple(out)
 
 
-def proof_for(cls: type, purpose: str, reports: Callable[[], Any] = tuple) -> _Proof | None:
+def proof_for(cls: type, purpose: str, reports: Callable[[], Any] = tuple, callees_ok: bool = False) -> _Proof | None:
     """The watch of *cls*'s world, holding now, or None when there is none
     to be had. *reports* gives the analyses whose helpers the watch covers
-    too; *purpose* tells watches with different reports apart."""
+    too; *purpose* tells watches with different reports apart.
+
+    *callees_ok*: a world that reaches a cached function is watched too
+    (`_Proof.reaches_cached`); the caller remembers only a fold that asked
+    for no cached function's state, and gives up on the class otherwise
+    (`give_up`). A cached function's state is its whole world, globals and
+    callees included, which this watch does not cover; its wrapper and the
+    code it wraps, which a fold reads by name, the watch does."""
     if not ENABLED or type(cls) not in (type, abc.ABCMeta):
         return None
     key = (id(cls), purpose)
     proof = _proofs.get(key)
     if proof is None or proof.cls is not cls:
-        proof = _Proof(cls)
+        proof = _Proof(cls, callees_ok)
         _proofs[key] = proof
     if proof.holds():
         return proof
     return proof if proof.scan(reports) and proof.holds() else None
+
+
+def give_up(proof: _Proof) -> None:
+    """*proof*'s class folds to what cannot be remembered under it (a
+    cached function's state): folded every time, scanned again only after
+    the longest back-off."""
+    STATS["refused"] += 1
+    proof.world = -1
+    proof.skipped = 0
+    proof.backoff = _MAX_BACKOFF
 
 
 class ClassMemo:
@@ -300,6 +358,7 @@ class Capture:
     __slots__ = (
         "classes",
         "classes_asked",
+        "callee_states",
         "classes_found",
         "digests",
         "ledger",
@@ -370,12 +429,14 @@ def captured(compute: Callable[[], Any]) -> tuple[Capture | None, Any]:
         for var, value in zip((ledger_v, watch_v, code_v, ttls_v, digests_v, lookups_v, classes_v, reads_v), own)
     ]
     before = _outside()
+    states_before = CALLEE_STATES_BUILT[0]
     try:
         result = compute()
     finally:
         for var, token in reversed(tokens):
             var.reset(token)
     cap = Capture()
+    cap.callee_states = CALLEE_STATES_BUILT[0] - states_before
     cap.ledger, cap.watch = own[0] or {}, own[1] or {}
     cap.owners = dict(own[2].owners) if own[2] is not None else {}
     cap.reports = dict(own[2].reports) if own[2] is not None else {}

@@ -182,6 +182,7 @@ class CodeArgs:
         #: What an argument class's code reads, per class and cached function
         #: (`_user_carrier_parts`).
         self._carrier_memo = class_memo.ClassMemo()
+        self._surface_memo = class_memo.ClassMemo()
         # Code carriers already reported (`_warn_unhashable_code_once`,
         # `_warn_untrackable_in_carrier_once`): once per carrier and function.
         self._warned_unhashable_code: set[tuple] = set()
@@ -949,7 +950,7 @@ class CodeArgs:
                     parts.append(f"{carrier_name(carrier)}:{surface}")
                     parts.extend(self._held_class_carrier_parts(carrier, func_name, param, owner_code, env))
                     continue
-            digest = self._code.code_surface_hash(carrier)
+            digest = self._carrier_surface_hash(carrier)
             if digest is not None:
                 parts.append(f"{carrier_name(carrier)}:{digest}")
                 # Its code is in the key, and so is what that code reads,
@@ -989,7 +990,7 @@ class CodeArgs:
             or not walk_scope.walk_is_idle()
         ):
             return self._user_carrier_parts_now(carrier, func_name, param, owner_code, env)
-        proof = class_memo.proof_for(carrier, "carrier", lambda: self._carrier_reports(carrier))
+        proof = class_memo.proof_for(carrier, "carrier", lambda: self._carrier_reports(carrier), callees_ok=True)
         if proof is None:
             return self._user_carrier_parts_now(carrier, func_name, param, owner_code, env)
         # The classes of module data are folded by their surface or in full
@@ -1008,9 +1009,52 @@ class CodeArgs:
             lambda: self._user_carrier_parts_now(carrier, func_name, param, owner_code, own_env)
         )
         env |= own_env
-        if cap is not None:
+        if cap is not None and proof.reaches_cached and cap.callee_states:
+            # The fold keyed a cached function by its state, which the
+            # class's watch does not cover.
+            class_memo.give_up(proof)
+        elif cap is not None:
             self._carrier_memo.put(key, proof, (owner_code, cap, tuple(parts), frozenset(own_env)))
         return parts
+
+    def _carrier_surface_hash(self, carrier: Any) -> str | None:
+        """`CodeSurface.code_surface_hash` of *carrier*; for a class,
+        remembered while its world stands still (`class_memo`), as
+        `_user_carrier_parts` remembers what its code reads. The user code
+        a class reaches is resolved by name, through every global its code
+        names, and the watch covers each of those names: walked again,
+        lmfit's model classes, reached from a class of the user's holding
+        one, cost 5 ms a call, hits included. Not one whose digest folds a
+        cached function's state, which the watch does not cover."""
+        if (
+            not class_memo.ENABLED
+            or not isinstance(carrier, type)
+            or walk_scope.stack()
+            or not walk_scope.walk_is_idle()
+        ):
+            return self._code.code_surface_hash(carrier)
+        proof = class_memo.proof_for(carrier, "surface", callees_ok=True)
+        if proof is None:
+            return self._code.code_surface_hash(carrier)
+        key = (id(carrier), bool(_EXPLAINING.get()), walk_scope.building_now(), held_by_name())
+        entry = self._surface_memo.get(key, proof)
+        if entry is not class_memo.MISS and class_memo.replayable(entry[0]):
+            if class_memo.VERIFY:
+                cap, digest = class_memo.captured(lambda: self._code.code_surface_hash(carrier))
+                class_memo.STATS["verified"] += 1
+                if digest != entry[1] or cap is None or cap.ledger != entry[0].ledger:
+                    raise class_memo.ClassMemoMismatch(
+                        f"the remembered code surface of {carrier.__qualname__} differs from walking it again"
+                    )
+            else:
+                class_memo.replay(entry[0])
+            return entry[1]
+        cap, digest = class_memo.captured(lambda: self._code.code_surface_hash(carrier))
+        if cap is not None and proof.reaches_cached and cap.callee_states:
+            class_memo.give_up(proof)
+        elif cap is not None:
+            self._surface_memo.put(key, proof, (cap, digest))
+        return digest
 
     def _held_class_carrier_parts(
         self, carrier: type, func_name: str, param: str | None, owner_code: Any, env: set

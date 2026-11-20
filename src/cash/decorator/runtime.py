@@ -57,7 +57,7 @@ from ..tracking.randomness import (
     replayable,
 )
 from ..tracking.trace_recorder import other_thread_alive
-from . import attribute_replay, code_trace, hit_memo, library_reads, state_memo, walk_scope, warning_state
+from . import attribute_replay, class_memo, code_trace, hit_memo, library_reads, state_memo, walk_scope, warning_state
 from .arg_hashing import (
     CALL_POLARS,
     CONTENT_KEYED,
@@ -774,6 +774,7 @@ class KeyBuilder:
         a key build, with that build's `HELD_BY_NAME`; outside one, with
         the function's own (`held_by_name_for`).
         """
+        class_memo.CALLEE_STATES_BUILT[0] += 1
         if HELD_BY_NAME.get() is not None:
             return self._callee_state(spec)
         token = HELD_BY_NAME.set(self.held_by_name_for(spec))

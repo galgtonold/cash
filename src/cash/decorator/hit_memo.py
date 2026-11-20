@@ -909,6 +909,15 @@ class _Scan:
                         # (`ModuleAttrs`: a library's object is no data). A
                         # write to another variable moves nothing it reads.
                         continue
+                    if mod is sys and name == "modules":
+                        # ``sys.modules``: never plain data (it holds
+                        # ``sys``), so a key folds nothing of it
+                        # (`module_attrs._library_attr_parts`); which
+                        # module a name is bound to is watched apart
+                        # (`_watch_modules`). Walked, it is every module
+                        # loaded, and one of a class of its own
+                        # (``six.moves``) refused the whole world.
+                        continue
                     if library and _unread_object(md[name]):
                         # ``logging._handlers``: read through a library's
                         # module, an object of the library's is no data a
@@ -1661,7 +1670,7 @@ def _array_content(v: Any) -> tuple:
     return (v.dtype.str, v.dtype.descr if v.dtype.names else None, v.shape, v.strides, digest)
 
 
-def watch_class(cls: type, reports: Any = ()) -> tuple[tuple, tuple, _Family | None]:
+def watch_class(cls: type, reports: Any = (), reached: list | None = None) -> tuple[tuple, tuple, _Family | None]:
     """Watch what *cls* holds, as `scan` watches a cached function's world:
     every attribute along its MRO, the code of its methods and what that
     code names, and the helpers *reports* (the analyses of its methods)
@@ -1671,7 +1680,9 @@ def watch_class(cls: type, reports: Any = ()) -> tuple[tuple, tuple, _Family | N
     read whole again by pickle on every check (`_deep_content`), and the
     user code that pickle names in it (an instance's class, a function in a
     list) is watched as any code met. For the per-class memos of `class_memo`. Raises
-    `Ineligible`, also for a class whose world reaches a cached function."""
+    `Ineligible`, also for a class whose world reaches a cached function,
+    unless *reached* is given: the cached functions' states met are then
+    added to it, and the caller answers for them."""
     reports = tuple(reports)
     s = _ProbingScan(getattr(cls, "__module__", None))
     s.content = True
@@ -1688,7 +1699,10 @@ def watch_class(cls: type, reports: Any = ()) -> tuple[tuple, tuple, _Family | N
         for mod_name, chain, _ref in report.helper_bindings:
             s.value(_resolve(mod_name, chain), frozenset(chain))
     if s.callees or any(report.cached_callees for report in reports):
-        raise Ineligible("a cached function reached")
+        if reached is None:
+            raise Ineligible("a cached function reached")
+        reached.extend(s.callees)
+        reached.extend(ref for report in reports for ref in report.cached_callees)
     s.finish()
     if _probes_main_variables(s.probes, (x for pair in s.cells for x in pair)):
         raise Ineligible("a probe would hold a variable of __main__")
