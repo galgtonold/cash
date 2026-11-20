@@ -583,13 +583,17 @@ def _with_objects_alive(classes: list[type]) -> list[type]:
 
     if not classes or objects_frozen_since_import():
         return classes  # objects ``gc.freeze`` moved out of the collector's lists
+    # Keyed by address as ``object``'s hash gives it, not ``id()``: Python
+    # raises an audit event per ``id()``, and each Python audit hook runs for
+    # every object on the heap.
+    place = object.__hash__
     objects = gc.get_objects()
-    kinds = dict(zip(map(id, map(type, objects)), map(type, objects)))
+    kinds = dict(zip(map(place, map(type, objects)), map(type, objects)))
     del objects
     alive: set[int] = set()
     for kind in kinds.values():
-        alive.update(map(id, _CLASS_MRO(kind)))
-    return [c for c in classes if id(c) in alive or not _CLASS_FLAGS(c) & _HAVE_GC]
+        alive.update(map(place, _CLASS_MRO(kind)))
+    return [c for c in classes if place(c) in alive or not _CLASS_FLAGS(c) & _HAVE_GC]
 
 
 _HAVE_GC = 1 << 14

@@ -3293,15 +3293,17 @@ def _module_references(objs: list[Any], namespaces: list[dict]) -> list[int] | N
     references each one has; None when anything else holds one of them (or
     holds it uncounted: as a key, or a second time through a name it does
     not see). Read from the namespaces and the reference counts alone, with
-    no read of the heap."""
-    ids = [id(obj) for obj in objs]
+    no read of the heap. Each value is named by `_PLACE`, not ``id()``,
+    which raises an audit event per value of every namespace."""
+    place = _PLACE
+    ids = [place(obj) for obj in objs]
     counts = dict.fromkeys(ids, 0)
     wanted = counts.keys()
     for namespace in namespaces:
         values = namespace.values()
-        if wanted.isdisjoint(map(id, values)):
+        if wanted.isdisjoint(map(place, values)):
             continue
-        for key in map(id, values):
+        for key in map(place, values):
             if key in counts:
                 counts[key] += 1
     refs = _reference_counts(objs)

@@ -57,3 +57,44 @@ def test_reading_the_heap_asks_no_id_per_object(read):
     found_ids = {id(obj) for obj in found}
     assert all(id(holder) in found_ids for holder in holders)
     assert len(filler) == 20_000
+
+
+def _ids_asked(fn, *args):
+    COUNTING[:] = [0]
+    try:
+        return fn(*args), COUNTING[0]
+    finally:
+        COUNTING.clear()
+
+
+def test_the_other_reads_of_the_heap_or_a_namespace_ask_no_id_per_object():
+    """The same for the other reads the sampled 3.10 workers spent their time
+    in: the classes with an object alive (every object on the heap), the
+    module references of a value (every value of each namespace) and a
+    namespace's memo holders (every value of a module's namespace)."""
+    from cash.notebook import helper_memos
+    from cash.notebook.statement import unseen_writes
+
+    class Alive:
+        pass
+
+    class Gone:
+        pass
+
+    kept = [Alive() for _ in range(3)]
+    namespace = {f"v{i}": [i] for i in range(20_000)}
+    namespace["target"] = []
+    namespace.update({f"f{i}": (lambda i=i: i) for i in range(2_000)})
+
+    alive, asked = _ids_asked(unseen_writes._with_objects_alive, [Alive, Gone])
+    assert asked <= 10
+    assert alive == [Alive]
+
+    counts, asked = _ids_asked(shared_objects._module_references, [namespace["target"]], [namespace])
+    assert asked <= 10
+    assert counts == [1]
+
+    holders, asked = _ids_asked(helper_memos._holders, namespace)
+    assert asked <= 10
+    assert len(holders) == 2_000
+    assert len(kept) == 3
