@@ -1899,10 +1899,12 @@ a hasher for the type.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/decorator/closure_fold.py:ClosureFold._defaults_unhashable @0a6de304, cash/decorator/closure_fold.py:HelperIdentity.identity @e54e2652, cash/decorator/code_surface.py:CodeSurface._unpicklable_identity @70e59364 -->
+<!-- claim: cash/decorator/closure_fold.py:ClosureFold._defaults_unhashable @0a6de304, cash/decorator/closure_fold.py:HelperIdentity.identity @e54e2652, cash/decorator/code_surface.py:CodeSurface._unpicklable_identity @70e59364, cash/decorator/code_surface.py:CodeSurface._unpicklable_member @23850a96 -->
 **What happened.** A parameter default of the function, of a helper it
 calls, or of a function or class passed to it, could not be hashed, so the
-call was not cached. The message names the type.
+call was not cached. The same goes for a callable class attribute with no
+code of its own (a callable object holding a lock, a `functools.partial` of
+a builtin) on a class that reaches the call. The message names the type.
 
 **Why it matters.** The function is not cached for any caller, including
 those that pass the argument.

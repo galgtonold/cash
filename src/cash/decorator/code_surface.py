@@ -81,6 +81,14 @@ def _codes_now(owners: list[Any]) -> tuple:
 #: A memory address in a repr (``<object object at 0x7f...>``).
 _ADDRESS_REPR = re.compile(r"\bat 0x[0-9a-fA-F]+")
 
+#: Compiled callables with no state of their own: what they run is fixed by
+#: the C type they belong to.
+_STATELESS_C_CALLABLES = (
+    types.WrapperDescriptorType,
+    types.MethodDescriptorType,
+    types.ClassMethodDescriptorType,
+)
+
 
 class CodeSurface:
     """What identifies code reached through arguments and globals: the code
@@ -726,9 +734,44 @@ class CodeSurface:
                         repr(sub_parts).encode("utf-8"),
                     ).hexdigest()
         content = self._member_content(member)
-        if nested is None and content is None:
-            return []
+        if content is None and not isinstance(member, type):
+            content = self._unpicklable_member(base, name, member)
         return [(base.__qualname__, name, (nested, content))]
+
+    def _unpicklable_member(self, base: type, name: str, member: Any) -> str:
+        """The stand-in for a codeless callable class attribute whose content
+        cannot be pickled, or `KeyBuildFailed`.
+
+        Its state (``Scaler(3)`` against ``Scaler(4)``, each holding a lock;
+        the arguments of a ``partial`` of a builtin) decides what it computes,
+        and its code says nothing about that state. Left out, a process that
+        built the attribute differently was served the old result. Compiled
+        code with no state of its own (a C type's slot wrapper or method
+        descriptor, a builtin of a module or a type) is keyed by its name,
+        and a lock's own method by its kind, as a lock held anywhere else
+        is: no result is computed from one.
+        """
+        owner = getattr(member, "__self__", None)
+        if isinstance(member, _STATELESS_C_CALLABLES) or (
+            isinstance(member, types.BuiltinFunctionType)
+            and (owner is None or isinstance(owner, (type, types.ModuleType)))
+        ):
+            home = getattr(member, "__objclass__", owner)
+            module = getattr(home, "__module__", None) or getattr(home, "__name__", "?")
+            return f"builtin:{module}.{getattr(member, '__qualname__', getattr(member, '__name__', '?'))}"
+        if isinstance(owner, SYNC_TYPES):
+            cls = type(owner)
+            return f"sync:{cls.__module__}.{cls.__qualname__}.{getattr(member, '__name__', '?')}"
+        kind = type(member)
+        kind_name = f"{getattr(kind, '__module__', '?')}.{getattr(kind, '__qualname__', '?')}"
+        raise KeyBuildFailed(
+            "KEY-UNHASHABLE-DEFAULT",
+            f"cash cannot key the class attribute {base.__qualname__}.{name}, a {kind_name} that code "
+            f"reaching the call holds: it cannot be hashed, so a change to what it computes could not "
+            f"be seen and the call ran uncached.",
+            f"make {base.__qualname__}.{name} a method or a function, or register a hasher with "
+            f"cash.register_hasher({getattr(kind, '__qualname__', '?')}, ...).",
+        )
 
     def _data_member_parts(self, base: type, name: str, member: Any, ident: tuple) -> list[tuple]:
         """The parts for a non-callable class attribute.
