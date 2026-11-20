@@ -6,12 +6,14 @@ every decorated result, pandas DataFrames included.
 
 from __future__ import annotations
 
+import contextlib
+import gc
 import logging
 import pickle
 import sys
 import threading
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any
 
 from .. import _cash_views, _weak, kept_state
@@ -384,6 +386,23 @@ def _note_geometries(data: Any, blob: Any, lengths: Any, rows: Any, srid_free: A
         logger.debug("geometry pieces not noted", exc_info=True)
 
 
+@contextlib.contextmanager
+def _gc_paused() -> Iterator[None]:
+    """Hold the cyclic collector off while shapely makes a geometry per
+    row: each is an object the collector tracks, so every few thousand of
+    them it walked every object the process holds, the ones just made
+    among them. 30 of 75 ms reading 300,000 points. Nothing it could
+    collect is made meanwhile. Left as it was found, so a program that had
+    switched it off keeps it off."""
+    was_on = gc.isenabled()
+    gc.disable()
+    try:
+        yield
+    finally:
+        if was_on:
+            gc.enable()
+
+
 def _geometry_array_from_wkb(cls: type, blob: Any, lengths: Any, rows: Any, crs: Any) -> Any:
     """The array `_reduce_geometry_array` stored: the geometries *blob*
     holds one after another, *lengths* bytes each (0 for a missing row),
@@ -404,7 +423,8 @@ def _geometry_array_from_wkb(cls: type, blob: Any, lengths: Any, rows: Any, crs:
         starts = (ends - lengths)[present].tolist()
         pieces = np.array([raw[start:end] for start, end in zip(starts, ends[present].tolist())], dtype=object)
     distinct = np.full(len(lengths), None, dtype=object)
-    distinct[present] = shapely.from_wkb(pieces)
+    with _gc_paused():
+        distinct[present] = shapely.from_wkb(pieces)
     data = distinct if rows is None else distinct[rows]
     _note_geometries(data, raw, lengths, rows)
     array = cls.__new__(cls)
