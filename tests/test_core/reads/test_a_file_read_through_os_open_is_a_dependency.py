@@ -71,7 +71,7 @@ def test_the_file_is_listed_as_a_dependency(disk_cash, tmp_path):
         return read(p)
 
     load(str(path))
-    assert str(path.resolve()) in str(load.explain(str(path)))
+    assert path.resolve().as_posix() in str(load.explain(str(path))).replace("\\", "/")
 
 
 def test_a_file_that_appears_recomputes(disk_cash, tmp_path):
