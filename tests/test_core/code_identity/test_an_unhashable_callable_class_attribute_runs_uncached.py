@@ -55,7 +55,7 @@ print(run(Model(), 2))
 
 _ATTRIBUTES = {
     "callable instance": "Scaler(int(sys.argv[1]))",
-    "partial of a builtin": "functools.partial(operator.mul, Scaler(int(sys.argv[1])))",
+    "partial of a builtin": "staticmethod(functools.partial(operator.mul, Scaler(int(sys.argv[1]))))",
 }
 
 
