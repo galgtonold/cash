@@ -740,7 +740,19 @@ def call_starts(cells: Mapping[types.CodeType, tuple] | None) -> Iterator[None]:
 
 def value_digest(value: Any) -> str:
     """A digest of *value* that is the same in another process for an equal
-    value, or ``"opaque:<type>"`` when it is too big or cannot be read."""
+    value, or ``"opaque:<type>"`` when it is too big or cannot be read.
+
+    A class of the user's is remembered while its world stands still
+    (`_remembered`): a trace names a dozen classes held by module globals
+    (``Parameter`` imported into each module of lmfit), each digested
+    again on every check."""
+    if type(value) is type and is_user_type(value):
+        return _remembered(value, "value", lambda: _value_digest_now(value))
+    return _value_digest_now(value)
+
+
+def _value_digest_now(value: Any) -> str:
+    """`value_digest`, read now."""
     h = hashlib.blake2b(digest_size=12)
     try:
         _Digester(h).feed(value)

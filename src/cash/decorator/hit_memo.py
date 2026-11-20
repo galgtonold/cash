@@ -50,6 +50,7 @@ import abc
 import ast
 import builtins
 import collections
+import contextlib
 import contextvars
 import dataclasses
 import datetime
@@ -1510,6 +1511,42 @@ class ContentProbe:
 
 _NOTHING: Any = object()
 
+#: ``(world epoch, {(id of the value, read): (value, what it read)})`` while
+#: a round of checks is open on this thread (`probe_round`).
+_ROUND: contextvars.ContextVar[list | None] = contextvars.ContextVar("cash_probe_round", default=None)
+
+
+@contextlib.contextmanager
+def probe_round() -> typing.Iterator[None]:
+    """One round of checks (a key build, the check of a stored trace) in
+    which each value a `ContentProbe` reads whole is read once, however
+    many watches hold a probe of it: lmfit's module of line shapes holds
+    four scipy distributions, which each of a dozen class watches read
+    again, 5 ms a call. Cash's own code runs between the checks of a
+    round, never the user's body; what the round read is forgotten when
+    the world epoch moves (an import, a class edited), and a probe made
+    since reads its value itself."""
+    if _ROUND.get() is not None:
+        yield
+        return
+    token = _ROUND.set([_cw.world_epoch() if _cw is not None else 0, {}])
+    try:
+        yield
+    finally:
+        _ROUND.reset(token)
+
+
+def _probe_round() -> dict | None:
+    """The reads of the open round (`probe_round`), or None."""
+    r = _ROUND.get()
+    if r is None:
+        return None
+    epoch = _cw.world_epoch() if _cw is not None else 0
+    if r[0] != epoch:
+        r[0] = epoch
+        r[1] = {}
+    return r[1]
+
 
 def _class_and_dict(v: Any) -> _Items:
     """*v*'s class and ``__dict__``, compared by identity."""
@@ -1866,9 +1903,19 @@ class _Family:
     def holds(self, state: list) -> bool:
         """Is what the key read of the classes still so? Moves the guard
         on when a registration elsewhere left theirs as they were."""
+        seen = _probe_round()
         for read, value in self.probes:
             try:
-                if read() != value:
+                if seen is not None and type(read) is ContentProbe:
+                    # Read once a round (`probe_round`): a dozen class
+                    # watches can share one module's data.
+                    k = (id(read.value), read.read)
+                    got = seen.get(k, _NOTHING)
+                    if got is _NOTHING:
+                        got = seen[k] = (read.value, read())
+                    if got[0] is not read.value or got[1] != value:
+                        return False
+                elif read() != value:
                     return False
             except Exception:  # noqa: BLE001 - cannot tell: not so
                 return False

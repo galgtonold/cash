@@ -905,6 +905,12 @@ class KeyBuilder:
         return folded
 
     def _build(self, spec: CachedFunction, args: tuple, kwargs: dict, split: frozenset[int]) -> BuiltKey:
+        """`build`'s work, as one round of checks (`hit_memo.probe_round`):
+        data many class watches hold is read whole once."""
+        with hit_memo.probe_round():
+            return self._build_now(spec, args, kwargs, split)
+
+    def _build_now(self, spec: CachedFunction, args: tuple, kwargs: dict, split: frozenset[int]) -> BuiltKey:
         func, func_name = spec.func, spec.name
         iterators = iterator_arguments(spec.signature, args, kwargs) if args or kwargs else []
         # One plain-data census per argument, shared across the key
@@ -1419,7 +1425,8 @@ class CallRunner:
         if not self._chunks_are_intact(cache_key, metadata):
             return MissReason(MissKind.INCOMPLETE, "a chunk of the stored result is missing")
         if metadata.code_trace is not None:
-            changed = code_trace.verify(metadata.code_trace, self._cached_state, self._full_closure_state)
+            with hit_memo.probe_round():
+                changed = code_trace.verify(metadata.code_trace, self._cached_state, self._full_closure_state)
             if changed is not None:
                 # Kept for a call that needs none too, as a check beside the
                 # key: then nothing was picked by name.
