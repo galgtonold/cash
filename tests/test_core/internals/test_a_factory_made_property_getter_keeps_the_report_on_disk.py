@@ -26,6 +26,9 @@ _RUNNER = textwrap.dedent(
     from cash.analysis import report_store
     from cash.analysis.purity_analyzer import get_analyzer
     import presets
+    # A walk cheaper than reading its report back is not stored, and these
+    # getters' walks sit near that line: a busy runner tipped one of them.
+    report_store._READ_COST = -1.0
     an = get_analyzer()
     before = report_store.status()
     for getter in (vars(presets.Preset)["table"].func, vars(presets.Preset)["flag"].fget):
