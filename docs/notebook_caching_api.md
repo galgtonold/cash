@@ -161,7 +161,7 @@ the reasoning.
 
 ### Plots shown from the cache
 
-<!-- claim: cash/notebook/ipython/plot_runs.py:PlotRuns.serve @0458b11a, cash/notebook/ipython/plot_runs.py:PlotRuns._store @09e26d89, cash/notebook/plot_outputs.py:statement_plot_facts @b47a015b, cash/notebook/plot_outputs.py:first_read_after @1d857b84, cash/notebook/ipython/plot_runs.py:PlotRuns._served @b75ad5cc, cash/notebook/statement/processor.py:StatementProcessor.settle_served_plot_statement @cbfa94b7 -->
+<!-- claim: cash/notebook/ipython/plot_runs.py:PlotRuns.serve @0458b11a, cash/notebook/ipython/plot_runs.py:PlotRuns._prepare @3d481867, cash/notebook/plot_outputs.py:statement_plot_facts @b47a015b, cash/notebook/plot_outputs.py:first_read_after @1d857b84, cash/notebook/ipython/plot_runs.py:PlotRuns._served @b75ad5cc, cash/notebook/statement/processor.py:StatementProcessor.settle_served_plot_statement @cbfa94b7 -->
 With the inline backend (the default in Jupyter), a plot begins with no
 figure open and ends when `plt.show()`, or the end of the cell, shows its
 figures and closes them. Cash keeps what such a plot showed: the image, what
