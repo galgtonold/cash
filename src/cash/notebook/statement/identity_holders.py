@@ -1641,7 +1641,12 @@ class _Walk:
             if flat and max(flat) >= _LOWEST_ADDRESS and min(flat) < _HIGHEST_ADDRESS:
                 self.numbers.update(flat)
         else:
-            self.numbers.update(item for item in flat if type(item) is int and item >= _LOWEST_ADDRESS)
+            # The ints picked out at C speed, and looked through one by one
+            # only when one could be an address: the values level of a
+            # million ``{'i': i, 'v': [...]}`` records was a quarter second.
+            ints = list(compress(flat, map(operator.is_, map(type, flat), repeat(int))))
+            if ints and max(ints) >= _LOWEST_ADDRESS:
+                self.numbers.update(item for item in ints if item >= _LOWEST_ADDRESS)
 
     def _leaf_held(self, item: Any) -> None:
         """Note a leaf a *quiet* walk met, for the ids looked for."""

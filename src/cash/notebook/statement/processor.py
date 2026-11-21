@@ -527,9 +527,19 @@ def _classes_with_state(
     found: dict[str, set[str]] = {}
     left = _ITEMS_READ
     unread = False
+    stateful: dict[int, bool] = {}
+
+    def has_state(cls: type) -> bool:
+        key = id(cls)
+        if key not in stateful:
+            stateful[key] = _has_class_state(cls, value_types)
+        return stateful[key]
+
     # Once every class with state is among the classes reached, reading on
-    # finds nothing new.
-    wanted = {key for key, name in named.items() if _has_class_state(user_ns[name], value_types)}
+    # finds nothing new. Read on first need: with ``from pylab import *``
+    # the namespace binds hundreds of classes, and reading each one's
+    # attributes twice a statement was most of a one-line statement's time.
+    wanted: set[int] | None = None
     for value in values:
         if instance_of(value, (types.ModuleType, types.FunctionType)) or is_value(value, value_types):
             continue
@@ -541,7 +551,11 @@ def _classes_with_state(
             # speed: 100,000 objects in a list cost what 100,000 ints do.
             level: dict[type, list[Any]] = {type(value): [value]}
             depth = 0
-            while level and not wanted <= _reached(classes):
+            while level:
+                if wanted is None:
+                    wanted = {key for key, name in named.items() if has_state(user_ns[name])}
+                if wanted <= _reached(classes):
+                    break
                 held: list[Any] = []
                 for kind, group in level.items():
                     held.extend(_items_held(kind, group, named))
@@ -575,7 +589,7 @@ def _classes_with_state(
             origin = named.get(id(cls))
             for related in (*cls.__mro__, *type(cls).__mro__):
                 name = named.get(id(related))
-                if name is not None and _has_class_state(related, value_types):
+                if name is not None and has_state(related):
                     found.setdefault(name, set()).update({origin} if origin else ())
     return found, unread
 

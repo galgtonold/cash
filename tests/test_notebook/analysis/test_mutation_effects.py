@@ -196,14 +196,51 @@ class TestClassifyReceivers:
         assert self._c("m = df.mean()", {"df": [1]}) == ReceiverClasses()
 
 
-def test_live_function_source():
-    from cash.analysis import ast_util
+def test_live_function_source(tmp_path):
+    import importlib.util
 
-    assert live_function_source("called_names", {"called_names": ast_util.called_names}).startswith("def called_names")
+    path = tmp_path / "user_helpers.py"
+    path.write_text("def build(ds):\n    return clean(ds)\n\ndef clean(ds):\n    return ds\n", encoding="utf-8")
+    spec = importlib.util.spec_from_file_location("user_helpers", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert live_function_source("build", {"build": module.build}).startswith("def build")
     # A helper reached through the module globals of a bound function.
-    assert live_function_source("resolve_callee", {"f": ast_util.called_names}).startswith("def resolve_callee")
-    assert live_function_source("resolve_callee", {"f": len, "k": dict}) is None
+    assert live_function_source("clean", {"f": module.build}).startswith("def clean")
+    assert live_function_source("clean", {"f": len, "k": dict}) is None
     assert live_function_source("dict", {"dict": dict}) is None
+
+
+def test_a_librarys_function_bound_by_name_is_not_read():
+    """``from random import shuffle`` binds the library's function the
+    dotted ``random.shuffle`` names: neither is read, nor is a helper of the
+    library's found through its module (``_randbelow``)."""
+    import random
+
+    assert live_function_source("random.shuffle", {"random": random}) is None
+    assert live_function_source("shuffle", {"shuffle": random.shuffle}) is None
+    assert live_function_source("_randbelow", {"shuffle": random.shuffle}) is None
+    # The method of a library's object, bound by name, as well.
+    assert live_function_source("pick", {"pick": random.Random(0).choice}) is None
+
+
+def test_a_pyplot_call_bound_by_a_star_import_changes_no_rcparams():
+    """``from pylab import *`` binds pyplot's functions and ``rcParams``:
+    read, every call reached ``switch_backend`` and claimed to change
+    ``rcParams``, which each plotting statement then searched the heap for
+    the holders of. What a library call changes is told at run time."""
+    import pytest
+
+    pytest.importorskip("matplotlib")
+    from matplotlib import pyplot
+
+    from cash.analysis.callee_effects import callee_global_mutations
+
+    namespace = {name: getattr(pyplot, name) for name in ("plot", "figure", "title", "rcParams")}
+    for code in ("plot([1], [2])", "figure()", "title('t')"):
+        found = callee_global_mutations(ast.parse(code), lambda name: live_function_source(name, namespace))
+        assert found == frozenset(), (code, found)
 
 
 def test_is_estimator():
