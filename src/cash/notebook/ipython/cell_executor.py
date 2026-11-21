@@ -78,7 +78,7 @@ from ...tracking.randomness import get_drawing_rng_modules, rng_lineage_fingerpr
 from .._protocols import ShellProtocol
 from ..background_threads import BackgroundThreads
 from ..cache_status import CacheStatus
-from ..compiled_source import is_cash_filename, statement_place
+from ..compiled_source import is_cash_filename, register_cell_source, statement_place
 from ..control_structures import contains_top_level_await, is_control_structure
 from ..plot_outputs import PLOT_FACTS
 from ..statement import ProcessResult
@@ -1655,6 +1655,30 @@ class CellExecutor:
         finally:
             _set_written_later(self, frozenset())
 
+    def _compile_whole(self, cell: _CellRun, node: ast.stmt) -> None:
+        """Raise the SyntaxError IPython raises for *node*, before any of it runs.
+
+        IPython compiles a cell's top-level statements one by one, so a
+        structure that does not compile as a whole (a ``return`` or a
+        ``yield`` in an ``if`` at cell level, a ``break`` outside a loop)
+        never starts. Cash runs a structure's header and body statements
+        one by one, each compiling on its own: the test and the statements
+        above the ``return`` ran, and changed names, before it failed.
+        """
+        shell = attribute_or(self, "shell", None)
+        compiler = attribute_or(shell, "compile", None)
+        flags = attribute_or(compiler, "flags", 0)
+        flags = (flags if isinstance(flags, int) else 0) | ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
+        with statement_place(compiler, running_cell_count(shell), 1, cell.raw_cell):
+            filename = register_cell_source(cell.raw_cell)
+            try:
+                compile(ast.Module(body=[node], type_ignores=[]), filename, "exec", flags=flags, dont_inherit=True)
+            except SyntaxError as e:
+                # Its line is the cell's already (`show_clean_error`).
+                with contextlib.suppress(AttributeError, TypeError):
+                    e._cash_error_lineno = e.lineno  # type: ignore[attr-defined]
+                raise
+
     def _control_structure_steps(
         self,
         cell: _CellRun,
@@ -1679,6 +1703,7 @@ class CellExecutor:
         """
         node = cell.tree.body[i]
         raw_cell = cell.raw_cell
+        self._compile_whole(cell, node)
         # Logged as ONE statement, as the upstream simulation traces it, for
         # the figure histories a writer records.
         control_log = self._statement_processor.begin_control_log(stmt_code)

@@ -88,6 +88,10 @@ def show_clean_error(
     # the exact body statement line.
     stmt_lineno: int = attribute_or(exc, "_cash_error_lineno", None) or attribute_or(node, "lineno", 1)
 
+    if isinstance(exc, SyntaxError) and is_cash_filename(exc.filename) and has_attribute(shell, "showsyntaxerror"):
+        _show_statement_syntax_error(exc, raw_cell, stmt_lineno, cell_name, shell)
+        return
+
     # Build a synthetic cell-level traceback by compiling + exec'ing
     # a ``raise`` at the right line inside a code object whose
     # filename is ``Cell In[N]``.  IPython's traceback machinery will
@@ -135,6 +139,33 @@ def show_clean_error(
 
         # Fallback: format and print directly.
         tb_mod.print_exception(exc_type, exc, cell_tb)
+
+
+def _show_statement_syntax_error(
+    exc: SyntaxError, raw_cell: str, stmt_lineno: int, cell_name: str, shell: ShellProtocol
+) -> None:
+    """Show *exc*, raised compiling the statement at *stmt_lineno* of the
+    cell, as IPython shows a cell that does not compile: ``Cell In[N],
+    line L``, the line and the caret, with no traceback above them.
+
+    Its line counts from the statement's first, unless the statement was
+    compiled with the cell's line numbers (``_cash_error_lineno``).
+    """
+    lineno = exc.lineno or 1
+    end_lineno = exc.end_lineno
+    if attribute_or(exc, "_cash_error_lineno", None) is None:
+        lineno += stmt_lineno - 1
+        end_lineno = None if end_lineno is None else end_lineno + stmt_lineno - 1
+    lines = raw_cell.splitlines(True)
+    exc.filename = cell_name
+    exc.lineno = lineno
+    exc.end_lineno = end_lineno
+    if 0 < lineno <= len(lines):
+        exc.text = lines[lineno - 1]
+    try:
+        raise exc.with_traceback(None)
+    except SyntaxError:
+        shell.showsyntaxerror()
 
 
 def _explain_read_only(exc: BaseException) -> None:
