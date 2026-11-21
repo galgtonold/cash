@@ -1179,8 +1179,9 @@ def _as_json(value: Any) -> Any:
 #: Records waiting to be written: a process that never makes a cache dir
 #: keeps only the most recent.
 _MAX_PENDING = 256
-#: Records worked out in this process and not written yet: (root, entry).
-_PENDING: list[tuple[tuple[str, tuple[str, ...], str], dict]] = []
+#: Records worked out in this process and not written yet: (the store
+#: folder of the call that worked it out, root, entry).
+_PENDING: list[tuple[Any, tuple[str, tuple[str, ...], str], dict]] = []
 #: Records worked out before they are written together (and the rest at
 #: exit): a file written per report cost more than the walks it spared.
 _FLUSH_EVERY = 64
@@ -1200,7 +1201,12 @@ def save(func: Callable[..., Any], report: PurityReport, walk: Any, seconds: flo
     out now, written in batches and at exit (`flush`), once the cache dir
     exists."""
     root = _root_path(func)
-    if root is None or not scan_store.enabled():
+    if root is None:
+        return
+    # The folder of the call walking *func*, taken now: when the record is
+    # written (at exit above all) no call runs (`scan_store.target_dir`).
+    directory = scan_store.target_dir()
+    if directory is None:
         return
     text = _text(func)
     if text is None:
@@ -1215,7 +1221,7 @@ def save(func: Callable[..., Any], report: PurityReport, walk: Any, seconds: flo
     if seconds is not None and seconds < clock() - start + _READ_COST:
         STATS["cheap"] += 1
         return
-    _PENDING.append((root, entry))
+    _PENDING.append((directory, root, entry))
     del _PENDING[:-_MAX_PENDING]
     if len(_PENDING) >= _FLUSH_EVERY:
         flush()
@@ -1265,22 +1271,21 @@ def _entry(func: Any, report: PurityReport, walk: Any, text: str) -> dict:
     }
 
 
-def flush(*, at_exit: bool = False) -> None:
-    """Write the records worked out so far, once the cache dir exists."""
+def flush() -> None:
+    """Write the records worked out so far, each into the folder of the call
+    that worked it out, once its cache dir exists; the others stay held."""
     if not _PENDING:
         return
     try:
-        directory = scan_store.exit_store_dir() if at_exit else scan_store.store_dir()
+        ready = {d: scan_store.ready(d) for d in {d for d, _, _ in _PENDING}}
     except Exception:  # noqa: BLE001 - at exit: a store that cannot be found keeps nothing
         return
-    if directory is None:
-        return
-    pending = list(_PENDING)
-    _PENDING.clear()
+    pending = [p for p in _PENDING if ready[p[0]]]
+    _PENDING[:] = [p for p in _PENDING if not ready[p[0]]]
     by_root: dict[tuple, list[dict]] = {}
-    for root, entry in pending:
-        by_root.setdefault(root, []).append(entry)
-    for root, new in by_root.items():
+    for directory, root, entry in pending:
+        by_root.setdefault((directory, root), []).append(entry)
+    for (directory, root), new in by_root.items():
         file = _file(root, directory)
         # Most recently worked out last: a full file drops the oldest.
         entries = [e for e in _entries(file, root) if e not in new]
@@ -1307,4 +1312,4 @@ def verify(func: Any, loaded: PurityReport, walked: PurityReport) -> None:
         raise StoredReportMismatch(f"stored report of {func.__qualname__} differs from walking it again")
 
 
-atexit.register(flush, at_exit=True)
+atexit.register(flush)

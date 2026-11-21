@@ -26,7 +26,9 @@ dir>/analysis``), and only once that dir exists: what a process works out
 before then (its first call, a miss, runs before the result that makes the
 dir is stored) is held (`_PENDING`) and written once the dir is there, at
 the latest when the process exits, so the second process does not pay for
-it again. ``CASH_ANALYSIS_STORE=0``
+it again. Each record held is written into the folder of the call that
+worked it out (`target_dir`), not the one the settings name when it is
+written: at exit no call runs. ``CASH_ANALYSIS_STORE=0``
 turns it off, ``CASH_ANALYSIS_STORE=<dir>`` moves it. With
 ``CASH_ANALYSIS_MEMO_VERIFY=1`` every stored answer used is worked out again
 and `StoredScanMismatch` raised when it differs.
@@ -52,13 +54,14 @@ from . import tree_memo
 __all__ = [
     "StoredScanMismatch",
     "enabled",
-    "exit_store_dir",
     "load_record",
     "read_json",
     "save_record",
     "scan",
+    "ready",
     "status",
     "store_dir",
+    "target_dir",
     "write_json",
 ]
 
@@ -133,16 +136,17 @@ def _py_file_prints(folder: str, prefix: str, into: list[str]) -> None:
         _py_file_prints(path, rel, into)
 
 
-def _dir() -> Path | None:
+def _dir(*, made: bool = True) -> Path | None:
     """``<cache dir>/analysis/<fingerprint>``: beside the results, wherever
-    the settings put them (a pool worker's are its parent's). None when that
-    cache dir does not exist yet: the store never makes one of its own."""
+    the settings of the code running now put them (a pool worker's are its
+    parent's). None when that cache dir does not exist yet (*made*): the
+    store never makes one of its own."""
     setting = _setting()
     if setting.lower() in ("0", "false", "no", "off", ""):
         return None
     if setting.lower() in ("1", "true", "yes", "on"):
         cache_dir = active_config().cache_dir
-        if not cache_dir or not os.path.isdir(cache_dir):
+        if not cache_dir or (made and not os.path.isdir(cache_dir)):
             return None
         base = Path(os.path.abspath(cache_dir)) / ANALYSIS_DIRNAME
     else:
@@ -188,41 +192,46 @@ def _slot_file(directory: Path, kind: str, path: str) -> Path:
     return directory / f"{slot}.json"
 
 
-#: The last store folder `_store_dir` found, for the writes at exit
-#: (`exit_store_dir`).
-_LAST_DIR: list[Path] = []
-
-
 def _store_dir() -> Path | None:
     try:
         with untracked():
-            directory = _dir()
+            return _dir()
     except OSError:
         return None
-    if directory is not None and _LAST_DIR[-1:] != [directory]:
-        _LAST_DIR[:] = [directory]
-    return directory
 
 
-def exit_store_dir() -> Path | None:
-    """Where the records still held go at exit: `store_dir`, else the folder
-    an earlier lookup in this process found, while its cache dir is still
-    there.
+def target_dir() -> Path | None:
+    """Where what the code running now works out goes: `store_dir`, also
+    while its cache dir does not exist yet (`ready`); None when the store is
+    off.
 
-    At exit no call is running, so the folder of a ``Cash(cache_dir=...)``
-    the user built (not the default instance) is not the active one: the
-    records its calls worked out were written nowhere, and every process
-    walked the same helpers again. What they hold is a function of source
-    texts, this Python and this cash (the folder's name), never of the cache
-    dir they sit in."""
-    directory = _store_dir()
-    if directory is not None or not _LAST_DIR:
-        return directory
-    last = _LAST_DIR[-1]
-    if _setting().lower() in ("1", "true", "yes", "on") and not os.path.isdir(last.parent.parent):
-        # The cache dir was removed: the store never makes one of its own.
+    A record held to be written later (in a batch, or at exit) keeps this,
+    taken while it is worked out: later, and at exit above all, no call is
+    running, so the settings are the default instance's. Looked up then, the
+    records the calls of a ``Cash(cache_dir=...)`` of the program's own
+    worked out went into the default cache dir whenever that existed (a
+    ``.cash`` in the project, or above it), every later process looked for
+    them in its own folder, and walked the same helpers again."""
+    try:
+        with untracked():
+            return _dir(made=False)
+    except OSError:
         return None
-    return last
+
+
+def ready(directory: Path) -> bool:
+    """May *directory*, a `target_dir`, be written now: is the store on, and
+    the cache dir it sits in there? The store never makes one of its own."""
+    setting = _setting().lower()
+    if setting in ("0", "false", "no", "off", ""):
+        return False
+    if setting in ("1", "true", "yes", "on"):
+        try:
+            with untracked():
+                return os.path.isdir(directory.parent.parent)
+        except OSError:
+            return False
+    return True
 
 
 def enabled() -> bool:
@@ -273,42 +282,43 @@ def save_record(kind: str, path: str, digest: str, data: dict) -> None:
     _save(kind, path, {**data, "kind": kind, "digest": digest})
 
 
-#: ``(kind, path)`` -> the record worked out while the cache dir did not
-#: exist yet, written by `flush`.
-_PENDING: dict[tuple[str, str], dict] = {}
+#: ``(store folder, kind, path)`` -> the record worked out while that
+#: folder's cache dir did not exist yet, written by `flush`.
+_PENDING: dict[tuple[Path, str, str], dict] = {}
 #: More records than any one process should hold for a cache dir to come.
 _MAX_PENDING = 4096
 
 
 def _save(kind: str, path: str, record: dict) -> None:
-    directory = _store_dir()
+    directory = target_dir()
     if directory is None:
-        if enabled() and (len(_PENDING) < _MAX_PENDING or (kind, path) in _PENDING):
-            _PENDING[(kind, path)] = record
+        return
+    if not ready(directory):
+        slot = (directory, kind, path)
+        if len(_PENDING) < _MAX_PENDING or slot in _PENDING:
+            _PENDING[slot] = record
         return
     if _PENDING:
         flush()
     _write(directory, _slot_file(directory, kind, path), record)
 
 
-def flush(*, at_exit: bool = False) -> None:
-    """Write the records held for a cache dir that did not exist yet, once
-    it does; nothing before then. *at_exit*: into `exit_store_dir`."""
-    if not _PENDING:
-        return
-    try:
-        directory = exit_store_dir() if at_exit else _store_dir()
-    except Exception:  # noqa: BLE001 - at exit: a store that cannot be found keeps nothing
-        return
-    if directory is None:
-        return
-    pending = dict(_PENDING)
-    _PENDING.clear()
-    for (kind, path), record in pending.items():
-        _write(directory, _slot_file(directory, kind, path), record)
+def flush() -> None:
+    """Write each record held into the folder it was worked out for, once
+    that folder's cache dir exists; the others stay held."""
+    for slot in list(_PENDING):
+        directory, kind, path = slot
+        try:
+            if not ready(directory):
+                continue
+        except Exception:  # noqa: BLE001 - at exit: a store that cannot be found keeps nothing
+            return
+        record = _PENDING.pop(slot, None)
+        if record is not None:
+            _write(directory, _slot_file(directory, kind, path), record)
 
 
-atexit.register(flush, at_exit=True)
+atexit.register(flush)
 
 
 def _load(file: Path, kind: str, digest: str) -> dict | None:

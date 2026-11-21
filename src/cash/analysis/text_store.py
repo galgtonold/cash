@@ -58,8 +58,10 @@ STATS = {"loaded": 0, "computed": 0, "stored": 0, "refused": 0, "verified": 0}
 _LOCK = threading.RLock()
 #: kind -> {digest: answer}: what this process read or worked out.
 _SLOTS: dict[str, dict[str, Any]] = {}
-#: kind -> digests worked out here and not written yet.
-_PENDING: dict[str, set[str]] = {}
+#: (the store folder of the call that worked them out, kind) -> digests
+#: worked out here and not written yet: at exit no call runs, so the folder
+#: is taken when they are (`scan_store.target_dir`).
+_PENDING: dict[tuple[Any, str], set[str]] = {}
 #: kind -> digests used in this process (kept last, so first, when full).
 _USED: dict[str, set[str]] = {}
 
@@ -159,9 +161,11 @@ def kept(
     except (ValueError, TypeError):
         STATS["refused"] += 1
         return answer
+    directory = scan_store.target_dir()
     with _LOCK:
         slot[digest] = encoded
-        _PENDING.setdefault(kind, set()).add(digest)
+        if directory is not None:
+            _PENDING.setdefault((directory, kind), set()).add(digest)
         _USED.setdefault(kind, set()).add(digest)
         due = sum(len(p) for p in _PENDING.values()) >= _FLUSH_EVERY
     if due:
@@ -169,21 +173,21 @@ def kept(
     return answer
 
 
-def flush(*, at_exit: bool = False) -> None:
+def flush() -> None:
     """Write what this process worked out since the last flush, merged into
-    what is on disk now. Best effort."""
+    what is on disk now, each into the folder of the call that worked it
+    out. Best effort."""
     with _LOCK:
         if not _PENDING:
             return
         pending = dict(_PENDING)
         _PENDING.clear()
-        try:
-            directory = scan_store.exit_store_dir() if at_exit else scan_store.store_dir()
-        except Exception:  # noqa: BLE001 - at exit: a store that cannot be found keeps nothing
-            return
-        if directory is None:
-            return
-        for kind, digests in pending.items():
+        for (directory, kind), digests in pending.items():
+            try:
+                if not scan_store.ready(directory):
+                    continue
+            except Exception:  # noqa: BLE001 - at exit: a store that cannot be found keeps nothing
+                return
             mine = _SLOTS.get(kind, {})
             merged = _read_file(directory, kind)
             merged.update((d, mine[d]) for d in digests if d in mine)
@@ -204,4 +208,4 @@ def forget() -> None:
         _USED.clear()
 
 
-atexit.register(flush, at_exit=True)
+atexit.register(flush)
