@@ -130,6 +130,16 @@ def _wrapped_function(fn: types.FunctionType) -> Any:
         fn = inner
 
 
+def _library_function(fn: Any) -> bool:
+    """Whether *fn* is a function (or a method of one) whose code, through
+    ``__wrapped__``, is a library's, not the user's (`is_user_code_file`)."""
+    if type(fn) is types.MethodType:
+        fn = fn.__func__
+    if type(fn) is not types.FunctionType:
+        return False
+    return not is_user_code_file(_wrapped_function(fn).__code__.co_filename)
+
+
 def live_function_source(name: str, namespace: Mapping[str, Any]) -> str | None:
     """Source of the function *name* as the kernel holds it, or None.
 
@@ -163,6 +173,12 @@ def live_function_source(name: str, namespace: Mapping[str, Any]) -> str | None:
             return None
     fn = namespace.get(name)
     if callable(fn) and not isinstance(fn, type):
+        if _library_function(fn):
+            # A library's function bound by name (``from pylab import *``)
+            # is read as ``plt.plot`` is above: not at all. Read, every
+            # pyplot call reached ``switch_backend`` and claimed to change
+            # ``rcParams``; what a library call changes is told at run time.
+            return None
         try:
             return inspect.getsource(fn)
         except SOURCE_RETRIEVAL_ERRORS:
@@ -179,7 +195,7 @@ def live_function_source(name: str, namespace: Mapping[str, Any]) -> str | None:
             continue
         seen.add(id(module_globals))
         candidate = module_globals.get(name)
-        if callable(candidate) and not isinstance(candidate, type):
+        if callable(candidate) and not isinstance(candidate, type) and not _library_function(candidate):
             try:
                 return inspect.getsource(candidate)
             except SOURCE_RETRIEVAL_ERRORS:

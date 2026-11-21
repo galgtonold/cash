@@ -421,3 +421,22 @@ def test_a_loop_unit_calling_a_library_reads_its_bytecode_once(cash_magics):
     assert cash_magics.shell.user_ns["frame"]["a"].tolist() == [i + 1 for i in range(60)]
     # Under 50 now; some 1800 before.
     assert scanned.calls <= 200, scanned.calls
+
+
+def test_a_pyplot_call_bound_by_a_star_import_looks_for_no_holders(cash_magics):
+    """``from matplotlib.pyplot import *`` binds pyplot's functions and
+    ``rcParams``. Each call read as the notebook's own code claimed to
+    change ``rcParams``, and the statement searched the whole heap for what
+    else holds it, a pass over every object per level: seconds a plotting
+    statement once a session's heap is big."""
+    pytest.importorskip("matplotlib")
+    from cash.notebook import shared_objects
+
+    run_cash_cell(cash_magics, "import matplotlib\nmatplotlib.use('Agg')\nfrom matplotlib.pyplot import *")
+    run_cash_cell(cash_magics, "xs = [1, 2, 3]")
+    with method_calls(shared_objects, "_find_holders") as searches:
+        run_cash_cell(cash_magics, "plot(xs, xs)")
+        run_cash_cell(cash_magics, "title('t')")
+    # Two or three per statement before.
+    assert searches.calls == 0, searches.calls
+
