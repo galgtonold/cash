@@ -65,7 +65,7 @@ from ..purity import is_pure, is_stateful
 from ..source_reading import own_source, read_code_file
 from . import scan_store
 from .helper_bindings import UNRESOLVED, held_ref, resolve_binding, resolve_local_import, unloaded_local_imports
-from .helper_code import is_mock
+from .helper_code import UnwalkableLayers, callable_layers, is_mock
 from .purity_report import PurityIssue, PurityReport
 from .unloaded_modules import source_digest
 
@@ -475,7 +475,19 @@ def _token(value: Any) -> list:
         ]
     if isinstance(value, functools.partial):
         return ["p", _token(value.func)]
-    return ["v", _type_name(kind), _static_str(value, "__module__"), _static_str(value, "__qualname__")]
+    token = ["v", _type_name(kind), _static_str(value, "__module__"), _static_str(value, "__qualname__")]
+    if callable(value):
+        # The functions a callable object runs (`callable_layers`: the
+        # ``pyfunc`` of an ``np.vectorize``, a class-based decorator's
+        # ``self.fn``), which the walk follows as helpers: by its type
+        # alone, ``VEC = np.vectorize(double)`` read the same as
+        # ``np.vectorize(triple)``, and a later process served the report
+        # walked through ``double``, with its helpers and findings.
+        try:
+            token.append([_token(layer) for layer in callable_layers(value)])
+        except UnwalkableLayers as e:
+            raise _Unstorable(str(e)) from e
+    return token
 
 
 def _type_name(kind: type) -> list:

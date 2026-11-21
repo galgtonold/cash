@@ -26,6 +26,12 @@ JOB = """
     import numpy as np
 
     import cash
+    from cash.analysis import report_store
+
+    # Every walk stored, however cheap, so each later process reads one
+    # back: whether a walk is stored hung on its CPU time, and a report
+    # read back for the other function once said only "global VEC changed".
+    report_store._READ_COST = -1.0
 
 
     def double(x):
