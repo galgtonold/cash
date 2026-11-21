@@ -62,6 +62,9 @@ _SLOTS: dict[str, dict[str, Any]] = {}
 _PENDING: dict[str, set[str]] = {}
 #: kind -> digests used in this process (kept last, so first, when full).
 _USED: dict[str, set[str]] = {}
+#: kind -> the folder its file was read from: what this process works out
+#: goes back there, where the next one reads it (`flush`).
+_DIRS: dict[str, Any] = {}
 
 
 class StoredTextMismatch(AssertionError):
@@ -95,6 +98,7 @@ def _slot(kind: str) -> dict[str, Any] | None:
         if directory is None:
             return None
         slot = _SLOTS[kind] = _read_file(directory, kind)
+        _DIRS[kind] = directory
     return slot
 
 
@@ -171,19 +175,29 @@ def kept(
 
 def flush(*, at_exit: bool = False) -> None:
     """Write what this process worked out since the last flush, merged into
-    what is on disk now. Best effort."""
+    what is on disk now. Best effort.
+
+    Each kind goes back to the folder its file was read from (`_DIRS`): a
+    kind first asked for in a call of a ``Cash(cache_dir=...)`` reads that
+    instance's folder, and at exit, with no call running, the folder was
+    the default instance's when one existed; the next process read the
+    user's folder again, found nothing, and worked out the same answers
+    (about 580 of them for an lmfit fit's first call)."""
     with _LOCK:
         if not _PENDING:
             return
         pending = dict(_PENDING)
         _PENDING.clear()
         try:
-            directory = scan_store.exit_store_dir() if at_exit else scan_store.store_dir()
+            default = scan_store.exit_store_dir() if at_exit else scan_store.store_dir()
         except Exception:  # noqa: BLE001 - at exit: a store that cannot be found keeps nothing
-            return
-        if directory is None:
-            return
+            default = None
         for kind, digests in pending.items():
+            directory = _DIRS.get(kind)
+            if directory is None or not scan_store.still_there(directory):
+                directory = default
+            if directory is None:
+                continue
             mine = _SLOTS.get(kind, {})
             merged = _read_file(directory, kind)
             merged.update((d, mine[d]) for d in digests if d in mine)
@@ -202,6 +216,7 @@ def forget() -> None:
         _SLOTS.clear()
         _PENDING.clear()
         _USED.clear()
+        _DIRS.clear()
 
 
 atexit.register(flush, at_exit=True)

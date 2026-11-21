@@ -145,10 +145,22 @@ class _Proof:
     def holds(self) -> bool:
         if self.world < 0 or self.world != _cw.world_epoch() or self.gen != state_memo.GEN[0]:
             return False
+        # Once a round of checks (`hit_memo.probe_round`): a key build asks
+        # again for the watch of each class it meets, about 30 times for an
+        # lmfit fit, and only cash's code runs between. What the round found
+        # is forgotten when the world epoch moves; a scan gives a new stamp.
+        seen = hit_memo.round_checks()
+        mark = ("proof", id(self))
+        if seen is not None and seen.get(mark) == (self.stamp, self.world, self.gen):
+            return True
         cells, tags = _strong(self.cells), _strong(self.tags)
         if cells is None or tags is None or not _cw.world_holds(cells, tags):
             return False
-        return self.family is None or self.family.holds([None] * 11)
+        if self.family is not None and not self.family.holds([None] * 11):
+            return False
+        if seen is not None:
+            seen[mark] = (self.stamp, self.world, self.gen)
+        return True
 
     def scan(self, reports: Callable[[], Any]) -> bool:
         """Watch the class now, when due; True when it is watched at the

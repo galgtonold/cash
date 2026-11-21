@@ -238,13 +238,27 @@ def _dispatched(registry: Any, spelled: str) -> Any:
         return UNRESOLVED
 
 
+def _chain(qualname: str) -> tuple[str, ...]:
+    """The attributes that lead to what *qualname* names from its module.
+    A private name in a class body (``Parameter.__set_expression``) is held
+    under its mangled name, ``_Parameter__set_expression``: read as
+    written, no name led to such a method, and every report whose walk
+    visited one was walked again in each process."""
+    parts = qualname.split(".")
+    for i in range(1, len(parts)):
+        name, owner = parts[i], parts[i - 1].lstrip("_")
+        if name.startswith("__") and not name.endswith("__") and owner:
+            parts[i] = f"_{owner}{name}"
+    return tuple(parts)
+
+
 def _home(obj: Any) -> tuple[str, tuple[str, ...]] | None:
     base = obj.__func__ if type(obj) is types.MethodType else obj
     module = getattr(base, "__module__", None) if isinstance(base, (type, types.FunctionType)) else None
     qualname = getattr(base, "__qualname__", None) if module else None
     if not isinstance(module, str) or not isinstance(qualname, str) or "<" in qualname:
         return None
-    return module, tuple(qualname.split("."))
+    return module, _chain(qualname)
 
 
 def _defining_home(obj: Any) -> tuple[str, tuple[str, ...]] | None:
@@ -262,7 +276,7 @@ def _defining_home(obj: Any) -> tuple[str, tuple[str, ...]] | None:
     qualname = base.__qualname__
     if "<" in qualname:
         return None
-    return module, tuple(qualname.split("."))
+    return module, _chain(qualname)
 
 
 def _owner_homes(obj: Any) -> list[tuple[str, tuple[str, ...]]]:
@@ -342,7 +356,7 @@ def _holder_homes(obj: Any) -> list[tuple[str, tuple[str, ...]]]:
     qualname = getattr(base, "__qualname__", None) if type(base) is types.FunctionType else None
     if not isinstance(qualname, str) or "<" in qualname or "." not in qualname:
         return []
-    chain = tuple(qualname.split("."))
+    chain = _chain(qualname)
     return [(name, chain) for name in _class_holders(chain[0]) if _holds_own_class(name, chain[0])]
 
 
@@ -1179,8 +1193,9 @@ def _as_json(value: Any) -> Any:
 #: Records waiting to be written: a process that never makes a cache dir
 #: keeps only the most recent.
 _MAX_PENDING = 256
-#: Records worked out in this process and not written yet: (root, entry).
-_PENDING: list[tuple[tuple[str, tuple[str, ...], str], dict]] = []
+#: Records worked out in this process and not written yet: (root, entry,
+#: the folder its lookup read, or None when there was none yet).
+_PENDING: list[tuple[tuple[str, tuple[str, ...], str], dict, Any]] = []
 #: Records worked out before they are written together (and the rest at
 #: exit): a file written per report cost more than the walks it spared.
 _FLUSH_EVERY = 64
@@ -1215,7 +1230,11 @@ def save(func: Callable[..., Any], report: PurityReport, walk: Any, seconds: flo
     if seconds is not None and seconds < clock() - start + _READ_COST:
         STATS["cheap"] += 1
         return
-    _PENDING.append((root, entry))
+    # Kept where its lookup read (`load`, in this same context): at exit no
+    # call runs, and the folder then is the default instance's, not that
+    # of the ``Cash(cache_dir=...)`` whose call looked it up and will look
+    # it up again in the next process.
+    _PENDING.append((root, entry, scan_store.store_dir()))
     del _PENDING[:-_MAX_PENDING]
     if len(_PENDING) >= _FLUSH_EVERY:
         flush()
@@ -1272,16 +1291,20 @@ def flush(*, at_exit: bool = False) -> None:
     try:
         directory = scan_store.exit_store_dir() if at_exit else scan_store.store_dir()
     except Exception:  # noqa: BLE001 - at exit: a store that cannot be found keeps nothing
-        return
-    if directory is None:
-        return
-    pending = list(_PENDING)
-    _PENDING.clear()
+        directory = None
     by_root: dict[tuple, list[dict]] = {}
-    for root, entry in pending:
-        by_root.setdefault(root, []).append(entry)
-    for root, new in by_root.items():
-        file = _file(root, directory)
+    held = []
+    for root, entry, where in _PENDING:
+        # Where its lookup read, while that cache dir is still there.
+        if where is None or not scan_store.still_there(where):
+            where = directory
+        if where is None:
+            held.append((root, entry, None))
+            continue
+        by_root.setdefault((root, where), []).append(entry)
+    _PENDING[:] = held
+    for (root, where), new in by_root.items():
+        file = _file(root, where)
         # Most recently worked out last: a full file drops the oldest.
         entries = [e for e in _entries(file, root) if e not in new]
         entries = (entries + new)[-_MAX_ENTRIES:]

@@ -466,6 +466,14 @@ def _recorder_class() -> type:
             self.keyed_codes = LibraryCodeMap()
             #: LINE callbacks run, for the tests of what watching lines costs.
             self.line_events = 0
+            #: id(code) -> (a weak reference to it, is it in `lib_codes`,
+            #: in `site_codes`, its `attr_codes` entry, `_start_gen` then):
+            #: read on every start of code left armed, which a strict call
+            #: does thousands of times (lmfit's ``Parameter._getval``),
+            #: without a weak reference made for each look into the three.
+            #: `_start_gen` moves after code joins one of them.
+            self._start_kinds: dict[int, tuple[Any, bool, bool, tuple[str, ...] | None, int]] = {}
+            self._start_gen = 0
             free = [tool for tool in self.tool_ids if mon.get_tool(tool) is None]
             if len(free) < 2:
                 held = {t: mon.get_tool(t) for t in self.tool_ids}
@@ -609,8 +617,11 @@ def _recorder_class() -> type:
             bound = () if pool else binds_parameter_attributes(code)
             if bound:
                 self.attr_codes[code] = bound
-                if self._strict_active():
-                    self._note_bound(code, frame, bound)
+            # After the sets it joined: a start on another thread meanwhile
+            # works its kind out again (`_start_kinds`).
+            self._start_gen += 1
+            if bound and self._strict_active():
+                self._note_bound(code, frame, bound, code in self.site_codes)
             if self.active or self.stack:
                 if resumed and code.co_flags & rec.RESUMABLE:
                     self._seen_resume(code, g, kind)
@@ -631,6 +642,7 @@ def _recorder_class() -> type:
                 events = mon.events.PY_START | mon.events.PY_RESUME
                 self.user_codes[code] = events
                 self.lib_codes.add(code)
+                self._start_gen += 1
                 if code.co_qualname in library_keyed_names:
                     arg = library_keyed_argument(code, frame.f_globals)
                     if arg is not None:
@@ -863,14 +875,32 @@ def _recorder_class() -> type:
                     unit.markers.add("thread_alive")
             return unit
 
+        def _start_kind(self, code: types.CodeType) -> tuple[Any, bool, bool, tuple[str, ...] | None, int]:
+            """`_start_kinds`' entry for *code*, worked out now."""
+            gen = self._start_gen
+            try:
+                ref = _weak.ref(code)
+            except TypeError:
+                ref = None
+            kind = (ref, code in self.lib_codes, code in self.site_codes, self.attr_codes.get(code), gen)
+            if ref is not None:
+                if len(self._start_kinds) > 65536:
+                    self._start_kinds.clear()
+                self._start_kinds[id(code)] = kind
+            return kind
+
         def _on_start(self, code: types.CodeType, offset: int) -> Any:
-            if code in self.lib_codes:
+            kind = self._start_kinds.get(id(code))
+            if kind is None or kind[4] != self._start_gen or kind[0] is None or kind[0]() is not code:
+                kind = self._start_kind(code)
+            if kind[1]:
                 return self._on_library(code)
             inside_collection = collecting()
             if not inside_collection:
                 self.rearm.add(code)
-            site = self.active and code in self.site_codes
-            bound = self.attr_codes.get(code) if self._strict_active() else None
+            active = self.active
+            site = active and kind[2]
+            bound = kind[3] if self.strict else None
             watched = bool(site or bound)
             if watched:
                 # Every start, not the first one: where each was called
@@ -880,9 +910,13 @@ def _recorder_class() -> type:
                 if site:
                     self._note_site(code, frame)
                 if bound:
-                    self._note_bound(code, frame, bound)
-                if not self.stack and all(code in u.codes for u in self.active):
-                    return None
+                    self._note_bound(code, frame, bound, kind[2])
+                if not self.stack:
+                    for u in active:
+                        if code not in u.codes:
+                            break
+                    else:
+                        return None
             if self.active or self.stack:
                 frame = sys._getframe(rec.WATCHED_FRAME)
                 if not self.stack and self._for_no_call(frame):
@@ -922,27 +956,38 @@ def _recorder_class() -> type:
             progress: only its check reads `TraceUnit.attr_params`."""
             return self.strict
 
-        def _note_bound(self, code: types.CodeType, frame: Any, params: tuple[str, ...]) -> None:
+        def _note_bound(self, code: types.CodeType, frame: Any, params: tuple[str, ...], is_site: bool) -> None:
             """What this start of *code* was handed for *params*, whose
-            attributes it binds; and, for an ``__init__``, where it was
+            attributes it binds; and, for an ``__init__`` (*is_site*: one
+            in `site_codes`, which notes its sites itself), where it was
             called from, which tells whether its instance is new
             (`out_arguments.site_constructs`)."""
             f_locals = frame.f_locals
-            init = code.co_name == "__init__" and code not in self.site_codes
-            caller = frame.f_back
-            site = (caller.f_code, caller.f_lasti) if caller is not None else (None, -1)
+            init = code.co_name == "__init__" and not is_site
+            site = None
+            if init:
+                caller = frame.f_back
+                site = (caller.f_code, caller.f_lasti) if caller is not None else (None, -1)
             for unit in self.active:
                 if unit.global_starts is None:
                     continue
-                held = unit.attr_params.setdefault(code, {})
-                targets = unit.attr_targets.setdefault(code, {})
+                held = unit.attr_params.get(code)
+                if held is None:
+                    held = unit.attr_params[code] = {}
+                targets = unit.attr_targets.get(code)
+                if targets is None:
+                    targets = unit.attr_targets[code] = {}
                 for name in params:
                     obj = f_locals.get(name)
+                    refs = targets.get(name)
+                    if refs is not None:
+                        ref = refs.get(id(obj))
+                        if ref and ref() is obj:
+                            # Seen in this unit already: its id is held.
+                            continue
+                    else:
+                        refs = targets[name] = {}
                     held.setdefault(name, set()).add(id(obj))
-                    refs = targets.setdefault(name, {})
-                    ref = refs.get(id(obj))
-                    if ref and ref() is obj:
-                        continue
                     # An id seen before whose object is gone is a new
                     # object: the dead one's reference has nothing to add.
                     try:

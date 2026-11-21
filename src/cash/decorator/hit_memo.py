@@ -1464,7 +1464,7 @@ class ContentProbe:
     def __init__(self, value: Any, read: Any) -> None:
         self.value = value
         self.read = read
-        self.digest = read(value)
+        self.digest = _read_in_round(value, read)
 
     def __call__(self) -> Any:
         return self.read(self.value)
@@ -1546,6 +1546,26 @@ def _probe_round() -> dict | None:
         r[0] = epoch
         r[1] = {}
     return r[1]
+
+
+def round_checks() -> dict | None:
+    """What the open round of checks (`probe_round`) found so far, for a
+    check that the round's other checks may ask again (`class_memo`), or
+    None outside one. Emptied when the world epoch moves."""
+    return _probe_round()
+
+
+def _read_in_round(value: Any, read: Any) -> Any:
+    """``read(value)``, once a round (`probe_round`) when one is open: a
+    watch made in it starts from what the watches checked in it read."""
+    seen = _probe_round()
+    if seen is None:
+        return read(value)
+    k = (id(value), read)
+    got = seen.get(k, _NOTHING)
+    if got is _NOTHING or got[0] is not value:
+        got = seen[k] = (value, read(value))
+    return got[1]
 
 
 def _class_and_dict(v: Any) -> _Items:
@@ -1909,11 +1929,7 @@ class _Family:
                 if seen is not None and type(read) is ContentProbe:
                     # Read once a round (`probe_round`): a dozen class
                     # watches can share one module's data.
-                    k = (id(read.value), read.read)
-                    got = seen.get(k, _NOTHING)
-                    if got is _NOTHING:
-                        got = seen[k] = (read.value, read())
-                    if got[0] is not read.value or got[1] != value:
+                    if _read_in_round(read.value, read.read) != value:
                         return False
                 elif read() != value:
                     return False

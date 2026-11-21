@@ -492,6 +492,10 @@ class _Digester:
             self.feed(fn.__defaults__)
         if fn.__kwdefaults__:
             self.feed(fn.__kwdefaults__)
+        if fn.__closure__:
+            taking = getattr(_CELL_CODES, "stack", None)
+            if taking:
+                taking[-1].add(fn.__code__)
         starts = getattr(_STARTS, "cells", None)
         cells = starts.get(fn.__code__) if starts and fn.__code__ not in self.shared else None
         if (
@@ -612,6 +616,10 @@ def _code_names(code: types.CodeType) -> set[str]:
 
 
 _STARTS = threading.local()
+#: ``stack``: for each digest `_remembered` is taking on this thread, the
+#: codes of the functions with cells it went through, whose start cells
+#: (`start_cells`) a call could stand in for theirs.
+_CELL_CODES = threading.local()
 
 
 def _cell_digests(closure: Iterable[Any], within: _Digester | None) -> tuple[str | None, ...]:
@@ -888,25 +896,71 @@ def _own_surface(cls: type) -> str:
 def _remembered(cls: type, kind: str, compute: Any) -> str:
     """*compute*'s digest of *cls*, remembered while its world stands
     still (`class_memo`), apart for each *kind* and for digests taken by
-    the surface of the classes met inside (`SURFACE`)."""
-    if not getattr(_STARTS, "cells", None):
-        # Not while a call's start cells stand in for its functions' cells
-        # (`start_cells`): the digest then is of that call's, not the class's.
-        from ..decorator import class_memo
+    the surface of the classes met inside (`SURFACE`).
 
-        if class_memo.ENABLED:
-            proof = class_memo.proof_for(cls, "digest")
-            if proof is not None:
-                key = (id(cls),) if kind == "digest" and not SURFACE.get() else (id(cls), kind, SURFACE.get())
-                got = class_memo.DIGESTS.get(key, proof)
-                if got is class_memo.MISS or class_memo.VERIFY:
-                    fresh = compute()
-                    if got is not class_memo.MISS and got != fresh:
-                        raise class_memo.ClassMemoMismatch(f"the {kind} of {cls.__qualname__} changed unseen")
-                    class_memo.DIGESTS.put(key, proof, fresh)
-                    return fresh
-                return got
-    return compute()
+    While a call's start cells stand in for its functions' cells
+    (`start_cells`), a digest is that call's, not the class's, where a
+    function with cells it goes through started with some: such a digest
+    is neither served nor remembered. One going through none of them is
+    the class's own: the classes a miss's trace names were digested again
+    on every miss, about 70 of them for an lmfit fit, 15 ms."""
+    from ..decorator import class_memo
+
+    if not class_memo.ENABLED:
+        return compute()
+    proof = class_memo.proof_for(cls, "digest")
+    if proof is None:
+        return _noting_cell_codes(compute)[0]
+    starts = getattr(_STARTS, "cells", None)
+    key = (id(cls),) if kind == "digest" and not SURFACE.get() else (id(cls), kind, SURFACE.get())
+    got = class_memo.DIGESTS.get(key, proof)
+    if got is not class_memo.MISS and not class_memo.VERIFY and not _started_in(got[1], starts):
+        _note_cell_codes(got[1])
+        return got[0]
+    fresh, codes = _noting_cell_codes(compute)
+    if _started_in(codes, starts):
+        return fresh
+    if got is not class_memo.MISS and got[0] != fresh:
+        raise class_memo.ClassMemoMismatch(f"the {kind} of {cls.__qualname__} changed unseen")
+    class_memo.DIGESTS.put(key, proof, (fresh, codes))
+    return fresh
+
+
+def _started_in(codes: frozenset, starts: Any) -> bool:
+    """Does a call's start cells (*starts*) stand in for the cells of a
+    function of one of *codes*? Not where every cell a start holds is a
+    class (`_AS_IT_IS`): those are read as they are now, as with no start
+    (a method calling ``super()``, whose ``__class__`` cell holds its own
+    class)."""
+    if not starts:
+        return False
+    for code in codes:
+        cells = starts.get(code)
+        if cells is not None and any(c != _AS_IT_IS for c in cells):
+            return True
+    return False
+
+
+def _noting_cell_codes(compute: Any) -> tuple[str, frozenset]:
+    """``(compute(), the codes of the functions with cells it went through)``;
+    those join the digest being taken around it."""
+    stack = getattr(_CELL_CODES, "stack", None)
+    if stack is None:
+        stack = _CELL_CODES.stack = []
+    stack.append(set())
+    try:
+        got = compute()
+    finally:
+        codes = frozenset(stack.pop())
+    _note_cell_codes(codes)
+    return got, codes
+
+
+def _note_cell_codes(codes: frozenset) -> None:
+    """*codes* join the digest being taken around this one, if any."""
+    stack = getattr(_CELL_CODES, "stack", None)
+    if stack:
+        stack[-1].update(codes)
 
 
 def _class_digest_now(cls: type, within: _Digester | None, *, surface: bool = False) -> str:
