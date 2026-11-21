@@ -440,3 +440,18 @@ def test_a_pyplot_call_bound_by_a_star_import_looks_for_no_holders(cash_magics):
     # Two or three per statement before.
     assert searches.calls == 0, searches.calls
 
+
+def test_a_statement_over_a_value_reads_no_class_for_state(cash_magics):
+    """The classes a namespace binds are read for state of their own only
+    when a statement's input can lead to one: ``from pylab import *`` binds
+    hundreds, and reading each one's attributes twice a statement was most
+    of what ``m = y.bit_length()`` cost."""
+    from cash.notebook.statement import processor
+
+    classes = "\n".join(f"class K{i}:\n    held = []" for i in range(20))
+    run_cash_cell(cash_magics, classes)
+    run_cash_cell(cash_magics, "y = 3")
+    with method_calls(processor, "_has_class_state") as reads:
+        run_cash_cell(cash_magics, "m = y.bit_length()")
+    # One per class, twice, before.
+    assert reads.calls == 0, reads.calls
