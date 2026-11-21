@@ -2830,17 +2830,21 @@ class CallRunner:
             for entry in (getattr(run, "args_before", None) or {}).values()
             if type(entry[1]) is rewrite_in_place.AttrRecording
         )
-        return code_trace.build(
-            unit,
-            code_trace.static_codes(functions, reports),
-            strict=call.needs_trace,
-            accepted=accepted,
-            owners=owners,
-            # A call that needs its trace is checked on all of each class's
-            # code, as before: the strict build judges what ran.
-            narrow=call.narrowed and not call.needs_trace,
-            also_accepted=more,
-        )
+        # One round of checks (`hit_memo.probe_round`), as the trace's
+        # check on a hit is: the classes the trace names share the data
+        # their watches probe, read once instead of once a class.
+        with hit_memo.probe_round():
+            return code_trace.build(
+                unit,
+                code_trace.static_codes(functions, reports),
+                strict=call.needs_trace,
+                accepted=accepted,
+                owners=owners,
+                # A call that needs its trace is checked on all of each class's
+                # code, as before: the strict build judges what ran.
+                narrow=call.narrowed and not call.needs_trace,
+                also_accepted=more,
+            )
 
     @staticmethod
     def _full_fold_gate() -> tuple[int, frozenset[str]] | None:
