@@ -369,7 +369,13 @@ class PlotRuns:
 
     def end_cell(self, last_index: int) -> None:
         """The cell's statements ran: a plot run still open ends here, where
-        the inline backend shows the open figures."""
+        the inline backend shows the open figures.
+
+        They are drawn where it draws them, after the cell's value is shown
+        (`_after_the_value`): drawn before, a ``Text`` the cell echoes shows
+        where the draw placed it, not where the cell put it. Whether the
+        run is kept is settled now, as the cell left the namespace.
+        """
         run = self._close()
         if run is None:
             return
@@ -382,21 +388,34 @@ class PlotRuns:
         flush = attribute_or(flush, "flush_figures", None)
         if flush is None:
             return
-        try:
-            with capture_output(stdout=False, stderr=False, display=True) as captured:
-                flush()
-        except Exception:
-            logger.debug("%s could not render the open figures", _LOG, exc_info=True)
-            return
-        shown = list(captured.outputs)
-        if shown:
-            self._show_after_cell(shown)
-        if run.start + len(run.codes) - 1 != last_index or not _no_figures():
-            return
-        rich = rich_records(shown)
-        if rich is None:
-            return
-        self._keep(run, flush=rich)
+        keep = None
+        if run.start + len(run.codes) - 1 == last_index:
+            try:
+                keep = self._prepare(run)
+            except Exception:
+                logger.debug("%s could not keep the plot run", _LOG, exc_info=True)
+
+        def show() -> None:
+            try:
+                with capture_output(stdout=False, stderr=False, display=True) as captured:
+                    flush()
+            except Exception:
+                logger.debug("%s could not render the open figures", _LOG, exc_info=True)
+                return
+            shown = list(captured.outputs)
+            if shown:
+                replay_outputs(rich=shown)
+            if keep is None or not _no_figures():
+                return
+            rich = rich_records(shown)
+            if rich is None:
+                return
+            try:
+                keep(rich)
+            except Exception:
+                logger.debug("%s could not keep the plot run", _LOG, exc_info=True)
+
+        self._after_the_value(show, before=flush)
 
     def _watching(self) -> bool:
         return inline_backend_closes_figures() and _no_figures()
@@ -404,28 +423,29 @@ class PlotRuns:
     def _keep(self, run: _Open, flush: list[dict] | None) -> None:
         """Store *run*, which ended with no figure open."""
         try:
-            self._store(run, flush)
+            keep = self._prepare(run)
+            if keep is not None:
+                keep(flush)
         except Exception:
             logger.debug("%s could not keep the plot run", _LOG, exc_info=True)
 
-    def _store(self, run: _Open, flush: list[dict] | None) -> None:
+    def _prepare(self, run: _Open) -> Callable[[list[dict] | None], None] | None:
+        """What stores *run* once what the inline backend showed at the end
+        of the cell is known (None when nothing did), or None when it is
+        not kept: everything it is checked against is read now."""
         if run.refused is not None:
             logger.debug("%s not kept: %s", _LOG, run.refused)
-            return
-        if not run.shown and not flush:
-            # Showed nothing: not a plot anyone sees (a ``def`` of a helper that draws).
-            logger.debug("%s not kept: it showed nothing", _LOG)
-            return
+            return None
         if not environment_unchanged(run.env):
             logger.debug("%s not kept: an environment variable it read changed", _LOG)
-            return
+            return None
         seconds = _perf_counter() - run.started
         if seconds < _KEEP_FLOOR_S:
             logger.debug("%s not kept: it took %.4fs", _LOG, seconds)
-            return
+            return None
         if figure_settings_digest(self.shell) != run.settings:
             logger.debug("%s not kept: it changed matplotlib's settings", _LOG)
-            return
+            return None
         modules = _bound_modules(run.bound, self.shell.user_ns)
         if run.bound - set(modules):
             # Served, it would draw nothing and so have no figure, axes or
@@ -436,37 +456,37 @@ class PlotRuns:
             # user's ``_`` alone, and served, it would hold an older echo.
             names = ", ".join(sorted(run.bound - set(modules)))
             logger.debug("%s not kept: it binds %s", _LOG, names)
-            return
+            return None
         changed = _names_changed(run.names, self.shell.user_ns, set(modules))
         if changed:
             # ``del tmp``, or a helper binding ``__main__.zz``: served, the
             # names would stay as they were.
             self._bound_unseen |= changed - run.bound
             logger.debug("%s not kept: it binds or unbinds %s", _LOG, ", ".join(sorted(changed)))
-            return
+            return None
         again = self._bound_unseen & run.names.keys()
         if again:
             # A run binding one of them to the object it held would not show:
             # after a restart, served, it would be left unbound.
             logger.debug("%s not kept: %s was bound by a plot's helper", _LOG, ", ".join(sorted(again)))
-            return
+            return None
         code = "\n".join(run.codes)
         inputs = self._inputs(code)
         if inputs is None or inputs & run.bound:
             logger.debug("%s not kept: it binds a name it reads", _LOG)
-            return
+            return None
         lineage = self._processor.tracking_state.variable_lineage
         if any(run.lineage.get(name) != lineage.get(name) for name in inputs):
             logger.debug("%s not kept: an input changed as it ran", _LOG)
-            return
+            return None
         if has_missing_lineage(inputs, self.shell.user_ns, lineage):
             logger.debug("%s not kept: an input has no lineage", _LOG)
-            return
+            return None
         rng_reads = {rng_virtual_var(module): run.lineage.get(rng_virtual_var(module)) for module in run.rng_read}
         if any(value is None for value in rng_reads.values()):
             # Unseeded: a run from the top draws other numbers each time.
             logger.debug("%s not kept: it draws from an unseeded random stream", _LOG)
-            return
+            return None
         echo = None
         if run.echo is not None:
             # Kept as the value, which a hit shows and binds to ``_`` and
@@ -475,14 +495,10 @@ class PlotRuns:
             echo = _echo_bytes(run.echo)
             if echo is None:
                 logger.debug("%s not kept: what its last line echoed cannot be kept", _LOG)
-                return
-        size = sum(record_size(p[2]) + len(p[0]) + len(p[1]) for s in run.statements for p in s["parts"])
-        size += record_size(flush or ()) + len(echo or b"")
-        if size > PLOT_RECORD_CAP:
-            return
+                return None
         variants_key = self._key(code, inputs, run.occurrence, run.settings)
         if variants_key is None:
-            return
+            return None
         try:
             hidden = helper_memos.hidden_moved(run.hidden, self.shell.user_ns, fresh=run.fresh)
         except Exception:  # noqa: BLE001 - not known to call none: not kept
@@ -492,50 +508,64 @@ class PlotRuns:
             # stays as it was, and a later call computes (prints, seeds a
             # stream) where a run finds the answer.
             logger.debug("%s not kept: it may call the memo %s, which cash cannot find", _LOG, hidden)
-            return
+            return None
         backend = self._backend()
         if backend is None:
-            return
+            return None
         memo_records = [[records for records, _changes in stored["memos"]] for stored in run.statements]
         condition = _condition(run.env, rng_reads, memo_records)
         key = self._key(code, inputs, run.occurrence, run.settings, condition)
         if key is None:
-            return
-        payload = {"statements": run.statements, "flush": flush, "echo": echo}
-        metadata = {
-            "plot_outputs": True,
-            "ttl": attribute_or(self._cell, "ttl", None),
-            "execution_time": seconds,
-            "size": size,
-            "bound": sorted(run.bound | (_HISTORY_NAMES if echo is not None else set())),
-            "env": run.env,
-            "force_persist": bool(self._processor.persist_all),
-            "rng_reads": rng_reads,
-            "memo_records": memo_records,
-            "modules": modules,
-            "flushes": flush is not None,
-            "echoes": echo is not None,
-            "plot_format": _FORMAT,
-        }
-        backend.set(key, payload, metadata)
-        kept = self._note_variant(
-            backend,
-            variants_key,
-            condition,
-            size,
-            lambda c: self._key(code, inputs, run.occurrence, run.settings, c),
-            self._served_last.get(variants_key),
-        )
-        self._note_shape(backend, run.codes, run.occurrence)
-        logger.debug(
-            "%s kept %d statement(s) under %s (inputs %s, settings %s, %d condition(s))",
-            _LOG,
-            len(run.codes),
-            key[:24],
-            sorted(inputs),
-            run.settings[:12],
-            kept,
-        )
+            return None
+        ttl = attribute_or(self._cell, "ttl", None)
+        force_persist = bool(self._processor.persist_all)
+
+        def store(flush: list[dict] | None) -> None:
+            if not run.shown and not flush:
+                # Showed nothing: not a plot anyone sees (a ``def`` of a helper that draws).
+                logger.debug("%s not kept: it showed nothing", _LOG)
+                return
+            size = sum(record_size(p[2]) + len(p[0]) + len(p[1]) for s in run.statements for p in s["parts"])
+            size += record_size(flush or ()) + len(echo or b"")
+            if size > PLOT_RECORD_CAP:
+                return
+            payload = {"statements": run.statements, "flush": flush, "echo": echo}
+            metadata = {
+                "plot_outputs": True,
+                "ttl": ttl,
+                "execution_time": seconds,
+                "size": size,
+                "bound": sorted(run.bound | (_HISTORY_NAMES if echo is not None else set())),
+                "env": run.env,
+                "force_persist": force_persist,
+                "rng_reads": rng_reads,
+                "memo_records": memo_records,
+                "modules": modules,
+                "flushes": flush is not None,
+                "echoes": echo is not None,
+                "plot_format": _FORMAT,
+            }
+            backend.set(key, payload, metadata)
+            kept = self._note_variant(
+                backend,
+                variants_key,
+                condition,
+                size,
+                lambda c: self._key(code, inputs, run.occurrence, run.settings, c),
+                self._served_last.get(variants_key),
+            )
+            self._note_shape(backend, run.codes, run.occurrence)
+            logger.debug(
+                "%s kept %d statement(s) under %s (inputs %s, settings %s, %d condition(s))",
+                _LOG,
+                len(run.codes),
+                key[:24],
+                sorted(inputs),
+                run.settings[:12],
+                kept,
+            )
+
+        return store
 
     @staticmethod
     def _note_variant(
@@ -966,6 +996,28 @@ class PlotRuns:
         shapes = [s for s in (record.get("shapes") or []) if s != codes]
         shapes.insert(0, list(codes))
         backend.set_metadata_only(key, {"plot_shapes": True, "shapes": shapes[:_SHAPES_KEPT], "ttl": None})
+
+    def _after_the_value(self, action: Callable[[], None], *, before: Callable[..., Any]) -> None:
+        """Do *action* once, after the cell, its echoed value shown, where
+        IPython runs its ``post_execute`` callbacks: just ahead of *before*
+        (the inline backend's flush), so pyplot's own redraw of the open
+        figures, and any error it shows, comes first as without cash."""
+        events = attribute_or(self.shell, "events", None)
+        callbacks = attribute_or(events, "callbacks", None)
+        hooked = callbacks.get("post_execute") if isinstance(callbacks, dict) else None
+        if not isinstance(hooked, list):
+            action()
+            return
+
+        def once(*_args: Any) -> None:
+            try:
+                hooked.remove(once)
+            except ValueError:
+                pass
+            action()
+
+        at = next((i for i, callback in enumerate(hooked) if callback == before), len(hooked))
+        hooked.insert(at, once)
 
     def _show_after_cell(self, outputs: list) -> None:
         """Show *outputs* where the inline backend shows a cell's figures:
