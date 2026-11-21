@@ -371,6 +371,11 @@ def pickled_size_estimate(value: Any, _depth: int = 0, _seen: set[int] | None = 
         # 50,000 record dicts read each dict's module and name.
         if _depth >= _ESTIMATE_DEPTH:
             return 0
+        if _plain_data.looked_plain(value):
+            # JSON-like data a statement's checks walked: no array, no
+            # object below, so nothing to count. A million records were read
+            # again, twice, by the store's estimates (0.13 s).
+            return 0
         if _K is not None:
             # The same loop in C: a call per record dict cost 0.1 s for 200,000.
             return _K.items_estimate(

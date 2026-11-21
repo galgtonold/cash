@@ -1442,6 +1442,18 @@ def _tree_walk(value: Any, leaves: frozenset):
     raise _NotPlain
 
 
+def looked_plain(value: Any) -> bool:
+    """Whether the `one_look` open now walked *value*, a value it is
+    about, and found it JSON-like data: answered from what the look keeps,
+    never by a walk. False when no look is open, it did not walk *value*,
+    or found it is none."""
+    look = _LOOKED.get()
+    if look is None:
+        return False
+    found, facts = _known_facts(look, value)
+    return found and facts is not None
+
+
 def whole_tree_facts(value: Any) -> TreeFacts | None:
     """`tree_facts` of *value* from one walk of all of it, at C speed when
     the kernels are in, as `tree_walk` walks it but without keeping its
