@@ -27,6 +27,7 @@ from cash.backends.tiered_backend import TieredBackend
 from cash.notebook import file_records
 from cash.notebook.cache_status import CacheStatus
 from cash.notebook.file_records import UNRESOLVED_PREFIX, entry_file_records
+from cash.notebook.statement.rebuild_cost import RebuildCostLedger
 from cash.notebook.statement.store import StatementStore
 from cash.tracking.file_dep_snapshot import snapshot_is_fresh
 from tests._cell_driver import run_cash_cell
@@ -219,6 +220,13 @@ def test_a_statement_too_cheap_to_store_below_takes_no_stat_of_the_files(cash_ma
         return real(self, run, execution, 0.0 if run.code == CHEAP else seconds)
 
     monkeypatch.setattr(StatementStore, "_too_cheap_to_store", too_cheap)
+    # The same clock prices the read above: a cheap statement over inputs
+    # whose unsaved work measured 0.1 s keeps its final value
+    # (``RebuildCostLedger.COSTLY_INPUTS_S``), so a restart need not rebuild
+    # them. The read takes 15 ms here; a contended macOS runner measured it
+    # past 0.1 s, kept the copy and so rightly stat'ed every file. That rule
+    # is held off: the copy is too cheap to store whatever the read measured.
+    monkeypatch.setattr(RebuildCostLedger, "COSTLY_INPUTS_S", float("inf"))
     for cell in CELLS[:2]:
         run_cash_cell(cash_magics, cell, cells=CELLS)
     store_stats()
