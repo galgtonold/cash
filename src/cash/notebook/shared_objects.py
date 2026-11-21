@@ -4810,10 +4810,52 @@ def _lone_flat_containers_left(
         flat = exact.issuperset(map(type, itertools.chain.from_iterable(lone)))
     else:
         flat = all(map(_values_only, lone, itertools.repeat(exact)))
+    if not flat:
+        flat = _values_and_lone_sets(lone, exact)
     del lone
     if not flat:
         return None
     return _left_by_count(children, kinds, leaves, counts)
+
+
+#: What `_values_and_lone_sets` reads below a lone list or dict.
+_VALUE_SETS = frozenset((set, frozenset, tuple))
+
+
+def _values_and_lone_sets(lone: list[Any], exact: frozenset[type]) -> bool:
+    """Do the lists and dicts *lone* hold values alone, or sets, frozensets
+    and tuples of values alone, each set held by its container alone and
+    once? A tuple or frozenset of values is no node (`_is_node`), and such
+    a set has no reference but the one the walk would count: none can be
+    shared, and nothing is below them. A million records each holding a
+    small set of tags (``{"i": i, "tags": {i % 7}}``) were walked a record
+    and a set at a time, past the share check's time."""
+    lists = [container for container in lone if type(container) is list]
+    dicts = [container for container in lone if type(container) is dict]
+    # Taken at C speed: a step per item was most of the check's time. The
+    # keys are values as a rule, told without a list of them.
+    keys = (
+        ()
+        if exact.issuperset(map(type, itertools.chain.from_iterable(dicts)))
+        else itertools.chain.from_iterable(map(dict.keys, dicts))
+    )
+    items = list(
+        itertools.chain(
+            itertools.chain.from_iterable(lists), keys, itertools.chain.from_iterable(map(dict.values, dicts))
+        )
+    )
+    del lists, dicts, keys
+    nested = list(itertools.compress(items, map(operator.not_, map(exact.__contains__, map(type, items)))))
+    del items
+    if not _VALUE_SETS.issuperset(map(type, nested)) or not exact.issuperset(
+        map(type, itertools.chain.from_iterable(nested))
+    ):
+        return False
+    sets = list(itertools.compress(nested, map(operator.is_, map(type, nested), itertools.repeat(set))))
+    del nested
+    # Counted as `_LONE_RECORD` counts a record: its container's reference,
+    # and the one list holding it here.
+    return all(map(_LONE_RECORD.__eq__, map(sys.getrefcount, sets)))
 
 
 def _left_by_count(
