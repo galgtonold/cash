@@ -152,6 +152,8 @@ def test_a_pipeline_restored_in_a_new_process_keys_its_next_stage_without_writin
     )
     first = run_python(script, cwd=tmp_path).stdout.split()
     second = run_python(script, cwd=tmp_path).stdout.split()
-    # The first process writes each geometry once, to store it.
-    assert first == [first[0], "0", "0", str(ROWS)]
+    # The first process stores the points from their coordinates: it
+    # writes no row to WKB, only the few points that check shapely's
+    # layout once per process.
+    assert first[:3] == [first[0], "0", "0"] and int(first[3]) < 100
     assert second == [first[0], "1", "1", "0"]

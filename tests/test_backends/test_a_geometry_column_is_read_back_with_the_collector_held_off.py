@@ -21,8 +21,11 @@ shapely = pytest.importorskip("shapely")
 
 
 def _frame(n=2000):
+    """Polygons, which are read back from WKB (plain points are made from
+    their coordinates)."""
     rng = np.random.default_rng(0)
-    return gpd.GeoDataFrame({"v": np.arange(n)}, geometry=shapely.points(rng.uniform(0, 1, (n, 2))), crs="EPSG:4326")
+    centres = shapely.points(rng.uniform(0, 1, (n, 2)))
+    return gpd.GeoDataFrame({"v": np.arange(n)}, geometry=shapely.buffer(centres, 0.01, quad_segs=2), crs="EPSG:4326")
 
 
 def _stored(frame):

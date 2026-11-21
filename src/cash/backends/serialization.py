@@ -343,6 +343,7 @@ def _reduce_geometry_array(value: Any) -> Any:
         import shapely
 
         from ..content_hashers import distinct_objects
+        from ..geometry_points import plain_point_coordinates
 
         data = value._data
         if type(data) is not np.ndarray or data.dtype != object or data.ndim != 1:
@@ -351,6 +352,9 @@ def _reduce_geometry_array(value: Any) -> Any:
         missing = shapely.is_missing(distinct)  # None, read in C
         if not shapely.is_geometry(distinct[~missing]).all():
             raise TypeError("holds something besides geometries and None")
+        coordinates = plain_point_coordinates(distinct[~missing])
+        if coordinates is not None:
+            return _reduce_points(value, data, coordinates, missing, index, len(distinct))
         wkb = shapely.to_wkb(distinct[~missing])
         lengths = np.zeros(len(distinct), dtype=np.int64)
         lengths[~missing] = np.fromiter(map(len, wkb), dtype=np.int64, count=len(wkb))
@@ -359,12 +363,68 @@ def _reduce_geometry_array(value: Any) -> Any:
     except Exception:  # not the layout this expects: geopandas' own pickle
         logger.debug("pickling a %s the geopandas way", type(value).__name__, exc_info=True)
         return value.__reduce_ex__(5)
-    if len(distinct) == len(data):
-        rows = None  # no row shares an object: they are *distinct* in order
-    else:
-        rows = index.astype(np.int32 if len(distinct) < 2**31 else np.int64)
+    rows = _rows_of(index, len(distinct), len(data))  # None: no row shares an object
     _note_geometries(data, blob, lengths, rows, srid_free=distinct[~missing])
     return _geometry_array_from_wkb, (type(value), blob, lengths, rows, crs)
+
+
+def _rows_of(index: Any, distinct: int, rows: int) -> Any:
+    """Which distinct object each row holds, or None when each row holds
+    its own (in order)."""
+    import numpy as np
+
+    if distinct == rows:
+        return None
+    return index.astype(np.int32 if distinct < 2**31 else np.int64)
+
+
+def _reduce_points(value: Any, data: Any, coordinates: Any, missing: Any, index: Any, distinct: int) -> Any:
+    """`_reduce_geometry_array` for a column whose geometries are all plain
+    points (`geometry_points`): their x and y, not their WKB, rebuilt by
+    `_geometry_array_from_points`. 2 float64 per point in place of 21
+    bytes of WKB, read and made again in C: 300,000 points took 0.15 s
+    to write to WKB and 0.1 s to read back from it."""
+    rows = _rows_of(index, distinct, len(data))
+    _note_points(data, coordinates, missing, rows)
+    return _geometry_array_from_points, (type(value), coordinates, missing if missing.any() else None, rows, value._crs)
+
+
+def _note_points(data: Any, coordinates: Any, missing: Any, rows: Any) -> None:
+    """`_note_geometries` for points: their WKB, laid out from their
+    coordinates (`geometry_points.point_wkb`)."""
+    try:
+        import numpy as np
+
+        from ..geometry_points import POINT_WKB_BYTES, point_wkb
+
+        lengths = np.where(missing, 0, POINT_WKB_BYTES).astype(np.int64)
+        _note_geometries(data, point_wkb(coordinates), lengths, rows)
+    except Exception:  # the hasher writes the WKB itself instead
+        logger.debug("point pieces not noted", exc_info=True)
+
+
+def _geometry_array_from_points(cls: type, coordinates: Any, missing: Any, rows: Any, crs: Any) -> Any:
+    """The array `_reduce_points` stored: a point at each of *coordinates*,
+    in order, among rows *missing* (a bool array; none when None) left
+    None, placed at *rows* (each row its own when None), with *crs*,
+    through geopandas' own ``__setstate__``."""
+    import numpy as np
+
+    from ..geometry_points import points_from_coordinates
+
+    with _gc_paused():
+        made = points_from_coordinates(coordinates)
+    if missing is None:
+        distinct = made
+        missing = np.zeros(len(made), dtype=bool)
+    else:
+        distinct = np.full(len(missing), None, dtype=object)
+        distinct[~missing] = made
+    data = distinct if rows is None else distinct[rows]
+    _note_points(data, coordinates, missing, rows)
+    array = cls.__new__(cls)
+    array.__setstate__({"_data": data, "_crs": crs, "_sindex": None, "base": None})
+    return array
 
 
 def _note_geometries(data: Any, blob: Any, lengths: Any, rows: Any, srid_free: Any = None) -> None:

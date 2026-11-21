@@ -1198,10 +1198,17 @@ class _GeometryDigests:
         (none missing), joined in row order."""
         import shapely
 
+        from .geometry_points import plain_point_coordinates, point_wkb
+
         np = _numpy()
-        if len(data) < self.MIN_ROWS or not shapely.get_type_id(data).any():
-            # Few, or only points: each is its own WKB, cheaper written
-            # again than looked up.
+        if len(data) < self.MIN_ROWS:
+            return b"".join(self._read(data))
+        if not shapely.get_type_id(data).any():
+            # Only points: each is its own WKB, cheaper written again than
+            # looked up, and plain ones are laid out from their coordinates.
+            coordinates = plain_point_coordinates(data)
+            if coordinates is not None:
+                return point_wkb(coordinates)
             return b"".join(self._read(data))
         distinct, index = distinct_objects(data)
         if len(distinct) > self.MAX_HELD:
