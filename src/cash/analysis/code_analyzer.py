@@ -1343,30 +1343,64 @@ class CodeAnalyzer:
 #: reads none of it as Python.
 _PYTHON_BODY_CELL_MAGICS = frozenset({"time", "capture", "prun"})
 
-#: What IPython's input transform turns a magic or a shell command into: a
-#: call of one of these on ``get_ipython()``.
-_IPYTHON_RUNNERS = frozenset({"run_line_magic", "run_cell_magic", "getoutput", "system"})
+#: The shell's methods that run a magic, a shell command or code given as a
+#: string: what IPython's input transform turns a magic or a shell command
+#: into (``run_line_magic``, ``run_cell_magic``, ``getoutput``, ``system``),
+#: the alias notebooks saved before IPython 9 still call (``magic``), and the
+#: other ways in (``system_piped``, ``run_cell``, ``ex``, ...).
+_IPYTHON_RUNNERS = frozenset(
+    {
+        "run_line_magic",
+        "run_cell_magic",
+        "getoutput",
+        "system",
+        "magic",
+        "system_piped",
+        "system_raw",
+        "run_cell",
+        "run_cell_async",
+        "ex",
+        "ev",
+    }
+)
+
+
+def _is_shell(node: ast.AST) -> bool:
+    """Whether *node* is ``get_ipython()`` or ``IPython.get_ipython()``."""
+    if not (isinstance(node, ast.Call) and not node.args):
+        return False
+    func = node.func
+    return (isinstance(func, ast.Name) and func.id == "get_ipython") or (
+        isinstance(func, ast.Attribute) and func.attr == "get_ipython"
+    )
+
+
+def _shell_runner(func: ast.AST) -> bool:
+    """Whether the callee *func* is a runner of the shell's, looked up as an
+    attribute (``get_ipython().magic``) or by ``getattr(get_ipython(), 'magic')``."""
+    if isinstance(func, ast.Attribute):
+        return func.attr in _IPYTHON_RUNNERS and _is_shell(func.value)
+    return (
+        isinstance(func, ast.Call)
+        and isinstance(func.func, ast.Name)
+        and func.func.id == "getattr"
+        and len(func.args) >= 2
+        and _is_shell(func.args[0])
+        and isinstance(func.args[1], ast.Constant)
+        and func.args[1].value in _IPYTHON_RUNNERS
+    )
 
 
 def calls_ipython(tree: ast.AST) -> bool:
-    """Whether *tree* runs a magic or a shell command, written as IPython's
-    transform writes one (``get_ipython().run_line_magic('time', 'x = f()')``).
+    """Whether *tree* runs a magic, a shell command or code given as a
+    string through the shell, as IPython's transform writes one
+    (``get_ipython().run_line_magic('time', 'x = f()')``) or as a user
+    does (``get_ipython().magic('ls')``, ``getattr(get_ipython(), 'system')``).
 
     What such a call reads and binds is IPython's business, not code cash
     can analyse.
     """
-    for node in walk_tree(tree):
-        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
-            continue
-        shell = node.func.value
-        if (
-            node.func.attr in _IPYTHON_RUNNERS
-            and isinstance(shell, ast.Call)
-            and isinstance(shell.func, ast.Name)
-            and shell.func.id == "get_ipython"
-        ):
-            return True
-    return False
+    return any(isinstance(node, ast.Call) and _shell_runner(node.func) for node in walk_tree(tree))
 
 
 #: Line magics whose argument is a Python statement run in the user's namespace.
