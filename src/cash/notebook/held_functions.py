@@ -97,6 +97,9 @@ _HEAP_TYPE = 1 << 9
 #: when they are missing or say NotImplemented (a subclass, a metaclass of
 #: its own). A walk of a 350,000-edge graph took 1.2 s in Python.
 _K = _native.kernels
+#: ``tree_id_leaves``, which tells JSON-like data over given leaves in one
+#: pass (`_plain_data_alone`), or None.
+_PLAIN_READ = attribute_or(_K, "tree_id_leaves", None)
 
 #: What ``gc.freeze`` had moved out of the collector's view when cash was
 #: imported. Python 3.12 freezes some 375 tuples of its own while it starts,
@@ -772,13 +775,20 @@ def _walk(
 
 def _plain_data_alone(value: Any) -> bool:
     """Whether *value* is exact dicts, lists and tuples over `_leaves` and
-    nothing else, read in one pass at C speed (`whole_tree_facts`): the walk
-    would find nothing in it, and it is remembered as found complete, so
-    no statement reading it asks again. A million parsed records took a
-    walk of 0.75 s beside a notebook defining any function, and without
-    one a scan of every tracked object each time a statement read them."""
+    nothing else, read in one pass at C speed (``tree_id_leaves`` reading
+    no number and no text; else `whole_tree_facts`): the walk would find
+    nothing in it, and it is remembered as found complete, so no statement
+    reading it asks again. A million parsed records took a walk of 0.75 s
+    beside a notebook defining any function, and without one a scan of
+    every tracked object each time a statement read them; this pass takes
+    0.1 s."""
     if type(value) not in _PLAIN:
         return False
+    if _PLAIN_READ is not None:
+        try:
+            return _PLAIN_READ(value, _leaves(), 0, 0, -1) is not NotImplemented
+        except Exception:  # noqa: BLE001 - not known (no memory): the walk decides
+            return False
     facts = whole_tree_facts(value)
     return facts is not None and facts.types <= _leaves() | _PLAIN
 

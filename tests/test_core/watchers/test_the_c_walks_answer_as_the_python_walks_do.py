@@ -800,3 +800,25 @@ def test_the_tree_id_read_hands_back_what_it_cannot_read():
     ints, texts = read({"a": [5 << 22, 3, "1" * 8, "x" * 40, "x" * 40 + "\n", "1" * 8], 6 << 22: True})
     assert ints == [5 << 22, 6 << 22] or ints == [6 << 22, 5 << 22]
     assert texts == ["a", "1" * 8, "x" * 40 + "\n"]
+
+
+@pytest.mark.parametrize("seed", range(80))
+def test_the_plain_data_read_answers_as_its_facts_do(seed, monkeypatch):
+    rng = random.Random(seed)
+    anchor = Plain()
+    values = [_tree_with_ids(rng, rng.randint(1, 6), anchor) for _ in range(20)]
+    values = [value for value in values if type(value) in (dict, list, tuple)]
+    values.append([{"i": 1, "v": [1, 2.5, None]}, ("a", b"x", datetime.date(2020, 1, 1))])
+    assert values
+
+    def read(kernel):
+        monkeypatch.setattr(hf, "_PLAIN_READ", kernel)
+        return [hf._plain_data_alone(value) for value in values]
+
+    c, python = read(K.tree_id_leaves), read(None)
+    assert c == python
+    assert c[-1] is True
+
+
+def test_the_plain_data_read_reads_no_text():
+    assert K.tree_id_leaves(["a\n" + "1" * 9, 5 << 22, {"k": "x"}], hf._leaves(), 0, 0, -1) == ([], [])

@@ -1330,8 +1330,10 @@ cleanup:
  * its levels: *ints*, the exact ints n with low <= n < high, and *texts*,
  * the exact strs of at most *longest* characters or holding a line break,
  * each once in the order first met (dict.fromkeys). NotImplemented for
- * anything else (a type outside them, deeper, a number out of range of a
- * C long long for the bounds): the Python walk then reads it.
+ * anything else (a type outside them, deeper): the Python walk then reads
+ * it. With *longest* -1 and low == high it reads no number and no text,
+ * and only says whether *value* is such data
+ * (held_functions._plain_data_alone).
  */
 static PyObject *py_tree_id_leaves(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
     if (nargs != 5 || !is_typeset(args[1]) || !PyLong_CheckExact(args[2]) || !PyLong_CheckExact(args[3]) ||
@@ -1342,8 +1344,8 @@ static PyObject *py_tree_id_leaves(PyObject *self, PyObject *const *args, Py_ssi
     long long low = PyLong_AsLongLong(args[2]), high = PyLong_AsLongLong(args[3]);
     Py_ssize_t longest = PyLong_AsSsize_t(args[4]);
     if (PyErr_Occurred()) return NULL;
-    if (longest < 0) {
-        PyErr_SetString(PyExc_ValueError, "longest >= 0");
+    if (longest < -1) {
+        PyErr_SetString(PyExc_ValueError, "longest >= -1");
         return NULL;
     }
     PyObject *value = args[0];
@@ -1400,7 +1402,7 @@ static PyObject *py_tree_id_leaves(PyObject *self, PyObject *const *args, Py_ssi
                         long long x = PyLong_AsLongLongAndOverflow(o, &overflow);
                         if (x == -1 && PyErr_Occurred()) { verdict = -1; goto end; }
                         if (!overflow && x >= low && x < high && PyList_Append(ints, o) < 0) { verdict = -1; goto end; }
-                    } else if (t == &PyUnicode_Type) {
+                    } else if (t == &PyUnicode_Type && longest >= 0) {
                         Py_ssize_t len = PyUnicode_GET_LENGTH(o);
                         int keep = len <= longest;
                         if (!keep) {
