@@ -1548,6 +1548,13 @@ def _probe_round() -> dict | None:
     return r[1]
 
 
+def round_checks() -> dict | None:
+    """What the open round of checks (`probe_round`) found so far, for a
+    check that the round's other checks may ask again (`class_memo`), or
+    None outside one. Emptied when the world epoch moves."""
+    return _probe_round()
+
+
 def _read_in_round(value: Any, read: Any) -> Any:
     """``read(value)``, once a round (`probe_round`) when one is open: a
     watch made in it starts from what the watches checked in it read."""
