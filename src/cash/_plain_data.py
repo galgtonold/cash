@@ -1442,6 +1442,30 @@ def _tree_walk(value: Any, leaves: frozenset):
     raise _NotPlain
 
 
+def whole_tree_facts(value: Any) -> TreeFacts | None:
+    """`tree_facts` of *value* from one walk of all of it, at C speed when
+    the kernels are in, as `tree_walk` walks it but without keeping its
+    levels: inside a `one_look` that already holds facts, `tree_facts`
+    walks in Python to take the parts it knows whole. A value the look is
+    about keeps what this found, as `tree_walk` keeps it."""
+    if type(value) not in TREE_NODES:
+        return None
+    look = _LOOKED.get()
+    name = _name_in(look[0], value) if look is not None else None
+    if name is not None:
+        found, facts = _known_facts(look, value)
+        if found:
+            return facts
+    try:
+        with _gc_paused():
+            facts = _tree_facts(value, None)
+    except (_NotPlain, TypeError):
+        facts = None
+    if name is not None:
+        look[1][id(value)] = (name, facts)
+    return facts
+
+
 def tree_walk(value: Any) -> list | None:
     """The levels of JSON-like *value* over any leaf (`_tree_walk`), or None
     for anything else: walked once for both `tree_size` and `spine_copy`

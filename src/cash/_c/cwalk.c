@@ -1321,6 +1321,119 @@ cleanup:
 }
 
 /*
+ * tree_id_leaves(value, leaves, low, high, longest)
+ *   -> (ints, texts) | NotImplemented
+ *
+ * What identity_holders._plain_tree_without_ids reads of JSON-like *value*
+ * (exact dicts, lists and tuples over *leaves*, keys included, no deeper
+ * than MAX_LEVELS levels of containers), in one pass that makes no list of
+ * its levels: *ints*, the exact ints n with low <= n < high, and *texts*,
+ * the exact strs of at most *longest* characters or holding a line break,
+ * each once in the order first met (dict.fromkeys). NotImplemented for
+ * anything else (a type outside them, deeper, a number out of range of a
+ * C long long for the bounds): the Python walk then reads it.
+ */
+static PyObject *py_tree_id_leaves(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs != 5 || !is_typeset(args[1]) || !PyLong_CheckExact(args[2]) || !PyLong_CheckExact(args[3]) ||
+        !PyLong_CheckExact(args[4])) {
+        PyErr_SetString(PyExc_TypeError, "tree_id_leaves(value, set of types, int, int, int)");
+        return NULL;
+    }
+    long long low = PyLong_AsLongLong(args[2]), high = PyLong_AsLongLong(args[3]);
+    Py_ssize_t longest = PyLong_AsSsize_t(args[4]);
+    if (PyErr_Occurred()) return NULL;
+    if (longest < 0) {
+        PyErr_SetString(PyExc_ValueError, "longest >= 0");
+        return NULL;
+    }
+    PyObject *value = args[0];
+    if (!is_node_type(Py_TYPE(value))) return NOT_IMPL();
+    TypeSet leaves;
+    ts_init(&leaves, args[1]);
+    PyObject *ints = PyList_New(0), *texts = PyDict_New(), *out = NULL;
+    PtrVec level = {0}, next = {0};
+    int verdict = 0; /* 0: read, -1: error, -2: NotImplemented */
+    GCPause gp;
+    gc_pause(&gp);
+    Py_INCREF(value);
+    if (!ints || !texts || pv_push(&level, value) < 0) { verdict = -1; goto end; }
+    for (int depth = 0; level.n; depth++) {
+        if (depth == MAX_LEVELS) { verdict = -2; goto end; }
+        next.n = 0;
+        for (Py_ssize_t i = 0; i < level.n; i++) {
+            PyObject *c = level.v[i];
+            PyObject **items = NULL;
+            Py_ssize_t n = 0, pos = 0;
+            PyObject *k, *v;
+            int is_dict = PyDict_CheckExact(c);
+            if (!is_dict) {
+                n = PySequence_Fast_GET_SIZE(c);
+                items = PySequence_Fast_ITEMS(c);
+            }
+            for (Py_ssize_t j = 0;; j++) {
+                /* a dict's key, then its value; a sequence's items */
+                PyObject *pair[2];
+                int count;
+                if (is_dict) {
+                    if (!PyDict_Next(c, &pos, &k, &v)) break;
+                    pair[0] = k;
+                    pair[1] = v;
+                    count = 2;
+                } else {
+                    if (j >= n) break;
+                    pair[0] = items[j];
+                    count = 1;
+                }
+                for (int at = 0; at < count; at++) {
+                    PyObject *o = pair[at];
+                    PyTypeObject *t = Py_TYPE(o);
+                    if (is_node_type(t)) {
+                        if (is_dict && at == 0) { verdict = -2; goto end; } /* a key is a leaf */
+                        if (pv_push(&next, o) < 0) { verdict = -1; goto end; }
+                        continue;
+                    }
+                    int r = ts_has(&leaves, t);
+                    if (r == -1) { verdict = -1; goto end; }
+                    if (r != 1) { verdict = -2; goto end; }
+                    if (t == &PyLong_Type) {
+                        int overflow = 0;
+                        long long x = PyLong_AsLongLongAndOverflow(o, &overflow);
+                        if (x == -1 && PyErr_Occurred()) { verdict = -1; goto end; }
+                        if (!overflow && x >= low && x < high && PyList_Append(ints, o) < 0) { verdict = -1; goto end; }
+                    } else if (t == &PyUnicode_Type) {
+                        Py_ssize_t len = PyUnicode_GET_LENGTH(o);
+                        int keep = len <= longest;
+                        if (!keep) {
+                            Py_ssize_t f = PyUnicode_FindChar(o, '\n', 0, len, 1);
+                            if (f == -2) { verdict = -1; goto end; }
+                            keep = f >= 0;
+                        }
+                        if (keep && PyDict_SetDefault(texts, o, Py_None) == NULL) { verdict = -1; goto end; }
+                    }
+                }
+            }
+        }
+        PtrVec swap = level;
+        level = next;
+        next = swap;
+    }
+end:
+    if (verdict == 0) {
+        PyObject *keys = PyDict_Keys(texts);
+        if (keys) out = PyTuple_Pack(2, ints, keys);
+        Py_XDECREF(keys);
+    }
+    pv_free(&level);
+    pv_free(&next);
+    Py_XDECREF(ints);
+    Py_XDECREF(texts);
+    Py_DECREF(value);
+    gc_resume(&gp);
+    if (verdict == -2) return NOT_IMPL();
+    return out;
+}
+
+/*
  * held_beyond(value, leaves, limit) -> list | False | None | NotImplemented
  *
  * The walk of `_plain_data.held_beyond_parents` in one pass: the exact
@@ -2846,6 +2959,8 @@ static PyMethodDef cwalk_methods[] = {
     {"tree_facts", (PyCFunction)(void (*)(void))py_tree_facts, METH_FASTCALL,
      "tree_facts(value, leaves, want_walk, top_extra, picks, mode=0) -> (types, held_once, size, nodes, walk) | None | "
      "NotImplemented"},
+    {"tree_id_leaves", (PyCFunction)(void (*)(void))py_tree_id_leaves, METH_FASTCALL,
+     "tree_id_leaves(value, leaves, low, high, longest) -> (ints, texts) | NotImplemented"},
     {"held_beyond", (PyCFunction)(void (*)(void))py_held_beyond, METH_FASTCALL,
      "held_beyond(value, leaves, limit) -> list | False | None | NotImplemented"},
     {"shared_parts", (PyCFunction)(void (*)(void))py_shared_parts, METH_FASTCALL,

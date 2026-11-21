@@ -718,3 +718,85 @@ def test_the_nested_read_hands_back_a_class_of_its_own():
     from cash.notebook.statement import identity_holders as ih
 
     assert K.nested_leaves([("a", Odd())], ih._LEAVES, 8, 18) is NotImplemented
+
+
+def _tree_with_ids(rng: random.Random, depth: int, anchor: object) -> object:
+    """A JSON-like value: dicts, lists and tuples over leaves, now and then
+    a number or a text that is the id() of *anchor*, a number beside one,
+    a long text or one with a line break, a dict keyed by such a number,
+    or something no JSON-like value holds."""
+    roll = rng.random()
+    if depth > 0 and roll < 0.45:
+        kind = rng.choice([list, tuple, dict])
+        if kind is dict:
+            keys = [1, "k", 2.5, None, id(anchor), str(id(anchor)), (1, 2)]
+            return {rng.choice(keys): _tree_with_ids(rng, depth - 1, anchor) for _ in range(rng.randint(0, 3))}
+        return kind(_tree_with_ids(rng, depth - 1, anchor) for _ in range(rng.randint(0, 4)))
+    if roll < 0.46:
+        return Plain()
+    if roll < 0.47:
+        return bytearray(b"x")
+    return rng.choice(
+        [
+            1,
+            -5,
+            True,
+            2**70,
+            (1 << 22) + 16,
+            id(anchor),
+            id(anchor) + 1,
+            hex(id(anchor)),
+            str(id(anchor)),
+            "x" * 30,
+            "line\n" + str(id(anchor)),
+            2.5,
+            None,
+            b"0x7f0000000000",
+            datetime.datetime(2019, 10, 1),
+        ]
+    )
+
+
+@pytest.mark.parametrize("seed", range(80))
+def test_the_tree_id_read_finds_what_the_level_read_finds(seed, monkeypatch):
+    from cash.notebook.statement import identity_holders as ih
+
+    rng = random.Random(seed)
+    anchor = Plain()
+    values = [_tree_with_ids(rng, rng.randint(1, 6), anchor) for _ in range(20)]
+    values = [value for value in values if type(value) in (dict, list, tuple)]
+    assert values
+
+    def read(kernel):
+        monkeypatch.setattr(ih, "_TREE_ID_LEAVES", kernel)
+        return [ih.holds_no_ids(value) for value in values]
+
+    c, python = read(K.tree_id_leaves), read(None)
+    assert c == python
+
+
+def test_the_tree_id_read_finds_both_answers():
+    from cash.notebook.statement import identity_holders as ih
+
+    anchor = Plain()
+    assert ih.holds_no_ids({"a": [1, (2, "x")], "b": None})
+    assert not ih.holds_no_ids({"a": [1, (2, hex(id(anchor)))]})
+
+
+def test_the_tree_id_read_hands_back_what_it_cannot_read():
+    from cash.notebook.statement import identity_holders as ih
+
+    def read(value):
+        return K.tree_id_leaves(value, ih._LEAVES, 1 << 22, 1 << 48, 18)
+
+    assert read([("a", Odd())]) is NotImplemented
+    assert read([{(1, 2): 3}]) is NotImplemented
+    deep: list = []
+    inner = deep
+    for _ in range(20):
+        inner.append([])
+        inner = inner[0]
+    assert read(deep) is NotImplemented
+    ints, texts = read({"a": [5 << 22, 3, "1" * 8, "x" * 40, "x" * 40 + "\n", "1" * 8], 6 << 22: True})
+    assert ints == [5 << 22, 6 << 22] or ints == [6 << 22, 5 << 22]
+    assert texts == ["a", "1" * 8, "x" * 40 + "\n"]

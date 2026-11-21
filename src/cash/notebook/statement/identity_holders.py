@@ -59,7 +59,7 @@ from itertools import chain, compress, repeat
 from typing import Any
 
 from cash import _native
-from cash._plain_data import tree_walk
+from cash._plain_data import tree_walk, whole_tree_facts
 from cash._user_attrs import attribute_or, builtin_base, builtin_items, has_attribute, own_dict
 from cash._weak import callback_of, is_cash_ref
 from cash.closure_sharing import slot_readers
@@ -226,6 +226,9 @@ _flat_kept = [0]
 #: without the C kernels: the addresses, types and nesting of everything
 #: in it, and the value of each str and int.
 _SHAPE_WITNESS = attribute_or(_native.kernels, "shape_witness", None)
+#: ``tree_id_leaves``: the ints and texts of a JSON-like value that could
+#: be an ``id()``, read in one pass (`_plain_tree_without_ids`).
+_TREE_ID_LEAVES = attribute_or(_native.kernels, "tree_id_leaves", None)
 
 #: What `_Walk._read_flat` found in a big container this cell, by the
 #: witness of its content: the numbers it spelled, the lists it counted
@@ -493,6 +496,21 @@ def _plain_tree_without_ids(value: Any) -> bool:
     if type(value) not in _PLAIN_NODES:
         return False
     try:
+        if _TREE_ID_LEAVES is not None:
+            # Its facts (which the look keeps for the checks after this
+            # one) and then its ints and texts, each a pass at C speed that
+            # makes no list of the value's levels.
+            facts = whole_tree_facts(value)
+            if facts is None or not facts.types <= _PLAIN_TREE_TYPES:
+                return False
+            if facts.types.isdisjoint(_ID_LEAVES):
+                return True
+            read = _TREE_ID_LEAVES(value, _LEAVES, _LOWEST_ADDRESS, _HIGHEST_ADDRESS, _LONGEST_NUMBER)
+            if read is not NotImplemented:
+                reader = _Walk({})
+                reader.numbers = set(read[0])
+                reader._read_texts(read[1])
+                return not _candidate_ids(reader.numbers)
         levels = tree_walk(value)
         if levels is None:
             return False
