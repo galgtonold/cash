@@ -4869,6 +4869,11 @@ def _flat_record_class(kind: type, children: list[Any], value_types: tuple[type,
         if own_lookup(kind) or _slot_members(kind):
             return False
         for klass in kind.__mro__[:-1]:
+            if klass is types.SimpleNamespace:
+                # A C class that looks attributes up as Python does, in the
+                # ``__dict__`` its member descriptor hands back: a million
+                # ``SimpleNamespace`` records were walked one at a time.
+                continue
             if not klass.__flags__ & _HEAPTYPE:
                 return False  # a C base may look attributes up its own way
             own = vars(klass)
