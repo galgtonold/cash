@@ -40,6 +40,7 @@ from cash._user_attrs import attribute_or, builtin_items, instance_of, own_dict
 
 from .. import _native, _weak
 from .._memo import CODE_OBJECTS, LruMemo
+from .._plain_data import whole_tree_facts
 from .._type_memo import per_mro, per_type
 from ..install_paths import is_user_code_module
 from ..tracking import io_watch
@@ -727,7 +728,8 @@ def _walk(
     With *check_at*, once that many objects were visited it asks whether a
     notebook function exists at all (`notebook_functions_exist`) and raises
     `_NoNotebookFunctions` when none does: the rest of the walk could find
-    nothing."""
+    nothing. Before it asks, a value of plain data alone
+    (`_plain_data_alone`) ends the walk, found complete with nothing."""
     globals_ids = _globals_ids(namespace)
     functions: dict[int, Any] = {}
     classes: dict[int, type] = {}
@@ -743,6 +745,8 @@ def _walk(
         visited += sum(len(group) for _kind, group in level)
         if check_at is not None and visited > check_at:
             check_at = None
+            if not (functions or classes) and _plain_data_alone(value):
+                return (), (), True
             if not (functions or classes or _anything_to_find(namespace)):
                 raise _NoNotebookFunctions
         if visited > WALK_LIMIT:
@@ -758,10 +762,25 @@ def _walk(
             # Asked before the next level is sorted: a sheet's 400,000
             # cells cost more to dedup than the question does.
             check_at = None
+            if not (functions or classes) and _plain_data_alone(value):
+                return (), (), True
             if not (functions or classes or _anything_to_find(namespace)):
                 raise _NoNotebookFunctions
         level = _next_level(children, seen)
     return tuple(functions.values()), tuple(classes.values()), True
+
+
+def _plain_data_alone(value: Any) -> bool:
+    """Whether *value* is exact dicts, lists and tuples over `_leaves` and
+    nothing else, read in one pass at C speed (`whole_tree_facts`): the walk
+    would find nothing in it, and it is remembered as found complete, so
+    no statement reading it asks again. A million parsed records took a
+    walk of 0.75 s beside a notebook defining any function, and without
+    one a scan of every tracked object each time a statement read them."""
+    if type(value) not in _PLAIN:
+        return False
+    facts = whole_tree_facts(value)
+    return facts is not None and facts.types <= _leaves() | _PLAIN
 
 
 def _infrastructure() -> list[Any]:
