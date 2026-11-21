@@ -1193,9 +1193,9 @@ def _as_json(value: Any) -> Any:
 #: Records waiting to be written: a process that never makes a cache dir
 #: keeps only the most recent.
 _MAX_PENDING = 256
-#: Records worked out in this process and not written yet: (root, entry,
-#: the folder its lookup read, or None when there was none yet).
-_PENDING: list[tuple[tuple[str, tuple[str, ...], str], dict, Any]] = []
+#: Records worked out in this process and not written yet: (the store
+#: folder of the call that worked it out, root, entry).
+_PENDING: list[tuple[Any, tuple[str, tuple[str, ...], str], dict]] = []
 #: Records worked out before they are written together (and the rest at
 #: exit): a file written per report cost more than the walks it spared.
 _FLUSH_EVERY = 64
@@ -1215,7 +1215,12 @@ def save(func: Callable[..., Any], report: PurityReport, walk: Any, seconds: flo
     out now, written in batches and at exit (`flush`), once the cache dir
     exists."""
     root = _root_path(func)
-    if root is None or not scan_store.enabled():
+    if root is None:
+        return
+    # The folder of the call walking *func*, taken now: when the record is
+    # written (at exit above all) no call runs (`scan_store.target_dir`).
+    directory = scan_store.target_dir()
+    if directory is None:
         return
     text = _text(func)
     if text is None:
@@ -1230,11 +1235,7 @@ def save(func: Callable[..., Any], report: PurityReport, walk: Any, seconds: flo
     if seconds is not None and seconds < clock() - start + _READ_COST:
         STATS["cheap"] += 1
         return
-    # Kept where its lookup read (`load`, in this same context): at exit no
-    # call runs, and the folder then is the default instance's, not that
-    # of the ``Cash(cache_dir=...)`` whose call looked it up and will look
-    # it up again in the next process.
-    _PENDING.append((root, entry, scan_store.store_dir()))
+    _PENDING.append((directory, root, entry))
     del _PENDING[:-_MAX_PENDING]
     if len(_PENDING) >= _FLUSH_EVERY:
         flush()
@@ -1285,26 +1286,22 @@ def _entry(func: Any, report: PurityReport, walk: Any, text: str) -> dict:
 
 
 def flush(*, at_exit: bool = False) -> None:
-    """Write the records worked out so far, once the cache dir exists."""
+    """Write the records worked out so far, each into the folder of the call
+    that worked it out, once its cache dir exists; the others stay held
+    (`scan_store.written_to`)."""
     if not _PENDING:
         return
     try:
-        directory = scan_store.exit_store_dir() if at_exit else scan_store.store_dir()
+        where = {d: scan_store.written_to(d, at_exit=at_exit) for d in {d for d, _, _ in _PENDING}}
     except Exception:  # noqa: BLE001 - at exit: a store that cannot be found keeps nothing
-        directory = None
+        return
+    pending = [p for p in _PENDING if where[p[0]] is not None]
+    _PENDING[:] = [p for p in _PENDING if where[p[0]] is None]
     by_root: dict[tuple, list[dict]] = {}
-    held = []
-    for root, entry, where in _PENDING:
-        # Where its lookup read, while that cache dir is still there.
-        if where is None or not scan_store.still_there(where):
-            where = directory
-        if where is None:
-            held.append((root, entry, None))
-            continue
-        by_root.setdefault((root, where), []).append(entry)
-    _PENDING[:] = held
-    for (root, where), new in by_root.items():
-        file = _file(root, where)
+    for directory, root, entry in pending:
+        by_root.setdefault((where[directory], root), []).append(entry)
+    for (directory, root), new in by_root.items():
+        file = _file(root, directory)
         # Most recently worked out last: a full file drops the oldest.
         entries = [e for e in _entries(file, root) if e not in new]
         entries = (entries + new)[-_MAX_ENTRIES:]

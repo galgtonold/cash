@@ -67,7 +67,7 @@ from disk is your own and behaves as the one your code built.
 
 ## An argument that does not change the result
 
-<!-- claim: cash/core.py:Cash.cache @ef0577dc -->
+<!-- claim: cash/core.py:Cash.cache @2248de10 -->
 Every argument is part of the key, so a logger, a progress callback or a
 `verbose=` flag splits the cache: `fit(data, verbose=True)` misses after
 `fit(data)` ran. Leave such a parameter out with `ignore=["verbose"]` or a

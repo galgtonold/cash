@@ -19,6 +19,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
 
 from . import _log, _weak
+from ._active import ACTIVE_CONFIG
 from ._console import encodable
 from .analytics import AnalyticsManager
 from .backends import CacheBackend
@@ -725,71 +726,79 @@ class Cash:
         if again is not None:
             return again
 
-        cf = CachedFunction(
-            func,
-            func_key(func),
-            dynamic_depends_on=dynamic_depends_on,
-            ttl=ttl,
-            cache_if=cache_if,
-            chunk_max_items=chunk_max_items,
-            chunk_max_bytes=chunk_max_bytes,
-            purity="strict" if strict else "silent" if assume_safe else "warn",
-            frozen=frozen,
-            allow_random=allow_random,
-            declared_files=_declared_files(file_depends_on),
-        )
-        # Checked before anything is registered: a mistake raises here.
-        cf.arg_key = arg_key_spec(func, cf.signature, key, ignore)
-        func_name = cf.name
-        previous = self._other_instance_before(func, options)
-        if previous is not None:
-            self._rebind_instance(cf, previous)
-        else:
-            for dep in self._registry.register(cf, depends_on):
-                warn_inert_dependency(self._notices, func_name, dep)
-        self._pins.pin_own_source(func, self.source_hashes[func_name], quiet=previous is not None)
-
-        # Async generators are not cached; warn once and return unwrapped.
-        if inspect.isasyncgenfunction(func):
-            self._notices.warn_once(
-                CashCacheIneffectiveWarning,
-                func_name,
-                "",
-                f"@cash.cache on {func_name}: async generators are not cached "
-                f"in this release, so the function was returned unwrapped.",
-                code="CACHE-ASYNC-GENERATOR",
-                fix="move the work into a plain async def that returns a list "
-                "and cache that, or leave the generator undecorated and "
-                "cache the expensive step inside it.",
-            )
-            return func
-
-        # Unseeded-randomness check. Deliberately here and not in the
-        # wrapper: it is a pure function of the source, so it runs ONCE per
-        # decorated function and adds nothing to the per-call path. Placed after
-        # the async-generator early return because that path is not cached at
-        # all, and the hazard being warned about is a frozen cached value.
-        self._rng.warn_unseeded_randomness(func, func_name, allow_random)
-        if cf.arg_key is not None and cf.arg_key.key_fn is not None:
-            self._check_key_function(cf)
-
-        # Watch reads from now, not from the first miss: a memo the cached
-        # function will use is usually filled before it is first called
-        # (`main()` logging its settings), and a read nobody saw is an input
-        # no entry records. Not when caching is off: that promises
-        # nothing is patched or analysed.
-        if not self.config.disable:
-            try:
-                install_read_watch()
-            except Exception:  # the first miss installs them anyway
-                logger.debug("[CORE] could not install the read watch at decoration", exc_info=True)
-
-        wrapper = self._wrappers.wrap(cf)
+        # Under this instance's settings, as its calls run (`ACTIVE_CONFIG`):
+        # what decorating works out from the source (its digest, its
+        # analysis) is stored in this instance's cache dir, not the
+        # default instance's.
+        token = ACTIVE_CONFIG.set(self.config)
         try:
-            self._decorations[func_name] = (cf, options, _weak.ref(wrapper))
-        except TypeError:
-            pass  # not weak-referenceable: decorated anew each time
-        return wrapper
+            cf = CachedFunction(
+                func,
+                func_key(func),
+                dynamic_depends_on=dynamic_depends_on,
+                ttl=ttl,
+                cache_if=cache_if,
+                chunk_max_items=chunk_max_items,
+                chunk_max_bytes=chunk_max_bytes,
+                purity="strict" if strict else "silent" if assume_safe else "warn",
+                frozen=frozen,
+                allow_random=allow_random,
+                declared_files=_declared_files(file_depends_on),
+            )
+            # Checked before anything is registered: a mistake raises here.
+            cf.arg_key = arg_key_spec(func, cf.signature, key, ignore)
+            func_name = cf.name
+            previous = self._other_instance_before(func, options)
+            if previous is not None:
+                self._rebind_instance(cf, previous)
+            else:
+                for dep in self._registry.register(cf, depends_on):
+                    warn_inert_dependency(self._notices, func_name, dep)
+            self._pins.pin_own_source(func, self.source_hashes[func_name], quiet=previous is not None)
+
+            # Async generators are not cached; warn once and return unwrapped.
+            if inspect.isasyncgenfunction(func):
+                self._notices.warn_once(
+                    CashCacheIneffectiveWarning,
+                    func_name,
+                    "",
+                    f"@cash.cache on {func_name}: async generators are not cached "
+                    f"in this release, so the function was returned unwrapped.",
+                    code="CACHE-ASYNC-GENERATOR",
+                    fix="move the work into a plain async def that returns a list "
+                    "and cache that, or leave the generator undecorated and "
+                    "cache the expensive step inside it.",
+                )
+                return func
+
+            # Unseeded-randomness check. Deliberately here and not in the
+            # wrapper: it is a pure function of the source, so it runs ONCE per
+            # decorated function and adds nothing to the per-call path. Placed after
+            # the async-generator early return because that path is not cached at
+            # all, and the hazard being warned about is a frozen cached value.
+            self._rng.warn_unseeded_randomness(func, func_name, allow_random)
+            if cf.arg_key is not None and cf.arg_key.key_fn is not None:
+                self._check_key_function(cf)
+
+            # Watch reads from now, not from the first miss: a memo the cached
+            # function will use is usually filled before it is first called
+            # (`main()` logging its settings), and a read nobody saw is an input
+            # no entry records. Not when caching is off: that promises
+            # nothing is patched or analysed.
+            if not self.config.disable:
+                try:
+                    install_read_watch()
+                except Exception:  # the first miss installs them anyway
+                    logger.debug("[CORE] could not install the read watch at decoration", exc_info=True)
+
+            wrapper = self._wrappers.wrap(cf)
+            try:
+                self._decorations[func_name] = (cf, options, _weak.ref(wrapper))
+            except TypeError:
+                pass  # not weak-referenceable: decorated anew each time
+            return wrapper
+        finally:
+            ACTIVE_CONFIG.reset(token)
 
     def _decorated_before(self, func: Callable[..., Any], options: tuple) -> Callable[..., Any] | None:
         """The wrapper an earlier ``cache(func, ...)`` of this very function,

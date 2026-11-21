@@ -202,7 +202,7 @@ argument back. See [Silencing one code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/core.py:Cash.cache @ef0577dc -->
+<!-- claim: cash/core.py:Cash.cache @2248de10 -->
 **What happened.** You put `@cash.cache` on an async generator (an
 `async def` that `yield`s). cash does not cache those, so it returned your
 function unwrapped.

@@ -58,13 +58,12 @@ STATS = {"loaded": 0, "computed": 0, "stored": 0, "refused": 0, "verified": 0}
 _LOCK = threading.RLock()
 #: kind -> {digest: answer}: what this process read or worked out.
 _SLOTS: dict[str, dict[str, Any]] = {}
-#: kind -> digests worked out here and not written yet.
-_PENDING: dict[str, set[str]] = {}
+#: (the store folder of the call that worked them out, kind) -> digests
+#: worked out here and not written yet: at exit no call runs, so the folder
+#: is taken when they are (`scan_store.target_dir`).
+_PENDING: dict[tuple[Any, str], set[str]] = {}
 #: kind -> digests used in this process (kept last, so first, when full).
 _USED: dict[str, set[str]] = {}
-#: kind -> the folder its file was read from: what this process works out
-#: goes back there, where the next one reads it (`flush`).
-_DIRS: dict[str, Any] = {}
 
 
 class StoredTextMismatch(AssertionError):
@@ -98,7 +97,6 @@ def _slot(kind: str) -> dict[str, Any] | None:
         if directory is None:
             return None
         slot = _SLOTS[kind] = _read_file(directory, kind)
-        _DIRS[kind] = directory
     return slot
 
 
@@ -163,9 +161,11 @@ def kept(
     except (ValueError, TypeError):
         STATS["refused"] += 1
         return answer
+    directory = scan_store.target_dir()
     with _LOCK:
         slot[digest] = encoded
-        _PENDING.setdefault(kind, set()).add(digest)
+        if directory is not None:
+            _PENDING.setdefault((directory, kind), set()).add(digest)
         _USED.setdefault(kind, set()).add(digest)
         due = sum(len(p) for p in _PENDING.values()) >= _FLUSH_EVERY
     if due:
@@ -175,28 +175,21 @@ def kept(
 
 def flush(*, at_exit: bool = False) -> None:
     """Write what this process worked out since the last flush, merged into
-    what is on disk now. Best effort.
-
-    Each kind goes back to the folder its file was read from (`_DIRS`): a
-    kind first asked for in a call of a ``Cash(cache_dir=...)`` reads that
-    instance's folder, and at exit, with no call running, the folder was
-    the default instance's when one existed; the next process read the
-    user's folder again, found nothing, and worked out the same answers
-    (about 580 of them for an lmfit fit's first call)."""
+    what is on disk now, each into the folder of the call that worked it
+    out once its cache dir exists; the others stay held
+    (`scan_store.written_to`). Best effort."""
     with _LOCK:
         if not _PENDING:
             return
         pending = dict(_PENDING)
         _PENDING.clear()
-        try:
-            default = scan_store.exit_store_dir() if at_exit else scan_store.store_dir()
-        except Exception:  # noqa: BLE001 - at exit: a store that cannot be found keeps nothing
-            default = None
-        for kind, digests in pending.items():
-            directory = _DIRS.get(kind)
-            if directory is None or not scan_store.still_there(directory):
-                directory = default
+        for (target, kind), digests in pending.items():
+            try:
+                directory = scan_store.written_to(target, at_exit=at_exit)
+            except Exception:  # noqa: BLE001 - at exit: a store that cannot be found keeps nothing
+                return
             if directory is None:
+                _PENDING.setdefault((target, kind), set()).update(digests)
                 continue
             mine = _SLOTS.get(kind, {})
             merged = _read_file(directory, kind)
@@ -216,7 +209,6 @@ def forget() -> None:
         _SLOTS.clear()
         _PENDING.clear()
         _USED.clear()
-        _DIRS.clear()
 
 
 atexit.register(flush, at_exit=True)

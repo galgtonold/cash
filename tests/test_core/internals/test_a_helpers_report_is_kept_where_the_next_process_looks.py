@@ -11,9 +11,10 @@ ever being read back, so every process worked them out again:
   of the user's and a default cache folder some other script had made,
   the reports went there, while the next process looked up the reports
   of what a call reaches (the methods of its arguments, and the classes
-  those make) in the user's folder. Each report now goes to the folder
-  its own lookup read, and each kind of text answer to the folder its
-  file was read from.
+  those make) in the user's folder. Each report and text answer now goes
+  to the folder of the call that worked it out, the one its lookup read
+  (`scan_store.target_dir`); at exit, one whose cache folder is gone goes
+  to the folder there is (`scan_store.written_to`).
 * A method with a private name (``def __set_expression``) is held by its
   class under its mangled name. A report whose walk visited one was never
   stored: no name led to it.
@@ -120,7 +121,7 @@ def test_at_exit_a_report_goes_to_the_folder_its_lookup_read(tmp_path, monkeypat
     used = tmp_path / "user-cache" / "analysis" / default.name
     kept, moved = ("m", ("kept",), "f.py:1"), ("m", ("moved",), "f.py:2")
     gone = tmp_path / "gone-cache" / "analysis" / default.name
-    monkeypatch.setattr(report_store, "_PENDING", [(kept, {"text": "a"}, used), (moved, {"text": "b"}, gone)])
+    monkeypatch.setattr(report_store, "_PENDING", [(used, kept, {"text": "a"}), (gone, moved, {"text": "b"})])
     report_store.flush(at_exit=True)
     assert report_store._entries(report_store._file(kept, used), kept) == [{"text": "a"}]
     assert not report_store._file(kept, default).exists()
