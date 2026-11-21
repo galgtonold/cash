@@ -58,6 +58,7 @@ __all__ = [
     "save_record",
     "scan",
     "status",
+    "still_there",
     "store_dir",
     "write_json",
 ]
@@ -219,10 +220,14 @@ def exit_store_dir() -> Path | None:
     if directory is not None or not _LAST_DIR:
         return directory
     last = _LAST_DIR[-1]
-    if _setting().lower() in ("1", "true", "yes", "on") and not os.path.isdir(last.parent.parent):
-        # The cache dir was removed: the store never makes one of its own.
-        return None
-    return last
+    return last if still_there(last) else None
+
+
+def still_there(directory: Path) -> bool:
+    """Is *directory*, a folder `store_dir` gave earlier, still one to
+    write to? Not once its cache dir was removed: the store never makes one
+    of its own."""
+    return _setting().lower() not in ("1", "true", "yes", "on") or os.path.isdir(directory.parent.parent)
 
 
 def enabled() -> bool:
