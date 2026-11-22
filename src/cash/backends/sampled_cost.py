@@ -17,6 +17,12 @@ its tables (`many_frames_cost`): each costs a fixed fraction of a
 millisecond to copy into the RAM tier and to pickle, whatever its bytes,
 so 6,000 three-row frames built in 1.2 s took 1.1 s to copy and 1.15 s to
 pickle, against a byte size the model reads as free.
+
+A big list or dict of other Python objects -- ``SimpleNamespace`` records,
+instances of a notebook's class, dicts holding sets -- is priced by a
+sample of its items too (`many_objects_cost`): the RAM tier copies it by a
+pickle round trip, an object at a time, so 1.5 million records built in
+1.5 s took 8 s to copy, against 0.07 s the byte model predicted.
 """
 
 from __future__ import annotations
@@ -27,10 +33,10 @@ import time
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
-from .. import kept_state
+from .. import _plain_data, kept_state
 from .._user_attrs import from_family
 
-__all__ = ["SampledCost", "many_frames_cost", "sampled_cost"]
+__all__ = ["SampledCost", "many_frames_cost", "many_objects_cost", "sampled_cost"]
 
 #: Containers with fewer items than this are not sampled: small enough to be
 #: priced by their bytes, or looked into when they are a payload's dicts.
@@ -60,6 +66,8 @@ class SampledCost(NamedTuple):
     load: float
     copy: float = 0.0
     items: int = 0
+    #: What the items are: ``"tables"`` or ``"objects"``.
+    unit: str = "tables"
 
 
 def sampled_cost(value: Any) -> SampledCost | None:
@@ -69,21 +77,35 @@ def sampled_cost(value: Any) -> SampledCost | None:
     # make thousands of containers, and each collection they set off walks
     # the notebook's whole heap -- 0.5 s of a 0.07 s measurement next to two
     # million parsed objects.
-    return _paused_gc(value, frames_only=False)
+    return _paused_gc(value, only=None)
 
 
 def many_frames_cost(value: Any) -> SampledCost | None:
     """The predicted cost of storing *value*'s lists of many small pandas
     tables (`_frames_cost`): pickling, loading and copying them into the RAM
     tier, measured on a sample. None when it holds no such list."""
-    return _paused_gc(value, frames_only=True)
+    return _paused_gc(value, only=_FRAMES)
 
 
-def _paused_gc(value: Any, *, frames_only: bool) -> SampledCost | None:
+def many_objects_cost(value: Any) -> SampledCost | None:
+    """The predicted cost of storing *value*'s big lists, tuples and dicts
+    of Python objects (`_objects_cost`): pickling, loading and copying them
+    into the RAM tier, measured on a sample. None when it holds none: one
+    of JSON-like data the tier copies a container at a time, or of fewer
+    than `_MIN_ITEMS` items, is priced by its bytes."""
+    return _paused_gc(value, only=_OBJECTS)
+
+
+#: What `_cost` prices: only lists of small tables, or only big containers of objects.
+_FRAMES = "frames"
+_OBJECTS = "objects"
+
+
+def _paused_gc(value: Any, *, only: str | None) -> SampledCost | None:
     enabled = gc.isenabled()
     gc.disable()
     try:
-        total = _cost(value, 0, frames_only)
+        total = _cost(value, 0, only)
     finally:
         if enabled:
             gc.enable()
@@ -92,10 +114,10 @@ def _paused_gc(value: Any, *, frames_only: bool) -> SampledCost | None:
     return total
 
 
-def _cost(value: Any, depth: int, frames_only: bool = False) -> SampledCost | None:
+def _cost(value: Any, depth: int, only: str | None = None) -> SampledCost | None:
     kind = type(value)
     if kind is dict and len(value) <= _SMALL_DICT and depth < _MAX_DEPTH:
-        found = [part for item in value.values() if (part := _cost(item, depth + 1, frames_only)) is not None]
+        found = [part for item in value.values() if (part := _cost(item, depth + 1, only)) is not None]
         if not found:
             return None
         return SampledCost(
@@ -103,18 +125,21 @@ def _cost(value: Any, depth: int, frames_only: bool = False) -> SampledCost | No
             sum(part.load for part in found),
             sum(part.copy for part in found),
             sum(part.items for part in found),
+            found[0].unit,
         )
-    if kind in (list, tuple, dict) and len(value) >= _MIN_FRAMES:
-        frames = _frames_cost(list(value.values()) if kind is dict else value, copy=frames_only)
-        if frames is not None or frames_only:
+    if kind in (list, tuple, dict) and len(value) >= _MIN_FRAMES and only != _OBJECTS:
+        frames = _frames_cost(list(value.values()) if kind is dict else value, copy=only == _FRAMES)
+        if frames is not None or only == _FRAMES:
             return frames
-    elif frames_only:
+    elif only == _FRAMES:
         return None
     if kind in (list, tuple, dict) and len(value) >= _MIN_ITEMS:
         items = list(value.items()) if kind is dict else value
         step = max(1, len(items) // _SAMPLE_ITEMS)
+        if only == _OBJECTS:
+            return _objects_cost(items[::step], len(items))
         return _measure(items[::step], len(items) / len(items[::step]))
-    return _frame_cost(value)
+    return None if only == _OBJECTS else _frame_cost(value)
 
 
 def _frame_cost(value: Any) -> SampledCost | None:
@@ -182,6 +207,36 @@ def _frames_cost(items: list | tuple, *, copy: bool) -> SampledCost | None:
         except Exception:  # noqa: BLE001 - not priced: the store finds out
             return None
     return measured._replace(copy=copied, items=len(items))
+
+
+def _objects_cost(sample: list | tuple, count: int) -> SampledCost | None:
+    """What storing a container of *count* items costs, by *sample*, an
+    evenly spread sample of them, when they are objects the RAM tier copies
+    by a pickle round trip (an object at a time): pickling and loading the
+    sample, and copying it as that tier's store copies (`_safe_deep_copy`),
+    scaled by the count. None for JSON-like data (`_plain_data.is_tree`),
+    which the tier copies a container at a time, or for what the copy cannot
+    make (the store finds out)."""
+    if _plain_data.is_tree(list(sample)):
+        return None
+    scale = count / len(sample)
+    measured = _measure(sample, scale)
+    if measured is None:
+        return None
+    from .memory_backend import InMemoryBackend
+
+    fell_back: list[bool] = []
+    by_deepcopy: list[bool] = []
+    try:
+        start = time.perf_counter()
+        # As a store copies it (``record_cells`` given); thrown away.
+        InMemoryBackend._safe_deep_copy(sample, record_cells={}, by_reference=fell_back, by_deepcopy=by_deepcopy)
+        copied = (time.perf_counter() - start) * scale
+    except Exception:  # noqa: BLE001 - not priced: the store finds out
+        return None
+    if fell_back or by_deepcopy:
+        return None
+    return measured._replace(copy=copied, items=count, unit="objects")
 
 
 def _measure(

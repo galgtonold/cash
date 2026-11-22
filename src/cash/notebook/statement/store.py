@@ -25,7 +25,7 @@ from cash._memo import PRODUCER_SNAPSHOTS, LruMemo
 from cash._user_attrs import attribute_or, instance_of
 from cash.backends import memory_backend
 from cash.backends.persistence_policy import PersistencePolicy, restore_kind
-from cash.backends.sampled_cost import SampledCost, many_frames_cost
+from cash.backends.sampled_cost import SampledCost, many_frames_cost, many_objects_cost
 from cash.backends.store_notices import DECORATED_CALLS_FIELD
 from cash.closure_sharing import closure_check_budget, closures_sharing
 from cash.diagnostics import log_diagnostic, warn_diagnostic
@@ -938,18 +938,18 @@ class StatementStore:
                 self._priced = None
 
     def _frames_cost(self, values: dict[str, Any]) -> SampledCost | None:
-        """`many_frames_cost` of *values*, measured once for the same
-        objects of the same statement: asked before its walks
-        (`priced_refusal`) and again by its store, which holds them alive
-        in between, so an ``id`` is still theirs."""
+        """`many_frames_cost` of *values*, or else `many_objects_cost`,
+        measured once for the same objects of the same statement: asked
+        before its walks (`priced_refusal`) and again by its store, which
+        holds them alive in between, so an ``id`` is still theirs."""
         run = self._pricing
         if run is None:
-            return many_frames_cost(values)
+            return many_frames_cost(values) or many_objects_cost(values)
         ids = tuple(sorted((name, id(value)) for name, value in values.items()))
         priced = self._priced
         if priced is not None and priced[0] is run and priced[1] == ids:
             return priced[2]
-        sampled = many_frames_cost(values)
+        sampled = many_frames_cost(values) or many_objects_cost(values)
         self._priced = (run, ids, sampled)
         return sampled
 
@@ -965,7 +965,10 @@ class StatementStore:
         their bytes: a loop building 6,000 small frames in 1.38 s was
         copied into the RAM tier for 0.55 s and pickled for 0.36 s more,
         that pickling holding the interpreter lock while the next cell ran,
-        which took 1.1 s for its 0.34 s. The copy counts when the first tier
+        which took 1.1 s for its 0.34 s. Likewise for big lists and dicts of
+        other Python objects (`many_objects_cost`), which the RAM tier
+        copies an object at a time: 1.5 million ``SimpleNamespace``
+        records built in 1.5 s took 8 s to copy. The copy counts when the first tier
         keeps values in RAM, the pickling when a tier writes them out, and
         the restore is the first tier's: a RAM hit copies every table again,
         a disk hit loads them."""
@@ -984,7 +987,7 @@ class StatementStore:
         if not policy.refuses_store(execution_time, copy_s=copy, dump_s=dump, restore_s=restore):
             return None
         reason = (
-            f"Storing its {sampled.items:,} tables would take ~{copy + 2 * dump:.2f}s with the next "
+            f"Storing its {sampled.items:,} {sampled.unit} would take ~{copy + 2 * dump:.2f}s with the next "
             f"statement's wait, and a hit ~{restore:.2f}s, vs {execution_time:.2f}s compute "
             f"— use @cash:persist to force"
         )

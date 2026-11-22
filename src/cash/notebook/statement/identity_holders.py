@@ -94,6 +94,41 @@ _WEAK_CONTAINERS = (weakref.WeakValueDictionary, weakref.WeakKeyDictionary, weak
 _LEAVES = frozenset(IMMUTABLE_LEAF_TYPES)
 _DICT = operator.attrgetter("__dict__")
 _PLAIN_NODES = frozenset({dict, list, tuple})
+#: The containers `_Walk._read_records` reads through, by exact type.
+_RECORD_NODES = frozenset({dict, list, tuple, set, frozenset})
+#: Of those, the ones no weak reference can point at.
+_UNREFERABLE = frozenset({dict, list, tuple})
+#: Fewest items of a container `_Walk._read_records` reads once however
+#: often it is held.
+_FLAT_RECORDS_MIN = 32
+#: ``Py_TPFLAGS_HEAPTYPE``: a class defined in Python.
+_HEAPTYPE = 1 << 9
+
+
+def _plain_user_class(kind: type) -> bool:
+    """Whether `_Walk._open` reads an object of *kind*, a class of the
+    user's, by its ``__dict__``'s values alone, the dict Python's own slot
+    holds: no ``__slots__``, no ``__getattribute__``, ``__getattr__``,
+    ``__class__`` or ``__dict__`` of its own, nothing but classes defined
+    in Python above it but ``object``, and none of the kinds `_open` asks
+    about first."""
+    try:
+        if issubclass(kind, (*_REFERENCES, *_WEAK_CONTAINERS, weakref.finalize, *_BY_REFERENCE)):
+            return False
+        if slot_readers(kind) or attribute_or(kind, "__getattribute__") is not object.__getattribute__:
+            return False
+        for klass in kind.__mro__[:-1]:
+            if not klass.__flags__ & _HEAPTYPE:
+                return False
+            own = vars(klass)
+            if "__class__" in own or "__getattr__" in own or "__slots__" in own:
+                return False
+            held = own.get("__dict__")
+            if held is not None and type(held) is not types.GetSetDescriptorType:
+                return False
+        return True
+    except Exception:  # noqa: BLE001 - a class that cannot be asked is walked an object at a time
+        return False
 
 
 def _value_kinds() -> tuple[frozenset[type], frozenset[type]]:
@@ -1174,6 +1209,8 @@ class _Walk:
         levels: int | None = None,
     ) -> None:
         self.user_kinds = user_kinds
+        #: Per class, `_plain_record`'s answer.
+        self.record_kinds: dict[type, bool] = {}
         #: What the value's own walk reads as a leaf (`_value_kinds`), and
         #: which of those are numpy's integers, read as the ``int`` each
         #: is. Looking through the notebook (*quiet*), a library's scalar
@@ -1425,6 +1462,8 @@ class _Walk:
                     return
                 # What each holds is looked through, within the budget:
                 # ``reg = {id(objs[7].child): ...}``.
+            elif self._read_records(items):
+                return
         into.extend(items)
 
     def _read_flat(self, items: list[Any]) -> bool:
@@ -1601,6 +1640,86 @@ class _Walk:
         self._unseen.append(nodes)
         self._read_leaves(leaves, leaf_kinds)
         return True
+
+    def _read_records(self, items: list[Any]) -> bool:
+        """`_read_nested` for a big container of records: objects of a class
+        the walk reads by its attributes alone (`_plain_record`), and
+        dicts, lists, tuples, sets and frozensets, over leaves, read a level
+        at a time. A list of a million ``SimpleNamespace`` records, or of
+        dicts each holding a set, was opened an object at a time until the
+        share check's time ran out, and the statement ran every time. Each
+        object read is seen and counts against the budget, as walking it
+        would; False, with nothing seen, for anything else, or for one a
+        weak reference points at (`targets`), which the walk keeps."""
+        level: list[Any] = items
+        nodes: list[Any] = []
+        leaves: list[Any] = []
+        leaf_kinds: set[type] = set()
+        for _ in range(_NESTED_LEVELS):
+            kinds = set(map(type, level))
+            if kinds <= _LEAVES:
+                leaves.extend(level)
+                leaf_kinds |= kinds
+                break
+            inner_kinds = kinds - _LEAVES
+            if not all(kind in _RECORD_NODES or self._plain_record(kind) for kind in inner_kinds):
+                return False
+            if inner_kinds == kinds:
+                inner = level
+            else:
+                is_node = list(map(inner_kinds.__contains__, map(type, level)))
+                inner = list(compress(level, is_node))
+                leaves.extend(compress(level, map(operator.not_, is_node)))
+                leaf_kinds |= kinds - inner_kinds
+            # A long container held more than once is read once, as the
+            # walk opens it once.
+            long = [item for item in inner if type(item) in _RECORD_NODES and len(item) >= _FLAT_RECORDS_MIN]
+            if len(set(map(id, long))) < len(long):
+                inner = list({id(item): item for item in inner}.values())
+            del long
+            parts: list[Any] = []
+            for kind in inner_kinds:
+                group = inner if len(inner_kinds) == 1 else [item for item in inner if type(item) is kind]
+                if self.targets is not None and kind not in _UNREFERABLE and any(map(weakref.getweakrefcount, group)):
+                    return False
+                if kind is dict:
+                    parts.append(chain.from_iterable(group))
+                    parts.append(chain.from_iterable(map(dict.values, group)))
+                elif kind in _RECORD_NODES:
+                    parts.append(chain.from_iterable(group))
+                else:
+                    # Python's own slot, read at C speed, as `_lone_records` reads it.
+                    states = list(map(_DICT, group))
+                    if set(map(type, states)) != {dict}:
+                        return False
+                    parts.append(chain.from_iterable(map(dict.values, states)))
+            nodes.extend(inner)
+            level = list(chain.from_iterable(parts))
+        else:
+            return False
+        if len(nodes) > self.budget and not self._more(len(nodes) - self.budget):
+            # As `_read_nested` tells the walk's cut.
+            if len(set(map(id, nodes)) - self.seen_all()) > self.budget:
+                self.cut = True
+                return True
+            return False
+        self.budget -= len(nodes)
+        self._unseen.append(nodes)
+        self._read_leaves(leaves, leaf_kinds)
+        return True
+
+    def _plain_record(self, kind: type) -> bool:
+        """Whether `_open` reads an object of *kind* by its ``__dict__``'s
+        values alone, and Python's own slot holds that dict: a
+        ``SimpleNamespace``, or a class of the user's code with no slots,
+        no lookup, ``__class__`` or ``__dict__`` of its own and no C base
+        but ``object``."""
+        known = self.record_kinds.get(kind)
+        if known is None:
+            known = self.record_kinds[kind] = kind is types.SimpleNamespace or (
+                self._users(kind) and _plain_user_class(kind)
+            )
+        return known
 
     def seen_all(self) -> set[int]:
         """*seen*, with the containers `_read_nested` read."""

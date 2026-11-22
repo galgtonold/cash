@@ -74,8 +74,12 @@ def test_the_statement_is_refused_with_a_warning_after_one_check(cash_magics, ca
     cash_instance.config.min_execution_time_to_cache_seconds = 0.0
     cash_instance.config.call_cost_floor_seconds = 0.0
     run_cash_cell(cash_magics, f"from fractions import Fraction\nN = {N}")
-    from cash.notebook.statement import processor
+    from cash.notebook.statement import processor, store
 
+    # Priced as worth storing: 300,000 objects built this quickly cost
+    # more to store than to build (`many_objects_cost`), and a value
+    # refused for that is never share-checked.
+    monkeypatch.setattr(store, "many_objects_cost", lambda value: None)
     monkeypatch.setattr(processor, "share_check_budget", lambda cost: 600.0)
     # The share check's time spent by the first `_MAX_SEEN` objects: within
     # it, the walk would go on and read the list whole.

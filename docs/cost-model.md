@@ -215,7 +215,7 @@ flowchart TB
     W -->|Yes| DISK
 ```
 
-<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.refuses_store @d4b6402c, cash/backends/sampled_cost.py:_MIN_FRAMES == 500 -->
+<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.refuses_store @d4b6402c, cash/backends/sampled_cost.py:_MIN_FRAMES == 500, cash/backends/sampled_cost.py:_MIN_ITEMS == 20_000 -->
 1. **Store it at all?** cash predicts how long reading the value back from the
    first tier (memory, by default) would take, and refuses when that exceeds
    both `min_cache_fixed_budget_seconds` and 80% of the compute time. In memory
@@ -226,7 +226,10 @@ flowchart TB
    saves: copying them, plus writing them twice over (the write holds the
    interpreter while the next statement runs, which waits as long), against
    running the loop again less restoring them (memory copies each table
-   back). The badge says so, and the loop runs again.
+   back). A list or dict of tens of thousands of other Python objects
+   (records, instances of your classes, dicts holding sets) is priced the
+   same way, from a sample of its items: memory copies such objects one at a
+   time. The badge says so, and the loop runs again.
 2. **Write it to disk?** Only when the compute time is over
    0.1 s, reading the value back from disk beats computing it by
    `min_cache_savings_pct`, and one re-run saves more than the write takes
