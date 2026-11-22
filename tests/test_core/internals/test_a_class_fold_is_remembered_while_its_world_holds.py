@@ -167,7 +167,24 @@ def test_a_class_digest_moves_with_an_edit(mod, edit):
         assert class_digest(mod.Sampler) != before
 
 
+class _StillWorld:
+    """The C world watch with its epoch held still: a write anywhere in the
+    process (another thread of the test worker, on Windows CI) moved the
+    real one between two digests, and the second was taken anew."""
+
+    def __init__(self, real):
+        self._real = real
+
+    def world_epoch(self):
+        return 1
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
 def test_a_class_digest_is_served_and_a_sabotaged_watch_would_keep_it(mod, monkeypatch):
+    # Undone with the sabotage below: the last digest sees the real epoch.
+    monkeypatch.setattr(class_memo, "_cw", _StillWorld(class_memo._cw))
     class_digest(mod.Sampler)
     before = class_memo.STATS["served"]
     stale = class_digest(mod.Sampler)
