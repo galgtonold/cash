@@ -53,6 +53,8 @@ def test_every_noqa_gives_a_reason():
     found = []
     for path in _tracked_python_files():
         source = path.read_text(encoding="utf-8")
+        if "noqa" not in source.lower():
+            continue  # nothing to tokenize: most files hold no noqa
         for n, comment in _unexplained(source):
             found.append(f"{path.relative_to(REPO_ROOT).as_posix()}:{n}: {comment}")
     assert not found, "Say why the rule does not apply, as `# noqa: CODE - reason`:\n" + "\n".join(found)

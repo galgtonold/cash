@@ -101,14 +101,23 @@ def installed_tool(tmp_path_factory):
     """A venv with cash and a console-script package installed into it."""
     base = tmp_path_factory.mktemp("consolescript")
     venv = base / "venv"
-    made = run_tied([sys.executable, "-m", "venv", str(venv)], timeout=180)
+    # cash's dependencies come from the suite's own environment, and cash
+    # is built without its C extension: the arms ask where an installed
+    # entry point caches, which neither changes, and resolving the
+    # dependencies again and compiling the extension took most of the
+    # 17-30 s this fixture cost each worker that ran one of its tests.
+    made = run_tied([sys.executable, "-m", "venv", "--system-site-packages", str(venv)], timeout=180)
     assert made.returncode == 0, made.stderr[-2000:]
     bindir = venv / ("Scripts" if os.name == "nt" else "bin")
     python = bindir / ("python.exe" if os.name == "nt" else "python")
 
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
     dist = _write_distribution(base / "dist")
-    install = run_tied([python, "-m", "pip", "install", "-q", repo_root, dist], timeout=480)
+    install = run_tied(
+        [python, "-m", "pip", "install", "-q", "--no-deps", repo_root, dist],
+        timeout=480,
+        env={**os.environ, "CASH_PURE_PYTHON": "1"},
+    )
     if install.returncode != 0:
         pytest.skip(f"could not build the probe distribution:\n{install.stderr[-2000:]}")
 

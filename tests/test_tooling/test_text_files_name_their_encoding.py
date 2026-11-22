@@ -41,9 +41,12 @@ def test_every_read_text_and_write_text_names_an_encoding():
     tracked = subprocess.run(
         ["git", "ls-files", "*.py"], cwd=REPO, capture_output=True, text=True, check=True
     ).stdout.split()
+    sources = ((path, (REPO / path).read_text(encoding="utf-8")) for path in tracked)
     missing = [
         f"{path}:{line}"
-        for path in tracked
-        for line in _calls_without_encoding((REPO / path).read_text(encoding="utf-8"))
+        for path, source in sources
+        # Parsed only where a call can be: most files make neither.
+        if "read_text" in source or "write_text" in source
+        for line in _calls_without_encoding(source)
     ]
     assert not missing, "pass encoding='utf-8' at:\n" + "\n".join(missing)
