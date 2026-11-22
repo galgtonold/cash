@@ -104,7 +104,7 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
     - **A file it or an input read** ([files](#files), below).
     - **An environment variable it reads** by name, in its own text or in a
       function or method of yours it calls, defined in a cell or a module.
-    <!-- claim: cash/tracking/reference_states.py:changed @1949e458, cash/notebook/statement/processor.py:StatementProcessor._note_reference_states @24a22d30, cash/tracking/reference_states.py:for_call @fafe1936, cash/tracking/lookups_seen.py:_on_call @c61001a7, cash/tracking/lookups_seen.py:_note_reads @025b3e9f, cash/tracking/lookups_seen.py:_note_globals @c4fe6755, cash/tracking/lookups_seen.py:_warn_unseen_once @71cd55a2 -->
+    <!-- claim: cash/tracking/reference_states.py:changed @1949e458, cash/notebook/statement/processor.py:StatementProcessor._note_reference_states @24a22d30, cash/tracking/reference_states.py:for_call @fafe1936, cash/tracking/lookups_seen.py:_on_call @c61001a7, cash/tracking/lookups_seen.py:_note_reads @7e6205ac, cash/tracking/lookups_seen.py:_note_globals @77198b83, cash/tracking/lookups_seen.py:_warn_unseen_once @71cd55a2 -->
     - **An object that pickles by reference** (by its name, as a logger
       pickles as `getLogger(name)`) held by a value it reads, or by a global
       a function it calls reads, or by a value it reads was made from. Its
@@ -115,7 +115,12 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
       (`logging.getLogger("app").level`), and one its code reads through a
       module: an attribute of the module (`logging.root`), of a class or an
       object it holds, or an item of a dict, list or tuple held there
-      (`logging.Logger.manager.loggerDict`). Where this cannot be watched,
+      (`logging.Logger.manager.loggerDict`). Where code decides what such
+      an attribute is, it is followed: a property, method or
+      `__getattr__` of yours reading an object or class a module holds has
+      what that object or class holds looked through, and a library's
+      property has what it returns checked; a chain going on past what
+      compiled code decides runs every time. Where this cannot be watched,
       [NOTEBOOK-LOOKUPS-UNSEEN](../warnings.md#notebook-lookups-unseen)
       says so once
       ([what is not seen](../known-limitations.md#an-object-found-by-a-lookup-cash-does-not-see)).

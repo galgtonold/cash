@@ -12,6 +12,7 @@ when its cell ran again, leaving the level as it was.
 
 from __future__ import annotations
 
+import _thread
 import functools
 import logging
 import logging.handlers
@@ -120,6 +121,77 @@ HOLDER = types.SimpleNamespace(log=LOGGER)
 PARTIAL = functools.partial(int)
 PARTIAL.log = LOGGER
 
+
+class Decides:
+    """A class whose own ``__getattribute__`` decides what a read finds."""
+
+    def __getattribute__(self, name):
+        return object.__getattribute__(self, name)
+
+
+class Propertied:
+    """The logger behind a property, a method, and a class attribute a
+    method reads."""
+
+    LOG = LOGGER
+
+    def __init__(self):
+        self._held = {"log": LOGGER}
+
+    @property
+    def log(self):
+        return self._held["log"]
+
+    @property
+    def level(self):
+        return self._held["log"].level
+
+    def level_now(self):
+        return self._held["log"].level
+
+    def class_level(self):
+        return self.LOG.level
+
+
+class Hooked:
+    """The logger handed over by a ``__getattr__``."""
+
+    def __init__(self):
+        self._held = {"log": LOGGER}
+
+    def __getattr__(self, name):
+        return object.__getattribute__(self, "_held")[name]
+
+
+class Lazy(type):
+    """A metaclass whose property hands the logger over."""
+
+    @property
+    def log(cls):
+        return LOGGER
+
+
+class Classy(metaclass=Lazy):
+    pass
+
+
+class Slotted:
+    __slots__ = ("log",)
+
+
+class Mapping_(dict):
+    """A ``dict`` subclass holding the logger as an attribute."""
+
+
+PROPERTIED = Propertied()
+HOOKED = Hooked()
+DECIDING = Decides()
+DECIDING.log = LOGGER
+SLOTTED = Slotted()
+SLOTTED.log = LOGGER
+MAPPING = Mapping_()
+MAPPING.log = LOGGER
+
 LOOKUP_SETUP = (
     "import logging\n"
     f"import {__name__} as here\n"
@@ -148,6 +220,15 @@ LOOKUP_SETUP = (
         f"seen = logging.Logger.manager.loggerDict[{NAME!r}].level",
         f"seen = logging.Logger.manager.loggerDict.get({NAME!r}).level",
         f"seen = [lg.level for n, lg in logging.Logger.manager.loggerDict.items() if n == {NAME!r}][0]",
+        "seen = here.PROPERTIED.log.level",
+        "seen = here.PROPERTIED.level",
+        "seen = here.PROPERTIED.level_now()",
+        "seen = here.PROPERTIED.class_level()",
+        "seen = here.HOOKED.log.level",
+        "seen = here.DECIDING.log.level",
+        "seen = here.Classy.log.level",
+        "seen = here.SLOTTED.log.level",
+        "seen = here.MAPPING.log.level",
     ],
     ids=[
         "in-the-statement",
@@ -160,13 +241,25 @@ LOOKUP_SETUP = (
         "the-registry-s-item",
         "the-registry-s-get",
         "the-registry-iterated",
+        "a-property-s-getter",
+        "a-property-reading-it",
+        "a-method-reading-it",
+        "a-method-reading-its-class-s",
+        "a-getattr",
+        "an-own-getattribute",
+        "a-metaclass-s-property",
+        "a-slot",
+        "a-dict-subclass-s-attribute",
     ],
 )
 def test_a_reader_looking_the_logger_up_runs_again(cash_magics, cash_instance, reader):
     """No input holds the logger: the statement, or a function it calls
     (from a builtin's code too), finds it by its name as it runs, or reads
     it through a module: an attribute of it, of a class or an object it
-    holds, or an item of the registry of loggers, read by C."""
+    holds, or an item of the registry of loggers, read by C. Or code of
+    yours hands it over, reading an object a module holds: a property's
+    getter, a method, a ``__getattr__``, a ``__getattribute__``, a
+    metaclass's property; or a slot holds it."""
     cash_instance.config.min_execution_time_to_cache_seconds = 0.0
     cash_instance.config.call_cost_floor_seconds = 0.0
     cells = [
@@ -202,13 +295,6 @@ def test_a_cell_setting_the_level_the_logger_had_runs_again(cash_magics, cash_in
         run_cash_cell(cash_magics, cell, cells=cells)
     assert logging.getLogger(NAME).level == 10
     assert cash_magics.shell.user_ns["seen"] == 10
-
-
-class Decides:
-    """A class whose own ``__getattribute__`` decides what a read finds."""
-
-    def __getattribute__(self, name):
-        return object.__getattribute__(self, name)
 
 
 def test_a_c_class_s_own_lookup_is_object_s_only_when_it_is():
@@ -262,13 +348,27 @@ def _codes(caught):
     return [getattr(w.message, "code", None) for w in caught]
 
 
+class Hoarding:
+    """An object holding more than cash looks through, the logger last."""
+
+    def __init__(self):
+        self.rows = BIG
+
+    def level_now(self):
+        return self.rows[-1].level
+
+
+HOARDING = Hoarding()
+
+
 @needs_monitoring
-def test_a_container_too_big_to_look_through_is_never_served(cash_magics, cash_instance):
-    """An item read by C from a container too big to look through: the
-    statement runs every time, and a warning says why, rather than be
-    served what it read before."""
+@pytest.mark.parametrize("reader", ["seen = here.BIG[-1].level", "seen = here.HOARDING.level_now()"])
+def test_a_container_too_big_to_look_through_is_never_served(cash_magics, cash_instance, reader):
+    """An item read by C from a container too big to look through, or by a
+    method of yours from an object holding one: the statement runs every
+    time, and a warning says why, rather than be served what it read
+    before."""
     cash_instance.config.min_execution_time_to_cache_seconds = 0.0
-    reader = "seen = here.BIG[-1].level"
     cells = [LOOKUP_SETUP, reader, f"# elsewhere\nlogging.getLogger({NAME!r}).setLevel(30)", f"# again\n{reader}"]
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
@@ -276,6 +376,59 @@ def test_a_container_too_big_to_look_through_is_never_served(cash_magics, cash_i
             run_cash_cell(cash_magics, cell, cells=cells)
     assert cash_magics.shell.user_ns["seen"] == 30
     assert "NOTEBOOK-ITEMS-UNREAD" in _codes(caught)
+
+
+#: An object of a C class whose own lookup is not ``object``'s: what it
+#: hands over is decided by compiled code.
+LOCAL = _thread._local()
+LOCAL.log = LOGGER
+
+
+@needs_monitoring
+def test_a_chain_past_what_compiled_code_decides_is_never_served(cash_magics, cash_instance, monkeypatch):
+    """``here.LOCAL.log.level``: what the thread-local hands over cannot be
+    looked at without running its code, and the chain goes on past it. The
+    statement runs every time, and a warning says why."""
+    from cash.tracking import lookups_seen
+
+    monkeypatch.setattr(lookups_seen, "_UNFOLLOWED_SAID", set())  # said once a process
+    cash_instance.config.min_execution_time_to_cache_seconds = 0.0
+    reader = "seen = here.LOCAL.log.level"
+    cells = [LOOKUP_SETUP, reader, f"# elsewhere\nlogging.getLogger({NAME!r}).setLevel(30)", f"# again\n{reader}"]
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+    assert cash_magics.shell.user_ns["seen"] == 30
+    said = [str(w.message) for w in caught if getattr(w.message, "code", None) == "NOTEBOOK-LOOKUPS-UNSEEN"]
+    assert any("here.LOCAL.log" in message for message in said), said
+
+
+@needs_monitoring
+@pytest.mark.parametrize(
+    "reader",
+    [
+        "seen = here.PROPERTIED.level",
+        "seen = here.PROPERTIED.level_now()",
+        "seen = here.SLOTTED.log.level",
+        "seen = here.LOGGER.manager.disable",
+        "import pandas as pd\nseen = pd.options.display.max_rows",
+    ],
+    ids=["a-property", "a-method", "a-slot", "a-library-s-property", "pandas-options"],
+)
+def test_a_read_code_decides_is_served_while_nothing_changed(cash_magics, cash_instance, reader):
+    """Followed through the code that decides it, a read is served on the
+    next run all, as nothing it reads changed."""
+    if "pandas" in reader:
+        pytest.importorskip("pandas")
+    cash_instance.config.min_execution_time_to_cache_seconds = 0.0
+    cells = [LOOKUP_SETUP, reader]
+    for _ in range(2):
+        for cell in cells:
+            run_cash_cell(cash_magics, cell, cells=cells)
+    # The read, last: an import before it runs every time.
+    statuses = [str(s["status"]) for s in cash_magics._last_cell_metrics["statements"]]
+    assert statuses[-1] == "RESTORED", statuses
 
 
 @needs_monitoring
