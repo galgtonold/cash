@@ -46,7 +46,7 @@ from .cache_restore import CacheRestorer
 from .control_simulation import ControlSimulation
 from .file_writers import LazyReadPaths
 from .loop_rules import LoopRules
-from .mismatch_classifier import MismatchClassifier
+from .mismatch_classifier import MismatchClassifier, import_only
 from .read_scope import ReadScope
 from .reexecution_planner import ReexecutionPlanner
 from .simulated_callables import SimulatedCallables
@@ -744,6 +744,7 @@ class NotebookSimulator:
                         }
                     )
                     run = planner.complete_later_producers(run, trace)
+                    run = _readers_of_rebound(trace, run, restored_by_index)
                     if len(run) == size:
                         break
                 unkept = []
@@ -1108,3 +1109,29 @@ def _held_by_modules(
         ):
             out |= group & broken
     return out
+
+
+def _readers_of_rebound(trace: list, run: list[int], restored_by_index: Mapping[int, dict]) -> list[int]:
+    """*run*, with each statement of a cell-run plan that reads a name an
+    earlier statement of the plan binds again: one that runs, or one
+    restored, whose restore binds a new object to it.
+
+    Its value is current by lineage, but it was made from the object the
+    name held before: ``key = id(df)`` or ``held = {id(df): 'df'}`` below a
+    restored ``df = load()`` kept the ``id()`` of the frame the restore
+    replaced, where plain Python, running the cell, keys the new one. Run,
+    it reads the object the cell binds now (and is served its own entry
+    when it has one). An import binds the module it bound before, so it
+    rebinds nothing."""
+    rebinding = set(run) | set(restored_by_index)
+    added = set(run)
+    for i, entry in enumerate(trace):
+        if i in added or i in restored_by_index:
+            continue
+        for name in entry.inputs or ():
+            maker = latest_producer(trace, name, before=i)
+            if maker is not None and maker in rebinding and not import_only(trace[maker].stmt_code):
+                added.add(i)
+                rebinding.add(i)
+                break
+    return sorted(added)
