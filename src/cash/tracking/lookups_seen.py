@@ -27,6 +27,7 @@ import base64
 import builtins
 import contextlib
 import dis
+import functools
 import logging
 import sys
 import threading
@@ -595,7 +596,10 @@ def _attribute(value: Any, attr: str) -> Any:
         return vars(value).get(attr, _MISSING)
     if issubclass(type(value), type):
         return _class_attribute(value, attr) if type(value) is type else _MISSING
-    if any("__getattribute__" in _CLASS_DICT(base) for base in mro_of(type(value)) if base is not object):
+    if any(
+        _CLASS_DICT(base).get("__getattribute__", _OBJECTS_LOOKUP) not in _GENERIC_GETATTRIBUTE
+        for base in mro_of(type(value))
+    ):
         return _MISSING
     found = _class_attribute(type(value), attr)
     if found is not _MISSING and _is_descriptor(found):
@@ -624,6 +628,21 @@ def _is_descriptor(value: Any) -> bool:
 _MISSING = object()
 #: A class's ``__dict__`` as ``type`` reads it: no metaclass's code runs.
 _CLASS_DICT = type.__dict__["__dict__"].__get__
+#: The ``__getattribute__`` slot wrappers that are ``object``'s lookup: a C
+#: class that sets it explicitly holds a wrapper of its own for it, which
+#: reads attributes as ``object`` does (``SimpleNamespace`` below Python
+#: 3.13, ``functools.partial``). Any other decides what a read finds.
+_OBJECTS_LOOKUP = object.__getattribute__
+_GENERIC_GETATTRIBUTE = frozenset(
+    {
+        _OBJECTS_LOOKUP,
+        *(
+            _CLASS_DICT(kind)["__getattribute__"]
+            for kind in (types.SimpleNamespace, functools.partial)
+            if "__getattribute__" in _CLASS_DICT(kind)
+        ),
+    }
+)
 
 #: ``code -> ((global name, (attribute, ...)), ...)`` (`_global_reads`).
 _READS: weakref.WeakKeyDictionary[types.CodeType, tuple[tuple[str, tuple[str, ...]], ...]] = _weak.WeakKeyDictionary()

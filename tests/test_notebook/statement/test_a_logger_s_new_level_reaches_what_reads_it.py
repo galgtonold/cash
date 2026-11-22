@@ -12,6 +12,7 @@ when its cell ran again, leaving the level as it was.
 
 from __future__ import annotations
 
+import functools
 import logging
 import logging.handlers
 import sys
@@ -114,6 +115,10 @@ class Holder:
 
 
 HOLDER = types.SimpleNamespace(log=LOGGER)
+#: An object of a C class whose ``__getattribute__``, set explicitly, is
+#: ``object``'s (as ``SimpleNamespace``'s is below Python 3.13).
+PARTIAL = functools.partial(int)
+PARTIAL.log = LOGGER
 
 LOOKUP_SETUP = (
     "import logging\n"
@@ -139,6 +144,7 @@ LOOKUP_SETUP = (
         "seen = max(map(level_of_item, [0]))",
         "seen = here.Holder.LOG.level",
         "seen = here.HOLDER.log.level",
+        "seen = here.PARTIAL.log.level",
         f"seen = logging.Logger.manager.loggerDict[{NAME!r}].level",
         f"seen = logging.Logger.manager.loggerDict.get({NAME!r}).level",
         f"seen = [lg.level for n, lg in logging.Logger.manager.loggerDict.items() if n == {NAME!r}][0]",
@@ -150,6 +156,7 @@ LOOKUP_SETUP = (
         "called-back-by-a-builtin",
         "a-class-attribute",
         "an-object-s-attribute",
+        "a-c-object-s-attribute",
         "the-registry-s-item",
         "the-registry-s-get",
         "the-registry-iterated",
@@ -195,6 +202,53 @@ def test_a_cell_setting_the_level_the_logger_had_runs_again(cash_magics, cash_in
         run_cash_cell(cash_magics, cell, cells=cells)
     assert logging.getLogger(NAME).level == 10
     assert cash_magics.shell.user_ns["seen"] == 10
+
+
+class Decides:
+    """A class whose own ``__getattribute__`` decides what a read finds."""
+
+    def __getattribute__(self, name):
+        return object.__getattribute__(self, name)
+
+
+def test_a_c_class_s_own_lookup_is_object_s_only_when_it_is():
+    """A C class that sets ``object``'s lookup as its own holds a wrapper
+    for it in its ``__dict__``: an attribute of one is read as ``object``
+    reads it. One that looks up otherwise, or a class of Python's with a
+    ``__getattribute__``, is not read."""
+    import _thread
+
+    from cash.tracking import lookups_seen
+
+    held = Decides()
+    held.log = LOGGER
+    local = _thread._local()
+    local.log = LOGGER
+    assert lookups_seen._attribute(HOLDER, "log") is LOGGER
+    assert lookups_seen._attribute(PARTIAL, "log") is LOGGER
+    assert lookups_seen._attribute(held, "log") is lookups_seen._MISSING
+    assert lookups_seen._attribute(local, "log") is lookups_seen._MISSING
+
+
+@pytest.mark.skipif(sys.implementation.name != "cpython", reason="reads CPython's type struct")
+def test_each_lookup_taken_as_object_s_is_object_s():
+    """Each ``__getattribute__`` wrapper taken as ``object``'s lookup wraps
+    ``PyObject_GenericGetAttr``: read from its class's ``tp_getattro``."""
+    import _thread
+
+    ctypes = pytest.importorskip("ctypes")
+    from cash.tracking import lookups_seen
+
+    generic = ctypes.cast(ctypes.pythonapi.PyObject_GenericGetAttr, ctypes.c_void_p).value
+    size = ctypes.sizeof(ctypes.c_void_p)
+
+    def words(kind):
+        return (ctypes.c_void_p * (type.__basicsize__ // size)).from_address(id(kind))
+
+    at = list(words(object)).index(generic)  # tp_getattro: object's is the generic one
+    assert words(_thread._local)[at] != generic  # a C class looking up otherwise
+    for wrapper in lookups_seen._GENERIC_GETATTRIBUTE:
+        assert words(wrapper.__objclass__)[at] == generic, wrapper
 
 
 #: More items than cash looks through for an object found by its name
