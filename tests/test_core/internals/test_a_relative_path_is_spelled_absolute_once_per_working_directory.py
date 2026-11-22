@@ -22,7 +22,10 @@ def test_a_spelling_is_made_once_and_again_in_another_directory(tmp_path, monkey
     real = os.path.abspath
 
     def counted(path):
-        made.append(path)
+        # Only this path's spellings: cash spells its own files absolute
+        # too, as a memo cleared between tests fills again.
+        if os.fspath(path).endswith("x.csv"):
+            made.append(path)
         return real(path)
 
     monkeypatch.setattr(file_dep_snapshot.os.path, "abspath", counted)

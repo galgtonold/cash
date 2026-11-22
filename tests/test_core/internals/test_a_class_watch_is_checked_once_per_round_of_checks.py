@@ -76,8 +76,20 @@ def test_within_a_round_a_watch_that_held_is_not_read_again(mod, full_checks):
     assert len(full_checks) == 8, "outside a round a check took another's word"
 
 
+def _first_proof(cls):
+    """The class's watch, asked again if a write elsewhere in the process
+    (another thread of the test worker) moved the world epoch while it was
+    scanned: that scan gives no proof, and the next one does. The world is
+    not held still here, as this test needs it to move."""
+    for _ in range(5):
+        proof = class_memo.proof_for(cls, "digest")
+        if proof is not None:
+            return proof
+    return None
+
+
 def test_a_moved_world_is_read_again_within_the_round(mod):
-    proof = class_memo.proof_for(mod.First, "digest")
+    proof = _first_proof(mod.First)
     assert proof is not None
     with hit_memo.probe_round():
         assert class_memo.proof_for(mod.First, "digest") is proof

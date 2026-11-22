@@ -98,8 +98,10 @@ def forget_cash_memos() -> None:
 
 def forget_ipython_outputs() -> None:
     history = sys.modules.get("IPython.core.history")
-    if history is not None:
-        history.HistoryManager.outputs.clear()
+    # IPython 8 keeps no output history on the class.
+    outputs = getattr(getattr(history, "HistoryManager", None), "outputs", None)
+    if outputs is not None:
+        outputs.clear()
 
 
 def forget_test_instance(item: Any) -> None:

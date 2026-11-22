@@ -82,12 +82,15 @@ def test_the_per_call_line_and_the_summary_count_the_same(tmp_path, caplog):
     _warm_up.cache_clear()
     c = Cash(cache_dir=str(tmp_path / "cache"), verbose=True)
     work = _decorate(c)
-    for x in (0, 1):
-        work(x)
+    work(0)  # pays the warm-up
+    warm = _timed(work, 1)
     with caplog.at_level(logging.INFO, logger="cash.calls"):
         work(0)
     hit_lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("HIT")]
     assert len(hit_lines) == 1
     saved = work.cache_info()["total_time_saved"]
     assert f"saved {saved:.2f}s" in hit_lines[0], (hit_lines, saved)
-    assert saved < WARM_UP / 2
+    # Credited what a warm call took, as measured here (a sleep overshoots
+    # on a busy macOS runner), not the warm-up.
+    assert saved <= warm * 1.05, (saved, warm)
+    assert saved < WARM_UP, saved
