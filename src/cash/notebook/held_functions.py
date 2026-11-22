@@ -20,11 +20,21 @@ The walk also notes the classes of the user's own modules it meets
 ``mylib.Order`` runs ``Order.total`` and the module's ``rate()`` when a
 statement calls ``o.total()``, though no lineage of ``orders`` passes
 through ``mylib``. The key names that code (``cache_key``).
+
+A value with no lineage (``records`` after the class of its objects was
+defined again: ``StatementProcessor._forget_holders_of_replaced_classes``)
+has no memo to answer from, and the upstream check, the key, the reads log
+and the checks before a statement runs each asked for its walk: six walks
+of 1.5 million objects for ``n = len(records)``. While a share is open
+(`walks_shared`), the first walk answers the others; it closes before the
+statement's code runs, and whatever else may change the value in place
+(a restore, a statement re-run above the cell) drops it.
 """
 
 from __future__ import annotations
 
 import collections
+import contextlib
 import dataclasses
 import functools
 import gc
@@ -52,11 +62,16 @@ __all__ = [
     "EXISTENCE_CHECK_AT",
     "WALK_LIMIT",
     "Held",
+    "close_walk_share",
     "defined_again_held",
+    "drop_shared_walks",
     "held_notebook_code",
     "held_notebook_code_at",
     "module_class_objects_exist",
     "notebook_functions_exist",
+    "open_walk_share",
+    "walks_paused",
+    "walks_shared",
 ]
 
 #: Objects one walk visits before it gives up. A model, a figure, a frame
@@ -184,6 +199,87 @@ def _unheld(kept: Any) -> tuple[tuple[Any, ...], tuple[Any, ...], bool] | None:
 _WEAK = "weak"
 
 
+#: ``id(value) -> (value, the ids of the namespace's dicts, what the walk
+#: found)`` for the values without a lineage walked while the share is open
+#: (`walks_shared`). The value itself is kept, so the id names no other
+#: object while it is; and the entries go whenever cash counts the holders
+#: of the user's objects (`drop_shared_walks`), where one would read as
+#: another holder.
+_SHARED: dict[int, tuple[Any, frozenset[int], Any]] = {}
+#: Whether `_SHARED` is open.
+_SHARING = [False]
+
+
+def open_walk_share() -> None:
+    """Let the walks that follow share what they find, until
+    `close_walk_share`. Opened already, what it holds is kept: the upstream
+    check opens it for the cell, and the first statement's analyses reuse
+    the walks the check made, as nothing has run between them."""
+    if not _SHARING[0]:
+        _SHARED.clear()
+    _SHARING[0] = True
+
+
+def close_walk_share() -> None:
+    """Stop sharing walks, and forget the shared ones: code of the user's is
+    about to run, or something else may change a value in place."""
+    _SHARING[0] = False
+    _SHARED.clear()
+
+
+def drop_shared_walks() -> None:
+    """Forget the walks shared so far, keeping the share open: a value may
+    have changed in place (a restore), or the holders of the user's
+    objects are about to be counted."""
+    _SHARED.clear()
+
+
+@contextlib.contextmanager
+def walks_shared() -> Iterator[None]:
+    """The analyses of one statement before it runs share their walks
+    (`open_walk_share`); the share closes when the block ends, or before,
+    when the statement's code is about to run (`close_walk_share`)."""
+    open_walk_share()
+    try:
+        yield
+    finally:
+        close_walk_share()
+
+
+@contextlib.contextmanager
+def walks_paused() -> Iterator[None]:
+    """No walk shares within the block; what the share held before it is
+    kept, for its caller to keep or drop by what the block did. A share
+    opened within it starts empty."""
+    was = _SHARING[0]
+    _SHARING[0] = False
+    try:
+        yield
+    finally:
+        _SHARING[0] = was
+
+
+def _shared_walk(value: Any, namespace: Mapping[str, Any]) -> Any:
+    """`_walk` of *value*, once while the share is open: what it found, or
+    `_NONE_EXISTED` when it stopped as no notebook function existed."""
+    if not _SHARING[0]:
+        return _walked(value, namespace)
+    where = _globals_ids(namespace)
+    kept = _SHARED.get(id(value))
+    if kept is not None and kept[0] is value and kept[1] == where:
+        return kept[2]
+    found = _walked(value, namespace)
+    _SHARED[id(value)] = (value, where, found)
+    return found
+
+
+def _walked(value: Any, namespace: Mapping[str, Any]) -> Any:
+    try:
+        return _walk(value, namespace, check_at=EXISTENCE_CHECK_AT)
+    except _NoNotebookFunctions:
+        return _NONE_EXISTED
+
+
 def held_notebook_code(value: Any, namespace: Mapping[str, Any], lineage: str | None = None) -> Held:
     """The code of the notebook functions *value* holds, and of the methods
     of the notebook classes it holds or is an object of.
@@ -213,8 +309,11 @@ def held_notebook_code(value: Any, namespace: Mapping[str, Any], lineage: str | 
         if lineage:
             _BY_LINEAGE[lineage] = _held(((value,), (), True))
         return Held((value.__code__,))
-    memo_key = (id(value), lineage) if lineage else None
-    found = _unheld(_MEMO.get(memo_key)) if memo_key is not None else None
+    if not lineage:
+        found = _shared_walk(value, namespace)
+        return _NOTHING if found is _NONE_EXISTED else _held_of(found, namespace)
+    memo_key = (id(value), lineage)
+    found = _unheld(_MEMO.get(memo_key))
     if found is _NONE_EXISTED:
         if not _anything_to_find(namespace):
             return _NOTHING
@@ -223,13 +322,10 @@ def held_notebook_code(value: Any, namespace: Mapping[str, Any], lineage: str | 
         try:
             found = _walk(value, namespace, check_at=EXISTENCE_CHECK_AT)
         except _NoNotebookFunctions:
-            if memo_key is not None:
-                _MEMO[memo_key] = _BY_LINEAGE[memo_key[1]] = _NONE_EXISTED
+            _MEMO[memo_key] = _BY_LINEAGE[lineage] = _NONE_EXISTED
             return _NOTHING
-        if memo_key is not None:
-            _MEMO[memo_key] = _held(found)
-    if memo_key is not None:
-        _BY_LINEAGE[memo_key[1]] = _held(found)
+        _MEMO[memo_key] = _held(found)
+    _BY_LINEAGE[lineage] = _held(found)
     return _held_of(found, namespace)
 
 
