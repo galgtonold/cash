@@ -530,6 +530,10 @@ def _held_by_the_notebook(parts: set[int], refs: list[Any], namespace: Mapping[s
     ids = _Ids(parts)
     if parts.intersection(v for v in namespace.values() if type(v) is int):
         return _BY_ID
+    # A variable bound to the text itself (``key = hex(id(df))``): a
+    # container's are compared below, a variable's only here.
+    if texts.among([v for v in namespace.values() if type(v) is str]):
+        return _BY_ID
     # One variable at a time, so that a refusal can name the variable whose
     # value it could not look through.
     for name, value in list(namespace.items()):
