@@ -45,7 +45,11 @@ library's counter its source shows only names what it makes. What is kept:
     it held as first read is a ``"k"`` item, each one the call added is
     either not there or what the call put there, and ``"w"`` (a JSON list)
     holds every key it may have. A new process that has not filled it yet,
-    or has filled it the same, is served; one holding another key is not;
+    or has filled it the same, is served; one holding another key is not.
+    ``("a", module, "a.b", fingerprint)``, with no keys: an attribute of a
+    per-thread holder (``threading.local``) the thread did not have when
+    the call first read it, served while the thread has none or holds
+    what the call left there (`ABSENT`: while it has none);
 ``("x", module, "a.b", [process, fingerprint, compiled module, name])``
     a table a compiled module filled as it loaded (numba's ``c_helpers``,
     its C helpers' addresses), or an entry of one: compared in the process
@@ -63,6 +67,13 @@ library's counter its source shows only names what it makes. What is kept:
     state kept in C that no chain reaches: NumPy's error handling
     (``np.errstate``, ``np.seterr``) for a call that reached NumPy,
     ``decimal``'s context for one that reached ``decimal``.
+
+A chain passing a per-thread holder (``threading.local``) reads its
+attribute as the thread reading it sees it, in its per-thread ``__dict__``:
+scikit-learn's ``_threadlocal.global_config``, which ``set_config`` and
+``config_context`` change and ``_global_config`` never sees. A thread that
+has not set one yet reads the library's default for it where
+`THREAD_DEFAULTS` names one, else reads it as absent.
 
 A lookup follows each chain again and serves the entry only while every one
 ends on the same fingerprint (`changed`). A chain ending on anything else (a
@@ -115,6 +126,53 @@ _STDLIB = frozenset(getattr(sys, "stdlib_module_names", ())) | {"builtins", "__f
 _SPECIAL_TOPS = frozenset({"numpy", "decimal", "_decimal", "_pydecimal"})
 
 _lock = threading.Lock()
+
+#: Per-thread holders (``threading.local``, and the pure-Python one of
+#: ``_threading_local``): a library keeps settings in one so each thread
+#: has its own (scikit-learn's ``_threadlocal.global_config``, which
+#: ``set_config`` and ``config_context`` change). An attribute of one is
+#: read as the thread reading it sees it, in its per-thread ``__dict__``.
+_LOCALS: tuple[type, ...] = (threading.local,)
+try:
+    import _threading_local  # noqa: PLC2701 - the pure-Python threading.local, a class to recognise
+
+    _LOCALS = (threading.local, _threading_local.local)
+except ImportError:  # pragma: no cover - always there in CPython
+    pass
+
+#: What a thread that has not set a per-thread holder's attribute yet reads
+#: there, as the library makes it on first use: ``(module, holder,
+#: attribute)`` -> the global of *module* it is a copy of. Curated from each
+#: library's source. A thread without the attribute reads as holding that
+#: global, so a call that read it on a thread before the library made it is
+#: served on one that has it the same, and in a new process. Any other
+#: attribute a thread did not have is read as absent (see `build`).
+THREAD_DEFAULTS: dict[tuple[str, str, str], str] = {
+    # sklearn/_config.py, ``_get_threadlocal_config``: ``if not
+    # hasattr(_threadlocal, "global_config"): _threadlocal.global_config =
+    # _global_config.copy()``; ``set_config`` and ``config_context`` change
+    # that copy in place.
+    ("sklearn._config", "_threadlocal", "global_config"): "_global_config",
+}
+
+
+def _thread_default(holder: Any, name: str) -> Any:
+    """What *holder* (a per-thread holder without attribute *name* on this
+    thread) reads as by `THREAD_DEFAULTS`; `_MISSING` for none."""
+    for (module, local, attr), source in THREAD_DEFAULTS.items():
+        if attr != name:
+            continue
+        mod = sys.modules.get(module)
+        if mod is not None and mod.__dict__.get(local) is holder:
+            return mod.__dict__.get(source, _MISSING)
+    return _MISSING
+
+
+def _local_attr(holder: Any, name: str) -> Any:
+    """*holder*'s attribute *name* as this thread sees it, or its
+    `THREAD_DEFAULTS` value; `_MISSING` for neither."""
+    held = holder.__dict__.get(name, _MISSING)
+    return _thread_default(holder, name) if held is _MISSING else held
 
 
 class CodeSet:
@@ -539,6 +597,15 @@ def _step(v: Any, name: str) -> Any:
     would."""
     if isinstance(v, types.ModuleType):
         return v.__dict__.get(name, _MISSING)
+    if isinstance(v, _LOCALS):
+        # This thread's attributes: `inspect.getattr_static` reads the
+        # holder's own ``__dict__`` slot, which is no thread's.
+        try:
+            held = _local_attr(v, name)
+        except Exception:  # noqa: BLE001 - an unreadable holder is not followed
+            return _MISSING
+        if held is not _MISSING:
+            return held
     found = inspect.getattr_static(v, name, _MISSING)
     if found is _MISSING:
         return _MISSING
@@ -785,13 +852,18 @@ def deref_roots(code: types.CodeType) -> tuple[str, ...]:
     return tuple(sorted({chain[0][1:] for chain in _chains(code)[0] if chain[0].startswith(DEREF)}))
 
 
-def _follow(g: Mapping[str, Any], chain: tuple[str, ...], user: bool) -> tuple[str, tuple[str, ...], Any] | None:
+def _follow(
+    g: Mapping[str, Any], chain: tuple[str, ...], user: bool, *, unset: bool = False
+) -> tuple[str, tuple[str, ...], Any] | None:
     """Where *chain* ends in *g*: ``(kind, the chain up to there, value)``,
-    or None when it ends on nothing kept (see the module doc)."""
+    or None when it ends on nothing kept (see the module doc). *unset*:
+    a chain stopping at an attribute a per-thread holder does not have
+    (yet, on this thread) ends there as ``("l", the chain up to that
+    attribute, holder)``."""
     v = g.get(chain[0], _MISSING)
     if v is _MISSING:
         return None
-    if type(v) is not ContextVar and (user or not _plain(v)):
+    if type(v) is not ContextVar and (user or not _plain(v)) and not (not user and isinstance(v, _LOCALS)):
         top = _owner(v)
         if user or top in _STDLIB:
             if not _library_owner(top) and top not in _SPECIAL_TOPS:
@@ -806,7 +878,7 @@ def _follow(g: Mapping[str, Any], chain: tuple[str, ...], user: bool) -> tuple[s
             return None
         nv = _step(v, chain[i])
         if nv is _MISSING:
-            return None
+            return ("l", chain[: i + 1], v) if unset and isinstance(v, _LOCALS) else None
         v = nv
         i += 1
 
@@ -818,7 +890,14 @@ def _resolve(module: str, names: tuple[str, ...]) -> Any:
         mod = importlib.import_module(module)
     v = mod.__dict__[names[0]]
     for name in names[1:]:
-        v = v.__dict__[name] if isinstance(v, types.ModuleType) else getattr(v, name)
+        if isinstance(v, types.ModuleType):
+            v = v.__dict__[name]
+        elif isinstance(v, _LOCALS) and name not in v.__dict__:
+            v = _local_attr(v, name)
+            if v is _MISSING:
+                raise AttributeError(name)
+        else:
+            v = getattr(v, name)
     return v
 
 
@@ -852,6 +931,12 @@ class _Check:
         kind = self.kind
         if kind == "s":
             return _SPECIALS[self.module]() == self.fp
+        if kind == "a" and not self.path:
+            # An attribute the call made on a per-thread holder: holds
+            # while this thread has none yet, as the call found it.
+            holder = _resolve(self.module, self.names[:-1])
+            if isinstance(holder, _LOCALS) and _local_attr(holder, self.names[-1]) is _MISSING:
+                return True
         v = _resolve(self.module, self.names)
         if kind == "w":
             return type(v) is dict and self.snap.issuperset(v)
@@ -953,7 +1038,10 @@ def _plan(
         if _SPECIAL_OF.get(_owner(root)):
             specials.add(_SPECIAL_OF[_owner(root)])
         try:
-            hit = _follow(g, chain, user)
+            # A per-thread holder's attribute this thread has not set yet
+            # is kept: it may be set before the next call, and the plan
+            # stands while the holder is the same object.
+            hit = _follow(g, chain, user, unset=True)
         except Exception:  # noqa: BLE001 - a chain that cannot be followed now is followed next time
             kept.append(chain)
             continue
@@ -1129,7 +1217,7 @@ def _served_place(item: tuple) -> tuple | None:
         v = _resolve(module, tuple(chain.split(".")))
     except Exception:  # noqa: BLE001 - not there now: kept as named
         return None
-    if type(v) not in (dict, list, set):
+    if type(v) not in (dict, list, set) or _per_thread(module, chain):
         return None
     return ("obj", id(v), keys) if keys else ("obj", id(v))
 
@@ -1144,10 +1232,13 @@ def _targets(
     which the code that ran binds it (*skip*: those it binds), or None;
     *exported*, ``(module, name)`` of the compiled module whose container it
     reads (`_exported`), or None. Empty when it ends on nothing kept."""
-    hit = _follow(g, chain, user)
+    hit = _follow(g, chain, user, unset=True)
     if hit is None:
         return []
     kind, upto, v = hit
+    if kind == "l":
+        # An attribute this thread's holder does not have: read as absent.
+        kind, v = "a", _MISSING
     written = None
     if len(upto) > 1 and "." + upto[-1] in skip:
         written = "." + upto[-1]
@@ -1169,9 +1260,12 @@ def _targets(
     dotted = ".".join(upto)
     if (where, dotted) in PROCESS_STATE:
         return []
-    if kind == "c":
-        return [("c", where, dotted, (where, upto), v, written, None)]
+    if kind in ("c", "a"):
+        return [(kind, where, dotted, (where, upto), v, written, None)]
     ext = _exported(v)
+    # A per-thread holder's container is this thread's (or the global a
+    # thread without one reads, `THREAD_DEFAULTS`): told apart by its name.
+    own = type(v) in (dict, list, set) and not _per_thread(where, dotted)
     if paths is not None and type(v) is dict and len(upto) == len(chain):
         # Read only by constant keys, or by the keys a reader of it was
         # handed: those entries are what the call read. A container
@@ -1180,9 +1274,10 @@ def _targets(
         out = []
         for path in sorted(paths):
             text = json.dumps(list(path))
-            out.append(("k", where, dotted + _KEYS + text, ("obj", id(v), text), _entry(v, path), written, ext))
+            same = ("obj", id(v), text) if own else (where, upto, text)
+            out.append(("k", where, dotted + _KEYS + text, same, _entry(v, path), written, ext))
         return out
-    same = ("obj", id(v)) if type(v) in (dict, list, set) else (where, upto)
+    same = ("obj", id(v)) if own else (where, upto)
     return [(kind, where, dotted, same, v, written, ext)]
 
 
@@ -1223,6 +1318,35 @@ PROCESS_STATE: frozenset[tuple[str, str]] = frozenset(
         ("numba.stencils.stencil", "StencilFunc.id_counter"),
     }
 )
+
+
+def _per_thread_item(items: set, first: Mapping, kind: str, where: str, dotted: str, v: Any) -> str | None:
+    """Add the item an attribute of a per-thread holder is checked by, and
+    return its fingerprint. Not there when the call first read it: served
+    while this thread has none yet or holds what the call left (``"a"``,
+    `ABSENT` when the call left none). There then and gone now: checked on
+    the value first read (``"v"``)."""
+    pre = first.get(("v", where, dotted))
+    if kind == "a" and pre is not None:
+        if pre[0] is not None:
+            items.add(("v", where, dotted, pre[0]))
+        return pre[0]
+    fp = _fingerprint_of("a", v)
+    if fp is not None:
+        items.add(("a", where, dotted, fp))
+    return fp
+
+
+def _per_thread(module: str, dotted: str) -> bool:
+    """Is *dotted* in *module* an attribute of a per-thread holder
+    (`_LOCALS`)?"""
+    names = tuple(dotted.split("."))
+    if len(names) < 2 or _KEYS in dotted:
+        return False
+    try:
+        return isinstance(_resolve(module, names[:-1]), _LOCALS)
+    except Exception:  # noqa: BLE001 - not found again: no holder
+        return False
 
 
 def _import_hook(module: str) -> bool:
@@ -1266,7 +1390,7 @@ def _fingerprint_of(kind: str, v: Any) -> str | None:
     if kind == "c":
         value = v.get(_MISSING)
         return fingerprint("unset" if value is _MISSING else value)
-    if kind == "k" and v is _MISSING:
+    if kind in ("k", "a") and v is _MISSING:
         return ABSENT
     return fingerprint(v)
 
@@ -1438,6 +1562,17 @@ def build(
             held = first.get((kind, *same)) if same[0] == "obj" else None
             if held is None:
                 held = first.get((kind, where, dotted))
+            if kind == "a" or (
+                held is None
+                and (
+                    ("a", where, dotted) in first or (written and written not in latches and _per_thread(where, dotted))
+                )
+            ):
+                # An attribute of a per-thread holder this thread did not
+                # have when the call first read it, or does not have now.
+                if same not in places:
+                    places[same] = _per_thread_item(items, first, kind, where, dotted, v)
+                continue
             if written and (held is None or written in latches):
                 # Bound by the code that ran and never read before it was:
                 # what the call set, a hit finds set the same. Or bound
