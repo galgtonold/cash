@@ -74,9 +74,28 @@ def mod(tmp_path, monkeypatch):
     sys.modules.pop(name, None)
 
 
+class _StillWorld:
+    """The C world watch with its epoch held still: a write anywhere in the
+    process (another thread of the test worker) moves the real one between
+    two digests, and the second is then taken anew whatever the start cells
+    say, which these tests count."""
+
+    def __init__(self, real):
+        self._real = real
+
+    def world_epoch(self):
+        return 1
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
 @pytest.fixture
 def digests(mod, monkeypatch):
     """The classes of *mod* digested anew, by name."""
+    from cash.decorator import class_memo as memo
+
+    monkeypatch.setattr(memo, "_cw", _StillWorld(memo._cw))
     taken = []
     real = trace_items._class_digest_now
 
