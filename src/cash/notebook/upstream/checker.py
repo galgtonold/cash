@@ -19,6 +19,7 @@ from ...value_types import BUILTIN_NAMES
 from .._protocols import CashInstanceProtocol, ShellProtocol
 from .._trace import trace_event
 from ..cache_key import called_function_globals, statement_source_hash
+from ..held_functions import drop_shared_walks, walks_paused
 from ..server_discovery import (
     get_notebook_cells,
     get_notebook_cells_with_ids,
@@ -434,17 +435,23 @@ class UpstreamChecker:
         # Simulate the notebook statement by statement and compare the virtual
         # lineage with the in-memory state to find changed code.
         self._simulated = False
-        all_metrics, total_restore_time, total_execution_time = self._bring_up_to_date(
-            cell_code,
-            required_inputs,
-            process_statement_callback,
-            global_ttl,
-            effects,
-            notebook_path=notebook_path,
-            progress_callback=progress_callback,
-            control_structure_callback=control_structure_callback,
-            cell_id=cell_id,
-        )
+        # The walks made above are shared with the cell's first statement
+        # (`held_functions.walks_shared`) only when nothing was restored or
+        # re-run on the way: either may change a value in place.
+        with walks_paused():
+            all_metrics, total_restore_time, total_execution_time = self._bring_up_to_date(
+                cell_code,
+                required_inputs,
+                process_statement_callback,
+                global_ttl,
+                effects,
+                notebook_path=notebook_path,
+                progress_callback=progress_callback,
+                control_structure_callback=control_structure_callback,
+                cell_id=cell_id,
+            )
+        if all_metrics or total_restore_time or total_execution_time:
+            drop_shared_walks()
         if rebuilds and not self._simulated:
             _warn_state_not_rebuilt(rebuilds, self.shell.user_ns)
         if self.tracking_state.unheld_module_state:

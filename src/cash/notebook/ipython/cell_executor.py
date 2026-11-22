@@ -80,6 +80,7 @@ from ..background_threads import BackgroundThreads
 from ..cache_status import CacheStatus
 from ..compiled_source import is_cash_filename, register_cell_source, statement_place
 from ..control_structures import contains_top_level_await, is_control_structure
+from ..held_functions import close_walk_share, open_walk_share
 from ..plot_outputs import PLOT_FACTS
 from ..statement import ProcessResult
 from ..statement.capture import replay_outputs, show_unshown_output
@@ -737,6 +738,7 @@ class CellExecutor:
             with _builtin_trap(self.shell):
                 yield
         finally:
+            close_walk_share()
             end_file_state_epoch()
             if backend is not None:
                 backend.release_notices()
@@ -794,7 +796,11 @@ class CellExecutor:
             self._badges.close(badge_display_id)
             return PipelineSyntaxError()
 
-        # 4. Upstream resolution
+        # 4. Upstream resolution. Its walks of a value with no lineage are
+        # shared with the first statement's (`walks_shared`): nothing runs
+        # between them unless the cell starts with something else
+        # (`_cell_steps`).
+        open_walk_share()
         upstream_result = self._upstream.resolve(
             raw_cell,
             pre_upstream_metrics,
@@ -1249,6 +1255,8 @@ class CellExecutor:
             return _drive(self._cell_steps(cell, awaitable=False), self._run_step)
 
         magic = cell.ipython.magic if cell.ipython is not None else None
+        if magic is not None:
+            close_walk_share()  # the magic is code of its own, run first
         return run() if magic is None else self._under_cell_magic(magic, run)
 
     async def _execute_cell_statements_async(self, cell: _CellRun) -> tuple[list[ProcessResult], list, float]:
@@ -1342,6 +1350,10 @@ class CellExecutor:
         try:
             for i, node in enumerate(tree.body):
                 after_statement, follows = follows, False
+                if i or i in jump_runs or is_control_structure(node):
+                    # The upstream check's walks are the first statement's
+                    # alone, when nothing of the cell runs before it.
+                    close_walk_share()
                 if i in jump_runs:
                     plan = self._upstream_checker.plan_cell_run(
                         tree.body[i : jump_runs[i]], raw_cell, dict(stmt_occurrence_counts)
@@ -1359,6 +1371,7 @@ class CellExecutor:
                 stmt_occurrence_counts[stmt_code] = occ + 1
                 texts_by_index[i] = (stmt_code, stmt_display, stmt_exec_source, occ)
                 if i in planned:
+                    close_walk_share()
                     plots.interrupt()
                     metric = planned.pop(i)
                     all_metrics.append(metric)
@@ -1379,6 +1392,8 @@ class CellExecutor:
                         source,
                         blocked=lambda k: k in planned or k in jump_runs,
                     )
+                    if found:
+                        close_walk_share()
                     if found and plots.take_place(
                         found, _served_texts(found, i, stmt_code, source, tree.body, occ, stmt_occurrence_counts)
                     ):

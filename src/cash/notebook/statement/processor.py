@@ -199,6 +199,7 @@ from ..callee_reach import (
     module_state_writes,
     rebound_modules,
 )
+from ..held_functions import close_walk_share, drop_shared_walks, walks_shared
 from ..holder_patches import holder_patches
 from ..lineage_formula import (
     forward_helpers,
@@ -1520,7 +1521,7 @@ class StatementProcessor:
             # The analyses before the statement runs share their walks through
             # what it reads (`answers_shared`), up to the moment it runs.
             shadow = _shadow.SHADOW
-            with answers_shared():
+            with answers_shared(), walks_shared():
                 done = self._prepare(run)
                 if done is not None:
                     if shadow is not None:
@@ -1575,6 +1576,8 @@ class StatementProcessor:
         with untracked():
             gc.collect()
         run.collected_first = True
+        # A finalizer it ran is code of the user's.
+        drop_shared_walks()
 
     @staticmethod
     def _begin_recording(shadow: Any, run: StatementRun) -> Any:
@@ -1653,7 +1656,7 @@ class StatementProcessor:
                 is_last=is_last,
             )
             shadow = _shadow.SHADOW
-            with answers_shared():
+            with answers_shared(), walks_shared():
                 done = self._prepare(run)
                 if done is not None:
                     if shadow is not None:
@@ -1797,8 +1800,11 @@ class StatementProcessor:
         if cached_data and self._live_objects_shared(run, metadata):
             cached_data = None
         if cached_data and not import_needs_reexecution(run.tree, self.shell.user_ns):
-            # A restore may run code of the user's (an unpickled class's).
+            # A restore may run code of the user's (an unpickled class's),
+            # and writes into a live object: what was walked before it is not
+            # what the statement runs on when the restore falls through.
             self._digest_carry.give_up()
+            drop_shared_walks()
             hit_result = self._serve_hit(run, cached_data, metadata, unseeded_fits)
             if hit_result is not None:
                 return hit_result
@@ -2833,6 +2839,7 @@ class StatementProcessor:
         # What the analyses of this statement kept of its objects is cash's
         # reference, not a holder of the user's.
         forget_held_answers()
+        drop_shared_walks()
         user_ns = self.shell.user_ns
         names = {name for name in run.outputs | held if user_ns.get(name) is not FORWARD_PROBE_PLACEHOLDER}
         keep = (held | mutated) & names
@@ -3091,6 +3098,7 @@ class StatementProcessor:
                     if memo is not None:
                         user_ns.update(memo[1])
                     stop_sharing_answers()
+                    close_walk_share()
                     start_time = _perf_counter()
                     env_scope = recording_env_reads()
                     env_reads = env_scope.__enter__()

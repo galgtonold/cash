@@ -34,6 +34,7 @@ from ..cache_status import CacheStatus
 from ..call_refs import resolve_call_refs
 from ..control_structures import is_control_structure
 from ..file_records import entry_file_records
+from ..held_functions import drop_shared_walks
 from ..helper_memos import carries_changes
 from ..helper_memos import unfilled as memos_unfilled
 from ..holder_patches import HolderPatch, apply_patch
@@ -535,6 +536,7 @@ class CacheRestorer:
         # What the analyses kept of the user's objects is cash's reference,
         # not a holder of the user's.
         forget_held_answers()
+        drop_shared_walks()
         return live_shared_reason(names, keep, user_ns, shell=self.shell), into
 
     def _move_to_final_lineages(self, restored_vars: set[str], metadata: dict, final_lineages: dict[str, str]) -> None:
