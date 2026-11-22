@@ -58,7 +58,7 @@ import weakref
 from itertools import chain, compress, repeat
 from typing import Any
 
-from cash import _native
+from cash import _native, _weak
 from cash._plain_data import tree_walk, whole_tree_facts
 from cash._user_attrs import attribute_or, builtin_base, builtin_items, has_attribute, own_dict
 from cash._weak import callback_of, is_cash_ref
@@ -292,17 +292,23 @@ def forget_flat_reads() -> None:
     _FLAT_READS.clear()
     _SHAPE_READS.clear()
     _ARROW_READS.clear()
+    _ARROW_SIGNED.clear()
     _flat_kept[0] = 0
 
 
 def end_cell_reads() -> None:
-    """The cell ended: drop what `_FLAT_READS` and `_ARROW_READS` keep,
-    which hold the very objects read, and the entries of `_SHAPE_READS`
-    holding many numbers; the rest of it, which holds no object, is kept
-    for the next cell until it is half full."""
+    """The cell ended: drop what `_FLAT_READS` keeps, which holds the very
+    objects read, the entries of `_ARROW_READS` holding many numbers, and
+    those of `_SHAPE_READS`; the rest of `_SHAPE_READS`, which holds no
+    object, is kept for the next cell until it is half full. The rest of
+    `_ARROW_READS` holds no object either, and each entry goes with the
+    last Arrow array it was read from."""
     _FLAT_READS.clear()
-    _ARROW_READS.clear()
     _flat_kept[0] = 0
+    for signature, read in list(_ARROW_READS.items()):  # a copy: an entry may go as it is read
+        if read.numbers > _KEPT_ARROW_NUMBERS and _ARROW_READS.get(signature) is read:
+            del _ARROW_READS[signature]
+            read.drop()
     if len(_SHAPE_READS) > _MAX_SHAPE_READS // 2:
         _SHAPE_READS.clear()
         return
@@ -753,15 +759,20 @@ def _arrow_text_numbers(values: Any) -> list[Any] | None:
     compute = sys.modules.get("pyarrow.compute")
     if chunked is None or pyarrow is None or compute is None:
         return None
-    known = _ARROW_READS.get(id(chunked))
-    if known is not None and known[0] is chunked:
-        return known[1]
+    known = _arrow_read_of(chunked)
+    if known is not None:
+        return known
     try:
         if not (pyarrow.types.is_string(chunked.type) or pyarrow.types.is_large_string(chunked.type)):
             return None
+        signature = _arrow_signature(chunked)
+        read = _ARROW_READS.get(signature)
+        if read is not None and read.alive():
+            read.add(chunked)
+            return read.parts
         if len(chunked) <= _FEW_TEXTS:
             few = _few_texts_spelling_numbers(chunked.to_pylist())
-            _ARROW_READS[id(chunked)] = (chunked, few)
+            _ArrowRead(signature, few).add(chunked)
             return few
         # Only a value of 7 to 18 bytes can spell either number, all digits
         # or starting ``0x``: each is picked by masks Arrow computes without
@@ -773,10 +784,96 @@ def _arrow_text_numbers(values: Any) -> list[Any] | None:
         parts: list[Any] = []
         for piece in _joined_runs(pyarrow, chunked):
             _spelled_numbers(pyarrow, compute, piece, parts)
-        _ARROW_READS[id(chunked)] = (chunked, parts)
+        _ArrowRead(signature, parts).add(chunked)
         return parts
     except Exception:  # noqa: BLE001 - read as before, through NumPy
         return None
+
+
+def _arrow_read_of(chunked: Any) -> list[Any] | None:
+    """What `_arrow_text_numbers` found in this very Arrow array before,
+    while it is alive; None when it was not read, or not this one."""
+    key = id(chunked)
+    signature = _ARROW_SIGNED.get(key)
+    if signature is None:
+        return None
+    read = _ARROW_READS.get(signature)
+    if read is None:
+        return None
+    ref = read.refs.get(key)
+    return read.parts if ref is not None and ref() is chunked else None
+
+
+def _arrow_signature(chunked: Any) -> tuple:
+    """What names the text an Arrow array (*chunked*, a ChunkedArray)
+    holds while it is alive: its type, and each chunk's offset, length and
+    the address and size of each of its buffers -- as the frame digests
+    name an Arrow column's memory (`column_memory_key`). Arrow never writes
+    a buffer it handed out, and pandas wraps the same buffers anew in each
+    frame sharing a column (``labs = clean(labs)``, a merge's untouched
+    side). Past `_SIGNED_CHUNKS` chunks the array names only itself: their
+    buffers took longer to list than the read they spare."""
+    if chunked.num_chunks > _SIGNED_CHUNKS:
+        return ("array", id(chunked))
+    return (
+        str(chunked.type),
+        tuple(
+            (
+                chunk.offset,
+                len(chunk),
+                tuple((buf.address, buf.size) if buf is not None else None for buf in chunk.buffers()),
+            )
+            for chunk in chunked.iterchunks()
+        ),
+    )
+
+
+class _ArrowRead:
+    """An entry of `_ARROW_READS`: the numbers (*parts*) the text named by
+    *signature* spells, and a weak reference to each Arrow array read with
+    that signature (by its id). The entry lasts while one of them is alive,
+    which keeps the buffers the signature names from being freed and their
+    addresses used again; it holds no object of its own."""
+
+    __slots__ = ("numbers", "parts", "refs", "signature")
+
+    def __init__(self, signature: tuple, parts: list[Any]) -> None:
+        self.signature = signature
+        self.parts = parts
+        self.numbers = sum(1 if type(part) is int else len(part) for part in parts)
+        self.refs: dict[int, Any] = {}
+        old = _ARROW_READS.get(signature)
+        _ARROW_READS[signature] = self
+        if old is not None:
+            old.drop()
+
+    def alive(self) -> bool:
+        return any(ref() is not None for ref in list(self.refs.values()))
+
+    def add(self, chunked: Any) -> None:
+        key = id(chunked)
+        if key in self.refs:
+            return
+        signature = self.signature
+
+        def gone(_ref: Any) -> None:
+            # Runs as the array is freed, before its id can be used again.
+            if _ARROW_SIGNED.get(key) == signature:
+                _ARROW_SIGNED.pop(key, None)
+            if _ARROW_READS.get(signature) is self:
+                self.refs.pop(key, None)
+                if not self.refs:
+                    _ARROW_READS.pop(signature, None)
+
+        self.refs[key] = _weak.ref(chunked, gone)
+        _ARROW_SIGNED[key] = signature
+
+    def drop(self) -> None:
+        """Out of `_ARROW_READS`, with the arrays it was found by."""
+        for key in list(self.refs):
+            if _ARROW_SIGNED.get(key) == self.signature:
+                _ARROW_SIGNED.pop(key, None)
+        self.refs = {}
 
 
 #: A column of chunks this many rows long on average, or shorter, is read
@@ -832,11 +929,23 @@ def _spelled_numbers(pyarrow: Any, compute: Any, chunked: Any, parts: list[Any])
         parts.extend(int(text, 16) for text in hexadecimal.to_pylist() if text is not None)
 
 
-#: What `_arrow_text_spelling_numbers` found this cell, by the Arrow array
-#: read (kept, so its id is not reused): Arrow's arrays never change, and a
-#: loop writing one column of a wide frame leaves the others the same
-#: arrays. Cleared when the cell ends (`end_cell_reads`).
-_ARROW_READS: dict[int, tuple[Any, list[Any]]] = {}
+#: What `_arrow_text_spelling_numbers` found, by what names the text read
+#: (`_arrow_signature`): Arrow's arrays never change, a loop writing one
+#: column of a wide frame leaves the others the same arrays, and a frame
+#: carried from cell to cell (``labs_raw`` to ``labs`` to ``chg``) keeps
+#: its text columns' buffers, read once instead of after each statement
+#: and cell that outputs them (p18: 2.5 s of reading, 1.1 s now). An entry goes with the last
+#: array it was read from (`_ArrowRead`); one holding more than
+#: `_KEPT_ARROW_NUMBERS` numbers goes when its cell ends (`end_cell_reads`).
+_ARROW_READS: dict[tuple, _ArrowRead] = {}
+#: The signature of each Arrow array `_ARROW_READS` was read from, by its
+#: id, while it is alive.
+_ARROW_SIGNED: dict[int, tuple] = {}
+#: Most chunks an Arrow array may have to be named by its buffers.
+_SIGNED_CHUNKS = 64
+#: Most numbers an entry of `_ARROW_READS` may hold to be kept past its
+#: cell: a column of numbers kept as text keeps one per value.
+_KEPT_ARROW_NUMBERS = 1 << 16
 #: `_NUMBER_LINES`' hexadecimal spelling, a whole value (the decimal one,
 #: 7 to 18 digits, is picked by length and `ascii_is_decimal`).
 _HEX_TEXT = r"^0[xX][0-9a-fA-F]{5,16}$"
