@@ -110,12 +110,10 @@ from .function_identity import func_key, hash_callable_source
 from .global_values import KEY_BUILD_DIGESTS
 from .globals_fold import READS_FOLDED
 from .iterators import ChunkedCachedIterator, StreamingCachedIterator, chunk_prefix, is_one_shot_iterator
-from .library_versions import library_versions
 from .refusal_verdicts import ArgumentRefusal, RefusalVerdicts
 from .registry import resolve_dynamic_dependencies
 from .rng import capture_rng_pre_state, replay_rng_state
 from .store import StoreRequest
-from .user_code import own_package
 
 if TYPE_CHECKING:
     from ..dependency_state import DependencyStateHasher
@@ -2668,6 +2666,7 @@ class CallRunner:
             cost=execution_time,
             watch_identities=call.watch_identities,
             narrowed=call.narrowed,
+            file_deps=auto_file_deps,
         )
         if refusal is None:
             refusal = swapped
@@ -3029,9 +3028,9 @@ class CallRunner:
         """Say once a process that a call stored without its body recorded
         does not have the library settings it read checked: below Python
         3.12, with ``CASH_TRACE=0`` and for a coroutine nothing sees them
-        (`library_reads`). Only for a call that reaches a library."""
-        if not library_versions(self._registry.code_functions(func, func_name), own_package(func)):
-            return
+        (`library_reads`). Said for the first such call of any kind: a
+        library reached through an argument's method (``df.to_string()``)
+        is not named in the function's own code."""
         library_reads.UNSEEN_SAID = True
         if inspect.iscoroutinefunction(func):
             where = "a coroutine's body is not recorded"
@@ -3045,7 +3044,7 @@ class CallRunner:
             CashCacheIneffectiveWarning,
             func_name,
             "library_state_unseen",
-            f"{func_name} reaches library code and {where}, so a library setting changed between calls "
+            f"{func_name} was stored and {where}, so a library setting changed between calls "
             "(sklearn.set_config, np.seterr, pandas options, a ContextVar, an attribute set on a library's class, ...) "
             "is not detected: a later "
             "call could be served a result made under the old setting. Said once per process.",

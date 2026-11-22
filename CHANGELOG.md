@@ -19,6 +19,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a changed one misses with `library setting changed`.
 
 ### Changed
+- A `@cash.cache` call that read something cash cannot check is no longer
+  stored. A file a library opens in compiled code with the native file hook
+  off (always on macOS, or with `CASH_NATIVE_FILE_HOOK=0`:
+  `KEY-NATIVE-READ-UNSEEN`), a read cash failed to record
+  (`KEY-READ-UNRECORDED`), a file it cannot stat or a remote object it could
+  not ask is a dependency that is never fresh, so each call wrote an entry
+  that was never served (16 MB over three calls of a pyogrio reader) and the
+  next miss said `file changed`. The call now runs uncached, and the next
+  miss says `not stored last time: <reader> read <file> in compiled code,
+  which cash cannot check` (or what else could not be checked).
+- `KEY-LIBRARY-STATE-UNSEEN` (said once per process where a `@cash.cache`
+  call's library settings cannot be checked: before Python 3.12, with
+  `CASH_TRACE=0`, a coroutine, a returned iterator) is now said for the first
+  call stored, whatever the function's own code names. It was said only when
+  that code named a library (`np.sum`), so a function reaching one through
+  an argument (`df.to_string()`, `model.fit(X)`), served stale after
+  `pd.set_option(...)`, was stored without a word.
 - In a `@cash.cache` function, `# @cash:assume-safe` and
   `with cash.assume_safe():` now waive a change to a process setting
   (`atexit.register`, `np.seterr`, a logger's level or handler,

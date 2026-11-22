@@ -39,7 +39,7 @@ from .cached_function import CachedFunction
 from .call_state import HELD_BY_NAME, NO_WATCH, BodyRun, Call
 from .dynamic_sources import DynamicSources, recorded_sources, remember_sources, source_key
 from .explain import MissKind, not_persisted_reason
-from .file_deps import snapshot_tracked_deps
+from .file_deps import never_fresh_reads, snapshot_tracked_deps
 from .iterators import chunk_prefix
 from .purity_checks import held_sentinels, sentinel_ref
 from .refusal_verdicts import ArgumentRefusal
@@ -265,8 +265,13 @@ class ResultStore:
         inputs_moved: Callable[[], bool] | None = None,
         cost: float = 0.0,
         watch_identities: dict | None = None,
+        file_deps: dict[str, Any] | None = None,
     ) -> str | None:
         """Why *res* must not be stored, or ``None`` to store it.
+
+        *file_deps* is the call's snapshot of what it read
+        (`snapshot_tracked_deps`): a read in it that is never fresh would make
+        an entry that is never served (`never_fresh_reads`).
 
         *cost* is what the body took: the closure check may take twice it
         (`closure_check_budget`).
@@ -307,6 +312,10 @@ class ResultStore:
             refusal = "the result is tied to the identity of an object in memory"
         if refusal is None and self._files.work_outlived_call(func_name, tracker):
             refusal = "work it handed to a thread or thread pool was still running when it returned"
+        if refusal is None:
+            # Before the check that what it read held still: a read that
+            # cannot be checked is not a file that moved.
+            refusal = never_fresh_reads(tracker, file_deps)
         if refusal is None and self._files.inputs_moved_during_call(func_name, tracker):
             refusal = "a file it read changed while it ran"
         # A watched value that moved is the drift guard's: it stops keying
@@ -1030,6 +1039,7 @@ class ResultStore:
                 tracker,
                 observer=observer,
                 cost=chunks.produced_seconds,
+                file_deps=auto_file_deps,
             )
             if refusal is not None:
                 self._misses.note_not_stored(call.cache_key, refusal, func_name)

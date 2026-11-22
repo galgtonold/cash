@@ -333,8 +333,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         "KEY-LIBRARY-STATE-UNREAD",  # the body read a library setting or a
         # ContextVar holding a value cash cannot compare between calls; it
         # runs uncached
-        "KEY-LIBRARY-STATE-UNSEEN",  # a call reaching library code was stored
-        # below 3.12, with CASH_TRACE=0 or as a coroutine, where library
+        "KEY-LIBRARY-STATE-UNSEEN",  # a call was stored below 3.12, with
+        # CASH_TRACE=0, as a coroutine or returning an iterator, where library
         # settings it read are not checked; said once per process
         "KEY-LIBRARY-VALUE-UNREAD",  # a value the notebook set on a library's
         # module is too big or deep to look through for an iterator or random

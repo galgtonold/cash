@@ -31,6 +31,7 @@ from ..source_reading import SETTLED_SECONDS
 from ..tracking.file_dep_snapshot import (
     attach_code_relative,
     dep_path_for_this_process,
+    never_fresh,
     snapshot_dependencies,
     snapshot_is_fresh,
     walk_dataset_dir,
@@ -89,6 +90,27 @@ def snapshot_tracked_deps(tracker: Any, code_module: str | None = None) -> dict[
     # fixed location: record where it sits relative to the code, so another
     # install or release checks its own copy.
     return attach_code_relative(deps, code_module) or None
+
+
+def never_fresh_reads(tracker: Any, file_deps: dict[str, Any] | None) -> str | None:
+    """Why a call that read something cash cannot check is not stored, or
+    None. Such a read is kept as a dependency that is never fresh
+    (``file_dep_is_fresh``), so its entry would be written and never served:
+    a file a library opened in compiled code with the native file hook off
+    (KEY-NATIVE-READ-UNSEEN), a read cash failed to record
+    (KEY-READ-UNRECORDED), a path it cannot stat, a remote object it could
+    not ask."""
+    unseen = getattr(tracker, "native_reads_unseen", None)
+    if unseen:
+        reader, path, _where = unseen[0]
+        return f"{reader} read {path} in compiled code, which cash cannot check"
+    failed = unrecorded_reads(tracker)
+    if failed is not None:
+        return f"cash failed to record {failed}, so it cannot be checked"
+    unchecked = sorted(path for path, entry in (file_deps or {}).items() if never_fresh(entry))
+    if unchecked:
+        return f"it read {unchecked[0]}, which cash cannot check"
+    return None
 
 
 def propagate_file_deps_to_active_tracker(metadata: CacheMetadata, func_name: str) -> None:
@@ -480,7 +502,8 @@ class FileDeps:
 
     def warn_unrecorded_reads(self, func_name: str, tracker: Any) -> None:
         """KEY-READ-UNRECORDED when cash failed to record a read the body
-        made: the entry holds it as never fresh, so every call runs again."""
+        made: the call is not stored (`never_fresh_reads`), so every call
+        runs again."""
         what = unrecorded_reads(tracker)
         if what is None:
             return
@@ -488,16 +511,16 @@ class FileDeps:
             CashCacheIneffectiveWarning,
             func_name,
             "read_unrecorded",
-            f"@cash.cache on {func_name}: cash failed to record {what}, so the result is never "
-            f"served from the cache and the call runs again every time.",
+            f"@cash.cache on {func_name}: cash failed to record {what}, so the result is not "
+            f"stored and the call runs again every time.",
             code="KEY-READ-UNRECORDED",
             fix="nothing to change in your code; please report the error so cash can record that read.",
         )
 
     def warn_unseen_native_reads(self, func_name: str, tracker: Any) -> None:
         """KEY-NATIVE-READ-UNSEEN when the body called a reader that opens its
-        file in compiled code with the native file hook off: the entry holds
-        that file as never fresh, so every call runs again."""
+        file in compiled code with the native file hook off: the call is not
+        stored (`never_fresh_reads`), so every call runs again."""
         what = unseen_native_reads(tracker)
         if what is None:
             return
@@ -507,7 +530,7 @@ class FileDeps:
             "native_read_unseen",
             f"@cash.cache on {func_name}: {what}. That library opens the file in compiled code, "
             f"which cash cannot see on this platform (the native file hook is off), so the result is "
-            f"never served from the cache and the call runs again every time.",
+            f"not stored and the call runs again every time.",
             code="KEY-NATIVE-READ-UNSEEN",
             fix="name the file with file_depends_on= so cash checks it, and the call is cached again.",
         )

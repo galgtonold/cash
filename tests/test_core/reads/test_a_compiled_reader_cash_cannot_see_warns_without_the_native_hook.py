@@ -6,8 +6,9 @@ On macOS it is not available, and a reader cash does not follow to the file
 (``cv2.imread``, ``netCDF4.Dataset``, DuckDB, GDAL through pyogrio, fiona or
 osgeo) recorded nothing: after the file changed the old result was served,
 with no warning. The call now warns KEY-NATIVE-READ-UNSEEN, naming the
-reader, the file and the line, and is never served from the cache, unless the
-file is named with ``file_depends_on=``.
+reader, the file and the line, and is not stored, unless the file is named
+with ``file_depends_on=``: an entry holding a file nothing can check would be
+written on every call and never served.
 
 The hook is switched off here, which is the state macOS is always in; on
 macOS the same tests run on the real platform.
@@ -87,6 +88,24 @@ def test_an_edit_to_the_file_is_never_served_stale(disk_cash, tmp_path, hook_off
         assert len(runs) == 2  # runs every time
         _write(path, 5)
         assert count(str(path)) == 5
+
+
+def test_the_call_is_not_stored_and_the_next_miss_says_why(disk_cash, tmp_path, hook_off):
+    path = tmp_path / "points.geojson"
+    _write(path, 2)
+
+    @disk_cash.cache
+    def count(p):
+        return len(pyogrio.read_dataframe(p))
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        for _ in range(3):
+            assert count(str(path)) == 2
+        why = str(count.explain(str(path)))
+    assert count.cache_info()["miss_reasons"] == {"no entry yet": 1, "not stored last time": 2}
+    assert "no_entry" in why
+    assert f"not stored last time: pyogrio.read_dataframe read {path} in compiled code, which cash cannot check" in why
 
 
 def test_a_file_named_with_file_depends_on_is_cached_and_checked(disk_cash, tmp_path, hook_off):

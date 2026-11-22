@@ -838,8 +838,8 @@ class FileAccessTracker:
     def note_tracking_failed(self, event: str, path: str | None, error: str) -> None:
         """cash failed to record an *event* inside the block, raising *error*,
         here and on the parents: its read (*path*, when it names one) is
-        stored as never fresh, so the call runs again rather than be served
-        after the file changed, and a notebook statement is not stored. Both
+        recorded as never fresh, so neither a cached call
+        (`never_fresh_reads`) nor a notebook statement is stored. Both
         warn (KEY-READ-UNRECORDED, `unrecorded_reads`)."""
         name = path if path is not None else f"<{event}: not recorded>"
         failure = (event, path, error)
@@ -852,9 +852,9 @@ class FileAccessTracker:
         """*reader*, a library function that opens its file in compiled code,
         read *path* inside the block (called at *where*) while the native file
         hook is off, so nothing reports the open. Like a failed record, here
-        and on the parents: *path* is stored as never fresh, so the call runs
-        again rather than be served after the file changed, and a notebook
-        statement is not stored. Both warn (KEY-NATIVE-READ-UNSEEN,
+        and on the parents: *path* is recorded as never fresh, so neither a
+        cached call (`never_fresh_reads`) nor a notebook statement is stored.
+        Both warn (KEY-NATIVE-READ-UNSEEN,
         `unseen_native_reads`)."""
         seen = (reader, path, where)
         for tracker in self._self_and_parents():

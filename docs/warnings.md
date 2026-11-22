@@ -1546,11 +1546,14 @@ for the object), or pass the value in as an argument.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-**What happened.** A cached call that reaches library code was stored, and
-its body ran unrecorded: on Python below 3.12, with `CASH_TRACE=0`, as a
-coroutine, or returning an iterator whose code runs after the call. Only a recorded body has the library settings it read checked
-before a hit is served (see [KEY-LIBRARY-STATE-UNREAD](#key-library-state-unread)).
-Cash says this once per process, the first time such a call is stored.
+**What happened.** A cached call was stored, and its body ran unrecorded:
+on Python below 3.12, with `CASH_TRACE=0`, as a coroutine, or returning an
+iterator whose code runs after the call. Only a recorded body has the
+library settings it read checked before a hit is served (see
+[KEY-LIBRARY-STATE-UNREAD](#key-library-state-unread)). Cash says this once
+per process, the first time such a call is stored, whatever the function
+calls: a library is often reached through an argument (`df.to_string()`,
+`model.fit(X)`), which the function's own code does not name.
 
 **Why it matters.** A setting changed between two calls with the same
 arguments is not seen: `sklearn.set_config(...)`, `np.seterr(...)`,
@@ -1647,7 +1650,7 @@ line of its own above the statement the message names.
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/tracking/reader_patches.py:_NATIVE_READERS @41501bff, cash/tracking/reader_patches.py:_note_native_read @a6420ce4, cash/tracking/file_tracker.py:FileAccessTracker.note_native_read_unseen @8c12cc81 -->
+<!-- claim: cash/tracking/reader_patches.py:_NATIVE_READERS @41501bff, cash/tracking/reader_patches.py:_note_native_read @a6420ce4, cash/tracking/file_tracker.py:FileAccessTracker.note_native_read_unseen @ecf28e99, cash/decorator/file_deps.py:never_fresh_reads @344e3283 -->
 **What happened.** Your code read a file through a library that opens it in
 compiled code: `cv2.imread` or `cv2.imreadmulti`, `netCDF4.Dataset`, DuckDB's
 `read_csv`, `read_json`, `read_parquet`, `from_csv_auto` or `from_parquet`,
@@ -1657,8 +1660,10 @@ compiled code: `cv2.imread` or `cv2.imreadmulti`, `netCDF4.Dataset`, DuckDB's
 hook](known-limitations.md#reads-through-a-loader-cash-cannot-see) sees that
 open. Where it is off (on macOS, or with `CASH_NATIVE_FILE_HOOK=0`) nothing
 does. The message names the reader, the file and the line that called it. A
-cached function keeps the result, but it is never served: the call runs again
-every time. A notebook statement is not stored, and it runs again every time.
+cached function's call is not stored, nor a notebook statement's: an entry
+holding a file nobody can check would never be served. It runs again every
+time, and the next call's miss says `not stored last time: <reader> read
+<file> in compiled code, which cash cannot check`.
 
 **Why it matters.** The function or statement gets no speed-up from cash.
 Nothing stale is served: with the file missing from the entry, a hit would
@@ -1747,12 +1752,14 @@ code](#silencing-one-code).
 
 <span class="md-tag cash-warning-path">both paths</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-<!-- claim: cash/tracking/io_watch.py:_failed @f0b3769c, cash/tracking/file_tracker.py:FileAccessTracker.note_tracking_failed @b3112b5d -->
+<!-- claim: cash/tracking/io_watch.py:_failed @f0b3769c, cash/tracking/file_tracker.py:FileAccessTracker.note_tracking_failed @7ebdf6cd, cash/decorator/file_deps.py:never_fresh_reads @344e3283 -->
 **What happened.** Your code read a file, and cash's own code that records
 the read raised an error. The message names the file, or the event when
-there is no file, and the error. A cached function keeps the result, but it
-is never served: the call runs again every time. A notebook statement is not
-stored, and it runs again every time.
+there is no file, and the error. A cached function's call is not stored, nor
+a notebook statement's: an entry holding a read nobody can check would never
+be served. It runs again every time, and the next call's miss says `not
+stored last time: cash failed to record <the read> (<error>), so it cannot be
+checked`.
 
 **Why it matters.** The function or statement gets no speed-up from cash.
 Nothing stale is served: with the read missing from the entry, a hit could

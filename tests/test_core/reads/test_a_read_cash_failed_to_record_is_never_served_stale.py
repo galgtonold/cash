@@ -96,6 +96,19 @@ def test_a_handler_that_fails_leaves_the_call_never_served(tmp_path, monkeypatch
     assert load() == "v2-longer"
 
 
+def test_a_call_whose_read_was_not_recorded_is_not_stored(tmp_path, monkeypatch):
+    load, data = _reader(tmp_path)
+    monkeypatch.setattr(FileAccessTracker, "track_path", _broken)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        assert load() == "v1"
+        assert load() == "v1"
+    assert load.cache_info()["miss_reasons"] == {"no entry yet": 1, "not stored last time": 1}
+    why = str(load.explain())
+    assert f"not stored last time: cash failed to record the read of {data}" in why
+    assert "so it cannot be checked" in why
+
+
 def test_a_failed_handler_is_noted_on_the_block_and_its_parents(tmp_path, monkeypatch):
     data = tmp_path / "in.txt"
     data.write_text("v1", encoding="utf-8")
