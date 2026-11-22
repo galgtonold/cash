@@ -21,7 +21,7 @@ import numpy as np
 from cash import Cash, closure_sharing
 from cash.backends.persistence_policy import PersistencePolicy
 from cash.closure_sharing import closures_sharing
-from cash.notebook.statement import processor
+from cash.notebook.statement import processor, store
 from tests._cell_driver import run_cash_cell
 
 MADE: list = []
@@ -99,6 +99,9 @@ def test_past_its_time_the_result_is_returned_and_not_cached(tmp_path, monkeypat
 
 def test_in_a_notebook_past_its_time_the_statement_runs_again(cash_magics, monkeypatch):
     monkeypatch.setattr(PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: False)
+    # Priced as worth storing: 50,000 objects built this quickly cost more
+    # to store than to build (`many_objects_cost`), and are never checked.
+    monkeypatch.setattr(store, "many_objects_cost", lambda value: None)
     # The look for other names sharing an object is not what is tested.
     monkeypatch.setattr(processor, "SHARE_CHECK_FLOOR_S", 60.0)
     monkeypatch.setattr(closure_sharing, "CLOSURE_CHECK_FLOOR_S", 0.0)
