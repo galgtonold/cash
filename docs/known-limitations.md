@@ -714,6 +714,23 @@ Python 3.12 or newer for those.
 **Fix:** bind the object to a variable in a cell of its own
 (`log = logging.getLogger("app")`) and read it through that variable.
 
+### A library setting before Python 3.12
+
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_settings_unseen @140d15ce -->
+A library setting changed in a cell (`sklearn.set_config(...)`,
+`pd.set_option(...)`, `np.seterr(...)`) moves no lineage of a name a statement
+reads when the statement reaches the library through a name it imported or a
+method: `Y = StandardScaler().fit_transform(X)`, `s = df.to_string()`. On
+Python 3.12 and newer cash records the settings the statement's run read and
+runs it again when one changed. Before Python 3.12, or with `CASH_TRACE=0`,
+nothing records them, and the statement is restored with the result made under
+the old setting; [KEY-LIBRARY-STATE-UNSEEN](warnings.md#key-library-state-unseen)
+says so once, the first time such a statement is stored. A statement naming the
+module the setting was made on (`sklearn.preprocessing.StandardScaler()`) runs
+again either way.
+**Fix:** run on Python 3.12 or newer with tracing on, or put
+`# @cash:no-cache` on the statement.
+
 ### A special method that changes state outside its object
 
 <!-- claim: cash/notebook/statement/unseen_writes.py:writers_without_a_trace @25806177, cash/notebook/statement/unseen_writes.py:own_writes @6e4e16cd -->

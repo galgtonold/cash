@@ -128,6 +128,8 @@ class Shadow:
         self.traces: dict[str, dict] = {}
         self.groups: dict[str, collections.OrderedDict] = {}
         self._items: dict[tuple, tuple] = {}
+        #: A ``"lib"`` item's JSON -> its items (`_library_now`).
+        self._lib_parsed: dict[str, list[tuple]] = {}
         self._call_groups: collections.OrderedDict[str, tuple[str, frozenset]] = collections.OrderedDict()
         self._loaded = False
         self._log = None
@@ -481,9 +483,61 @@ class Shadow:
                     add(("global", module, name), self._global_digest(module, name, ns, snap if ns is nb else None))
         for name in inputs:
             add(("global", nbn, name), self._global_digest(nbn, name, nb, snap))
+        lib = self._library_item(unit, nbn)
+        if lib is not None:
+            add(lib, _LIB_HELD)
         out = [_interned((*k, v), self._items) for k, v in found_items.items()]
         out.extend(unit.extra)
         return tuple(dict.fromkeys(out)), markers, notes
+
+    @staticmethod
+    def _library_item(unit, nbn: str) -> tuple | None:
+        """``("lib", items)``: the library settings the code *unit* ran read,
+        as it first read them (`library_reads.build`, as for a traced
+        ``@cash.cache`` call), *items* their JSON; None when it read none.
+        A statement reaching a library through a name it imported or a
+        method (``StandardScaler().fit_transform(X)``) has no lineage that
+        a setting (``sklearn.set_config``) moves: these are checked before
+        its entry is served (`_now`). Names of the notebook's own are its
+        lineages' to follow, and left out, and so is a setting the run
+        itself changed (`library_reads.build`'s *changed_kept*): the first
+        use of a library in a process fills its registries as it imports
+        (torch's ``torch.library._defs``), and a statement checked on what
+        it first read ran again on its next run. A read that cannot be
+        compared (a ``ContextVar`` holding an object) leaves the trace
+        without it."""
+        from ...decorator import code_trace, library_reads
+
+        if attribute_or(unit, "lib_first", None) is None:
+            return None
+        found, _why = library_reads.build(
+            code_trace.library_codes(unit),
+            unit.lib_items,
+            unit.lib_cells,
+            unit.lib_keys,
+            unit.lib_first,
+            {**unit.receivers, **unit.lib_receivers},
+            changed_kept=False,
+        )
+        found = [list(item) for item in found or () if item[1] != nbn]
+        if not found:
+            return None
+        return ("lib", json.dumps(found))
+
+    def _library_now(self, text: str) -> str:
+        """`_LIB_HELD` while every library setting of a ``"lib"`` item
+        holds the value it was stored under; else which one moved."""
+        from ...decorator import library_reads
+
+        items = self._lib_parsed.get(text)
+        if items is None:
+            if len(self._lib_parsed) > 4096:
+                self._lib_parsed.clear()
+            # One list per text: `library_reads.changed` keeps its checks
+            # of a list, and what each matched last, by the list's identity.
+            items = self._lib_parsed[text] = [tuple(item) for item in json.loads(text)]
+        moved = library_reads.changed(items)
+        return _LIB_HELD if moved is None else moved
 
     def _followed(self, code: types.CodeType, g: Mapping[str, Any], unit, nb: Mapping[str, Any]) -> bool:
         """Does the trace follow *code*'s lookups by a string: what it called
@@ -634,6 +688,8 @@ class Shadow:
             from ...decorator.code_trace import first_import_digest
 
             now = first_import_digest(item[1], item[-1]) or "unreadable"
+        elif kind == "lib":
+            now = self._library_now(item[1])
         else:
             now = None
         memo[item[:-1]] = now
@@ -919,6 +975,11 @@ class Shadow:
             why = f"code it ran changed since it was stored{named}"
         elif kind == "environ":
             why = "an environment variable the code it ran reads changed since it was stored"
+        elif kind == "lib":
+            # As a traced ``@cash.cache`` call's miss says it.
+            return f"{now}, a library setting the run read, changed" + (
+                f" (+{len(changes) - 1} more)" if len(changes) > 1 else ""
+            )
         else:
             why = f"a value the code it ran reads changed since it was stored{named}"
         more = f" (+{len(changes) - 1} more)" if len(changes) > 1 else ""
@@ -1042,6 +1103,8 @@ class Shadow:
 
 
 _UNSET = object()
+#: The digest of a ``"lib"`` item whose settings all hold (`Shadow._library_now`).
+_LIB_HELD = "held"
 
 
 def _defaults(fn: Any, code: Any, value_digest: Callable[[Any], str]) -> str:
