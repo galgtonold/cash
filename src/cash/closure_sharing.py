@@ -422,16 +422,22 @@ def _read_in_bulk(kind: type) -> bool:
     found = _IN_BULK.get(type_key(kind))
     if found is None:
         mro = kind.__mro__
-        found = not (
-            kind is types.MethodType
-            or issubclass(kind, _BUILTIN_CONTAINERS)
-            or issubclass(kind, io.IOBase)
-            or any("_cash_wrapped_stream" in _CLASS_DICT(klass) for klass in mro)
-        ) and (
-            _users(kind)
-            or all(
-                klass.__flags__ & _HEAP_TYPE and not any(hook in _CLASS_DICT(klass) for hook in _REDUCE_HOOKS)
-                for klass in mro[:-1]
+        found = (
+            not (
+                kind is types.MethodType
+                or issubclass(kind, _BUILTIN_CONTAINERS)
+                or issubclass(kind, io.IOBase)
+                or any("_cash_wrapped_stream" in _CLASS_DICT(klass) for klass in mro)
+            )
+            and (
+                _users(kind)
+                # Its C ``__reduce__`` hands pickle its ``__dict__``, which
+                # `_object_parts` reads: a million of them were read one by one.
+                or kind is types.SimpleNamespace
+                or all(
+                    klass.__flags__ & _HEAP_TYPE and not any(hook in _CLASS_DICT(klass) for hook in _REDUCE_HOOKS)
+                    for klass in mro[:-1]
+                )
             )
         )
         found = _IN_BULK.put(kind, found)
