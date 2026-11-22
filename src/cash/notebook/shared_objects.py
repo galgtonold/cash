@@ -1194,6 +1194,7 @@ def view_base_names(
     seen: set[int] = set()
     plain_leaves = object_free_leaves()
     exact = exact_value_types()
+    flat: dict[type, bool] = {}
     stack = [value for value in values if not _plain_data.is_tree(value, plain_leaves)]
     pops = 0
     while stack:
@@ -1208,7 +1209,7 @@ def view_base_names(
         if found:
             bases.update(found)
             views.append(obj)
-        stack.extend(_may_hold_views(children_of(obj) or (), exact))
+        stack.extend(_may_hold_views(children_of(obj) or (), exact, value_types, flat))
     del stack, seen
     if not bases or _bases_held_by_views_alone(views):
         return set()
@@ -1229,14 +1230,22 @@ def view_base_names(
     return names
 
 
-def _may_hold_views(children: Any, exact: frozenset[type]) -> Any:
+def _may_hold_views(
+    children: Any, exact: frozenset[type], value_types: tuple[type, ...], flat: dict[type, bool]
+) -> Any:
     """*children* but what can hold no array: values and tuples of them,
     and, many lists at once, lists of those, told at C speed. An object
     column of 87,000 sessions, each a list of 20 ``(action, time)``
     records, was walked a record at a time (14 s), and cut short by the
     walk budget it linked the statement to every variable it read
-    (student_8)."""
+    (student_8). Many records holding values alone are told at C speed
+    too, as the share check tells them (`_records_of_values`,
+    `_value_sets_in`): with numpy loaded, a list of 300,000
+    ``SimpleNamespace`` records, or of dicts each holding a set of tags,
+    was walked a record at a time past the share check's budget."""
     if not children or _values_in_tuples(children, exact):
+        return ()
+    if len(children) >= _FLAT_RECORDS_MIN and records_hold_values(children, exact, value_types, flat):
         return ()
     is_list = list(map(operator.is_, map(type, children), itertools.repeat(list)))
     if sum(is_list) < _LISTS_AT_ONCE:
@@ -1245,6 +1254,27 @@ def _may_hold_views(children: Any, exact: frozenset[type]) -> Any:
     if not _values_in_record_lists(lists, exact):
         return children
     return list(itertools.compress(children, map(operator.not_, is_list)))
+
+
+def records_hold_values(
+    children: Any, exact: frozenset[type], value_types: tuple[type, ...], flat: dict[type, bool]
+) -> bool:
+    """Are *children* values of the *exact* types, besides either lists and
+    dicts holding those, or sets, frozensets and tuples of them
+    (`_value_sets_in`), or records of one class `_flat_record_class` admits
+    whose attributes are those values (`_records_of_values`)? None of these
+    can hold an array or a frame, so a walk for one need not read them.
+    Told at C speed; *flat* is the walk's memo of `_flat_record_class`."""
+    kinds = set(map(type, children)) - exact
+    if not kinds:
+        return True
+    others = [child for child in children if type(child) in kinds]
+    if kinds <= _FLAT_CONTAINERS:
+        return _value_sets_in(others, exact) is not None
+    if len(kinds) != 1:
+        return False
+    (kind,) = kinds
+    return _flat_kind(kind, others, value_types, flat) and _records_of_values(others, exact)
 
 
 def _bases_held_by_views_alone(views: list[Any]) -> bool:
@@ -4769,25 +4799,37 @@ def _records_left(
     if len(kinds) != 1:
         return None
     (kind,) = kinds
-    known = flat.get(kind)
-    if known is None:
-        known = flat[kind] = _flat_record_class(kind, children, value_types)
-    if not known:
+    if not _flat_kind(kind, children, value_types, flat):
         return None
     # Counted first, while nothing here but *children* holds a record.
     counts = list(map(sys.getrefcount, children))
     mixed = len(kinds) != len(set(map(type, children)))
     records = [child for child in children if type(child) is kind] if mixed else children
+    if not _records_of_values(records, exact):
+        return None
+    del records
+    return _left_by_count(children, kinds, leaves, counts)
+
+
+def _flat_kind(kind: type, children: list[Any], value_types: tuple[type, ...], flat: dict[type, bool]) -> bool:
+    """`_flat_record_class`, asked once per walk for each class (*flat*)."""
+    known = flat.get(kind)
+    if known is None:
+        known = flat[kind] = _flat_record_class(kind, children, value_types)
+    return known
+
+
+def _records_of_values(records: list[Any], exact: frozenset[type]) -> bool:
+    """Does the own ``__dict__`` of each of *records*, instances of a class
+    `_flat_record_class` admits, hold values of the *exact* types alone,
+    keyed by them? Told at C speed: nothing is below such a record."""
     try:
         states = list(map(_OWN_DICT, records))
     except (AttributeError, TypeError):
-        return None
-    if set(map(type, states)) != {dict} or not exact.issuperset(
+        return False
+    return set(map(type, states)) == {dict} and exact.issuperset(
         map(type, itertools.chain.from_iterable(map(dict.values, states)))
-    ):
-        return None
-    del states, records
-    return _left_by_count(children, kinds, leaves, counts)
+    )
 
 
 #: The containers `_records_left` takes by count when each holds values alone.
@@ -4818,7 +4860,7 @@ def _lone_flat_containers_left(
     return _left_by_count(children, kinds, leaves, counts)
 
 
-#: What `_values_and_lone_sets` reads below a lone list or dict.
+#: What `_value_sets_in` reads below a list or dict.
 _VALUE_SETS = frozenset((set, frozenset, tuple))
 
 
@@ -4830,8 +4872,20 @@ def _values_and_lone_sets(lone: list[Any], exact: frozenset[type]) -> bool:
     shared, and nothing is below them. A million records each holding a
     small set of tags (``{"i": i, "tags": {i % 7}}``) were walked a record
     and a set at a time, past the share check's time."""
-    lists = [container for container in lone if type(container) is list]
-    dicts = [container for container in lone if type(container) is dict]
+    sets = _value_sets_in(lone, exact)
+    # Counted as `_LONE_RECORD` counts a record: its container's reference,
+    # and the one list holding it here.
+    return sets is not None and all(map(_LONE_RECORD.__eq__, map(sys.getrefcount, sets)))
+
+
+def _value_sets_in(containers: list[Any], exact: frozenset[type]) -> list[Any] | None:
+    """The sets the lists and dicts *containers* hold, when they hold values
+    of the *exact* types alone, or sets, frozensets and tuples of those
+    alone; None when they hold anything else. Told at C speed. The list
+    returned is the one thing here holding the sets, for a caller to count
+    them by (`_values_and_lone_sets`)."""
+    lists = [container for container in containers if type(container) is list]
+    dicts = [container for container in containers if type(container) is dict]
     # Taken at C speed: a step per item was most of the check's time. The
     # keys are values as a rule, told without a list of them.
     keys = (
@@ -4850,12 +4904,10 @@ def _values_and_lone_sets(lone: list[Any], exact: frozenset[type]) -> bool:
     if not _VALUE_SETS.issuperset(map(type, nested)) or not exact.issuperset(
         map(type, itertools.chain.from_iterable(nested))
     ):
-        return False
+        return None
     sets = list(itertools.compress(nested, map(operator.is_, map(type, nested), itertools.repeat(set))))
     del nested
-    # Counted as `_LONE_RECORD` counts a record: its container's reference,
-    # and the one list holding it here.
-    return all(map(_LONE_RECORD.__eq__, map(sys.getrefcount, sets)))
+    return sets
 
 
 def _left_by_count(

@@ -49,6 +49,7 @@ from .shared_objects import (
     is_value,
     library_value_types,
     object_free_leaves,
+    records_hold_values,
 )
 
 logger = logging.getLogger(__name__)
@@ -369,6 +370,7 @@ def _borrowers_in(values: Iterable[Any]) -> list[tuple[Any, str]]:
     found: list[tuple[Any, str]] = []
     seen: set[int] = set()
     plain_leaves = object_free_leaves()
+    flat: dict[type, bool] = {}
     stack = [value for value in values if not _plain_data.is_tree(value, plain_leaves)]
     pops = 0
     while stack:
@@ -388,6 +390,12 @@ def _borrowers_in(values: Iterable[Any]) -> list[tuple[Any, str]]:
             continue
         children = children_of(obj)
         if not children or exact.issuperset(map(type, children)):
+            continue
+        if len(children) >= _TREE_MIN and records_hold_values(children, exact, value_types, flat):
+            # Records of values alone hold no frame, told at C speed: with
+            # numpy loaded, a list of 300,000 ``SimpleNamespace`` records,
+            # or of dicts each holding a set of tags, was walked a record at
+            # a time past the share check's budget.
             continue
         for child in children:
             kind = type(child)

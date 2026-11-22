@@ -169,7 +169,7 @@ Each of these misses a change, or applies one a second time.
 
 ### Mutating through an alias
 
-<!-- claim: cash/notebook/statement/derivation_edges.py:record_shared_object_edges @1d3cdc8d, cash/notebook/statement/derivation_edges.py:bump_derived_lineages @a018e4c3, cash/notebook/shared_objects.py:share_group @120f06ea, cash/notebook/shared_objects.py:view_base_names @3dee76b9, cash/notebook/statement/processor.py:StatementProcessor.record_structure_share_edges @7ac0bc53, cash/notebook/statement/processor.py:StatementProcessor._link_inputs_kept_by @7c616bf8 -->
+<!-- claim: cash/notebook/statement/derivation_edges.py:record_shared_object_edges @1d3cdc8d, cash/notebook/statement/derivation_edges.py:bump_derived_lineages @a018e4c3, cash/notebook/shared_objects.py:share_group @120f06ea, cash/notebook/shared_objects.py:view_base_names @7682dd57, cash/notebook/statement/processor.py:StatementProcessor.record_structure_share_edges @7ac0bc53, cash/notebook/statement/processor.py:StatementProcessor._link_inputs_kept_by @7c616bf8 -->
 When a statement leaves two names sharing an object, cash links them:
 
 - an alias: `log = history`;
