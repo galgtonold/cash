@@ -2479,7 +2479,7 @@ changes something outside its objects (`__add__` appending to a global
 list), so the operator may run it. The message names the container. It is
 shown once for each.
 
-<!-- claim: cash/tracking/lookups_seen.py:_note_value @6396f5f3, cash/tracking/lookups_seen.py:_warn_too_big @347ff5b1, cash/tracking/lookups_seen.py:_note_held @083b7eb0 -->
+<!-- claim: cash/tracking/lookups_seen.py:_note_value @5444add6, cash/tracking/lookups_seen.py:_warn_too_big @347ff5b1, cash/tracking/lookups_seen.py:_note_held @083b7eb0 -->
 It is shown too, once for each, when a statement, or a function of yours it
 calls, reads a dict, list or tuple through a module (`mod.ROWS`,
 `logging.Logger.manager.loggerDict`) that holds more than 100,000 items, too

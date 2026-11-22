@@ -141,6 +141,13 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
       `MemoryHandler`, a `QueueHandler`) changes with every record: a
       statement logging to it runs every time, and its reason names the
       handler.
+    <!-- claim: cash/tracking/lookups_seen.py:_note_settings @9b2a8c7a, cash/tracking/lookups_seen.py:SETTINGS_MAPPINGS @aff05a26 -->
+    - **matplotlib's `rcParams`**, when its code, or a function of yours it
+      calls, reads it through a module (`plt.rcParams["font.size"]`,
+      `matplotlib.rcParams.get(...)`), on Python 3.12 or newer: the entry
+      keeps its state as the statement found it, and is served only while
+      it holds the same, however another cell set it
+      (`plt.rcParams["font.size"] = 7`).
     <!-- claim: cash/notebook/shadow/__init__.py:Shadow._library_item @c9b0b726, cash/notebook/shadow/__init__.py:Shadow._library_now @3296947c -->
     - **A library setting its run read**, on Python 3.12 and newer:
       `sklearn.set_config(...)` or a `sklearn.config_context(...)` around

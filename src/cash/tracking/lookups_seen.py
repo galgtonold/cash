@@ -523,7 +523,9 @@ def _note_value(value: Any, read: str) -> None:
     elif kind is list or kind is tuple:
         items = value
     else:
-        if _may_note(kind):
+        if kind in _SETTINGS_KINDS:
+            _note_settings(value)
+        elif _may_note(kind):
             _note_object(value)
         return
     watch = _ACTIVE
@@ -547,6 +549,70 @@ def _note_value(value: Any, read: str) -> None:
                 plain[id(item)] = item
             except TypeError:  # one that takes no weak reference: reduced each time
                 pass
+
+
+#: The settings a library keeps in a mapping of its own class, read by
+#: subscript (``plt.rcParams["font.size"]``): ``(module, attribute)`` of
+#: each. No call of the library's reads them, so nothing else sees the
+#: read; the mapping is noted with its state as a logger is
+#: (`_note_settings`), found again by its module and name.
+SETTINGS_MAPPINGS = (("matplotlib", "rcParams"),)
+
+
+def _settings_kinds() -> frozenset[type]:
+    """The classes of `SETTINGS_MAPPINGS` loaded now: a set lookup decides
+    whether a value read may be one."""
+    found = set()
+    for module, attr in SETTINGS_MAPPINGS:
+        held = vars(sys.modules[module]).get(attr) if module in sys.modules else None
+        if held is not None:
+            found.add(type(held))
+    return frozenset(found)
+
+
+class _SettingsKinds:
+    """`_settings_kinds`, read again once a module of `SETTINGS_MAPPINGS`
+    is imported after the last read."""
+
+    def __init__(self) -> None:
+        self._loaded: tuple[bool, ...] = ()
+        self._kinds: frozenset[type] = frozenset()
+
+    def __contains__(self, kind: type) -> bool:
+        loaded = tuple(module in sys.modules for module, _attr in SETTINGS_MAPPINGS)
+        if loaded != self._loaded:
+            self._loaded, self._kinds = loaded, _settings_kinds()
+        return kind in self._kinds
+
+
+_SETTINGS_KINDS = _SettingsKinds()
+
+
+def _note_settings(value: Any) -> None:
+    """Note *value*, when it is one of `SETTINGS_MAPPINGS`, with its state,
+    in each collector open, found again by its module and name
+    (`kept_state.by_name`): the statement reading it is served only while
+    it holds what it held then (`reference_states.changed`)."""
+    import pickle
+
+    for module, attr in SETTINGS_MAPPINGS:
+        held = sys.modules.get(module)
+        if held is None or vars(held).get(attr) is not value:
+            continue
+        recipe = pickle.dumps((kept_state.by_name, (module, attr)), protocol=4)
+        note_known_by_reference(recipe)
+        watch = _ACTIVE
+        key = base64.b64encode(recipe).decode("ascii")
+        missing = [] if watch is None else [found for found in watch.collectors if key not in found]
+        if not missing:
+            return
+        try:
+            digest = kept_state.state_digest(value)
+        except Exception:  # noqa: BLE001 - whatever pickling it raises: never served
+            digest = ""
+        for found in missing:
+            found[key] = digest
+        return
 
 
 #: ``id -> object`` of the objects a module's container held, found not to
