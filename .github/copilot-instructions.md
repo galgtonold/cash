@@ -253,10 +253,11 @@ format is cleared on first open.
   machine does not change what is stored. A test about the write cost sets
   its own rate, or deletes the variable to measure.
 - `perf` marks wall-clock threshold tests; CI's unit job skips them.
-- CI (`ci.yml`) has two tiers: pushes to `claude/**` and `cext/**` run a
-  smaller, sharded matrix that fits the free runner limits; `main`, pull
-  requests and runs by hand run every OS and Python. Run it by hand on a
-  branch before merging a change that could differ by platform.
+- CI (`ci.yml`) has two tiers: pushes to the merge branch (`claude/batch` and a number)
+  run a smaller, sharded matrix that fits the free runner limits (no Windows
+  3.10); `main`, pull requests and runs by hand run every OS and Python.
+  Other branches run CI only by hand (workflow_dispatch). Run the full tier
+  by hand on the merge branch before moving main.
   `benchmarks/tests/` tests the benchmark tooling and runs separately.
 - Before moving main: `python tools/test_selection/impacted.py --run`. It runs
   the tests whose recorded coverage reaches the diff from `origin/main`

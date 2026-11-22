@@ -38,10 +38,13 @@ yourself. Figures on this page are derived from the repository by
 | Benchmarks | weekly, and when `benchmarks/` changes | Linux | the benchmark tooling tests, and the `perf` tests, which never block |
 | Release | when a release is published | Linux | the claim-drift check, blocking; then the build and `twine check` |
 
-A push to a working branch (`claude/**`, `cext/**`) runs a smaller tier so it
-never queues: the unit suite on Linux with Python 3.13 in 3 shards, and on
-Windows and macOS with Python 3.10 and 3.14 in 2 shards each, and the
-integration core set on Python 3.10, 3.13 and 3.14; the other checks run as above.
+A push to the working branch everything is merged into (`claude/batch` and a number)
+runs a smaller tier so it never queues: the unit suite on Linux with Python
+3.13 in 3 shards, on Windows with Python 3.14 in 4, on macOS with Python 3.10
+in 2 and 3.14 in 3, and the integration core set on Python 3.10 and 3.14; the
+other checks run as above. Windows with Python 3.10, the slowest of all, runs
+every night on the merge branch (`nightly.yml`), and in the full tier: when
+main moves, on pull requests, and by hand before main moves. Other working branches run CI only by hand.
 
 Two rules apply to every test run. `xfail_strict` is on, so a test marked as
 an expected failure fails the build once it passes. And a test fails if any

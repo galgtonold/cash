@@ -237,8 +237,9 @@ class TestBothTiersRunTheSuite:
             n = len(shards)
             assert sorted(shards) == [f"{i}/{n}" for i in range(1, n + 1)], (key, shards)
         oldest, newest = _supported_pythons()[0], _supported_pythons()[-1]
-        for os_name in ("windows-latest", "macos-latest"):
-            assert {(os_name, oldest), (os_name, newest)} <= set(groups), groups
+        # The oldest Python on macOS, the newest on Windows and macOS: Windows
+        # on the oldest, the slowest job of all, runs in the full tier only.
+        assert {("macos-latest", oldest), ("macos-latest", newest), ("windows-latest", newest)} <= set(groups), groups
         assert any(os_name == "ubuntu-latest" for os_name, _ in groups), groups
         assert {oldest, newest} <= set(_tiers()["branch"]["core"])
 
