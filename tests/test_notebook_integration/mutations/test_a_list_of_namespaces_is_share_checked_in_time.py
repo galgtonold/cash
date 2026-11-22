@@ -6,6 +6,10 @@ then the heap was searched for holders until that time ran out too, and the
 cell ended in NOTEBOOK-SHARE-UNCHECKED, 8 s more than the 1.5 s it took to
 build them. Each record that only its list holds, told by reference count,
 needs no walk, as for records of a class of the notebook's.
+
+numpy is imported first: with it loaded, the walks for array views and
+borrowed memory read the same records, and took them a record at a time
+past the check's time too.
 """
 
 import pytest
@@ -18,7 +22,9 @@ N = 300_000
 def test_a_list_of_namespaces_ends_without_the_unchecked_warning(nb_runner):
     nb_runner.create_notebook(
         [
-            "import cash\n%cash_on",
+            # numpy loaded, as a warm kernel may have it from an earlier
+            # test: the walks for views and borrowed memory run only then.
+            "import numpy\nimport cash\n%cash_on",
             "import types",
             f"records = [types.SimpleNamespace(i=i, x=i * 0.5) for i in range({N})]",
             "first = records[0]",
