@@ -37,6 +37,18 @@ PATTERNS = {
     "user-testing role": re.compile(r"\b" + "test" + r"ers?\b", re.IGNORECASE),
 }
 
+# Text each pattern cannot match without, lower-cased: a file without it
+# is not searched for the pattern (the session code has none).
+_NEEDS = {
+    "private tracker id": _ID.lower(),
+    "test round": "round",
+    "test wave": "wave",
+    "test batch": "batch",
+    "numbered finding": "finding",
+    "internal task": "task-",
+    "user-testing role": "test" + "er",
+}
+
 # A round code wrapped onto the next line of a comment or docstring, which the
 # line-by-line check cannot see: "(round" at a line end, "28)" on the next.
 WRAPPED_ROUND = re.compile(r"\bround\r?\n[ \t]*(?:#[ \t]*)?\d+\b", re.IGNORECASE)
@@ -87,12 +99,20 @@ def test_no_tracker_ids_or_test_round_codes_in_tracked_files():
         text = _read_text(rel)
         if text is None:
             continue
-        for n, line in enumerate(text.splitlines(), 1):
-            for what, pattern in PATTERNS.items():
+        # Line by line only for the patterns the whole text matches: none
+        # anchors to a line, so the text matches wherever a line does.
+        lower = text.lower()
+        hit = [
+            (what, pattern)
+            for what, pattern in PATTERNS.items()
+            if _NEEDS.get(what, "") in lower and pattern.search(text)
+        ]
+        for n, line in enumerate(text.splitlines() if hit else (), 1):
+            for what, pattern in hit:
                 m = pattern.search(line)
                 if m:
                     found.append(f"{rel}:{n}: {what} {m.group(0)!r}: {line.strip()[:120]}")
-        for m in WRAPPED_ROUND.finditer(text):
+        for m in WRAPPED_ROUND.finditer(text) if "round" in lower else ():
             n = text.count("\n", 0, m.start()) + 1
             found.append(f"{rel}:{n}: test round wrapped onto the next line {m.group(0)!r}")
     assert not found, (
