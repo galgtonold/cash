@@ -13,6 +13,8 @@ import gc
 import weakref
 from types import SimpleNamespace
 
+import pytest
+
 from cash import Cash, install_paths, source_norm
 from cash.notebook import string_lookups
 from tests import _between_tests
@@ -46,7 +48,10 @@ def test_a_collected_cash_no_longer_holds_its_backend_through_atexit():
 
 
 def test_ipython_output_history_is_emptied():
-    from IPython.core.history import HistoryManager, HistoryOutput
+    history = pytest.importorskip("IPython.core.history")
+    if not hasattr(history, "HistoryOutput"):
+        pytest.skip("IPython 8 keeps no output history on the class")
+    HistoryManager, HistoryOutput = history.HistoryManager, history.HistoryOutput
 
     HistoryManager.outputs[1].append(HistoryOutput(output_type="execute_result", bundle={"text/plain": "1"}))
     _between_tests.forget_ipython_outputs()
