@@ -588,9 +588,7 @@ def _users_module_functions() -> list[types.FunctionType]:
     held in a value (``{'fn': mylib.helper, 'rows': rows}``) runs the
     module's code, as a class held there does."""
     found: list[types.FunctionType] = []
-    for module in list(sys.modules.values()):
-        if not _users_module(module):
-            continue
+    for module in _users_modules():
         name = module.__name__
         for value in list(vars(module).values()):
             if type(value) is types.FunctionType and value.__module__ == name:
@@ -632,15 +630,31 @@ def users_module_classes() -> list[type]:
 def _users_module_classes() -> list[type]:
     """The classes defined at the top of the user's loaded modules."""
     found: list[type] = []
-    for module in list(sys.modules.values()):
-        if not _users_module(module):
-            continue
+    for module in _users_modules():
         name = module.__name__
         for value in list(vars(module).values()):
             if isinstance(value, type) and value.__flags__ & _HEAP_TYPE and value.__module__ == name:
                 found.append(value)
     return found
 
+
+def _users_modules() -> list[types.ModuleType]:
+    """The user's loaded modules (`_users_module`), in ``sys.modules``
+    order. Told again only when ``sys.modules`` holds other module objects
+    than when last asked: every statement asked up to 9 times, each a pass
+    over some 1,400 modules (2-3 ms).
+    """
+    loaded = list(sys.modules.values())
+    last, users = _USERS_MODULES
+    if len(loaded) != len(last) or not all(map(operator.is_, loaded, last)):
+        users = [module for module in loaded if _users_module(module)]
+        _USERS_MODULES[:] = [loaded, users]
+    return list(users)
+
+
+#: ``[the values of sys.modules, the user's among them]`` when
+#: `_users_modules` last read them.
+_USERS_MODULES: list[Any] = [[], []]
 
 #: Module name -> (the module, whether it is one of the user's), asked once
 #: per module object.
