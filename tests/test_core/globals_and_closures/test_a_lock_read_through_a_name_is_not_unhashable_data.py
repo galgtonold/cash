@@ -36,6 +36,8 @@ HELPERS = """
 """
 
 JOB = """
+    import sys
+
     import cash
     import lockreg
 
@@ -46,7 +48,9 @@ JOB = """
 
 
     info = (total(2), total.cache_info())
-    print(info[0], info[1]["misses"], [w["code"] for w in info[1]["warnings"]])
+    # Below Python 3.12 the first call a process stores says this once.
+    unseen = "KEY-LIBRARY-STATE-UNSEEN" if sys.version_info < (3, 12) else ""
+    print(info[0], info[1]["misses"], [w["code"] for w in info[1]["warnings"] if w["code"] != unseen])
 """
 
 

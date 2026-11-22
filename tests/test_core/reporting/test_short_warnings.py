@@ -9,6 +9,7 @@ says: ``f.cache_info()['warnings']``.
 
 from __future__ import annotations
 
+import sys
 import textwrap
 import warnings
 
@@ -222,7 +223,10 @@ def test_a_script_shows_one_line_and_no_echoed_source(tmp_path):
     assert "main.py:11: CashImpurityWarning: [IMPURE-OBSERVED-EFFECTS]" in ours[0]
     assert "# the echoed line" not in err, err
     assert "# their echoed line" in err, "another warning keeps Python's own format"
-    assert len(lines) == 3, err
+    # Below Python 3.12 the first call a process stores also says this, in one line too.
+    unseen = [line for line in lines if "[KEY-LIBRARY-STATE-UNSEEN]" in line]
+    assert len(unseen) == (1 if sys.version_info < (3, 12) else 0), err
+    assert len(lines) == 3 + len(unseen), err
 
 
 def test_the_variable_asks_for_the_full_text(tmp_path):

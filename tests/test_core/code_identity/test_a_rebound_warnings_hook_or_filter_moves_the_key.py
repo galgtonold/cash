@@ -362,6 +362,10 @@ def test_an_entry_of_a_run_that_warned_is_checked_in_another_process(tmp_path):
     store = str(tmp_path / ".cash")
 
     def run(*flags):
+        if sys.version_info < (3, 12):
+            # The first call a process stores says this once there; it is
+            # not the warning the body raises.
+            flags = (*flags, "-W", "ignore:[KEY-LIBRARY-STATE-UNSEEN]")
         out = subprocess.run(
             [sys.executable, *flags, str(script), store], capture_output=True, text=True, check=True, cwd=tmp_path
         )

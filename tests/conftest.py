@@ -578,6 +578,21 @@ def _lineage_aliases_forgotten():
 
 
 @pytest.fixture(autouse=True)
+def _settings_unseen_already_said(monkeypatch):
+    """Where no body is recorded (below Python 3.12, ``CASH_TRACE=0``),
+    count KEY-LIBRARY-STATE-UNSEEN as said already.
+
+    It is said once a process, for the first call stored: which test that
+    is depends on how xdist spreads them, and that test then saw one more
+    warning than it asked about. The tests of the note itself set
+    ``library_reads.UNSEEN_SAID`` back to ``False``."""
+    from cash.decorator import code_trace, library_reads
+
+    if not code_trace.on():
+        monkeypatch.setattr(library_reads, "UNSEEN_SAID", True)
+
+
+@pytest.fixture(autouse=True)
 def _reducer_veto_put_back():
     """Disarm the reducer veto a test's ``%cash_on`` left armed.
 

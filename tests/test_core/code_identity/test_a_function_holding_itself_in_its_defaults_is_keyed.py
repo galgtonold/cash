@@ -67,6 +67,8 @@ def test_a_function_holding_itself_caches_across_processes(tmp_path: Path):
     (tmp_path / "job.py").write_text(
         textwrap.dedent(
             """
+            import sys
+
             import cash
 
 
@@ -91,7 +93,10 @@ def test_a_function_holding_itself_caches_across_processes(tmp_path: Path):
                 return helper(n)
 
 
-            print(g(1), g(1), g.cache_info()["miss_reasons"], len(g.cache_info()["warnings"]))
+            # Below Python 3.12 the first call a process stores says this once.
+            unseen = "KEY-LIBRARY-STATE-UNSEEN" if sys.version_info < (3, 12) else ""
+            said = [w for w in g.cache_info()["warnings"] if w["code"] != unseen]
+            print(g(1), g(1), g.cache_info()["miss_reasons"], len(said))
             """
         ),
         encoding="utf-8",

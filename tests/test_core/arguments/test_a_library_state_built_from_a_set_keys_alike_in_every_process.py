@@ -105,7 +105,9 @@ MAIN = """
         warnings.simplefilter("always")
         out = [total(params, Fit(params), Uval(2.0, 0.5)) for _ in range(2)]
     info = total.cache_info()
-    codes = sorted({str(getattr(w.message, "code", "")) for w in caught} - {""})
+    # Below Python 3.12 the first call a process stores says this once.
+    unseen = "KEY-LIBRARY-STATE-UNSEEN" if sys.version_info < (3, 12) else ""
+    codes = sorted({str(getattr(w.message, "code", "")) for w in caught} - {"", unseen})
     print(out, info["hits"], info["misses"], codes)
 """
 

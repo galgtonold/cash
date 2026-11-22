@@ -73,7 +73,9 @@ MAIN = """
     with warnings.catch_warnings(record=True) as caught:
         print(profile(float(sys.argv[1])), thermo.f119(float(sys.argv[1])))
     info = profile.cache_info()
-    codes = sorted({str(getattr(w.message, "code", "")) for w in caught} - {""})
+    # Below Python 3.12 the first call a process stores says this once.
+    unseen = "KEY-LIBRARY-STATE-UNSEEN" if sys.version_info < (3, 12) else ""
+    codes = sorted({str(getattr(w.message, "code", "")) for w in caught} - {"", unseen})
     print(info["hits"], info["misses"], codes)
 """
 

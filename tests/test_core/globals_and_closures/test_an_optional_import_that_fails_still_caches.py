@@ -97,7 +97,9 @@ JOB = textwrap.dedent("""
         warnings.simplefilter("always")
         print(" ".join(str(f(1)) for f in fns))
     print(" ".join(str(f.cache_info()["hits"]) for f in fns))
-    print(sorted({str(w.message).split("]")[0].lstrip("[") for w in caught if "KEY-" in str(w.message)}))
+    # Below Python 3.12 the first call a process stores says this once.
+    unseen = "KEY-LIBRARY-STATE-UNSEEN" if sys.version_info < (3, 12) else ""
+    print(sorted({str(w.message).split("]")[0].lstrip("[") for w in caught if "KEY-" in str(w.message)} - {unseen}))
 """)
 
 
