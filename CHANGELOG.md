@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- A `@cash.cache` call reaching scikit-learn is now checked on its
+  configuration. `sklearn.set_config(transform_output="pandas")`, a
+  `sklearn.config_context(...)` block and `sklearn.get_config()` read in the
+  function were not seen: scikit-learn keeps its configuration per thread
+  (`threading.local`), and cash stopped at that holder, so a call after the
+  change was served the ndarray made before it, and a DataFrame stored
+  inside a `config_context` block was served after it. A setting a library
+  keeps in a `threading.local` is now read as the calling thread sees it,
+  and a changed one misses with `library setting changed`.
+
 ### Changed
 - In a `@cash.cache` function, `# @cash:assume-safe` and
   `with cash.assume_safe():` now waive a change to a process setting

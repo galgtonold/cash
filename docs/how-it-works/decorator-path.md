@@ -69,8 +69,10 @@ A library's settings are not in the key: a library is keyed by its
 installed version. On Python 3.12 and newer each call records, as its body
 runs, the settings the code it ran read: an attribute chain from a module
 global that ends on plain data (`sc.settings.n_jobs`, also through a
-property of a settings class's metaclass; sklearn's `set_config` dict;
-pandas' options), the value of a `ContextVar` (NumPy's print options, one of
+property of a settings class's metaclass; pandas' options; through a
+`threading.local`, as the calling thread sees it: sklearn's `set_config` and
+`config_context` dict, and a thread that has not set it yet reading as
+sklearn's defaults), the value of a `ContextVar` (NumPy's print options, one of
 yours), NumPy's error handling and `decimal`'s context, and an attribute of a
 library's class a method of it reads off `self` or `cls` (`Model.scale = 5`
 set by your script before the call): an atom, an enum member or a tuple of
