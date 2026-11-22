@@ -42,7 +42,7 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
 
     A statement recomputes when any of these changed:
 
-    <!-- claim: cash/notebook/held_modules.py:held_module_parts @ce3d3076, cash/notebook/held_modules.py:held_data_part @7f1477b6, cash/notebook/held_functions.py:held_notebook_code @fd53b6c3, cash/notebook/ipython/autoreload_hook.py:in_place_reload @1a058feb -->
+    <!-- claim: cash/notebook/held_modules.py:held_module_parts @ce3d3076, cash/notebook/held_modules.py:held_data_part @7f1477b6, cash/notebook/held_functions.py:held_notebook_code @8761da44, cash/notebook/ipython/autoreload_hook.py:in_place_reload @1a058feb -->
     - **Its source.**
     - **An input's lineage**, which changes whenever anything upstream of that
       input changed ([below](#lineage-propagation)).
@@ -273,7 +273,7 @@ lineages and miss, however many cells separate them.
 
 ### Upstream simulation
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @3a57e3a7, cash/notebook/upstream/simulator.py:NotebookSimulator.simulate_upstream @3c17a94b -->
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @d785b999, cash/notebook/upstream/simulator.py:NotebookSimulator.simulate_upstream @3c17a94b -->
 You edit cell 1, then run cell 3 directly. Before cell 3 runs, cash reads the
 notebook's current cells and *simulates* the cells above: it computes, from
 their code alone and without running them, the lineage each statement would
