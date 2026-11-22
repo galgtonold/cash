@@ -155,7 +155,7 @@ def _install() -> bool:
         if mon.get_tool(tool) is None:
             mon.use_tool_id(tool, _TOOL_NAME)
             mon.register_callback(tool, mon.events.CALL, _on_call)
-            mon.register_callback(tool, mon.events.PY_RETURN, _on_return)
+            mon.register_callback(tool, mon.events.PY_RETURN, _return_callback())
             mon.register_callback(tool, mon.events.PY_START, _on_start)
             _TOOL = tool
             _CALL, _RETURN, _START = mon.events.CALL, mon.events.PY_RETURN, mon.events.PY_START
@@ -163,6 +163,20 @@ def _install() -> bool:
             return True
     _REASON = f"the monitoring tool ids {' and '.join(map(str, _TOOL_IDS))} are taken by other tools"
     return False
+
+
+def _return_callback() -> Any:
+    """The PY_RETURN callback: `_on_return`, behind the C extension's
+    filter (`cwatch.plain_return_filter`) where it is loaded, which answers
+    a value of a class in `_PLAIN` itself, as `_on_return` would, without
+    calling it. A library function a loop calls (``random.randint`` in a
+    simulation) returns millions of plain values, each of which cost a
+    Python call; every return still reaches the filter, and every other
+    value `_on_return`."""
+    from .._native import cwatch
+
+    make = attribute_or(cwatch, "plain_return_filter", None)
+    return _on_return if make is None else make(_on_return)
 
 
 _warned_unseen = False
@@ -928,7 +942,8 @@ def _on_return(code: types.CodeType, offset: int, retval: Any, _type: type = typ
     """A callee armed returned *retval*: noted when it stands by reference.
     No return is switched off, as the next value it returns may be one
     (``random.choice``); a value of a class that cannot stand by reference
-    costs a set or dict lookup."""
+    costs a set or dict lookup, and a plain one (`_PLAIN`) no call of this
+    function where the C extension filters them (`_return_callback`)."""
     kind = _type(retval)
     if kind in _plain or _ACTIVE is None:
         return None
