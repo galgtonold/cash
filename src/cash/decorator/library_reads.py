@@ -25,7 +25,8 @@ imports sets as it loads is read after the body. A name or attribute the
 code that ran binds before any of it read it, or binds only to constants (a
 latch set once, numba's ``_already_initialized = True``), is not kept: what
 the call set, a hit finds set the same. Nor is a value of `PROCESS_STATE`, a
-library's counter its source shows only names what it makes. What is kept:
+library's counter its source shows only names what it makes, or a list it
+makes of a set in the order each process hashes it. What is kept:
 
 ``("v", module, "a.b", fingerprint)``
     plain data: an atom, an enum member, or lists, tuples, sets and dicts of
@@ -110,7 +111,16 @@ from typing import Any
 
 from .. import _weak
 
-__all__ = ["KEYED_NAMES", "build", "changed", "counts_file", "first_reads", "keyed_argument", "note_served"]
+__all__ = [
+    "KEYED_NAMES",
+    "build",
+    "changed",
+    "counts_file",
+    "first_reads",
+    "keyed_argument",
+    "note_served",
+    "reaches_library",
+]
 
 _MISSING = object()
 #: The fingerprint of a settings entry that is not there.
@@ -272,8 +282,10 @@ _CHAINS = CodeMap()
 #: is most of what watching a library costs a miss.
 QUIET = CodeSet()
 #: Whether this process has said KEY-LIBRARY-STATE-UNSEEN: a call stored
-#: without its body recorded (below 3.12, ``CASH_TRACE=0``, a coroutine)
-#: has no setting checked, said once (`CallRunner._warn_settings_unseen`).
+#: without its body recorded (below 3.12, ``CASH_TRACE=0``, a coroutine),
+#: or a notebook statement stored without its run recorded, has no setting
+#: checked, said once (`CallRunner._warn_settings_unseen`, the statement
+#: processor's `_warn_settings_unseen`).
 UNSEEN_SAID = False
 #: filename -> whether code there is a library's (`counts_file`).
 _FILES: dict[str, bool] = {}
@@ -333,6 +345,14 @@ def _library_owner(top: str) -> bool:
         return not is_user_module(mod)
     except Exception:  # noqa: BLE001 - a module that cannot be judged is not followed
         return False
+
+
+def reaches_library(values: Iterable[Any]) -> bool:
+    """Is one of *values* a library's: a module, class or function of an
+    installed package outside the standard library, or an object of such a
+    class? What a statement reads that says it may run library code, where
+    nothing records what it ran (`UNSEEN_SAID`)."""
+    return any(_library_owner(_owner(v)) for v in values)
 
 
 # -- the chains a code reads ----------------------------------------------------
@@ -871,7 +891,7 @@ def _follow(
     i = 1
     while True:
         if type(v) is ContextVar:
-            return "c", chain[:i], v
+            return None if _cash_var(v) else ("c", chain[:i], v)
         if _plain(v) and not isinstance(v, types.ModuleType):
             return ("v", chain[:i], v) if (i > 1 or not user) else None
         if i >= len(chain):
@@ -881,6 +901,24 @@ def _follow(
             return ("l", chain[: i + 1], v) if unset and isinstance(v, _LOCALS) else None
         v = nv
         i += 1
+
+
+#: ``[len(sys.modules) when taken, ids of cash's module-level ContextVars]``.
+_CASH_VARS: list[Any] = [-1, frozenset()]
+
+
+def _cash_var(v: ContextVar) -> bool:
+    """Is *v* a ``ContextVar`` of cash's own (the file tracker in force,
+    ``cash.tracking.tracker_context.active_tracker``)? Cash's state, set
+    around the very code it records, never a setting the result came of,
+    under whatever name the code that ran reads it."""
+    if _CASH_VARS[0] != len(sys.modules):
+        ids = set()
+        for name, mod in list(sys.modules.items()):
+            if (name == "cash" or name.startswith("cash.")) and mod is not None:
+                ids.update(id(x) for x in list(getattr(mod, "__dict__", {}).values()) if type(x) is ContextVar)
+        _CASH_VARS[:] = [len(sys.modules), frozenset(ids)]
+    return id(v) in _CASH_VARS[1]
 
 
 def _resolve(module: str, names: tuple[str, ...]) -> Any:
@@ -1316,6 +1354,12 @@ PROCESS_STATE: frozenset[tuple[str, str]] = frozenset(
         # (``"StencilFuncTyping_" + str(self.id)``) and the generated
         # function (``"__numba_stencil_%s_%s"``).
         ("numba.stencils.stencil", "StencilFunc.id_counter"),
+        # threadpoolctl.py: ``list(set(...))`` of its controllers' names,
+        # in the order string hashing gives a set, which each process
+        # seeds anew; read as names to look up, never by position. Kept,
+        # a scikit-learn fit was never served in another process.
+        ("threadpoolctl", "_ALL_PREFIXES"),
+        ("threadpoolctl", "_ALL_USER_APIS"),
     }
 )
 
@@ -1531,6 +1575,8 @@ def build(
     keys: Mapping[types.CodeType, set[str | None]] | None = None,
     first: Mapping[tuple[str, str, str], tuple[str | None, dict | None]] | None = None,
     receivers: Mapping[types.CodeType, type] | None = None,
+    *,
+    changed_kept: bool = True,
 ) -> tuple[list[tuple] | None, str | None]:
     """The items the code a body ran reads (*codes*: code -> ``(its
     globals, whether it is the user's)``), with those of the entries
@@ -1539,7 +1585,11 @@ def build(
     ``(kind, module, dotted)`` -> its fingerprint as the call first read
     it, and a small dict's entries' (`first_reads`); a place not in it is
     read as the body left it. *receivers*: a method's code that ran -> the
-    class it first ran on (`class_reads`)."""
+    class it first ran on (`class_reads`). With *changed_kept* False, a
+    place the call itself changed as it ran is left out, not checked on
+    what it first read: a notebook statement's, where the first use of a
+    library in a process (a registry its lazy imports fill, a flag it works
+    out once) ran the statement again on its next run."""
     items: set[tuple] = set()
     wants, specials, stores, latched = _wants(codes, keys or {}, cells)
     first = first or {}
@@ -1597,6 +1647,9 @@ def build(
                     items.add(("x", where, dotted, json.dumps([_PROCESS, fp, *ext])))
                 continue
             if held is not None and held[0] != fp and kind != "c":
+                if not changed_kept:
+                    places[same] = None
+                    continue
                 # The call changed it as it ran: checked on what it read
                 # first, the value its result came of.
                 pre_fp, pre = held

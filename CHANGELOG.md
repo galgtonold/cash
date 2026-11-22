@@ -17,6 +17,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inside a `config_context` block was served after it. A setting a library
   keeps in a `threading.local` is now read as the calling thread sees it,
   and a changed one misses with `library setting changed`.
+- In a notebook, a library setting changed in one cell now reruns a cached
+  statement in another that reaches the library through a name it imported
+  or a method. After `sklearn.set_config(transform_output="pandas")`,
+  `Y = StandardScaler().fit_transform(X)` was restored as the ndarray made
+  before it, and after `pd.set_option("display.precision", 2)`,
+  `s = df.to_string()` kept the old digits: a setting moved only the lineage
+  of the module it was called on. On Python 3.12 and newer the statement's
+  run records the library settings it read, as a `@cash.cache` call does,
+  and a changed one reruns it, with the setting named on the badge. Below
+  3.12, or with `CASH_TRACE=0`, `KEY-LIBRARY-STATE-UNSEEN` says once that
+  these are not checked.
+- A `@cash.cache` call that fits a scikit-learn estimator is served in a new
+  process again. threadpoolctl lists its libraries' names from a set, in an
+  order each process's string hashing makes anew, and the settings check
+  kept that list, so every new process missed.
 
 ### Changed
 - In a `@cash.cache` function, `# @cash:assume-safe` and

@@ -1544,6 +1544,8 @@ class StatementProcessor:
                 result = self._finish(run, runner.execution)
                 if shadow is not None:
                     shadow.statement_finished(run, unit, result)
+                else:
+                    self._warn_settings_unseen(run, result)
             finally:
                 self._advance_rng(run)
                 self._adopt_seeds_it_set(run, runner.execution.rng_reseeded)
@@ -1579,6 +1581,39 @@ class StatementProcessor:
         # A finalizer it ran is code of the user's.
         drop_shared_walks()
 
+    def _warn_settings_unseen(self, run: StatementRun, result: Mapping[str, Any]) -> None:
+        """KEY-LIBRARY-STATE-UNSEEN, once a process: a statement reaching a
+        library was stored, and nothing recorded what it ran (below Python
+        3.12, or ``CASH_TRACE=0``), so the library settings it read are not
+        checked before it is served (`Shadow._library_item` does on 3.12+),
+        as an unrecorded ``@cash.cache`` call says."""
+        from ...decorator import code_trace, library_reads
+
+        if library_reads.UNSEEN_SAID or run.skip_cache or not result.get("storage"):
+            return
+        if CacheStatus.parse(result.get("status")) is not CacheStatus.COMPUTED:
+            return
+        ns = self.shell.user_ns
+        if not library_reads.reaches_library(ns[name] for name in run.inputs or () if name in ns):
+            return
+        library_reads.UNSEEN_SAID = True
+        if not code_trace.TRACEABLE:
+            where = "Python below 3.12 does not record what a statement runs"
+        elif not code_trace.on():
+            where = "CASH_TRACE=0 turns off recording what a statement runs"
+        else:
+            where = "the monitoring tool that records what a statement runs could not be had"
+        warn_diagnostic(
+            CashCacheIneffectiveWarning,
+            "KEY-LIBRARY-STATE-UNSEEN",
+            f"a cached statement reaches library code and {where}, so a library setting changed in another "
+            "cell (sklearn.set_config, pd.set_option, np.seterr, a ContextVar, an attribute set on a library's "
+            "class, ...) is not detected: the statement is restored with the result made under the old "
+            "setting. Said once per process.",
+            "run on Python 3.12+ with tracing on (the default), or put `# @cash:no-cache` on a statement "
+            "whose result a setting changes.",
+        )
+
     @staticmethod
     def _begin_recording(shadow: Any, run: StatementRun) -> Any:
         """Start recording which code *run*'s statement runs (shadow mode)."""
@@ -1597,7 +1632,8 @@ class StatementProcessor:
         if unit is not None:
             spent = shadow.spent
             shadow.end(unit)
-            run.record_time += shadow.spent - spent
+            # And the library settings read as its code started: cash's work.
+            run.record_time += shadow.spent - spent + attribute_or(unit, "lib_seconds", 0.0)
 
     def _offer_digests(self, run: StatementRun, runner: CodeRunner) -> None:
         """Offer the arguments' digests taken before the statement to the
@@ -1676,6 +1712,8 @@ class StatementProcessor:
                 result = self._finish(run, runner.execution)
                 if shadow is not None:
                     shadow.statement_finished(run, unit, result)
+                else:
+                    self._warn_settings_unseen(run, result)
                 return result
             finally:
                 self._advance_rng(run)

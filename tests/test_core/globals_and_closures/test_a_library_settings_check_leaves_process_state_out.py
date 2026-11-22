@@ -12,7 +12,10 @@ changed, made every fresh process miss (`library_reads`):
 - a package the body imports lazily, filling a list of its submodule's as
   it loads (numba's cache prefixes): the submodule was done loading, so the
   list was kept as first read, empty, and the next process, whose lookup
-  imports the package, reads it filled.
+  imports the package, reads it filled;
+- a list threadpoolctl makes of a set of strings (``_ALL_PREFIXES``), in
+  the order each process's string hashing gives it: every scikit-learn fit
+  reads it.
 
 Each still misses when the setting it reads is changed from outside.
 """
@@ -35,13 +38,14 @@ needs_recording = pytest.mark.skipif(
 )
 
 
-def _run(script, *args):
+def _run(script, *args, env=None):
     out = subprocess.run(
         [sys.executable, "-W", "ignore", str(script), *map(str, args)],
         capture_output=True,
         text=True,
         check=True,
         timeout=600,
+        env=env,
     )
     return out.stdout.split()
 
@@ -218,3 +222,31 @@ def test_a_list_a_package_fills_as_the_body_imports_it_is_read_once_loaded(tmp_p
     # Every later process is served, not every second one.
     assert _run(script) == ["2", "1"]
     assert _run(script) == ["2", "1"]
+
+
+THREADPOOLS = """
+import threadpoolctl
+from cash import Cash
+
+
+def body():
+    with threadpoolctl.threadpool_limits(limits=1, user_api="blas"):
+        return 7
+
+
+f = Cash(cache_dir={cache!r}, register_magic=False).cache(body)
+print(f(), f.cache_info()["hits"])
+"""
+
+
+@needs_recording
+def test_a_list_made_from_a_set_in_each_process_s_order_is_no_setting(tmp_path):
+    pytest.importorskip("threadpoolctl")
+    import os
+
+    script = tmp_path / "pools.py"
+    script.write_text(textwrap.dedent(THREADPOOLS.format(cache=str(tmp_path / "cache"))), encoding="utf-8")
+    seeds = [{**os.environ, "PYTHONHASHSEED": str(seed)} for seed in (1, 2, 3, 4)]
+    assert _run(script, env=seeds[0]) == ["7", "0"]
+    # Other string hashing, the controllers' names in another order: served.
+    assert [_run(script, env=env) for env in seeds[1:]] == [["7", "1"]] * 3

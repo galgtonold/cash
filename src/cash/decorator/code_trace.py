@@ -224,6 +224,7 @@ def _unit_class() -> type:
             "lib_items",
             "lib_keys",
             "lib_receivers",
+            "lib_seconds",
             "sites",
             "surface",
         )
@@ -263,6 +264,10 @@ def _unit_class() -> type:
             #: class) it first ran on, whose attributes it reads off
             #: ``self``/``cls`` (`library_reads.self_names`).
             self.lib_receivers: dict[types.CodeType, type] = {}
+            #: Seconds spent reading those settings as code started (cash's
+            #: own work, not the unit's: a notebook statement's time leaves it
+            #: out, `StatementProcessor._end_recording`).
+            self.lib_seconds = 0.0
             #: A traced call's: code of a function that writes through its
             #: parameters -> ``(caller code, offset of the call)`` for each
             #: start of it (`_Recorder.site_codes`, `cash.analysis.out_arguments`).
@@ -295,6 +300,20 @@ def _unit_class() -> type:
             super().absorb(inner)
             for key, callee in getattr(inner, "callees", {}).items():
                 self.callees.setdefault(key, callee)
+            # What a notebook unit inside it read of the libraries' settings
+            # (`library_reads`), as first read there: it ran inside this one.
+            for code, g in inner.lib_codes.items():
+                self.lib_codes.setdefault(code, g)
+            for code, cls in inner.lib_receivers.items():
+                self.lib_receivers.setdefault(code, cls)
+            for code, held in inner.lib_cells.items():
+                self.lib_cells.setdefault(code, held)
+            for code, read in inner.lib_keys.items():
+                self.lib_keys.setdefault(code, set()).update(read)
+            for place, fp in inner.lib_first.items():
+                self.lib_first.setdefault(place, fp)
+            self.lib_items.extend(inner.lib_items)
+            self.lib_seconds += inner.lib_seconds
 
     return TraceUnit
 
@@ -648,17 +667,34 @@ def _recorder_class() -> type:
                     if arg is not None:
                         self.keyed_codes[code] = arg
                 mon.set_local_events(self.tool, code, events | self._line_events(code))
-            if self.active:
-                self._seen_library(code, frame)
+            units = self.lib_units()
+            if units:
+                self._seen_library(code, frame, units)
                 if code in self.keyed_codes:
-                    self._note_key(code, frame)
+                    self._note_key(code, frame, units)
 
-        def _note_key(self, code: types.CodeType, frame: Any) -> None:
+        def lib_units(self) -> list[Any]:
+            """The units a library's code starting now is seen by: every
+            traced call in progress, and the innermost notebook unit when
+            this is its thread (a statement's, `cash.notebook.shadow`)."""
+            stack = self.stack
+            if stack and stack[-1].thread == threading.get_ident():
+                return [*self.active, stack[-1]]
+            return self.active
+
+        def _note_key(self, code: types.CodeType, frame: Any, units: list[Any]) -> None:
             """A start of a library's code that reads the settings entry its
             caller names (`library_reads.KEYED_READERS`): which one, for
-            each call in progress."""
+            each unit in progress (*units*)."""
             if own_work_inside():
                 return
+            started = time.perf_counter()
+            try:
+                self._note_key_now(code, frame, units)
+            finally:
+                _spent(units, time.perf_counter() - started)
+
+        def _note_key_now(self, code: types.CodeType, frame: Any, units: list[Any]) -> None:
             try:
                 key = frame.f_locals.get(self.keyed_codes[code])
             except Exception:  # noqa: BLE001 - unreadable: the whole dict is checked
@@ -666,7 +702,7 @@ def _recorder_class() -> type:
             if not isinstance(key, str):
                 key = None
             fresh = []
-            for unit in self.active:
+            for unit in units:
                 read = unit.lib_keys.setdefault(code, set())
                 if key not in read:
                     read.add(key)
@@ -674,14 +710,21 @@ def _recorder_class() -> type:
             if fresh:
                 self._first_reads(fresh, code, frame.f_globals, False, keys={key})
 
-        def _seen_library(self, code: types.CodeType, frame: Any) -> None:
+        def _seen_library(self, code: types.CodeType, frame: Any, units: list[Any]) -> None:
             if own_work_inside():
                 own_work_left_out(code)
                 return
             if self._for_no_call(frame):
                 return
+            started = time.perf_counter()
+            try:
+                self._seen_library_now(code, frame, units)
+            finally:
+                _spent(units, time.perf_counter() - started)
+
+        def _seen_library_now(self, code: types.CodeType, frame: Any, units: list[Any]) -> None:
             g = frame.f_globals
-            fresh = [unit for unit in self.active if code not in unit.lib_codes]
+            fresh = [unit for unit in units if code not in unit.lib_codes]
             cls = library_receiver_class(code, frame) if fresh else None
             for unit in fresh:
                 unit.lib_codes[code] = g
@@ -729,15 +772,16 @@ def _recorder_class() -> type:
                 return DISABLE
             if not collecting():
                 self.rearm.add(code)
-            if self.active:
+            units = self.lib_units()
+            if units:
                 frame = sys._getframe(rec.WATCHED_FRAME + 1)
                 if self._for_no_call(frame):
                     return None  # left armed: the call's own start of it is still seen
-                self._seen_library(code, frame)
+                self._seen_library(code, frame, units)
                 if code in self.keyed_codes:
                     # Each start reads its own entry: left armed while a
-                    # call is in progress.
-                    self._note_key(code, frame)
+                    # unit is in progress.
+                    self._note_key(code, frame, units)
                     return None
             return DISABLE
 
@@ -943,6 +987,8 @@ def _recorder_class() -> type:
             for unit in self.active:
                 if unit.thread == me:
                     return False
+            if self.stack and self.stack[-1].thread == me:
+                return False
             return rec.works_for_no_call(frame)
 
         def _note_site(self, code: types.CodeType, frame: Any) -> None:
@@ -1036,8 +1082,8 @@ def _recorder_class() -> type:
                 except Exception:  # noqa: BLE001 - a frame whose locals cannot be read has no receiver
                     recv = None
             cells = surface_cells = None
-            if code.co_freevars and self.active:
-                self._closure_modules(code, frame)
+            if code.co_freevars:
+                self._closure_modules(code, frame, units)
             # A generator expression's cells are left out: what they held is
             # read only when `build` digests a function of this code
             # (`trace_items.call_starts`), and no function of a generator
@@ -1074,7 +1120,7 @@ def _recorder_class() -> type:
                 if lined:
                     self._arm_lines(code, lined)
             inside_collection = collecting()
-            fresh = [unit for unit in self.active if code not in unit.codes]
+            fresh = [unit for unit in units if code not in unit.codes]
             for unit in units:
                 rec.note_collected(unit, code, inside_collection)
                 unit.codes.setdefault(code, (g, module))
@@ -1084,11 +1130,20 @@ def _recorder_class() -> type:
                 if recv is not None:
                     unit.receivers.setdefault(code, recv if issubclass(type(recv), type) else type(recv))
             fresh = [unit for unit in fresh if hasattr(unit, "lib_first")]
+            if stack and g is self.notebook_ns:
+                # The notebook's own code: what it reads of the notebook's
+                # names is the lineages' to follow (`Shadow._library_item`),
+                # and a plan of its reads would hold the very objects its
+                # variables hold (a ``calls`` list), which a statement
+                # binding them then shares and is not stored.
+                fresh = [unit for unit in fresh if unit is not stack[-1]]
             if fresh:
+                started = time.perf_counter()
                 cls = None if recv is None else recv if issubclass(type(recv), type) else type(recv)
                 self._first_reads(fresh, code, g, True, fresh[0].lib_cells.get(code), receiver=cls)
+                _spent(fresh, time.perf_counter() - started)
 
-        def _closure_modules(self, code: types.CodeType, frame: Any) -> None:
+        def _closure_modules(self, code: types.CodeType, frame: Any, units: list[Any]) -> None:
             """The library modules *code*'s closure holds that a chain it
             reads starts from (``np.errstate`` with ``np`` captured), for
             `library_reads`."""
@@ -1102,7 +1157,7 @@ def _recorder_class() -> type:
                 return
             held = {k: v for k, v in held.items() if isinstance(v, types.ModuleType)}
             if held:
-                for unit in self.active:
+                for unit in units:
                     unit.lib_cells.setdefault(code, held)
 
         @staticmethod
@@ -1189,6 +1244,14 @@ def _recorder_class() -> type:
     return _Recorder
 
 
+def _spent(units: Iterable[Any], seconds: float) -> None:
+    """*seconds* of reading library settings (`library_reads`) as code
+    started, cash's work in each of *units* (`TraceUnit.lib_seconds`)."""
+    for unit in units:
+        if hasattr(unit, "lib_seconds"):
+            unit.lib_seconds += seconds
+
+
 _RECORDER: Any = None
 _RECORDER_LOCK = threading.RLock()
 
@@ -1262,7 +1325,7 @@ def note_library_items(items: list[tuple]) -> None:
     rec = _RECORDER
     if rec is None:
         return
-    for unit in list(rec.active):
+    for unit in rec.lib_units():
         unit.lib_items.extend(items)
 
 

@@ -136,6 +136,21 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
       `MemoryHandler`, a `QueueHandler`) changes with every record: a
       statement logging to it runs every time, and its reason names the
       handler.
+    <!-- claim: cash/notebook/shadow/__init__.py:Shadow._library_item @c9b0b726, cash/notebook/shadow/__init__.py:Shadow._library_now @3296947c -->
+    - **A library setting its run read**, on Python 3.12 and newer:
+      `sklearn.set_config(...)` or a `sklearn.config_context(...)` around
+      it, `pd.set_option(...)`, `np.seterr(...)`, a `ContextVar`, an
+      attribute your program set on a library's class. A setting changes no
+      lineage of a name the statement reads, so
+      `Y = StandardScaler().fit_transform(X)` or `s = df.to_string()` would
+      keep its key; cash records the settings the library code it ran read,
+      as for a `@cash.cache` call, and serves the entry only while each
+      holds the value it was stored under. The badge says which one
+      changed. A setting it did not read changes nothing, and neither does
+      one the statement changed itself as it ran. Before Python
+      3.12, or with `CASH_TRACE=0`,
+      [KEY-LIBRARY-STATE-UNSEEN](../warnings.md#key-library-state-unseen)
+      says once that these are not checked.
     - **Its age**, when a `ttl` applies. A statement that calls a
       `@cash.cache` function with a shorter `ttl` takes that shorter one.
     - **An in-place change** to a variable it reads
