@@ -7,6 +7,7 @@
 the awaited result, not the coroutine, and on a hit your `await` returns the
 stored value without running the body.
 
+<!-- test:expect-warning reason="the first coroutine stored says KEY-LIBRARY-STATE-UNSEEN once per process: a coroutine's body is not recorded (see below)" -->
 ```python
 import asyncio
 import cash
