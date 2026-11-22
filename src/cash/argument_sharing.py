@@ -35,7 +35,7 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 from ._user_attrs import from_family, module_file
-from .value_types import IMMUTABLE_LEAF_TYPES
+from .value_types import IMMUTABLE_LEAF_TYPES, class_module
 
 __all__ = ["Unknown", "Targets", "memory_of", "reads_of", "read_values", "shared_in"]
 
@@ -194,7 +194,7 @@ class _Walk:
             kind = type(obj)
             if kind in _LEAVES or isinstance(obj, (types.ModuleType, types.CodeType)):
                 continue
-            if (kind.__module__ or "").startswith("cash."):
+            if class_module(kind).startswith("cash."):
                 continue  # cash's own state holds copies, never the caller's objects
             if issubclass(kind, weakref.ref):
                 # What it points to, which the garbage collector does not

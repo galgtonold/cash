@@ -168,6 +168,14 @@ BUILTIN_NAMES: frozenset[str] = frozenset(dir(builtins)) | {"get_ipython", "__bu
 INTERPRETER_MANAGED_GLOBALS: frozenset[str] = frozenset({"__warningregistry__", "__annotations__", "__builtins__"})
 
 
+def class_module(cls: Any) -> str:
+    """*cls*'s ``__module__``, or ``""`` where it is not a string: Cython's
+    ``_common_types_metatype`` (the class of its function classes) has no
+    ``__module__`` of its own and reads ``type``'s descriptor."""
+    module = getattr(cls, "__module__", "")
+    return module if type(module) is str else ""
+
+
 def mro_kind(value: Any, bases: Mapping[str, str], prefixes: tuple[str, ...]) -> str | None:
     """What *value* is, by the first class in its MRO named in *bases*.
 
@@ -181,7 +189,7 @@ def mro_kind(value: Any, bases: Mapping[str, str], prefixes: tuple[str, ...]) ->
     except AttributeError:  # pragma: no cover - exotic metaclass
         return None
     for base in mro:
-        module = getattr(base, "__module__", "") or ""
+        module = class_module(base)
         if not module.startswith(prefixes):
             continue
         kind = bases.get(f"{module}.{getattr(base, '__qualname__', '')}")

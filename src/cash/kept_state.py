@@ -42,7 +42,7 @@ from ._own_work import own_work
 from ._user_attrs import from_family, instance_of
 from .live_state import is_live_stream, live_reduce
 from .unnamed_code import library_code_override, refused_unnamed
-from .value_types import WEAK_PROXY_TYPES, is_dead_proxy
+from .value_types import WEAK_PROXY_TYPES, class_module, is_dead_proxy
 
 __all__ = [
     "Ahead",
@@ -2334,7 +2334,7 @@ def _leaves_views_out(t: type) -> bool:
     does not choose its own state (a key keeps such a class's views)?
     Any other class is pickled by its own reduce, as before, with no
     Python step per instance."""
-    return not chooses_its_state(t) and any(k.__module__.startswith("networkx.") for k in t.__mro__)
+    return not chooses_its_state(t) and any(class_module(k).startswith("networkx.") for k in t.__mro__)
 
 
 def packed_records(array: Any) -> Any:
