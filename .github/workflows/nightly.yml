@@ -5,7 +5,8 @@ name: Nightly integration
 # night and by hand from the Actions tab, split into shards that run in
 # parallel. tools/test_selection/shard.py assigns each test to one shard by a
 # stable hash of its node id, so the shards never overlap and together run
-# every test. The wheel-gate job runs alongside the shards.
+# every test. The wheel-gate job runs alongside the shards, and so does the
+# held-unit job: the unit tests too slow for every push.
 on:
   schedule:
     - cron: "0 2 * * *"
@@ -85,7 +86,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
-      # As ci.yml's unit step, with its Windows 3.10 timeout.
+      # As ci.yml's unit step, with its Windows 3.10 timeout, but keeping the
+      # tests marked nightly: the only Windows run they get.
       - name: Run unit tests
         timeout-minutes: 55
         shell: bash
@@ -98,6 +100,40 @@ jobs:
             -p tools.test_selection.shard --shard=${{ matrix.shard }}/2 \
             -n auto --tb=short -q -rs --durations=40 \
             -o faulthandler_timeout=120 -o timeout=90
+
+  # The unit tests every push leaves out or shortens: those marked nightly
+  # (a wheel build and pip install, real kernels per shape), which ci.yml's
+  # unit step deselects, and the seed sweeps marked full_sweep, which a push
+  # runs with a few seeds and CASH_TEST_FULL_SWEEP=1 runs with all of them
+  # (tests/_sweeps.py).
+  held-unit:
+    name: Nightly and full-sweep unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run the held unit tests
+        env:
+          CASH_TEST_FULL_SWEEP: "1"
+        run: >-
+          python -m pytest tests/
+          --ignore=tests/test_notebook_integration
+          --ignore=tests/test_wheel_gate
+          --ignore=tests/docs
+          -m "nightly or full_sweep"
+          -n auto --tb=short -q -rs --durations=20
 
   # The wheel gate (scripts/wheel_gate.py): builds the wheel, installs it into
   # a fresh venv and drives a real Jupyter server through kernel restarts. The

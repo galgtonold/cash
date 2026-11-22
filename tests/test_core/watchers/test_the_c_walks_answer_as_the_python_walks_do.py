@@ -5,6 +5,9 @@ Each walk keeps its Python version as the reference and the fallback; here
 both run on random structures and on real objects (a networkx graph, a
 fitted model, a frame), and every answer must be the same: the same
 functions and classes in the same order, the same sizes, the same groups.
+
+The held-walk and tuple sweeps run a few seeds on every push and all of
+them nightly (``CASH_TEST_FULL_SWEEP=1``, `tests._sweeps`).
 """
 
 from __future__ import annotations
@@ -20,8 +23,12 @@ import pytest
 
 from cash import _native
 from cash.notebook import held_functions as hf
+from tests._sweeps import seeds
 
-pytestmark = pytest.mark.skipif(_native.kernels is None, reason=f"no C walk kernels: {_native.REASON}")
+pytestmark = [
+    pytest.mark.skipif(_native.kernels is None, reason=f"no C walk kernels: {_native.REASON}"),
+    pytest.mark.full_sweep,
+]
 
 K = _native.kernels
 
@@ -186,7 +193,7 @@ def _same(a, b):
 # ----------------------------------------------------------------- the held walk
 
 
-@pytest.mark.parametrize("seed", range(150))
+@pytest.mark.parametrize("seed", seeds(per_push=15, full=150))
 def test_the_held_walk_finds_the_same_code_in_the_same_order(seed, monkeypatch):
     rng = random.Random(seed)
     ns = _notebook_namespace()
@@ -666,7 +673,7 @@ def _nested_tuples(rng: random.Random, depth: int) -> object:
     return rng.choice([1, "a", 2.5, None, b"x", True])
 
 
-@pytest.mark.parametrize("seed", range(40))
+@pytest.mark.parametrize("seed", seeds(per_push=8, full=40))
 def test_values_in_tuples_matches_the_level_by_level_read(seed):
     from cash.notebook import shared_objects as so
 

@@ -238,6 +238,11 @@ format is cleared on first open.
   the documented one for a write a hit may skip, keeps it out of what is tested.
   Never put it on a cell's top-level line, where it caches the statement, and do
   not use `builtins.open` (the file tracker turns a read mode into a dependency).
+- After every test the root conftest empties cash's process-wide memos and
+  IPython's output history and drops the exit hooks of collected `Cash`
+  instances (`tests/_between_tests.py`): an xdist worker's heap otherwise
+  grows with every test, and every heap read cash makes slows with it. No
+  test may count on a memo an earlier test filled.
 - `InteractiveShell.instance()` creates a process-wide shell. A test that calls it
   must call `InteractiveShell.clear_instance()` in teardown, as
   `tests/docs/_harness.py` and `benchmarks/tests/conftest.py` do.

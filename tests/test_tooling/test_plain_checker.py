@@ -47,6 +47,7 @@ def test_the_shape_files_load():
 
 @pytest.mark.integration
 @pytest.mark.fresh_kernel
+@pytest.mark.nightly  # starts real kernels for every shape: minutes of a unit job
 @pytest.mark.timeout(600)
 def test_the_smoke_shapes_match_plain_python(tmp_path):
     for shape in runpy.run_path(str(ROOT / "tools" / "plain_checker" / "shapes" / "smoke.py"))["SHAPES"]:

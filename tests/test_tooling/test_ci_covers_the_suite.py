@@ -348,6 +348,42 @@ class TestTheIntegrationSuiteRuns:
         assert values == list(range(1, len(values) + 1)), values
 
 
+class TestTheHeldTestsRunNightly:
+    """A push skips the tests marked ``nightly`` and runs a few seeds of each
+    ``full_sweep`` sweep (`tests._sweeps`); the nightly held-unit job runs
+    both in full, so nothing the unit job leaves out is left out everywhere."""
+
+    def test_the_unit_step_deselects_only_perf_and_nightly(self, unit_step):
+        marks = re.findall(r'-m "([^"]*)"', unit_step)
+        assert marks == ["not perf and not nightly"], marks
+
+    def test_the_nightly_workflow_runs_them_over_the_unit_tree(self):
+        job = _job(NIGHTLY_YML.read_text(encoding="utf-8"), "held-unit")
+        assert 'CASH_TEST_FULL_SWEEP: "1"' in job, job
+        run = _step_run(job, "Run the held unit tests")
+        assert re.search(r"pytest\s+tests/\s", run), run
+        assert set(re.findall(r"--ignore=tests/([\w\-.]+)", run)) == EXPECTED_EXCLUSIONS, run
+        assert re.findall(r'-m "([^"]*)"', run) == ["nightly or full_sweep"], run
+        for narrowing in ("--deselect", " -k ", "::", "--shard"):
+            assert narrowing not in run, f"the held-unit run is narrowed by {narrowing.strip()!r}: {run}"
+
+    def test_every_sweep_is_marked_for_the_nightly_job(self):
+        """A module that shortens its sweep per push must be one the nightly
+        job selects, or its other seeds never run anywhere."""
+        sweeping = [
+            p
+            for p in TESTS_DIR.rglob("test_*.py")
+            if re.search(r"^from tests\._sweeps import|^import tests\._sweeps", p.read_text(encoding="utf-8"), re.M)
+        ]
+        assert sweeping, "no module sweeps through tests._sweeps; the check has nothing to check"
+        unmarked = [
+            str(p.relative_to(REPO_ROOT))
+            for p in sweeping
+            if "pytest.mark.full_sweep" not in p.read_text(encoding="utf-8")
+        ]
+        assert not unmarked, f"these modules shorten a sweep per push but are not marked full_sweep: {unmarked}"
+
+
 def _job(text: str, name: str) -> str:
     """The body of the top-level job called *name*, up to the next job."""
     m = re.search(rf"^  {re.escape(name)}:\n(?P<body>(?:(?:    .*|\s*)\n)+)", text + "\n", re.MULTILINE)
