@@ -705,9 +705,12 @@ def _classes_it_redefines(tree: ast.AST | None, user_ns: Mapping[str, Any]) -> d
 
 
 def _instances_of(classes: Collection[type]) -> list[Any]:
-    """The live objects whose class is one of *classes* (one heap scan)."""
-    exact = {id(cls) for cls in classes}
-    return [obj for obj in gc.get_referrers(*classes) if id(type(obj)) in exact and not instance_of(obj, type)]
+    """The live objects whose class is one of *classes* (one heap scan). A
+    class is never an object of one but a metaclass's, and no object
+    passes for a class by its ``__class__`` (`instance_of`): asked per
+    class, not of each of 1.5 million objects."""
+    exact = {id(cls) for cls in classes if not issubclass(cls, type)}
+    return [obj for obj in gc.get_referrers(*classes) if id(type(obj)) in exact]
 
 
 def _a_closure(value: Any) -> bool:

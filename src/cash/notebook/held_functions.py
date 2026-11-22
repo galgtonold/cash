@@ -370,11 +370,15 @@ def notebook_functions_exist(namespace: Mapping[str, Any]) -> bool:
 
     A no is remembered (`_NO_FUNCTIONS`) until code could have made one:
     a function is made only by code running with these globals, which
-    starts with an ``exec``, or by ``types.FunctionType``, both seen by an
-    audit hook (`_note_new_code`). A no is neither taken nor kept while
-    such code is on the stack (a call keyed inside a running statement,
-    which may define a lambda after the question). A statement's checks
-    asked it up to 13 times, 0.035-0.07 s each beside a big graph.
+    starts with an ``exec`` of code holding a ``def``, a ``lambda`` or a
+    class, or by ``types.FunctionType``, both seen by an audit hook
+    (`_new_function_code`). A no is neither taken nor kept while such code
+    is on the stack (a call keyed inside a running statement, which may
+    define a lambda after the question), nor kept while a frame or a
+    generator refers to these globals (`_SUSPENDED`). A statement's checks
+    asked it up to 13 times, 0.035-0.07 s each beside a big graph, and
+    every statement after asked again: 0.08 s for ``k = len(records)``
+    beside 1.5 million objects, where plain Python takes 0.002 s.
     """
     if objects_frozen_since_import():
         return True
@@ -382,9 +386,10 @@ def notebook_functions_exist(namespace: Mapping[str, Any]) -> bool:
     dicts = list(maps) if isinstance(maps, list) else [namespace]
     globals_ids = _globals_ids(namespace)
     running = _code_running_in(globals_ids)
-    if not running and _NO_FUNCTIONS.get(globals_ids) == _new_code():
+    if not running and _NO_FUNCTIONS.get(globals_ids) == _new_function_code():
         return False
-    seen_at = _new_code()
+    seen_at = _new_function_code()
+    keep = not running
     function = types.FunctionType
     # A ``def`` binds its function in the namespace: found there, the scan of
     # every tracked object (0.12 s beside a 400,000-cell workbook, at each
@@ -404,11 +409,20 @@ def notebook_functions_exist(namespace: Mapping[str, Any]) -> bool:
                 and not _running_statement(referrer)
             ):
                 return True
-    if not running:
+            if type(referrer) in _SUSPENDED:
+                # Code that can go on with these globals (a generator's
+                # frame before 3.11, which holds no function) makes a
+                # lambda with no event seen: the no holds only now.
+                keep = False
+    if keep:
         if len(_NO_FUNCTIONS) > 64:
             _NO_FUNCTIONS.clear()
         _NO_FUNCTIONS[globals_ids] = seen_at
     return False
+
+
+#: What runs code of its own later, with the globals it refers to.
+_SUSPENDED = frozenset((types.FrameType, types.GeneratorType, types.CoroutineType, types.AsyncGeneratorType))
 
 
 def _anything_to_find(namespace: Mapping[str, Any]) -> bool:
@@ -574,9 +588,7 @@ def _users_module_functions() -> list[types.FunctionType]:
     held in a value (``{'fn': mylib.helper, 'rows': rows}``) runs the
     module's code, as a class held there does."""
     found: list[types.FunctionType] = []
-    for module in list(sys.modules.values()):
-        if not _users_module(module):
-            continue
+    for module in _users_modules():
         name = module.__name__
         for value in list(vars(module).values()):
             if type(value) is types.FunctionType and value.__module__ == name:
@@ -618,15 +630,31 @@ def users_module_classes() -> list[type]:
 def _users_module_classes() -> list[type]:
     """The classes defined at the top of the user's loaded modules."""
     found: list[type] = []
-    for module in list(sys.modules.values()):
-        if not _users_module(module):
-            continue
+    for module in _users_modules():
         name = module.__name__
         for value in list(vars(module).values()):
             if isinstance(value, type) and value.__flags__ & _HEAP_TYPE and value.__module__ == name:
                 found.append(value)
     return found
 
+
+def _users_modules() -> list[types.ModuleType]:
+    """The user's loaded modules (`_users_module`), in ``sys.modules``
+    order. Told again only when ``sys.modules`` holds other module objects
+    than when last asked: every statement asked up to 9 times, each a pass
+    over some 1,400 modules (2-3 ms).
+    """
+    loaded = list(sys.modules.values())
+    last, users = _USERS_MODULES
+    if len(loaded) != len(last) or not all(map(operator.is_, loaded, last)):
+        users = [module for module in loaded if _users_module(module)]
+        _USERS_MODULES[:] = [loaded, users]
+    return list(users)
+
+
+#: ``[the values of sys.modules, the user's among them]`` when
+#: `_users_modules` last read them.
+_USERS_MODULES: list[Any] = [[], []]
 
 #: Module name -> (the module, whether it is one of the user's), asked once
 #: per module object.
@@ -687,23 +715,50 @@ def _of_a_users_module(cls: type) -> bool:
 
 
 #: The ids of the globals a `notebook_functions_exist` no was answered for,
-#: and the `_new_code` count it was answered at.
+#: and the `_new_function_code` count it was answered at.
 _NO_FUNCTIONS: dict[frozenset[int], int] = {}
 _NEW_CODE_EVENTS = frozenset(("exec", "function.__new__"))
+
+
+def _may_make_functions(args: tuple) -> bool:
+    """Can the code an ``exec`` event runs make a function? Only by making
+    one of a code object among its own constants (a ``def``, a ``lambda``,
+    a class body, a comprehension before 3.12): what it runs further down
+    is made by one of those first, or starts from an ``exec`` or a
+    ``types.FunctionType`` of its own, events counted in turn. The same
+    test as ``caudit.c``'s."""
+    code = args[0] if args else None
+    if type(code) is not types.CodeType:
+        return True
+    return any(type(const) is types.CodeType for const in code.co_consts)
+
+
 #: How many times code started running from an ``exec`` or a function was
 #: made from code (``types.FunctionType``) in this process: counted by the C
 #: extension's audit hook (``caudit.c``) when it is in, else by io_watch's
 #: Python one, shared, since Python calls every hook installed for every
-#: audited event (an ``id()`` included).
+#: audited event (an ``id()`` included). `_new_function_code` counts those
+#: of them that can make a function (`_may_make_functions`): a statement
+#: such as ``k = len(records) + 1`` cannot, and every one of them asking
+#: the heap again (`notebook_functions_exist`) cost 0.05-0.1 s beside 1.5
+#: million objects.
 _counted = io_watch.count_events(_NEW_CODE_EVENTS)
+_counted_functions = io_watch.count_events(("exec",), only=_may_make_functions)
+_counted_made = io_watch.count_events(("function.__new__",))
 
 if _counted is None and _K is not None and _K.audit_hook_install():
     _new_code = _K.audit_new_code
+    _new_function_code = _K.audit_new_function_code
 else:
     _counted = _counted if _counted is not None else [0]
+    _counted_functions = _counted_functions if _counted_functions is not None else [0]
+    _counted_made = _counted_made if _counted_made is not None else [0]
 
     def _new_code() -> int:
         return _counted[0]
+
+    def _new_function_code() -> int:
+        return _counted_functions[0] + _counted_made[0]
 
 
 def _code_running_in(globals_ids: frozenset[int]) -> bool:

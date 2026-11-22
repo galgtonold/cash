@@ -55,9 +55,12 @@ run("held again")
 
 counts = []
 start = hf._new_code()
-for step in ("exec", "def", "lambda", "FunctionType", "id"):
+made_start = hf._new_function_code()
+for step in ("exec", "exec def", "def", "lambda", "FunctionType", "id"):
     if step == "exec":
         exec("pass", {})
+    elif step == "exec def":
+        exec("def f():\n    pass", {})
     elif step == "def":
         def g():
             pass
@@ -67,7 +70,7 @@ for step in ("exec", "def", "lambda", "FunctionType", "id"):
         types.FunctionType((lambda: 2).__code__, {})
     else:
         id(counts)
-    counts.append(hf._new_code() - start)
+    counts.append((hf._new_code() - start, hf._new_function_code() - made_start))
 
 # a profiler does not step into the consumers, as it does not into a Python hook
 frames = []
@@ -90,7 +93,9 @@ def test_the_c_hook_delivers_and_counts_as_the_python_hook(tmp_path):
     assert with_c["lambda_frames"] == 0
     events = [event for event, _ in with_c["got"]]
     assert {"open", "os.listdir", "exec", "builtins.id", "os.remove"} <= set(events)
-    assert with_c["counts"][0] == 1 and with_c["counts"][-1] >= 2  # an exec, a FunctionType()
+    # (every exec and FunctionType(), those that can make a function)
+    assert with_c["counts"][:2] == [[1, 0], [2, 1]]  # exec("pass"), then an exec defining one
+    assert with_c["counts"][-1] == [3, 2]  # and a FunctionType()
 
 
 @pytest.mark.skipif(_native.kernels is None, reason=f"no C extension: {_native.REASON}")
