@@ -57,7 +57,8 @@ To run a full sweep yourself:
 
 ```bash
 CASH_TEST_FULL_SWEEP=1 pytest tests/ -m "nightly or full_sweep" \
-    --ignore=tests/test_notebook_integration --ignore=tests/test_wheel_gate --ignore=tests/docs
+    --ignore=tests/test_notebook_integration \
+    --ignore=tests/test_wheel_gate --ignore=tests/docs
 ```
 
 Two rules apply to every test run. `xfail_strict` is on, so a test marked as
@@ -105,7 +106,8 @@ through kernel restarts. It is run by hand; CI skips it.
 ```bash
 # the unit suite, as the unit check runs it
 pytest tests/ --ignore=tests/test_notebook_integration \
-    --ignore=tests/test_wheel_gate --ignore=tests/docs -m "not perf and not nightly"
+    --ignore=tests/test_wheel_gate --ignore=tests/docs \
+    -m "not perf and not nightly"
 # the integration core set
 pytest @tools/test_selection/core_set.txt
 # the whole integration suite (slow)
