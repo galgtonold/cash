@@ -366,8 +366,9 @@ def test_before_312_nothing_is_recorded(lib, c):
 
 
 # Where a body is not recorded (below 3.12, CASH_TRACE=0, a coroutine) the
-# settings it reads are not checked: the first call reaching a library that
-# is stored says so, once a process.
+# settings it reads are not checked: the first stored call says so, once a
+# process, whatever its own code names. A library reached through an
+# argument's method (``df.to_string()``) is named nowhere in that code.
 
 UNSEEN = "KEY-LIBRARY-STATE-UNSEEN"
 
@@ -397,13 +398,16 @@ def norms(x):
     return float(np.linalg.norm([x, x]))
 
 
-def test_an_unrecorded_call_reaching_a_library_says_so_once(c, unrecorded):
+def as_text(frame):
+    return frame.to_string()
+
+
+def test_the_first_unrecorded_call_stored_says_so_once(c, unrecorded):
     pytest.importorskip("numpy")
     with warnings.catch_warnings(record=True) as seen:
         warnings.simplefilter("always")
         own = c.cache(adds_one)
         assert own(1) == 2
-        assert not _said(seen), "a call reaching no library has nothing to say"
         f, g = c.cache(roots), c.cache(norms)
         for x in (4, 9, 4):
             assert f(x) == roots(x)
@@ -411,10 +415,33 @@ def test_an_unrecorded_call_reaching_a_library_says_so_once(c, unrecorded):
     said = _said(seen)
     assert len(said) == 1
     assert said[0].message.code == UNSEEN
-    assert "roots" in str(said[0].message)
+    assert "adds_one" in str(said[0].message)
     # Otherwise as before: the entry is served by its key.
     assert f.cache_info()["hits"] == 1
     assert g.cache_info()["hits"] == 1
+
+
+def test_a_library_reached_through_an_arguments_method_is_said(c, unrecorded):
+    pd = pytest.importorskip("pandas")
+    frame = pd.DataFrame({"x": [1.23456]})
+    with warnings.catch_warnings(record=True) as seen:
+        warnings.simplefilter("always")
+        f = c.cache(as_text)
+        assert f(frame) == as_text(frame)
+    said = _said(seen)
+    assert len(said) == 1
+    assert "as_text" in str(said[0].message)
+    assert "pandas options" in str(said[0].message)
+
+
+def test_an_unrecorded_call_not_stored_says_nothing(c, unrecorded):
+    # The note is about entries served later: a call run uncached has none.
+    with warnings.catch_warnings(record=True) as seen:
+        warnings.simplefilter("always")
+        f = c.cache(adds_one, cache_if=lambda r: False)
+        assert f(1) == 2
+    assert not _said(seen)
+    assert library_reads.UNSEEN_SAID is False
 
 
 def test_a_coroutine_reaching_a_library_says_so(c, monkeypatch):

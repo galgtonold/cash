@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a changed one misses with `library setting changed`.
 
 ### Changed
+- `KEY-LIBRARY-STATE-UNSEEN` (said once per process where a `@cash.cache`
+  call's library settings cannot be checked: before Python 3.12, with
+  `CASH_TRACE=0`, a coroutine, a returned iterator) is now said for the first
+  call stored, whatever the function's own code names. It was said only when
+  that code named a library (`np.sum`), so a function reaching one through
+  an argument (`df.to_string()`, `model.fit(X)`), served stale after
+  `pd.set_option(...)`, was stored without a word.
 - In a `@cash.cache` function, `# @cash:assume-safe` and
   `with cash.assume_safe():` now waive a change to a process setting
   (`atexit.register`, `np.seterr`, a logger's level or handler,

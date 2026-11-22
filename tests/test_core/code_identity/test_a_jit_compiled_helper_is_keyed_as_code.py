@@ -146,10 +146,10 @@ def _run(project: Path) -> tuple[bool, str, str]:
 
 
 def _without_the_pre_312_settings_notice(output: str) -> str:
-    """Drop the one key notice Python below 3.12 owes every body reaching a library.
+    """Drop the one key notice Python below 3.12 owes the first stored call.
 
     Below 3.12 nothing records the library settings a body reads, so cash says
-    so (KEY-LIBRARY-STATE-UNSEEN) for any body that reaches library code: a
+    so (KEY-LIBRARY-STATE-UNSEEN) for the first call it stores: a
     correct notice about settings, not about how the jitted helper is keyed.
     On 3.12+ it must not appear, so nothing is dropped there.
     """

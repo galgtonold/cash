@@ -1546,11 +1546,14 @@ for the object), or pass the value in as an argument.
 
 <span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheIneffectiveWarning</span>
 
-**What happened.** A cached call that reaches library code was stored, and
-its body ran unrecorded: on Python below 3.12, with `CASH_TRACE=0`, as a
-coroutine, or returning an iterator whose code runs after the call. Only a recorded body has the library settings it read checked
-before a hit is served (see [KEY-LIBRARY-STATE-UNREAD](#key-library-state-unread)).
-Cash says this once per process, the first time such a call is stored.
+**What happened.** A cached call was stored, and its body ran unrecorded:
+on Python below 3.12, with `CASH_TRACE=0`, as a coroutine, or returning an
+iterator whose code runs after the call. Only a recorded body has the
+library settings it read checked before a hit is served (see
+[KEY-LIBRARY-STATE-UNREAD](#key-library-state-unread)). Cash says this once
+per process, the first time such a call is stored, whatever the function
+calls: a library is often reached through an argument (`df.to_string()`,
+`model.fit(X)`), which the function's own code does not name.
 
 **Why it matters.** A setting changed between two calls with the same
 arguments is not seen: `sklearn.set_config(...)`, `np.seterr(...)`,

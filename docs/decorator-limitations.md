@@ -273,13 +273,15 @@ to watch:
 
 ## Library settings before Python 3.12
 
-<!-- claim: cash/decorator/runtime.py:CallRunner._warn_settings_unseen @074f4377 -->
+<!-- claim: cash/decorator/runtime.py:CallRunner._warn_settings_unseen @e86dbc89 -->
 On Python 3.12 and newer, cash checks the library settings a call read
 (`sklearn.set_config(...)`, `pd.set_option(...)`, `np.seterr(...)`, a
 `ContextVar`) before it serves the entry. Before 3.12, with `CASH_TRACE=0`,
 for an `async` function, or for code a returned iterator runs, it cannot see
 those reads: a call made after such a setting changed is served the result
-made under the old one. cash says so once per process
+made under the old one, also when the library is reached through an
+argument (`df.to_string()`). cash says so once per process, for the first
+call stored in such a case
 ([`KEY-LIBRARY-STATE-UNSEEN`](warnings.md#key-library-state-unseen)). Pass
 the setting in as an argument, or clear the function's entries after
 changing it.
