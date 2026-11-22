@@ -6,6 +6,9 @@ objects than the identity walk counted. It gave up ("'deltas' holds more
 objects than cash looks through"), the loop ran again on every run, and so
 did what read the list next. With a class of the notebook's keeping state,
 the check for the classes a method call may reach gave up on the list too.
+
+The Timedeltas take longer to store than to build, so their loop is marked
+``@cash:persist``: the walks still have to finish for it to be stored.
 """
 
 import pytest
@@ -21,7 +24,9 @@ TIMES = [
     "df['ts'] = pd.to_datetime(df['t'] * 1e9)\n"
     "class Tracker:\n"
     "    seen = []",
-    "deltas = []\nfor _, group in df.groupby('a'):\n    deltas += list(group['ts'].diff().dropna())",
+    # 1.2 million Timedeltas cost more to store than the 1.7 s loop that
+    # makes them (`many_objects_cost`), so the loop asks for it.
+    "deltas = []\nfor _, group in df.groupby('a'):  # @cash:persist\n    deltas += list(group['ts'].diff().dropna())",
     "q = np.quantile(np.array(deltas, dtype='timedelta64[ns]').astype('int64'), [0.1, 0.5, 0.9])",
 ]
 

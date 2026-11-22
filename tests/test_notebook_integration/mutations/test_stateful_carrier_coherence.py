@@ -120,18 +120,25 @@ def test_seeded_rng_unedited_notebook_is_not_disturbed(nb_runner):
 
 
 def _render_truth(path, totals, with_bars=True):
-    """Render the reference chart directly, outside cash, in this process."""
+    """Render the reference chart directly, outside cash, in this process.
+
+    Under the settings a fresh kernel starts with: another test in this
+    worker may have changed this process's rcParams, and a truth rendered
+    under them differs from the kernel's chart by a byte.
+    """
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    fig, ax = plt.subplots()
-    if with_bars:
-        ax.bar(["a", "b", "c"], totals)
-        ax.set_title("Totals")
-    fig.savefig(str(path))
-    plt.close(fig)
+    with matplotlib.rc_context():
+        matplotlib.rc_file_defaults()
+        fig, ax = plt.subplots()
+        if with_bars:
+            ax.bar(["a", "b", "c"], totals)
+            ax.set_title("Totals")
+        fig.savefig(str(path))
+        plt.close(fig)
     return hashlib.md5(path.read_bytes()).hexdigest()
 
 
