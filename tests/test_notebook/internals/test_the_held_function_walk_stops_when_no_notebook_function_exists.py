@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import array
 import gc
+import sys
 
 import pytest
 
@@ -189,12 +190,15 @@ def _counting_scans(monkeypatch) -> list[int]:
 def test_a_no_is_kept_across_a_statement_that_can_make_no_function(monkeypatch):
     """``k = len(records) + 1`` beside 1.5 million objects: every statement
     read the whole heap again (0.05-0.1 s), since every ``exec`` counted
-    as code that might have made a function."""
+    as code that might have made a function. A comprehension makes none
+    from 3.12 on; before, it runs as a function of the notebook's globals,
+    so it is asked about again there."""
     namespace = _notebook("records = [1, 2]")
     assert not held_functions.notebook_functions_exist(namespace)
     scans = _counting_scans(monkeypatch)
     exec("k = len(records) + 1", namespace)
-    exec("s = [r * 2 for r in records]", namespace)
+    if sys.version_info >= (3, 12):
+        exec("s = [r * 2 for r in records]", namespace)
     assert not held_functions.notebook_functions_exist(namespace)
     assert scans == []
 

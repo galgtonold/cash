@@ -183,13 +183,16 @@ def test_the_loops_refusal_costs_a_fraction_of_making_its_frames():
     (0.19 s, a third before) and a third on 3.10. On Windows and macOS
     3.10, whose interpreters run this pure-Python walk slower against the
     pandas work of making the frames, it was half to 0.57 of it in CI runs,
-    so there the bound is three quarters. Which work it skips is pinned by
-    the test above; this bounds what is left."""
+    so there the bound is three quarters. So it is under pandas 2, which
+    makes the frames three times faster than pandas 3 (0.36 s against
+    1.1 s), so the same walk was half of it (0.18 s) in CI. Which work it
+    skips is pinned by the test above; this bounds what is left."""
     frames, namespace, built = _loop_shape(3000)
     best = float("inf")
     for _ in range(3):
         started = time.perf_counter()
         assert in_place.refusal(frames, namespace) is None
         best = min(best, time.perf_counter() - started)
-    share = 0.75 if sys.platform in ("win32", "darwin") and sys.version_info < (3, 11) else 0.5
+    slow_walk = sys.platform in ("win32", "darwin") and sys.version_info < (3, 11)
+    share = 0.75 if slow_walk or int(pd.__version__.split(".")[0]) < 3 else 0.5
     assert best < built * share, (best, built)
