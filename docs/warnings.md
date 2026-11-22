@@ -2505,7 +2505,7 @@ not matter to any cell: put `# @cash:assume-safe` on the statement.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/tracking/lookups_seen.py:arm @621f5c02, cash/tracking/lookups_seen.py:_warn_unseen_once @71cd55a2, cash/tracking/lookups_seen.py:_install @9b846e79 -->
+<!-- claim: cash/tracking/lookups_seen.py:arm @621f5c02, cash/tracking/lookups_seen.py:_warn_unseen_once @71cd55a2, cash/tracking/lookups_seen.py:_install @3ab782b0 -->
 **What happened.** cash cannot watch what a statement finds as it runs:
 `sys.monitoring` needs Python 3.12 or newer, or other tools hold the
 monitoring tool ids cash asks for (5 and 2). Below Python 3.12 the code a

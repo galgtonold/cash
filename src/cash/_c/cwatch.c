@@ -74,7 +74,7 @@
 
 #include "cwalk.h"
 
-#define CWATCH_API_VERSION 8
+#define CWATCH_API_VERSION 9
 #define CWATCH_VERSION "0.1.0"
 
 #if PY_VERSION_HEX < 0x030C0000
@@ -3601,8 +3601,38 @@ static PyObject *py_any_key(PyObject *self, PyObject *const *args, Py_ssize_t na
     return k;
 }
 
+/* `lookups_seen`'s PY_RETURN callback for a library callee, which may run
+   millions of times in a loop (``random.randint`` in a simulation): a
+   value of exactly one of the plain classes `lookups_seen._PLAIN` names
+   never stands by reference, so None is returned here without a Python
+   frame; any other value goes to *slow* (the Python callback, held as this
+   function's self) with the same arguments. Every return is still seen. */
+static PyObject *plain_return_call(PyObject *slow, PyObject *const *args, Py_ssize_t nargs) {
+    if (nargs == 3) {
+        PyObject *v = args[2];
+        PyTypeObject *t = Py_TYPE(v);
+        if (v == Py_None || t == &PyLong_Type || t == &PyBool_Type || t == &PyFloat_Type || t == &PyUnicode_Type ||
+            t == &PyTuple_Type || t == &PyList_Type || t == &PyDict_Type || t == &PyBytes_Type ||
+            t == &PyComplex_Type || t == &PySet_Type || t == &PyFrozenSet_Type)
+            Py_RETURN_NONE;
+    }
+    return PyObject_Vectorcall(slow, args, (size_t)nargs, NULL);
+}
+
+static PyMethodDef plain_return_def = {
+    "plain_return_filter", (PyCFunction)(void (*)(void))plain_return_call, METH_FASTCALL,
+    "(code, offset, retval): None for a plain retval, else the slow callback's answer"};
+
+static PyObject *py_plain_return_filter(PyObject *self, PyObject *slow) {
+    if (!PyCallable_Check(slow)) {
+        PyErr_SetString(PyExc_TypeError, "plain_return_filter: the slow callback must be callable");
+        return NULL;
+    }
+    return PyCFunction_New(&plain_return_def, slow);
+}
+
 static PyMethodDef methods[] = {
-    {"check", (PyCFunction)(void (*)(void))py_check, METH_FASTCALL, "check(value, kind) -> digest | status int"},
+    {"check",(PyCFunction)(void (*)(void))py_check, METH_FASTCALL, "check(value, kind) -> digest | status int"},
     {"seen", (PyCFunction)(void (*)(void))py_seen, METH_FASTCALL, "seen(value, seconds)"},
     {"arm", (PyCFunction)(void (*)(void))py_arm, METH_FASTCALL, "arm(value, anchors=None) -> (status, detail)"},
     {"commit", (PyCFunction)(void (*)(void))py_commit, METH_FASTCALL, "commit(value, kind, digest, seconds) -> bool"},
@@ -3646,6 +3676,8 @@ static PyMethodDef methods[] = {
     {"offers", py_offers, METH_O, ""},
     {"set_weak_callback", py_set_weak_callback, METH_O, "the callback of the weak references made"},
     {"record", py_record, METH_O, "record(d) -> KeyRecorder: the keys of d that change, and what they held"},
+    {"plain_return_filter", py_plain_return_filter, METH_O,
+     "plain_return_filter(slow) -> a PY_RETURN callback answering a plain value itself"},
     {NULL, NULL, 0, NULL}};
 
 static int find_set_dummy(void) {

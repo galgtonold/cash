@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 #: The ``API_VERSION`` this cash's Python code was written against. A module
 #: with another number is a leftover from another build and is not used.
-EXPECTED_API = 8
+EXPECTED_API = 9
 
 MODULE = "cash._cwatch"
 
