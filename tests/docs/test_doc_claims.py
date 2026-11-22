@@ -100,6 +100,9 @@ _ENV_ALLOWLIST: frozenset[str] = frozenset(
         # exit (cash.phase_times); read once at import, so not a setting.
         "CASH_PHASE_TIMES",
         "CASH_PHASE_TIMES_FILE",
+        # Runs every seed of the test suite's sweeps (tests/_sweeps.py), as
+        # the nightly workflow does; read by the tests, not by cash.
+        "CASH_TEST_FULL_SWEEP",
     }
 )
 

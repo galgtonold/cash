@@ -15,12 +15,12 @@ yourself. Figures on this page are derived from the repository by
 
 ## The suites
 
-**<!-- docnum:tests_total -->~30,950<!-- /docnum --> tests** in
-<!-- docnum:test_files -->~2,910<!-- /docnum --> files:
+**<!-- docnum:tests_total -->~30,800<!-- /docnum --> tests** in
+<!-- docnum:test_files -->~2,920<!-- /docnum --> files:
 
 | Suite | Size | What it covers |
 |---|---|---|
-| Unit | <!-- docnum:tests_unit -->~24,880<!-- /docnum --> | keys, lineage, hashing, backends, the decorator, the notebook engine with a real IPython shell |
+| Unit | <!-- docnum:tests_unit -->~24,690<!-- /docnum --> | keys, lineage, hashing, backends, the decorator, the notebook engine with a real IPython shell |
 | Notebook integration | <!-- docnum:tests_integration -->~5,470<!-- /docnum --> | real kernels running real notebooks, one folder per feature |
 | Docs | <!-- docnum:tests_docs -->~650<!-- /docnum --> | the documentation's examples and claims ([below](#the-docs-are-tested-too)) |
 
@@ -28,11 +28,12 @@ yourself. Figures on this page are derived from the repository by
 
 | Check | When | Platforms | What it runs |
 |---|---|---|---|
-| Unit | every push to main, every pull request | Linux, Windows and macOS, Python 3.10 to 3.14: <!-- docnum:platforms -->15<!-- /docnum --> combinations | the unit suite, without the tests marked `perf` |
+| Unit | every push to main, every pull request | Linux, Windows and macOS, Python 3.10 to 3.14: <!-- docnum:platforms -->15<!-- /docnum --> combinations | the unit suite, without the tests marked `perf` or `nightly`, and a few seeds of each `full_sweep` sweep |
 | Polars 1 | every push and pull request | Linux, Python 3.12 | the unit tests named for polars, on the newest polars 1 (the others run on polars 2) |
 | Pandas 2 | every push and pull request | Linux, Python 3.13 | the unit tests named for pandas, frames, series, columns, scikit-learn and fits, on pandas 2 (the others run on pandas 3, except on Python 3.10) |
 | Integration core set | every push to main, every pull request | Linux, Python 3.10 to 3.14 | about 340 integration tests (`tools/test_selection/core_set.txt`), chosen to cover every line, feature and step sequence the whole suite covers |
 | Integration, full | nightly | Linux, Python 3.12, in 6 parallel shards | the whole integration suite |
+| Held unit tests | nightly | Linux, Python 3.12 | the unit tests marked `nightly`, which the unit check leaves out, and every seed of the sweeps marked `full_sweep` |
 | Docs | every push and pull request | Linux, Python 3.12 | the docs suite, and a check that the derived numbers are current |
 | Lint | every push and pull request | Linux | `ruff check .` and `ruff format --check .` |
 | Benchmarks | weekly, and when `benchmarks/` changes | Linux | the benchmark tooling tests, and the `perf` tests, which never block |
@@ -45,6 +46,19 @@ in 2 and 3.14 in 3, and the integration core set on Python 3.10 and 3.14; the
 other checks run as above. Windows with Python 3.10, the slowest of all, runs
 every night on the merge branch (`nightly.yml`), and in the full tier: when
 main moves, on pull requests, and by hand before main moves. Other working branches run CI only by hand.
+
+Some unit tests cost too much for every push. A test that builds and
+installs a wheel or starts real kernels is marked `nightly`: the unit check
+deselects it, and the nightly held-unit job runs it (the nightly Windows
+Python 3.10 run keeps it too). A randomized sweep takes its seeds from
+`tests/_sweeps.py` and is marked `full_sweep`: a push runs its first few
+seeds, and the nightly job sets `CASH_TEST_FULL_SWEEP=1` to run every seed.
+To run a full sweep yourself:
+
+```bash
+CASH_TEST_FULL_SWEEP=1 pytest tests/ -m "nightly or full_sweep" \
+    --ignore=tests/test_notebook_integration --ignore=tests/test_wheel_gate --ignore=tests/docs
+```
 
 Two rules apply to every test run. `xfail_strict` is on, so a test marked as
 an expected failure fails the build once it passes. And a test fails if any
@@ -89,9 +103,9 @@ through kernel restarts. It is run by hand; CI skips it.
 ## Running the suites
 
 ```bash
-# the unit suite
+# the unit suite, as the unit check runs it
 pytest tests/ --ignore=tests/test_notebook_integration \
-    --ignore=tests/test_wheel_gate --ignore=tests/docs
+    --ignore=tests/test_wheel_gate --ignore=tests/docs -m "not perf and not nightly"
 # the integration core set
 pytest @tools/test_selection/core_set.txt
 # the whole integration suite (slow)

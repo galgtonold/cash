@@ -125,6 +125,8 @@ jobs:
       # workers hold ~2M objects, so one share check there can take over 30 s
       # (each gc.get_referrers call scans the heap): its per-test timeout is
       # 90 s, since a timeout ends the whole xdist worker.
+      # Tests marked nightly (a wheel build, real kernels) are deselected here
+      # and run by nightly.yml's held-unit job, as are the full seed sweeps.
       - name: Run unit tests
         timeout-minutes: 55
         run: |
@@ -132,7 +134,7 @@ jobs:
             --ignore=tests/test_notebook_integration \
             --ignore=tests/test_wheel_gate \
             --ignore=tests/docs \
-            -m "not perf" \
+            -m "not perf and not nightly" \
             -p tools.test_selection.shard --shard=${{ matrix.shard }} \
             -n auto --tb=short -q -rs --durations=40 \
             -o faulthandler_timeout=120 \

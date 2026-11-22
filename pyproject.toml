@@ -258,6 +258,8 @@ markers = [
     "slow: Tests that take longer than usual",
     "real_time_limits: Keeps the share check's and analysis's default time limits (tests/test_notebook pins them high)",
     "perf: Asserts a wall-clock threshold; excluded from the unit CI job, run by the Benchmarks workflow",
+    "nightly: Too slow for every push (builds a wheel, starts real kernels); the unit CI job deselects it, the nightly workflow runs it",
+    "full_sweep: A seed sweep (tests._sweeps): a few seeds per push, every seed when CASH_TEST_FULL_SWEEP=1, as the nightly workflow sets",
     "docs_parity: Documentation feature-parity tests (extract code fences from docs and run them)",
 ]
 

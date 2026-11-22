@@ -37,8 +37,9 @@ from tests._scripts import run_tied
 # venv, and pytest-timeout charges that to whichever test asks first. ~20 s
 # locally, but the suite-wide 30 s budget killed the worker outright on a slow
 # Windows runner ("node down: Not properly terminated"), on every retry --
-# each retry repeats the install.
-pytestmark = [pytest.mark.core, pytest.mark.slow, pytest.mark.timeout(600)]
+# each retry repeats the install. That install is why it runs nightly (on
+# Linux, and in the nightly Windows unit job), not in every push's unit job.
+pytestmark = [pytest.mark.core, pytest.mark.slow, pytest.mark.nightly, pytest.mark.timeout(600)]
 
 _PKG = "cashprobe"
 

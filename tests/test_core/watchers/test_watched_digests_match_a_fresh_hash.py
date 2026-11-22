@@ -9,6 +9,9 @@ global rebinding, ``__qualname__``, ``__code__``, copyreg reducers,
 every step each value is hashed through the watchers twice and compared
 with a hash read from the value (`_fuzz`). A longer run:
 ``python -m tests.test_core.watchers._fuzz --seconds 600``.
+
+Every push runs two seeds; the nightly workflow runs all eight
+(``CASH_TEST_FULL_SWEEP=1``, `tests._sweeps`).
 """
 
 from __future__ import annotations
@@ -16,10 +19,13 @@ from __future__ import annotations
 import pytest
 
 from cash import value_watch
+from tests._sweeps import seeds
 from tests.test_core.watchers._fuzz import fuzz
 
+pytestmark = pytest.mark.full_sweep
 
-@pytest.mark.parametrize("seed", range(8))
+
+@pytest.mark.parametrize("seed", seeds(per_push=2, full=8))
 def test_every_watched_digest_is_a_fresh_hash(watching, seed):
     hits = value_watch.stats()["hits"]
     fuzz(seed, 200, watching)
