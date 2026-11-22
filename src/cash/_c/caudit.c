@@ -10,7 +10,8 @@
  *
  * This hook is installed once, in C, in place of the Python hooks:
  *   - it counts "exec" and "function.__new__" itself (`audit_new_code`),
- *     where held_functions._note_new_code counted them;
+ *     where held_functions._note_new_code counted them, and apart those of
+ *     them that can make a function (`audit_new_function_code`);
  *   - it calls the Python dispatcher (io_watch._hook) only for an event named
  *     in the set io_watch hands it (`audit_dispatch`), a superset of what
  *     that dispatcher acts on: the dispatcher sees exactly the events it acted
@@ -40,6 +41,24 @@
 static int installed = 0;
 static PyInterpreterState *home = NULL;
 static unsigned long long new_code = 0;
+static unsigned long long new_function_code = 0;
+
+/* Can the code an "exec" event runs make a function? Only by a
+ * MAKE_FUNCTION of a code object among its own constants (a def, a lambda,
+ * a class body, a comprehension before 3.12): the code it runs further
+ * down is made by one of those first, or starts from an exec or a
+ * types.FunctionType of its own, counted as events of their own. Not a
+ * code object (an event raised by another caller): yes. */
+static int may_make_functions(PyObject *args) {
+    if (!args || !PyTuple_Check(args) || PyTuple_GET_SIZE(args) < 1) return 1;
+    PyObject *code = PyTuple_GET_ITEM(args, 0);
+    if (!PyCode_Check(code)) return 1;
+    PyObject *consts = ((PyCodeObject *)code)->co_consts;
+    if (!consts || !PyTuple_Check(consts)) return 1;
+    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(consts); i++)
+        if (PyCode_Check(PyTuple_GET_ITEM(consts, i))) return 1;
+    return 0;
+}
 static PyObject *dispatcher = NULL; /* strong; never freed once set (the hook outlives the module) */
 
 /* the names dispatched: copies, and the first bytes they start with */
@@ -58,9 +77,13 @@ static int hook(const char *event, PyObject *args, void *data) {
     (void)data;
     PyThreadState *ts = CA_TSTATE();
     if (!ts || PyThreadState_GetInterpreter(ts) != home) return 0;
-    if ((event[0] == 'e' && strcmp(event, "exec") == 0) ||
-        (event[0] == 'f' && strcmp(event, "function.__new__") == 0))
+    if (event[0] == 'e' && strcmp(event, "exec") == 0) {
         new_code++;
+        if (may_make_functions(args)) new_function_code++;
+    } else if (event[0] == 'f' && strcmp(event, "function.__new__") == 0) {
+        new_code++;
+        new_function_code++;
+    }
     if (!dispatcher || !wanted(event) || CA_FINALIZING()) return 0;
     PyObject *fn = Py_NewRef(dispatcher);
     PyObject *name = PyUnicode_FromString(event);
@@ -145,6 +168,13 @@ static PyObject *py_dispatch(PyObject *self, PyObject *const *args, Py_ssize_t n
  * interpreter since the hook went in */
 static PyObject *py_new_code(PyObject *self, PyObject *noargs) { return PyLong_FromUnsignedLongLong(new_code); }
 
+/* audit_new_function_code() -> int: the "exec" events of code that can make
+ * a function (`may_make_functions`) and the "function.__new__" events seen in
+ * this interpreter since the hook went in */
+static PyObject *py_new_function_code(PyObject *self, PyObject *noargs) {
+    return PyLong_FromUnsignedLongLong(new_function_code);
+}
+
 /* audit_state() -> (installed, dispatched names): for tests */
 static PyObject *py_state(PyObject *self, PyObject *noargs) {
     PyObject *out = PyList_New(nnames);
@@ -162,6 +192,7 @@ static PyMethodDef caudit_methods[] = {
     {"audit_dispatch", (PyCFunction)(void (*)(void))py_dispatch, METH_FASTCALL,
      "audit_dispatch(dispatcher, names): dispatch only these events"},
     {"audit_new_code", py_new_code, METH_NOARGS, "audit_new_code() -> int"},
+    {"audit_new_function_code", py_new_function_code, METH_NOARGS, "audit_new_function_code() -> int"},
     {"audit_state", py_state, METH_NOARGS, "audit_state() -> (installed, names)"},
     {NULL, NULL, 0, NULL}};
 

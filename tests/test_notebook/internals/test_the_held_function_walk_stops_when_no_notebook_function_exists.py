@@ -172,3 +172,46 @@ def test_a_function_bound_in_the_namespace_answers_without_a_scan_of_every_objec
     # One no name binds is still found, by the scan.
     assert held_functions.notebook_functions_exist(_notebook("keep = [lambda: 1]"))
     assert scans
+
+
+def _counting_scans(monkeypatch) -> list[int]:
+    scans: list[int] = []
+    real = held_functions._referrers_or_none
+
+    def counting(objects, stop=None):
+        scans.append(len(objects))
+        return real(objects, stop)
+
+    monkeypatch.setattr(held_functions, "_referrers_or_none", counting)
+    return scans
+
+
+def test_a_no_is_kept_across_a_statement_that_can_make_no_function(monkeypatch):
+    """``k = len(records) + 1`` beside 1.5 million objects: every statement
+    read the whole heap again (0.05-0.1 s), since every ``exec`` counted
+    as code that might have made a function."""
+    namespace = _notebook("records = [1, 2]")
+    assert not held_functions.notebook_functions_exist(namespace)
+    scans = _counting_scans(monkeypatch)
+    exec("k = len(records) + 1", namespace)
+    exec("s = [r * 2 for r in records]", namespace)
+    assert not held_functions.notebook_functions_exist(namespace)
+    assert scans == []
+
+
+def test_a_statement_making_a_lambda_after_a_no_is_seen(monkeypatch):
+    namespace = _notebook("records = [1, 2]")
+    assert not held_functions.notebook_functions_exist(namespace)
+    scans = _counting_scans(monkeypatch)
+    exec("keep = [lambda: records]", namespace)
+    assert held_functions.notebook_functions_exist(namespace)
+    assert scans
+
+
+def test_a_function_made_from_code_after_a_no_is_seen():
+    import types
+
+    namespace = _notebook("records = [1, 2]")
+    assert not held_functions.notebook_functions_exist(namespace)
+    namespace["keep"] = [types.FunctionType(compile("records", "<t>", "eval"), namespace)]
+    assert held_functions.notebook_functions_exist(namespace)

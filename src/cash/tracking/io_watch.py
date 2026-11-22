@@ -79,9 +79,9 @@ _idle_table: dict[str, tuple[Consumer, ...]] = {}
 _C_HOOK = _native.kernels
 
 
-#: event -> [count], for `count_events`: counted by the Python hook, scope
-#: or no scope and in cash's own work too.
-_counts: dict[str, list[int]] = {}
+#: event -> ``(counter, only)`` pairs, for `count_events`: counted by the
+#: Python hook, scope or no scope and in cash's own work too.
+_counts: dict[str, list[tuple[list[int], Callable[[tuple], bool] | None]]] = {}
 
 
 def _hook(event: str, args: tuple) -> None:
@@ -90,7 +90,9 @@ def _hook(event: str, args: tuple) -> None:
     # Under the C hook, only for the events a table names (`_C_HOOK`).
     counted = _counts.get(event)
     if counted is not None:
-        counted[0] += 1
+        for counter, only in counted:
+            if only is None or only(args):
+                counter[0] += 1
     consumers = _active.get(event)
     if consumers is None:
         return
@@ -197,18 +199,19 @@ def subscribe_always(event: str | Iterable[str], consumer: Consumer) -> None:
         _rebuild()
 
 
-def count_events(events: Iterable[str]) -> list[int] | None:
+def count_events(events: Iterable[str], only: Callable[[tuple], bool] | None = None) -> list[int] | None:
     """A counter of *events* (``[n]``) kept by the Python hook, or None
     under the C hook, which counts what it is asked to itself. One hook
     for every listener: Python calls each hook installed for every audited
-    event in the process, an ``id()`` included."""
+    event in the process, an ``id()`` included. *only*, when given, says
+    from an event's arguments whether it counts."""
     with _lock:
         _ensure_hook()
         if _C_HOOK is not None:
             return None
         counter = [0]
         for event in events:
-            _counts[event] = counter
+            _counts.setdefault(event, []).append((counter, only))
         return counter
 
 
