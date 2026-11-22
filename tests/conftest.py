@@ -282,6 +282,9 @@ from traitlets.config import Configurable
 from cash import Cash
 from cash.backends import FileBackend, InMemoryBackend
 from cash.notebook.ipython.magics import CashMagics
+from tests import _between_tests
+
+_between_tests.track_cash_exit_work()
 
 # ============================================================================
 # Backend Fixtures
@@ -745,12 +748,17 @@ def pytest_unconfigure(config):
 
 
 @pytest.fixture(autouse=True)
-def _default_cache_dir_outside_the_checkout(request, monkeypatch, tmp_path_factory):
+def _default_cache_dir_outside_the_checkout(request, monkeypatch):
     """Point ``CASH_CACHE_DIR`` at a folder of this test's own, and fail the
     test if a ``.cash/`` still appears in the repository root.
 
     A test that needs the real default still gets it with
     ``monkeypatch.delenv("CASH_CACHE_DIR")``.
+
+    The base temp comes from the config, not the session-scoped
+    ``tmp_path_factory`` fixture: a function-scoped fixture that requests a
+    session-scoped one adds its finalizer (and its request) to that one's
+    list, emptied only when the session ends, so every test left one more.
     """
     if not _runs_in_process(request.node.path):
         yield
@@ -758,7 +766,7 @@ def _default_cache_dir_outside_the_checkout(request, monkeypatch, tmp_path_facto
     checkout_cache = request.config.rootpath / ".cash"
     existed = checkout_cache.exists()
     # Not created here: cash makes it on first write, and most tests never write.
-    per_test = tmp_path_factory.getbasetemp() / "default_cache" / str(next(_DEFAULT_CACHE_DIRS))
+    per_test = request.config._tmp_path_factory.getbasetemp() / "default_cache" / str(next(_DEFAULT_CACHE_DIRS))
     monkeypatch.setenv("CASH_CACHE_DIR", str(per_test))
     yield
     if not existed and checkout_cache.exists():
@@ -792,9 +800,15 @@ def sample_dataframe():
 # ============================================================================
 
 
+# The session's config, for hooks that are not handed it.
+_CONFIG: list[pytest.Config] = []
+_XDIST_WORKER = bool(os.environ.get("PYTEST_XDIST_WORKER"))
+
+
 @pytest.hookimpl(trylast=True)
 def pytest_configure(config):
     """Configure pytest with custom markers."""
+    _CONFIG[:] = [config]
     _STALL_WATCHDOG.start()
     _temp_files_under_basetemp(config)
     # A hint's own error is a debug line in a session; here it is a warning,
@@ -937,6 +951,25 @@ def pytest_runtest_logreport(report):
     if report.when == "teardown":
         # Back to the default limit; the next test declares its own.
         _STALL_WATCHDOG.set_allowance(None)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_teardown(item, nextitem):
+    try:
+        return (yield)
+    finally:
+        _between_tests.forget_test_instance(item)
+
+
+def pytest_runtest_logfinish(nodeid, location):
+    """Drop what the test left in the process that no later test needs
+    (tests/_between_tests.py): a worker's heap otherwise grows by ~100
+    objects a test, and every heap read cash makes slows down with it."""
+    _between_tests.forget_cash_memos()
+    _between_tests.forget_ipython_outputs()
+    _between_tests.forget_dead_cash_exit_work()
+    if _XDIST_WORKER and _CONFIG:
+        _between_tests.forget_passed_reports(_CONFIG[0])
 
 
 def pytest_terminal_summary(terminalreporter):
