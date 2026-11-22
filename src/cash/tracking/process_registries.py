@@ -35,6 +35,11 @@ the ``def`` line of a function on the way, as a file write is waived:
 ``os.putenv`` or ``os.unsetenv``, so a later write of that key the user did
 not waive is still counted.
 
+The variable cash hands its pool workers (`cash._location.LAUNCH_ENV`),
+which it writes again each time it resolves its settings, is cash's own: a
+write of it, from cash's work in the middle of a statement, is neither
+counted nor compared.
+
 What a waived stretch of a cached call changes in the other registries is
 left out the way an import's is: `read_registries` where the stretch
 begins, `waive_since` where it ends (`cash.effect_observer`).
@@ -53,6 +58,7 @@ import warnings
 from collections.abc import Callable
 from typing import Any
 
+from .._location import LAUNCH_ENV
 from .._user_attrs import attribute_or, has_attribute
 
 __all__ = [
@@ -103,6 +109,10 @@ _NATIVE_ENVIRONMENT = [0]
 #: The keys of the environment (as ``os.environ`` holds them) a waived
 #: ``os.putenv`` or ``os.unsetenv`` wrote: not compared (`_same_environment`).
 _WAIVED_ENVIRONMENT: set[Any] = set()
+#: The keys of the environment cash writes for itself (`LAUNCH_ENV`), in
+#: each spelling ``os.environ`` and the audit events hold them: never the
+#: statement's write.
+_OWN_ENVIRONMENT = frozenset({LAUNCH_ENV, LAUNCH_ENV.upper(), os.fsencode(LAUNCH_ENV)})
 #: Asked, in order, whether the user waived the environment write being
 #: audited: True or False, or None to leave it to the next. None from all:
 #: not waived.
@@ -241,6 +251,8 @@ def _count_calls() -> None:
     io_watch.subscribe_always("sys.addaudithook", added)
 
     def set_natively(args: tuple) -> None:
+        if args and _environment_key(args[0]) in _OWN_ENVIRONMENT:
+            return
         if args and _env_write_waived():
             _WAIVED_ENVIRONMENT.add(_environment_key(args[0]))
             return
@@ -381,11 +393,15 @@ _MISSING = object()
 
 
 def _environment() -> tuple[dict[Any, Any], int]:
-    """``os.environ``, and how many times ``os.putenv`` or ``os.unsetenv``
-    was called (the audit events: also when imported by name), which
-    change the process's environment and leave ``os.environ`` alone."""
+    """``os.environ`` but for cash's own keys (`_OWN_ENVIRONMENT`), and how
+    many times ``os.putenv`` or ``os.unsetenv`` was called (the audit
+    events: also when imported by name), which change the process's
+    environment and leave ``os.environ`` alone."""
     data = attribute_or(os.environ, "_data", None)
-    return (dict(data) if isinstance(data, dict) else dict(os.environ)), _NATIVE_ENVIRONMENT[0]
+    found = dict(data) if isinstance(data, dict) else dict(os.environ)
+    for key in _OWN_ENVIRONMENT:
+        found.pop(key, None)
+    return found, _NATIVE_ENVIRONMENT[0]
 
 
 def _same_environment(old: tuple[dict[Any, Any], int], new: tuple[dict[Any, Any], int]) -> bool:
