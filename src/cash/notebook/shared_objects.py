@@ -3204,6 +3204,9 @@ def _variables_holding(
     seen = set(inside)
     frontier = [obj for key, obj in inside.items() if key not in by_id]
     stop.add(id(frontier))
+    # A library's own object its class keeps as its own attribute (the link
+    # classes' ``interval_y_pred``): the library's, found again by its name.
+    constants: set[int] = set()
     for _level in range(_REFERRER_DEPTH):
         if not frontier:
             return names
@@ -3249,6 +3252,8 @@ def _variables_holding(
                 # the object is the notebook's, held where no copy reaches.
                 if _level > 1 and notebook_own:
                     return None
+                if _level == 1:
+                    constants.update(_class_constants(obj, inside))
                 continue
             if not _is_cash_own(obj):
                 following.append(obj)
@@ -3256,6 +3261,19 @@ def _variables_holding(
         # (`_module_references`).
         obj = None
         del referrers, args
+        if constants:
+            # Not looked for further, as ``()`` and a module's global are
+            # not: every other holder of a class's constant is one more
+            # object of the library's (each sklearn loss of that link holds
+            # its ``Interval``), and climbing on from them found every other
+            # model of the session -- linked as sharing the fitted one --
+            # and past one displayed in ``Out``, held in IPython's history,
+            # gave up, so the fit was refused as unchecked. What else the
+            # objects held from outside are is climbed from again, alone.
+            del following
+            rest = {key: value for key, value in inside.items() if key not in constants}
+            found = _variables_holding(rest, user_ns, skip, ignore, value_types) if rest else set()
+            return None if found is None else direct | found
         frontier[:] = following
         del following
     return names if not frontier else None
@@ -3401,6 +3419,17 @@ def _held_by_a_module(objs: tuple[Any, ...], namespaces: list[dict]) -> bool:
     ids = {id(obj) for obj in objs}
     referents = get_referents
     return any(not ids.isdisjoint(map(id, referents(namespace))) for namespace in namespaces)
+
+
+def _class_constants(cls: type, inside: Mapping[int, Any]) -> set[int]:
+    """The ids of the library's own objects of *inside* that *cls*, a
+    library's class, holds as its own attributes (in its ``__dict__``): the
+    library's constants, as its module's globals are."""
+    try:
+        held = {id(value) for value in list(vars(cls).values())}
+    except Exception:  # noqa: BLE001 - a metaclass's own ``__dict__``
+        return set()
+    return {key for key, obj in inside.items() if key in held and _is_library_own(obj)}
 
 
 def _is_library_own(obj: Any) -> bool:

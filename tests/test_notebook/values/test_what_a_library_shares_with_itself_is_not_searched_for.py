@@ -71,6 +71,41 @@ def test_a_boosting_fit_is_stored_without_searching_what_only_the_library_holds(
     assert not row.get("uncacheable_reasons"), row.get("uncacheable_reasons")
 
 
+def test_a_boosting_fit_is_stored_beside_an_earlier_model_kept_deep(cash_magics, monkeypatch):
+    """Every sklearn loss of a link holds the ``Interval`` its link class
+    keeps: one earlier model kept where the climb from it does not reach a
+    variable within `_REFERRER_DEPTH` levels -- displayed, and so held in
+    IPython's output history, or deep in a dict of runs as here -- made the
+    climb give up, and the new fit was refused as unchecked; a model in a
+    variable was found as holding the new one's object. The class's own
+    object is the library's: neither holder is looked for."""
+    climbs = []
+    real_climb = shared_objects._variables_holding
+
+    def climb(*args, **kwargs):
+        climbs.append(real_climb(*args, **kwargs))
+        return climbs[-1]
+
+    run_cash_cell(cash_magics, "import numpy as np\nfrom sklearn.ensemble import HistGradientBoostingRegressor")
+    run_cash_cell(
+        cash_magics,
+        "rng = np.random.default_rng(0)\nX = rng.normal(size=(2_000, 4))\ny = X[:, 0] + rng.normal(size=2_000)",
+    )
+    nested = "HistGradientBoostingRegressor(max_iter=2).fit(X, y)"
+    for level in range(shared_objects._REFERRER_DEPTH):
+        nested = f"{{'run{level}': {nested}}}"
+    run_cash_cell(cash_magics, f"runs = {nested}")
+    monkeypatch.setattr(shared_objects, "_variables_holding", climb)
+    run_cash_cell(cash_magics, "m = HistGradientBoostingRegressor(max_iter=5, random_state=0).fit(X, y)")
+
+    assert climbs, "the model's loss was not looked for"
+    assert None not in climbs, "the climb past the earlier model did not end"
+    assert all("runs" not in names for names in climbs), climbs
+    row = cash_magics._last_cell_metrics["statements"][-1]
+    assert str(row["status"]) == "COMPUTED"
+    assert not row.get("uncacheable_reasons"), row.get("uncacheable_reasons")
+
+
 LIBRARY = (
     "import sys, types\n"
     "lib = types.ModuleType('fakelib')\n"
