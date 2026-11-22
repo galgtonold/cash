@@ -2760,7 +2760,7 @@ of which hit or column it was taken from.
 
 <span class="md-tag cash-warning-path">notebook</span> <span class="md-tag cash-warning-class">CashWarning</span>
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._record_shared_object_edges @24c0cabb, cash/notebook/shared_objects.py:referring_names @d7fcff9d, cash/notebook/statement/processor.py:StatementProcessor.record_structure_share_edges @7ac0bc53 -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._record_shared_object_edges @24c0cabb, cash/notebook/shared_objects.py:referring_names @bfeafe7e, cash/notebook/statement/processor.py:StatementProcessor.record_structure_share_edges @7ac0bc53 -->
 **What happened.** After a statement ran, cash looked for the other variables
 that hold an object of its outputs, or are held in one (`data = raw`,
 `config = {"features": features}`), so that a later change through either
