@@ -29,7 +29,7 @@ import sys
 import threading
 from typing import Any
 
-__all__ = ["current_stream", "is_live_stream", "live_reduce"]
+__all__ = ["current_stream", "is_live_stream", "live_reduce", "stream_kind"]
 
 #: The ``sys`` names a stored stream may stand for, in the order they are
 #: tried: an object holding ``sys.stdout`` restores to the stdout of the
@@ -71,6 +71,15 @@ def _stream_name(obj: Any) -> str | None:
         if getattr(sys, name, None) is obj:
             return name
     return None
+
+
+def stream_kind(kind: type) -> bool:
+    """Can an object of *kind* be a stream `is_live_stream` names other than
+    ``sys.__stdout__`` and ``sys.__stderr__`` themselves: a writer cash puts
+    in front of one, or ipykernel's ``OutStream``?"""
+    if getattr(kind, "_cash_wrapped_stream", None) is not None:
+        return True
+    return kind.__name__ == "OutStream" and kind.__module__.startswith("ipykernel.")
 
 
 def is_live_stream(obj: Any) -> bool:

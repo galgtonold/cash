@@ -251,6 +251,13 @@ def _plain_class(kind: type) -> bool:
     )
 
 
+def answers_its_type(kind: type) -> bool:
+    """Do *kind*'s objects answer ``isinstance`` by their real type
+    (`_plain_class`), never asked for a ``__class__`` of their own?"""
+    plain = _PLAIN_CLASS.get(type_key(kind))
+    return _plain_class(kind) if plain is None else plain
+
+
 def _passable(kinds: type | tuple[type, ...]) -> tuple[tuple[type, ...], bool]:
     """*kinds* without the ones an object passes for only by being one: a
     function, method, code object, cell, frame, module, class or numpy

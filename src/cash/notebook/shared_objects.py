@@ -59,9 +59,18 @@ from cash._clock import CpuLimit
 from cash._plain_data import held_items_facts
 from cash._referents import get_referents
 from cash._type_memo import MroMemo, TypeMemo, type_key
-from cash._user_attrs import attribute_or, builtin_items, from_family, has_attribute, instance_of, own_dict, own_lookup
+from cash._user_attrs import (
+    answers_its_type,
+    attribute_or,
+    builtin_items,
+    from_family,
+    has_attribute,
+    instance_of,
+    own_dict,
+    own_lookup,
+)
 from cash.analysis.ast_util import walk_tree
-from cash.live_state import is_live_stream
+from cash.live_state import is_live_stream, stream_kind
 from cash.tracking.function_tracker import is_local_module
 from cash.value_types import LEAF_TYPES
 
@@ -638,6 +647,40 @@ def is_value(value: Any, value_types: tuple[type, ...]) -> bool:
         return instance_of(value, _CALLABLE_TYPES) and _bound_objects(value) is None
     except Exception:  # noqa: BLE001 - see above
         return issubclass(type(value), value_types)
+
+
+def _not_values(objs: Iterable[Any], value_types: tuple[type, ...]) -> list[Any]:
+    """*objs* without those `is_value` takes for values, in order.
+
+    Asked of each object of a class a cell defined again, 1.5 million of
+    them, `is_value` took 2-3 s. Its answer for an object whose class
+    answers ``isinstance`` by its real type (`answers_its_type`), is not a
+    callable's and cannot stand for a stream, is its class's: asked once
+    per class. ``sys.__stdout__`` and ``sys.__stderr__`` are asked for
+    themselves."""
+    by_kind: dict[type, bool] = {}
+    streams = (sys.__stdout__, sys.__stderr__)
+    kept = []
+    for obj in objs:
+        kind = type(obj)
+        value = by_kind.get(kind)
+        if value is None or obj is streams[0] or obj is streams[1]:
+            value = is_value(obj, value_types)
+            if kind not in by_kind and _decided_by_class(kind, obj, streams):
+                by_kind[kind] = value
+        if not value:
+            kept.append(obj)
+    return kept
+
+
+def _decided_by_class(kind: type, obj: Any, streams: tuple[Any, ...]) -> bool:
+    """Is `is_value`'s answer for *obj* the one for every object of *kind*?"""
+    if obj is streams[0] or obj is streams[1]:
+        return False
+    try:
+        return answers_its_type(kind) and not issubclass(kind, _CALLABLE_TYPES) and not stream_kind(kind)
+    except Exception:  # noqa: BLE001 - a class that cannot be asked is asked per object
+        return False
 
 
 _ESTIMATOR_CLASSES: TypeMemo[bool] = TypeMemo()
@@ -2147,7 +2190,7 @@ def referring_names(
 
     limit = CpuLimit(seconds)
     value_types = VALUE_TYPES + library_value_types()
-    roots = [root for root in roots if not is_value(root, value_types)]
+    roots = _not_values(roots, value_types)
     by_id: dict[int, list[str]] = {}
     for name, value in list(user_ns.items()):
         if not skip_name(name) and not is_value(value, value_types):
