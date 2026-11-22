@@ -235,3 +235,24 @@ def test_an_argument_to_a_call_that_raised_after_an_edit_keeps_its_lineage(
         assert "hist" in state.variable_lineage, "the fixed call was not cached"
     finally:
         sys.modules.pop(name, None)
+
+
+def test_a_name_imported_again_from_a_local_file_is_checked(lib, tmp_path):
+    """The check keeps, per ``sys.modules`` name, whether the module there
+    is the user's. A name that held a library module and now holds a local
+    one (``del sys.modules[name]``, then an import that finds the user's
+    file) is the user's from then on: its edit is reloaded before the cell."""
+    name, path = lib
+    sys.modules[name] = types  # a library module under the name, judged first
+    reloader = _reloader(name, check_all=True)
+    shell = _autoreload_shell(reloader)
+    assert run_autoreload_now(shell) == set()
+
+    del sys.modules[name]
+    module = __import__(name)
+    reloader.check()  # the extension records the new module's mtime
+    assert run_autoreload_now(shell) == set()
+    _edit(path, 1)
+
+    assert run_autoreload_now(shell) == {name}
+    assert module.get(10) == 11
