@@ -1670,10 +1670,16 @@ class FileDependencyRegistry:
         probes, ``getsize`` what it measures) is part of the question the
         user asked through it, which that call's own wrapper records.
         Otherwise `_record_path_answer` decides.
+
+        With no tracker open it records nothing, so it stats and returns
+        at once: ``%autoreload``'s check stats every loaded module's file
+        before each cell, outside every statement.
         """
 
         @functools.wraps(original_func)
         def tracked_os_stat(path, *args, **kwargs):
+            if active_tracker.get() is None:
+                return original_func(path, *args, **kwargs)
             try:
                 result = original_func(path, *args, **kwargs)
             except (FileNotFoundError, NotADirectoryError):

@@ -203,7 +203,7 @@ def _only_local_modules(reloader: Any) -> Iterator[None]:
         yield
         return
     candidates = list(sys.modules) if check_all else list(marked)
-    local = {name: True for name in candidates if _is_local(sys.modules.get(name))}
+    local = {name: True for name in candidates if _is_local_entry(name)}
     reloader.check_all, reloader.modules = False, local
     try:
         yield
@@ -213,6 +213,20 @@ def _only_local_modules(reloader: Any) -> Iterator[None]:
 
 #: Module name -> (the module, whether it is the user's), asked once per module object.
 _LOCAL: dict[str, tuple[types.ModuleType, bool]] = {}
+
+#: ``sys.modules`` key -> (the module there, `_is_local` of it): the check
+#: runs before every cell over thousands of modules, and an unchanged entry
+#: costs one lookup and an identity test this way.
+_BY_KEY: dict[str, tuple[Any, bool]] = {}
+
+
+def _is_local_entry(name: str) -> bool:
+    """`_is_local` of what ``sys.modules`` holds under *name* now."""
+    module = sys.modules.get(name)
+    held = _BY_KEY.get(name)
+    if held is None or held[0] is not module:
+        held = _BY_KEY[name] = (module, _is_local(module))
+    return held[1]
 
 
 def _is_local(module: Any) -> bool:
