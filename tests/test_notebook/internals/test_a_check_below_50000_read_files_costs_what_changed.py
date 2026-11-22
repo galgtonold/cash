@@ -34,14 +34,15 @@ from .test_a_held_check_of_the_cells_above_looks_at_no_file import _AsOnWindows,
 
 pytestmark = [
     pytest.mark.skipif(sys.platform == "darwin", reason="folders are not watched on macOS"),
-    # The suite's 30 s for each test's own work, without the module's set-up:
-    # writing the 50,000 files took 18-24 s on the Windows runners, and the
-    # first test a worker ran of this module was killed inside its budget.
-    pytest.mark.timeout(30, func_only=True),
 ]
 
-#: Folders of reviews, and reviews in each: 50,000 files.
-FOLDERS, FILES = 4, 12_500
+#: Folders of reviews, and reviews in each. 2,000 files stand in for the
+#: 50,000: the counts below are bounded by the folders, and a check that
+#: looked at every file again counts each of them, far past ``FEW``; it
+#: keeps every folder past `file_dep_snapshot.LISTING_MIN_FILES` and the
+#: stats of each past one `run_memo._STAT_CHUNK`. Writing 50,000 files
+#: took 18-34 s of the Windows runners' time.
+FOLDERS, FILES = 4, 500
 
 #: Each check may stat each watched folder, and the CSV's folder holds a few files.
 FEW = 16
