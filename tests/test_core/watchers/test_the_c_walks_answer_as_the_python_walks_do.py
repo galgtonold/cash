@@ -597,13 +597,15 @@ def _referrers_in_python(heap, ids):
     return [obj for obj in heap if obj is not loops and not ids.isdisjoint(map(id, gc.get_referents(obj)))]
 
 
-@functools.cache
-def _every_kind_on_the_heap() -> tuple:
+@pytest.fixture(scope="module")
+def every_kind_on_the_heap():
     """The process's heap cut to a few objects of each type, every module
     among them: every kind of object the heap holds, without all of it.
     Late in a long test run the heap holds millions of objects, and the
     Python read of all of them took a minute and more a seed. Read once
-    for the module's seeds."""
+    for the module's seeds, and let go after them: kept for the process,
+    the cut held three objects of every type alive, and a later notebook
+    test that counts what refers to an object found one holder more."""
     import gc
 
     kept: dict[type, int] = {}
@@ -613,11 +615,12 @@ def _every_kind_on_the_heap() -> tuple:
         if kind is types.ModuleType or kept.get(kind, 0) < 3:
             kept[kind] = kept.get(kind, 0) + 1
             heap.append(obj)
-    return tuple(heap)
+    yield heap
+    heap.clear()
 
 
 @pytest.mark.parametrize("seed", range(5))
-def test_the_heap_read_finds_the_same_referrers_in_the_same_order(seed):
+def test_the_heap_read_finds_the_same_referrers_in_the_same_order(seed, every_kind_on_the_heap):
     rng = random.Random(seed)
     targets = [[i] for i in range(20)] + [Plain(), WithSlots(), {"k": 1}, (1, 2), "text", 7]
     holders = []
@@ -638,7 +641,7 @@ def test_the_heap_read_finds_the_same_referrers_in_the_same_order(seed):
             holders.append(kind(picked))
     for size in (0, 1, 3, len(targets)):
         ids = {id(t) for t in rng.sample(targets, size)}
-        heap = [*_every_kind_on_the_heap(), *holders, *targets]
+        heap = [*every_kind_on_the_heap, *holders, *targets]
         assert list(map(id, K.referrers_in(heap, ids))) == list(map(id, _referrers_in_python(heap, ids)))
 
 
