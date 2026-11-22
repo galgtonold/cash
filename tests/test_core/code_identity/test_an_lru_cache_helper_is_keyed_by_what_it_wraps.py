@@ -56,12 +56,15 @@ def _opaque(caught):
 
 @pytest.mark.parametrize("trace", ["1", "0"])
 @pytest.mark.parametrize("how", ["through_a_helper", "called", "handed"])
-def test_an_edit_to_an_lru_cache_helper_misses_without_a_warning(tmp_path, monkeypatch, how, trace):
+def test_an_edit_to_an_lru_cache_helper_misses_without_a_warning(tmp_path, monkeypatch, request, how, trace):
     monkeypatch.setenv("CASH_TRACE", trace)
     monkeypatch.setattr(sys, "dont_write_bytecode", True)
     monkeypatch.syspath_prepend(str(tmp_path))
     helpers = f"_lru_helpers_{tmp_path.name}"
     caller = f"_lru_caller_{tmp_path.name}"
+    # Imported here, so gone again after: a later test in the worker that
+    # looks for memos in the user's modules would find the helper's.
+    request.addfinalizer(lambda: [sys.modules.pop(name, None) for name in (helpers, caller)])
     for name in (helpers, caller):
         monkeypatch.delitem(sys.modules, name, raising=False)
     (tmp_path / f"{helpers}.py").write_text(HELPERS.format(k=2), encoding="utf-8")
