@@ -19,6 +19,7 @@ import warnings
 import pytest
 
 from cash.backends.file_backend import FileBackend
+from cash.backends.persistence_policy import PersistencePolicy
 from cash.notebook import shared_objects as so
 from tests._cell_driver import run_cash_cell
 from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
@@ -129,9 +130,15 @@ EXPECTED = {
 
 
 @pytest.mark.parametrize("cells", [THREAD, HANDLER, BAR], ids=list(EXPECTED))
-def test_what_is_stored_served_and_run_is_unchanged(cash_magics, cells, request):
+def test_what_is_stored_served_and_run_is_unchanged(cash_magics, cells, request, monkeypatch):
     if cells is BAR:
         pytest.importorskip("tqdm")
+    # Only the slow statements are stored. The floor is wall clock, and on a
+    # loaded machine ``stop = threading.Event()`` took past it and was
+    # restored on the re-run: a statement stalled that long is still cheap.
+    monkeypatch.setattr(
+        PersistencePolicy, "too_cheap_to_store", lambda self, compute_s: compute_s < 0.75 * ABOVE_PERSISTENCE_FLOOR_S
+    )
     try:
         found = _outcomes(cash_magics, cells)
     finally:
