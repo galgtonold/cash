@@ -17,6 +17,7 @@ import pytest
 import cash.tracking.file_tracker as file_tracker
 from cash import Cash
 from cash._paths import _normalize_for
+from cash.tracking import file_dep_snapshot
 from cash.tracking.file_dep_snapshot import dep_is_fresh, snapshot_dependencies
 
 
@@ -59,6 +60,36 @@ def test_a_read_recorded_under_a_spelling_that_cannot_be_statted_recomputes(tmp_
     data.write_text("v2", encoding="utf-8")
     assert load(str(data)) == "v2"
     assert len(runs) == 2
+
+
+def test_a_call_that_read_a_file_it_cannot_stat_is_not_stored(tmp_path, monkeypatch):
+    """An entry holding a dependency that is never fresh would be written on
+    every call and never served: the call is not stored, and the next miss
+    says so instead of "file changed". The file is one the snapshot cannot
+    stat (a permission error), as it is stored."""
+    c = Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
+    data = tmp_path / "data.txt"
+    data.write_text("v1", encoding="utf-8")
+    real = file_dep_snapshot.own_stat
+
+    def refused(p, *a, **k):
+        if os.fspath(p) == str(data):
+            raise PermissionError(13, "Permission denied", str(p))
+        return real(p, *a, **k)
+
+    monkeypatch.setattr(file_dep_snapshot, "own_stat", refused)
+
+    @c.cache(assume_safe=True)
+    def load(p):
+        with open(p, encoding="utf-8") as fh:
+            return fh.read()
+
+    assert load(str(data)) == "v1"
+    assert load(str(data)) == "v1"
+    reasons = load.cache_info()["miss_reasons"]
+    assert reasons.get("not stored last time") == 1, reasons
+    why = str(load.explain(str(data)))
+    assert f"not stored last time: it read {data}, which cash cannot check" in why, why
 
 
 def test_a_path_that_exists_but_cannot_be_statted_is_never_fresh(tmp_path):

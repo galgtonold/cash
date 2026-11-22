@@ -2666,6 +2666,7 @@ class CallRunner:
             cost=execution_time,
             watch_identities=call.watch_identities,
             narrowed=call.narrowed,
+            file_deps=auto_file_deps,
         )
         if refusal is None:
             refusal = swapped

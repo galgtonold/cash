@@ -69,6 +69,7 @@ __all__ = [
     "ALSO_SPELLED",
     "fold_relative_twins",
     "unfold_relative_twins",
+    "never_fresh",
 ]
 
 # Marks a snapshot entry as a REMOTE object rather than a local path. Remote
@@ -97,6 +98,13 @@ _PRESENT_MARKER = "present"
 # recorded. Such an entry is never fresh: failing closed costs a recompute,
 # failing open (dropping the dependency) served every later edit stale.
 _UNRESOLVED_MARKER = "unresolved"
+
+
+def never_fresh(entry: Any) -> bool:
+    """Is *entry* a read recorded as never fresh (a local path that could
+    not be stat'ed as read, a remote object that could not be asked)?"""
+    return isinstance(entry, dict) and bool(entry.get(_UNRESOLVED_MARKER))
+
 
 _HASH_READ_CHUNK = 1024 * 1024  # 1 MiB streaming chunk
 #: Bytes, not text, on Windows (no newline translation); 0 elsewhere.
