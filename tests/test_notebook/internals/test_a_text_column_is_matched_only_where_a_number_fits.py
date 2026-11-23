@@ -44,6 +44,8 @@ def test_short_values_are_not_matched(matched):
     assert parts is not None
     assert sorted(parts[0].tolist()) == [12345678]
     assert sorted(parts[1:]) == [0x7F00AA12BC, 0x7F00AA12BD]
-    # Positive control: the patterns ran, on the 10,004 values that fit.
-    assert matched and max(matched) == 10_004
-    assert sum(matched) <= 3 * 10_004
+    # Positive control: the patterns ran, on the 4 values that fit and
+    # start with a digit (``Germany`` and ``Australia`` fit, but start
+    # with a letter: `_starting_with_a_digit`).
+    assert matched and max(matched) == 4
+    assert sum(matched) <= 3 * 4
