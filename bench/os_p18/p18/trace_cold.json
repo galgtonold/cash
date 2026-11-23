@@ -1,0 +1,252 @@
+{
+ "project": "p18-clinical",
+ "path": "notebook",
+ "python": "3.13",
+ "venv": "/home/user/r35/venvs/p18",
+ "packages": [
+  "cash-lib==0.13.0 (editable /home/user/r35/cash)",
+  "ipykernel==7.4.0",
+  "jupyter-client==8.10.0",
+  "matplotlib==3.11.2",
+  "numpy==2.5.4",
+  "pandas==3.0.6",
+  "pyarrow==26.0.0",
+  "scipy==1.18.1",
+  "seaborn==0.13.2"
+ ],
+ "setup": [
+  "python make_data.py"
+ ],
+ "steps": [
+  {
+   "op": "write_file",
+   "path": "cleaning.py",
+   "content": "\"\"\"Cleaning helpers for the trial data transfer.\"\"\"\nimport difflib\nimport re\n\nimport numpy as np\nimport pandas as pd\n\n# alternative unit -> (standard unit, factor to multiply by)\nUNIT_FACTORS = {\n    (\"GLUC\", \"mg/dL\"): (\"mmol/L\", 1 / 18.016),\n    (\"CREAT\", \"mg/dL\"): (\"umol/L\", 88.42),\n    (\"HGB\", \"g/dL\"): (\"g/L\", 10.0),\n    (\"ALB\", \"g/dL\"): (\"g/L\", 10.0),\n    (\"CHOL\", \"mg/dL\"): (\"mmol/L\", 1 / 38.67),\n    (\"TRIG\", \"mg/dL\"): (\"mmol/L\", 1 / 88.57),\n    (\"HDL\", \"mg/dL\"): (\"mmol/L\", 1 / 38.67),\n    (\"LDL\", \"mg/dL\"): (\"mmol/L\", 1 / 38.67),\n}\n\nARMS = {\n    \"placebo\": \"Placebo\", \"pbo\": \"Placebo\",\n    \"low dose\": \"Low dose\", \"drug 10mg\": \"Low dose\", \"low\": \"Low dose\",\n    \"high dose\": \"High dose\", \"drug 40mg\": \"High dose\", \"high\": \"High dose\",\n}\n\nPREFERRED_TERMS = {\n    \"headache\": \"Headache\", \"head ache\": \"Headache\",\n    \"nausea\": \"Nausea\", \"feeling sick\": \"Nausea\",\n    \"fatigue\": \"Fatigue\", \"tiredness\": \"Fatigue\", \"tired\": \"Fatigue\",\n    \"dizziness\": \"Dizziness\", \"dizzy\": \"Dizziness\",\n    \"diarrhoea\": \"Diarrhoea\", \"diarrhea\": \"Diarrhoea\", \"loose stools\": \"Diarrhoea\",\n    \"rash\": \"Rash\", \"skin rash\": \"Rash\",\n    \"insomnia\": \"Insomnia\", \"sleeplessness\": \"Insomnia\", \"trouble sleeping\": \"Insomnia\",\n    \"alt increased\": \"ALT increased\", \"elevated alt\": \"ALT increased\", \"alt elevation\": \"ALT increased\", \"alt raised\": \"ALT increased\",\n    \"hypoglycaemia\": \"Hypoglycaemia\", \"hypoglycemia\": \"Hypoglycaemia\", \"low blood sugar\": \"Hypoglycaemia\",\n    \"back pain\": \"Back pain\", \"backache\": \"Back pain\",\n    \"nasopharyngitis\": \"Nasopharyngitis\", \"common cold\": \"Nasopharyngitis\", \"cold\": \"Nasopharyngitis\", \"urti\": \"Nasopharyngitis\",\n    \"arthralgia\": \"Arthralgia\", \"joint pain\": \"Arthralgia\",\n}\n\nSOC = {\n    \"Headache\": \"Nervous system\", \"Dizziness\": \"Nervous system\", \"Nausea\": \"Gastrointestinal\",\n    \"Diarrhoea\": \"Gastrointestinal\", \"Fatigue\": \"General\", \"Rash\": \"Skin\", \"Insomnia\": \"Psychiatric\",\n    \"ALT increased\": \"Investigations\", \"Hypoglycaemia\": \"Metabolism\", \"Back pain\": \"Musculoskeletal\",\n    \"Arthralgia\": \"Musculoskeletal\", \"Nasopharyngitis\": \"Infections\",\n}\n\n\ndef normalize_arm(s):\n    return s.str.strip().str.lower().map(ARMS)\n\n\ndef normalize_sex(s):\n    return s.str.strip().str[0].str.upper()\n\n\ndef standardize_units(labs):\n    \"\"\"Convert every result to the standard unit of its test.\"\"\"\n    out = labs.copy()\n    out[\"value_std\"] = out[\"value\"]\n    out[\"unit_std\"] = out[\"unit\"]\n    for (test, unit), (std_unit, factor) in UNIT_FACTORS.items():\n        m = (out[\"test_code\"] == test) & (out[\"unit\"] == unit)\n        out.loc[m, \"value_std\"] = out.loc[m, \"value\"] * factor\n        out.loc[m, \"unit_std\"] = std_unit\n    return out\n\n\ndef drop_retests(labs):\n    \"\"\"Keep the last result per subject, visit and test (re-tests replace the first draw).\"\"\"\n    return labs.drop_duplicates([\"subject_id\", \"visit\", \"test_code\"], keep=\"last\").reset_index(drop=True)\n\n\ndef flag_range(labs, ref):\n    out = labs.merge(ref.rename(columns={\"unit\": \"unit_ref\"}), on=\"test_code\", how=\"left\")\n    out[\"flag\"] = np.select([out[\"value_std\"] < out[\"low\"], out[\"value_std\"] > out[\"high\"]], [\"L\", \"H\"], \"N\")\n    return out.drop(columns=[\"unit_ref\"])\n\n\ndef normalize_ae_term(verbatim):\n    \"\"\"Map a verbatim AE term to a preferred term (dictionary first, fuzzy match second).\"\"\"\n    if not isinstance(verbatim, str):\n        return \"Uncoded\"\n    t = re.sub(r\"\\(.*?\\)\", \"\", verbatim).strip().lower()\n    t = re.sub(r\"\\s+\", \" \", t)\n    if t in PREFERRED_TERMS:\n        return PREFERRED_TERMS[t]\n    for key in PREFERRED_TERMS:\n        if key in t:\n            return PREFERRED_TERMS[key]\n    close = difflib.get_close_matches(t, list(PREFERRED_TERMS), n=1, cutoff=0.75)\n    return PREFERRED_TERMS[close[0]] if close else \"Uncoded\"\n\n\ndef severity_grade(s):\n    s = s.astype(str).str.strip().str.lower()\n    return s.map({\"mild\": 1, \"1\": 1, \"moderate\": 2, \"2\": 2, \"severe\": 3, \"3\": 3})\n"
+  },
+  {
+   "op": "cell",
+   "id": "imports",
+   "src": "%load_ext autoreload\n%autoreload 2\nimport numpy as np\nimport pandas as pd\nimport matplotlib.pyplot as plt\nimport seaborn as sns\nimport cleaning"
+  },
+  {
+   "op": "run",
+   "id": "imports"
+  },
+  {
+   "op": "cell",
+   "id": "load_small",
+   "src": "sites = pd.read_csv(\"data/sites.csv\")\nsubjects_raw = pd.read_csv(\"data/subjects.csv\")\nvisits = pd.read_csv(\"data/visits.csv\", parse_dates=[\"visit_date\"])\nref = pd.read_csv(\"data/ref_ranges.csv\")\nprint(len(sites), \"sites,\", len(subjects_raw), \"subject rows,\", len(visits), \"visits\")"
+  },
+  {
+   "op": "run",
+   "id": "load_small"
+  },
+  {
+   "op": "cell",
+   "id": "load_labs",
+   "src": "labs_raw = pd.read_csv(\"data/labs.csv\", parse_dates=[\"collected\"])\nlabs_raw.shape"
+  },
+  {
+   "op": "run",
+   "id": "load_labs"
+  },
+  {
+   "op": "cell",
+   "id": "subjects",
+   "src": "subjects = (\n    subjects_raw.drop_duplicates(\"subject_id\")\n    .assign(\n        arm=lambda d: cleaning.normalize_arm(d[\"arm\"]),\n        sex=lambda d: cleaning.normalize_sex(d[\"sex\"]),\n        rand_date=lambda d: pd.to_datetime(d[\"rand_date\"]),\n        birth_date=lambda d: pd.to_datetime(d[\"birth_date\"]),\n    )\n    .merge(sites, on=\"site_id\", how=\"left\")\n)\nsubjects = subjects.assign(age=((subjects.rand_date - subjects.birth_date).dt.days / 365.25).astype(int))\nsubjects = subjects.assign(age_grp=pd.cut(subjects.age, [17, 40, 65, 120], labels=[\"18-40\", \"41-65\", \">65\"]))\nsubjects.groupby([\"arm\", \"age_grp\"], observed=True).size().unstack()"
+  },
+  {
+   "op": "run",
+   "id": "subjects"
+  },
+  {
+   "op": "cell",
+   "id": "labs",
+   "src": "labs = cleaning.standardize_units(labs_raw)\nlabs = cleaning.drop_retests(labs)\n# @cash:persist\nlabs = cleaning.flag_range(labs, ref)\nprint(f\"{len(labs_raw) - len(labs):,} re-test rows dropped\")\nlabs.flag.value_counts()"
+  },
+  {
+   "op": "run",
+   "id": "labs"
+  },
+  {
+   "op": "cell",
+   "id": "wide",
+   "src": "lab_wide = labs.pivot_table(index=[\"subject_id\", \"visit\"], columns=\"test_code\", values=\"value_std\", aggfunc=\"mean\")\nlab_wide.shape"
+  },
+  {
+   "op": "run",
+   "id": "wide"
+  },
+  {
+   "op": "cell",
+   "id": "chg",
+   "src": "base = (labs.loc[labs.visit == \"V1\", [\"subject_id\", \"test_code\", \"value_std\"]]\n        .rename(columns={\"value_std\": \"base\"}))\nchg = (labs.merge(base, on=[\"subject_id\", \"test_code\"], how=\"left\")\n       .assign(chg=lambda d: d.value_std - d.base,\n               pchg=lambda d: 100 * (d.value_std - d.base) / d.base,\n               visit_no=lambda d: d.visit.str[1:].astype(int)))\n# @cash:persist\nchg = chg.merge(subjects[[\"subject_id\", \"arm\", \"sex\", \"age\", \"country\"]], on=\"subject_id\", how=\"inner\")\nchg.shape"
+  },
+  {
+   "op": "run",
+   "id": "chg"
+  },
+  {
+   "op": "cell",
+   "id": "qc",
+   "src": "chg[chg.test_code == \"GLUC\"].groupby(\"country\")[\"value_std\"].median().round(2)"
+  },
+  {
+   "op": "run",
+   "id": "qc"
+  },
+  {
+   "op": "cell",
+   "id": "helpers",
+   "src": "def arm_table(df, rows, value, digits=2):\n    \"\"\"Mean of `value` per row group and arm, arms in protocol order.\"\"\"\n    tab = df.pivot_table(index=rows, columns=\"arm\", values=value, aggfunc=\"mean\")\n    return tab[[\"Placebo\", \"Low dose\", \"High dose\"]].round(digits)"
+  },
+  {
+   "op": "run",
+   "id": "helpers"
+  },
+  {
+   "op": "cell",
+   "id": "chg_tab",
+   "src": "chg_tab = arm_table(chg[chg.visit.isin([\"V4\", \"V7\", \"V10\"])], [\"test_code\", \"visit\"], \"pchg\")\nchg_tab"
+  },
+  {
+   "op": "run",
+   "id": "chg_tab"
+  },
+  {
+   "op": "cell",
+   "id": "load_ae",
+   "src": "ae_raw = pd.read_csv(\"data/ae.csv\")\nae_raw.shape"
+  },
+  {
+   "op": "run",
+   "id": "load_ae"
+  },
+  {
+   "op": "cell",
+   "id": "ae",
+   "src": "ae = ae_raw.assign(\n    term=ae_raw.ae_verbatim.map(cleaning.normalize_ae_term),\n    grade=cleaning.severity_grade(ae_raw.severity),\n    onset_date=pd.to_datetime(ae_raw.onset_date),\n)\nae = ae.merge(subjects[[\"subject_id\", \"arm\", \"rand_date\"]], on=\"subject_id\", how=\"inner\")\nae = ae.assign(soc=ae.term.map(cleaning.SOC), study_day=(ae.onset_date - ae.rand_date).dt.days + 1)\nae.term.value_counts()"
+  },
+  {
+   "op": "run",
+   "id": "ae"
+  },
+  {
+   "op": "cell",
+   "id": "peek",
+   "src": "ae.loc[ae.term == \"Uncoded\", \"ae_verbatim\"].value_counts()"
+  },
+  {
+   "op": "run",
+   "id": "peek"
+  },
+  {
+   "op": "cell",
+   "id": "ae_tab",
+   "src": "n_arm = subjects.groupby(\"arm\").size()\nae_tab = (ae.drop_duplicates([\"subject_id\", \"term\"])\n          .groupby([\"term\", \"arm\"]).size().unstack(\"arm\")\n          .div(n_arm, axis=1).mul(100).round(1)\n          [[\"Placebo\", \"Low dose\", \"High dose\"]]\n          .sort_values(\"High dose\", ascending=False))\nae_tab"
+  },
+  {
+   "op": "run",
+   "id": "ae_tab"
+  },
+  {
+   "op": "cell",
+   "id": "plot_lab",
+   "src": "tests = [\"GLUC\", \"LDL\", \"TRIG\", \"ALT\"]\nfig, axes = plt.subplots(1, len(tests), figsize=(18, 4), sharey=True)\nfor ax, test in zip(axes, tests):\n    sns.lineplot(data=chg[chg.test_code == test], x=\"visit_no\", y=\"pchg\", hue=\"arm\",\n                 errorbar=\"se\", estimator=\"mean\", ax=ax)\n    ax.set_title(f\"{test}: % change from baseline\")\n    ax.axhline(0, color=\"grey\", lw=0.8)\nfig.tight_layout()\nplt.show()"
+  },
+  {
+   "op": "run",
+   "id": "plot_lab"
+  },
+  {
+   "op": "cell",
+   "id": "plot_ae",
+   "src": "top = ae_tab.head(10).reset_index().melt(id_vars=\"term\", var_name=\"arm\", value_name=\"pct\")\nfig, ax = plt.subplots(figsize=(8, 5))\nsns.barplot(data=top, y=\"term\", x=\"pct\", hue=\"arm\", ax=ax)\nax.set_xlabel(\"% of subjects with at least one event\")\nplt.show()"
+  },
+  {
+   "op": "run",
+   "id": "plot_ae"
+  },
+  {
+   "op": "cell",
+   "id": "boot_fn",
+   "src": "def boot_ci(x, n_boot=400, seed=42):\n    \"\"\"Mean and percentile-bootstrap 95% CI of the mean.\"\"\"\n    rng = np.random.default_rng(seed)\n    x = x.dropna().to_numpy()\n    idx = rng.integers(0, len(x), size=(n_boot, len(x)))\n    means = x[idx].mean(axis=1)\n    return pd.Series({\"mean\": x.mean(), \"lo\": np.percentile(means, 2.5),\n                      \"hi\": np.percentile(means, 97.5), \"n\": len(x)})"
+  },
+  {
+   "op": "run",
+   "id": "boot_fn"
+  },
+  {
+   "op": "cell",
+   "id": "boot",
+   "src": "ci = (chg[chg.visit != \"V1\"].groupby([\"test_code\", \"arm\", \"visit_no\"])[\"pchg\"]\n      .apply(boot_ci).unstack())\nci.loc[\"GLUC\"].round(2)"
+  },
+  {
+   "op": "run",
+   "id": "boot"
+  },
+  {
+   "op": "cell",
+   "id": "plot_ci",
+   "src": "v10 = ci.xs(10, level=\"visit_no\").reset_index()\nfig, ax = plt.subplots(figsize=(7, 8))\nfor k, (arm, d) in enumerate(v10.groupby(\"arm\")):\n    y = np.arange(len(d)) + 0.25 * k\n    ax.errorbar(d[\"mean\"], y, xerr=[d[\"mean\"] - d[\"lo\"], d[\"hi\"] - d[\"mean\"]], fmt=\"o\", label=arm, capsize=2)\nax.set_yticks(np.arange(len(d)) + 0.25)\nax.set_yticklabels(d[\"test_code\"])\nax.axvline(0, color=\"grey\", lw=0.8)\nax.set_xlabel(\"% change from baseline at V10 (95% bootstrap CI)\")\nax.legend()\nplt.show()"
+  },
+  {
+   "op": "run",
+   "id": "plot_ci"
+  },
+  {
+   "op": "cell",
+   "id": "flag_tab",
+   "src": "flag_tab = (chg[chg.visit != \"V1\"].assign(high=lambda d: d.flag == \"H\")\n            .groupby([\"test_code\", \"arm\"])[\"high\"].mean().mul(100).unstack(\"arm\")\n            [[\"Placebo\", \"Low dose\", \"High dose\"]].round(1))\nflag_tab"
+  },
+  {
+   "op": "run",
+   "id": "flag_tab"
+  },
+  {
+   "op": "cell",
+   "id": "vitals",
+   "src": "vitals = pd.read_csv(\"data/vitals.csv\")\nvit = (vitals.merge(visits, on=[\"subject_id\", \"visit\"], how=\"inner\")\n       .merge(subjects[[\"subject_id\", \"arm\"]], on=\"subject_id\", how=\"inner\"))\nvit_tab = arm_table(vit, \"visit\", \"sbp\")\nvit_tab"
+  },
+  {
+   "op": "run",
+   "id": "vitals"
+  },
+  {
+   "op": "cell",
+   "id": "adsl",
+   "src": "ae_counts = ae.groupby(\"subject_id\").agg(\n    n_ae=(\"term\", \"size\"),\n    n_sae=(\"serious\", lambda s: (s == \"Y\").sum()),\n    max_grade=(\"grade\", \"max\"),\n)\nlast_visit = visits.sort_values(\"visit_date\").groupby(\"subject_id\").tail(1).set_index(\"subject_id\")[\"visit\"]\nbl = lab_wide.xs(\"V1\", level=\"visit\").add_prefix(\"bl_\")\nadsl = (subjects.merge(ae_counts, on=\"subject_id\", how=\"left\")\n        .merge(bl, left_on=\"subject_id\", right_index=True, how=\"left\")\n        .assign(last_visit=lambda d: d.subject_id.map(last_visit))\n        .fillna({\"n_ae\": 0, \"n_sae\": 0, \"max_grade\": 0}))\nadsl.shape"
+  },
+  {
+   "op": "run",
+   "id": "adsl"
+  },
+  {
+   "op": "cell",
+   "id": "export",
+   "src": "import os\nos.makedirs(\"out\", exist_ok=True)\nadsl.to_parquet(\"out/adsl.parquet\", index=False)\nchg_tab.to_csv(\"out/lab_change_table.csv\")\nae_tab.to_csv(\"out/ae_table.csv\")\nflag_tab.to_csv(\"out/lab_high_flags.csv\")\nprint(sorted(os.listdir(\"out\")))"
+  },
+  {
+   "op": "run",
+   "id": "export"
+  },
+  {
+   "op": "cell",
+   "id": "age_tab",
+   "src": "adsl.groupby([\"age_grp\", \"arm\"], observed=True)[\"n_ae\"].mean().unstack().round(2)"
+  },
+  {
+   "op": "run",
+   "id": "age_tab"
+  },
+  {
+   "op": "cell",
+   "id": "plot_box",
+   "src": "fig, ax = plt.subplots(figsize=(9, 4))\nsns.boxplot(data=chg[(chg.test_code == \"GLUC\") & chg.visit.isin([\"V1\", \"V10\"])],\n            x=\"visit\", y=\"value_std\", hue=\"arm\", showfliers=False, ax=ax)\nax.set_ylabel(\"Glucose (mmol/L)\")\nfig.savefig(\"out/glucose_box.png\", dpi=100)\nplt.show()"
+  },
+  {
+   "op": "run",
+   "id": "plot_box"
+  }
+ ]
+}
