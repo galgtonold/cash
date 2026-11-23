@@ -1092,6 +1092,12 @@ def _spelling_bytes(numpy: Any, found: Any) -> Any:
     return fits
 
 
+#: The fewest rows a chunk of Arrow text averages for `_could_spell` to
+#: pick its candidates: below that, picking chunk by chunk costs more than
+#: Arrow reading all of it (even at 512 rows a chunk, measured).
+_NARROWED_CHUNK_ROWS = 512
+
+
 def _could_spell(pyarrow: Any, chunked: Any) -> Any:
     """The values of *chunked* (Arrow text: an Array or a ChunkedArray)
     that could spell a number as `_spelled_numbers` reads them, in order,
@@ -1112,11 +1118,21 @@ def _could_spell(pyarrow: Any, chunked: Any) -> Any:
     the ``-`` ruling each out) after each of p18's statements making a new
     frame of lab rows. None when a chunk's buffers are not laid out as
     Arrow's ``string`` or ``large_string`` lay them out: Arrow reads all of
-    *chunked*, as before."""
+    *chunked*, as before.
+
+    None too when *chunked*'s chunks average fewer than
+    `_NARROWED_CHUNK_ROWS` rows: picking costs some 15 microseconds a
+    chunk, and 10,000 chunks of one row took 0.19 s against Arrow's 0.03 s
+    for all of them. A chunk at least two thirds of whose values are
+    candidates is kept whole rather than copied (2 million digit strings):
+    its other values spell nothing, which Arrow's patterns find as well,
+    so the numbers found are the same."""
     numpy = sys.modules.get("numpy")
     if numpy is None:
         return None
     if isinstance(chunked, pyarrow.ChunkedArray):
+        if len(chunked) < chunked.num_chunks * _NARROWED_CHUNK_ROWS:
+            return None
         chunks = chunked.chunks
     else:
         chunks = [chunked]
@@ -1182,7 +1198,9 @@ def _could_spell(pyarrow: Any, chunked: Any) -> Any:
             spots = spots.astype(numpy.int64, copy=False)
             kept.append(at[numpy.logical_or.reduceat(_spelling_bytes(numpy, text[spots]), first)])
         at = numpy.sort(numpy.concatenate(kept))
-        if at.size:
+        if 3 * at.size >= 2 * rows:
+            taken.append(chunk)  # most of it: Arrow's patterns pick them
+        elif at.size:
             taken.append(chunk.take(pyarrow.array(at, type=pyarrow.int64())))
     return pyarrow.chunked_array(taken, type=kind)
 

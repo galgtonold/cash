@@ -12,7 +12,9 @@ the offsets and the few bytes every spelling in them would cover, through
 NumPy (`_could_spell`), and Arrow's patterns run on those alone. These
 tests pin that the numbers found are the same, for any text, slice,
 chunking, missing value and offset width, and the same as `_spelled_in`
-reads in each value.
+reads in each value; and for the two shapes where picking is left out
+because it costs more: many chunks of a few rows (Arrow reads all of it)
+and chunks whose values are mostly candidates (kept whole, not copied).
 """
 
 from __future__ import annotations
@@ -45,16 +47,18 @@ def _numbers(parts: list) -> set:
     return found
 
 
-def _texts(rng: random.Random) -> list:
+def _texts(rng: random.Random, digits: float = 0.2) -> list:
+    """Random text; about *digits* of it decimal numbers of 6 to 18 digits."""
     letters = "0123456789xXabcdefAFg-é \n"
     texts: list = []
+    rest = (1 - digits) / 0.9
     for _ in range(rng.randint(0, 300)):
         pick = rng.random()
-        if pick < 0.1:
+        if pick < 0.1 * rest:
             texts.append(None)
-        elif pick < 0.3:
+        elif pick < 0.1 * rest + digits:
             texts.append(str(rng.randint(10**5, 10**18 - 1)))
-        elif pick < 0.4:
+        elif pick < 0.2 * rest + digits:
             texts.append(
                 "0" + rng.choice("xX") + "".join(rng.choice("0123456789abcdefAFg") for _ in range(rng.randint(3, 17)))
             )
@@ -72,10 +76,12 @@ def _texts(rng: random.Random) -> list:
 
 @pytest.mark.parametrize("seed", range(40))
 def test_the_numbers_found_are_those_reading_all_of_it_finds(seed, monkeypatch):
+    # Pick in chunks of any size, so these short chunked columns are picked too.
+    monkeypatch.setattr(identity_holders, "_NARROWED_CHUNK_ROWS", 1)
     rng = random.Random(seed)
     for _ in range(10):
         kind = rng.choice([pa.string(), pa.large_string()])
-        column = pa.array(_texts(rng), type=kind)
+        column = pa.array(_texts(rng, rng.choice([0.0, 0.2, 0.6, 0.8, 1.0])), type=kind)
         if len(column) > 4 and rng.random() < 0.5:
             column = column.slice(rng.randint(0, 3), rng.randint(0, len(column) - 4))
         if len(column) > 3 and rng.random() < 0.5:
@@ -138,3 +144,35 @@ def test_an_id_spelled_in_a_long_column_of_ids_is_still_found(spelled):
         identity_holders.forget_flat_reads()
     assert reason is not None
     assert "id()" in str(reason)
+
+
+@pytest.mark.parametrize("seed", range(10))
+def test_many_chunks_of_a_few_rows_are_read_whole_and_find_the_same(seed, monkeypatch):
+    rng = random.Random(seed)
+    kind = rng.choice([pa.string(), pa.large_string()])
+    texts = _texts(rng, 0.3) + _texts(rng, 0.3) + ["0x7f00aa12bc", "123456789"]
+    whole = pa.array(texts, type=kind)
+    cuts = sorted({0, len(whole), *(rng.randint(0, len(whole)) for _ in range(len(whole) // 2))})
+    column = pa.chunked_array([whole.slice(a, b - a) for a, b in zip(cuts, cuts[1:])], type=kind)
+    assert identity_holders._could_spell(pa, column) is None
+    assert _read(column, True, monkeypatch) == _read(column, False, monkeypatch)
+    with monkeypatch.context() as patch:
+        patch.setattr(identity_holders, "_NARROWED_CHUNK_ROWS", 1)
+        assert _read(column, True, monkeypatch) == _read(column, False, monkeypatch)
+
+
+@pytest.mark.parametrize("kind", [pa.string(), pa.large_string()])
+def test_a_column_of_digits_is_kept_whole_and_finds_the_same(kind, monkeypatch):
+    numbers = [str(10**9 + i) for i in range(3_000)]
+    for texts in (
+        numbers,
+        numbers[:2_000] + ["S011-00001", "12345", "", None, "0x7f00aa12bc", "0xZZ00aa12bc"] * 50,
+        [None, *numbers[:1_000], ""],
+    ):
+        column = pa.chunked_array([pa.array(texts, type=kind)] * 2, type=kind).slice(1)
+        narrowed = identity_holders._could_spell(pa, column)
+        assert narrowed is not None
+        assert [chunk.buffers()[2].address for chunk in narrowed.chunks] == [
+            chunk.buffers()[2].address for chunk in column.chunks
+        ]
+        assert _read(column, True, monkeypatch) == _read(column, False, monkeypatch)
