@@ -12,13 +12,16 @@ listing after the read took a stat of every file and folder it had read:
 
 from __future__ import annotations
 
+import collections
 import os
 import sys
+import threading
+import traceback
 
 import pytest
 
 from cash.notebook import run_memo
-from cash.tracking import file_dep_snapshot
+from cash.tracking import file_dep_snapshot, file_watch
 from tests._cell_driver import run_cash_cell
 
 FILES = 60
@@ -121,16 +124,32 @@ def photos(tmp_path, monkeypatch):
     return folder
 
 
+class _Stats(list):
+    """The paths stat-ed, and which thread and code of cash took each: what
+    a failure on a CI machine, which cannot be stepped through, says."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.by: collections.Counter = collections.Counter()
+
+    def clear(self) -> None:
+        super().clear()
+        self.by.clear()
+
+
 @pytest.fixture
 def photo_stats(monkeypatch, photos):
     """The ``stat`` calls of a photo, by path."""
-    taken: list[str] = []
+    taken = _Stats()
     real = os.stat
 
     def stat(path, *args, **kwargs):
         p = os.fspath(path) if not isinstance(path, int) else ""
         if isinstance(p, str) and os.path.basename(p).startswith("p") and p.endswith(".txt"):
             taken.append(p)
+            frames = traceback.extract_stack(limit=12)[:-1]
+            mine = [f"{os.path.basename(f.filename)}:{f.name}" for f in frames if f"{os.sep}cash{os.sep}" in f.filename]
+            taken.by[(threading.current_thread().name, " < ".join(reversed(mine[-4:])))] += 1
         return real(path, *args, **kwargs)
 
     monkeypatch.setattr(os, "stat", stat)
@@ -143,13 +162,19 @@ def test_the_cells_below_a_read_take_no_stat_for_a_link_count(cash_magics, photo
     assert len(cash_magics.shell.user_ns["faces"]) == FILES
 
     below = []
+    by = []
     for cell in CELLS[2:]:
         photo_stats.clear()
         run_cash_cell(cash_magics, cell, cells=CELLS)
         below.append(len(photo_stats))
+        by.append(dict(photo_stats.by))
 
     assert cash_magics.shell.user_ns["n"] == FILES
-    assert sum(below) <= FILES // 10, f"the cells below took a stat of each photo again: {below}"
+    watch = file_watch.running()
+    assert sum(below) <= FILES // 10, (
+        f"the cells below took a stat of each photo again: {below}; taken by {by}; "
+        f"folder watch: {watch.report() if watch is not None else None}"
+    )
 
 
 def test_a_file_with_a_second_link_is_still_stat_ed_by_itself(photos):
