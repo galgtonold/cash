@@ -76,21 +76,51 @@ def test_within_a_round_a_watch_that_held_is_not_read_again(mod, full_checks):
     assert len(full_checks) == 8, "outside a round a check took another's word"
 
 
-def _first_proof(cls):
-    """The class's watch, asked again if a write elsewhere in the process
-    (another thread of the test worker) moved the world epoch while it was
-    scanned: that scan gives no proof, and the next one does. The world is
-    not held still here, as this test needs it to move."""
-    for _ in range(5):
+def _proof(cls):
+    """The class's watch, asked again while it gives none.
+
+    The world a watch proves still is the whole process's: ``sys.modules``,
+    every module's namespace, the builtins. Anything another thread of the
+    test worker does there (an import, a new global: a cache writer or file
+    watcher an earlier test left running) while the class is scanned leaves
+    that scan without a proof. A scan that gave none counts as a world that
+    keeps moving, so the next one that does is followed by a back-off
+    (`_Proof.backoff`): the first call after the world moves again skips
+    the scan and gives None too, and the one after scans. The world is not
+    held still here, as this test needs it to move."""
+    for _ in range(8):
         proof = class_memo.proof_for(cls, "digest")
         if proof is not None:
             return proof
     return None
 
 
-def test_a_moved_world_is_read_again_within_the_round(mod):
-    proof = _first_proof(mod.First)
+@pytest.fixture(params=[False, True], ids=["held", "moved-mid-scan"])
+def first_scan_moved(request, monkeypatch):
+    """With True, the world moves while the class is first scanned, as a
+    write of another thread does (the macOS and Windows CI runners)."""
+    if request.param:
+        real = hit_memo.watch_class
+        left = [1]
+
+        def watch(*args, **kwargs):
+            out = real(*args, **kwargs)
+            if left:
+                left.pop()
+                sys.modules["_round_watch_elsewhere"] = sys  # sys.modules is watched whole
+                del sys.modules["_round_watch_elsewhere"]
+            return out
+
+        monkeypatch.setattr(hit_memo, "watch_class", watch)
+    return request.param
+
+
+def test_a_moved_world_is_read_again_within_the_round(mod, first_scan_moved):
+    scans = class_memo.STATS["scans"]
+    proof = _proof(mod.First)
     assert proof is not None
+    if first_scan_moved:
+        assert class_memo.STATS["scans"] - scans >= 2, "control: the first scan gave a proof"
     with hit_memo.probe_round():
         assert class_memo.proof_for(mod.First, "digest") is proof
         stamp = proof.stamp
@@ -99,7 +129,7 @@ def test_a_moved_world_is_read_again_within_the_round(mod):
             return x - 1
 
         mod.First.run = run
-        assert class_memo.proof_for(mod.First, "digest") is proof
+        assert _proof(mod.First) is proof, "the moved class was never watched again"
         assert proof.stamp != stamp, "a moved world took the round's word: the class was not watched again"
 
 
