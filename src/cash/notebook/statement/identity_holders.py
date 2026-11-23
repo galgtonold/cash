@@ -1554,7 +1554,11 @@ def _mapped_between(low: int, high: int) -> bool:
     """Whether a writable mapping of this process where an object can lie
     (not the executable's own image when it is at a fixed address:
     `_fixed_image`) overlaps the numbers from *low* to *high*. True where
-    the mappings cannot be read."""
+    the mappings cannot be read (not Linux), unless the numbers lie wholly
+    below `_LOWEST_ADDRESS` or from `_HIGHEST_ADDRESS` up, where no process
+    maps an object."""
+    if high < _LOWEST_ADDRESS or low >= _HIGHEST_ADDRESS:
+        return False
     ranges = _read_mappings()
     if ranges is None:
         return True
