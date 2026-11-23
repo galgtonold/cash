@@ -10,6 +10,7 @@ statement runs, or must be assumed to mutate.
 from __future__ import annotations
 
 import ast
+import functools
 import hashlib
 import pickle
 import types
@@ -68,6 +69,34 @@ def _with_bodies(tree: ast.Module | None) -> ast.Module | None:
     return ast.Module(body=body, type_ignores=[]) if body else None
 
 
+def _handed_whole(tree: ast.Module | None) -> frozenset[str]:
+    """The names *tree* hands to a call as they are (``f(df)``,
+    ``f(*rows)``, ``f(k=df)``), whose digest the call may take over
+    (`DigestHandoff`)."""
+    if tree is None:
+        return frozenset()
+    names: set[str] = set()
+    for node in walk_tree(tree):
+        if isinstance(node, ast.Call):
+            for arg in [*node.args, *(kw.value for kw in node.keywords)]:
+                if isinstance(arg, ast.Starred):
+                    arg = arg.value
+                if isinstance(arg, ast.Name):
+                    names.add(arg.id)
+    return frozenset(names)
+
+
+def _settled(
+    settle: Callable[[Any, str, Callable[[Any], str]], str],
+    token: str,
+    digest: Callable[[Any], str],
+    value: Any,
+) -> str:
+    """`ArgFingerprints.settle` of *value* for *token*, as a content
+    function `mutation_fingerprint` takes."""
+    return settle(value, token, digest)
+
+
 class MutationClassifier:
     """Classifies a statement's method-call receivers and observes the ones
     it could not decide before execution."""
@@ -89,6 +118,10 @@ class MutationClassifier:
         # Pre-execution fingerprints of a bare call's arguments, by statement
         # source hash -- see :meth:`classify`.
         self._arg_snapshots: dict[str, dict[str, str]] = {}
+        # Of those, the frames fingerprinted by a stand-in their check
+        # settles after the statement (`ArgFingerprints.defer`), by source
+        # hash: name -> token.
+        self._deferred: dict[str, dict[str, str]] = {}
         # What a statement whose verdict is known could still change, by
         # source hash, and the keys it was seen running under -- see
         # :meth:`start_rewatch`.
@@ -114,8 +147,14 @@ class MutationClassifier:
         """
         mutated = {b for b in observe if self._receiver_mutated(b)}
         after = self.digests.digest_after
+        deferred = self._deferred.pop(source_hash, {})
+        settle = self.digests.fingerprints.settle
         for name, before in self._arg_snapshots.pop(source_hash, {}).items():
-            if mutation_fingerprint(self.shell.user_ns.get(name), after) != before:
+            content = after
+            token = deferred.get(name)
+            if token is not None:
+                content = functools.partial(_settled, settle, token, after)
+            if mutation_fingerprint(self.shell.user_ns.get(name), content) != before:
                 mutated.add(name)
         return mutated
 
@@ -251,6 +290,8 @@ class MutationClassifier:
         # the simulation asks again: `print(df)` is learned as reading only.
         if classes.unknown_args and unwatched:
             self.digests.watch(tree, self.shell.user_ns)
+        deferred: dict[str, str] = {}
+        whole = _handed_whole(tree) if classes.unknown_args else frozenset()
         for name in classes.unknown_args:
             if not outputs and is_costly(self.shell.user_ns.get(name)):
                 # Too costly to read (`budgeted_hash`: an openpyxl workbook,
@@ -260,7 +301,16 @@ class MutationClassifier:
                 assumed.add(name)
                 pre_route.add(name)
                 continue
-            fingerprint = mutation_fingerprint(self.shell.user_ns.get(name), self.digests.digest)
+            value = self.shell.user_ns.get(name)
+            # Handed on only as a part (``f(df[mask])``): its digest is
+            # handed to no call, so it is taken after the statement, and
+            # only if it can have changed (`ArgFingerprints.defer`).
+            token = None if name in whole else self.digests.fingerprints.defer(value)
+            if token is not None:
+                snapshots[name] = mutation_fingerprint(value, lambda _value, token=token: token)
+                deferred[name] = token
+                continue
+            fingerprint = mutation_fingerprint(value, self.digests.digest)
             if fingerprint is None:
                 if name in kept_only:
                     # `rows = fetch(conn)`: a handle that cannot be pickled
@@ -273,6 +323,7 @@ class MutationClassifier:
                 snapshots[name] = fingerprint
         if snapshots:
             self._arg_snapshots[source_hash] = snapshots
+            self._deferred[source_hash] = deferred
         record_verdict = verdict is None and bool(observe or assumed or snapshots)
         self._rewatch_candidates.pop(source_hash, None)
         if verdict is not None and rewatch:
