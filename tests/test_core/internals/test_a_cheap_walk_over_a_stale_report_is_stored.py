@@ -2,9 +2,9 @@
 text is stored already.
 
 A fresh process stores a cached function's purity report only when the
-walk cost more CPU time than working out the report's guards again
+walk cost more CPU time than reading its file back
 (`report_store._READ_COST`): walking a cheap function again costs less than
-checking its report would. That holds only while nothing is stored for it.
+reading its report would. That holds only while nothing is stored for it.
 Once a report with the function's text is (stored before a file it reads
 was edited), every later process checks that report before it walks; a
 walk left out of the store then spared no check and added a walk to every
