@@ -173,5 +173,8 @@ def test_the_numbers_a_text_column_spells_are_read_the_same_joined(monkeypatch):
     in_runs = read()
     monkeypatch.setattr(identity_holders, "_SMALL_CHUNK_ROWS", 0)
     assert identity_holders._joined_runs(pa, column._pa_array) == [column._pa_array]
-    assert read() == joined == in_runs == sorted(i for i in range(3000) if i % 3 != 2)
+    spelled = set().union(*(identity_holders._spelled_in(text) for text in values))
+    assert {i for i in range(3000) if i % 3 != 2} <= spelled
+    # The same numbers, read whole or a run at a time.
+    assert set(read()) == set(joined) == set(in_runs) == spelled
     identity_holders._ARROW_READS.clear()

@@ -2421,8 +2421,10 @@ and its attributes, a named tuple's fields), integer and structured NumPy
 arrays, pandas frames, series and indexes, `array.array`, a
 `functools.partial`'s arguments, the attributes of an `argparse.Namespace`,
 and the attributes and slots of your own objects and of a `SimpleNamespace`
-are looked through, and an `id()` turned into text (`hex(id(x))`,
-`str(id(x))`) counts as one. Another library's object is not looked
+are looked through, and an `id()` turned into text counts as one, alone
+or anywhere inside a longer text (`hex(id(x))`, `'k' + str(id(x))`,
+`f"run-{id(x)}"`, an object's default `repr`): a run of 7 or more digits,
+or `0x` and 5 to 16 hexadecimal digits. Another library's object is not looked
 inside: a value holding one next to an `id()` or a weak reference runs
 every time too, since that object could hold one as well. So does a value
 of more than 200,000 objects, one whose `id()` could be of an object

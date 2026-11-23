@@ -30,40 +30,54 @@ def test_a_number_is_placed_among_sorted_mappings():
     assert _inside({50, 100, 199, 200, 350, 999, 4999, 5000}, ranges) == {100, 199, 350, 4999}
 
 
+def _numbers(parts) -> set[int]:
+    found: set[int] = set()
+    for part in parts:
+        found.update(int(n) for n in part) if isinstance(part, np.ndarray) else found.add(part)
+    return found
+
+
+def _spelled(texts) -> set[int]:
+    return set().union(*(identity_holders._spelled_in(text) for text in texts if text is not None))
+
+
 def test_an_arrow_text_column_gives_the_numbers_it_spells():
-    s = pd.Series(["abc", "12345678", "0x7f00aa12bc", None, "123456789012345678901", "x12345678"], dtype=STR)
-    parts = identity_holders._arrow_text_spelling_numbers(s)
-    assert parts[0].tolist() == [12345678]
-    assert parts[1:] == [0x7F00AA12BC]
+    texts = ["abc", "12345678", "0x7f00aa12bc", None, "123456789012345678901", "x87654321"]
+    parts = identity_holders._arrow_text_spelling_numbers(pd.Series(texts, dtype=STR))
+    found = _numbers(parts)
+    assert {12345678, 87654321, 0x7F00AA12BC} <= found
+    assert found == _spelled(texts)
 
 
 def test_a_text_column_in_many_chunks_gives_the_numbers_it_spells():
     # After a ``merge`` the column came in thousands of chunks, and the two
     # patterns over all of them took 6 s: the values that could spell a
-    # number are picked by length, then searched as one array.
+    # number are picked from their bytes, then searched as one array.
     import pyarrow
 
     forget_flat_reads()
     chunk = [f"w{i}" for i in range(20)]
     chunks = [pyarrow.array(chunk, type=pyarrow.large_string()) for _ in range(5_000)]
-    chunks[3] = pyarrow.array([*chunk, "12345678", "0x7f00aa12bc", "1" * 19], type=pyarrow.large_string())
+    extra = ["12345678", "0x7f00aa12bc", "1" * 19, "id 87654321."]
+    chunks[3] = pyarrow.array([*chunk, *extra], type=pyarrow.large_string())
     s = pd.Series(pd.arrays.ArrowExtensionArray(pyarrow.chunked_array(chunks)))
-    parts = identity_holders._arrow_text_spelling_numbers(s)
-    assert parts[0].tolist() == [12345678]
-    assert parts[1:] == [0x7F00AA12BC]
+    found = _numbers(identity_holders._arrow_text_spelling_numbers(s))
+    assert {12345678, 87654321, 0x7F00AA12BC} <= found
+    assert found == _spelled(extra)
     forget_flat_reads()
 
 
-def test_only_whole_ascii_numbers_of_number_length_are_read():
-    # Picked by masks, not patterns: other digits, a space, a bad hex digit
-    # or one digit too many spell nothing, as before.
+def test_only_ascii_numbers_of_number_length_are_read():
+    # Other digits, a space, a bad hex digit or too few digits spell
+    # nothing; a run of digits inside a text does.
     texts = ["1234567", "999999999999999999", "1234567890123456789", "\u0661\u0662\u0663\u0664\u0665\u0666\u0667"]
-    texts += ["12 34567", "0x12g456", "0XABCDEF", "0x1234", "abc"]
+    texts += ["12 34567", "0x12g456", "0XABCDEF", "0x1234", "abc", "k7654321"]
     s = pd.Series(texts * 300, dtype="string[pyarrow]")
     forget_flat_reads()
-    parts = identity_holders._arrow_text_spelling_numbers(s)
-    assert sorted(set(parts[0].tolist())) == [1234567, 999999999999999999]
-    assert set(parts[1:]) == {0xABCDEF}
+    found = _numbers(identity_holders._arrow_text_spelling_numbers(s))
+    assert {1234567, 999999999999999999, 0xABCDEF, 7654321} <= found
+    assert not found & {34567, 0x12, 0x1234}
+    assert found == _spelled(texts)
     forget_flat_reads()
 
 

@@ -83,6 +83,30 @@ static int ts_has(TypeSet *ts, PyTypeObject *t) {
 
 static int is_typeset(PyObject *o) { return PyFrozenSet_CheckExact(o) || PyAnySet_CheckExact(o); }
 
+/*
+ * Whether the str *s* could spell an id() anywhere in it, as
+ * identity_holders._spelled_in reads one: a run of at least *run* ASCII
+ * digits, or "0x" / "0X". A superset: the Python read decides.
+ */
+static int may_spell_id(PyObject *s, Py_ssize_t run) {
+    int kind = PyUnicode_KIND(s);
+    const void *data = PyUnicode_DATA(s);
+    Py_ssize_t len = PyUnicode_GET_LENGTH(s), digits = 0;
+    for (Py_ssize_t i = 0; i < len; i++) {
+        Py_UCS4 c = PyUnicode_READ(kind, data, i);
+        if (c >= '0' && c <= '9') {
+            if (++digits >= run) return 1;
+            if (c == '0' && i + 1 < len) {
+                Py_UCS4 n = PyUnicode_READ(kind, data, i + 1);
+                if (n == 'x' || n == 'X') return 1;
+            }
+        } else {
+            digits = 0;
+        }
+    }
+    return 0;
+}
+
 /* ------------------------------------------------------------ gc pause */
 typedef struct { int was; } GCPause;
 static void gc_pause(GCPause *p) { p->was = PyGC_Disable(); }
@@ -1321,17 +1345,18 @@ cleanup:
 }
 
 /*
- * tree_id_leaves(value, leaves, low, high, longest)
+ * tree_id_leaves(value, leaves, low, high, run)
  *   -> (ints, texts) | NotImplemented
  *
  * What identity_holders._plain_tree_without_ids reads of JSON-like *value*
  * (exact dicts, lists and tuples over *leaves*, keys included, no deeper
  * than MAX_LEVELS levels of containers), in one pass that makes no list of
  * its levels: *ints*, the exact ints n with low <= n < high, and *texts*,
- * the exact strs of at most *longest* characters or holding a line break,
- * each once in the order first met (dict.fromkeys). NotImplemented for
- * anything else (a type outside them, deeper): the Python walk then reads
- * it. With *longest* -1 and low == high it reads no number and no text,
+ * the exact strs that could spell an id() anywhere in them (a run of
+ * *run* digits or "0x": may_spell_id), each once in the order first met
+ * (dict.fromkeys). NotImplemented for anything else (a type outside them,
+ * deeper): the Python walk then reads it. With *run* -1 and low == high
+ * it reads no number and no text,
  * and only says whether *value* is such data
  * (held_functions._plain_data_alone).
  */
@@ -1342,10 +1367,10 @@ static PyObject *py_tree_id_leaves(PyObject *self, PyObject *const *args, Py_ssi
         return NULL;
     }
     long long low = PyLong_AsLongLong(args[2]), high = PyLong_AsLongLong(args[3]);
-    Py_ssize_t longest = PyLong_AsSsize_t(args[4]);
+    Py_ssize_t run = PyLong_AsSsize_t(args[4]);
     if (PyErr_Occurred()) return NULL;
-    if (longest < -1) {
-        PyErr_SetString(PyExc_ValueError, "longest >= -1");
+    if (run < -1 || run == 0) {
+        PyErr_SetString(PyExc_ValueError, "run >= 1, or -1");
         return NULL;
     }
     PyObject *value = args[0];
@@ -1402,15 +1427,8 @@ static PyObject *py_tree_id_leaves(PyObject *self, PyObject *const *args, Py_ssi
                         long long x = PyLong_AsLongLongAndOverflow(o, &overflow);
                         if (x == -1 && PyErr_Occurred()) { verdict = -1; goto end; }
                         if (!overflow && x >= low && x < high && PyList_Append(ints, o) < 0) { verdict = -1; goto end; }
-                    } else if (t == &PyUnicode_Type && longest >= 0) {
-                        Py_ssize_t len = PyUnicode_GET_LENGTH(o);
-                        int keep = len <= longest;
-                        if (!keep) {
-                            Py_ssize_t f = PyUnicode_FindChar(o, '\n', 0, len, 1);
-                            if (f == -2) { verdict = -1; goto end; }
-                            keep = f >= 0;
-                        }
-                        if (keep && PyDict_SetDefault(texts, o, Py_None) == NULL) { verdict = -1; goto end; }
+                    } else if (t == &PyUnicode_Type && run > 0) {
+                        if (may_spell_id(o, run) && PyDict_SetDefault(texts, o, Py_None) == NULL) { verdict = -1; goto end; }
                     }
                 }
             }
@@ -2519,7 +2537,7 @@ static PyObject *py_values_in_tuples(PyObject *self, PyObject *const *args, Py_s
 }
 
 /*
- * nested_leaves(items, leaves, levels, longest)
+ * nested_leaves(items, leaves, levels, run)
  *   -> (nodes, texts, ints, kinds, lists) | False | NotImplemented
  *
  * identity_holders._Walk._read_nested's read of the exact list *items*, a
@@ -2528,9 +2546,9 @@ static PyObject *py_values_in_tuples(PyObject *self, PyObject *const *args, Py_s
  * containers are still met at level *levels* - 1. Else *nodes*: the
  * containers, level by level, each level's in order; *kinds*: the types
  * of the leaves; *lists*: how many of the nodes are lists. Of the leaves,
- * what _read_leaves reads: *texts*, the exact strs of at most *longest*
- * characters or holding a line break, each once in the order first met
- * (dict.fromkeys), and *ints*, the exact ints in order.
+ * what _read_leaves reads: *texts*, the exact strs that could spell an
+ * id() anywhere in them (may_spell_id with *run*), each once in the order
+ * first met (dict.fromkeys), and *ints*, the exact ints in order.
  */
 static PyObject *py_nested_leaves(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
     if (nargs != 4 || !PyList_CheckExact(args[0]) || !is_typeset(args[1]) || !PyLong_CheckExact(args[2]) ||
@@ -2539,9 +2557,9 @@ static PyObject *py_nested_leaves(PyObject *self, PyObject *const *args, Py_ssiz
         return NULL;
     }
     long levels = PyLong_AsLong(args[2]);
-    Py_ssize_t longest = PyLong_AsSsize_t(args[3]);
-    if (levels < 1 || levels > 64 || longest < 0) {
-        PyErr_SetString(PyExc_ValueError, "levels 1..64, longest >= 0");
+    Py_ssize_t run = PyLong_AsSsize_t(args[3]);
+    if (levels < 1 || levels > 64 || run < 1) {
+        PyErr_SetString(PyExc_ValueError, "levels 1..64, run >= 1");
         return NULL;
     }
     TypeSet ts;
@@ -2592,8 +2610,7 @@ static PyObject *py_nested_leaves(PyObject *self, PyObject *const *args, Py_ssiz
                 goto done;
             }
             if (PyUnicode_CheckExact(obj)) {
-                Py_ssize_t len = PyUnicode_GET_LENGTH(obj);
-                if (len <= longest || PyUnicode_FindChar(obj, '\n', 0, len, 1) >= 0) {
+                if (may_spell_id(obj, run)) {
                     PyObject *had = PyDict_SetDefault(texts, obj, Py_None);
                     if (!had) {
                         verdict = -1;
@@ -2957,12 +2974,12 @@ static PyMethodDef cwalk_methods[] = {
     {"values_in_tuples", (PyCFunction)(void (*)(void))py_values_in_tuples, METH_FASTCALL,
      "values_in_tuples(items, exact, levels) -> bool | NotImplemented"},
     {"nested_leaves", (PyCFunction)(void (*)(void))py_nested_leaves, METH_FASTCALL,
-     "nested_leaves(items, leaves, levels, longest) -> (nodes, texts, ints, kinds, lists) | False | NotImplemented"},
+     "nested_leaves(items, leaves, levels, run) -> (nodes, texts, ints, kinds, lists) | False | NotImplemented"},
     {"tree_facts", (PyCFunction)(void (*)(void))py_tree_facts, METH_FASTCALL,
      "tree_facts(value, leaves, want_walk, top_extra, picks, mode=0) -> (types, held_once, size, nodes, walk) | None | "
      "NotImplemented"},
     {"tree_id_leaves", (PyCFunction)(void (*)(void))py_tree_id_leaves, METH_FASTCALL,
-     "tree_id_leaves(value, leaves, low, high, longest) -> (ints, texts) | NotImplemented"},
+     "tree_id_leaves(value, leaves, low, high, run) -> (ints, texts) | NotImplemented"},
     {"held_beyond", (PyCFunction)(void (*)(void))py_held_beyond, METH_FASTCALL,
      "held_beyond(value, leaves, limit) -> list | False | None | NotImplemented"},
     {"shared_parts", (PyCFunction)(void (*)(void))py_shared_parts, METH_FASTCALL,

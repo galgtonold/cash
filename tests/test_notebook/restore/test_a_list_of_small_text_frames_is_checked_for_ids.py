@@ -27,12 +27,12 @@ TEXTS = [
     "12345678",
     "0000012345678",
     "123456",  # too short
-    "1234567890123456789",  # too long
+    "1234567890123456789",  # longer than an address: read in parts
     "0x7f00aa12bc",
     "0X7F00AA12BC",
     "0x1234",  # too short
-    "x12345678",
-    "12345678\n",  # a last newline is not the end of the text
+    "x12345678",  # inside a longer text
+    "12345678\n",
     "12345678\n87654321",
     "\r12345678",
     "12345678 ",
@@ -56,18 +56,22 @@ def _spelled(column) -> list[int]:
 
 
 def test_a_short_text_column_spells_what_a_long_one_does():
+    from cash.notebook.statement.identity_holders import _spelled_in
+
     short = pd.Series(TEXTS, dtype=STR)
     long = pd.Series(TEXTS * 20, dtype=STR)
-    assert _spelled(short) == [12345678, 12345678, 0x7F00AA12BC, 0x7F00AA12BC]
-    assert _spelled(long) == sorted(_spelled(short) * 20)
+    expected = set().union(*(_spelled_in(text) for text in TEXTS if text is not None))
+    assert {12345678, 87654321, 0x7F00AA12BC} <= expected
+    assert 123456 not in expected and 0x1234 not in expected
+    assert set(_spelled(short)) == set(_spelled(long)) == expected
 
 
 @pytest.mark.parametrize(
     "texts, found",
     [
-        (["abc", "\u00e9" * 3 + "1234567"], [0]),  # not ASCII: read one by one
+        (["abc", "\u00e9" * 3 + "1234567"], [1]),  # not ASCII, a number inside
         (["a", "bc", "x" * 30, None], []),  # no value of a number's length: nothing at all
-        (["\u00e9" * 4, "abc"], [0]),  # 8 bytes, as Arrow counts: looked through, an empty array
+        (["\u00e9" * 4, "abc"], []),  # 8 bytes, as Arrow counts, but no digit: nothing
     ],
 )
 def test_a_short_text_column_is_read_as_a_long_one_is(texts, found):

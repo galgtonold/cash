@@ -814,7 +814,7 @@ def test_the_tree_id_read_hands_back_what_it_cannot_read():
     from cash.notebook.statement import identity_holders as ih
 
     def read(value):
-        return K.tree_id_leaves(value, ih._LEAVES, 1 << 22, 1 << 48, 18)
+        return K.tree_id_leaves(value, ih._LEAVES, 1 << 22, 1 << 48, ih._SHORTEST_RUN)
 
     assert read([("a", Odd())]) is NotImplemented
     assert read([{(1, 2): 3}]) is NotImplemented
@@ -824,9 +824,12 @@ def test_the_tree_id_read_hands_back_what_it_cannot_read():
         inner.append([])
         inner = inner[0]
     assert read(deep) is NotImplemented
-    ints, texts = read({"a": [5 << 22, 3, "1" * 8, "x" * 40, "x" * 40 + "\n", "1" * 8], 6 << 22: True})
+    texts_in = ["1" * 8, "x" * 40, "x" * 40 + "\n", "1" * 8, "k" * 40 + "1" * 7, "a0X", "123456", "12345x67"]
+    ints, texts = read({"a": [5 << 22, 3, *texts_in], 6 << 22: True})
     assert ints == [5 << 22, 6 << 22] or ints == [6 << 22, 5 << 22]
-    assert texts == ["a", "1" * 8, "x" * 40 + "\n"]
+    # The texts that could spell an id() anywhere in them, whatever their
+    # length: a run of seven digits, or "0x".
+    assert texts == ["1" * 8, "k" * 40 + "1" * 7, "a0X"]
 
 
 @pytest.mark.parametrize("seed", range(80))

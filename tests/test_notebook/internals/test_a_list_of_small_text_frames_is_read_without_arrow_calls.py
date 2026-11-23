@@ -36,10 +36,9 @@ def test_small_text_frames_make_no_arrow_call_or_column(monkeypatch):
     assert identity_held_reason("df_array", frames, {"df_array": frames}) is None
     assert calls == {"arrow": 0, "iloc": 0, "dtypes": 0}
 
-    # A long column still goes to Arrow: its values start with a digit and
-    # are of a number's length, so the first bytes leave them all to it
-    # (`_starting_with_a_digit`).
+    # A long column still goes to Arrow: its values are digits of a
+    # number's length, so their bytes leave them all to it (`_could_spell`).
     forget_flat_reads()
-    big = pd.DataFrame({"at": ["1/2/2020"] * 1000})
+    big = pd.DataFrame({"at": ["20200102"] * 1000})
     assert identity_held_reason("big", big, {"big": big}) is None
     assert calls["arrow"] > 0

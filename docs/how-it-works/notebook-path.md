@@ -207,7 +207,7 @@ object's slots among them), an attribute of a class of yours, such as a
 registry filled in `__init__`, or a `weakref.finalize`) points at an object
 it holds, or such a container, a NumPy array, a pandas object, a
 `functools.partial` or an `argparse.Namespace` keeps one's `id()` as a key,
-a value or an item, or as text (`hex(id(x))`) (what it holds comes back as copies; both are checked again at each
+a value or an item, or as text, alone or inside a longer one (`hex(id(x))`, `f"run-{id(x)}"`) (what it holds comes back as copies; both are checked again at each
 restore); when the notebook holds a container of more than 10,000 items that
 holds anything but numbers, strings and the like or tuples of them (records), which is not looked inside;
 when a function it calls writes a module it imports;

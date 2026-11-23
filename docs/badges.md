@@ -266,7 +266,8 @@ the statement every time instead of storing it:
   `wr = weakref.ref(p.child)`, a `WeakValueDictionary`, `reg = {id(p): ...}`.
   Restored, the value would point at the object as it was when it was
   stored, while the statement that binds `p` binds a new one. It runs again,
-  as in plain Python. Ids, also as text (`hex(id(x))`), are looked for in
+  as in plain Python. Ids, also as text, alone or inside a longer one
+  (`hex(id(x))`, `f"run-{id(x)}"`), are looked for in
   lists, tuples, dicts, sets, deques, NumPy arrays, pandas objects,
   `array.array`, a `functools.partial`, an `argparse.Namespace` and the
   attributes and slots of objects of your own classes and of a

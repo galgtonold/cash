@@ -2,9 +2,9 @@
 matched against the number patterns.
 
 The identity check looks in every Arrow text column of a statement's new
-frame for numbers that could be an ``id()``: values of 7 to 18 bytes, all
-digits or starting ``0x``. Both patterns ran over every value of the
-column, the prefix as a match ignoring case (a regular expression in
+frame for numbers that could be an ``id()``: a run of 7 digits or ``0x``
+and hexadecimal digits, anywhere in a value. Both patterns ran over every
+value of the column, the prefix as a match ignoring case (a regular expression in
 Arrow): after p18's ``chg = labs.merge(...)``, most of the check's time,
 for nine columns of country names, visit codes and the like.
 """
@@ -24,7 +24,7 @@ pc = pytest.importorskip("pyarrow.compute")
 def matched(monkeypatch):
     """The values each pattern was matched against."""
     seen: list[int] = []
-    for name in ("ascii_is_decimal", "starts_with"):
+    for name in ("ascii_is_decimal", "match_substring_regex"):
         real = getattr(pc, name)
 
         def counting(values, *args, _real=real, **kwargs):
@@ -42,10 +42,11 @@ def test_short_values_are_not_matched(matched):
     identity_holders.forget_flat_reads()
     parts = identity_holders._arrow_text_spelling_numbers(s)
     assert parts is not None
-    assert sorted(parts[0].tolist()) == [12345678]
-    assert sorted(parts[1:]) == [0x7F00AA12BC, 0x7F00AA12BD]
-    # Positive control: the patterns ran, on the 4 values that fit and
-    # start with a digit (``Germany`` and ``Australia`` fit, but start
-    # with a letter: `_starting_with_a_digit`).
-    assert matched and max(matched) == 4
-    assert sum(matched) <= 3 * 4
+    found = {int(n) for part in parts for n in (part.tolist() if hasattr(part, "tolist") else [part])}
+    assert found == {12345678, 0x7F00AA12BC, 0x7F00AA12BD}
+    # Positive control: the patterns ran, on the 3 values whose bytes could
+    # spell a number (``Germany``, ``Australia`` and ``0xzz000000`` are
+    # long enough, but a letter that is no hexadecimal digit sits where any
+    # spelling in them would be: `_could_spell`).
+    assert matched and max(matched) == 3
+    assert sum(matched) <= 2 * 3

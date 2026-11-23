@@ -18,9 +18,10 @@ What is looked at:
   class, a module or a function comes back as itself and does not count;
 - an ``int`` in the value equal to the ``id()`` of an object the value holds
   or the notebook's variables hold, at any depth, an integer NumPy array
-  holding one, and one turned into text (``hex(id(x))``, `as_address`); a
-  number outside every mapping this process can write (`_mapped`) is not
-  one;
+  holding one, and one spelled in text, alone or anywhere inside a longer
+  one (``hex(id(x))``, ``f"run-{id(x)}"``, an object's default ``repr``:
+  `_spelled_in`); a number outside every mapping this process can write
+  (`_mapped`) is not one;
 - a weak reference another variable keeps to the value, or to an object in
   it (`_weakly_held`).
 
@@ -55,7 +56,7 @@ import struct
 import sys
 import types
 import weakref
-from itertools import chain, compress, repeat
+from itertools import accumulate, chain, compress, repeat
 from typing import Any
 
 from cash import _native, _weak
@@ -67,7 +68,7 @@ from cash.install_paths import is_user_code_module
 from cash.notebook.shared_objects import library_exact_values, walk_time_left
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
-__all__ = ["IdentityHeld", "as_address", "end_cell_reads", "forget_flat_reads", "identity_held_reason", "library_parts"]
+__all__ = ["IdentityHeld", "end_cell_reads", "forget_flat_reads", "identity_held_reason", "library_parts"]
 
 #: A container with more items is read at C speed when it holds only
 #: leaves or records of them, and walked item by item otherwise.
@@ -546,7 +547,7 @@ def _plain_tree_without_ids(value: Any) -> bool:
                 return False
             if facts.types.isdisjoint(_ID_LEAVES):
                 return True
-            read = _TREE_ID_LEAVES(value, _LEAVES, _LOWEST_ADDRESS, _HIGHEST_ADDRESS, _LONGEST_NUMBER)
+            read = _TREE_ID_LEAVES(value, _LEAVES, _LOWEST_ADDRESS, _HIGHEST_ADDRESS, _SHORTEST_RUN)
             if read is not NotImplemented:
                 reader = _Walk({})
                 reader.numbers = set(read[0])
@@ -575,27 +576,85 @@ def _plain_tree_without_ids(value: Any) -> bool:
 
 #: Every digit as ``0``: a run of seven digits is then ``"0000000"``.
 _DIGITS_AS_ZERO = str.maketrans("123456789", "000000000")
-#: The lines of text `as_address` may read as a number.
-_NUMBER_LINES = re.compile(r"^(?:0[xX][0-9a-fA-F]{5,16}|[0-9]{7,18})$", re.MULTILINE)
-
-#: The longest line `_NUMBER_LINES` matches.
+#: The fewest digits an address is spelled with in decimal: `_LOWEST_ADDRESS`
+#: has seven. Not more: an interpreter that is not position independent
+#: keeps its heap right above its image, at 8-digit addresses (``0x12c5000``).
+_SHORTEST_RUN = len(str(_LOWEST_ADDRESS))
+#: The most: `_HIGHEST_ADDRESS` has fifteen. A longer run of digits holds
+#: one only as a part of it (``f"{id(a)}{id(b)}"``), read by `_windows`.
+_ADDRESS_DIGITS = len(str(_HIGHEST_ADDRESS))
+#: The longest run of digits also read as one number, as `_spelled_in`
+#: read a text that is all digits before reading inside texts.
 _LONGEST_NUMBER = 18
-
-#: Texts `_Walk._read_leaves` joins into one string to search.
+#: A run of decimal digits that could spell an address, anywhere in a text.
+_DECIMAL_RUN = re.compile(r"[0-9]{%d,}" % _SHORTEST_RUN)
+#: ``0x`` and the hexadecimal digits after it, anywhere in a text: read as
+#: a number when 5 to 16 digits long, as ``hex(id(x))`` is.
+_HEX_RUN = re.compile(r"0[xX]([0-9a-fA-F]{5,})")
+_LONGEST_HEX = 16
+#: Texts `_Walk._read_texts` joins into one string to search, and the
+#: characters, so a column of long texts is not joined into one huge string.
 _TEXTS_AT_ONCE = 100_000
+_CHARS_AT_ONCE = 1 << 24
+
+assert 1000 % _ALIGNMENT == 0  # an address's last three digits tell its alignment
 
 
-def as_address(text: str) -> int | None:
-    """The number *text* spells when it could be an ``id()`` turned into
-    text, ``hex(id(x))`` or ``str(id(x))``; None otherwise."""
-    if not 6 < len(text) < 19:
-        return None
-    try:
-        if text[:2] in ("0x", "0X"):
-            return int(text, 16)
-        return int(text) if text.isdigit() else None
-    except ValueError:
-        return None
+def _spelled_in(text: str) -> set[int]:
+    """The numbers *text* spells that could be an ``id()`` turned into text,
+    alone or inside it: ``str(id(x))``, ``'k' + str(id(x))``,
+    ``f"run-{id(x)}"``, ``hex(id(x))``, ``<Q object at 0x7f...>``. Each run
+    of decimal digits of 7 to 18, and the parts of a longer one
+    (`_windows`); each ``0x`` followed by 5 to 16 hexadecimal digits.
+    Restored, a value holding one spells the old process's address, where
+    plain Python spells the new one's. Which of them is an object's address
+    `_candidate_ids` decides."""
+    numbers: set[int] = set()
+    runs = _DECIMAL_RUN.findall(text)
+    if runs:
+        lengths = list(map(len, runs))
+        numbers.update(map(int, compress(runs, map(operator.ge, repeat(_LONGEST_NUMBER), lengths))))
+        if max(lengths) > _ADDRESS_DIGITS:
+            for run in compress(runs, map(operator.lt, repeat(_ADDRESS_DIGITS), lengths)):
+                numbers.update(_windows(run))
+    if "0x" in text or "0X" in text:
+        numbers.update(int(digits, 16) for digits in _HEX_RUN.findall(text) if len(digits) <= _LONGEST_HEX)
+    return numbers
+
+
+def _windows(run: str) -> list[int]:
+    """The numbers inside *run*, a run of digits longer than any address,
+    that could be one: 7 to 15 digits, not starting with ``0`` (``str()``
+    writes none), and a multiple of `_ALIGNMENT`, which its last three
+    digits tell. ``f"{id(a)}{id(b)}"`` spells both."""
+    found = []
+    for end in range(_SHORTEST_RUN, len(run) + 1):
+        if int(run[end - 3 : end]) % _ALIGNMENT:
+            continue
+        for start in range(max(0, end - _ADDRESS_DIGITS), end - _SHORTEST_RUN + 1):
+            if run[start] != "0":
+                found.append(int(run[start:end]))
+    return found
+
+
+def _may_spell(text: str) -> bool:
+    """Whether *text* could hold what `_spelled_in` reads, told by plain
+    searches, far quicker than its patterns: most text has no run of seven
+    digits and no ``0x``."""
+    return "0x" in text or "0X" in text or "0" * _SHORTEST_RUN in text.translate(_DIGITS_AS_ZERO)
+
+
+def _joined(texts: list[str]) -> Any:
+    """*texts* joined by line breaks, at most `_TEXTS_AT_ONCE` of them and
+    about `_CHARS_AT_ONCE` characters at once (a longer text alone)."""
+    ends = list(accumulate(map(len, texts)))
+    start = 0
+    while start < len(texts):
+        before = ends[start - 1] if start else 0
+        stop = min(len(texts), start + _TEXTS_AT_ONCE, bisect.bisect_right(ends, before + _CHARS_AT_ONCE))
+        stop = max(stop, start + 1)
+        yield "\n".join(texts[start:stop])
+        start = stop
 
 
 def library_parts(value: Any) -> list[Any] | None:
@@ -738,10 +797,11 @@ def _column_arrays(frame: Any) -> list[Any]:
 
 def _arrow_text_spelling_numbers(column: Any) -> list[Any] | None:
     """Of a column of Arrow-backed text (pandas' default ``str``), the only
-    thing that could matter: the numbers its values spell as `as_address`
-    reads them, picked and parsed by Arrow at C speed -- the decimal ones as
-    one NumPy array of 8-byte integers (checked as an integer column is),
-    the hexadecimal ones as ints. Converting the column to Python strings
+    thing that could matter: the numbers its values spell as `_spelled_in`
+    reads them, the values that could spell one picked at C speed -- a value
+    that is all digits parsed by Arrow, into one NumPy array of 8-byte
+    integers (checked as an integer column is), the others' numbers as
+    `_spelled_parts` gives them. Converting the column to Python strings
     made new ones each time, a million for a wide frame, after every
     statement of a loop writing it. Text holds no object. None for any
     other column, or where Arrow is not at hand."""
@@ -774,13 +834,11 @@ def _arrow_text_numbers(values: Any) -> list[Any] | None:
             few = _few_texts_spelling_numbers(chunked.to_pylist())
             _ArrowRead(signature, few).add(chunked)
             return few
-        # Only a value of 7 to 18 bytes can spell either number, all digits
-        # or starting ``0x``: each is picked by masks Arrow computes without
-        # copying the text, and only those taken out. A merged frame's text
-        # column came in thousands of chunks, and two patterns over all of
-        # it took 6 s after one `merge` (p18). The patterns are matched on
-        # those values alone, and the prefix as two plain ones: matched
-        # ignoring case, Arrow ran a regular expression over every value.
+        # Only a value holding a run of 7 digits or ``0x`` and 5 hexadecimal
+        # digits can spell a number: those that could are picked from the
+        # text's bytes (`_could_spell`), and only they matched. A merged
+        # frame's text column came in thousands of chunks, and two patterns
+        # over all of it took 6 s after one `merge` (p18).
         parts: list[Any] = []
         for piece in _joined_runs(pyarrow, chunked):
             _spelled_numbers(pyarrow, compute, piece, parts)
@@ -913,43 +971,77 @@ def _joined_runs(pyarrow: Any, chunked: Any) -> list[Any]:
 
 def _spelled_numbers(pyarrow: Any, compute: Any, chunked: Any, parts: list[Any]) -> None:
     """Append to *parts* the numbers the text of *chunked* (an Array or a
-    ChunkedArray) spells, as `_arrow_text_numbers` reads them."""
-    narrowed = _starting_with_a_digit(pyarrow, chunked)
+    ChunkedArray) spells, as `_arrow_text_numbers` reads them: the values
+    that are 7 to 15 digits, cast by Arrow, then those of the others that
+    hold a spelling (`_SPELLING_TEXT`), read by `_spelled_in`."""
+    narrowed = _could_spell(pyarrow, chunked)
     if narrowed is not None:
         if not len(narrowed):
             return
         chunked = narrowed
     length = compute.binary_length(chunked)
-    fits = compute.and_(compute.greater_equal(length, 7), compute.less_equal(length, 18))
-    candidates = compute.filter(chunked, fits)
-    decimal = compute.filter(candidates, compute.ascii_is_decimal(candidates))
+    whole = compute.and_(
+        compute.and_(compute.greater_equal(length, _SHORTEST_RUN), compute.less_equal(length, _ADDRESS_DIGITS)),
+        compute.ascii_is_decimal(chunked),
+    )
+    decimal = compute.filter(chunked, whole)
     if len(decimal):
         parts.append(compute.cast(decimal, pyarrow.int64()).to_numpy(zero_copy_only=False))
-    prefixed = compute.filter(
-        candidates,
-        compute.or_(compute.starts_with(candidates, "0x"), compute.starts_with(candidates, "0X")),
-    )
-    if len(prefixed):
-        hexadecimal = compute.filter(prefixed, compute.match_substring_regex(prefixed, _HEX_TEXT))
-        parts.extend(int(text, 16) for text in hexadecimal.to_pylist() if text is not None)
+    rest = compute.filter(chunked, compute.invert(whole))
+    if len(rest):
+        rest = compute.filter(rest, compute.match_substring_regex(rest, _SPELLING_TEXT))
+    if len(rest):
+        numbers: set[int] = set()
+        texts = [text for text in rest.to_pylist() if text is not None]
+        for text in _joined(texts):
+            numbers |= _spelled_in(text)
+        parts.extend(_spelled_parts(numbers))
 
 
-def _starting_with_a_digit(pyarrow: Any, chunked: Any) -> Any:
+def _spelled_parts(numbers: set[int]) -> list[Any]:
+    """*numbers* as `_arrow_text_numbers` hands them on: those an 8-byte
+    integer holds as one NumPy array, in order, then any larger as ints."""
+    import numpy
+
+    small = sorted(n for n in numbers if n < 1 << 63)
+    return [numpy.array(small, dtype=numpy.int64), *sorted(n for n in numbers if n >= 1 << 63)]
+
+
+def _spelling_bytes(numpy: Any, found: Any) -> Any:
+    """For each byte of *found* (a NumPy array of them), whether it can be
+    part of a spelling `_spelled_in` reads: a digit, ``x`` or a hexadecimal
+    letter, in either case. By compares, each a pass at C speed: a table
+    looked up took four times as long over p18's 5.6 million values."""
+    lower = found | numpy.uint8(0x20)
+    fits = found - numpy.uint8(0x30)
+    fits = fits < 10
+    letter = lower - numpy.uint8(0x61)
+    fits |= letter < 6
+    fits |= lower == 0x78
+    return fits
+
+
+def _could_spell(pyarrow: Any, chunked: Any) -> Any:
     """The values of *chunked* (Arrow text: an Array or a ChunkedArray)
     that could spell a number as `_spelled_numbers` reads them, in order,
-    as one ChunkedArray: those 7 to 18 bytes long whose first byte is an
-    ASCII digit. Both spellings start with one (``0x`` for the
-    hexadecimal), so `_spelled_numbers` finds in them what it finds in all
-    of *chunked*; a missing value among them stays missing, as Arrow's
-    patterns drop it.
+    as one ChunkedArray; a missing value among them stays missing, as
+    Arrow's patterns drop it.
+
+    A spelling is at least 7 bytes of digits, ``x`` and hexadecimal letters
+    (`_spelling_bytes`): 7 digits, or ``0x`` and 5 hexadecimal digits. So a
+    value shorter than 7 bytes spells none; in a value of 7 to 13 bytes
+    every spelling covers its bytes ``length - 7`` to ``6`` alike, each
+    looked at, the middle one first, for the values still left; and in a longer
+    one every spelling covers one of its bytes 6, 13, 20 and so on. The
+    rest are left out: they spell nothing.
 
     Read from the arrays' offsets and bytes through NumPy, without a copy
     of the text: Arrow's length, mask and filter over every value took
     most of the read, 0.13 s for a column of 5.6 million ids (``S011-00001``,
-    all of a fitting length) after each of p18's statements making a new
-    frame of lab rows, where the first byte rules every one out in 20 ms.
-    None when a chunk's buffers are not laid out as Arrow's ``string`` or
-    ``large_string`` lay them out: Arrow reads all of *chunked*, as before."""
+    the ``-`` ruling each out) after each of p18's statements making a new
+    frame of lab rows. None when a chunk's buffers are not laid out as
+    Arrow's ``string`` or ``large_string`` lay them out: Arrow reads all of
+    *chunked*, as before."""
     numpy = sys.modules.get("numpy")
     if numpy is None:
         return None
@@ -964,6 +1056,7 @@ def _starting_with_a_digit(pyarrow: Any, chunked: Any) -> Any:
         offset_type = numpy.int64
     else:
         return None
+    span = _SHORTEST_RUN
     width = numpy.dtype(offset_type).itemsize
     taken: list[Any] = []
     for chunk in chunks:
@@ -979,12 +1072,45 @@ def _starting_with_a_digit(pyarrow: Any, chunked: Any) -> Any:
         if buffers[2] is None:
             return None
         text = numpy.frombuffer(buffers[2], dtype=numpy.uint8)
-        # Each value's first byte; an empty one at the end of the text
-        # reads its last byte (``clip``), and is left out by its length.
-        first = text.take(offsets[:-1], mode="clip")
-        at = numpy.flatnonzero((first >= 0x30) & (first <= 0x39))
-        lengths = offsets[at + 1] - offsets[at]
-        at = at[(lengths >= 7) & (lengths <= 18)]
+        starts, ends = offsets[:-1], offsets[1:]
+        lengths = ends - starts
+        kept: list[Any] = []
+        longer = numpy.flatnonzero(lengths >= 2 * span)
+        # 7 to 13 bytes: the bytes every spelling covers, `count` of them
+        # from `low`. The middle one first, for every value at once (a
+        # separator, as in ``S011-00001``, rules most out); the others for
+        # the values it leaves. The lengths become the middles in place:
+        # each array of 5.6 million offsets made costs its pages afresh.
+        fits = lengths >= span
+        fits &= lengths < 2 * span
+        middle = lengths
+        middle -= 1
+        middle >>= 1
+        middle += starts  # each value's byte ``(length - 1) // 2``
+        fits &= _spelling_bytes(numpy, text.take(middle, mode="clip"))
+        del middle, lengths
+        at = numpy.flatnonzero(fits)
+        low = ends[at].astype(numpy.int64) - span
+        count = 2 * span - (ends[at] - starts[at])
+        for step in range(span):
+            more = count > step
+            if not more.all():
+                kept.append(at[~more])
+                at, low, count = at[more], low[more], count[more]
+            if not at.size:
+                break
+            fits = _spelling_bytes(numpy, text[low + step])
+            at, low, count = at[fits], low[fits], count[fits]
+        kept.append(at)
+        # Longer: a byte every 7, from the 7th.
+        at = longer
+        if at.size:
+            count = ((ends[at] - starts[at]) // span).astype(numpy.int64)
+            first = numpy.cumsum(count) - count
+            spots = numpy.repeat(starts[at] + (span - 1) - span * first, count) + span * numpy.arange(int(count.sum()))
+            spots = spots.astype(numpy.int64, copy=False)
+            kept.append(at[numpy.logical_or.reduceat(_spelling_bytes(numpy, text[spots]), first)])
+        at = numpy.sort(numpy.concatenate(kept))
         if at.size:
             taken.append(chunk.take(pyarrow.array(at, type=pyarrow.int64())))
     return pyarrow.chunked_array(taken, type=kind)
@@ -1007,18 +1133,11 @@ _SIGNED_CHUNKS = 64
 #: Most numbers an entry of `_ARROW_READS` may hold to be kept past its
 #: cell: a column of numbers kept as text keeps one per value.
 _KEPT_ARROW_NUMBERS = 1 << 16
-#: `_NUMBER_LINES`' hexadecimal spelling, a whole value (the decimal one,
-#: 7 to 18 digits, is picked by length and `ascii_is_decimal`).
-_HEX_TEXT = r"^0[xX][0-9a-fA-F]{5,16}$"
-#: The same two, for Python's ``re`` (``fullmatch``: Arrow's ``$`` is the
-#: end of the text, never before a last newline).
-_DECIMAL_WHOLE = re.compile(r"[0-9]{7,18}")
-_HEX_WHOLE = re.compile(r"0[xX][0-9a-fA-F]{5,16}")
-#: The same, each a whole line of texts joined by line breaks, and a line
-#: of a number's length (7 to 18 characters, of ASCII text: bytes).
-_DECIMAL_LINE = re.compile(r"^[0-9]{7,18}$", re.MULTILINE)
-_HEX_LINE = re.compile(r"^0[xX][0-9a-fA-F]{5,16}$", re.MULTILINE)
-_FITS_LINE = re.compile(r"^.{7,18}$", re.MULTILINE)
+#: What a value `_spelled_in` reads a number in holds, for Arrow's
+#: patterns (RE2): a run of 7 digits, or ``0x`` and 5 to 16 hexadecimal
+#: digits ending there. Missed by none of its spellings, and matching no
+#: column of longer hashes (``0x`` and 64 digits), read in Python for nothing.
+_SPELLING_TEXT = r"[0-9]{7}|0[xX][0-9a-fA-F]{5,16}(?:[^0-9a-fA-F]|$)"
 #: An Arrow text array of at most this many values is read in Python: each
 #: Arrow call costs tens of microseconds however short the array, and a
 #: list of thousands of small frames made four per column.
@@ -1027,29 +1146,12 @@ _FEW_TEXTS = 64
 
 def _few_texts_spelling_numbers(texts: list[Any]) -> list[Any]:
     """What `_arrow_text_numbers` finds in a few *texts* (None for a
-    missing value), the same way: nothing when no value is 7 to 18 bytes
-    long, else the decimal numbers as one NumPy array of 8-byte integers,
-    then the hexadecimal ones as ints. ASCII texts with no line break are
-    searched joined, a line each, in three calls."""
-    import numpy
-
-    present = [text for text in texts if text is not None]
-    joined = "\n".join(present)
-    if joined.isascii() and joined.count("\n") == len(present) - 1:
-        if not _FITS_LINE.search(joined):
-            return []
-        decimal = _DECIMAL_LINE.findall(joined)
-        hexadecimal = _HEX_LINE.findall(joined)
-    else:
-        if not any(7 <= len(text.encode()) <= 18 for text in present):
-            return []
-        decimal = [text for text in present if _DECIMAL_WHOLE.fullmatch(text)]
-        hexadecimal = [text for text in present if _HEX_WHOLE.fullmatch(text)]
-    # An array of its own each time, as Arrow's read makes: each is one
-    # object the walk counts against its budget (`_MAX_SEEN`).
-    parts: list[Any] = [numpy.array([int(text) for text in decimal], dtype=numpy.int64)]
-    parts.extend(int(text, 16) for text in hexadecimal)
-    return parts
+    missing value): the numbers they spell (`_spelled_in`), searched
+    joined, as `_spelled_parts` hands them on; nothing when they spell
+    none."""
+    joined = "\n".join(text for text in texts if text is not None)
+    numbers = _spelled_in(joined) if _may_spell(joined) else None
+    return _spelled_parts(numbers) if numbers else []
 
 
 #: The lowest address a 64-bit macOS process maps: ``__PAGEZERO`` covers
@@ -1497,10 +1599,9 @@ class _Walk:
             elif kind is int:
                 self.numbers.add(item)
             elif kind is str:
-                # ``hex(id(x))`` or ``str(id(x))``: an id() as well.
-                number = as_address(item)
-                if number is not None:
-                    self.numbers.add(number)
+                # ``hex(id(x))``, ``str(id(x))``, ``f"run-{id(x)}"``: an id() as well.
+                if len(item) >= _SHORTEST_RUN:
+                    self.numbers.update(_spelled_in(item))
             return
         if kind in self.leaves:
             # A library's scalar, read so by the value's own walk alone (a
@@ -1738,7 +1839,7 @@ class _Walk:
         tuple is seen, as walking it would see it, and counts against the
         budget; False, with nothing seen, when a level holds anything else."""
         if _NESTED_LEAVES is not None and type(items) is list:
-            read = _NESTED_LEAVES(items, _LEAVES, _NESTED_LEVELS, _LONGEST_NUMBER)
+            read = _NESTED_LEAVES(items, _LEAVES, _NESTED_LEVELS, _SHORTEST_RUN)
             if read is False:
                 return False
             if read is not NotImplemented:
@@ -1904,22 +2005,11 @@ class _Walk:
         if str in kinds:
             # The text spelling a number, found by one search of it all.
             texts = flat if kinds == {str} else compress(flat, map(operator.is_, map(type, flat), repeat(str)))
-            # Each text once, and only one a line of could spell a number:
-            # a column of 5 million cells repeating 8,000 log lines of 1 KB
-            # each was joined into one 5 GB string, and the kernel ran out
-            # of memory (student_3's ``explode``).
-            unique = list(dict.fromkeys(texts))
-            texts = list(
-                compress(
-                    unique,
-                    map(
-                        operator.or_,
-                        map(operator.ge, repeat(_LONGEST_NUMBER), map(len, unique)),
-                        map(operator.contains, unique, repeat("\n")),
-                    ),
-                )
-            )
-            del unique
+            # Each text once: a column of 5 million cells repeating 8,000 log
+            # lines of 1 KB each was joined into one 5 GB string, and the
+            # kernel ran out of memory (student_3's ``explode``). Read
+            # whatever its length: an id() can be spelled inside any text.
+            texts = list(dict.fromkeys(texts))
             self._read_texts(texts)
         if int in kinds:
             self._read_ints(flat, kinds == {int})
@@ -1930,15 +2020,11 @@ class _Walk:
             self._read_ints(list(map(int, compress(flat, map(numpy_ints.__contains__, kind_of)))), True)
 
     def _read_texts(self, texts: list[str]) -> None:
-        """The numbers *texts*, each one once and none longer than a number
-        unless it holds a line break, spell (`as_address`)."""
-        for start in range(0, len(texts), _TEXTS_AT_ONCE):
-            text = "\n".join(texts[start : start + _TEXTS_AT_ONCE])
-            # Most text has no run of seven digits and no "0x": found by
-            # plain searches, far quicker than the pattern's.
-            if "0x" in text or "0X" in text or "0000000" in text.translate(_DIGITS_AS_ZERO):
-                self.numbers.update(map(as_address, _NUMBER_LINES.findall(text)))
-                self.numbers.discard(None)
+        """The numbers *texts*, each one once, spell anywhere in them
+        (`_spelled_in`), searched joined a chunk at a time."""
+        for text in _joined(texts):
+            if _may_spell(text):
+                self.numbers.update(_spelled_in(text))
 
     def _read_ints(self, flat: Any, only: bool) -> None:
         """The ints of *flat* that could be an id(); with *only*, *flat*
