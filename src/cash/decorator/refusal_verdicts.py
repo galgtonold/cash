@@ -5,8 +5,10 @@ arguments in a way a hit cannot replay: such a call is never stored
 A call that was refused for that reason leaves a verdict, kept in the
 process and beside the cache (`StoredKeyRecord.note_refused`), under a key
 made of what is known before the cache key is built: the function's own
-code digest, the digests of the helpers its analysis walked and of the
-cached functions it calls, how it is checked (``purity=``), and the types of
+code digest, the digests of the helpers holding a finding that can change
+state (`_code_part`; every walked helper's when no finding is a write in
+place) and of the cached functions it calls, how it is checked
+(``purity=``), and the types of
 the arguments it is handed, with the values of flags and strings
 (``copy=True`` and ``inplace=False`` take another path through the same
 code), what a closure captures (`_captured_part`: a closure capturing
@@ -21,8 +23,13 @@ other -- every `REPROBE_EVERY`-th time it is used, counted across processes,
 so what its key does not name (a library the body calls, a helper reached
 some way the analysis did not walk, an argument's contents) is seen within
 that many calls; a probe that stores, or refuses for another reason, drops
-the verdict. Any change to the function's own code or a walked helper's
-names another verdict key at once.
+the verdict. A change to the function's own code, to a helper holding such
+a finding, or a helper that gains one, names another verdict key at once;
+an edit to a helper that only computes does not (a library's ``_fit``
+reaches hundreds, and each commit touching one cost a full key build).
+The warnings the analysis gives are shown before a verdict is looked up,
+from the code as it is now; a verdict replays only those its refused call
+gave while keyed and run.
 
 The first call of a process uses the verdict too: a script calling such a
 function once per run would otherwise pay the full key build every run, and
@@ -164,10 +171,22 @@ def _closure_part(func: Any, depth: int = 0) -> str | None:
 
 
 def _code_part(func: Any, report: PurityReport | None) -> str:
-    """The function's own code digest and those of what its analysis walked."""
+    """The function's own code digest and those of the helpers holding a
+    finding that can change state (`PurityReport.state_changing_helpers`):
+    what the refusal rests on. A helper that only computes, edited, keeps
+    the verdict; one that starts to change state holds a finding, and names
+    another key. When no finding is a write in place (the change was made
+    where the analysis saw none: compiled code, a call by a run-time name)
+    or a finding's place is not a walked helper, every walked helper's
+    digest is in the key."""
     parts = [f"own={hash_callable_source(func)}"]
     if report is not None:
-        parts.extend(f"helper:{q}={d}" for q, d in sorted(report.helper_source_hashes.items()))
+        hashes = report.helper_source_hashes
+        changing = report.state_changing_helpers
+        if report.writes_in_place and all(q in hashes for q in changing):
+            parts.extend(f"changes:{q}={hashes[q]}" for q in sorted(changing))
+        else:
+            parts.extend(f"helper:{q}={d}" for q, d in sorted(hashes.items()))
         for ref in report.cached_callees:
             callee = ref()
             parts.append(f"cached={hash_callable_source(callee) if callee is not None else 'gone'}")
