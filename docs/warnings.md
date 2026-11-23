@@ -2418,7 +2418,7 @@ reference finds nothing, and the `id()` matches nothing. So cash did not
 store the statement. The message names the variable and says which of the
 two it holds. Lists, tuples, dicts, sets and deques (a subclass's items
 and its attributes, a named tuple's fields), integer and structured NumPy
-arrays, pandas frames, series and indexes, `array.array`, a
+arrays, pandas frames, series, indexes and arrays, `array.array`, a
 `functools.partial`'s arguments, the attributes of an `argparse.Namespace`,
 and the attributes and slots of your own objects and of a `SimpleNamespace`
 are looked through, and an `id()` turned into text counts as one, alone

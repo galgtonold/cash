@@ -661,9 +661,10 @@ def library_parts(value: Any) -> list[Any] | None:
     """What a library's object of a kind cash knows keeps the user's data
     in: a ``functools.partial``'s function and arguments, an
     ``argparse.Namespace``'s attributes, an ``array.array``'s numbers, a
-    structured NumPy array's fields, and a pandas frame's, series' or
-    index's columns as NumPy arrays. None for any other object: what it
-    holds is not known."""
+    structured NumPy array's fields, a pandas frame's, series' or index's
+    columns as NumPy arrays, and a pandas array's values
+    (`_pandas_array_parts`). None for any other object: what it holds is
+    not known."""
     if isinstance(value, functools.partial):
         keywords = functools.partial.keywords.__get__(value)
         parts = [functools.partial.func.__get__(value), *functools.partial.args.__get__(value)]
@@ -684,7 +685,28 @@ def library_parts(value: Any) -> list[Any] | None:
     pandas = sys.modules.get("pandas")
     if pandas is not None and isinstance(value, (pandas.DataFrame, pandas.Series, pandas.Index)):
         return _pandas_parts(pandas, value)
+    if pandas is not None and isinstance(value, pandas.api.extensions.ExtensionArray):
+        return _pandas_array_parts(value)
     return None
+
+
+def _pandas_array_parts(values: Any) -> list[Any]:
+    """A pandas array's values that could keep an ``id()`` or a weak
+    reference, as a column of it is read (`_pandas_column`): Arrow's text
+    by `_arrow_text_numbers`, other objects as a NumPy array of them, and
+    8-byte integers as one of those. ``pd.array(keys, dtype='string')`` on
+    its own, a call's result cash keeps apart from the frame made of it,
+    was read as nothing, and served with the old process's ``str(id(x))``."""
+    spelled = _arrow_text_numbers(values)
+    if spelled is not None:
+        return spelled
+    dtype = values.dtype
+    kind = attribute_or(dtype, "kind")
+    if kind == "O":
+        return [values.to_numpy(dtype=object)]
+    if kind in ("i", "u") and attribute_or(dtype, "itemsize") == 8:
+        return [values.to_numpy(dtype="int64", na_value=0)]
+    return []
 
 
 def _pandas_parts(pandas: Any, value: Any) -> list[Any]:
