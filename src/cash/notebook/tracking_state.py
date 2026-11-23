@@ -401,6 +401,13 @@ class TrackingState:
     # W: StatementLineageBuilder. R: StatementLineageBuilder, VirtualLineage.
     no_cache_values: dict[str, dict[str, str]] = field(default_factory=dict)
 
+    # Source hashes of the statements whose last run bound a value holding
+    # the id() of an object the notebook holds, keyed by that value
+    # (``StatementProcessor._id_held_outputs``): only a run tells what it
+    # spells, so a plan of the cell (``plan_cell_run``) never skips one.
+    # W: StatementProcessor. R: NotebookSimulator.
+    id_keyed_statements: set[str] = field(default_factory=set)
+
     # Variable -> (the lineage a statement that may have changed it in place
     # gave it, seconds of the change check that gave up on it) when that
     # check ran out of its budget (`value_hash.is_costly`): it counts as

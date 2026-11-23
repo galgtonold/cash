@@ -143,4 +143,28 @@ def test_the_check_finds_the_spelling_anywhere_in_a_text(text, spelled):
 def test_a_number_too_short_for_an_address_is_not_read():
     """Seven digits is the shortest spelling read (`_LOWEST_ADDRESS` has
     seven): a six-digit run is no address, inside a text or alone."""
-    assert identity_holders._spelled_in("a123456b c1234567d 0X1234567") == {1234567, 0x1234567}
+    found = identity_holders._spelled_in("a123456b c1234567d 0X1234567")
+    assert {1234567, 0x1234567} <= found and 123456 not in found
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["v2{d}", "{d}7", "9{d}1", "{h}ff", "<{h}abc0>"],
+)
+def test_an_address_glued_to_other_digits_is_read(text):
+    """An address of 14 decimal digits (a heap below the 15-digit mmap
+    range) glued to other digits is a run of at most 15, read only as one
+    number before; hexadecimal digits glued after ``hex(id(x))`` made a
+    run read as one number too. Read inside `reading_every_spelling`, as
+    the outputs of a statement reading ``id`` are."""
+    address = 94_123_456_789_008
+    assert address % 8 == 0 and len(str(address)) == 14
+    with identity_holders.reading_every_spelling():
+        assert address in identity_holders._spelled_in(text.format(d=address, h=hex(address)))
+
+
+def test_a_hash_after_0x_is_not_read_by_its_starts():
+    """``0x`` and 64 hexadecimal digits is a hash, not an address with
+    digits glued after it: none of its starts is read."""
+    with identity_holders.reading_every_spelling():
+        assert identity_holders._spelled_in("0x" + "7f" * 32) == set()

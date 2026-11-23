@@ -67,6 +67,7 @@ __all__ = [
     "callee_mutated_globals",
     "callee_watched_defaults",
     "callee_watched_globals",
+    "code_loads",
     "functions_reached_in",
     "changes_its_closure",
     "holds_a_writer",
@@ -179,6 +180,11 @@ FOREIGN_GLOBALS = "<globals of another module>"
 #: ``code object -> _code_names(code)``, so a call does not disassemble its
 #: callee on every invocation.
 _CODE_NAMES: LruMemo[Any, frozenset[str]] = LruMemo(CODE_OBJECTS)
+
+
+def code_loads(code: _types.CodeType) -> frozenset[str]:
+    """The global names *code* and the code nested in it load (`_code_names`)."""
+    return _code_names(code)
 
 
 def functions_reached_in(globals_dict: dict, fn) -> list:
@@ -2298,6 +2304,10 @@ class CallKeys:
         # variable doing its job, not something to explain. Only the first
         # call of each run is compared, against the first call of the last.
         self._keyed_this_run: set = set()
+
+    def context(self) -> CacheKeyContext:
+        """The key context of the statement under way."""
+        return self._ctx_provider()
 
     def begin_statement(self) -> None:
         """A new statement run: each site's first call is compared again."""

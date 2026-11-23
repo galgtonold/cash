@@ -90,7 +90,12 @@ from cash.notebook.statement.expression_memo import ExpressionMemo
 from cash.notebook.statement.file_deps import StatementFileDeps
 from cash.notebook.statement.freshness import CacheFreshnessChecker
 from cash.notebook.statement.hit import CacheHitServer
-from cash.notebook.statement.identity_holders import IdentityHeld
+from cash.notebook.statement.identity_holders import (
+    ID_KIND,
+    IdentityHeld,
+    identity_held_reason,
+    reading_every_spelling,
+)
 from cash.notebook.statement.imports import (
     import_bindings_hold,
     import_needs_reexecution,
@@ -197,6 +202,7 @@ from ..callee_reach import (
     library_streams_read,
     module_globals,
     module_state_writes,
+    reads_a_builtin,
     rebound_modules,
 )
 from ..held_functions import close_walk_share, drop_shared_walks, walks_shared
@@ -426,6 +432,11 @@ def _holds_one_of(value: Any, ids: set[int]) -> bool:
 def share_check_budget(cost: float) -> float:
     """Seconds the share check of a statement that took *cost* may take."""
     return max(SHARE_CHECK_FLOOR_S, SHARE_CHECK_FACTOR * cost)
+
+
+#: The builtins whose result can spell an object's address: ``id(x)``, and
+#: ``repr(x)`` of an object without a ``__repr__`` of its own.
+_ID_SPELLERS = frozenset({"id", "repr"})
 
 
 def store_share_budget(cost: float, persist: bool) -> float:
@@ -944,6 +955,11 @@ class StatementProcessor:
         self._restored_scalar_values: set[str] = set()
         #: Statements already warned NOTEBOOK-IDENTITY-HELD about.
         self._identity_held_warned: set[str] = set()
+        #: Source hashes of the statements whose outputs the share check
+        #: found holding an id() though their code reads no `_ID_SPELLERS`
+        #: (a default ``repr`` in an f-string): looked through before their
+        #: lineage from their next run on (`_id_held_outputs`).
+        self._spells_ids: set[str] = set()
         #: Statements already told about NOTEBOOK-ANALYSIS-BUDGET.
         self._past_budget_told: set[str] = set()
         #: Statements already told about NOTEBOOK-ITEMS-UNREAD for a draw.
@@ -2404,6 +2420,52 @@ class StatementProcessor:
             keyed |= frozenset(run.outputs)
         run.value_keyed_outputs = keyed
         return keyed
+
+    def _id_held_outputs(self, run: StatementRun, cost: float) -> frozenset[str]:
+        """The outputs of *run* that hold the ``id()`` of an object the
+        notebook holds (`identity_held_reason`), to be keyed by their value.
+
+        Such a value is not stored, and runs again; but its lineage named
+        only its code and inputs, which stay the same when the object it
+        points at is a new one (restored, or after a restart). What a later
+        statement or call built from it was then served by that lineage,
+        spelling the old address where plain Python spells the new one:
+        ``df = make_frame(keys)`` below ``keys = [... str(id(p.child))]``.
+        Keyed by its value, a new address is a new lineage, and an equal
+        value keeps what is built on it served.
+
+        Asked of a statement whose code, or a function of the user's it
+        calls, reads ``id`` or ``repr`` (`_ID_SPELLERS`), stored or not: one
+        priced out of the store, or refused for another reason, is never
+        walked by the share check, and its readers are served by its lineage
+        all the same. Not of any other: the walk reads every text of the
+        value, 0.3 s for a frame of a million texts, after a statement that
+        took a millisecond. One the share check later finds holding an id()
+        all the same is asked from its next run on (`_spells_ids`). The
+        answers are kept for the share check (`run.identity_verdicts`),
+        which then does not walk the same values again. Within the share
+        check's budget for a statement that took *cost*, as there."""
+        run.identity_verdicts = {}
+        if not run.outputs or (
+            run.source_hash not in self._spells_ids and not reads_a_builtin(run.code, self.shell.user_ns, _ID_SPELLERS)
+        ):
+            return frozenset()
+        user_ns = self.shell.user_ns
+        restored_into = run.metrics.get("stored_in_place") or ()
+        held: set[str] = set()
+        try:
+            with walk_budget(store_share_budget(cost, run.force_persist)), reading_every_spelling():
+                for name in sorted(run.outputs):
+                    value = user_ns.get(name)
+                    if value is None or self._kernel_object(value):
+                        continue
+                    reason = identity_held_reason(name, value, user_ns, weak_holders=name not in restored_into)
+                    run.identity_verdicts[name] = (value, reason)
+                    if isinstance(reason, IdentityHeld) and reason.kind == ID_KIND:
+                        held.add(name)
+        except WalkBudgetExceeded:
+            run.identity_verdicts = {}
+        return frozenset(held)
 
     def _note_refused_entry(self, run: StatementRun, metadata: Any, cached_data: Any) -> None:
         """What `_changed_from_refused_entry` compares with: the entry's digests
@@ -4044,7 +4106,24 @@ class StatementProcessor:
         run.entry_sources = {name: sources[name] for name in run.inputs & run.outputs if name in sources}
         # Before it records its own: an edge it makes moves no input on.
         before = self.lineage_builder.edges_now(self.tracking_state, run.inputs | run.outputs)
+        no_cache = (
+            (run.annotation is not None and run.annotation.no_cache)
+            or run.value_varies
+            or run.past_budget
+            or inputs_moved
+            or self._binds_a_stream(run)
+        )
         with self._keeping_outputs(run, execution.echo, execution.cost or 0.0):
+            # Before their lineage: an output holding an id() is keyed by its
+            # value (`_id_held_outputs`).
+            value_keyed = self._value_keyed(run)
+            id_held = frozenset() if no_cache else self._id_held_outputs(run, execution.cost or 0.0)
+            if id_held:
+                value_keyed |= id_held
+                run.value_keyed_outputs = value_keyed
+                self.tracking_state.id_keyed_statements.add(run.source_hash)
+            else:
+                self.tracking_state.id_keyed_statements.discard(run.source_hash)
             # What it links, from its outputs' edges dropped to those found
             # now, is kept for the simulation (`note_share_edges`).
             with logging_edges() as linked:
@@ -4059,12 +4138,8 @@ class StatementProcessor:
                     tree=run.tree,
                     accessed_remote=execution.accessed_remote,
                     probes=execution.probes,
-                    no_cache=(run.annotation is not None and run.annotation.no_cache)
-                    or run.value_varies
-                    or run.past_budget
-                    or inputs_moved
-                    or self._binds_a_stream(run),
-                    value_keyed=self._value_keyed(run),
+                    no_cache=no_cache,
+                    value_keyed=value_keyed,
                     drawn=frozenset(run.carriers_advanced or ()) - run.outputs,
                     occurrence_index=run.occurrence_index,
                     replay_bumps=False,
@@ -4342,6 +4417,7 @@ class StatementProcessor:
                     values_passed=values_passed,
                     shared_owners=owners,
                     homes=homes,
+                    identity_known=None if run.memo_changes else run.identity_verdicts,
                 )
                 if reason is not None and holders is not None and values_passed:
                     # Not when a value refused on its own: the retry checks
@@ -4429,6 +4505,8 @@ class StatementProcessor:
         self._note_share_refusal(run, reason)
         if isinstance(reason, IdentityHeld):
             self._warn_identity_held(run, reason)
+            if reason.kind == ID_KIND and reason.name not in run.value_keyed_outputs:
+                self._spells_ids.add(run.source_hash)
         if reason is not None:
             run.skip_cache = True
             run.metrics.setdefault("uncacheable_reasons", []).append(reason)

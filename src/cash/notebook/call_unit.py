@@ -81,6 +81,7 @@ from cash.notebook.call_key import (
     callee_mutated_globals,
     callee_watched_defaults,
     callee_watched_globals,
+    code_loads,
     functions_reached_in,
     global_digests,
     holds_a_stream,
@@ -495,6 +496,10 @@ def _ran_unseen_writes(call: Any, unit: Any) -> bool:
         )
     except Exception:  # noqa: BLE001 - not read is not stored
         return True
+
+
+#: The builtins whose result can spell an object's address (`CallUnit._spells_a_held_id`).
+_ID_SPELLERS = frozenset({"id", "repr"})
 
 
 def _decide_site(run: _SiteRun, site: CallSite) -> None:
@@ -1333,16 +1338,51 @@ class CallUnit:
         it called held (`helper_memos.used`), gets what the memos on named
         classes the result reaches hold; *before* is the memos' miss counts
         before the call (`helper_memos.misses_before`)."""
-        return self._entries.storable(
-            result,
-            call.args,
-            call.kwargs,
-            call.fn,
-            result_held,
-            ran=attribute_or(unit, "codes", None),
-            memos=class_memos,
-            before=before,
-        ) and self._entries.restore_pays(result, elapsed)
+        return (
+            self._entries.storable(
+                result,
+                call.args,
+                call.kwargs,
+                call.fn,
+                result_held,
+                ran=attribute_or(unit, "codes", None),
+                memos=class_memos,
+                before=before,
+            )
+            and self._entries.restore_pays(result, elapsed)
+            and not self._spells_a_held_id(call, result, unit)
+        )
+
+    def _spells_a_held_id(self, call: _Call, result: Any, unit: Any) -> bool:
+        """Whether *result* holds the ``id()`` of an object the notebook
+        holds (`identity_held_reason`), asked when the code the call ran
+        reads ``id`` or ``repr`` (`_ID_SPELLERS`). Kept, a hit after a
+        restart, or once that object is a new one, hands back the old
+        address where plain Python spells the new one: ``make_keys(p.child)``
+        keyed on ``p``'s lineage, which stays the same. A statement holding
+        such a value is not stored for the same reason."""
+        # Here, not at the top: the statement package imports this module.
+        from cash.notebook.statement.identity_holders import (
+            ID_KIND,
+            IdentityHeld,
+            identity_held_reason,
+            reading_every_spelling,
+        )
+
+        try:
+            codes = attribute_or(unit, "codes", None)
+            if not codes:
+                namespace = attribute_or(call.fn, "__globals__", None)
+                fns = functions_reached_in(namespace, call.fn) if isinstance(namespace, dict) else [call.fn]
+                codes = [code for fn in fns if (code := attribute_or(fn, "__code__", None)) is not None]
+            if all(_ID_SPELLERS.isdisjoint(code_loads(code)) for code in codes):
+                return False
+            user_ns = attribute_or(self._keys.context(), "user_ns", None) or {}
+            with reading_every_spelling():
+                reason = identity_held_reason("<intercepted call>", result, user_ns, weak_holders=False)
+            return isinstance(reason, IdentityHeld) and reason.kind == ID_KIND
+        except Exception:  # noqa: BLE001 - not read is not stored
+            return True
 
     def _changed_a_default(self, call: _Call, defaults: tuple, before: list) -> bool:
         """Did the call change one of *defaults* (`callee_watched_defaults`,

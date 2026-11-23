@@ -33,6 +33,7 @@ from ...source_norm import exact_source_digest
 from ...tracking.function_tracker import FunctionTracker, is_local_module
 from .._protocols import CashInstanceProtocol, ShellProtocol
 from .._trace import is_tracing, trace_event
+from ..cache_key import statement_source_hash
 from ..cache_status import CacheStatus
 from ..consumables import is_write_stream
 from ..lineage_store import LineageWatch
@@ -707,9 +708,14 @@ class NotebookSimulator:
                 if name not in self.shell.user_ns or self.tracking_state.variable_lineage.get(name) != lineage
             }
             restored_by_index: dict[int, dict] = {}
-            run: list[int] = []
+            # What a statement whose value holds an id() spells is known only
+            # by running it: the object may be another one now.
+            keyed = self.tracking_state.id_keyed_statements
+            run: list[int] = [
+                i for i, entry in enumerate(trace) if keyed and statement_source_hash(entry.stmt_code) in keyed
+            ]
             if broken:
-                run, restored, _ = classifier.backward_scan_pass(
+                scanned, restored, _ = classifier.backward_scan_pass(
                     sim,
                     ClassificationResult(
                         broken_vars=broken,
@@ -718,6 +724,7 @@ class NotebookSimulator:
                     ),
                     with_outputs=True,
                 )
+                run = sorted(set(run) | set(scanned))
                 for info in restored:
                     position = info.get("position")
                     if isinstance(position, int):
