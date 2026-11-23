@@ -58,7 +58,7 @@ import struct
 import sys
 import types
 import weakref
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from itertools import accumulate, chain, compress, repeat
 from typing import Any
 
@@ -785,6 +785,48 @@ def library_parts(value: Any) -> list[Any] | None:
     if pandas is not None and isinstance(value, pandas.api.extensions.ExtensionArray):
         return _pandas_array_parts(value)
     return None
+
+
+def _pandas_object(kind: type) -> bool:
+    """Whether *kind* is a pandas frame or series class (a user's subclass
+    of one, read attribute by attribute, `_state_held`)."""
+    pandas = sys.modules.get("pandas")
+    return pandas is not None and issubclass(kind, (pandas.DataFrame, pandas.Series))
+
+
+def _state_held(kind: type, state: dict[str, Any]) -> Iterable[Any]:
+    """The values of *state*, an object of *kind*'s own ``__dict__``, that
+    could keep an ``id()`` or a weak reference of the user's.
+
+    Not pandas 2's ``_is_copy`` of a frame or series subclass (``df[df.a >
+    1]`` on a ``GeoDataFrame``): a weak reference to the frame it was taken
+    from, which only ``NDFrame._check_setitem_copy`` reads, to warn
+    (``SettingWithCopyWarning``) on a later write to the slice; no value of
+    either frame depends on it. Pickling drops it (``NDFrame.__getstate__``),
+    as it does for a plain ``DataFrame``, whose ``_is_copy`` is never read
+    here (`library_parts`). Kept, and so refused, while
+    ``mode.chained_assignment`` is ``"raise"`` without copy-on-write: then a
+    write to the slice raises ``SettingWithCopyError`` in plain Python and
+    would not on a hit. pandas 3 has no ``_is_copy``. A series' ``_cacher``
+    is kept: through it a write to the series changes its parent frame
+    (``DataFrame._maybe_cache_changed``)."""
+    held = state.get("_is_copy")
+    if type(held) is not weakref.ReferenceType or not _pandas_object(kind) or _copy_check_raises():
+        return state.values()
+    return [value for key, value in state.items() if key != "_is_copy"]
+
+
+def _copy_check_raises() -> bool:
+    """Whether pandas' ``_check_setitem_copy`` raises: ``mode.chained_assignment``
+    is ``"raise"`` and copy-on-write is off (``True`` or ``"warn"`` returns
+    before the check). True when it cannot be read."""
+    pandas = sys.modules["pandas"]
+    try:
+        if pandas.get_option("mode.copy_on_write") is not False:
+            return False
+        return pandas.get_option("mode.chained_assignment") == "raise"
+    except Exception:  # noqa: BLE001 - an option this pandas does not have: assume it raises
+        return True
 
 
 def _pandas_array_parts(values: Any) -> list[Any]:
@@ -1894,6 +1936,7 @@ class _Walk:
                         (*_REFERENCES, *_WEAK_CONTAINERS, weakref.finalize, *_BY_REFERENCE, *_BUILTIN_CONTAINERS),
                     )
                     and not _numpy_array(kind)
+                    and not _pandas_object(kind)
                     and (issubclass(kind, types.SimpleNamespace) or self._users(kind))
                 )
             self.bulk_kinds[kind] = found
@@ -2042,7 +2085,7 @@ class _Walk:
             items = []
             state = own_dict(item)
             if state:
-                items.extend(state.values())
+                items.extend(_state_held(kind, state))
             for reader in slot_readers(kind):
                 try:
                     items.append(reader.__get__(item, kind))
