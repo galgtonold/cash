@@ -518,6 +518,7 @@ class Shadow:
             unit.lib_first,
             {**unit.receivers, **unit.lib_receivers},
             changed_kept=False,
+            late=unit.lib_late,
         )
         found = [list(item) for item in found or () if item[1] != nbn]
         if not found:

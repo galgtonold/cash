@@ -2521,6 +2521,7 @@ class CallRunner:
                     unit.lib_keys,
                     unit.lib_first,
                     {**unit.receivers, **unit.lib_receivers},
+                    late=unit.lib_late,
                 )
                 if unit is not None
                 else (None, None)

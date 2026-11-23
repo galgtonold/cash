@@ -148,7 +148,7 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
       keeps its state as the statement found it, and is served only while
       it holds the same, however another cell set it
       (`plt.rcParams["font.size"] = 7`).
-    <!-- claim: cash/notebook/shadow/__init__.py:Shadow._library_item @c9b0b726, cash/notebook/shadow/__init__.py:Shadow._library_now @3296947c -->
+    <!-- claim: cash/notebook/shadow/__init__.py:Shadow._library_item @beac3c5b, cash/notebook/shadow/__init__.py:Shadow._library_now @3296947c -->
     - **A library setting its run read**, on Python 3.12 and newer:
       `sklearn.set_config(...)` or a `sklearn.config_context(...)` around
       it, `pd.set_option(...)`, `np.seterr(...)`, a `ContextVar`, an

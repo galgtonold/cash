@@ -105,7 +105,7 @@ import re
 import sys
 import threading
 import types
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping
 from contextvars import ContextVar
 from typing import Any
 
@@ -120,6 +120,7 @@ __all__ = [
     "keyed_argument",
     "note_served",
     "reaches_library",
+    "read_before",
 ]
 
 _MISSING = object()
@@ -1246,18 +1247,43 @@ def _wants(
 
 def _served_place(item: tuple) -> tuple | None:
     """Where an item an entry served inside the call reads, as `build`
-    tells containers apart: the object it ends on, whatever it is called."""
+    tells containers apart: the object it ends on, whatever it is called;
+    an attribute of a per-thread holder by its name (``(module, names)``),
+    as `_targets` names it."""
     kind, module, dotted, _fp = item
     if kind not in ("v", "k", "a"):
         return None
     chain, _sep, keys = dotted.partition(_KEYS)
+    names = tuple(chain.split("."))
     try:
-        v = _resolve(module, tuple(chain.split(".")))
+        v = _resolve(module, names)
     except Exception:  # noqa: BLE001 - not there now: kept as named
         return None
-    if type(v) not in (dict, list, set) or _per_thread(module, chain):
+    if _per_thread(module, chain):
+        return None if keys else (module, names)
+    if type(v) not in (dict, list, set):
         return None
     return ("obj", id(v), keys) if keys else ("obj", id(v))
+
+
+def read_before(first: Mapping[tuple, Any], item: tuple) -> bool:
+    """Had the call read the place *item* (of an entry served inside it
+    now) reads before, by *first* (`first_reads`)? Then the entry was
+    served under what the call found there or set there itself, and the
+    call is checked on what it read first (`build`)."""
+    kind, module, dotted, _fp = item
+    if kind not in ("v", "k", "a"):
+        return False
+    if (kind, module, dotted) in first:
+        return True
+    if kind in ("v", "a") and ("a" if kind == "v" else "v", module, dotted) in first:
+        # A per-thread attribute: first read as the default or as absent.
+        return True
+    try:
+        place = _served_place(item)
+    except Exception:  # noqa: BLE001 - not placed: kept
+        return False
+    return place is not None and place[0] == "obj" and (kind, *place) in first
 
 
 def _targets(
@@ -1577,6 +1603,7 @@ def build(
     receivers: Mapping[types.CodeType, type] | None = None,
     *,
     changed_kept: bool = True,
+    late: Collection[tuple] = (),
 ) -> tuple[list[tuple] | None, str | None]:
     """The items the code a body ran reads (*codes*: code -> ``(its
     globals, whether it is the user's)``), with those of the entries
@@ -1589,7 +1616,12 @@ def build(
     place the call itself changed as it ran is left out, not checked on
     what it first read: a notebook statement's, where the first use of a
     library in a process (a registry its lazy imports fill, a flag it works
-    out once) ran the statement again on its next run."""
+    out once) ran the statement again on its next run. *late*: the items of
+    *served* an entry was served under after the call had read their place
+    itself (`read_before`): where the call is checked on what it read there
+    first, the served value (what the call's own code set there, as
+    ``_fit_context``'s ``config_context`` does around a cached method) is
+    no input of the call's."""
     items: set[tuple] = set()
     wants, specials, stores, latched = _wants(codes, keys or {}, cells)
     first = first or {}
@@ -1700,8 +1732,13 @@ def build(
         item = tuple(item)
         same = _served_place(item)
         if same is not None:
-            if places.get(same, _MISSING) == item[3]:
+            held_fp = places.get(same, _MISSING)
+            if held_fp == item[3]:
                 # The same object under another name, read the same.
+                continue
+            if held_fp is not _MISSING and held_fp is not None and item in late:
+                # Served after the call read the place: under what the call
+                # itself set there. Checked on what it read first.
                 continue
             places.setdefault(same, item[3])
         items.add(item)

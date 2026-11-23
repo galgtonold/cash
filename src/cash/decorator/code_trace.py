@@ -223,6 +223,7 @@ def _unit_class() -> type:
             "lib_first",
             "lib_items",
             "lib_keys",
+            "lib_late",
             "lib_receivers",
             "lib_seconds",
             "sites",
@@ -250,6 +251,9 @@ def _unit_class() -> type:
             #: and the items of the entries served inside it (`library_reads`).
             self.lib_codes: dict[types.CodeType, dict] = {}
             self.lib_items: list[tuple] = []
+            #: The items of `lib_items` an entry was served under after the
+            #: call had read their place itself (`library_reads.read_before`).
+            self.lib_late: set[tuple] = set()
             #: A library's code that reads one settings entry by a key it is
             #: handed (`library_reads.KEYED_READERS`) -> the keys its starts
             #: read (None for a start whose key could not be read).
@@ -313,6 +317,7 @@ def _unit_class() -> type:
             for place, fp in inner.lib_first.items():
                 self.lib_first.setdefault(place, fp)
             self.lib_items.extend(inner.lib_items)
+            self.lib_late.update(getattr(inner, "lib_late", ()))
             self.lib_seconds += inner.lib_seconds
 
     return TraceUnit
@@ -1325,8 +1330,16 @@ def note_library_items(items: list[tuple]) -> None:
     rec = _RECORDER
     if rec is None:
         return
+    from .library_reads import read_before
+
     for unit in rec.lib_units():
         unit.lib_items.extend(items)
+        # Served after the call read the place itself: what the call's own
+        # code set there (a ``config_context`` it entered), not what it
+        # entered with (`library_reads.build`).
+        first = unit.lib_first
+        if first:
+            unit.lib_late.update(item for item in items if read_before(first, item))
 
 
 def library_codes(unit: Any) -> dict[types.CodeType, tuple[dict, bool]]:
