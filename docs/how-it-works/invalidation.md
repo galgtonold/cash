@@ -111,11 +111,13 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
       name finds it from anywhere, so `logging.getLogger("app").setLevel(10)`,
       in a cell or in a function, changes it without naming a variable. On
       Python 3.12 or newer, so is one it finds as it runs: one a call made
-      by its code, or by a function of yours, returns
-      (`logging.getLogger("app").level`), and one its code reads through a
+      by its code, or by a function of yours, returns, alone or inside a
+      container or plain object (`logging.getLogger("app").level`,
+      `lib.settings()["log"].level`), and one its code reads through a
       module: an attribute of the module (`logging.root`), of a class or an
-      object it holds, or an item of a dict, list or tuple held there
-      (`logging.Logger.manager.loggerDict`). Where code decides what such
+      object it holds, or what a dict, list or tuple held there holds, at
+      any depth (`logging.Logger.manager.loggerDict`,
+      `mod.CFG["a"]["log"].level`). Where code decides what such
       an attribute is, it is followed: a property, method or
       `__getattr__` of yours reading an object or class a module holds has
       what that object or class holds looked through, and a library's

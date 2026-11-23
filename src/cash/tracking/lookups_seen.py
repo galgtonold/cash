@@ -512,43 +512,24 @@ def _arm_returns_of(value: Any) -> None:
 
 def _note_value(value: Any, read: str) -> None:
     """Note *value*, which the statement reads as *read*, when it stands by
-    reference, or what a dict, list or tuple *value* holds that does, one
-    level down. An item is reduced only when its class, read in C, may
-    pickle by reference and is not the user's (`_may_note`): no code of the
-    user's runs. One of more than `ITEM_TYPES_AT` items is not looked
-    through: the statement is never served (`_too_big`)."""
+    reference, or what a dict, list, tuple or set *value* holds that does
+    (``mod.CFG["a"]["log"]``, ``mod.ITEMS[0].log``), at any depth, as
+    `_note_within` looks through it. An item is reduced only when its
+    class, read in C, may pickle by reference and is not the user's
+    (`_may_note`): no code of the user's runs. Past `ITEM_TYPES_AT` items
+    in all, the statement is never served (`_too_big`)."""
     kind = type(value)
-    if kind is dict:
-        items = value.values()
-    elif kind is list or kind is tuple:
-        items = value
-    else:
+    if kind not in _CONTAINERS:
         if kind in _SETTINGS_KINDS:
             _note_settings(value)
-        elif _may_note(kind):
-            _note_object(value)
-        return
+            return
+        if (_may_note(kind) and _note_object(value)) or _container_base(kind) is None:
+            return
     watch = _ACTIVE
-    if watch is None or not items:
+    if watch is None or id(value) in watch.held_read:
         return
-    from ..analysis.handed_callables import ITEM_TYPES_AT
-
-    if len(items) > ITEM_TYPES_AT:
-        _too_big(watch, read)
-        return
-    # Which classes the items are, read in C: nothing of theirs runs.
-    met = [kind for kind in set(map(type, items)) if _may_note(kind)]
-    if not met:
-        return
-    plain = _PLAIN_ITEMS
-    for item in list(items):
-        if type(item) not in met or plain.get(id(item)) is item:
-            continue
-        if not _note_item(watch, item):
-            try:
-                plain[id(item)] = item
-            except TypeError:  # one that takes no weak reference: reduced each time
-                pass
+    watch.held_read[id(value)] = value
+    _note_within(watch, value, read)
 
 
 #: The settings a library keeps in a mapping of its own class, read by
@@ -960,51 +941,206 @@ def _note_held(watch: _Watch, obj: Any, read: str) -> None:
     """Note each object pickled by reference that *obj*, read as *read*,
     holds, as code of its class the user wrote reads what it holds (a
     property returning ``self._log``, a method reading
-    ``self.cfg["log"].level``, ``self.LOG.level`` of its class): through
-    its own attributes and its class's, those of the objects of the user's
-    classes and of ``SimpleNamespace`` it holds, and the dicts, lists,
-    tuples and sets in them, reading each with no code of theirs run.
-    Past `ITEM_TYPES_AT` items in all, the statement is never served
-    (`_too_big`)."""
+    ``self.cfg["log"].level``, ``self.LOG.level`` of its class): its own
+    attributes and its class's, looked through as `_note_within` says."""
     if id(obj) in watch.held_read:
         return
     watch.held_read[id(obj)] = obj
+    _note_within(watch, obj, read)
+
+
+def _note_within(watch: _Watch, root: Any, read: str) -> bool:
+    """Note each object pickled by reference *root*, read as *read*, holds
+    at any depth; whether one was. Looked through (`_looked_through`): the
+    items of dicts (their keys too), lists, tuples, sets and deques, and of
+    their subclasses; the attributes and slots of ``SimpleNamespace``, of
+    objects of the user's classes, and of a library's objects pickled by
+    what they hold (``object``'s own reduce: a dataclass), each with no
+    code of theirs run; and the class's attributes of an object of the
+    user's. A library's object that pickles itself its own way (a frame,
+    a figure) is not looked into. Past
+    `ITEM_TYPES_AT` items in all, the statement is never served
+    (`_too_big`); a container holding only scalars and such containers is
+    read at once (`_pure_data`) and not counted. The time it takes counts
+    toward the noting budget (`_note_object`)."""
     from ..analysis.handed_callables import ITEM_TYPES_AT
 
     left = ITEM_TYPES_AT
-    seen = {id(obj)}
+    seen = {id(root)}
     classes: set[type] = set()
-    stack = [obj]
+    stack = [root]
+    plain = _PLAIN_ITEMS
+    found = False
+    started, before = thread_time(), watch.noting
+    try:
+        while stack:
+            held = stack.pop()
+            if type(held) in _CONTAINERS and _pure_data(held):
+                # Numbers, strings and containers of them, read in C:
+                # nothing in them stands by reference.
+                continue
+            items = _held_items(held, classes)
+            left -= len(items)
+            if left < 0:
+                _too_big(watch, read)
+                return found
+            # Which classes the items are, read in C: nothing of theirs runs.
+            if set(map(type, items)) <= _SCALARS:
+                continue
+            for item in items:
+                kind = type(item)
+                if kind in _SCALARS or id(item) in seen:
+                    continue
+                seen.add(id(item))
+                if kind in _CONTAINERS:
+                    stack.append(item)
+                    continue
+                if kind in _SETTINGS_KINDS:
+                    _note_settings(item)
+                    found = True
+                    continue
+                if _may_note(kind) and plain.get(id(item)) is not item:
+                    if _note_item(watch, item):
+                        found = True
+                        continue
+                    try:
+                        plain[id(item)] = item
+                    except TypeError:  # one that takes no weak reference: reduced each time
+                        pass
+                if _looked_through(kind):
+                    stack.append(item)
+        return found
+    finally:
+        watch.noting = max(watch.noting, before + thread_time() - started)
+        if watch.noting > watch.budget and not watch.past_budget:
+            watch.past_budget = True
+            _unreadable()
+
+
+#: How many items `_pure_data` reads in all before it answers no: about
+#: 25 ms in C.
+PURE_DATA_ITEMS = 5_000_000
+
+
+def _pure_data(value: Any) -> bool:
+    """Is *value* exactly a dict, list, tuple, set or frozenset holding
+    only scalars (`_SCALARS`) and such containers, keys too, at any depth,
+    in at most `PURE_DATA_ITEMS` items in all (a dict's key and value count
+    two)? Read in C where the C extension is loaded (`cwatch.pure_data`),
+    which answers as `_pure_data_py` does."""
+    global _PURE_DATA_C
+    if _PURE_DATA_C is None:
+        from .._native import cwatch
+
+        _PURE_DATA_C = attribute_or(cwatch, "pure_data", False)
+    if _PURE_DATA_C is False:
+        return _pure_data_py(value, PURE_DATA_ITEMS)
+    return _PURE_DATA_C(value, PURE_DATA_ITEMS)
+
+
+_PURE_DATA_C: Any = None
+
+
+def _pure_data_py(value: Any, left: int) -> bool:
+    """`_pure_data`, read in Python, with *left* items to read."""
+    if type(value) not in _CONTAINERS:
+        return False
+    stack = [value]
     while stack:
-        items = _held_items(stack.pop(), classes)
+        held = stack.pop()
+        items = [*dict.keys(held), *dict.values(held)] if type(held) is dict else held
         left -= len(items)
         if left < 0:
-            _too_big(watch, read)
-            return
+            return False
         for item in items:
             kind = type(item)
-            if kind in _SCALARS or id(item) in seen:
+            if kind in _SCALARS:
                 continue
-            seen.add(id(item))
-            if kind in _CONTAINERS or kind is types.SimpleNamespace or (kind is not type and _is_users_class(kind)):
-                stack.append(item)
-            elif _may_note(kind):
-                _note_item(watch, item)
+            if kind not in _CONTAINERS:
+                return False
+            stack.append(item)
+    return True
+
+
+#: The classes whose instances hold their items as these do: read with
+#: their own methods (`_held_items`).
+_CONTAINER_BASES = (dict, list, tuple, set, frozenset, collections.deque)
+
+
+def _container_base(kind: type) -> type | None:
+    """The first of `_CONTAINER_BASES` *kind* is a subclass of, or None."""
+    for base in _CONTAINER_BASES:
+        if issubclass(kind, base):
+            return base
+    return None
+
+
+#: ``class -> whether `_note_within` looks through one`` (`_looked_through`).
+_LOOKED_THROUGH: weakref.WeakKeyDictionary[type, bool] = _weak.WeakKeyDictionary()
+_HEAPTYPE = 1 << 9
+
+
+def _looked_through(kind: type) -> bool:
+    """Does `_note_within` look through an object of *kind*: a container
+    or a subclass of one, a ``SimpleNamespace``, or a class defined in
+    Python, not a class or module, that is the user's or pickles what it
+    holds (`_pickles_its_attributes`)?"""
+    try:
+        return _LOOKED_THROUGH[kind]
+    except KeyError:
+        pass
+    except TypeError:  # a class whose metaclass makes it unhashable
+        return False
+    if kind in _CONTAINERS or kind is types.SimpleNamespace or _container_base(kind) is not None:
+        found = True
+    elif issubclass(kind, (type, types.ModuleType)) or not kind.__flags__ & _HEAPTYPE:
+        found = False
+    else:
+        found = _is_users_class(kind) or _pickles_its_attributes(kind)
+    _LOOKED_THROUGH[kind] = found
+    return found
+
+
+_OBJECTS_OWN = {name: _CLASS_DICT(object).get(name) for name in ("__reduce_ex__", "__reduce__", "__getstate__")}
+
+
+def _pickles_its_attributes(kind: type) -> bool:
+    """Does an object of *kind* pickle as ``object`` has it, by its
+    attributes and slots: no reduce or ``__getstate__`` of its own along its
+    MRO but ``object``'s, or the ``__getstate__`` a slotted dataclass is
+    given?"""
+    for name, objects in _OBJECTS_OWN.items():
+        held = _in_mro(kind, name)
+        if held is _MISSING or held is objects:
+            continue
+        if name == "__getstate__" and attribute_or(held, "__module__", None) == "dataclasses":
+            continue
+        return False
+    return True
 
 
 def _held_items(obj: Any, classes: set[type]) -> list[Any]:
-    """What *obj* holds, read with no code of its run: a container's items,
-    a class's own attributes along its MRO, an object's own attributes and
-    slots, and its class's when it is the user's and not in *classes*."""
+    """What *obj* holds, read with no code of its run: a container's items
+    (a dict's keys too, unless all scalars), a class's own attributes along
+    its MRO, an object's own attributes and slots, and its class's when it
+    is the user's and not in *classes*."""
     kind = type(obj)
     if kind is dict:
-        return list(obj.values())
+        return _mapping_items(obj)
     if kind in _CONTAINERS:
         return list(obj)
     if issubclass(kind, type):
         return _class_items(obj)
+    base = _container_base(kind)
+    if base is None:
+        items = []
+    elif base is dict:
+        items = _mapping_items(obj)
+    else:
+        items = list(base.__iter__(obj))
     own = own_dict(obj)
-    items = [] if own is None else list(own.values())
+    if own is not None:
+        items.extend(own.values())
     for base in mro_of(kind):
         for held in _CLASS_DICT(base).values():
             if type(held) is _MEMBER:
@@ -1016,6 +1152,16 @@ def _held_items(obj: Any, classes: set[type]) -> list[Any]:
         # What its methods read as ``self.LOG`` may be its class's.
         classes.add(kind)
         items.extend(_class_items(kind))
+    return items
+
+
+def _mapping_items(held: dict) -> list[Any]:
+    """A dict's values, and its keys unless all are scalars, read with
+    ``dict``'s own methods."""
+    items = list(dict.values(held))
+    keys = dict.keys(held)
+    if not set(map(type, keys)) <= _SCALARS:
+        items.extend(keys)
     return items
 
 
@@ -1360,21 +1506,30 @@ def _is_users(code: types.CodeType) -> bool:
 
 
 def _on_return(code: types.CodeType, offset: int, retval: Any, _type: type = type, _plain: frozenset = _PLAIN) -> Any:
-    """A callee armed returned *retval*: noted when it stands by reference.
-    No return is switched off, as the next value it returns may be one
-    (``random.choice``); a value of a class that cannot stand by reference
-    costs a set or dict lookup, and a plain one (`_PLAIN`) no call of this
-    function where the C extension filters them (`_return_callback`)."""
+    """A callee armed returned *retval*: noted when it stands by reference,
+    or what it holds that does when it is a container or an object
+    `_note_within` looks through (``lib.settings()["log"]``,
+    ``lib.settings().log``). No return is switched off, as the next value
+    it returns may be one (``random.choice``); a value of a class that
+    cannot stand by reference costs a set or dict lookup, and a scalar, or
+    a tuple, list or dict of them, no call of this function where the C
+    extension filters them (`_return_callback`)."""
     kind = _type(retval)
-    if kind in _plain or _ACTIVE is None:
+    if kind in _plain:
+        if kind in _SCALARS or _all_scalars(retval):
+            return None
+    elif not _may_note(kind) and not _looked_through(kind):
         return None
-    if not _may_note(kind) or _THREAD.busy or importing():
+    watch = _ACTIVE
+    if watch is None or _THREAD.busy or importing():
         # Found by a module's first import: the module's, set up once a
         # process as its registrations are (``process_registries``).
         return None
     _THREAD.busy = True
     try:
-        noted = _note_object(retval)
+        noted = kind not in _plain and _may_note(kind) and _note_object(retval)
+        if not noted and (kind in _plain or _looked_through(kind)):
+            noted = _note_within(watch, retval, f"what {code.co_qualname}() returns")
     except Exception:  # noqa: BLE001 - whatever reading it raises: never served
         _unreadable()
         return None
@@ -1383,6 +1538,14 @@ def _on_return(code: types.CodeType, offset: int, retval: Any, _type: type = typ
     if noted:
         _RETURNERS.add(code)
     return None
+
+
+def _all_scalars(value: Any) -> bool:
+    """Does *value*, a container of `_PLAIN`, hold only scalars, keys too?
+    Read in C."""
+    if type(value) is dict and not set(map(type, value.values())) <= _SCALARS:
+        return False
+    return set(map(type, value)) <= _SCALARS
 
 
 #: The code of a library's functions seen returning an object that stands

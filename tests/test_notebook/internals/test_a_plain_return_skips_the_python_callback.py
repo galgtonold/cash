@@ -6,8 +6,9 @@ value it returns may stand by reference (``random.choice`` over a list that
 holds a logger). In a simulation it returns millions of ints
 (``random.randint`` in the pytudes notebook, about 2.8 s of a 66 s run). The C
 extension's filter answers a value of exactly one of `lookups_seen._PLAIN`'s
-classes itself, and hands every other value, a subclass of a plain class
-included, to the Python callback with the same arguments.
+classes itself, a container only while it holds scalars alone, and hands
+every other value, a subclass of a plain class or a container holding a
+logger included, to the Python callback with the same arguments.
 """
 
 from __future__ import annotations
@@ -61,8 +62,28 @@ def test_the_filter_answers_each_plain_class_itself():
 @needs_filter
 @pytest.mark.parametrize(
     "value",
-    [MyInt(3), MyList([1]), logging.getLogger("cash_test_plain_return"), object(), sys],
-    ids=["an-int-subclass", "a-list-subclass", "a-logger", "an-object", "a-module"],
+    [
+        MyInt(3),
+        MyList([1]),
+        logging.getLogger("cash_test_plain_return"),
+        object(),
+        sys,
+        [1, logging.getLogger("cash_test_plain_return")],
+        {"log": logging.getLogger("cash_test_plain_return")},
+        (1, [2]),
+        {1, (2,)},
+    ],
+    ids=[
+        "an-int-subclass",
+        "a-list-subclass",
+        "a-logger",
+        "an-object",
+        "a-module",
+        "a-list-holding-a-logger",
+        "a-dict-holding-a-logger",
+        "a-tuple-holding-a-list",
+        "a-set-holding-a-tuple",
+    ],
 )
 def test_any_other_value_reaches_the_python_callback(value):
     slow = []

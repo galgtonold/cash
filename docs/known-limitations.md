@@ -674,7 +674,7 @@ a name bound through the namespace, `eval`, `exec` of a computed string and
 
 ### An object found by a lookup cash does not see
 
-<!-- claim: cash/tracking/lookups_seen.py:_note_object @417935ea, cash/tracking/lookups_seen.py:collecting @9163f1c2, cash/tracking/lookups_seen.py:_may_note @d506a15c, cash/tracking/lookups_seen.py:_note_globals @77198b83, cash/tracking/lookups_seen.py:_note_value @5444add6, cash/tracking/lookups_seen.py:_on_call @c61001a7, cash/tracking/lookups_seen.py:_on_start @182191e3, cash/tracking/lookups_seen.py:_on_return @b1e9395e, cash/tracking/lookups_seen.py:arm @621f5c02 -->
+<!-- claim: cash/tracking/lookups_seen.py:_note_object @417935ea, cash/tracking/lookups_seen.py:collecting @9163f1c2, cash/tracking/lookups_seen.py:_may_note @d506a15c, cash/tracking/lookups_seen.py:_note_globals @77198b83, cash/tracking/lookups_seen.py:_note_value @9465af19, cash/tracking/lookups_seen.py:_on_call @c61001a7, cash/tracking/lookups_seen.py:_on_start @182191e3, cash/tracking/lookups_seen.py:_on_return @42581e94, cash/tracking/lookups_seen.py:arm @621f5c02 -->
 A logger pickles by its name, so a statement can find it without any
 variable holding it: `seen = logging.getLogger("app").level`. On Python 3.12
 and newer, cash checks such an object when a call written in Python returns
@@ -682,14 +682,25 @@ it, or when the statement's code, or a function of yours it calls, reads it
 through a module (an attribute, of the module or of a class or object it
 holds, or an item of a dict, list or tuple held there).
 
-<!-- claim: cash/tracking/lookups_seen.py:_follow @77c614ba, cash/tracking/lookups_seen.py:_note_held @083b7eb0, cash/tracking/lookups_seen.py:_reads_a_slot @7dcabbe9, cash/tracking/lookups_seen.py:_cannot_follow @bd2b3dc1 -->
+<!-- claim: cash/tracking/lookups_seen.py:_note_within @686b554a, cash/tracking/lookups_seen.py:_looked_through @ea99e79a, cash/tracking/lookups_seen.py:_pure_data @04355022, cash/tracking/lookups_seen.py:_on_return @42581e94 -->
+A container is looked through at any depth: the items of a dict (its keys
+too), list, tuple or set a module holds (`mod.CFG["a"]["log"].level`), and
+of what a library's function returns (`lib.settings()["log"].level`), and
+the attributes of the objects in them, or returned, that pickle by what
+they hold: a `SimpleNamespace`, a dataclass, an object of your classes
+(`mod.ITEMS[0].log.level`, `lib.settings().log.level`). Numbers, strings
+and containers of only those are read at once, however many; past 100,000
+other items in all, the statement runs every time
+([NOTEBOOK-ITEMS-UNREAD](warnings.md#notebook-items-unread)).
+
+<!-- claim: cash/tracking/lookups_seen.py:_follow @77c614ba, cash/tracking/lookups_seen.py:_note_held @b2dec90d, cash/tracking/lookups_seen.py:_reads_a_slot @7dcabbe9, cash/tracking/lookups_seen.py:_cannot_follow @bd2b3dc1 -->
 Where code decides what such an attribute is, cash follows it. A property,
 a method, a `__getattr__` or `__getattribute__` of your class, or a
 property of your metaclass, reading an object or class a module holds
 (`seen = cfg.SETTINGS.log.level`, `cfg.SETTINGS.level()`): what that object
-holds is looked through, its own attributes and its class's, and the
-objects of your classes, dicts, lists, tuples and sets in them, for such
-objects; past 100,000 items in all the statement runs every time
+holds is looked through, its own attributes and its class's, and what
+they hold as a container is (above), for such objects; past 100,000 items
+in all the statement runs every time
 ([NOTEBOOK-ITEMS-UNREAD](warnings.md#notebook-items-unread)). A slot, and
 an attribute Python's own classes or numpy's arrays define in C
 (`__class__`, `dtype`), is read as it is. A library's property or
@@ -706,10 +717,11 @@ served what it read before after another cell changes it:
 - by a call written in C: `getattr(logging, "root")`, `vars(logging)["root"]`,
   `operator.attrgetter("root")(logging)`;
 - by a function of yours that returns what such a call found;
-- inside a value a library's code returns or hands over, such as a list or
-  an object holding the logger (`lib.settings().log.level`);
-- by an item of a dict, list or tuple read through a module more than one
-  level down (`mod.CFG["a"]["log"].level`, `mod.ITEMS[0].log.level`);
+- inside an object of a library's class that pickles itself its own way
+  (a data frame, a figure, a fitted model), held in such a container or
+  returned by a library's function (`lib.client().log.level`), or inside
+  a value a library's code hands over without returning it (to a callback
+  of yours);
 - by a call made where the same statement, at the same place, called a
   function written in C first (`for get in (str, logging.getLogger)`), or
   called one function twice before (`for get in (fake, fake,
@@ -720,8 +732,10 @@ served what it read before after another cell changes it:
   returning such an object before (`logging.getLogger`), are watched
   wherever they are called.
 
-A statement that reads, through a module, a container of more than 100,000
-items runs every time, uncached, and
+A statement that reads, through a module, a container holding more than
+100,000 items in all that are not numbers, strings or containers of only
+those, or calls a library's function returning one, runs every time,
+uncached, and
 [NOTEBOOK-ITEMS-UNREAD](warnings.md#notebook-items-unread) says so; so does
 one whose checking of such objects takes longer than its analysis budget
 ([NOTEBOOK-ANALYSIS-BUDGET](warnings.md#notebook-analysis-budget)), and so
