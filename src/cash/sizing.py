@@ -350,10 +350,38 @@ def _array_estimate(arr: Any, seen: set[int]) -> int:
 
 
 def _index_estimate(index: Any, seen: set[int]) -> int:
-    """A RangeIndex pickles as its three numbers, not as the values."""
-    if type(index).__name__ == "RangeIndex":
+    """A RangeIndex pickles as its three numbers, not as the values. A
+    MultiIndex pickles as its levels and codes (`_multi_index_parts`):
+    its ``_values``, an object array of one tuple per row, is made on
+    first read and kept in the index's cache. Read for an estimate, it
+    cost 0.13 s for 876,000 rows, left 876,000 tuples the garbage
+    collector tracks for as long as the frame lived (each later
+    collection and heap read went through them; the closure check walked
+    them, 0.3 s), and counted twice what pickle writes."""
+    kind = type(index).__name__
+    if kind == "RangeIndex":
         return 0
+    if kind == "MultiIndex":
+        parts = _multi_index_parts(index)
+        if parts is not None:
+            levels, codes = parts
+            return sum(_index_estimate(level, seen) for level in levels) + sum(
+                _array_estimate(code, seen) for code in codes
+            )
     return _array_estimate(index._values, seen)
+
+
+def _multi_index_parts(index: Any) -> tuple[list, list] | None:
+    """A pandas MultiIndex's ``(levels, codes)``, what its ``__reduce__``
+    hands pickle beside its names, or None when they cannot be read as
+    that (another library's class of that name)."""
+    try:
+        levels, codes = list(index.levels), list(index.codes)
+    except Exception:  # noqa: BLE001 - not pandas': its values, as before
+        return None
+    if len(levels) != len(codes) or not all(type(code).__name__ == "ndarray" for code in codes):
+        return None
+    return levels, codes
 
 
 def pickled_size_estimate(value: Any, _depth: int = 0, _seen: set[int] | None = None) -> int:
