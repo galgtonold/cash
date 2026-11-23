@@ -111,8 +111,15 @@ def _class_reader(name: str) -> Callable[[Any], Any]:
     read = type.__dict__[name].__get__
 
     def class_reader(obj: Any) -> Any:
-        try:
+        if type(obj) is type:
             return read(obj)
+        try:
+            # A metaclass may define the name itself, in C (Cython 3.3's
+            # ``_common_types_metatype`` gives ``__module__``, where
+            # ``type``'s descriptor reads the instances' member descriptor
+            # out of the class's namespace): ``type``'s lookup finds that,
+            # and still runs no ``__getattribute__`` or ``__getattr__``.
+            return type.__getattribute__(obj, name)
         except TypeError:
             if issubclass(type(obj), type):
                 raise
