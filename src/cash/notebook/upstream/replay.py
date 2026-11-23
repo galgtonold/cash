@@ -19,6 +19,7 @@ from cash import kept_state
 from cash.control_markers import strip_markers
 
 from ..._memo import NOTEBOOK_CELLS, NOTEBOOK_VERSIONS
+from ..._type_memo import class_name
 from ...analysis.annotations import get_statement_annotations
 from ...analysis.ast_util import parse_cached, walk_tree
 from ...analysis.code_analyzer import clean_cell_source, parse_cell_source, statement_code
@@ -378,7 +379,9 @@ class StatementReplay:
                         error = result.get("error")
                         if error:
                             text = (
-                                f"{type(error).__name__}: {error}" if isinstance(error, BaseException) else str(error)
+                                f"{class_name(type(error))}: {error}"
+                                if isinstance(error, BaseException)
+                                else str(error)
                             )
                             raise self._failure(error, text, stmt_code, statements[:stmt_idx], notebook_cells)
             except UpstreamStateError:
@@ -400,7 +403,7 @@ class StatementReplay:
                 # top-to-bottom run would.
                 logger.error("[ERROR] Failed to auto-execute statement: %s", e)
                 raise self._failure(
-                    e, f"{type(e).__name__}: {e}", stmt_code, statements[:stmt_idx], notebook_cells
+                    e, f"{class_name(type(e))}: {e}", stmt_code, statements[:stmt_idx], notebook_cells
                 ) from e
 
             # Report progress after each statement

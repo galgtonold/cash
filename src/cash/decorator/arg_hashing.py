@@ -21,8 +21,8 @@ from typing import TYPE_CHECKING, Any
 from .. import _cash_views, _plain_data, _weak, kept_state, value_watch
 from .._clock import perf_counter as _perf_counter
 from .._memo import ARGUMENTS, FRAMES, LruMemo
-from .._type_memo import TypeMemo, type_key
-from .._user_attrs import from_family
+from .._type_memo import TypeMemo, class_dict, class_module, class_name, class_qualname, type_key
+from .._user_attrs import from_family, instance_of, named_attr, plain_getattr
 from ..backends.frame_sharing import is_pin
 from ..canonical_form import (
     NOT_HOOKED,
@@ -145,7 +145,7 @@ def is_plain_data(value: Any) -> bool:
     the marker the watchers kept for it when they prove it unchanged."""
     if value_watch.WATCHING and value_watch.peek(value, value_watch.KIND_PLAIN_KEY) is not None:
         if value_watch.VERIFY and plain_census(value) is None:
-            raise value_watch.WatchMismatch(f"a watched {type(value).__name__} kept as plain data is not plain")
+            raise value_watch.WatchMismatch(f"a watched {class_name(type(value))} kept as plain data is not plain")
         return True
     return plain_census(value) is not None
 
@@ -238,7 +238,7 @@ def code_value_stand_in(value: Any) -> tuple | None:
 
     if not defined_in_user_code(value):
         return None
-    return ("__cash_code_value__", getattr(value, "__module__", None), getattr(value, "__qualname__", None))
+    return ("__cash_code_value__", plain_getattr(value, "__module__", None), plain_getattr(value, "__qualname__", None))
 
 
 def _user_function_in_arguments(fn: types.FunctionType) -> bool:
@@ -257,11 +257,11 @@ write_user_functions_when(_user_function_in_arguments)
 
 def _pickles_by_reference(fn: types.FunctionType) -> bool:
     """*fn* is found again by its module and qualified name, as pickle looks it up."""
-    target: Any = sys.modules.get(getattr(fn, "__module__", None) or "")
-    for part in (getattr(fn, "__qualname__", "") or "").split("."):
+    target: Any = sys.modules.get(plain_getattr(fn, "__module__", None) or "")
+    for part in (plain_getattr(fn, "__qualname__", "") or "").split("."):
         if target is None or part.startswith("<"):
             return False
-        target = getattr(target, part, None)
+        target = named_attr(target, part, None)
     return target is fn
 
 
@@ -280,7 +280,7 @@ CODE_ARG_FIX = (
 
 def unhashable_arg_fix(value: Any, type_name: str) -> str:
     """The fix line for an argument of *type_name* that could not be hashed."""
-    if isinstance(value, CODE_VALUE_TYPES):
+    if instance_of(value, CODE_VALUE_TYPES):
         return CODE_ARG_FIX
     if cash_key_method(value) is not None:
         return (
@@ -352,7 +352,7 @@ def is_cow_pandas(value: Any) -> bool:
     """
     global _COW_PANDAS
     t = type(value)
-    if t.__name__ not in ("DataFrame", "Series") or not from_family(t, "pandas"):
+    if class_name(t) not in ("DataFrame", "Series") or not from_family(t, "pandas"):
         return False
     if _COW_PANDAS is None:
         try:
@@ -430,7 +430,7 @@ def _array_signature(values: Any) -> tuple:
     """
     signature: tuple = (id(values), id(getattr(values, "_pa_array", None)))
     dtype = getattr(values, "dtype", None)
-    if type(dtype).__name__ == "CategoricalDtype":
+    if class_name(type(dtype)) == "CategoricalDtype":
         categories = dtype.categories
         signature += (
             id(values._ndarray),
@@ -445,7 +445,7 @@ def _array_signature(values: Any) -> tuple:
 def _axis_arrays(axis: Any) -> list:
     """The arrays an axis keeps its labels in; a ``RangeIndex`` keeps none
     (and its ``_data`` would build one)."""
-    kind = type(axis).__name__
+    kind = class_name(type(axis))
     if kind == "RangeIndex":
         return []
     if kind == "MultiIndex":
@@ -642,7 +642,7 @@ def _frame_memory(
             if not all(reference(codes) for codes in holder):
                 return None
             continue
-        elif type(holder).__module__ == "pandas._libs.index":
+        elif class_module(type(holder)) == "pandas._libs.index":
             if not reference(holder.values):
                 return None
             continue
@@ -878,7 +878,7 @@ def _stateful_of(items: list) -> list:
 
 #: What is set on an object: None when nothing is. ``object.__getstate__``
 #: reads it without making the dict reading ``__dict__`` makes.
-_OWN_STATE = getattr(object, "__getstate__", None) or (lambda obj: getattr(obj, "__dict__", None) or None)
+_OWN_STATE = plain_getattr(object, "__getstate__", None) or (lambda obj: plain_getattr(obj, "__dict__", None) or None)
 
 
 @functools.cache
@@ -1023,7 +1023,7 @@ def watch_array_handles() -> None:
         (pd.Categorical, "codes", _READ_ONLY_VIEW),
         (pd.CategoricalIndex, "codes", _READ_ONLY_VIEW),
     ):
-        original = cls.__dict__.get(name)
+        original = class_dict(cls).get(name)
         if type(original) is types.FunctionType:  # a method: wrapped as it is
             setattr(cls, name, _noting(original, outside_only))
             continue
@@ -1384,7 +1384,7 @@ def _watch_callback_handouts() -> None:
     except ImportError:  # pragma: no cover - a pandas without these
         pass
     for cls, name, raw_at in targets:
-        original = cls.__dict__.get(name)
+        original = class_dict(cls).get(name)
         if type(original) is types.FunctionType:
             setattr(cls, name, _handing_out(original, raw_at))
 
@@ -1547,7 +1547,7 @@ def is_opaque(obj: Any) -> bool:
     that breaks an otherwise-cacheable call.
     """
     try:
-        if isinstance(obj, functools.partial):
+        if instance_of(obj, functools.partial):
             # A partial is the function it wraps plus arguments, both of
             # which are keyed. Declaring `functools.partial` opaque would
             # silence EVERY partial in the process, including ones over code
@@ -1607,11 +1607,11 @@ class _CostliestArg:
             if producer is None and self._frozen.containers and id(value) in self._frozen.containers:
                 producer = self._frozen.containers[id(value)][1]
             old_pandas = (
-                type(value).__name__ in ("DataFrame", "Series")
+                class_name(type(value)) in ("DataFrame", "Series")
                 and from_family(type(value), "pandas")
                 and not is_cow_pandas(value)
             )
-            self.costliest = (label, seconds, type(value).__name__, producer, old_pandas)
+            self.costliest = (label, seconds, class_name(type(value)), producer, old_pandas)
         return digest
 
     def charge_payload(self, raw: list[tuple[str, Any]], seconds: float) -> None:
@@ -1622,7 +1622,7 @@ class _CostliestArg:
             producer = own_tag(value, "_cash_lineage_producer")
             if producer is None and self._frozen.containers and id(value) in self._frozen.containers:
                 producer = self._frozen.containers[id(value)][1]
-            self.costliest = (label, seconds, type(value).__name__, producer, False)
+            self.costliest = (label, seconds, class_name(type(value)), producer, False)
 
 
 class FrameDigests:
@@ -2141,7 +2141,7 @@ class ArgHasher:
             func_name,
             arg_type_name,
             f"@cash.cache on {func_name}: cache-key generation raised "
-            f"{type(e).__name__} ({e}) somewhere it did not anticipate, so "
+            f"{class_name(type(e))} ({e}) somewhere it did not anticipate, so "
             f"this call does not cache.",
             code="KEY-BUILD-FAILED",
             fix=hint,
@@ -2155,7 +2155,7 @@ class ArgHasher:
         `ArgHasher.first_unhashable_arg` for how the argument is found.
         """
         suspect = self.first_unhashable_arg(args, kwargs)
-        return "<unknown>" if suspect is NO_SUSPECT else type(suspect).__qualname__
+        return "<unknown>" if suspect is NO_SUSPECT else class_qualname(type(suspect))
 
     def first_unhashable_arg(self, args: tuple, kwargs: dict) -> Any:
         """The argument that could not be hashed, or ``NO_SUSPECT``.
@@ -2169,7 +2169,13 @@ class ArgHasher:
         which says more than naming the list. When no single candidate fails
         on its own, the first non-built-in is the best remaining guess.
         """
-        candidates = [a for a in (*args, *kwargs.values()) if not isinstance(a, IMMUTABLE_PRIMS + BUILTIN_CONTAINERS)]
+        # A class is neither: ``isinstance`` would ask it for its
+        # ``__class__``, which a metaclass's hook of the user's answers.
+        candidates = [
+            a
+            for a in (*args, *kwargs.values())
+            if issubclass(type(a), type) or not isinstance(a, IMMUTABLE_PRIMS + BUILTIN_CONTAINERS)
+        ]
         for candidate in candidates:
             try:
                 self.hash_payload((candidate,), {})
@@ -2275,7 +2281,7 @@ class ArgHasher:
             try:
                 identity = method(value)
             except Exception as exc:  # reported as an unhashable argument
-                raise TypeError(f"{name}.__cash_key__() raised {type(exc).__name__}: {exc}") from exc
+                raise TypeError(f"{name}.__cash_key__() raised {class_name(type(exc))}: {exc}") from exc
             if identity is value:
                 raise TypeError(f"{name}.__cash_key__() returned the object itself")
             digest = self.hash_payload((identity,), {})

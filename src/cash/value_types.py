@@ -30,6 +30,9 @@ import weakref
 from collections.abc import Mapping
 from typing import Any
 
+from ._type_memo import class_dict, class_mro, class_qualname, module_of_class, mro_of
+from ._user_attrs import attribute_or, instance_of
+
 #: Exact types that carry no user code and hold nothing else.
 CODELESS_PRIMS = (str, int, float, bool, type(None), bytes, complex, bytearray)
 
@@ -138,7 +141,7 @@ def _shapely_geometry_types(shapely: Any) -> frozenset:
         return frozenset()
     # Before shapely 2.0 a geometry was a mutable Python object over a
     # GEOS pointer, which took attributes: not a leaf.
-    if any("__dict__" in klass.__dict__ for kind in found for klass in kind.__mro__ if klass is not object):
+    if any("__dict__" in class_dict(klass) for kind in found for klass in class_mro(kind) if klass is not object):
         return frozenset()
     return found
 
@@ -172,7 +175,8 @@ def class_module(cls: Any) -> str:
     """*cls*'s ``__module__``, or ``""`` where it is not a string: Cython's
     ``_common_types_metatype`` (the class of its function classes) has no
     ``__module__`` of its own and reads ``type``'s descriptor."""
-    module = getattr(cls, "__module__", "")
+    # A class's by ``type``'s own descriptor: a metaclass's hook is not run.
+    module = module_of_class(cls, "") if issubclass(type(cls), type) else attribute_or(cls, "__module__", "")
     return module if type(module) is str else ""
 
 
@@ -184,15 +188,11 @@ def mro_kind(value: Any, bases: Mapping[str, str], prefixes: tuple[str, ...]) ->
     DataFrame) costs a couple of string checks. Imports nothing: a value of a
     library that is not loaded cannot be one of its classes.
     """
-    try:
-        mro = type(value).__mro__
-    except AttributeError:  # pragma: no cover - exotic metaclass
-        return None
-    for base in mro:
+    for base in mro_of(type(value)):
         module = class_module(base)
         if not module.startswith(prefixes):
             continue
-        kind = bases.get(f"{module}.{getattr(base, '__qualname__', '')}")
+        kind = bases.get(f"{module}.{class_qualname(base)}")
         if kind is not None:
             return kind
     return None
@@ -262,4 +262,4 @@ def is_runtime_machinery(value: Any) -> bool:
     counted with them: it holds nothing a result depends on."""
     if is_dead_proxy(value):
         return True
-    return isinstance(value, RUNTIME_MACHINERY_TYPES) or type(value).__module__ in _RUNTIME_MACHINERY_MODULES
+    return instance_of(value, RUNTIME_MACHINERY_TYPES) or class_module(type(value)) in _RUNTIME_MACHINERY_MODULES

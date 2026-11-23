@@ -17,6 +17,8 @@ from typing import Any
 from cash._user_attrs import attribute_or
 from cash.live_state import live_reduce
 
+from .._type_memo import class_name
+
 __all__ = ["StreamTaken", "TeeWriter"]
 
 
@@ -104,7 +106,7 @@ def _stream_reduce(writer: Any) -> tuple:
     reduced = live_reduce(writer)
     if reduced is None:
         raise TypeError(
-            f"cannot pickle {type(writer).__name__!r} object: it writes to a stream that is not sys.stdout or sys.stderr"
+            f"cannot pickle {class_name(type(writer))!r} object: it writes to a stream that is not sys.stdout or sys.stderr"
         )
     return reduced
 

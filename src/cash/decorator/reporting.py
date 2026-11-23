@@ -4,7 +4,6 @@ the per-call log and debug lines."""
 from __future__ import annotations
 
 import hashlib
-import inspect
 import logging
 import re
 import threading
@@ -15,6 +14,8 @@ from typing import TYPE_CHECKING, Any
 
 from .._active import EXPLAINING as _EXPLAINING
 from .._clock import perf_counter as _perf_counter
+from .._type_memo import class_name
+from .._user_attrs import plain_getattr, unwrapped
 from ..backends import adaptive_caps, budget_notices
 from ..diagnostics import format_diagnostic, full_warnings, short_diagnostic, warn_diagnostic, warn_diagnostic_message
 from ..exceptions import CashCacheIneffectiveWarning, CashImpurityWarning
@@ -292,7 +293,7 @@ class Notices:
         """The name the user calls *func_name* by: ``backtest``, not
         ``__main__.backtest``."""
         fn = self._functions.get(func_name)
-        return getattr(fn, "__name__", None) or func_name.rpartition(".")[2]
+        return plain_getattr(fn, "__name__", None) or func_name.rpartition(".")[2]
 
     def has_warned(self, key: tuple[type[Warning], str, str, str]) -> bool:
         """Has `warn_once` already shown the warning *key* names?"""
@@ -334,7 +335,7 @@ class Notices:
         runs on a pool thread, whose stack holds nothing of the user's."""
         fn = self._functions.get(func_name)
         try:
-            code = getattr(inspect.unwrap(fn), "__code__", None) if fn is not None else None
+            code = getattr(unwrapped(fn), "__code__", None) if fn is not None else None
         except ValueError:  # a wrapper chain that loops
             return None
         return (code.co_filename, code.co_firstlineno) if code is not None else None
@@ -354,7 +355,7 @@ class Notices:
             func_name,
             "cache_if",
             f"@cash.cache on {func_name}: cache_if predicate raised "
-            f"{type(error).__name__} ({error}), so the result is returned "
+            f"{class_name(type(error))} ({error}), so the result is returned "
             f"un-cached and every later call recomputes.",
             code="CACHE-IF-RAISED",
             fix="make the predicate total -- it must handle every shape the "
@@ -392,7 +393,7 @@ class Notices:
             func_name,
             "metadata_invalid",
             f"@cash.cache on {func_name}: a stored cache entry's metadata "
-            f"could not be validated ({type(error).__name__}: {error}), so "
+            f"could not be validated ({class_name(type(error))}: {error}), so "
             f"cash treated the entry as absent and recomputed.",
             code="STORE-METADATA-INVALID",
             fix="nothing, for a one-off; if it keeps appearing, run "
@@ -432,7 +433,7 @@ class Notices:
             func_name,
             "lock_failed",
             f"@cash.cache on {func_name}: backend lock acquisition failed "
-            f"({type(error).__name__}: {error}), so cash proceeded without the "
+            f"({class_name(type(error))}: {error}), so cash proceeded without the "
             f"lock and concurrent calls with the same args may compute "
             f"redundantly.",
             code="STORE-LOCK-FAILED",
@@ -647,7 +648,7 @@ class CallLog:
             execution_time=_perf_counter() - call_start,
             args_hash="",
             cache_key="",
-            miss=MissReason(MissKind.RAISED, f"{type(exc).__name__}: {str(exc)[:80]}"),
+            miss=MissReason(MissKind.RAISED, f"{class_name(type(exc))}: {str(exc)[:80]}"),
         )
 
     def drain(self) -> list[dict[str, Any]]:

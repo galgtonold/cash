@@ -15,6 +15,7 @@ import sys
 import textwrap
 from collections.abc import Iterable, Mapping
 
+from ..._user_attrs import plain_getattr
 from ...source_norm import exact_source_digest
 from .detect import get_drawing_rng_modules, get_seeding_rng_modules
 
@@ -263,8 +264,8 @@ def _state_wrapper(module: str, original, *, sets: bool):
 
     state.__wrapped__ = original  # type: ignore[attr-defined]
     state.__cash_seed_watch__ = True  # type: ignore[attr-defined]
-    state.__name__ = getattr(original, "__name__", "setstate" if sets else "getstate")
-    state.__doc__ = getattr(original, "__doc__", None)
+    state.__name__ = plain_getattr(original, "__name__", "setstate" if sets else "getstate")
+    state.__doc__ = plain_getattr(original, "__doc__", None)
     return state
 
 
@@ -283,8 +284,8 @@ def _seed_wrapper(module: str, original):
 
     seed.__wrapped__ = original  # type: ignore[attr-defined]
     seed.__cash_seed_watch__ = True  # type: ignore[attr-defined]
-    seed.__name__ = getattr(original, "__name__", "seed")
-    seed.__doc__ = getattr(original, "__doc__", None)
+    seed.__name__ = plain_getattr(original, "__name__", "seed")
+    seed.__doc__ = plain_getattr(original, "__doc__", None)
     return seed
 
 

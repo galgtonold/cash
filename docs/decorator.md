@@ -34,7 +34,7 @@ slow_square(1_000_000)   # cache hit: returns the stored result
 
 That is all the setup there is. A few rules hold for every cached function:
 
-<!-- claim: cash/decorator/store.py:ResultStore.refusal @a4c15474, cash/decorator/store.py:ResultStore.store @c5fd2627, cash/decorator/store.py:ResultStore.restore_identity @2e52815d -->
+<!-- claim: cash/decorator/store.py:ResultStore.refusal @a4c15474, cash/decorator/store.py:ResultStore.store @9ae74e54, cash/decorator/store.py:ResultStore.restore_identity @255cf26e -->
 - **Exceptions are never cached.** If the body raises, nothing is stored and the
   exception reaches you as usual. The next call runs the body again.
 - **A hit does not replay output.** Anything the body printed or logged appears
@@ -76,7 +76,7 @@ takes a backend instance or a backend type name (`backend="sqlite"`). See the
 
 ## Where results are stored
 
-<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @f269c827, cash/backends/tiered_backend.py:TieredBackend.set @34e7db12, cash/backends/tiered_backend.py:TieredBackend._waits_for_a_hit @d085eeb3 -->
+<!-- claim: cash/backends/persistence_policy.py:PersistencePolicy.decide @f269c827, cash/backends/tiered_backend.py:TieredBackend.set @efe3040d, cash/backends/tiered_backend.py:TieredBackend._waits_for_a_hit @d085eeb3 -->
 **Every result is written to disk.** However cheap the call was, a decorated
 result goes to the RAM tier and to the disk tier, so the next process finds it.
 A result holding 1 MiB or more of arrays goes to the disk tier first: its
@@ -697,7 +697,7 @@ Every argument is part of the key, so a `verbose=` flag, a logger or an
 `n_jobs=` setting splits the cache: `fit(data, verbose=True)` misses after
 `fit(data)` ran. Three ways to say which arguments decide the result:
 
-<!-- claim: cash/decorator/arg_key.py:arg_key_spec @648484e3, cash/decorator/arg_key.py:keyed_arguments @d9fd1022 -->
+<!-- claim: cash/decorator/arg_key.py:arg_key_spec @ede0dbd7, cash/decorator/arg_key.py:keyed_arguments @2ce02f52 -->
 **`ignore=`** names the parameters to leave out. It works on any function,
 including one you do not own, and the names are checked against the
 signature when the function is decorated:
@@ -724,7 +724,7 @@ Adding `ignore=` to a function that already has entries starts new ones:
 the old entries were keyed with the parameter in, so each call runs once
 more, and `explain()` says "it now ignores parameter ...".
 
-<!-- claim: cash/decorator/arg_key.py:annotated_ignores @3c698cef -->
+<!-- claim: cash/decorator/arg_key.py:annotated_ignores @7326063e -->
 **`cash.Ignore`** says the same on the parameter itself. A type checker sees
 the type inside, `bool` here; `Annotated[bool, cash.Ignore]` is the same
 marker. String annotations (`from __future__ import annotations`) are read
@@ -748,7 +748,7 @@ load("a.csv")               # first call: runs the body
 load("a.csv", debug=True)   # cache hit: nothing is logged
 ```
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.key_arguments @316e84b5, cash/decorator/runtime.py:KeyBuilder._fold_key_function @125f0613 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.key_arguments @316e84b5, cash/decorator/runtime.py:KeyBuilder._fold_key_function @525ac2db -->
 **`key=`** takes a function that gets each call's arguments, bound to the
 signature with the defaults filled in, so `f(2, "3")`, `f(2, unit="3")` and
 `f(x=2, unit="3")` reach it alike. What it returns (a tuple, a string, a
@@ -795,7 +795,7 @@ object (`key=Pick("id")`). Editing any of them re-keys every call.
     does not run the body, so with an ignored `debug` flag the debug prints of
     a hit do not happen.
 
-<!-- claim: cash/decorator/arg_key.py:key_function_impurities @859b5d2b, cash/core.py:Cash._check_key_function @c5ba8c38 -->
+<!-- claim: cash/decorator/arg_key.py:key_function_impurities @b523bd66, cash/core.py:Cash._check_key_function @c5ba8c38 -->
 The key function must compute the key from its arguments alone. One that
 reads a file, the clock, a random number, the network or the environment
 gets [`KEY-FUNCTION-IMPURE`](warnings.md#key-function-impure)
@@ -847,7 +847,7 @@ entry. That holds whenever the seed was set: before the function was
 decorated, or before `import cash` in the same script. A function
 whose own body seeds the stream is not keyed by where the caller left it.
 
-<!-- claim: cash/decorator/rng.py:replay_rng_state @42b65738, cash/decorator/runtime.py:CallRunner.finish_miss @77af0182 -->
+<!-- claim: cash/decorator/rng.py:replay_rng_state @42b65738, cash/decorator/runtime.py:CallRunner.finish_miss @49f7d93a -->
 The same holds for a generator in a module global that the body draws from
 (`rng = np.random.default_rng(42)` at module level, `rng.normal()` inside): the
 key includes where `rng` stands, and a hit moves `rng` on to where the computed
@@ -863,7 +863,7 @@ a miss.
 
 ### `frozen=` and large arguments
 
-<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @5653b253, cash/decorator/frozen.py:FrozenResults.warn_has_no_effect @46f8683e -->
+<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @f104039f, cash/decorator/frozen.py:FrozenResults.warn_has_no_effect @9cd1e97c -->
 An argument is keyed by its content at the time of the call, so a big array or
 frame is hashed on every call it is passed to. When a result comes from another
 cached function and nothing changes it afterwards, say so on the producer:
@@ -890,7 +890,7 @@ back read-only, and
 frozen result was changed after all. [`CACHE-NET-LOSS`](warnings.md#cache-net-loss)
 warns when hashing an argument costs more than the cache saves.
 
-<!-- claim: cash/decorator/store.py:ResultStore.attach_lineage @1dbbcf06, cash/decorator/frozen.py:FrozenResults.container_hash @cfd38330 -->
+<!-- claim: cash/decorator/store.py:ResultStore.attach_lineage @bc0d7926, cash/decorator/frozen.py:FrozenResults.container_hash @2fe95b0e -->
 `frozen=True` covers the very object the function returns, in the process
 that called it:
 
@@ -907,7 +907,7 @@ function, and build a container you pass on inside a frozen function of its
 own. `frozen=` has no effect together with `ttl=`: such a result is keyed by
 its content.
 
-<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @5653b253, cash/decorator/frozen.py:FrozenResults.remember_array @3bb58fef -->
+<!-- claim: cash/decorator/frozen.py:FrozenResults.audit @f104039f, cash/decorator/frozen.py:FrozenResults.remember_array @3bb58fef -->
 A frozen numpy array comes back read-only, so a write raises. A frozen pandas
 frame or any other object stays writable, and writing into it breaks the
 promise: the calls after the write can be served results computed for its
@@ -924,7 +924,7 @@ when the cell restores `model` from the cache instead of calling `train`. Once
 a cell changes `model` (`model.set_params(...)`), it is keyed as a changed
 value.
 
-<!-- claim: cash/decorator/frozen.py:FrozenResults.remember_container @1e8af0c7, cash/decorator/store.py:ResultStore.attach_lineage @1dbbcf06 -->
+<!-- claim: cash/decorator/frozen.py:FrozenResults.remember_container @1e8af0c7, cash/decorator/store.py:ResultStore.attach_lineage @bc0d7926 -->
 **Big inputs: path in, data passed on.** [Pass data in](#pass-data-in) and
 `frozen=` work together. Give the file path to a cached loader marked
 `frozen=True`, parse inside it, and pass what it returns to the functions
@@ -1082,7 +1082,7 @@ covers every caller of that helper. A change to a process setting
 a function called from that line, or anywhere in a function with the comment
 on its `def` line ([details](how-it-works/decorator-path.md#side-effects)).
 
-<!-- claim: cash/analysis/annotations.py:assume_safe_block_lines @29dff9a1, cash/effect_observer.py:EffectObserver.record_effect @2f5ea303, cash/source_norm.py:drop_waiver_blocks @358fa0bc -->
+<!-- claim: cash/analysis/annotations.py:assume_safe_block_lines @fcce9c6a, cash/effect_observer.py:EffectObserver.record_effect @2f5ea303, cash/source_norm.py:drop_waiver_blocks @358fa0bc -->
 **Several lines at once.** Wrap them in `with cash.assume_safe():`. It waives
 what the comment waives, on every line inside the block. While the block runs,
 it also waives the effects cash observes, including those of helpers it calls.
@@ -1189,7 +1189,7 @@ changed, in a new process too, and when that is code the function calls,
 See
 [`CacheExplanation`](api/cash.md#cash.CacheExplanation).
 
-<!-- claim: cash/decorator/explain.py:check_explain_arguments @f3526db8 -->
+<!-- claim: cash/decorator/explain.py:check_explain_arguments @cf6d369b -->
 For a cached method, explain through the class and pass the instance:
 `Model.score.explain(m, 2)` explains `m.score(2)`. `m.score.explain(2)` cannot
 pass the instance, and raises `TypeError`, as do arguments the function
@@ -1246,7 +1246,7 @@ Python function that calls the kernels, or on top of `@njit` itself.
 side effects. A miss's run time, and so the time a hit saves, includes any
 compiling the call did.
 
-<!-- claim: cash/cython_digest.py:cython_function_digest @3efb2e1c -->
+<!-- claim: cash/cython_digest.py:cython_function_digest @97a07b6d -->
 **Can I cache code that calls Cython?** Yes. A Cython function of your
 project is keyed by the Cython code it can reach in its `.pyx`, the
 `.pxd` and `.pxi` files it uses, and the build configuration, so editing

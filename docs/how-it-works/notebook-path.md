@@ -191,7 +191,7 @@ puts the stored state back into the object itself, so other names for it, a
 `weakref` to it and a dict keyed by its `id()` still find it, as after a
 plain run.
 
-<!-- claim: cash/notebook/statement/in_place.py:refusal @8cccfaec, cash/notebook/statement/in_place.py:_held_by_the_notebook @30ba22dd, cash/notebook/statement/processor.py:StatementProcessor._cheap_to_rerun @1a1db567, cash/notebook/statement/in_place.py:bound_as_a_copy @07b8a485 -->
+<!-- claim: cash/notebook/statement/in_place.py:refusal @45c1fe59, cash/notebook/statement/in_place.py:_held_by_the_notebook @30ba22dd, cash/notebook/statement/processor.py:StatementProcessor._cheap_to_rerun @1a1db567, cash/notebook/statement/in_place.py:bound_as_a_copy @07b8a485 -->
 Only a list, a dict, a set, an object of your own class pickled the default
 way, or a NumPy array, DataFrame or Series a call in the loop changes (as for
 [a statement](safety.md#method-calls)) is restored into. An object of another

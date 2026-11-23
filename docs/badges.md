@@ -214,7 +214,7 @@ runs a search, mark it [`# @cash:assume-safe`](annotations.md#cashassume-safe).
 
 <iframe class="cash-badge" title="cash badge example: NOT CACHED, in-place mutation" src="/_badges/not_cached_mutation.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
-<!-- claim: cash/rewrite_in_place.py:refusal @cece1b9e, cash/rewrite_in_place.py:shape_change @496efe57 -->
+<!-- claim: cash/rewrite_in_place.py:refusal @abbcccec, cash/rewrite_in_place.py:shape_change @9ecf321f -->
 The statement changes an object made in an earlier cell (`out.append(...)`,
 `d[k] = v`, `df.sort_values(inplace=True)`) instead of producing a new value.
 When that object is a NumPy array, a pandas frame or Series, or a list, dict
@@ -261,7 +261,7 @@ the statement every time instead of storing it:
   a library's registry or a closure, or the statement is in a loop body. See
   [Mutating an object created in an earlier cell](known-limitations.md#mutating-an-object-created-in-an-earlier-cell).
 
-<!-- claim: cash/notebook/statement/identity_holders.py:identity_held_reason @db67b352 -->
+<!-- claim: cash/notebook/statement/identity_holders.py:identity_held_reason @8be0f3ff -->
 - **Holds a weak reference, or the `id()` of an object the notebook holds**:
   `wr = weakref.ref(p.child)`, a `WeakValueDictionary`, `reg = {id(p): ...}`.
   Restored, the value would point at the object as it was when it was

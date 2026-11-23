@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from .._active import EXPLAINING as _EXPLAINING
 from .._memo import STATE_LEDGERS, LruMemo
+from .._type_memo import class_name
+from .._user_attrs import named_attr, plain_getattr
 from ..backends._base import ttl_expired, written_at
 from ..data_source import DataSource
 from ..dependency_state import STATE_LEDGER
@@ -789,12 +791,12 @@ def _owner_class(func: Callable[..., Any]) -> type | None:
     """The class a plain function was defined in, found through its
     ``__qualname__`` from its module's globals; None for a module-level or
     local function, or one whose class cannot be reached."""
-    parts = getattr(func, "__qualname__", "").split(".")
+    parts = plain_getattr(func, "__qualname__", "").split(".")
     if len(parts) < 2 or "<locals>" in parts:
         return None
-    owner: Any = getattr(func, "__globals__", {}).get(parts[0])
+    owner: Any = plain_getattr(func, "__globals__", {}).get(parts[0])
     for part in parts[1:-1]:
-        owner = getattr(owner, part, None)
+        owner = named_attr(owner, part, None)
     return owner if isinstance(owner, type) else None
 
 
@@ -833,7 +835,7 @@ def check_explain_arguments(cf: CachedFunction, args: tuple, kwargs: dict) -> No
     if params[0].name == "cls" and isinstance(first, type) and issubclass(first, owner):
         return
     raise TypeError(
-        f"{cf.name}.explain(...): the first argument is {type(first).__name__} {first!r}, "
+        f"{cf.name}.explain(...): the first argument is {class_name(type(first))} {first!r}, "
         f"not the {owner.__name__} {'class' if params[0].name == 'cls' else 'instance'} "
         f"the method is called on.{_method_hint(cf)}"
     )
@@ -1047,7 +1049,7 @@ class Explainer:
             return _uncomputable(
                 func_name,
                 {
-                    "error": f"{type(e).__name__}: {e}",
+                    "error": f"{class_name(type(e))}: {e}",
                     "hint": "Building the cache key raised, so the call would run uncached.",
                 },
             )

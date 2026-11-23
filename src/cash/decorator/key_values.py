@@ -11,7 +11,8 @@ import weakref
 from collections.abc import Mapping
 from typing import Any
 
-from .._type_memo import TypeMemo, type_key
+from .._type_memo import TypeMemo, class_module, class_qualname, type_key
+from .._user_attrs import instance_of, plain_getattr
 from ..analysis.helper_code import is_mock, renamed
 from ..generated_docs import keyed_state_doc
 from ..jit_functions import jit_python_function
@@ -43,6 +44,8 @@ def is_immutable_capture(v: Any) -> bool:
     (e.g. a hit counter) whose value changes every call - folding those into
     the key would make every call miss. Tuples are looked through however deep
     they nest: one cannot hold itself."""
+    if issubclass(type(v), type):
+        return False  # a class: ``isinstance`` would ask its metaclass's hook
     if isinstance(v, (bool, int, float, complex, str, bytes, type(None))):
         return True
     if isinstance(v, (tuple, frozenset)):
@@ -93,17 +96,17 @@ def code_ref(value: Any) -> str | None:
     if is_mock(value):
         return None
     try:
-        owner = getattr(value, "__self__", None)
+        owner = plain_getattr(value, "__self__", None)
         if type(value) is types.MethodType and isinstance(owner, type):
             bound = code_ref(owner)
-            name = getattr(value, "__name__", None)
+            name = plain_getattr(value, "__name__", None)
             return f"{bound}.{name}" if bound is not None and isinstance(name, str) else None
-        module = getattr(value, "__module__", None)
+        module = plain_getattr(value, "__module__", None)
         if module is None:
             # A method descriptor (``str.upper``) names no module; its class does.
             objclass = getattr(value, "__objclass__", None)
-            module = getattr(objclass, "__module__", None)
-        qualname = getattr(value, "__qualname__", None)
+            module = plain_getattr(objclass, "__module__", None)
+        qualname = plain_getattr(value, "__qualname__", None)
     except Exception:  # noqa: BLE001 - an object answering any name
         return None
     if isinstance(module, str) and isinstance(qualname, str):
@@ -117,7 +120,7 @@ def held_partials(value: Any) -> list[tuple[tuple, dict]]:
     itself a partial."""
     if isinstance(value, functools.partial):
         return []
-    state = getattr(value, "__dict__", None)
+    state = plain_getattr(value, "__dict__", None)
     if not isinstance(state, dict):
         return []
     return [(p.args, dict(p.keywords)) for p in state.values() if isinstance(p, functools.partial)]
@@ -136,7 +139,7 @@ def carried_payload(value: Any) -> Any:
     (its options are part of its code's identity, the rest of what it holds
     is the compiler's): None.
     """
-    if isinstance(value, functools.partial):
+    if instance_of(value, functools.partial):
         return ("partial", value.func, value.args, dict(value.keywords))
     if type(value) is types.MethodType:
         owner = value.__self__
@@ -150,7 +153,7 @@ def carried_payload(value: Any) -> Any:
     if not callable(value) or jit_python_function(value) is not None:
         return None
     if is_user_class(type(value), own_package(type(value))):
-        state = getattr(value, "__dict__", None)
+        state = plain_getattr(value, "__dict__", None)
         if isinstance(state, dict):
             kept = without_filled_caches(value, dict(state))
             if "__doc__" in kept:
@@ -202,7 +205,7 @@ _NO_CODE_LEAVES = frozenset(IMMUTABLE_LEAF_TYPES)
 
 
 # None before Python 3.11, where ``object`` has no ``__getstate__``.
-_OBJECT_GETSTATE = getattr(object, "__getstate__", None)
+_OBJECT_GETSTATE = plain_getattr(object, "__getstate__", None)
 
 
 def _state_is_its_dict(t: type) -> bool:
@@ -222,9 +225,9 @@ def _reads_as_its_dict(t: type) -> bool:
         return True
     if t.__reduce_ex__ is not object.__reduce_ex__ or t.__reduce__ is not object.__reduce__:
         return False
-    if getattr(t, "__getstate__", _OBJECT_GETSTATE) is not _OBJECT_GETSTATE:
+    if plain_getattr(t, "__getstate__", _OBJECT_GETSTATE) is not _OBJECT_GETSTATE:
         return False
-    return all(set(getattr(k, "__slots__", ())) <= {"__dict__", "__weakref__"} for k in t.__mro__)
+    return all(set(plain_getattr(k, "__slots__", ())) <= {"__dict__", "__weakref__"} for k in t.__mro__)
 
 
 #: The weak containers of the standard library, keyed by their entries.
@@ -236,7 +239,7 @@ def _stabilized(v: Any, hash_callable, _path: frozenset[int], carried: bool) -> 
     if type(v) in _NO_CODE_LEAVES:
         return v, False
     if id(v) in _path:
-        return ("__cash_cycle__", type(v).__qualname__), False
+        return ("__cash_cycle__", class_qualname(type(v))), False
     if is_dead_proxy(v):
         return ("__cash_dead_proxy__",), False
     if pint_kind(type(v)) is not None:
@@ -257,7 +260,7 @@ def _stabilized(v: Any, hash_callable, _path: frozenset[int], carried: bool) -> 
                 inner = frozenset(inner)  # a set: its form is ordered
             except TypeError:
                 pass
-        return ("__cash_weak__", type(v).__qualname__, inner), True
+        return ("__cash_weak__", class_qualname(type(v)), inner), True
     if issubclass(type(v), types.ModuleType):
         # A module cannot be pickled: `{"fft": numpy.fft}` warned unhashable,
         # and switching it to `scipy.fft` served the old result. Which module.
@@ -272,8 +275,8 @@ def _stabilized(v: Any, hash_callable, _path: frozenset[int], carried: bool) -> 
         try:
             ident = hash_callable(v)
         except (OSError, TypeError, ValueError):
-            ident = v.__qualname__
-        return ("__cash_class__", f"{v.__module__}.{v.__qualname__}", ident), True
+            ident = class_qualname(v)
+        return ("__cash_class__", f"{class_module(v)}.{class_qualname(v)}", ident), True
     if TYPE_ALIAS is not None and type(v) is TYPE_ALIAS:
         # ``type X = ...`` pickles by name, and builds its value once, on
         # its first read: by what defines it (`value_digest`), however
@@ -286,7 +289,7 @@ def _stabilized(v: Any, hash_callable, _path: frozenset[int], carried: bool) -> 
         try:
             ident: Any = hash_callable(v)
         except (OSError, TypeError, ValueError):
-            ident = getattr(v, "__qualname__", repr(v))
+            ident = plain_getattr(v, "__qualname__", repr(v))
         payload = carried_payload(v) if carried else None
         if payload is None:
             return ("__cash_callable__", ident), True
@@ -308,7 +311,7 @@ def _stabilized(v: Any, hash_callable, _path: frozenset[int], carried: bool) -> 
         inner = _path | {id(v)}
         parts = [_stabilized(x, hash_callable, inner, carried) for x in v]
         return type(v)(x for x, _ in parts), any(moved for _, moved in parts)
-    state = getattr(v, "__dict__", None)
+    state = plain_getattr(v, "__dict__", None)
     if (
         type(state) is dict
         and state

@@ -11,10 +11,10 @@ import types
 from itertools import compress, repeat
 from typing import Any
 
-from ._type_memo import TypeMemo, mro_mark, mro_of, per_type, same_mro, type_key
+from ._type_memo import TypeMemo, class_dict, class_mro, mro_mark, mro_of, per_type, same_mro, type_key, type_lookup
 
 
-def attribute_or(obj: Any, name: str, default: Any = None) -> Any:
+def attribute_or(obj: Any, name: str, default: Any = None, *, asked: bool = False) -> Any:
     """``getattr(obj, name, default)``, with any error the lookup raises taken
     as the attribute missing.
 
@@ -28,14 +28,90 @@ def attribute_or(obj: Any, name: str, default: Any = None) -> Any:
     ``__getattr__`` answers every name (``self._d.get(name, 0)``) hands back
     ``0``, which cash's walk of what a function runs read as code and failed
     the cell with.
+
+    A class whose metaclass looks attributes up with code of its own (a
+    ``__getattribute__`` or ``__getattr__`` in Python) is read by
+    ``type``'s lookup: plain Python never runs that code for cash's
+    questions. With *asked*, for a read of an attribute the user's code
+    names (``Defaults.retries``, a dotted path a cell reads), a name that
+    ``type`` does not find is asked of the metaclass's ``__getattr__`` as
+    the user's code reading it would: what it answers is the value. A
+    ``__dunder__`` name is never asked.
     """
     kind = type(obj)
     own = _OWN_LOOKUP.get(type_key(kind))
     if own is None:
         own = own_lookup(kind)
     try:
-        found = object.__getattribute__(obj, name) if own else getattr(obj, name, default)
+        if own:
+            if issubclass(kind, type):
+                return _class_lookup(obj, name, default, asked)
+            found = object.__getattribute__(obj, name)
+        else:
+            found = getattr(obj, name, default)
     except Exception:  # noqa: BLE001 - the object's own error, not one of cash's
+        return default
+    if name == "__code__" and type(found) is not types.CodeType:
+        return default
+    return found
+
+
+def plain_getattr(obj: Any, name: str, default: Any = None) -> Any:
+    """``getattr(obj, name, default)``, but a class whose metaclass looks its
+    attributes up with code of its own is read by ``type``'s lookup
+    (`attribute_or`): cash's question of it (its ``__module__``, a marker of
+    cash's) runs nothing of the user's, as plain Python never asks it.
+    Anything else is asked exactly as ``getattr`` asks it."""
+    kind = type(obj)
+    if kind is not type and issubclass(kind, type):
+        own = _OWN_LOOKUP.get(type_key(kind))
+        if own is None:
+            own = own_lookup(kind)
+        if own:
+            return _class_lookup(obj, name, default, False)
+    return getattr(obj, name, default)
+
+
+def plain_hasattr(obj: Any, name: str) -> bool:
+    """``hasattr(obj, name)`` as `plain_getattr` reads the name."""
+    return plain_getattr(obj, name, _NO_DEFAULT) is not _NO_DEFAULT
+
+
+def named_attr(obj: Any, name: str, *default: Any) -> Any:
+    """``getattr(obj, name[, default])`` for a name the user's code reads (a
+    step of a dotted path a body or a qualname names): a class whose
+    metaclass hooks its lookups is read by ``type``'s, a name it lacks asked
+    of the metaclass's ``__getattr__`` as the user's code would
+    (`attribute_or` with *asked*). Anything else exactly as ``getattr``
+    reads it; without *default* a missing name raises AttributeError."""
+    kind = type(obj)
+    if kind is not type and issubclass(kind, type):
+        own = _OWN_LOOKUP.get(type_key(kind))
+        if own is None:
+            own = own_lookup(kind)
+        if own:
+            found = _class_lookup(obj, name, default[0] if default else _NO_DEFAULT, True)
+            if found is _NO_DEFAULT:
+                raise AttributeError(name)
+            return found
+    return getattr(obj, name, *default)
+
+
+def _class_lookup(cls: type, name: str, default: Any, asked: bool) -> Any:
+    """`attribute_or` of a class whose metaclass hooks its lookups."""
+    try:
+        found = type_lookup(cls, name)
+    except AttributeError:
+        if not asked or (name.startswith("__") and name.endswith("__")):
+            return default
+        hook = _in_mro(type(cls), "__getattr__")
+        if type(hook) is not types.FunctionType:
+            return default
+        try:
+            found = hook(cls, name)
+        except Exception:  # noqa: BLE001 - the class's own error, not one of cash's
+            return default
+    except Exception:  # noqa: BLE001 - a descriptor's own error, not one of cash's
         return default
     if name == "__code__" and type(found) is not types.CodeType:
         return default
@@ -56,9 +132,127 @@ def importable_attr(obj: Any, name: str, default: Any = None) -> Any:
     ``getattr`` like any module, so it loads and its functions are keyed.
     """
     try:
+        if hooked_class(obj):
+            return class_attr(obj, name, default)
         return getattr(obj, name, default)
     except ImportError:
         return default
+
+
+def hooked_class(obj: Any) -> bool:
+    """Is *obj* a class whose metaclass looks its attributes up with code of
+    its own (`own_lookup`)? Read such a class with `class_attr`."""
+    kind = type(obj)
+    own = _OWN_LOOKUP.get(type_key(kind))
+    if own is None:
+        own = own_lookup(kind)
+    return own and issubclass(kind, type)
+
+
+def class_attr(cls: type, name: str, default: Any = None) -> Any:
+    """``getattr(cls, name, default)`` for a class, found by ``type``'s own
+    lookup: a ``__getattribute__`` or ``__getattr__`` of its metaclass's is
+    not run (plain Python asks neither for what cash asks). Any error the
+    lookup raises (a descriptor's) is the attribute missing.
+
+    A class of a metaclass with no lookup of its own is read with
+    ``getattr``, which finds the same and raises nothing for a name it
+    lacks: most classes, and the reads that ask a class for a marker it
+    rarely holds."""
+    meta = type(cls)
+    if meta is not type:
+        own = _OWN_LOOKUP.get(type_key(meta))
+        if own is None:
+            own = own_lookup(meta)
+        if own:
+            try:
+                return type_lookup(cls, name)
+            except Exception:  # noqa: BLE001 - the class's own error, not one of cash's
+                return default
+    try:
+        return getattr(cls, name, default)
+    except Exception:  # noqa: BLE001 - the class's own error, not one of cash's
+        return default
+
+
+def dataclass_fields(kind: type) -> tuple | None:
+    """``dataclasses.fields(kind)`` when *kind* is a dataclass
+    (``dataclasses.is_dataclass``), else None: its ``__dataclass_fields__``
+    read by `class_attr`, as ``dataclasses`` would ask the metaclass's
+    hook of a class of the user's for it."""
+    found = class_attr(kind, "__dataclass_fields__")
+    if found is None:
+        return None
+    import dataclasses
+
+    return dataclasses.fields(types.SimpleNamespace(__dataclass_fields__=found))
+
+
+def unwrapped(func: Any) -> Any:
+    """``unwrapped(func)``: the end of its ``__wrapped__`` chain, each
+    link read by `attribute_or`, so a class's metaclass's hook is not asked
+    for one. Raises ValueError on a chain that loops, as ``inspect`` does."""
+    f = func
+    memo = {id(f): f}
+    limit = sys.getrecursionlimit()
+    while True:
+        inner = attribute_or(f, "__wrapped__", _ABSENT)
+        if inner is _ABSENT:
+            return f
+        f = inner
+        if id(f) in memo or len(memo) >= limit:
+            raise ValueError(f"wrapper loop when unwrapping {func!r}")
+        memo[id(f)] = f
+
+
+_NO_DEFAULT: Any = object()
+
+
+def static_attr(obj: Any, name: str, default: Any = _NO_DEFAULT) -> Any:
+    """``static_attr(obj, name, default)``, with every class's
+    namespace read through ``type``'s own descriptor.
+
+    ``inspect.getattr_static`` reads ``klass.__dict__`` for each class
+    along the MRO, which runs a ``__getattribute__`` of the metaclass's:
+    plain Python never asks it. Raises AttributeError like it without a
+    *default*."""
+    kind = type(obj)
+    if type in class_mro(kind):
+        klass = obj
+        held = _ABSENT
+    else:
+        klass = kind
+        attributes = own_dict(obj, subclasses=True)
+        held = dict.get(attributes, name, _ABSENT) if attributes is not None else _ABSENT
+    found = _in_mro(klass, name)
+    if held is not _ABSENT:
+        if found is not _ABSENT:
+            found_kind = type(found)
+            if _in_mro(found_kind, "__get__") is not _ABSENT and (
+                _in_mro(found_kind, "__set__") is not _ABSENT or _in_mro(found_kind, "__delete__") is not _ABSENT
+            ):
+                return found
+        return held
+    if found is not _ABSENT:
+        return found
+    if obj is klass:
+        # For a class, its metaclass's too.
+        found = _in_mro(kind, name)
+        if found is not _ABSENT:
+            return found
+    if default is not _NO_DEFAULT:
+        return default
+    raise AttributeError(name)
+
+
+def _in_mro(klass: type, name: str) -> Any:
+    """What the first class along *klass*'s MRO holding *name* holds, or
+    `_ABSENT`."""
+    for entry in class_mro(klass):
+        held = class_dict(entry)
+        if name in held:
+            return held[name]
+    return _ABSENT
 
 
 def module_file(module: Any) -> str | None:
@@ -180,7 +374,16 @@ def own_lookup(kind: type) -> bool:
     they are answered by Python's generic lookup and the real type."""
     own = _OWN_LOOKUP.get(type_key(kind))
     if own is None:
-        own = _OWN_LOOKUP.put(kind, type(kind.__getattribute__) is types.FunctionType)
+        # Found along the MRO, as ``kind.__getattribute__`` finds it (the
+        # metaclass holds no data descriptor by that name) but without
+        # asking the metaclass of a class of the user's. A class (*kind* a
+        # metaclass) counts one with a ``__getattr__`` in Python too: cash's
+        # questions of a class go to ``type``'s lookup (`attribute_or`).
+        hook = _in_mro(kind, "__getattribute__")
+        own = type(hook) is types.FunctionType
+        if not own and issubclass(kind, type):
+            own = type(_in_mro(kind, "__getattr__")) is types.FunctionType
+        own = _OWN_LOOKUP.put(kind, own)
     return own
 
 
@@ -327,6 +530,12 @@ def is_routine(obj: Any) -> bool:
     kind = type(obj)
     if own_lookup(kind) or issubclass(kind, functools.partial):
         return False
+    if hooked_class(kind):
+        # The object's class's metaclass hooks its lookups: ``inspect``
+        # would ask it for ``__get__``. Answered by the real type alone.
+        return issubclass(kind, _ROUTINE_KINDS) or (
+            _in_mro(kind, "__get__") is not _ABSENT and _in_mro(kind, "__set__") is _ABSENT
+        )
     try:
         return inspect.isroutine(obj)
     except Exception:  # noqa: BLE001 - the object's own error, not one of cash's
@@ -453,6 +662,17 @@ def builtin_items(value: Any) -> list[Any] | None:
     return list(base.__iter__(value))
 
 
+_OBJECT_LOOKUP = object.__dict__["__getattribute__"]
+_ROUTINE_KINDS = (
+    types.BuiltinFunctionType,
+    types.FunctionType,
+    types.MethodType,
+    types.MethodWrapperType,
+    types.MethodDescriptorType,
+    types.WrapperDescriptorType,
+    types.ClassMethodDescriptorType,
+)
+
 #: `held_attribute`'s answer for an attribute reading would compute.
 NOT_HELD: Any = object()
 _TUPLE_GETTER = type(collections.namedtuple("_Probe", "a").__dict__["a"])
@@ -466,11 +686,11 @@ def held_attribute(obj: Any, name: str) -> Any:
     attribute the instance does not shadow, a class with its own
     ``__getattribute__``, a missing attribute (``__getattr__``'s)."""
     cls = type(obj)
-    if cls.__getattribute__ is not object.__getattribute__ and not isinstance(obj, tuple):
+    if _in_mro(cls, "__getattribute__") is not _OBJECT_LOOKUP and not isinstance(obj, tuple):
         return NOT_HELD
     found = NOT_HELD
-    for klass in cls.__mro__:
-        found = klass.__dict__.get(name, NOT_HELD)
+    for klass in class_mro(cls):
+        found = class_dict(klass).get(name, NOT_HELD)
         if found is not NOT_HELD:
             break
     if isinstance(found, functools.cached_property):
@@ -509,8 +729,8 @@ def _pydantic_private(obj: Any, cls: type, name: str) -> Any:
     base = getattr(pydantic, "BaseModel", None) if pydantic is not None else None
     if base is None or not isinstance(obj, base):
         return NOT_HELD
-    getattr_ = next((k.__dict__["__getattr__"] for k in cls.__mro__ if "__getattr__" in k.__dict__), None)
-    if getattr_ is None or getattr_ is not base.__dict__.get("__getattr__"):
+    getattr_ = _in_mro(cls, "__getattr__")
+    if getattr_ is _ABSENT or getattr_ is not class_dict(base).get("__getattr__"):
         return NOT_HELD
     try:
         declared = object.__getattribute__(obj, "__private_attributes__")

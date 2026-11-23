@@ -27,6 +27,8 @@ from cash._user_attrs import attribute_or, instance_of, is_routine
 
 from .. import source_reads
 from .._memo import STATEMENTS, USER_CALLEES, LruMemo
+from .._type_memo import class_module
+from .._user_attrs import plain_getattr, static_attr, unwrapped
 from ..diagnostics import warn_diagnostic
 from ..effects import is_open_write_mode
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
@@ -173,7 +175,7 @@ def statement_user_writer_call(
             for value, function in _handed_functions(node, namespace, bound):
                 found = user_callee_writing_files(function, appends=appends)
                 if found:
-                    return getattr(value, "__name__", None) or ast.unparse(node.func), found
+                    return plain_getattr(value, "__name__", None) or ast.unparse(node.func), found
     return None
 
 
@@ -246,7 +248,7 @@ def _function_called(value: Any) -> Any:
         return value
     owner = value if isinstance(value, type) else type(value)
     try:
-        return inspect.getattr_static(owner, "__init__" if isinstance(value, type) else "__call__")
+        return static_attr(owner, "__init__" if isinstance(value, type) else "__call__")
     except AttributeError:
         return value
 
@@ -363,7 +365,7 @@ def _examined_body(func: Any) -> "tuple[types.FunctionType, bool, bool, bool, tu
     else: not a Python function, ``@pure``, from an installed package, or
     without source."""
     if type(func) is not types.FunctionType:
-        func = inspect.unwrap(func) if callable(func) else func
+        func = unwrapped(func) if callable(func) else func
         if type(func) is not types.FunctionType:
             return None
     if is_pure(func):
@@ -456,7 +458,7 @@ def _calls_pyplot(
                 return True
         elif isinstance(expr, ast.Name):
             target = namespace.get(expr.id)
-            if callable(target) and getattr(target, "__module__", None) == "matplotlib.pyplot":
+            if callable(target) and plain_getattr(target, "__module__", None) == "matplotlib.pyplot":
                 return True
     return False
 
@@ -492,7 +494,7 @@ def statement_user_pyplot_call(
             for value, function in _handed_functions(node, namespace, bound):
                 found = user_callee_using_pyplot(function)
                 if found:
-                    return getattr(value, "__name__", None) or ast.unparse(node.func), found
+                    return plain_getattr(value, "__name__", None) or ast.unparse(node.func), found
     return None
 
 
@@ -500,7 +502,7 @@ def _is_pyplot_object(value: Any) -> bool:
     """Whether *value* is the pyplot module or one of its functions."""
     if issubclass(type(value), types.ModuleType):
         return value.__name__ == "matplotlib.pyplot"
-    return callable(value) and getattr(value, "__module__", None) == "matplotlib.pyplot"
+    return callable(value) and plain_getattr(value, "__module__", None) == "matplotlib.pyplot"
 
 
 def _hands_pyplot(call: ast.Call, namespace: "Mapping[str, Any]") -> bool:
@@ -1346,7 +1348,7 @@ def _receiver_is_pyplot_module(recv: ast.AST, namespace: dict[str, Any] | None) 
         if namespace is not None and recv.id in namespace:
             mod = namespace[recv.id]
             # A Figure/Axes has no ``__name__``; the pyplot module's is exact.
-            return getattr(mod, "__name__", "") == "matplotlib.pyplot"
+            return plain_getattr(mod, "__name__", "") == "matplotlib.pyplot"
         # Namespace unavailable / name not bound: accept the conventional alias
         # as a conservative fallback (everyone imports pyplot as ``plt``).
         return recv.id in ("plt", "pyplot")
@@ -1419,7 +1421,7 @@ def notebook_global_rebinds(tree: ast.AST | None, resolve_source, namespace: Map
             continue
         seen.add(name)
         func = namespace.get(name)
-        if getattr(func, "__globals__", None) is not namespace:
+        if plain_getattr(func, "__globals__", None) is not namespace:
             continue
         try:
             source = resolve_source(name)
@@ -1606,7 +1608,7 @@ def _live_user_function_source(user_ns: Mapping[str, Any]) -> Callable[[str], st
         fn = user_ns.get(head)
         for attr in attrs:
             try:
-                fn = inspect.getattr_static(fn, attr)
+                fn = static_attr(fn, attr)
             except AttributeError:
                 return None
         if type(fn) is not types.FunctionType:
@@ -1886,7 +1888,7 @@ def _call_handoffs(
             # ``H.push(x)``: what the method or partial an attribute holds
             # is bound to changes, watched by the names that hold it.
             try:
-                held = inspect.getattr_static(user_ns[func.value.id], func.attr)
+                held = static_attr(user_ns[func.value.id], func.attr)
             except Exception:  # noqa: BLE001 - not there, or not readable without running code
                 held = None
             if held is not None:
@@ -2000,7 +2002,7 @@ def _names_a_class(node: ast.expr, local: frozenset[str] | set[str], user_ns: Ma
         if not instance_of(value, (types.ModuleType, type)):
             return False
         try:
-            value = inspect.getattr_static(value, attr)
+            value = static_attr(value, attr)
         except AttributeError:
             return False
     return instance_of(value, type)
@@ -2455,7 +2457,7 @@ def _helper_name(func: ast.expr, user_ns: Mapping[str, Any]) -> str | None:
     holder: Any = user_ns[node.id]
     for attr in reversed(parts[1:]):
         try:
-            holder = inspect.getattr_static(holder, attr)
+            holder = static_attr(holder, attr)
         except AttributeError:
             return None
         if not isinstance(holder, types.ModuleType):
@@ -2464,7 +2466,7 @@ def _helper_name(func: ast.expr, user_ns: Mapping[str, Any]) -> str | None:
 
 
 def _array_like(value: Any) -> bool:
-    module = getattr(type(value), "__module__", "") or ""
+    module = plain_getattr(type(value), "__module__", "") or ""
     return module.split(".", 1)[0] in ("numpy", "pandas")
 
 
@@ -2606,10 +2608,10 @@ def users_method_call(
         return None
     cls = value if is_class else type(value)
     try:
-        method = inspect.getattr_static(cls, func.attr)
+        method = static_attr(cls, func.attr)
     except AttributeError:
         return None
-    if not is_class and inspect.getattr_static(value, func.attr, None) is not method:
+    if not is_class and static_attr(value, func.attr, None) is not method:
         return None  # an instance's own attribute, not the class's method
     bound = constructed or not is_class
     if issubclass(type(method), staticmethod):
@@ -2745,18 +2747,18 @@ def _users_code(target: Any) -> bool:
     if type(target) is types.MethodType:
         target = target.__func__
     if issubclass(type(target), type):
-        target = inspect.getattr_static(target, "__init__", None)
+        target = static_attr(target, "__init__", None)
     elif type(target) is not types.FunctionType:
-        target = inspect.getattr_static(type(target), "__call__", None)
+        target = static_attr(type(target), "__call__", None)
     if issubclass(type(target), (staticmethod, classmethod)):
         target = target.__func__
     if type(target) is not types.FunctionType:
         return False
     try:
-        target = inspect.unwrap(target)
+        target = unwrapped(target)
     except ValueError:
         return True
-    code = getattr(target, "__code__", None)
+    code = plain_getattr(target, "__code__", None)
     return code is not None and is_user_code_file(code.co_filename)
 
 
@@ -2960,7 +2962,7 @@ def _stand_ins(
     if isinstance(func, ast.Attribute) and func.attr in ("fit", "partial_fit"):
         # scikit-learn's ``fit`` returns the estimator itself.
         fitted = _stand_ins(func.value, tree, user_ns, parents, depth + 1)
-        if not fitted or not all(type(v).__module__.partition(".")[0] == "sklearn" for v in fitted):
+        if not fitted or not all(class_module(type(v)).partition(".")[0] == "sklearn" for v in fitted):
             return None
         return fitted
     callee = resolve_callee(func, user_ns)
@@ -3216,7 +3218,7 @@ def _built_in_text(
     if not _only_used_as_estimator(name, tree, parents):
         return None
     values = _stand_ins(assign.value, tree, user_ns, parents, depth + 1)
-    if not values or not all(type(v).__module__.partition(".")[0] == "sklearn" for v in values):
+    if not values or not all(class_module(type(v)).partition(".")[0] == "sklearn" for v in values):
         return None
     return values + ([user_ns[name]] if name in user_ns else [])
 
@@ -3225,7 +3227,7 @@ def _method_leaves(obj: Any, method: str, call: ast.Call, name: str, user_ns: Ma
     """Whether *obj*'s *method*, a function of the user's whose source is
     read, leaves what *call* hands it under *name* as it was."""
     try:
-        fn = inspect.getattr_static(type(obj), method)
+        fn = static_attr(type(obj), method)
     except AttributeError:
         return False
     if type(fn) is not types.FunctionType or not is_user_code_file(fn.__code__.co_filename):

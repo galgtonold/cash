@@ -29,6 +29,9 @@ import sys
 import threading
 from typing import Any
 
+from ._type_memo import class_name, module_of_class
+from ._user_attrs import class_attr
+
 __all__ = ["current_stream", "is_live_stream", "live_reduce", "stream_kind"]
 
 #: The ``sys`` names a stored stream may stand for, in the order they are
@@ -53,8 +56,16 @@ def _own_stream(obj: Any) -> bool:
     on it writes to that file, which a restore cannot give back."""
     if obj is sys.__stdout__ or obj is sys.__stderr__:
         return obj is not None
-    kind = type(obj)
-    return kind.__name__ == "OutStream" and kind.__module__.startswith("ipykernel.")
+    return _kernel_stream(type(obj))
+
+
+def _kernel_stream(kind: type) -> bool:
+    """Is *kind* ipykernel's ``OutStream``? Read through ``type``'s own
+    descriptors: a metaclass's hook of the user's is not asked."""
+    if class_name(kind) != "OutStream":
+        return False
+    module = module_of_class(kind, "")
+    return type(module) is str and module.startswith("ipykernel.")
 
 
 def _stream_name(obj: Any) -> str | None:
@@ -62,7 +73,7 @@ def _stream_name(obj: Any) -> str | None:
     process's own streams (`_own_stream`). A writer cash puts in front of a
     stream while a cell runs (``notebook/_tee.py``) stands for the stream it
     writes to."""
-    wrapped = getattr(type(obj), "_cash_wrapped_stream", None)
+    wrapped = class_attr(type(obj), "_cash_wrapped_stream")
     if wrapped is not None:
         obj = wrapped(obj)
     if not _own_stream(obj):
@@ -77,9 +88,9 @@ def stream_kind(kind: type) -> bool:
     """Can an object of *kind* be a stream `is_live_stream` names other than
     ``sys.__stdout__`` and ``sys.__stderr__`` themselves: a writer cash puts
     in front of one, or ipykernel's ``OutStream``?"""
-    if getattr(kind, "_cash_wrapped_stream", None) is not None:
+    if class_attr(kind, "_cash_wrapped_stream") is not None:
         return True
-    return kind.__name__ == "OutStream" and kind.__module__.startswith("ipykernel.")
+    return _kernel_stream(kind)
 
 
 def is_live_stream(obj: Any) -> bool:

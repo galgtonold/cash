@@ -131,7 +131,7 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
       each is the same; so is a call the call cache keeps. A statement or a
       kept call that changed one runs again the next time, as a hit could
       not change it again.
-      <!-- claim: cash/kept_state.py:logger_state @37d45541, cash/kept_state.py:_handler_state @5efc2fe1, cash/kept_state.py:buffering_handlers @83e6a999, cash/kept_state.py:_reduce_by_reference_for_key @62e37a1b -->
+      <!-- claim: cash/kept_state.py:logger_state @37d45541, cash/kept_state.py:_handler_state @bebe7d1f, cash/kept_state.py:buffering_handlers @5989c5c5, cash/kept_state.py:_reduce_by_reference_for_key @62e37a1b -->
       A standard library logger's state is what its output follows: its
       name, level, parent, `propagate`, `disabled`, handlers (each with
       its level, formatter, filters and the file or stream it writes to,
@@ -170,7 +170,7 @@ decorator, [Writing cache-safe cells](../known-limitations.md) for notebooks.
     - **An in-place change** to a variable it reads
       ([below](#mutation-bumps-the-receivers-lineage)).
 
-    <!-- claim: cash/tracking/function_tracker.py:FunctionTracker.check_and_reload_changed_modules @377dc190, cash/notebook/ipython/cell_executor.py:CellExecutor._raise_failed_reload @c7525897 -->
+    <!-- claim: cash/tracking/function_tracker.py:FunctionTracker.check_and_reload_changed_modules @e28aabed, cash/notebook/ipython/cell_executor.py:CellExecutor._raise_failed_reload @c7525897 -->
     If an edited module no longer loads (a syntax error, or an error in its
     top-level code), the kernel still holds its old code, so cash runs
     nothing on it: every cell you run fails with the error a fresh import of

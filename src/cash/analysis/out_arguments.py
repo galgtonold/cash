@@ -32,6 +32,8 @@ import textwrap
 import types
 from typing import Any
 
+from .._type_memo import class_mro
+from .._user_attrs import plain_getattr
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..jit_functions import jit_python_function
 from ..source_reading import own_source
@@ -162,10 +164,10 @@ def site_constructs(fn: types.FunctionType, caller: Any, caller_code: types.Code
     cls = resolve_callee(call.func, _namespace(caller), modules_only=False)
     if not isinstance(cls, type) or type(cls).__call__ is not type.__call__ or cls.__new__ is not object.__new__:
         return False
-    init = next((k.__dict__["__init__"] for k in cls.__mro__ if "__init__" in k.__dict__), None)
+    init = next((k.__dict__["__init__"] for k in class_mro(cls) if "__init__" in k.__dict__), None)
     seen = 0
     while init is not None and init is not fn and seen < 8:
-        init = getattr(init, "__wrapped__", None) if type(init) is types.FunctionType else None
+        init = plain_getattr(init, "__wrapped__", None) if type(init) is types.FunctionType else None
         seen += 1
     return init is fn
 

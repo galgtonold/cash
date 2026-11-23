@@ -23,6 +23,7 @@ import zlib
 from collections.abc import Callable
 from typing import Any
 
+from .._type_memo import class_name
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheStoreFailedWarning
 from .entry_format import ENTRY_SUFFIX, MAGIC, MAGICS
@@ -455,7 +456,7 @@ def warn_unusable(path: str, exc: BaseException) -> None:
             CashCacheStoreFailedWarning,
             "CACHE-DIR-UNWRITABLE",
             f"cash cannot use its cache directory {path} "
-            f"({type(exc).__name__}: {exc}). Nothing will be cached to disk "
+            f"({class_name(type(exc))}: {exc}). Nothing will be cached to disk "
             f"this run, so every call recomputes -- but the run itself "
             f"continues normally.",
             "point cash somewhere it can write -- cash.configure(cache_dir=...), "
@@ -502,7 +503,7 @@ def warn_if_unwritable(cache_dir: str, *, windows: bool = os.name == "nt") -> No
             CashCacheStoreFailedWarning,
             "CACHE-DIR-UNWRITABLE",
             f"cash cannot write to its cache directory {cache_dir} "
-            f"({type(exc).__name__}: {exc}).{why} Nothing will be cached to disk "
+            f"({class_name(type(exc))}: {exc}).{why} Nothing will be cached to disk "
             f"this run, so every call recomputes.",
             fix,
         )

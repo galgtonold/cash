@@ -41,6 +41,7 @@ from collections import OrderedDict
 from typing import Any
 
 from .. import _weak
+from .._type_memo import class_module, class_name
 
 __all__ = [
     "content_key_of",
@@ -244,7 +245,7 @@ def lookup(view: memoryview) -> tuple[bytes | None, Any]:
         return None, None
     try:
         source = view.obj
-        if type(source).__name__ == "Buffer" and type(source).__module__ == "pyarrow.lib":
+        if class_name(type(source)) == "Buffer" and class_module(type(source)) == "pyarrow.lib":
             return _arrow_lookup(source, view.nbytes)
         with _LOCK:
             found = _IMMUTABLE.get(id(source))

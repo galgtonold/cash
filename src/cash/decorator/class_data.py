@@ -18,6 +18,8 @@ from typing import TYPE_CHECKING, Any
 
 from .. import _weak
 from .._memo import CODE_OBJECTS, LruMemo
+from .._type_memo import class_dict, class_module, class_mro, class_name, class_qualname
+from .._user_attrs import class_attr, hooked_class, plain_getattr
 from ..analysis.helper_code import is_mock
 from ..exceptions import CashImpurityWarning
 from .arg_hashing import is_opaque
@@ -46,10 +48,10 @@ CLASSES_FOLDED: contextvars.ContextVar[set[int] | None] = contextvars.ContextVar
 
 def _user_bases(cls: type) -> list[type]:
     """*cls*'s own user classes in method-resolution order, and its metaclass's."""
-    found = [b for b in cls.__mro__ if b is not object and not is_opaque(b) and is_user_code_object(b)]
+    found = [b for b in class_mro(cls) if b is not object and not is_opaque(b) and is_user_code_object(b)]
     meta = type(cls)
     if meta is not type:
-        found += [b for b in meta.__mro__ if b not in (type, object) and not is_opaque(b) and is_user_code_object(b)]
+        found += [b for b in class_mro(meta) if b not in (type, object) and not is_opaque(b) and is_user_code_object(b)]
     return found
 
 
@@ -66,7 +68,7 @@ def _function_layers(fn: Any) -> list[types.FunctionType]:
         walked.add(id(fn))
         if type(fn) is types.FunctionType and not is_cash_wrapper(fn):
             layers.append(fn)
-        fn = getattr(fn, "__wrapped__", None)
+        fn = plain_getattr(fn, "__wrapped__", None)
     return layers
 
 
@@ -97,7 +99,7 @@ def class_surface_functions(cls: type) -> list[types.FunctionType]:
     while classes:
         current = classes.pop(0)
         for base in _user_bases(current):
-            for member in list(vars(base).values()):
+            for member in list(class_dict(base).values()):
                 functions = _member_functions(member)
                 found.extend(functions)
                 if (
@@ -148,7 +150,7 @@ def implicit_access_functions(cls: type) -> list[types.FunctionType]:
     runs. Its own and every user base's."""
     found: list[types.FunctionType] = []
     for base in _user_bases(cls):
-        for name, member in vars(base).items():
+        for name, member in class_dict(base).items():
             if isinstance(member, property):
                 found.extend(_function_layers(member.fget))
             elif hasattr(member, "attrname") and (type(getattr(member, "func", None)) is types.FunctionType):
@@ -184,11 +186,11 @@ def class_data_items(
     """
     items: list[tuple[str, Any]] = []
     for base in _user_bases(cls) if bases is None else bases:
-        prefix = base.__qualname__
-        if isinstance(base, enum.EnumMeta):
+        prefix = class_qualname(base)
+        if issubclass(type(base), enum.EnumMeta):
             items.append((f"{prefix}.__members__", enum_members(base)))
             continue
-        for name, value in list(vars(base).items()):
+        for name, value in list(class_dict(base).items()):
             if _is_class_machinery(name) or name in skip:
                 continue
             if issubclass(type(value), types.ModuleType) or is_cash_wrapper(value):
@@ -251,10 +253,10 @@ def enum_members(cls: type) -> list[tuple[str, Any, list[tuple[str, Any]]]]:
     ``cached_property`` getter of the class stored on it during a call is
     left out (`note_getter_fills`): its getter's code stands for it. A
     value written into that slot by hand is kept."""
-    filled = {k for base in cls.__mro__ for k, v in vars(base).items() if type(v) is functools.cached_property}
+    filled = {k for base in class_mro(cls) for k, v in class_dict(base).items() if type(v) is functools.cached_property}
     out = []
     for name, member in cls.__members__.items():
-        held = getattr(member, "__dict__", None)
+        held = plain_getattr(member, "__dict__", None)
         extra: list[tuple[str, Any]] = []
         if type(held) is dict:
             for k, v in held.items():
@@ -333,14 +335,14 @@ def abc_registries(cls: type) -> list[tuple[str, tuple[str, ...]]]:
     """``(label, registered names)`` for *cls* and the classes below it
     when *cls* is an ABC: what ``isinstance(x, cls)`` asks besides the
     MRO."""
-    if not isinstance(cls, abc.ABCMeta):
+    if not issubclass(type(cls), abc.ABCMeta):
         return []
     found: list[tuple[str, tuple[str, ...]]] = []
     for k in (cls, *classes_below(cls)):
-        if isinstance(k, abc.ABCMeta):
+        if issubclass(type(k), abc.ABCMeta):
             names = tuple(sorted(_class_name(c) for c in _abc_registered(k)))
             if names:
-                found.append((f"{k.__qualname__}.register", names))
+                found.append((f"{class_qualname(k)}.register", names))
     return found
 
 
@@ -350,7 +352,10 @@ def class_names(cls: type) -> tuple[tuple[str, tuple[str, ...]], ...]:
     ``runtime_checkable`` protocol, ``hasattr`` or ``dir`` answers, and no
     source or data digest sees it."""
     return tuple(
-        (base.__qualname__, tuple(sorted(n for n in vars(base) if n not in _LAZY_NAMES and isinstance(n, str))))
+        (
+            class_qualname(base),
+            tuple(sorted(n for n in class_dict(base) if n not in _LAZY_NAMES and isinstance(n, str))),
+        )
         for base in _user_bases(cls)
     )
 
@@ -376,7 +381,7 @@ def class_annotations(cls: type, digest: Callable[[Any], str]) -> str:
         if isinstance(own, list):
             own = [(name, _annotation_print(value, digest)) for name, value in own]
         if own is not None:
-            found.append((base.__qualname__, own))
+            found.append((class_qualname(base), own))
     return hashlib.sha256(repr(found).encode("utf-8")).hexdigest()
 
 
@@ -388,11 +393,11 @@ def _unhashable_annotation(cls: type, func_name: str, error: Exception) -> KeyBu
     """KEY-UNHASHABLE-CAPTURE for an annotation of *cls* the key needs and
     cannot hash: left out, a change to it would not reach the key, so the
     call runs uncached."""
-    name = cls.__qualname__
+    name = class_qualname(cls)
     return KeyBuildFailed(
         "KEY-UNHASHABLE-CAPTURE",
         f"@cash.cache: {func_name} reads the annotations of {name}, and one of them could not be "
-        f"hashed ({type(error).__name__}: {error}), so the call ran uncached rather than risk "
+        f"hashed ({class_name(type(error))}: {error}), so the call ran uncached rather than risk "
         f"serving a result computed under annotations that changed.",
         f"annotate {name} with plain types and values, or register a hasher for the marker's type "
         f"with cash.register_hasher(...).",
@@ -401,7 +406,7 @@ def _unhashable_annotation(cls: type, func_name: str, error: Exception) -> KeyBu
 
 def _annotation_print(value: Any, digest: Callable[[Any], str]) -> str:
     if isinstance(value, type):
-        return f"type:{value.__module__}.{value.__qualname__}"
+        return f"type:{class_module(value)}.{class_qualname(value)}"
     if isinstance(value, str):
         return f"str:{value}"
     return f"value:{digest(value)}"
@@ -417,7 +422,7 @@ def _own_annotations(base: type) -> list[tuple[str, Any]] | str | None:
     without evaluating a name it does not define (``FORWARDREF``), and
     without keeping the result, which reading ``__annotations__`` would.
     """
-    ns = vars(base)
+    ns = class_dict(base)
     value = ns.get("__annotations__", ns.get("__annotations_cache__"))
     if value is None and ("__annotate_func__" in ns or "__annotate__" in ns):
         try:
@@ -435,7 +440,7 @@ def _own_annotations(base: type) -> list[tuple[str, Any]] | str | None:
 
 def _code_names(func: Any) -> frozenset[str]:
     """The names *func*'s code, and the scopes inside it, look up."""
-    code = getattr(func, "__code__", None)
+    code = plain_getattr(func, "__code__", None)
     if not isinstance(code, types.CodeType):
         return frozenset()
     return frozenset(n for scope in iter_code_scopes(code) for n in scope.co_names or ())
@@ -489,7 +494,12 @@ def _abc_registered(k: type) -> list[type]:
     if _get_dump is None:  # pragma: no cover - _py_abc
         return list(getattr(k, "_abc_registry", ()))
     try:
-        registry = _get_dump(k)[0]
+        if hooked_class(k):
+            # ``_get_dump`` asks the class for its ``_abc_impl``, which its
+            # metaclass's hook would answer: handed it as ``type`` finds it.
+            registry = _get_dump(types.SimpleNamespace(_abc_impl=class_attr(k, "_abc_impl")))[0]
+        else:
+            registry = _get_dump(k)[0]
     except TypeError:
         return []
     return [c for c in (ref() for ref in registry) if c is not None]
@@ -538,7 +548,7 @@ def _in_an_abc_set(k: type) -> bool:
 
 def registered_with(cls: type) -> tuple[str, ...]:
     """The ABCs that registered *cls* or a class of its MRO, by name."""
-    mro = [k for k in cls.__mro__ if k is not object]
+    mro = [k for k in class_mro(cls) if k is not object]
     if not any(_in_an_abc_set(k) for k in mro):
         return ()
     index = _registrations()
@@ -711,12 +721,12 @@ class ClassDataFold:
     ) -> list[tuple[str, str]]:
         if owner_code is None:
             owner = self._registry.functions.get(func_name)
-            owner_code = getattr(owner, "__code__", None)
+            owner_code = plain_getattr(owner, "__code__", None)
         learned = self._mutations.of(owner_code, "global") if owner_code is not None else frozenset()
-        label = f"class:{cls.__module__}.{cls.__qualname__}"
+        label = f"class:{class_module(cls)}.{class_qualname(cls)}"
         parts, unhashable = self._held_data_parts(cls, label, learned)
         functions, excluded, read_names, _ = self._class_code(cls)
-        subclasses = SUBCLASSES in read_names or reads_subclasses(getattr(reader, "__code__", None))
+        subclasses = SUBCLASSES in read_names or reads_subclasses(plain_getattr(reader, "__code__", None))
         for member, value in (*class_family(cls, subclasses), ("names", class_names(cls))):
             parts.append((f"{label}:{member}", hashlib.sha256(repr(value).encode("utf-8")).hexdigest()))
         if DOCSTRING_READS & read_names:
@@ -796,9 +806,11 @@ class ClassDataFold:
         """Key parts for the docstrings of *cls* and its user bases."""
         parts: list[tuple[str, str]] = []
         for base, _, _, _ in self._class_layout(cls):
-            doc = vars(base).get("__doc__")
+            doc = class_dict(base).get("__doc__")
             if isinstance(doc, str):
-                parts.append((f"{label}:{base.__qualname__}.__doc__", hashlib.sha256(doc.encode("utf-8")).hexdigest()))
+                parts.append(
+                    (f"{label}:{class_qualname(base)}.__doc__", hashlib.sha256(doc.encode("utf-8")).hexdigest())
+                )
         return parts
 
     def _function_read_parts(
@@ -851,7 +863,7 @@ class ClassDataFold:
         names: set[str] = set()
         written: set[str] = set()
         for fn in functions:
-            g = getattr(fn, "__globals__", None)
+            g = plain_getattr(fn, "__globals__", None)
             if not isinstance(g, dict):
                 continue
             data = set(self._reads.read_global_data_names(fn))
@@ -876,16 +888,16 @@ class ClassDataFold:
         removed from a class, which the namespace sizes stand guard for.
         """
         cached = self._class_layout_cache.get(cls)
-        if cached is not None and all(len(vars(base)) == size for base, size, _, _ in cached):
+        if cached is not None and all(len(class_dict(base)) == size for base, size, _, _ in cached):
             return cached
         skip = self._class_code(cls)[3]
         layout = []
         for base in _user_bases(cls):
-            if isinstance(base, enum.EnumMeta):
-                layout.append((base, len(vars(base)), None, {}))
+            if issubclass(type(base), enum.EnumMeta):
+                layout.append((base, len(class_dict(base)), None, {}))
                 continue
             names = tuple(label.split(".")[-1] for label, _ in class_data_items(base, skip, bases=[base]))
-            layout.append((base, len(vars(base)), names, set_loop_leftovers(base, names)))
+            layout.append((base, len(class_dict(base)), names, set_loop_leftovers(base, names)))
         result = tuple(layout)
         self._class_layout_cache[cls] = result
         return result
@@ -894,11 +906,11 @@ class ClassDataFold:
         """`class_data_items` of *cls*, read through its memoized layout."""
         items: list[tuple[str, Any]] = []
         for base, _, names, leftovers in self._class_layout(cls):
-            prefix = base.__qualname__
+            prefix = class_qualname(base)
             if names is None:
                 items.append((f"{prefix}.__members__", enum_members(base)))
                 continue
-            namespace = vars(base)
+            namespace = class_dict(base)
             for name in names:
                 if name in namespace:
                     value = leftover_value(namespace, name, leftovers)
@@ -953,7 +965,7 @@ class ClassDataFold:
         self, func_name: str, labels: list[str], read_names: frozenset, reader: Any
     ) -> None:
         """Warn once per member that a class attribute the code reads could not be hashed."""
-        reader_code = getattr(reader, "__code__", None)
+        reader_code = plain_getattr(reader, "__code__", None)
         if reader_code is not None:
             read_names = read_names | {n for scope in iter_code_scopes(reader_code) for n in scope.co_names or ()}
         for label in labels:

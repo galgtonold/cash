@@ -33,6 +33,7 @@ import threading
 from typing import Any
 
 from .. import _weak
+from .._type_memo import class_qualname
 from ..content_hashers import column_memory_key, known_column_pieces, pandas_value_route
 
 logger = logging.getLogger(__name__)
@@ -99,7 +100,7 @@ def block_layout(values: Any) -> tuple | None:
     if type(array) is not np.ndarray or not (array.flags.c_contiguous or array.flags.f_contiguous):
         return None
     return (
-        kind.__qualname__,
+        class_qualname(kind),
         str(values.dtype),
         array.shape,
         array.flags.c_contiguous,

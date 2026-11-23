@@ -17,7 +17,8 @@ from typing import TYPE_CHECKING, Any
 from .. import _plain_data, canonical_form
 from .._active import EXPLAINING as _EXPLAINING
 from .._memo import CODE_OBJECTS, LruMemo
-from .._user_attrs import module_file
+from .._type_memo import class_dict, class_mro, class_qualname, mro_of
+from .._user_attrs import attribute_or, module_file, named_attr, plain_getattr
 from ..analysis.purity_analyzer import get_analyzer
 from ..analysis.purity_report import ISSUE_AMBIENT_READ, ISSUE_UNTRACKABLE_DEP, UNREAD_MODULE, PurityIssue
 from ..code_digest import unwrap_partials
@@ -82,11 +83,11 @@ def carrier_name(carrier: Any) -> str:
     that grows without bound) and would make a folded part label differ
     between two processes holding equal arguments.
     """
-    name = getattr(carrier, "__qualname__", None) or getattr(carrier, "__name__", None)
+    name = plain_getattr(carrier, "__qualname__", None) or plain_getattr(carrier, "__name__", None)
     if isinstance(name, str) and name:
         return name
     t = type(carrier)
-    return getattr(t, "__qualname__", None) or getattr(t, "__name__", None) or "?"
+    return plain_getattr(t, "__qualname__", None) or plain_getattr(t, "__name__", None) or "?"
 
 
 def _plain_record(value: Any) -> bool:
@@ -96,11 +97,11 @@ def _plain_record(value: Any) -> bool:
         return False
     fields = value if isinstance(value, tuple) else None
     if fields is None:
-        state = getattr(value, "__dict__", None)
+        state = plain_getattr(value, "__dict__", None)
         if not isinstance(state, dict) or not state:
             return False
         fields = state.values()
-    elif getattr(value, "__dict__", None):
+    elif plain_getattr(value, "__dict__", None):
         return False
     return all(type(f) in CODELESS_PRIMS for f in fields)
 
@@ -122,7 +123,7 @@ def is_user_code_carrier(carrier: Any) -> bool:
     while ``functools.partial(<a user function>)`` does, because the
     wrapped body is absent from the key.
     """
-    if getattr(carrier, "__qualname__", None) or getattr(carrier, "__name__", None):
+    if plain_getattr(carrier, "__qualname__", None) or plain_getattr(carrier, "__name__", None):
         return is_user_code_object(carrier)
     wrapped = getattr(carrier, "func", None)
     if wrapped is not None:
@@ -142,7 +143,7 @@ def defined_in_user_code(obj: Any) -> bool:
     the rest of the process. A module without a file (a notebook's
     ``__main__``, exec'd code) keeps the lenient verdict.
     """
-    mod = sys.modules.get(getattr(obj, "__module__", None) or "")
+    mod = sys.modules.get(plain_getattr(obj, "__module__", None) or "")
     if mod is not None and module_file(mod) is not None:
         return is_user_code_module(mod)
     return is_user_code_carrier(obj)
@@ -321,9 +322,11 @@ class CodeArgs:
         if _EXPLAINING.get():
             return
         name = carrier_name(carrier)
-        inner = getattr(carrier, "func", None) or getattr(carrier, "__wrapped__", None)
+        inner = getattr(carrier, "func", None) or plain_getattr(carrier, "__wrapped__", None)
         inner_name = (
-            getattr(inner, "__qualname__", None) or getattr(inner, "__name__", None) if inner is not None else None
+            plain_getattr(inner, "__qualname__", None) or plain_getattr(inner, "__name__", None)
+            if inner is not None
+            else None
         )
         mark = (f"{name}:{inner_name}", func_name, param)
         if mark in self._warned_unhashable_code:
@@ -336,7 +339,7 @@ class CodeArgs:
             f"hashed, so editing it will NOT invalidate the cache."
         )
         kind = carrier if isinstance(carrier, type) else type(carrier)
-        kind_name = getattr(kind, "__qualname__", None) or getattr(kind, "__name__", "?")
+        kind_name = plain_getattr(kind, "__qualname__", None) or plain_getattr(kind, "__name__", "?")
         fix = (
             f"name what it runs with @cash.cache(depends_on=[...]) if the result "
             f"depends on its implementation, or pass it in a form cash can read "
@@ -455,7 +458,7 @@ class CodeArgs:
             # for one of its instances, so routing the class here rather than
             # the instance leaves opacity unchanged.
             call = getattr(type(value), "__call__", None)
-            if getattr(call, "__code__", None) is not None:
+            if plain_getattr(call, "__code__", None) is not None:
                 cls = self._instance_class_carrier(value, _seen)
                 if cls is not None:
                     yield cls
@@ -574,10 +577,10 @@ class CodeArgs:
         if not verdict[1]:
             yield from self._iter_library_held(value, _depth, _seen)
             return
-        attrs = getattr(value, "__dict__", None)
+        attrs = plain_getattr(value, "__dict__", None)
         values: list[Any] = self._held_attributes(value, attrs) if isinstance(attrs, dict) else []
-        for klass in type(value).__mro__:
-            slots = klass.__dict__.get("__slots__", ())
+        for klass in mro_of(type(value)):
+            slots = class_dict(klass).get("__slots__", ())
             for slot in (slots,) if isinstance(slots, str) else slots:
                 if slot in ("__dict__", "__weakref__"):
                     continue
@@ -647,7 +650,7 @@ class CodeArgs:
             _seen.add(id(value))
             for v in held:
                 yield from self._walk_carriers(v, _depth + 1, _seen)
-        attrs = getattr(value, "__dict__", None)
+        attrs = plain_getattr(value, "__dict__", None)
         if not isinstance(attrs, dict) or not attrs:
             return
         _seen.add(id(value))
@@ -685,7 +688,7 @@ class CodeArgs:
             elif self._keyed_by_registration(v):
                 continue
             else:
-                attrs = getattr(v, "__dict__", None)
+                attrs = plain_getattr(v, "__dict__", None)
                 if isinstance(attrs, dict) and attrs:
                     _seen.add(id(v))
                     yield from self._find_user_code(attrs.values(), _depth + 1, _seen)
@@ -778,16 +781,16 @@ class CodeArgs:
         resolves load (``df.money``, ``df.report``): what `_installed_code`
         looks up on an argument's class. A superset (global names too) does
         no harm. Kept per report: a new analysis is a new report."""
-        memo_key = id(report) if report is not None else id(getattr(func, "__code__", func))
+        memo_key = id(report) if report is not None else id(plain_getattr(func, "__code__", func))
         entry = self._attribute_names_memo.get(memo_key)
-        if entry is not None and entry[0] is (report if report is not None else getattr(func, "__code__", func)):
+        if entry is not None and entry[0] is (report if report is not None else plain_getattr(func, "__code__", func)):
             return entry[1]
         functions: list[Any] = [func]
         if report is not None:
             for module_name, chain in report.helper_resolution_paths.values():
                 target: Any = sys.modules.get(module_name)
                 for attr in chain:
-                    target = getattr(target, attr, None)
+                    target = named_attr(target, attr, None)
                 if isinstance(target, type):
                     functions.extend(class_functions(target))
                 elif target is not None:
@@ -798,13 +801,13 @@ class CodeArgs:
                     functions.append(target)
         names: set[str] = set()
         for fn in functions:
-            code = getattr(getattr(fn, "__func__", fn), "__code__", None)
+            code = getattr(plain_getattr(fn, "__func__", fn), "__code__", None)
             if isinstance(code, types.CodeType):
                 for scope in _code_scopes(code):
                     names.update(scope.co_names)
         result = frozenset(names)
         self._attribute_names_memo[memo_key] = (
-            report if report is not None else getattr(func, "__code__", func),
+            report if report is not None else plain_getattr(func, "__code__", func),
             result,
         )
         return result
@@ -824,11 +827,11 @@ class CodeArgs:
         """
         memo_key = (id(cls), names)
         entry = self._installed_memo.get(memo_key)
-        mro = cls.__mro__
+        mro = class_mro(cls)
         if entry is not None and entry[0] is cls:
             sizes = entry[1]
-            if len(sizes) == len(mro) and all(len(k.__dict__) == n for k, n in zip(mro, sizes)):
-                if all(owner.__dict__.get(name) is attr for name, owner, attr, _ in entry[2]):
+            if len(sizes) == len(mro) and all(len(class_dict(k)) == n for k, n in zip(mro, sizes)):
+                if all(class_dict(owner).get(name) is attr for name, owner, attr, _ in entry[2]):
                     return tuple((name, carrier) for name, _, _, carrier in entry[2])
         found: list[tuple[str, type, Any, Any]] = []
         # A user class's own code is walked as an argument's is; what the
@@ -838,14 +841,14 @@ class CodeArgs:
         user = self._is_user_instance_class(cls)
         for name in sorted(names):
             for klass in mro:
-                attr = klass.__dict__.get(name, _MISSING)
+                attr = class_dict(klass).get(name, _MISSING)
                 if attr is _MISSING:
                     continue
                 if not (user and self._is_user_instance_class(klass)):
                     for carrier in installed_user_code(attr):
                         found.append((name, klass, attr, carrier))
                 break
-        self._installed_memo[memo_key] = (cls, tuple(len(k.__dict__) for k in mro), tuple(found))
+        self._installed_memo[memo_key] = (cls, tuple(len(class_dict(k)) for k in mro), tuple(found))
         return tuple((name, carrier) for name, _, _, carrier in found)
 
     def _family_installed_code(self, family: tuple[type, ...], names: frozenset[str]) -> tuple[tuple[str, Any], ...]:
@@ -866,17 +869,17 @@ class CodeArgs:
             return entry[5]
         namespaces: dict[int, Any] = {}
         for cls in family:
-            for klass in cls.__mro__:
-                namespaces.setdefault(id(klass), klass.__dict__)
+            for klass in class_mro(cls):
+                namespaces.setdefault(id(klass), class_dict(klass))
         found: list[tuple[str, Any]] = []
         watched: list[tuple[Any, str, Any]] = []
         for cls in family:
             for name, carrier in self._installed_code(cls, names):
                 found.append((name, carrier))
-                for klass in cls.__mro__:
-                    attr = klass.__dict__.get(name, _MISSING)
+                for klass in class_mro(cls):
+                    attr = class_dict(klass).get(name, _MISSING)
                     if attr is not _MISSING:
-                        watched.append((klass.__dict__, name, attr))
+                        watched.append((class_dict(klass), name, attr))
                         break
         dicts = tuple(namespaces.values())
         result = tuple(found)
@@ -1044,7 +1047,7 @@ class CodeArgs:
                 class_memo.STATS["verified"] += 1
                 if digest != entry[1] or cap is None or cap.ledger != entry[0].ledger:
                     raise class_memo.ClassMemoMismatch(
-                        f"the remembered code surface of {carrier.__qualname__} differs from walking it again"
+                        f"the remembered code surface of {attribute_or(carrier, '__qualname__')} differs from walking it again"
                     )
             else:
                 class_memo.replay(entry[0])
@@ -1096,7 +1099,7 @@ class CodeArgs:
             or cap.reads.keys() != entry[1].reads.keys()
         ):
             raise class_memo.ClassMemoMismatch(
-                f"the remembered fold of {carrier.__qualname__} for {func_name} differs from folding it again"
+                f"the remembered fold of {attribute_or(carrier, '__qualname__')} for {func_name} differs from folding it again"
             )
 
     def _carrier_reports(self, carrier: type) -> list:
@@ -1181,7 +1184,7 @@ class CodeArgs:
         """The functions of *cls* (`class_surface_functions`) with a closure
         cell of their own, per class while its MRO namespaces keep their
         sizes: asked for every user class reached, on every call."""
-        mro = cls.__mro__
+        mro = class_mro(cls)
         entry = self._capturing_memo.get(cls)
         if entry is not None and list(map(len, entry[0])) == entry[1]:
             return entry[2]
@@ -1190,7 +1193,7 @@ class CodeArgs:
             for fn in class_surface_functions(cls)
             if getattr(fn, "__closure__", None) and any(n not in CLASS_BODY_CELLS for n in fn.__code__.co_freevars)
         )
-        namespaces = tuple(k.__dict__ for k in mro)
+        namespaces = tuple(class_dict(k) for k in mro)
         self._capturing_memo[cls] = (namespaces, list(map(len, namespaces)), found)
         return found
 
@@ -1266,13 +1269,13 @@ class CodeArgs:
                         member, func_name, helpers, owner_code=owner_code, seen=seen
                     )
             if helpers:
-                parts.append(f"argclass:{carrier.__qualname__}#helpers:{helpers}")
+                parts.append(f"argclass:{class_qualname(carrier)}#helpers:{helpers}")
             return parts
         # Under a partial (`apply(partial(price, k=1), x)`), the function it
         # calls: its code was keyed (`CodeSurface._code_surface_own`), and
         # what that code reads was not.
         fn = unwrap_partials(carrier)
-        fn = getattr(fn, "__func__", fn)
+        fn = plain_getattr(fn, "__func__", fn)
         if type(fn) is not types.FunctionType:
             return []
         digest = self._globals.fold_passed_function_reads(fn, func_name, owner_code)
@@ -1292,7 +1295,7 @@ _ACCESSOR_FAMILIES = {
 
 def _accessor_classes(cls: type) -> list[type]:
     """*cls*, and the classes of its library's accessor family that are loaded."""
-    top = (getattr(cls, "__module__", None) or "").partition(".")[0]
+    top = (plain_getattr(cls, "__module__", None) or "").partition(".")[0]
     family = _ACCESSOR_FAMILIES.get(top)
     module = sys.modules.get(top) if family else None
     if module is None:
@@ -1350,7 +1353,7 @@ def installed_user_code(attr: Any) -> list[Any]:
     elif issubclass(type(attr), (types.FunctionType, type)):
         candidates = [attr]
     else:
-        held = getattr(attr, "__dict__", None)
+        held = plain_getattr(attr, "__dict__", None)
         candidates = list(held.values()) if isinstance(held, dict) else []
     return [c for c in candidates if issubclass(type(c), (types.FunctionType, type)) and defined_in_user_code(c)]
 
@@ -1361,7 +1364,7 @@ def _carrier_functions(carrier: Any, of_class: Any) -> list[types.FunctionType]:
     if isinstance(carrier, type):
         return [fn for fn in of_class(carrier) if is_user_code_object(fn)]
     fn = unwrap_partials(carrier)
-    fn = getattr(fn, "__func__", fn)
+    fn = plain_getattr(fn, "__func__", fn)
     return [fn] if type(fn) is types.FunctionType and is_user_code_object(fn) else []
 
 
@@ -1369,8 +1372,8 @@ def _own_methods(cls: type) -> dict[str, types.FunctionType]:
     """``qualname -> function`` for the plain methods *cls* and its bases
     define, whose first parameter is an instance of *cls* when called on one."""
     found: dict[str, types.FunctionType] = {}
-    for klass in cls.__mro__:
-        for member in vars(klass).values():
+    for klass in class_mro(cls):
+        for member in class_dict(klass).values():
             # The function a ``functools.wraps`` decorator wraps (sklearn's
             # ``_fit_context``) shares the wrapper's name and is the one
             # that holds the lookup: the innermost layer stands for the name.
@@ -1378,7 +1381,7 @@ def _own_methods(cls: type) -> dict[str, types.FunctionType]:
             depth = 0
             while type(member) is types.FunctionType and depth < 100:
                 layers[member.__qualname__] = member
-                member = getattr(member, "__wrapped__", None)
+                member = plain_getattr(member, "__wrapped__", None)
                 depth += 1
             for name, fn in layers.items():
                 found.setdefault(name, fn)

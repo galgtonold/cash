@@ -37,6 +37,8 @@ import sys
 import types
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from .._type_memo import class_dict, class_module, class_mro, class_name, mro_of
+from .._user_attrs import plain_getattr
 from ..rewrite_in_place import AttrChange, AttrRecording, AttrState, Relink, held_changes, put_back, seal
 from ..value_types import IMMUTABLE_LEAF_TYPES
 
@@ -269,10 +271,10 @@ def _global_ref(value: Any, func: Callable, obj: Any) -> Relink | None:
     function found by its module and qualified name, or a name bound to it
     in the function's module or in the module of *obj*'s class."""
     if isinstance(value, _NAMED):
-        module, qualname = getattr(value, "__module__", None), getattr(value, "__qualname__", None)
+        module, qualname = plain_getattr(value, "__module__", None), plain_getattr(value, "__qualname__", None)
         if isinstance(module, str) and isinstance(qualname, str) and _by_path(module, qualname) is value:
             return Relink("global", (module, qualname))
-    for namespace in (getattr(func, "__globals__", None), _module_dict(type(obj).__module__)):
+    for namespace in (plain_getattr(func, "__globals__", None), _module_dict(class_module(type(obj)))):
         if not isinstance(namespace, dict):
             continue
         module = namespace.get("__name__")
@@ -286,7 +288,7 @@ def _global_ref(value: Any, func: Callable, obj: Any) -> Relink | None:
 
 def _module_dict(module: Any) -> dict | None:
     held = sys.modules.get(module) if isinstance(module, str) else None
-    namespace = getattr(held, "__dict__", None)
+    namespace = plain_getattr(held, "__dict__", None)
     return namespace if isinstance(namespace, dict) else None
 
 
@@ -295,7 +297,7 @@ def _by_path(module: str, qualname: str) -> Any:
     attribute lookup runs code), or None."""
     held: Any = sys.modules.get(module)
     for part in qualname.split("."):
-        namespace = getattr(held, "__dict__", None)
+        namespace = plain_getattr(held, "__dict__", None)
         if not isinstance(namespace, (dict, types.MappingProxyType)) or part not in namespace:
             return None
         held = namespace[part]
@@ -320,8 +322,8 @@ def find(relink: Relink, named: dict[str, Any]) -> Any:
             state = None
         if type(state) is not dict or name not in state:
             raise Unresolved(f"{param}.{name}, the object it bound by identity, is not an attribute of {param} now")
-        for klass in type(obj).__mro__:
-            found = vars(klass).get(name, _ABSENT)
+        for klass in mro_of(type(obj)):
+            found = class_dict(klass).get(name, _ABSENT)
             if found is not _ABSENT:
                 if hasattr(type(found), "__set__") or hasattr(type(found), "__delete__"):
                     raise Unresolved(f"{param}.{name}, the object it bound by identity, is a property of its class now")
@@ -363,9 +365,9 @@ def _children(value: Any) -> Any:
     numbers): a C object that holds references and does not say so is not
     seen into."""
     kind = type(value)
-    if kind.__name__ == "ndarray" and getattr(getattr(value, "dtype", None), "kind", None) == "O":
+    if class_name(kind) == "ndarray" and getattr(getattr(value, "dtype", None), "kind", None) == "O":
         return [*gc.get_referents(value), *value.flat]
-    module = getattr(kind, "__module__", "")
+    module = plain_getattr(kind, "__module__", "")
     if module == _SKLEARN_METRICS or module in _SKLEARN_TREES:
         return [*gc.get_referents(value), *_sklearn_buffers(value)]
     return gc.get_referents(value)
@@ -385,14 +387,14 @@ def _sklearn_buffers(value: Any) -> list:
     if type(state) is not tuple:
         return []
     found = []
-    if type(value).__module__ == _SKLEARN_METRICS:
+    if class_module(type(value)) == _SKLEARN_METRICS:
         for view in state[1:3]:
             held = getattr(getattr(getattr(view, "base", None), "obj", None), "base", None)
             if held is not None:
                 found.append(held)
         extra = list(state[3:5])
     else:
-        found = [item for item in (*state[:4], state[12]) if type(item).__name__ == "ndarray"]
+        found = [item for item in (*state[:4], state[12]) if class_name(type(item)) == "ndarray"]
         extra = []
     holds = _memoryview_holds()
     return [held for held in found for _ in range(holds)] + extra
@@ -491,21 +493,19 @@ def _sklearn_refusal(value: Any, kind: type) -> str | None | bool:
     (its ``__setstate__`` looks for the float64 metric's name): its queries
     give the same results, through the metric instead of the inline path,
     but it is not the object the call left."""
-    module = getattr(kind, "__module__", "") or ""
+    module = plain_getattr(kind, "__module__", "") or ""
     if module == _SKLEARN_METRICS:
-        return None if any(base.__name__ == "DistanceMetric" for base in kind.__mro__) else False
+        return None if any(base.__name__ == "DistanceMetric" for base in class_mro(kind)) else False
     prefix = _SKLEARN_TREES.get(module)
-    if prefix is None or not kind.__name__.startswith(prefix):
+    if prefix is None or not class_name(kind).startswith(prefix):
         return False
-    if kind.__name__.endswith("32"):
+    if class_name(kind).endswith("32"):
         try:
             metric = value.__getstate__()[11]
         except Exception:  # noqa: BLE001 - not read: not trusted
-            return f"is a {kind.__name__}, whose state could not be read"
-        if type(metric).__name__ == "EuclideanDistance32":
-            return (
-                f"is a {kind.__name__} on the Euclidean metric, which its pickle brings back without its Euclidean flag"
-            )
+            return f"is a {class_name(kind)}, whose state could not be read"
+        if class_name(type(metric)) == "EuclideanDistance32":
+            return f"is a {class_name(kind)} on the Euclidean metric, which its pickle brings back without its Euclidean flag"
     return None
 
 
@@ -522,25 +522,25 @@ def _pickling_refusal(value: Any) -> str | None:
     kind = type(value)
     if kind in _EXACT_CONTAINERS or kind in _ATOM_SET:
         return None
-    if (getattr(kind, "__module__", "") or "").split(".")[0] in _EXACT_PICKLERS:
+    if (plain_getattr(kind, "__module__", "") or "").split(".")[0] in _EXACT_PICKLERS:
         return None
     sklearn = _sklearn_refusal(value, kind)
     if sklearn is not False:
         return sklearn
     if kind.__reduce_ex__ is not object.__reduce_ex__ or kind.__reduce__ is not object.__reduce__:
-        return f"is a {kind.__name__}, which pickles through its own __reduce__"
-    getstate = getattr(kind, "__getstate__", None)
-    if getstate is None or getstate is getattr(object, "__getstate__", None):
+        return f"is a {class_name(kind)}, which pickles through its own __reduce__"
+    getstate = plain_getattr(kind, "__getstate__", None)
+    if getstate is None or getstate is plain_getattr(object, "__getstate__", None):
         return None
     try:
         state = value.__getstate__()
     except Exception:  # noqa: BLE001 - not read: not trusted
-        return f"is a {kind.__name__}, whose __getstate__ could not be read"
-    attrs = getattr(value, "__dict__", None)
+        return f"is a {class_name(kind)}, whose __getstate__ could not be read"
+    attrs = plain_getattr(value, "__dict__", None)
     if type(state) is not dict or type(attrs) is not dict:
-        return f"is a {kind.__name__}, whose __getstate__ does not hand back its attributes"
+        return f"is a {class_name(kind)}, whose __getstate__ does not hand back its attributes"
     if any(state.get(key, _MISSING) is not held for key, held in attrs.items()):
-        return f"is a {kind.__name__}, whose __getstate__ leaves out or changes some of its attributes"
+        return f"is a {class_name(kind)}, whose __getstate__ leaves out or changes some of its attributes"
     return None
 
 
@@ -650,7 +650,7 @@ def _held_elsewhere(
             hidden.extend(
                 (held, label)
                 for held in _sklearn_buffers(value)
-                if type(held).__name__ == "ndarray" and id(held) not in arguments
+                if class_name(type(held)) == "ndarray" and id(held) not in arguments
             )
     return None
 

@@ -19,7 +19,8 @@ import os
 import sys
 import types
 
-from ._user_attrs import module_file
+from ._type_memo import class_dict
+from ._user_attrs import instance_of, module_file, plain_getattr
 from .cython_digest import cimported_binaries_digest, cython_function_digest
 from .exceptions import SOURCE_RETRIEVAL_ERRORS
 from .jit_functions import jit_identity, jit_python_function
@@ -89,7 +90,7 @@ def own_source_digest(fn: object) -> str | None:
 def _wrapped_of(fn: object) -> object | None:
     """What a ``functools.wraps`` wrapper FUNCTION wraps, or None."""
     if type(fn) is types.FunctionType:
-        return getattr(fn, "__wrapped__", None)
+        return plain_getattr(fn, "__wrapped__", None)
     return None
 
 
@@ -165,7 +166,7 @@ def _with_forwarded(own: str, fn: object, walked: frozenset[int]) -> str:
         return own
     g = fn.__globals__
     module = sys.modules.get(g.get("__name__") or "")
-    if g.get("__file__") or getattr(module, "__dict__", None) is g:
+    if g.get("__file__") or plain_getattr(module, "__dict__", None) is g:
         return own
     walked = walked | {id(fn)}
     parts = []
@@ -192,7 +193,7 @@ def _with_members(own: str, fn: object, walked: frozenset[int]) -> str:
     walked = walked | {id(fn)}
     parts = []
     try:
-        members = sorted((k, v) for k, v in vars(fn).items() if isinstance(k, str))
+        members = sorted((k, v) for k, v in class_dict(fn).items() if isinstance(k, str))
     except TypeError:
         return own
     for name, value in members:
@@ -218,8 +219,8 @@ def opaque_identity(fn: object) -> str:
     a key through the arguments and the function's own namespace name.
     """
     fn = unwrap_partials(fn)
-    module = getattr(fn, "__module__", None) or "?"
-    qualname = getattr(fn, "__qualname__", None) or getattr(fn, "__name__", None) or repr(fn)
+    module = plain_getattr(fn, "__module__", None) or "?"
+    qualname = plain_getattr(fn, "__qualname__", None) or plain_getattr(fn, "__name__", None) or repr(fn)
     return f"{module}.{qualname}"
 
 
@@ -233,7 +234,7 @@ def unwrap_partials(fn: object) -> object:
     at the first repeat.
     """
     seen: set[int] = set()
-    while isinstance(fn, functools.partial) and id(fn) not in seen:
+    while instance_of(fn, functools.partial) and id(fn) not in seen:
         seen.add(id(fn))
         fn = fn.func
     return fn
@@ -256,9 +257,9 @@ def extension_file_digest(fn: object) -> str | None:
     A Windows build is hashed without the link time MSVC stamps into it
     (`extension_bytes_digest`), so relinking unchanged code keeps the digest.
     """
-    while isinstance(fn, functools.partial):
+    while instance_of(fn, functools.partial):
         fn = fn.func
-    module = sys.modules.get(getattr(fn, "__module__", None) or "")
+    module = sys.modules.get(plain_getattr(fn, "__module__", None) or "")
     path = module_file(module)
     if not isinstance(path, str) or not path.endswith(tuple(importlib.machinery.EXTENSION_SUFFIXES)):
         return None

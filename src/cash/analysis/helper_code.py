@@ -21,6 +21,8 @@ from typing import Any
 from cash._user_attrs import instance_of
 
 from .._paths import MAIN_MODULE_NAMES, is_pseudo_filename, resolve_main_module
+from .._type_memo import class_dict, class_name, class_qualname, module_of_class
+from .._user_attrs import hooked_class, plain_getattr, plain_hasattr
 from ..install_paths import in_own_package, top_package
 from ..jit_functions import jit_python_function
 from ..tracking.function_tracker import is_local_module
@@ -41,6 +43,9 @@ def _defining_module(obj: Any) -> Any:
         module = sys.modules.get(name) if isinstance(name, str) else None
         if module is not None:
             return module
+    if hooked_class(obj):
+        # ``inspect.getmodule`` asks a class for its ``__module__``.
+        return sys.modules.get(module_of_class(obj) or "")
     return inspect.getmodule(obj)
 
 
@@ -79,7 +84,7 @@ def _class_is_exec_built(cls: type) -> bool:
         if id(current) in seen:
             continue
         seen.add(id(current))
-        for member in list(vars(current).values()):
+        for member in list(class_dict(current).values()):
             member = _unwrapped_member(member)
             if isinstance(member, type):
                 pending.append(member)
@@ -89,7 +94,7 @@ def _class_is_exec_built(cls: type) -> bool:
 
 
 def _function_is_exec_built(obj: Any) -> bool:
-    fn = getattr(obj, "__func__", obj)
+    fn = plain_getattr(obj, "__func__", obj)
     if type(fn) is not types.FunctionType or "__name__" in fn.__globals__:
         return False
     filename = fn.__code__.co_filename
@@ -137,7 +142,7 @@ def _function_like(value: Any) -> bool:
     return issubclass(type(value), (types.FunctionType, types.MethodType, functools.partial)) or (
         callable(value)
         and not issubclass(type(value), (type, types.ModuleType, types.BuiltinFunctionType))
-        and hasattr(value, "__wrapped__")
+        and plain_hasattr(value, "__wrapped__")
     )
 
 
@@ -146,10 +151,10 @@ def _layer_candidates(value: Any) -> Iterator[Any]:
     if type(value) is types.MethodType:
         yield value.__func__
         return
-    if isinstance(value, functools.partial):
+    if instance_of(value, functools.partial):
         yield value.func
         return
-    wrapped = getattr(value, "__wrapped__", None) if not isinstance(value, type) else None
+    wrapped = plain_getattr(value, "__wrapped__", None) if not isinstance(value, type) else None
     if wrapped is not None:
         yield wrapped
     # wrapt's proxies forward `__class__`, so one passes for a plain
@@ -165,14 +170,16 @@ def _layer_candidates(value: Any) -> Iterator[Any]:
                 continue
             if _function_like(inner):
                 yield inner
-        attrs = getattr(value, "__dict__", None) or {}
+        attrs = plain_getattr(value, "__dict__", None) or {}
     else:
         if callable(value) and not issubclass(type(value), (type, types.ModuleType)):
             call = getattr(type(value), "__call__", None)
             if type(call) is types.FunctionType:
                 yield call
         try:
-            attrs = dict(vars(value))
+            # A class's namespace as ``type`` reads it: ``vars`` asks it
+            # for ``__dict__``, which a metaclass's hook answers.
+            attrs = dict(class_dict(value) if isinstance(value, type) else vars(value))
         except TypeError:
             attrs = {}
     for key, attr in list(attrs.items()):
@@ -192,8 +199,8 @@ def _expand(value: Any, obj: Any) -> Iterator[Any]:
         return iter(list(_layer_candidates(value)))
     except Exception as e:
         raise UnwalkableLayers(
-            f"cash could not look inside {type(value).__qualname__}, which {qualname_of(obj)} "
-            f"runs ({type(e).__name__}: {e})"
+            f"cash could not look inside {class_qualname(type(value))}, which {qualname_of(obj)} "
+            f"runs ({class_name(type(e))}: {e})"
         ) from e
 
 
@@ -287,7 +294,7 @@ def is_user_code(callee: Any, root_module: str | None) -> bool:
     module = _defining_module(callee)
     if module is None:
         return False
-    if in_own_package(getattr(module, "__name__", None), top_package(root_module)):
+    if in_own_package(plain_getattr(module, "__name__", None), top_package(root_module)):
         return True
     try:
         return is_local_module(module)
@@ -321,8 +328,8 @@ def renamed(obj: Any) -> str:
     too, so a key naming a class or function by its qualname kept serving
     what it computed under the old name. Empty for every class and function
     not renamed so: their keys are unchanged."""
-    name = getattr(obj, "__name__", None)
-    qualname = getattr(obj, "__qualname__", None)
+    name = plain_getattr(obj, "__name__", None)
+    qualname = plain_getattr(obj, "__qualname__", None)
     if not isinstance(name, str) or not isinstance(qualname, str) or qualname.rpartition(".")[2] == name:
         return ""
     return f"|name={name}"
@@ -339,9 +346,9 @@ def qualname_of(func: Callable[..., Any]) -> str:
     ``helper_paths``, whose module string is looked up in ``sys.modules`` at
     runtime and has to stay ``__main__`` to resolve.
     """
-    module = getattr(func, "__module__", None) or "<unknown>"
-    qualname = getattr(func, "__qualname__", None) or getattr(func, "__name__", "<callable>")
-    if type(func) is types.FunctionType and hasattr(func, "__wrapped__"):
+    module = plain_getattr(func, "__module__", None) or "<unknown>"
+    qualname = plain_getattr(func, "__qualname__", None) or plain_getattr(func, "__name__", "<callable>")
+    if type(func) is types.FunctionType and plain_hasattr(func, "__wrapped__"):
         # `functools.wraps` copied the wrapped function's names onto this one,
         # so both halves of a decorated helper answered to the same name and
         # the walk, which visits each name once, followed only one of them.

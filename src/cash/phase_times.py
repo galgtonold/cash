@@ -52,6 +52,7 @@ import time
 from typing import Any
 
 from ._clock import real_perf_counter
+from ._user_attrs import plain_getattr
 
 _perf_counter = real_perf_counter()
 
@@ -324,7 +325,9 @@ _RECORDS_LOCK = threading.Lock()
 
 def record_for(func: Any, name: str) -> PhaseRecord:
     """A new record for the cached function *func*, kept for the at-exit dump."""
-    record = PhaseRecord(getattr(func, "__module__", None) or "?", getattr(func, "__qualname__", None) or name, name)
+    record = PhaseRecord(
+        plain_getattr(func, "__module__", None) or "?", plain_getattr(func, "__qualname__", None) or name, name
+    )
     with _RECORDS_LOCK:
         _RECORDS.append(record)
     return record

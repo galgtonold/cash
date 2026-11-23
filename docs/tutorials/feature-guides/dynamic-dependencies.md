@@ -50,7 +50,7 @@ load("labels")     # cache miss: different arguments
 load("features")   # cache miss: the version moved
 ```
 
-<!-- claim: cash/decorator/registry.py:resolve_dynamic_dependencies @379962b9, cash/data_source.py:DataSource.state_token @89498b3e -->
+<!-- claim: cash/decorator/registry.py:resolve_dynamic_dependencies @7d3cf520, cash/data_source.py:DataSource.state_token @89498b3e -->
 A resolver may return one `DataSource`, a list of them, or `None` (no dynamic
 dependency for this call). You can also pass a list of resolvers; their sources
 are pooled. The key takes the sources in the order they come back, so return
@@ -61,7 +61,7 @@ them in a stable order: the same sources in another order miss once.
 `state_token()` must return a value that **changes when the data changes**: a
 version, an ETag, a row count with a last-modified time, a digest.
 
-<!-- claim: cash/data_source.py:state_token_of @60e6073c -->
+<!-- claim: cash/data_source.py:state_token_of @9063dc22 -->
 - **Return a value, not a `bool`.** A flag like "is it fresh?" has two states
   and cannot tell one version from the next. cash warns if it sees a `bool`.
 - **Keep it cheap.** The resolver and the token run on every lookup, hits

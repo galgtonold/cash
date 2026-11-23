@@ -46,7 +46,7 @@ sales.revenue()   # a hit: the frame is not read to build the key
 # test:inject: revenue = Dataset.revenue  # lets the harness read cache_info
 ```
 
-<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.cash_key_hash @839a8823, cash/decorator/cash_key.py:cash_key_method @c2b9f062, cash/decorator/purity_checks.py:PurityChecks.held_generators @9d730f62 -->
+<!-- claim: cash/decorator/arg_hashing.py:ArgHasher.cash_key_hash @27ffc2c9, cash/decorator/cash_key.py:cash_key_method @c2b9f062, cash/decorator/purity_checks.py:PurityChecks.held_generators @6db9c55f -->
 `__cash_key__` returns what identifies the object, and the key uses that
 instead of reading the frames. Building the key costs microseconds however
 much data the object holds, and a stored result is found again after a
@@ -76,7 +76,7 @@ results computed from the old data. Return a version you bump, a content id,
 or the source file's path with its modification time. Here, bump
 `version` whenever the data behind `sales-2026` changes.
 
-<!-- claim: cash/decorator/cash_key.py:KeyCheck._check @3770f723, cash/config/schema.py:CashConfig.check_cash_keys == True -->
+<!-- claim: cash/decorator/cash_key.py:KeyCheck._check @58df7e73, cash/config/schema.py:CashConfig.check_cash_keys == True -->
 cash checks this for you. The first time an object is keyed by its
 `__cash_key__` in a process, cash reads its content on a background thread
 and compares it with what the same key stood for before, in this run or an
@@ -112,7 +112,7 @@ def evaluate(model, data):
     return model.weights @ data
 ```
 
-<!-- claim: cash/core.py:Cash.register_hasher @f8a61573, cash/code_digest.py:callable_identity @38daa9e0 -->
+<!-- claim: cash/core.py:Cash.register_hasher @0fc93c81, cash/code_digest.py:callable_identity @38daa9e0 -->
 From now on, every `MyModel` argument is identified by `hash_model(model)`,
 and so is a `MyModel` inside a list, tuple, set or dict argument. On your own
 `Cash(...)` instance, call `app.register_hasher(...)` instead.
@@ -201,7 +201,7 @@ data changes.
 
 ## Overriding a built-in content hasher
 
-<!-- claim: cash/content_hashers.py:builtin_hash @9e1b386d broad="the list enumerates every type the builtin dispatcher recognises", cash/content_hashers.py:builtin_hash_family @f68d990f -->
+<!-- claim: cash/content_hashers.py:builtin_hash @9e1b386d broad="the list enumerates every type the builtin dispatcher recognises", cash/content_hashers.py:builtin_hash_family @51874565 -->
 cash hashes these types by their full content, before it looks at your
 registrations:
 

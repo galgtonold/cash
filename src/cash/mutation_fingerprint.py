@@ -13,6 +13,7 @@ import hashlib
 from collections.abc import Callable
 from typing import Any
 
+from ._type_memo import class_module, class_name, class_qualname
 from .content_hashers import builtin_family_of, builtin_hash_family
 from .value_hash import HASH_ERRORS, compute_hash, identity_hash
 
@@ -36,7 +37,7 @@ def mutation_fingerprint(obj: Any, content: Callable[[Any], str] | None = None) 
     """
     h = hashlib.sha256()
     t = type(obj)
-    h.update(f"{t.__module__}.{t.__qualname__}".encode("utf-8"))
+    h.update(f"{class_module(t)}.{class_qualname(t)}".encode("utf-8"))
     if t is contextvars.ContextVar:
         # Nothing changes one in place: ``set`` binds another value to it
         # in the context, which is what it is read by.
@@ -133,7 +134,7 @@ def _part_digest(value: Any) -> str:
     value = _canonical_sparse(value)
     digest = compute_hash(value)
     if digest == identity_hash(value):
-        raise _Unobservable(type(value).__name__)
+        raise _Unobservable(class_name(type(value)))
     return digest
 
 

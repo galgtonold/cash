@@ -6,7 +6,6 @@ code reads."""
 from __future__ import annotations
 
 import hashlib
-import inspect
 import pickle
 import types
 from collections.abc import Callable
@@ -14,6 +13,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from .._memo import CODE_OBJECTS, LruMemo
+from .._type_memo import class_dict, class_mro
+from .._user_attrs import plain_getattr, static_attr
 from ..analysis.bytecode import instructions
 from ..analysis.helper_bindings import resolve_local_import, unloaded_local_imports
 from ..analysis.helper_code import renamed
@@ -133,14 +134,14 @@ def _library_attr_parts(
     """
     # From its namespace only: a module's own ``__getattr__`` can import a
     # submodule, and what it makes on demand is code, not data.
-    namespace = getattr(mod, "__dict__", None)
+    namespace = plain_getattr(mod, "__dict__", None)
     if not isinstance(namespace, dict) or attr not in namespace:
         return []
     value = namespace[attr]
     label = f"{mod_name}.{attr}"
     if label in reader.learned:
         return []
-    code = getattr(reader.func, "__code__", None)
+    code = plain_getattr(reader.func, "__code__", None)
     if isinstance(code, types.CodeType) and (mod_name, attr) in written_module_attrs(code):
         return []
     if issubclass(type(value), types.ModuleType):
@@ -174,21 +175,21 @@ def _library_class_attr_parts(
     label = f"{path}.{attr}"
     if label in reader.learned:
         return []
-    owner = next((k for k in getattr(cls, "__mro__", ()) if attr in vars(k)), None)
+    owner = next((k for k in class_mro(cls) if attr in class_dict(k)), None)
     if owner is None:
         return []
-    value = vars(owner)[attr]
+    value = class_dict(owner)[attr]
     kind = plain_data_kind(value)
     if kind is None:
         return []
-    code = getattr(reader.func, "__code__", None)
+    code = plain_getattr(reader.func, "__code__", None)
     if isinstance(code, types.CodeType) and (path, attr) in written_module_attrs(code):
         return []
     h = values.safe_global_hash(value, reader.func_name, label)
     if h is None:
         return []
     if reader.watch is not None and kind == "plain":
-        reader.watch[label] = (h, "library", (vars(owner), attr), None)
+        reader.watch[label] = (h, "library", (class_dict(owner), attr), None)
     return [(label, h)]
 
 
@@ -248,7 +249,7 @@ class ModuleAttrFold:
                 pass
             elif not issubclass(type(value), (types.FunctionType, type)) or not is_user_code_object(value):
                 return
-            doc = getattr(value, "__doc__", None)
+            doc = plain_getattr(value, "__doc__", None)
             if isinstance(doc, str):
                 parts.append((f"{label}.__doc__", hashlib.sha256(doc.encode("utf-8")).hexdigest()))
 
@@ -294,7 +295,7 @@ class ModuleAttrFold:
 
         imports, attr_reads, bare_reads, dotted = plan
         own_pkg = own_package(func)
-        root_module = getattr(func, "__module__", None)
+        root_module = plain_getattr(func, "__module__", None)
         code = func.__code__
         cells = dict(zip(code.co_freevars or (), getattr(func, "__closure__", None) or ()))
         parts: list[tuple[str, str]] = []
@@ -435,7 +436,7 @@ class ModuleAttrFold:
                 return _library_class_attr_parts(self._values, reader, obj, mod_name, attr)
             return []
         try:
-            value = inspect.getattr_static(obj, attr) if is_cls else getattr(obj, attr)
+            value = static_attr(obj, attr) if is_cls else getattr(obj, attr)
         except (AttributeError, Exception):  # noqa: BLE001 - never break a call
             return []
         label = f"{mod_name}.{attr}"
@@ -515,7 +516,7 @@ class ModuleAttrFold:
         """The key part naming a class or callable a user module holds
         (`GlobalValues.code_ref_part`): ``settings.AGG = sum`` edited to
         ``max``."""
-        ref = self._values.code_ref_part(value, getattr(reader.func, "__module__", None), reader.func_name, label)
+        ref = self._values.code_ref_part(value, plain_getattr(reader.func, "__module__", None), reader.func_name, label)
         return [(f"{label}#ref", ref)] if ref is not None else []
 
     def _held_class_parts(self, reader: _AttrReader, label: str, value: Any) -> list[tuple[str, str]]:
@@ -556,7 +557,7 @@ class ModuleAttrFold:
         callable carries, when the drift guard watches (*reader.watch*),
         or else the data globals the helper itself reads."""
         if reader.watch is not None and label not in reader.learned:
-            carried = self._values.carried_global_hash(value, getattr(reader.func, "__module__", None))
+            carried = self._values.carried_global_hash(value, plain_getattr(reader.func, "__module__", None))
             if carried is not None:
                 reader.watch[label] = (carried, "carrier", (vars(module), attr), None)
                 return [(f"{label}#carried", carried)]
@@ -572,7 +573,7 @@ class ModuleAttrFold:
         """
         value = cash_wrapped(value)
         value = jit_python_function(value) or value
-        helper_globals = getattr(value, "__globals__", None)
+        helper_globals = plain_getattr(value, "__globals__", None)
         if not isinstance(helper_globals, dict):
             return []
         parts: list[tuple[str, str]] = []
@@ -584,7 +585,9 @@ class ModuleAttrFold:
                 parts.extend(module_ref_part(f"{label}.{inner}", iv))
                 continue
             if isinstance(iv, type) or (callable(iv) and not isinstance(iv, (dict, list, tuple, set))):
-                ref = self._values.code_ref_part(iv, getattr(value, "__module__", None), func_name, f"{label}.{inner}")
+                ref = self._values.code_ref_part(
+                    iv, plain_getattr(value, "__module__", None), func_name, f"{label}.{inner}"
+                )
                 if ref is not None:
                     parts.append((f"{label}.{inner}#ref", ref))
                 continue
@@ -595,7 +598,7 @@ class ModuleAttrFold:
 
     def _function_attr_parts(self, fn: Any, attr: str, name: str, func_name: str) -> list[tuple[str, str]]:
         """The key part for data stored as an attribute of the user's function *fn*."""
-        stored = getattr(fn, "__dict__", None)
+        stored = plain_getattr(fn, "__dict__", None)
         if not isinstance(stored, dict) or attr not in stored or not is_user_code_object(fn):
             return []
         value = stored[attr]

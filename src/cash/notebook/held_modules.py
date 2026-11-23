@@ -42,6 +42,7 @@ from typing import Any
 from cash._user_attrs import attribute_or
 
 from .._memo import CODE_OBJECTS, LruMemo
+from .._type_memo import class_module
 from ..code_digest import module_identity
 from ..loaded_code import class_functions
 from ..source_norm import bytecode_identity
@@ -143,7 +144,7 @@ def _loaded_identity(module: types.ModuleType) -> str:
     for attr, value in list(vars(module).items()):
         if isinstance(value, type) and attribute_or(value, "__module__", None) == name:
             functions = class_functions(value)
-        elif type(value) is types.FunctionType and value.__module__ == name:
+        elif type(value) is types.FunctionType and class_module(value) == name:
             functions = [value]
         else:
             continue

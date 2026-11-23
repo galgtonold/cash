@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
 from . import _log, _weak
 from ._active import ACTIVE_CONFIG
 from ._console import encodable
+from ._type_memo import class_flags, class_name
 from .analytics import AnalyticsManager
 from .backends import CacheBackend
 from .backends.factory import build_tiered
@@ -196,7 +197,7 @@ def _constructor_overrides(
     elif backend is not None and not isinstance(backend, CacheBackend):
         raise TypeError(
             f"Cash(backend=...) takes a backend instance or a backend type name such as 'sqlite', "
-            f"not {type(backend).__name__}"
+            f"not {class_name(type(backend))}"
         )
     if not isinstance(use_locking, bool) and use_locking not in (0, 1):
         raise ValueError(f"Cash(use_locking={use_locking!r}): expected True or False")
@@ -583,7 +584,7 @@ class Cash:
 
     def __repr__(self) -> str:
         built = self._backend_slot.built
-        backend_name = type(built).__name__ if built is not None else "<deferred>"
+        backend_name = class_name(type(built)) if built is not None else "<deferred>"
         n_funcs = len(self.functions)
         return f"Cash(backend={backend_name}, functions={n_funcs}, debug={self.debug})"
 
@@ -851,7 +852,7 @@ class Cash:
         """
         if (
             isinstance(func, _NOT_INSTANCES)
-            or not (type(func).__flags__ & _HEAPTYPE)
+            or not (class_flags(type(func)) & _HEAPTYPE)
             or options[0]
             or options[1] is not None
             or options[2] is not None
@@ -986,8 +987,8 @@ class Cash:
             warn_diagnostic(
                 CashCacheIneffectiveWarning,
                 "KEY-CALLABLE-HASHER",
-                f"cash.register_hasher({type_.__name__}, ...) decides the "
-                f"identity of every {type_.__name__} passed to a cached "
+                f"cash.register_hasher({class_name(type_)}, ...) decides the "
+                f"identity of every {class_name(type_)} passed to a cached "
                 f"function in this process. Closures one factory makes share a "
                 f"name and a body, so a hasher that does not return what they "
                 f"capture gives them one cache entry, and the second gets the "

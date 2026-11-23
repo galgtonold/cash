@@ -22,6 +22,7 @@ import copyreg
 import datetime
 import functools
 import hashlib
+import importlib
 import io
 import itertools
 import logging
@@ -39,7 +40,8 @@ from typing import Any
 
 from . import _native, _weak
 from ._own_work import own_work
-from ._user_attrs import from_family, instance_of
+from ._type_memo import class_dict, class_dictoffset, class_flags, class_mro, class_name, class_qualname, mro_of
+from ._user_attrs import attribute_or, class_attr, from_family, instance_of, named_attr, own_lookup, plain_getattr
 from .live_state import is_live_stream, live_reduce
 from .unnamed_code import library_code_override, refused_unnamed
 from .value_types import WEAK_PROXY_TYPES, class_module, is_dead_proxy
@@ -769,7 +771,7 @@ def _library_type(t: type) -> bool:
         pass
     except TypeError:  # a class whose metaclass makes it unhashable
         return False
-    module = t.__module__
+    module = class_module(t)
     if module in _WALKED_MODULES:
         found = False
     else:
@@ -1471,7 +1473,7 @@ _LOCK_TYPES = frozenset({type(threading.Lock()), type(threading.RLock())})
 def _refused(obj: Any) -> Any:
     """A key's reduce of a writer cash puts in front of a stream: refused,
     as the stream it stands for is."""
-    raise TypeError(f"cannot key {type(obj).__name__!r} object")
+    raise TypeError(f"cannot key {class_name(type(obj))!r} object")
 
 
 def _stand_in(obj: Any, reducer: Any, watch: list | None) -> Any:
@@ -1575,6 +1577,13 @@ class _KeepDict(dict):
         self._dtypes: dict[Any, Any] = {}
 
     def __missing__(self, t: type) -> Any:
+        if issubclass(t, type) and own_lookup(t):
+            # A class whose metaclass hooks its lookups, by its name as
+            # pickle writes a class, read through ``type``'s own
+            # descriptors: pickle asks the class for its ``__qualname__``
+            # and ``__module__``, which the hook answers.
+            self[t] = _reduce_hooked_class
+            return _reduce_hooked_class
         if _numpy_scalar_type(t):
             # A scalar reduces to its dtype and bytes, no state: no names.
             reducer = _scalar_dtype_apart(self._reducer(t), self._dtypes)
@@ -1590,9 +1599,9 @@ class _KeepDict(dict):
         if self._keyed:
             # A key refuses a stream and a lock as it did: what stands in for
             # one is stored, never keyed (`live_state`).
-            if getattr(t, "_cash_wrapped_stream", None) is not None:
+            if class_attr(t, "_cash_wrapped_stream") is not None:
                 reducer = _refused
-        elif getattr(t, "_cash_wrapped_stream", None) is not None:
+        elif class_attr(t, "_cash_wrapped_stream") is not None:
             reducer = functools.partial(_stand_in, reducer=reducer, watch=self._watch)
         elif issubclass(t, io.IOBase) or t in _LOCK_TYPES:
             reducer = functools.partial(_or_live, reducer=reducer, watch=self._watch)
@@ -1620,10 +1629,10 @@ class _KeepDict(dict):
         registered = copyreg.dispatch_table.get(t)
         if self._watch is not None:
             reducer = _watched(self._store_reducer(t, registered), t, registered, self._watch)
-            if t.__name__ in _GLOBAL_RNG_TYPE_NAMES:
+            if class_name(t) in _GLOBAL_RNG_TYPE_NAMES:
                 reducer = functools.partial(_watched_rng, reducer=reducer, watch=self._watch)
             return reducer
-        if self._keyed and t.__name__ == "ndarray" and t is getattr(sys.modules.get("numpy"), "ndarray", None):
+        if self._keyed and class_name(t) == "ndarray" and t is getattr(sys.modules.get("numpy"), "ndarray", None):
             # A record array's padding bytes are whatever memory held:
             # keyed without them (`packed_records`).
             return functools.partial(_reduce_array_for_key, protocol=self._protocol)
@@ -1651,10 +1660,10 @@ class _KeepDict(dict):
             # A logger reduces to ``getLogger(name)``: the key would hold
             # its name and none of its level (`_reduce_by_reference_for_key`).
             reducer = functools.partial(_reduce_by_reference_for_key, reducer=reducer)
-        if self._keyed and t.__name__ in _GLOBAL_RNG_TYPE_NAMES:
+        if self._keyed and class_name(t) in _GLOBAL_RNG_TYPE_NAMES:
             # One instance of the class may be a module's global RNG.
             reducer = functools.partial(_reduce_rng_for_key, reducer=reducer)
-        if self._keyed and t.__name__ == "vectorize" and t is getattr(sys.modules.get("numpy"), "vectorize", None):
+        if self._keyed and class_name(t) == "vectorize" and t is getattr(sys.modules.get("numpy"), "vectorize", None):
             reducer = functools.partial(_reduce_vectorize_for_key, reducer=reducer)
         if self._keyed and registered is None and library_chooses_its_state(t):
             reducer = functools.partial(_reduce_names_sorted, reducer=reducer)
@@ -1697,12 +1706,12 @@ def _quiet_uncertainty(t: type) -> bool:
     base = next(
         (
             klass
-            for klass in t.__mro__
-            if klass.__qualname__ == "NDUncertainty" and klass.__module__ == "astropy.nddata.nduncertainty"
+            for klass in class_mro(t)
+            if class_qualname(klass) == "NDUncertainty" and class_module(klass) == "astropy.nddata.nduncertainty"
         ),
         None,
     )
-    if base is None or getattr(t, "__getstate__", None) is not base.__dict__.get("__getstate__"):
+    if base is None or plain_getattr(t, "__getstate__", None) is not base.__dict__.get("__getstate__"):
         return False
     if issubclass(t, (list, dict)) or hasattr(t, "__getnewargs_ex__") or hasattr(t, "__getnewargs__"):
         return False
@@ -1751,10 +1760,41 @@ def forward_ref(arg: str, module: str | None, is_argument: bool, is_class: bool,
     if owner is not None and hasattr(ref, "__owner__"):
         found: Any = sys.modules.get(owner[0])
         for part in owner[1].split("."):
-            found = getattr(found, part, None)
+            found = named_attr(found, part, None)
         if isinstance(found, type):
             ref.__owner__ = found
     return ref
+
+
+def _reduce_hooked_class(cls: type) -> tuple:
+    """A class whose metaclass looks its attributes up with code of its own,
+    reduced to the module and qualified name pickle finds it by
+    (`class_named`), never asking the class: its name through ``type``'s
+    descriptors, and the check that the name finds this very class, as
+    pickle's own makes it ("not the same object")."""
+    module = class_module(cls)
+    qualname = class_qualname(cls)
+    try:
+        found: Any = sys.modules.get(module) or importlib.import_module(module)
+        for part in qualname.split("."):
+            found = attribute_or(found, part, _NOT_FOUND)
+    except Exception:  # noqa: BLE001 - not found by its name, as pickle says
+        found = _NOT_FOUND
+    if found is not cls:
+        raise pickle.PicklingError(f"Can't pickle {module}.{qualname}: it's not the same object as {module}.{qualname}")
+    return class_named, (module, qualname)
+
+
+_NOT_FOUND = object()
+
+
+def class_named(module: str, qualname: str) -> type:
+    """The class *module* holds at *qualname*: what `_reduce_hooked_class`
+    pickles a class as, loaded as pickle loads a class by name."""
+    found: Any = importlib.import_module(module)
+    for part in qualname.split("."):
+        found = named_attr(found, part)
+    return found
 
 
 def _reduce_forward_ref(ref: Any) -> Any:
@@ -1774,7 +1814,7 @@ def _reduce_forward_ref(ref: Any) -> Any:
     """
     owner = getattr(ref, "__owner__", None)
     where = (
-        (str(getattr(owner, "__module__", "?")), str(getattr(owner, "__qualname__", "?")))
+        (str(plain_getattr(owner, "__module__", "?")), str(plain_getattr(owner, "__qualname__", "?")))
         if owner is not None
         else None
     )
@@ -1887,7 +1927,7 @@ def _numpy_scalar_type(t: type) -> bool:
     """Is *t* one of numpy's own scalar types (``numpy.float64``), not a
     subclass of one?"""
     numpy = sys.modules.get("numpy")
-    return numpy is not None and t.__module__ == "numpy" and isinstance(t, type) and issubclass(t, numpy.generic)
+    return numpy is not None and class_module(t) == "numpy" and isinstance(t, type) and issubclass(t, numpy.generic)
 
 
 def _scalar_dtype_apart(reducer: Any, dtypes: dict[Any, Any]) -> Callable[[Any], Any]:
@@ -2030,7 +2070,7 @@ def global_rng_stand_in(obj: Any) -> tuple | None:
     other object. The trace's value digests take the same stand-in, so a
     library global holding the singleton (``scipy.stats.f``) digests alike
     in every process too."""
-    if type(obj).__name__ not in _GLOBAL_RNG_TYPE_NAMES:
+    if class_name(type(obj)) not in _GLOBAL_RNG_TYPE_NAMES:
         return None
     module = global_rng_module(obj)
     return None if module is None else (_global_rng, (module,))
@@ -2137,7 +2177,7 @@ def _watched(reducer: Any, t: type, registered: Any, watch: list) -> Any:
     would reduce otherwise (`_KeepDict.__missing__` with *keyed*): what
     `dumps_also_keyed` answers from. Each check is the one the keyed
     reducer makes to decide whether it changes anything."""
-    if t.__name__ == "ndarray" and t is getattr(sys.modules.get("numpy"), "ndarray", None):
+    if class_name(t) == "ndarray" and t is getattr(sys.modules.get("numpy"), "ndarray", None):
 
         def array(obj: Any) -> Any:
             try:
@@ -2228,8 +2268,8 @@ def cached_properties(t: type) -> tuple[str, ...]:
     except TypeError:  # a class whose metaclass makes it unhashable
         return ()
     names: list[str] = []
-    for klass in t.__mro__:
-        for name, member in vars(klass).items():
+    for klass in class_mro(t):
+        for name, member in class_dict(klass).items():
             if isinstance(member, functools.cached_property) and name not in names:
                 names.append(member.attrname or name)
     found = _CACHED_PROPERTIES[t] = tuple(names)
@@ -2256,7 +2296,7 @@ def derived_views(obj: Any) -> frozenset[str]:
     value that is a snapshot (a number, a list) is kept: it may be stale.
     """
     names = cached_properties(type(obj))
-    state = getattr(obj, "__dict__", None)
+    state = plain_getattr(obj, "__dict__", None)
     if not names or not isinstance(state, dict):
         return frozenset()
     present = [name for name in names if name in state]
@@ -2277,7 +2317,7 @@ def _views(value: Any, held: set[int]) -> bool:
     for part in attrs.values():
         if isinstance(part, weakref.ref):
             part = part()
-        target = getattr(part, "__self__", part) if isinstance(part, types.BuiltinMethodType) else part
+        target = plain_getattr(part, "__self__", part) if isinstance(part, types.BuiltinMethodType) else part
         if id(target) in held:
             linked = True
         elif type(part) not in _VIEW_SETTINGS:
@@ -2424,21 +2464,23 @@ def _plain_container_subclass(t: type) -> bool:
 
 
 def _decide_plain_container_subclass(t: type) -> bool:
-    mro = t.__mro__
+    mro = class_mro(t)
     base = next((klass for klass in mro if klass in _CONTAINER_BASES), None)
-    if base is None or t is base or "_fields" in vars(t):
+    if base is None or t is base or "_fields" in class_dict(t):
         return False
     for klass in mro[: mro.index(base)]:
-        if not klass.__flags__ & _HEAP_TYPE or "__new__" in vars(klass) and klass.__module__ != "collections":
+        own = class_dict(klass)
+        module = class_module(klass)
+        if not class_flags(klass) & _HEAP_TYPE or "__new__" in own and module != "collections":
             return False
-        if klass.__module__ != "collections" and any(hook in vars(klass) for hook in _PICKLE_HOOKS):
+        if module != "collections" and any(hook in own for hook in _PICKLE_HOOKS):
             return False
-        if klass.__module__ == "collections" and klass.__name__ != "Counter":
+        if module == "collections" and class_name(klass) != "Counter":
             return False
     # Pickle's own way runs none of the class's methods, where it has none
     # of the ones it reads and fills a container with: kept as it is.
     return any(
-        klass.__module__ == "collections" or any(name in vars(klass) for name in _CONTAINER_METHODS)
+        class_module(klass) == "collections" or any(name in class_dict(klass) for name in _CONTAINER_METHODS)
         for klass in mro[: mro.index(base)]
     )
 
@@ -2478,7 +2520,7 @@ def _reduce_container_subclass(obj: Any) -> Any:
     own methods: rebuilt by `rebuild_container_subclass`, which runs none
     of the class's methods either."""
     kind = type(obj)
-    base = next(klass for klass in kind.__mro__ if klass in _CONTAINER_BASES)
+    base = next(klass for klass in class_mro(kind) if klass in _CONTAINER_BASES)
     items = list(dict.items(obj)) if base is dict else list(base.__iter__(obj))
     try:
         attrs = object.__getattribute__(obj, "__dict__")
@@ -2535,10 +2577,10 @@ def _drops_dict(t: type) -> bool:
 
 
 def _decide_drops_dict(t: type) -> bool:
-    if not t.__dictoffset__:
+    if not class_dictoffset(t):
         return False
-    for klass in t.__mro__:
-        own = klass.__dict__
+    for klass in class_mro(t):
+        own = class_dict(klass)
         method = own.get("__reduce_ex__") or own.get("__reduce__")
         if method is None:
             continue
@@ -2550,7 +2592,7 @@ def _decide_drops_dict(t: type) -> bool:
             klass = owner
         elif klass is object or isinstance(method, _PYTHON_METHODS):
             return False  # object's reduce keeps the dict; a Python one is the class's own say
-        return not klass.__dictoffset__
+        return not class_dictoffset(klass)
     return False
 
 
@@ -2561,12 +2603,12 @@ def _wrapped_reduce_owner(t: type, klass: type, method: Any) -> type | None:
     gives, so it drops the dict that one drops. Else None."""
     if not isinstance(method, types.FunctionType):
         return None
-    inner = getattr(method, "__wrapped__", None)
+    inner = plain_getattr(method, "__wrapped__", None)
     if inner is None or isinstance(inner, _PYTHON_METHODS):
         return None
-    mro = t.__mro__
+    mro = class_mro(t)
     for base in mro[mro.index(klass) + 1 :]:
-        own = base.__dict__
+        own = class_dict(base)
         if own.get("__reduce_ex__") is inner or own.get("__reduce__") is inner:
             return None if base is object else base
     return None
@@ -2610,7 +2652,7 @@ def _reduce_with_dict(obj: Any, protocol: int, unshared: bool = False, keyed: bo
     (a ``datetime`` in a frame's list, its ``tzinfo`` a class of the
     user's)."""
     reduced = obj.__reduce_ex__(protocol)
-    attrs = getattr(obj, "__dict__", None)
+    attrs = plain_getattr(obj, "__dict__", None)
     if not attrs or isinstance(reduced, str):
         return reduced
     if keyed and pandas_memo_attrs(obj):
@@ -2659,10 +2701,10 @@ def _pandas_cached_names(t: type) -> frozenset[str]:
     except TypeError:  # a class whose metaclass makes it unhashable
         return frozenset()
     names: set[str] = set()
-    for klass in t.__mro__:
-        for member in vars(klass).values():
+    for klass in class_mro(t):
+        for member in class_dict(klass).values():
             kind = type(member)
-            if kind.__name__ == "CachedProperty" and kind.__module__ == "pandas._libs.properties":
+            if class_name(kind) == "CachedProperty" and class_module(kind) == "pandas._libs.properties":
                 name = getattr(member, "name", None)
                 if isinstance(name, str):
                     names.add(name)
@@ -2691,11 +2733,11 @@ def _xarray_lazy_dicts(t: type) -> tuple[str, ...]:
     except TypeError:  # a class whose metaclass makes it unhashable
         return ()
     names: list[str] = []
-    for klass in t.__mro__:
-        module = klass.__module__  # a member_descriptor on Cython 3.1's function type
+    for klass in class_mro(t):
+        module = class_module(klass)  # a member_descriptor on Cython 3.1's function type
         if not (isinstance(module, str) and module.startswith("xarray.")):
             continue
-        own = vars(klass)
+        own = class_dict(klass)
         for prop, slot in (("attrs", "_attrs"), ("encoding", "_encoding")):
             if isinstance(own.get(prop), property) and slot not in names:
                 names.append(slot)
@@ -2711,7 +2753,7 @@ def library_memos(obj: Any) -> bool:
     on: pandas' memo of its ``cache_readonly`` values (`pandas_memo_attrs`)
     or an xarray dict made on first read (`_xarray_lazy_dicts`)?"""
     t = type(obj)
-    if _pandas_cached_names(t) and isinstance(getattr(obj, "__dict__", None), dict) and pandas_memo_attrs(obj):
+    if _pandas_cached_names(t) and isinstance(plain_getattr(obj, "__dict__", None), dict) and pandas_memo_attrs(obj):
         return True
     lazy = _xarray_lazy_dicts(t)
     return bool(lazy) and any(_lazy_dict_filled(obj, name) for name in lazy)
@@ -2734,7 +2776,7 @@ def _reduce_without_memos(obj: Any, reducer: Any) -> Any:
     if isinstance(reduced, str) or len(reduced) < 3:
         return reduced
     state = reduced[2]
-    own = getattr(obj, "__dict__", None)
+    own = plain_getattr(obj, "__dict__", None)
     if isinstance(own, dict) and "_cache" in own and pandas_memo_attrs(obj):
         trimmed = {k: v for k, v in own.items() if k != "_cache"}
         if state is own:
@@ -2906,10 +2948,10 @@ def runs_users_state(t: type) -> bool:
 def _decide_runs_users_state(t: type) -> bool:
     return any(
         users_function(method)
-        for klass in t.__mro__
+        for klass in class_mro(t)
         if klass is not object
         for name in (*_STATE_METHODS, *_NEWARGS_METHODS)
-        if isinstance(method := klass.__dict__.get(name), _PYTHON_METHODS)
+        if isinstance(method := class_dict(klass).get(name), _PYTHON_METHODS)
     )
 
 
@@ -2918,11 +2960,11 @@ def users_function(function: Any) -> bool:
     its module is not loaded, of a file of theirs?"""
     from .install_paths import is_user_code_file, is_user_code_module
 
-    function = getattr(function, "__func__", function)
-    module = sys.modules.get(getattr(function, "__module__", None) or "")
+    function = plain_getattr(function, "__func__", function)
+    module = sys.modules.get(plain_getattr(function, "__module__", None) or "")
     if module is not None:
         return is_user_code_module(module)
-    code = getattr(function, "__code__", None)
+    code = plain_getattr(function, "__code__", None)
     return code is not None and is_user_code_file(code.co_filename)
 
 
@@ -2951,14 +2993,14 @@ def chooses_its_state(t: type) -> bool:
 
 
 def _decide_chooses_state(t: type) -> bool:
-    for klass in t.__mro__:
+    for klass in class_mro(t):
         if klass is object:
             return False
-        own = klass.__dict__
+        own = class_dict(klass)
         if any(isinstance(own.get(name), _PYTHON_METHODS) for name in _STATE_METHODS):
             from .install_paths import is_user_code_module
 
-            return is_user_code_module(sys.modules.get(klass.__module__))
+            return is_user_code_module(sys.modules.get(class_module(klass)))
     return False
 
 
@@ -2982,14 +3024,14 @@ def library_chooses_its_state(t: type) -> bool:
 
 
 def _decide_library_chooses_state(t: type) -> bool:
-    for klass in t.__mro__:
+    for klass in class_mro(t):
         if klass is object:
             return False
-        own = klass.__dict__
+        own = class_dict(klass)
         if any(isinstance(own.get(name), _PYTHON_METHODS) for name in _STATE_METHODS):
             from .install_paths import is_user_code_module
 
-            module = sys.modules.get(klass.__module__)
+            module = sys.modules.get(class_module(klass))
             return module is not None and not is_user_code_module(module)
     return False
 
@@ -3002,7 +3044,7 @@ _CHOOSES_STATE: weakref.WeakKeyDictionary = _weak.WeakKeyDictionary()
 def _is_users_class(t: type) -> bool:
     from .install_paths import is_user_code_module
 
-    return is_user_code_module(sys.modules.get(t.__module__))
+    return is_user_code_module(sys.modules.get(class_module(t)))
 
 
 def _reduce_for_key(obj: Any, protocol: int, registered: Any = None) -> Any:
@@ -3048,12 +3090,13 @@ def may_stand_by_reference(t: type) -> bool:
 
 
 def _decide_may_stand_by_reference(t: type) -> bool:
-    if not t.__dictoffset__ and not any(klass.__dict__.get("__slots__") for klass in t.__mro__):
+    mro = class_mro(t)
+    if not class_dictoffset(t) and not any(class_dict(klass).get("__slots__") for klass in mro):
         return False
-    for klass in t.__mro__:
-        own = klass.__dict__
+    for klass in mro:
+        own = class_dict(klass)
         if "__reduce_ex__" in own or "__reduce__" in own:
-            return klass is not object and (klass.__module__, klass.__qualname__) not in _REDUCES_BY_VALUE
+            return klass is not object and (class_module(klass), class_qualname(klass)) not in _REDUCES_BY_VALUE
     return False
 
 
@@ -3150,7 +3193,7 @@ def _detached_root_logger(obj: logging.RootLogger, reduced: tuple) -> tuple:
     same. Keyed by its class and the state its log methods read."""
     cls = type(obj)
     state = {
-        "class": f"{cls.__module__}.{cls.__qualname__}",
+        "class": f"{class_module(cls)}.{class_qualname(cls)}",
         "name": obj.name,
         "level": obj.level,
         "disabled": obj.disabled,
@@ -3217,7 +3260,7 @@ def _own_attrs(obj: Any) -> dict:
     t = type(obj)
     own: dict = {}
     for name, value in attrs.items():
-        if any(klass.__dict__.get(name, _NOT_HELD) is value for klass in t.__mro__):
+        if any(class_dict(klass).get(name, _NOT_HELD) is value for klass in t.__mro__):
             continue
         if name == "_cache" and type(value) is dict and _fills_cache_readonly(t):
             continue
@@ -3250,9 +3293,9 @@ def _fills_cache_readonly(t: type) -> bool:
 
 def _decide_fills_cache_readonly(t: type) -> bool:
     for klass in t.__mro__:
-        for value in klass.__dict__.values():
+        for value in class_dict(klass).values():
             kind = type(value)
-            if kind.__name__ == "CachedProperty" and kind.__module__ == "pandas._libs.properties":
+            if class_name(kind) == "CachedProperty" and class_module(kind) == "pandas._libs.properties":
                 return True
     return False
 
@@ -3487,7 +3530,7 @@ def _handler_state(handler: Any) -> Any:
     gathering what it handles (pytest's ``LogCaptureHandler``) is not
     rekeyed by each record. Anything else in a logger's handlers by its
     type."""
-    if logging.Handler not in type(handler).__mro__:
+    if logging.Handler not in mro_of(type(handler)):
         return type(handler)
     own = not _stdlib_logging(handler)
     state: dict[str, Any] = {"__class__": type(handler)}
@@ -3513,7 +3556,7 @@ def _held_key(value: Any) -> Any:
         return value
     if callable(value):
         kind = type(value)
-        return (kind.__module__, kind.__qualname__)
+        return (class_module(kind), class_qualname(kind))
     return _stream_key(value)
 
 
@@ -3565,8 +3608,8 @@ def buffering_handlers(logger: Any) -> list[str]:
     while type(logger) in _STDLIB_LOGGERS and id(logger) not in seen:
         seen.add(id(logger))
         for handler in _instance_attrs(logger).get("handlers") or ():
-            if logging.Handler in type(handler).__mro__ and {"buffer", "queue"} & _instance_attrs(handler).keys():
-                found.append(type(handler).__name__)
+            if logging.Handler in mro_of(type(handler)) and {"buffer", "queue"} & _instance_attrs(handler).keys():
+                found.append(class_name(type(handler)))
         if not _instance_attrs(logger).get("propagate"):
             break
         logger = _instance_attrs(logger).get("parent")
@@ -3586,7 +3629,7 @@ def _formatter_state(formatter: Any) -> Any:
     if formatter is None:
         return None
     own = not _stdlib_logging(formatter)
-    if own and logging.Formatter not in type(formatter).__mro__:
+    if own and logging.Formatter not in mro_of(type(formatter)):
         return formatter
     style = vars(formatter).get("_style")
     defaults = vars(style).get("_defaults") if _stdlib_logging(style) else style
@@ -3708,7 +3751,7 @@ def left_out_attrs(obj: Any, state: Any, *, own_only: bool = False) -> dict:
             if name in saved and _same(saved[name], value):
                 continue
             if not _picklable(value):
-                value = ("__cash_unpicklable__", f"{type(value).__module__}.{type(value).__qualname__}")
+                value = ("__cash_unpicklable__", f"{class_module(type(value))}.{class_qualname(type(value))}")
             left_out[name] = value
     except BaseException:
         memo.pop(id(obj), None)
@@ -3764,16 +3807,16 @@ def _picklable(value: Any) -> bool:
 
 def _instance_attrs(obj: Any) -> dict:
     """*obj*'s ``__dict__`` and the ``__slots__`` it has set."""
-    attrs = dict(getattr(obj, "__dict__", None) or ())
-    for klass in type(obj).__mro__:
-        slots = klass.__dict__.get("__slots__")
+    attrs = dict(plain_getattr(obj, "__dict__", None) or ())
+    for klass in mro_of(type(obj)):
+        slots = class_dict(klass).get("__slots__")
         if not slots:
             continue
         for name in (slots,) if isinstance(slots, str) else slots:
             if name in ("__dict__", "__weakref__"):
                 continue
             if name.startswith("__") and not name.endswith("__"):
-                name = f"_{klass.__name__.lstrip('_')}{name}"  # name-mangled slot
+                name = f"_{class_name(klass).lstrip('_')}{name}"  # name-mangled slot
             if name in attrs:
                 continue
             try:
@@ -3829,13 +3872,13 @@ def named_now(obj: Any) -> Any:
     re-run defines a new class under the old name, and pickle refuses an
     instance of the old one ("not the same object as __main__.Fit").
     """
-    module = sys.modules.get(getattr(obj, "__module__", None) or "")
-    qualname = getattr(obj, "__qualname__", None)
+    module = sys.modules.get(attribute_or(obj, "__module__") or "")
+    qualname = attribute_or(obj, "__qualname__")
     if module is None or not isinstance(qualname, str) or "<locals>" in qualname:
         return None
     current: Any = module
     for part in qualname.split("."):
-        current = getattr(current, part, None)
+        current = named_attr(current, part, None)
         if current is None:
             return None
     if current is obj:
@@ -3907,7 +3950,7 @@ def by_name(module: str, qualname: str) -> Any:
 
     found: Any = importlib.import_module(module)
     for part in qualname.split("."):
-        found = getattr(found, part)
+        found = named_attr(found, part)
     return found
 
 

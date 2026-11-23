@@ -99,7 +99,7 @@ print(double.explain(1).reason)     # "hit"
 
 ## Leaving a parameter out of the key
 
-<!-- claim: cash/decorator/arg_key.py:Ignore @ea1a47d6, cash/decorator/arg_key.py:annotated_ignores @3c698cef -->
+<!-- claim: cash/decorator/arg_key.py:Ignore @ea1a47d6, cash/decorator/arg_key.py:annotated_ignores @7326063e -->
 `cash.Ignore` marks a parameter that does not change the result, so it is
 left out of the key: `debug: cash.Ignore[bool] = False`. It is
 `typing.Annotated` with a marker, so a type checker sees `bool`;

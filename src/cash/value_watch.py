@@ -45,6 +45,8 @@ from typing import Any
 from . import _native, _weak, kept_state
 from ._native import REASON
 from ._native import cwatch as _cw
+from ._type_memo import class_dict, class_flags, class_module, class_name, class_qualname
+from ._user_attrs import plain_getattr
 
 __all__ = [
     "KIND_HANDED",
@@ -191,9 +193,9 @@ def _classify(t: type) -> tuple[bool, tuple, bool]:
     if mro[-1] is not object:
         return no
     for klass in mro[:-1]:
-        if type(klass) not in _PLAIN_METACLASSES or not (klass.__flags__ & _HEAPTYPE):
+        if type(klass) not in _PLAIN_METACLASSES or not (class_flags(klass) & _HEAPTYPE):
             return no
-        own = klass.__dict__
+        own = class_dict(klass)
         if not _FORBIDDEN.isdisjoint(own):
             return no
         held_dict = own.get("__dict__")
@@ -213,7 +215,7 @@ def _classify(t: type) -> tuple[bool, tuple, bool]:
         return no
     slots: list = []
     for klass in mro[:-1]:
-        for name, member in klass.__dict__.items():
+        for name, member in class_dict(klass).items():
             if type(member) is not types.MemberDescriptorType or member.__objclass__ is not klass:
                 continue
             for first in mro:
@@ -261,9 +263,9 @@ def _plain_view_class(t: type) -> bool:
         return False
     mro = t.__mro__
     for klass in mro[:-1]:
-        if type(klass) not in _VIEW_METACLASSES or not (klass.__flags__ & _HEAPTYPE):
+        if type(klass) not in _VIEW_METACLASSES or not (class_flags(klass) & _HEAPTYPE):
             return False
-        own = klass.__dict__
+        own = class_dict(klass)
         if "__getattribute__" in own or "__getattr__" in own:
             return False
         held_dict = own.get("__dict__")
@@ -276,7 +278,7 @@ def _plain_view_class(t: type) -> bool:
             if name in ("__dict__", "__weakref__"):
                 continue
             if name.startswith("__") and not name.endswith("__"):
-                name = f"_{klass.__name__.lstrip('_')}{name}"
+                name = f"_{class_name(klass).lstrip('_')}{name}"
             first = next((k.__dict__[name] for k in mro if name in k.__dict__), None)
             if type(first) is not types.MemberDescriptorType:
                 return False
@@ -325,7 +327,7 @@ def _anchors() -> tuple:
         if isinstance(user_ns, dict) and all(user_ns is not other for other in found):
             found.append(user_ns)
     main = sys.modules.get("__main__")
-    ns = getattr(main, "__dict__", None)
+    ns = plain_getattr(main, "__dict__", None)
     if isinstance(ns, dict) and all(ns is not other for other in found):
         found.append(ns)
     ipython = sys.modules.get("IPython")
@@ -486,7 +488,7 @@ def _verify(value: Any, compute: Callable[[Any], Any], reused: Any) -> None:
     VERIFIED[0] += 1
     if fresh != reused:
         raise WatchMismatch(
-            f"cash._cwatch reused a stale digest for a {type(value).__module__}.{type(value).__qualname__}: "
+            f"cash._cwatch reused a stale digest for a {class_module(type(value))}.{class_qualname(type(value))}: "
             f"{reused!r} != {fresh!r}"
         )
 

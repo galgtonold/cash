@@ -12,6 +12,7 @@ import logging
 import time
 from typing import Any
 
+from ..._type_memo import class_name
 from ...backends._writes import discarded_writes
 from ..cache_status import CacheStatus
 from ..statement import ProcessResult
@@ -133,7 +134,7 @@ def module_reloaded_row(changed_modules: dict[str, str]) -> ProcessResult:
 
 def module_load_failed_row(errors: dict[str, BaseException]) -> ProcessResult:
     """The badge row for edited modules that did not reload, so the cell did not run."""
-    names = ", ".join(f"{name} ({type(exc).__name__})" for name, exc in sorted(errors.items()))
+    names = ", ".join(f"{name} ({class_name(type(exc))})" for name, exc in sorted(errors.items()))
     return {
         "status": CacheStatus.ERROR,
         "code": f"Module{'s' if len(errors) > 1 else ''} did not reload: {names}",

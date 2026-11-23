@@ -54,8 +54,17 @@ from .. import _plain_data, _weak, source_reads
 from .._inspect_cache import forget_static_lookups
 from .._memo import CODE_OBJECTS, LruMemo
 from .._paths import is_pseudo_filename
-from .._type_memo import TypeMemo, type_key
-from .._user_attrs import attribute_or, instance_of, own_dict
+from .._type_memo import TypeMemo, class_dict, class_flags, class_mro, class_name, mro_of, type_key
+from .._user_attrs import (
+    attribute_or,
+    dataclass_fields,
+    has_attribute,
+    instance_of,
+    own_dict,
+    plain_getattr,
+    static_attr,
+    unwrapped,
+)
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..source_reading import own_source, wrapper_layers
 from ..tracking.function_tracker import is_local_module
@@ -486,7 +495,7 @@ def _members_by_class(objects: list[Any], names: frozenset[str]) -> list[Any]:
                 else:
                     func = member.__func__
                     out.extend(types.MethodType(func, obj) for obj in rest)
-            elif getattr(member, "__self__", None) is sample:
+            elif plain_getattr(member, "__self__", None) is sample:
                 # A builtin's method bound to each object (a subclass of
                 # ``list``'s ``append``): each one's own.
                 out.extend(m for obj in rest if (m := _attribute(obj, name)) is not _MISSING and callable(m))
@@ -1405,14 +1414,14 @@ _OWN = object()
 
 def _static_attribute(owner: Any, attr: str) -> Any:
     if instance_of(owner, type):
-        return inspect.getattr_static(owner, attr)
+        return static_attr(owner, attr)
     own = _instance_dict(owner)
     in_own = attr in own
     key = (type(owner), attr, in_own)
     member = _CLASS_ATTRIBUTES.get(key)
     if member is None:
         try:
-            member = inspect.getattr_static(owner, attr)
+            member = static_attr(owner, attr)
         except AttributeError:
             member = _MISSING
         if len(_CLASS_ATTRIBUTES) > 1024:
@@ -1444,7 +1453,7 @@ def _attribute(owner: Any, attr: str) -> Any:
         if instance_of(owner, type):
             # A method of the metaclass (``K.bump(5)``, ``def bump(cls, n)``
             # on ``Meta``): bound to the class, as Python binds it.
-            on_class = any(attr in vars(klass) for klass in owner.__mro__)
+            on_class = any(attr in class_dict(klass) for klass in class_mro(owner))
             return member if on_class else types.MethodType(member, owner)
         in_instance = attr in _instance_dict(owner)
         return member if in_instance else types.MethodType(member, owner)
@@ -1454,7 +1463,7 @@ def _attribute(owner: Any, attr: str) -> Any:
             return getattr(owner, attr)
         except Exception:  # noqa: BLE001 - an object's attribute lookup
             return _MISSING
-    if hasattr(type(member), "__get__") and not instance_of(member, type):
+    if has_attribute(type(member), "__get__") and not instance_of(member, type):
         if not instance_of(owner, type) and _instance_dict(owner).get(attr, _MISSING) is member:
             # The object's own value (a bound method or a partial it holds):
             # Python binds no descriptor held there, so it is what is called.
@@ -1557,7 +1566,7 @@ def reaching_special_functions(cls: type) -> list[Any]:
     for fn in special_functions(cls):
         if dataclass_made(fn, cls):
             continue
-        code = getattr(inspect.unwrap(fn), "__code__", None)
+        code = getattr(unwrapped(fn), "__code__", None)
         if code is not None and not is_user_code_file(code.co_filename):
             # A library's function a class of the user's holds (dataclasses'
             # ``__replace__``): it reaches no global of the user's by name.
@@ -1590,7 +1599,7 @@ def _calls_by_name(source: str, fn: Any) -> bool:
     node = parse_function_source(source)
     if node is None:
         return bool(source_called_names(source))
-    globals_ = getattr(fn, "__globals__", None) or {}
+    globals_ = plain_getattr(fn, "__globals__", None) or {}
     own = scope_locals(node)
 
     def counts(name: str) -> bool:
@@ -1605,15 +1614,15 @@ def dataclass_made(fn: Any, cls: type) -> bool:
     """*fn* is a special method ``@dataclass`` wrote (`_DATACLASS_MADE`) on
     a class of *cls*'s MRO: compiled from text of its own (``<string>``),
     not from a file of the user's, for a class with dataclass fields."""
-    name = getattr(fn, "__name__", None)
+    name = plain_getattr(fn, "__name__", None)
     if name not in _DATACLASS_MADE:
         return False
-    code = getattr(inspect.unwrap(fn), "__code__", None)
+    code = getattr(unwrapped(fn), "__code__", None)
     if code is None or code.co_filename != "<string>":
         return False
     for klass in _CLASS_MRO(cls):
         held = _CLASS_DICT(klass).get(name)
-        if held is not None and (held is fn or inspect.unwrap(held) is inspect.unwrap(fn)):
+        if held is not None and (held is fn or unwrapped(held) is unwrapped(fn)):
             return "__dataclass_fields__" in _CLASS_DICT(klass)
     return False
 
@@ -1823,7 +1832,7 @@ class _Found:
                     self._bound_group(member.__func__, rest, root)
                     if (member.__func__, kind, root) in self._inert_methods:
                         self._inert_attributes.add((kind, name, root))
-                elif getattr(member, "__self__", None) is sample:
+                elif plain_getattr(member, "__self__", None) is sample:
                     # A builtin's method bound to each object (a subclass of
                     # ``list``'s ``append``): each one by itself.
                     for obj in rest:
@@ -1872,7 +1881,7 @@ class _Found:
                     if member is not _MISSING and callable(member):
                         self.add(member, root_of(name), False)
                         # ``return kk.m(a)``: what ``m`` reads by a free name.
-                        method = getattr(member, "__func__", member)
+                        method = plain_getattr(member, "__func__", member)
                         if type(method) is types.FunctionType and self._users(method):
                             pending.append(method)
                 else:
@@ -2107,7 +2116,7 @@ class _Found:
                 if _is_users_callable(impl):
                     self.add(impl, root, False)
         else:
-            pyfunc = getattr(value, "pyfunc", None) if type(value).__name__ == "vectorize" else None
+            pyfunc = getattr(value, "pyfunc", None) if class_name(type(value)) == "vectorize" else None
             if pyfunc is not None and _is_users_callable(pyfunc):
                 self.add(pyfunc, root, False)
 
@@ -2270,7 +2279,7 @@ class _Found:
                     continue
                 if _is_users_object(owner[0]):  # a property runs on objects only
                     try:
-                        member = inspect.getattr_static(type(owner[0]), node.attr)
+                        member = static_attr(type(owner[0]), node.attr)
                     except AttributeError:
                         member = _MISSING
                     if instance_of(member, property):
@@ -2448,10 +2457,10 @@ class _Found:
             self._bound_effects(value.__func__, [value.__self__], root)
             return
         if instance_of(value, (types.BuiltinMethodType, types.MethodWrapperType)):
-            owner = getattr(value, "__self__", None)
+            owner = plain_getattr(value, "__self__", None)
             if owner is None or instance_of(owner, (types.ModuleType, type)):
                 return
-            if getattr(value, "__name__", "") in MUTATING_METHODS:
+            if plain_getattr(value, "__name__", "") in MUTATING_METHODS:
                 self._changed(owner, root)
             elif instance_of(value, types.BuiltinMethodType):
                 self._inert_methods.add(_method_key(value, root))
@@ -2463,7 +2472,7 @@ class _Found:
                 # ``@dataclass`` writes has no source, and only sets the
                 # fields of the new object. What it runs of the user's is the
                 # field factories and ``__post_init__``.
-                for spec in dataclasses.fields(value):
+                for spec in dataclass_fields(value) or ():
                     if spec.default_factory is not dataclasses.MISSING:
                         self.add(spec.default_factory, root, False)
                 init = _class_member(value, "__post_init__")
@@ -2576,9 +2585,13 @@ def _super_members(owner: Any, fn: types.FunctionType, names: frozenset[str]) ->
     the one defining *fn*, bound to *owner*."""
     if not names:
         return []
-    mro = type(owner).__mro__
+    mro = mro_of(type(owner))
     start = next(
-        (i for i, k in enumerate(mro) if any(getattr(v, "__code__", None) is fn.__code__ for v in vars(k).values())),
+        (
+            i
+            for i, k in enumerate(mro)
+            if any(plain_getattr(v, "__code__", None) is fn.__code__ for v in vars(k).values())
+        ),
         None,
     )
     if start is None:
@@ -2604,7 +2617,7 @@ def _generated_dataclass_init(cls: type, init: Any) -> bool:
     *cls*: compiled from a string, so it has no source to read."""
     return (
         instance_of(init, types.FunctionType)
-        and dataclasses.is_dataclass(cls)
+        and dataclass_fields(cls) is not None
         and is_pseudo_filename(init.__code__.co_filename)
         and _source_of(init) is None
     )
@@ -2928,9 +2941,9 @@ def live_users_classes() -> list[type]:
             pending.extend(type.__subclasses__(cls))
         except TypeError:
             pass
-        if not cls.__flags__ & _HEAP_TYPE:
+        if not class_flags(cls) & _HEAP_TYPE:
             continue
-        name = cls.__dict__.get("__module__")
+        name = class_dict(cls).get("__module__")
         if not isinstance(name, str) or name == "builtins" or name not in sys.modules:
             # ``exec``'d code names ``builtins`` (or no module loaded):
             # judged class by class, by the functions it defines.
@@ -2969,7 +2982,7 @@ def _global_source(namespace: Mapping[str, Any], name: str) -> str | None:
     if _is_cashs(value):
         # A ``@cash.cache`` function: its body, not cash's wrapper around it,
         # whose bookkeeping is no state of the user's.
-        wrapped = getattr(value, "__wrapped__", None)
+        wrapped = plain_getattr(value, "__wrapped__", None)
         return _source_of(wrapped) if instance_of(wrapped, types.FunctionType) else None
     return _source_of(value)
 
@@ -3055,7 +3068,7 @@ def _opened_by(callee: Any, func: ast.expr | None) -> _Opened:
     fn, offset = _user_function_of(callee)
     if fn is not None:
         return _opened_by_function(fn, offset)
-    attr = func.attr if instance_of(func, ast.Attribute) else getattr(callee, "__name__", None)
+    attr = func.attr if instance_of(func, ast.Attribute) else plain_getattr(callee, "__name__", None)
     if attr in _TAKES_FUNCTIONS:
         return _Opened(frozenset({0}), frozenset({"func"}))
     return _OPENS_NOTHING
@@ -3311,7 +3324,7 @@ def _logging_callbacks(owner: Any, attr: str) -> list[Any]:
 
 def _class_member(cls: type, name: str) -> Any:
     try:
-        return inspect.getattr_static(cls, name)
+        return static_attr(cls, name)
     except AttributeError:
         return None
 
@@ -3583,12 +3596,12 @@ def _slot_members(kind: type) -> tuple[tuple[Any, type], ...]:
     members = _SLOT_MEMBERS.get(kind)
     if members is None:
         found: list[tuple[Any, type]] = []
-        for cls in kind.__mro__:
-            slots = cls.__dict__.get("__slots__")
+        for cls in class_mro(kind):
+            slots = class_dict(cls).get("__slots__")
             if slots is None:
                 continue
             for name in (slots,) if instance_of(slots, str) else slots:
-                member = cls.__dict__.get(name)
+                member = class_dict(cls).get(name)
                 if type(member) is types.MemberDescriptorType:
                     found.append((member, cls))
         members = _SLOT_MEMBERS[kind] = tuple(found)

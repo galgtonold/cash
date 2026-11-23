@@ -98,7 +98,6 @@ import dis
 import enum
 import hashlib
 import importlib
-import inspect
 import json
 import os
 import re
@@ -110,6 +109,8 @@ from contextvars import ContextVar
 from typing import Any
 
 from .. import _weak
+from .._type_memo import class_dict, class_module, class_mro, class_name, class_qualname
+from .._user_attrs import attribute_or, named_attr, plain_getattr, static_attr
 
 __all__ = [
     "KEYED_NAMES",
@@ -327,11 +328,13 @@ def _top(name: Any) -> str:
 def _owner(v: Any) -> str:
     """The top-level package that owns *v*: a module's, a class's or
     function's ``__module__``, else its type's."""
-    if isinstance(v, types.ModuleType):
-        return _top(v.__name__)
+    # A class first, by its real type: ``isinstance(v, ModuleType)`` would
+    # ask it for its ``__class__``, which a metaclass's hook answers.
     if isinstance(v, (type, types.FunctionType, types.BuiltinFunctionType)):
-        return _top(getattr(v, "__module__", None))
-    return _top(type(v).__module__)
+        return _top(plain_getattr(v, "__module__", None))
+    if isinstance(v, types.ModuleType):
+        return _top(class_name(v))
+    return _top(class_module(type(v)))
 
 
 def _library_owner(top: str) -> bool:
@@ -545,7 +548,13 @@ def fingerprint(v: Any) -> str | None:
 
 def _plain(v: Any) -> bool:
     t = type(v)
-    return t in _ATOMS or t in (tuple, list, set, frozenset, dict) or isinstance(v, (enum.Enum, tuple))
+    # A class is neither: ``isinstance`` would ask it for its ``__class__``,
+    # which a metaclass's hook of the user's answers.
+    return (
+        t in _ATOMS
+        or t in (tuple, list, set, frozenset, dict)
+        or (not issubclass(t, type) and isinstance(v, (enum.Enum, tuple)))
+    )
 
 
 #: ``[extobj, state]`` of the last `_numpy_state`: NumPy 2 keeps the error
@@ -627,7 +636,7 @@ def _step(v: Any, name: str) -> Any:
             return _MISSING
         if held is not _MISSING:
             return held
-    found = inspect.getattr_static(v, name, _MISSING)
+    found = static_attr(v, name, _MISSING)
     if found is _MISSING:
         return _MISSING
     if hasattr(type(found), "__get__") and not isinstance(found, _PLAIN_DESCRIPTORS):
@@ -763,8 +772,8 @@ def _frozen_plain(v: Any) -> bool:
 def _class_name(cls: Any) -> tuple[str, str] | None:
     """``(module, qualname)`` under which *cls* is found again (`_resolve`),
     or None for a class no name finds."""
-    module = getattr(cls, "__module__", None)
-    qualname = getattr(cls, "__qualname__", None)
+    module = plain_getattr(cls, "__module__", None)
+    qualname = plain_getattr(cls, "__qualname__", None)
     if not isinstance(module, str) or not isinstance(qualname, str) or "<" in qualname:
         return None
     try:
@@ -778,11 +787,11 @@ def _class_name(cls: Any) -> tuple[str, str] | None:
 def _setting_on(cls: type, name: str) -> Any:
     """The library class of *cls*'s MRO that holds *name* as a class
     setting (`_frozen_plain`), or None."""
-    for k in getattr(cls, "__mro__", ()):
-        held = k.__dict__.get(name, _MISSING)
+    for k in class_mro(cls) if isinstance(cls, type) else attribute_or(cls, "__mro__", ()):
+        held = class_dict(k).get(name, _MISSING)
         if held is _MISSING:
             continue
-        if _frozen_plain(held) and _library_owner(_owner(k)) and not _compiled(k.__module__):
+        if _frozen_plain(held) and _library_owner(_owner(k)) and not _compiled(class_module(k)):
             return k
         return None
     return None
@@ -812,7 +821,7 @@ def class_reads(code: types.CodeType, cls: Any) -> dict[tuple[str, str], str]:
         if where is None:
             continue
         try:
-            fp = fingerprint(getattr(_resolve(where[0], tuple(where[1].split("."))), name))
+            fp = fingerprint(attribute_or(_resolve(where[0], tuple(where[1].split("."))), name, asked=True))
         except Exception:  # noqa: BLE001 - not read again by its name: not kept
             fp = None
         if fp is not None and (where[0], f"{where[1]}.{name}") not in PROCESS_STATE:
@@ -844,7 +853,7 @@ def _reads_class_settings(code: types.CodeType, g: Mapping[str, Any]) -> bool:
         if "<" not in qualname and "." in qualname:
             owner = g.get(qualname.split(".")[0], _MISSING)
             for part in qualname.split(".")[1:-1]:
-                owner = getattr(owner, part, _MISSING) if owner is not _MISSING else _MISSING
+                owner = named_attr(owner, part, _MISSING) if owner is not _MISSING else _MISSING
         if not isinstance(owner, type):
             verdict = True
         else:
@@ -917,7 +926,7 @@ def _cash_var(v: ContextVar) -> bool:
         ids = set()
         for name, mod in list(sys.modules.items()):
             if (name == "cash" or name.startswith("cash.")) and mod is not None:
-                ids.update(id(x) for x in list(getattr(mod, "__dict__", {}).values()) if type(x) is ContextVar)
+                ids.update(id(x) for x in list(plain_getattr(mod, "__dict__", {}).values()) if type(x) is ContextVar)
         _CASH_VARS[:] = [len(sys.modules), frozenset(ids)]
     return id(v) in _CASH_VARS[1]
 
@@ -936,7 +945,7 @@ def _resolve(module: str, names: tuple[str, ...]) -> Any:
             if v is _MISSING:
                 raise AttributeError(name)
         else:
-            v = getattr(v, name)
+            v = named_attr(v, name)
     return v
 
 
@@ -1123,7 +1132,7 @@ def _rooted(g: Mapping[str, Any], module: str, upto: tuple[str, ...]) -> tuple[s
         v = v.get(name) if j == 0 else v.__dict__.get(name)
         if not isinstance(v, types.ModuleType):
             break
-        mod_name = getattr(v, "__name__", None)
+        mod_name = plain_getattr(v, "__name__", None)
         if isinstance(mod_name, str) and sys.modules.get(mod_name) is v:
             at = (mod_name, upto[j + 1 :])
     return at
@@ -1442,7 +1451,7 @@ def _exported(v: Any) -> tuple[str, str] | None:
         for name, mod in list(mods.items()):
             if not isinstance(mod, types.ModuleType) or not _compiled(name):
                 continue
-            for attr, x in list(getattr(mod, "__dict__", {}).items()):
+            for attr, x in list(plain_getattr(mod, "__dict__", {}).items()):
                 if type(x) in (dict, list, set) and not attr.startswith("__"):
                     index[id(x)] = (x, name, attr)
         _EXPORTS[:] = [len(mods), index]
@@ -1706,7 +1715,7 @@ def build(
                     value = v.get(_MISSING)
                     return None, (
                         f"the context variable {v.name!r} ({where}.{dotted}) it read holds a "
-                        f"{type(value).__qualname__}, which cash cannot compare between calls"
+                        f"{class_qualname(type(value))}, which cash cannot compare between calls"
                     )
             else:
                 places[same] = fp
@@ -1776,7 +1785,7 @@ def classes_watched(items: Any, watch: Any) -> bool:
             return False
         if not isinstance(cls, type):
             return False
-        for k in cls.__mro__:
+        for k in class_mro(cls):
             if k.__flags__ & _HEAPTYPE and watch(k) is None:
                 return False
     return True

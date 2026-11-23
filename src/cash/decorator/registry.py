@@ -14,6 +14,8 @@ from collections.abc import Callable, Collection
 from typing import TYPE_CHECKING, Any
 
 from .. import _weak
+from .._type_memo import class_name
+from .._user_attrs import named_attr, plain_getattr
 from ..analysis.code_analyzer import CodeAnalyzer
 from ..analysis.helper_bindings import bindings_changed, resolve_binding
 from ..analysis.purity_analyzer import get_analyzer
@@ -79,7 +81,7 @@ def resolve_dynamic_dependencies(
                     raise KeyBuildFailed(
                         "KEY-DYNAMIC-DEP-FAILED",
                         f"@cash.cache on {func_name}: a dynamic_depends_on resolver "
-                        f"returned a {type(ds).__name__}, which is not a DataSource, "
+                        f"returned a {class_name(type(ds))}, which is not a DataSource, "
                         f"so cash cannot tell when it changes and the call -- and any cached call around it -- ran uncached.",
                         fix,
                     )
@@ -95,7 +97,7 @@ def resolve_dynamic_dependencies(
             raise KeyBuildFailed(
                 "KEY-DYNAMIC-DEP-FAILED",
                 f"@cash.cache on {func_name}: dynamic_depends_on resolver raised "
-                f"{type(e).__name__} ({e}), so cash cannot tell whether that "
+                f"{class_name(type(e))} ({e}), so cash cannot tell whether that "
                 f"dependency changed and the call -- and any cached call around it -- ran uncached.",
                 fix,
             ) from e
@@ -136,7 +138,7 @@ def checked_depends_on(depends_on: Any) -> list[Callable[..., Any] | DataSource]
             else " Pass the function itself, or wrap the value in a DataSource."
         )
         raise TypeError(
-            f"@cash.cache: depends_on takes callables and DataSource objects, not {type(dep).__name__} {dep!r}.{hint}"
+            f"@cash.cache: depends_on takes callables and DataSource objects, not {class_name(type(dep))} {dep!r}.{hint}"
         )
     return entries
 
@@ -332,7 +334,7 @@ class FunctionRegistry:
         wrapper = ref() if ref is not None else None
         if wrapper is None or getattr(wrapper, "_cash_state", None) is None:
             return None
-        if self.functions.get(dep) is getattr(wrapper, "__wrapped__", None):
+        if self.functions.get(dep) is plain_getattr(wrapper, "__wrapped__", None):
             return None
         return wrapper
 
@@ -420,8 +422,8 @@ class FunctionRegistry:
         if bytecode_identity(dep) is None and snapshot == compiled_identity(dep) and extension_file_digest(dep) is None:
             return False
         self.declared_dep_snapshots[dep_key] = snapshot
-        module = getattr(dep, "__module__", None)
-        qualname = getattr(dep, "__qualname__", None) or getattr(dep, "__name__", None)
+        module = plain_getattr(dep, "__module__", None)
+        qualname = plain_getattr(dep, "__qualname__", None) or plain_getattr(dep, "__name__", None)
         if module and qualname and "<locals>" not in qualname:
             self._declared_dep_paths[dep_key] = (module, tuple(qualname.split(".")))
         return True
@@ -441,7 +443,7 @@ class FunctionRegistry:
         if obj is None:
             return None
         for attr in attr_chain:
-            obj = getattr(obj, attr, None)
+            obj = named_attr(obj, attr, None)
             if obj is None:
                 return None
         if not callable(obj):
@@ -634,7 +636,7 @@ class FunctionRegistry:
             logger.debug("[CORE] binding refresh failed for %s", func_name, exc_info=True)
             return MissReason(
                 MissKind.UNWALKABLE,
-                f"cash could not check the helpers {func_name} calls ({type(e).__name__}), so the call ran uncached",
+                f"cash could not check the helpers {func_name} calls ({class_name(type(e))}), so the call ran uncached",
             )
 
     def unresolved_gaps(self, func_name: str) -> list[str]:
@@ -688,7 +690,7 @@ class FunctionRegistry:
             # report would key the function by its own code alone, leaving
             # out every helper. The function runs, uncached.
             logger.debug("Purity analyzer failed for %s: %s", func_name, e, exc_info=True)
-            reason = f"cash could not find the helpers {func_name} calls ({type(e).__name__}: {e})"
+            reason = f"cash could not find the helpers {func_name} calls ({class_name(type(e))}: {e})"
             warn_diagnostic(
                 CashCacheIneffectiveWarning,
                 "KEY-HELPERS-UNWALKABLE",
@@ -703,7 +705,7 @@ class FunctionRegistry:
         # to one reached any other way served the caller's old result.
         callees: dict[str, Any] = {}
         for ref in report.cached_callees:
-            inner = getattr(ref(), "__wrapped__", None)
+            inner = plain_getattr(ref(), "__wrapped__", None)
             if inner is None:
                 continue
             name = func_key(inner)

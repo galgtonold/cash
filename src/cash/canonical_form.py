@@ -37,8 +37,19 @@ from typing import Any, NamedTuple
 
 from . import _native, _plain_data, _weak, kept_state
 from ._memo import SORTED_SETS, LruMemo
-from ._type_memo import TypeMemo, type_key
-from ._user_attrs import from_family
+from ._type_memo import (
+    TypeMemo,
+    class_dict,
+    class_flags,
+    class_module,
+    class_mro,
+    class_name,
+    class_qualname,
+    module_of_class,
+    mro_of,
+    type_key,
+)
+from ._user_attrs import class_attr, from_family, named_attr, plain_getattr
 from .pint_values import is_registry_class, pint_kind, quantity_parts, registry_digest
 from .sizing import SPARSE_PARTS, pandas_nbytes
 from .value_types import (
@@ -86,11 +97,11 @@ def object_state(value: Any) -> dict:
     not just a ``__dict__``-backed one.
     """
     state: dict = {}
-    obj_dict = getattr(value, "__dict__", None)
+    obj_dict = plain_getattr(value, "__dict__", None)
     if isinstance(obj_dict, dict):
         state.update(obj_dict)
-    for klass in type(value).__mro__:
-        slots = getattr(klass, "__slots__", ())
+    for klass in mro_of(type(value)):
+        slots = class_attr(klass, "__slots__", ())
         if isinstance(slots, str):
             slots = (slots,)
         for name in slots:
@@ -136,13 +147,13 @@ def _typed(value: Any, canon: Any, walk: _Walk) -> Generator[Any, Any, tuple]:
     factory = getattr(value, "default_factory", None)
     own = {k: v for k, v in _held_state(value, t).items() if not k.startswith("__")}
     if factory is not None:
-        state += (("default_factory", getattr(factory, "__qualname__", repr(factory))),)
+        state += (("default_factory", plain_getattr(factory, "__qualname__", repr(factory))),)
     if own:
         walked = []
         for k, v in own.items():
             walked.append((k, (yield v)))
         state += tuple(sorted(walked))
-    tag = f"{t.__module__}.{t.__qualname__}"
+    tag = f"{class_module(t)}.{class_qualname(t)}"
     return ("__cash_type__", tag, canon, state) if state else ("__cash_type__", tag, canon)
 
 
@@ -242,7 +253,7 @@ class TooDeepValueError(TypeError):
 
 
 def _too_deep(value: Any) -> str:
-    return f"a {type(value).__qualname__} nested too deeply to key"
+    return f"a {class_qualname(type(value))} nested too deeply to key"
 
 
 class _Walk:
@@ -317,7 +328,7 @@ def _plain_walk(walk: _Walk) -> Any:
         return None
     hook = walk.hook
     if hook is not None:
-        passes = _PLAIN_HOOKS.get(getattr(hook, "__func__", None))
+        passes = _PLAIN_HOOKS.get(plain_getattr(hook, "__func__", None))
         if passes is None or not passes(hook.__self__):
             return None
     if not _PLAIN_SET_UP:
@@ -441,7 +452,7 @@ def _content_digest(value: Any, content: ContentHashing) -> str | None:
         reading = _DIGESTING.ids = set()
     key = id(value)
     if key in reading:
-        raise CyclicValueError(f"a {type(value).__qualname__} that contains itself has no stable form to key on")
+        raise CyclicValueError(f"a {class_qualname(type(value))} that contains itself has no stable form to key on")
     reading.add(key)
     try:
         return content.digest(value)
@@ -507,8 +518,10 @@ def _enter(value: Any, walk: _Walk, fast: bool = True) -> Any:
             walk.left.append(value)  # type: ignore[union-attr]
         return value
     if id(value) in walk.stack:
-        raise CyclicValueError(f"a {type(value).__qualname__} that contains itself has no stable form to key on")
-    if isinstance(value, _MUTABLE_CONTAINERS):
+        raise CyclicValueError(f"a {class_qualname(type(value))} that contains itself has no stable form to key on")
+    # A class is no container: ``isinstance`` would ask it for its
+    # ``__class__``, which a metaclass's hook of the user's answers.
+    if not issubclass(type(value), type) and isinstance(value, _MUTABLE_CONTAINERS):
         first = seen.get(id(value))
         if first is not None:
             return ("__cash_alias__", first[0])
@@ -582,7 +595,7 @@ def _pint_steps(value: Any, kind: str, digest: str, magnitude: Any, units: tuple
     array by its content hasher)."""
     t = type(value)
     form = magnitude if type(magnitude) in _IMMUTABLE_PRIMS else (yield magnitude)
-    return ("__cash_pint__", kind, f"{t.__module__}.{t.__qualname__}", digest, form, units)
+    return ("__cash_pint__", kind, f"{class_module(t)}.{class_qualname(t)}", digest, form, units)
 
 
 #: ``{id(index): (index, digest)}`` of the pandas indexes a walk read, while
@@ -604,7 +617,7 @@ def index_digest(value: Any) -> str | None:
 def _pandas_index(type_: type) -> bool:
     """Is *type_* one of pandas' own index classes? A user's subclass may
     keep state of its own, and is pickled as before."""
-    module = type_.__module__
+    module = class_module(type_)
     if module != "pandas" and not module.startswith("pandas."):
         return False
     pd = sys.modules.get("pandas")
@@ -762,7 +775,7 @@ def holds_content_data(value: Any, content: ContentHashing) -> bool:
     list of records markedly slower. An object holding its frames in slots is
     pickled whole.
     """
-    state = getattr(value, "__dict__", None)
+    state = plain_getattr(value, "__dict__", None)
     if type(state) is not dict:
         return _xarray_holds_content_data(value, content)
     family = content.family
@@ -802,7 +815,7 @@ def _xarray_holds_content_data(value: Any, content: ContentHashing) -> bool:
         else:
             variables = [value]
         for variable in variables:
-            if type(variable).__name__ not in ("Variable", "IndexVariable"):
+            if class_name(type(variable)) not in ("Variable", "IndexVariable"):
                 continue
             data = variable._data
             if content.family(type(data)) is not None and _worth_opening(data, content):
@@ -881,7 +894,10 @@ def _object_steps(value: Any, walk: _Walk) -> Generator[Any, Any, Any]:
     try:
         prims = _IMMUTABLE_PRIMS
         items: list = []
-        if isinstance(value, (set, frozenset)):
+        # A class is none of the containers below: ``isinstance`` would ask
+        # it for its ``__class__``, which a metaclass's hook answers.
+        a_class = issubclass(type(value), type)
+        if not a_class and isinstance(value, (set, frozenset)):
             remembered = type(value) is frozenset and len(value) >= SORTED_SET_MIN
             if remembered:
                 entry = _SORTED_SETS.get(id(value))
@@ -901,7 +917,7 @@ def _object_steps(value: Any, walk: _Walk) -> Generator[Any, Any, Any]:
             if remembered:
                 _remember_sorted(value, form)
             return form
-        if isinstance(value, dict) or type(value) is types.MappingProxyType:
+        if not a_class and (isinstance(value, dict) or type(value) is types.MappingProxyType):
             # A read-only view (``MappingProxyType({})``, a default kept
             # from being changed) by the items it shows now, tagged apart
             # from a dict: it has no pickle.
@@ -909,7 +925,7 @@ def _object_steps(value: Any, walk: _Walk) -> Generator[Any, Any, Any]:
                 k_form = k if type(k) in prims else (yield k)
                 items.append((k_form, v if type(v) in prims else (yield v)))
             return (yield from _typed(value, tuple(items), walk))
-        if isinstance(value, (list, tuple)):
+        if not a_class and isinstance(value, (list, tuple)):
             numbers = _numbers_form(value) if walk.hook is None and len(value) >= RECORDS_FROM else None
             if numbers is None and walk.hook is None and len(value) >= RECORDS_FROM:
                 numbers = yield from _dates_steps(value)
@@ -935,7 +951,7 @@ def _object_steps(value: Any, walk: _Walk) -> Generator[Any, Any, Any]:
             fields = []
             for part in _signature_fields(value):
                 fields.append(part if type(part) in prims else (yield part))
-            return ("__cash_sig__", type(value).__qualname__, tuple(fields))
+            return ("__cash_sig__", class_qualname(type(value)), tuple(fields))
         t = type(value)
         if walk.fielded is not None:
             by_fields = _object_by_fields(value, walk)
@@ -946,7 +962,7 @@ def _object_steps(value: Any, walk: _Walk) -> Generator[Any, Any, Any]:
             # parts loop back to it raises `CyclicValueError` and runs
             # uncached: left to the key pickle, two graphs that differ only
             # inside the loop keyed alike.
-            return ("__cash_obj__", f"{t.__module__}.{t.__qualname__}", (yield _pickled_state(value)))
+            return ("__cash_obj__", f"{class_module(t)}.{class_qualname(t)}", (yield _pickled_state(value)))
         if holds_content_data(value, walk.content):
             # Pickled whole, every frame inside was serialised and hashed on each
             # call. Opened up, each goes through the caller's content hasher
@@ -954,7 +970,7 @@ def _object_steps(value: Any, walk: _Walk) -> Generator[Any, Any, Any]:
             # checked rather than read again. An object that reaches itself is
             # left to pickle, which keeps the loop.
             try:
-                return ("__cash_obj__", f"{t.__module__}.{t.__qualname__}", (yield _pickled_state(value)))
+                return ("__cash_obj__", f"{class_module(t)}.{class_qualname(t)}", (yield _pickled_state(value)))
             except CyclicValueError:
                 pass
         left = walk.left
@@ -1109,7 +1125,7 @@ _TZ = operator.attrgetter("tz")
 #: An instance's attributes, None or empty when it has none. Not
 #: ``__dict__``, which makes a dict for each instance that has none: 344 MB
 #: for a million Timestamps. Python 3.10 has no ``object.__getstate__``.
-_OWN_STATE = getattr(object, "__getstate__", operator.attrgetter("__dict__"))
+_OWN_STATE = plain_getattr(object, "__getstate__", operator.attrgetter("__dict__"))
 
 
 def _date_form(value: Any) -> Any:
@@ -1155,14 +1171,14 @@ def _dates_steps(value: list | tuple) -> Generator[Any, Any, tuple | None]:
     if len(kinds) != 1:
         return None
     kind = kinds.pop()
-    if kind not in pandas_dates() or kind.__name__ == "NaTType" or any(map(_OWN_STATE, value)):
+    if kind not in pandas_dates() or class_name(kind) == "NaTType" or any(map(_OWN_STATE, value)):
         return None
     import numpy as np
 
     numbers = np.fromiter(map(_VALUE, value), dtype="<i8", count=len(value)).tobytes()
     units: Any = set(map(_UNIT, value))
     units = units.pop() if len(units) == 1 else tuple(map(_UNIT, value))
-    if kind.__name__ == "Timedelta":
+    if class_name(kind) == "Timedelta":
         return ((_DATES, _TIMEDELTA, units, numbers),)
     if len(set(map(id, map(_TZ, value)))) != 1:  # each zone held by its Timestamps
         return None
@@ -1228,10 +1244,10 @@ def _found_by_name(t: type) -> bool:
     """Does pickle find *t* by its module and qualified name, as it must to
     pickle an instance? A class made in a function, or one a cell defined
     again, is not: its instances are unkeyable, as pickled."""
-    module = sys.modules.get(t.__module__)
+    module = sys.modules.get(class_module(t))
     found: Any = module
-    for part in t.__qualname__.split("."):
-        found = getattr(found, part, None)
+    for part in class_qualname(t).split("."):
+        found = named_attr(found, part, None)
         if found is None:
             return False
     return found is t
@@ -1240,7 +1256,7 @@ def _found_by_name(t: type) -> bool:
 def _fields_form(kind: str, t: type, digest: str) -> tuple:
     """The form of objects keyed by their fields: a tuple no value's form
     can be, since every container's form is tagged (`_typed`)."""
-    return ("__cash_fields__", kind, f"{t.__module__}.{t.__qualname__}", digest)
+    return ("__cash_fields__", kind, f"{class_module(t)}.{class_qualname(t)}", digest)
 
 
 def _records_by_fields(value: list | tuple, walk: _Walk) -> Any:
@@ -1314,7 +1330,7 @@ def _object_by_fields(value: Any, walk: _Walk) -> Any:
     t = type(value)
     if not fields_class(t):
         return None
-    state = getattr(value, "__dict__", None)
+    state = plain_getattr(value, "__dict__", None)
     if type(state) is not dict or not _STR_ONLY.issuperset(map(type, state)):
         return None
     views = kept_state.derived_views(value)
@@ -1464,7 +1480,7 @@ def _decide_record_kind(t: type) -> str | None:
     if _holds_native_state(t):
         return None
     for klass in t.__mro__:
-        slots = klass.__dict__.get("__slots__", ())
+        slots = class_dict(klass).get("__slots__", ())
         if any(name not in ("__dict__", "__weakref__") for name in ((slots,) if isinstance(slots, str) else slots)):
             return None
     if issubclass(t, tuple):
@@ -1600,14 +1616,15 @@ def contains_set(value: Any, found: dict[int, Any] | None = None, clean: dict[in
             # looked into. Without this, an MRO walk per array, and an
             # estimator holding 22,000 small arrays searched them all.
             continue
-        if isinstance(node, (set, frozenset)) or (found is not None and id(node) in found):
+        a_class = issubclass(kind, type)
+        if (not a_class and isinstance(node, (set, frozenset))) or (found is not None and id(node) in found):
             if found is not None:
                 for on_path in path:
                     found[id(on_path)] = on_path
             return True
         if id(node) in seen or (clean is not None and id(node) in clean):
             continue
-        if isinstance(node, logging.Logger):
+        if not a_class and isinstance(node, logging.Logger):
             # Pickled by NAME (`Logger.__reduce__`), so nothing inside it
             # reaches the key -- and walking it means walking every logger in
             # the process, 270 us on each call of any function that reads a
@@ -1617,12 +1634,12 @@ def contains_set(value: Any, found: dict[int, Any] | None = None, clean: dict[in
             continue  # a number or a time; without this, an MRO walk per scalar
         seen.add(id(node))
         held.append(node)
-        if isinstance(node, dict):
+        if not a_class and isinstance(node, dict):
             parts: list = []
             for k, v in node.items():
                 parts.append(k)
                 parts.append(v)
-        elif isinstance(node, (list, tuple)):
+        elif not a_class and isinstance(node, (list, tuple)):
             parts = list(node)
         else:
             parts = list(object_state(node).values())
@@ -1679,12 +1696,12 @@ def _holds_native_state(type_: type) -> bool:
     known = _NATIVE_STATE.get(type_key(type_))
     if known is not None:
         return known
-    top = (getattr(type_, "__module__", "") or "").split(".", 1)[0]
+    top = (module_of_class(type_, "") or "").split(".", 1)[0]
     found = (
         not issubclass(type_, _NO_NATIVE_STATE)
         and type_ not in LEAF_TYPES
         and (top == "builtins" or top in sys.stdlib_module_names)
-        and any(k.__flags__ & _IMMUTABLE_TYPE_FLAG for k in type_.__mro__[:-1])
+        and any(class_flags(k) & _IMMUTABLE_TYPE_FLAG for k in class_mro(type_)[:-1])
     )
     return _NATIVE_STATE.put(type_, found)
 

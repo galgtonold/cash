@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from ._active import EXPLAINING
+from ._type_memo import class_name, class_qualname
 from .diagnostics import warn_diagnostic
 from .exceptions import CashCacheIneffectiveWarning
 
@@ -42,7 +43,7 @@ def state_token_of(source: DataSource) -> str:
     when the token is a ``bool``, which cannot track a change."""
     token = source.state_token()
     if isinstance(token, bool) and not EXPLAINING.get():
-        name = type(source).__qualname__
+        name = class_qualname(type(source))
         if name not in _warned_bool_token_sources:
             _warned_bool_token_sources.add(name)
 
@@ -71,5 +72,5 @@ def _token_text(token: Any) -> str:
             isinstance(token, (list, tuple, dict, set, frozenset))
             and any(is_bulky(v) for v in (token.values() if isinstance(token, dict) else token))
         ):
-            return f"{type(token).__name__}:{compute_hash(token)}"
+            return f"{class_name(type(token))}:{compute_hash(token)}"
     return str(token)

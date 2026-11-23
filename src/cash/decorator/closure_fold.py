@@ -18,6 +18,8 @@ from typing import TYPE_CHECKING, Any
 from .. import _weak
 from .._memo import CODE_OBJECTS, LruMemo
 from .._plain_data import identity_changed, identity_snapshot
+from .._type_memo import class_mro, class_name, class_qualname
+from .._user_attrs import plain_getattr
 from ..analysis.annotations import assume_safe_block_lines
 from ..analysis.bytecode import DEREF_WRITES, argvals, instructions
 from ..analysis.purity_policy import REPORTED_METHODS
@@ -77,7 +79,7 @@ def bound_owner(func: Any) -> tuple[bool, Any]:
     if inspect.ismethod(func):
         return True, func.__self__
     if isinstance(func, (types.BuiltinMethodType, types.MethodWrapperType)):
-        owner = getattr(func, "__self__", None)
+        owner = plain_getattr(func, "__self__", None)
         if owner is not None and not isinstance(owner, types.ModuleType):
             return True, owner
     return False, None
@@ -275,7 +277,7 @@ def defaults_of(func: Callable, leave_out: frozenset[str] = frozenset()) -> tupl
     while fn is not None and id(fn) not in seen:  # every layer; a cycle ends
         seen.add(id(fn))
         level_pos = getattr(fn, "__defaults__", None) or ()
-        code = getattr(fn, "__code__", None)
+        code = plain_getattr(fn, "__code__", None)
         if leave_out and level_pos and code is not None:
             named = code.co_varnames[: code.co_argcount][-len(level_pos) :]
             level_pos = tuple(v for name, v in zip(named, level_pos) if not _left_out(name, leave_out))
@@ -286,7 +288,7 @@ def defaults_of(func: Callable, leave_out: frozenset[str] = frozenset()) -> tupl
         for name in sorted(level_kwd):
             if not _left_out(name, leave_out):
                 kwd[f"{depth}:{name}"] = level_kwd[name]
-        fn = getattr(fn, "__wrapped__", None)
+        fn = plain_getattr(fn, "__wrapped__", None)
         depth += 1
     return tuple(pos), kwd
 
@@ -346,7 +348,7 @@ def module_capture_identity(module: types.ModuleType, attrs: frozenset[str]) -> 
     channel of the globals fold, and code outside the user's own files is
     left out, as a module global's is.
     """
-    namespace = getattr(module, "__dict__", {})
+    namespace = plain_getattr(module, "__dict__", {})
     code = []
     for attr in sorted(attrs):
         value = namespace.get(attr)
@@ -428,7 +430,7 @@ class CaptureAnalysis:
         Cached per code object (closures from one factory share it). When the
         source is unavailable, every free var is reported unsafe.
         """
-        code = getattr(func, "__code__", None)
+        code = plain_getattr(func, "__code__", None)
         if code is None:
             return frozenset()
         cached = self._use_cache.get(code)
@@ -473,12 +475,12 @@ def unhashable_capture(fn: Any, name: str, value: Any, error: Exception) -> KeyB
     """KEY-UNHASHABLE-CAPTURE for *fn*'s captured *name*, whose *value* the
     key needs and cannot hash. Left out, a change to it would not reach
     the key; the call runs uncached instead."""
-    owner = getattr(fn, "__qualname__", repr(fn))
-    kind = type(value).__qualname__
+    owner = plain_getattr(fn, "__qualname__", repr(fn))
+    kind = class_qualname(type(value))
     return KeyBuildFailed(
         "KEY-UNHASHABLE-CAPTURE",
         f"@cash.cache: {owner} reads the captured variable '{name}', a {kind} that could "
-        f"not be hashed ({type(error).__name__}), so the call ran uncached rather than "
+        f"not be hashed ({class_name(type(error))}), so the call ran uncached rather than "
         f"risk serving a result computed under a value that changed.",
         f"pass what {owner} needs from '{name}' as an argument, capture only the plain "
         f"values it reads, or register a hasher with cash.register_hasher({kind}, ...).",
@@ -603,7 +605,7 @@ class HelperIdentity:
         a ``nonlocal`` setter in a sibling closure re-sets one without
         touching *fn* itself."""
         closure = getattr(fn, "__closure__", None)
-        code = getattr(fn, "__code__", None)
+        code = plain_getattr(fn, "__code__", None)
         if not closure or code is None:
             return ()
         written = self._captures.written_freevars(code)
@@ -654,7 +656,7 @@ class HelperIdentity:
         (a config dict the helper only reads), which `identity` watches.
         """
         closure = getattr(fn, "__closure__", None)
-        code = getattr(fn, "__code__", None)
+        code = plain_getattr(fn, "__code__", None)
         if not closure or code is None:
             return "", []
         mutable: list = []
@@ -761,7 +763,7 @@ class HelperIdentity:
             # An OPAQUE base still contributes nothing, as for a class passed as an argument.
             bases = [
                 hash_callable_source(base)
-                for base in fn.__mro__[1:]
+                for base in class_mro(fn)[1:]
                 if base is not object and not is_opaque(base) and is_user_code_object(base)
             ]
             if bases:
@@ -828,11 +830,11 @@ class HelperIdentity:
                 )
             except (TypeError, pickle.PicklingError, AttributeError, OverflowError) as e:
                 bad_type = self._args.first_unhashable_arg_type(pos, kwd)
-                name = getattr(fn, "__qualname__", repr(fn))
+                name = plain_getattr(fn, "__qualname__", repr(fn))
                 raise KeyBuildFailed(
                     "KEY-UNHASHABLE-DEFAULT",
                     f"@cash.cache: a parameter default of type {bad_type} on the helper "
-                    f"{name} could not be hashed ({type(e).__name__}), so the call ran "
+                    f"{name} could not be hashed ({class_name(type(e))}), so the call ran "
                     f"uncached rather than risk serving a result computed under a "
                     f"default that changed.",
                     f"get the value out of {name}'s signature -- build it in the body or "
@@ -921,7 +923,7 @@ class ClosureFold:
         and classes the body reads from it (`module_capture_identity`).
         """
         closure = getattr(func, "__closure__", None)
-        code = getattr(func, "__code__", None)
+        code = plain_getattr(func, "__code__", None)
         if not closure or code is None:
             return state_hash
         freevars = getattr(code, "co_freevars", ()) or ()
@@ -1004,7 +1006,7 @@ class ClosureFold:
         # (`a(lambda: "AAA"), a(lambda: "BBB")` is ONE line, so
         # `inspect.getsource` returns the same string for both).
         # Their code objects differ.
-        inner_code = getattr(v, "__code__", None)
+        inner_code = plain_getattr(v, "__code__", None)
         if inner_code is not None:
             fingerprint = f"{fingerprint}:{code_fingerprint(inner_code)}"
         # Source alone is not enough: a factory-built helper has the
@@ -1049,7 +1051,9 @@ class ClosureFold:
                 # What a class of the user's holds, as for one read as a
                 # module global (`ClassDataFold.class_parts`): its data,
                 # what its code reads, its annotations when they are read.
-                parts = self._classes.class_parts(v, func_name, owner_code=getattr(func, "__code__", None), reader=func)
+                parts = self._classes.class_parts(
+                    v, func_name, owner_code=plain_getattr(func, "__code__", None), reader=func
+                )
                 if parts:
                     payload = ":".join(f"{n}={h}" for n, h in sorted(parts))
                     return (name, f"ref:{ref}:" + hashlib.sha256(payload.encode("utf-8")).hexdigest())
@@ -1072,7 +1076,7 @@ class ClosureFold:
             # Kept per version of a table of plain functions
             # (`GlobalsFold.captured_code_digest`).
             if self.held_code is not None:
-                code_digest = self.held_code(name, v, func_name, getattr(func, "__code__", None))
+                code_digest = self.held_code(name, v, func_name, plain_getattr(func, "__code__", None))
                 if code_digest is not None:
                     h = f"{h}:{code_digest}"
             return (name, h)
@@ -1161,7 +1165,7 @@ class ClosureFold:
             func_name,
             bad_type,
             f"@cash.cache on {func_name}: a parameter default of type "
-            f"{bad_type} could not be hashed ({type(e).__name__}), so the "
+            f"{bad_type} could not be hashed ({class_name(type(e))}), so the "
             f"function does not cache for any caller rather than risk "
             f"serving a result computed under a default that changed.",
             code="KEY-UNHASHABLE-DEFAULT",
@@ -1200,7 +1204,7 @@ class ClosureFold:
         #    validation honest rather than merely cheap.
         if (
             pinnable
-            and getattr(func, "__wrapped__", None) is None
+            and plain_getattr(func, "__wrapped__", None) is None
             and all(is_immutable_capture(v) for v in pos)
             and all(is_immutable_capture(v) for v in kwd.values())
         ):
@@ -1237,7 +1241,7 @@ class ClosureFold:
             raise KeyBuildFailed(
                 "KEY-UNHASHABLE-ARG",
                 f"@cash.cache on {func_name}: {what} the functools.partial binds could "
-                f"not be hashed ({type(e).__name__}), so this call does not cache.",
+                f"not be hashed ({class_name(type(e))}), so this call does not cache.",
                 "pass the value as an argument of the call instead of binding it, or "
                 "register a hasher for its type with cash.register_hasher(...).",
             ) from e
@@ -1266,11 +1270,11 @@ class ClosureFold:
         try:
             return "state:" + self._args.hash_payload((owner,), {})
         except _UNHASHABLE_CAPTURE_ERRORS as e:
-            kind = type(owner).__qualname__
+            kind = class_qualname(type(owner))
             raise KeyBuildFailed(
                 "KEY-UNHASHABLE-CAPTURE",
                 f"@cash.cache: the key= function is a {kind} whose state could not be hashed "
-                f"({type(e).__name__}), so the call ran uncached rather than risk keying it with "
+                f"({class_name(type(e))}), so the call ran uncached rather than risk keying it with "
                 f"a key function that changed.",
                 f"make the key function a plain function of the arguments, or register a hasher "
                 f"with cash.register_hasher({kind}, ...).",
@@ -1317,13 +1321,13 @@ class ClosureFold:
         try:
             self_hash = self._args.hash_payload((owner,), {})
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError) as e:
-            owner_type = type(owner).__name__
+            owner_type = class_name(type(owner))
             self._notices.warn_once(
                 CashCacheIneffectiveWarning,
                 func_name,
                 owner_type,
                 f"@cash.cache on {'bound method ' if owner is not func else ''}{func_name}: the instance's state "
-                f"could not be hashed ({type(e).__name__}), so cash fell back "
+                f"could not be hashed ({class_name(type(e))}), so cash fell back "
                 f"to the instance's identity - entries are not shared across "
                 f"equal instances and do not survive the process.",
                 code="KEY-INSTANCE-STATE",

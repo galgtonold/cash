@@ -26,7 +26,8 @@ import os
 import sys
 import types
 
-from .._user_attrs import attribute_or
+from .._type_memo import class_module
+from .._user_attrs import attribute_or, plain_getattr
 from ..install_paths import in_own_package, top_package
 from ..tracking.function_tracker import is_local_module
 from ..value_types import BUILTIN_NAMES
@@ -199,7 +200,7 @@ def _with_live_values(digest: str | None, taken: tuple[tuple[str, str | None], .
     parts = []
     for module, name in taken:
         mod = sys.modules.get(module)
-        ns = getattr(mod, "__dict__", None) if mod is not None else None
+        ns = plain_getattr(mod, "__dict__", None) if mod is not None else None
         if not isinstance(ns, dict):
             # Not loaded: importing it runs its source, read above.
             continue
@@ -214,7 +215,7 @@ def _with_live_values(digest: str | None, taken: tuple[tuple[str, str | None], .
         for key, value in values:
             if isinstance(value, types.ModuleType):
                 # A module it imported: its own values are taken by name.
-                got = "module:" + str(getattr(value, "__name__", ""))
+                got = "module:" + str(plain_getattr(value, "__name__", ""))
             else:
                 got = value_digest(value)
                 if got.startswith("opaque:"):
@@ -387,7 +388,7 @@ def _locate(name: str) -> tuple[str | None, object]:
         mod = sys.modules.get(full)
         if mod is not None:
             if i == len(parts):
-                origin = getattr(mod, "__file__", None)
+                origin = plain_getattr(mod, "__file__", None)
                 return (origin if isinstance(origin, str) else None), getattr(mod, "__path__", None)
             path = getattr(mod, "__path__", None)
         else:
@@ -405,7 +406,7 @@ def _locate(name: str) -> tuple[str | None, object]:
 
 def _find_spec(name: str, path) -> importlib.machinery.ModuleSpec | None:
     for finder in sys.meta_path:
-        if (type(finder).__module__ or "").startswith("cash."):
+        if (class_module(type(finder)) or "").startswith("cash."):
             # cash's own hooks look a spec up through `importlib.util.find_spec`.
             continue
         find = getattr(finder, "find_spec", None)

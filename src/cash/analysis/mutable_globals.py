@@ -18,6 +18,7 @@ from typing import Any
 
 from .. import source_reads
 from .._memo import MODULE_ANALYSES, LruMemo
+from .._user_attrs import plain_getattr
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..source_reading import settled_source_version, source_version_unchanged
 from ..value_types import BUILTIN_NAMES
@@ -52,7 +53,7 @@ def module_modified_globals(module: Any) -> frozenset[str]:
     not read and hash the whole file again to find the scan it already did.
     """
     # What a stored report that read this checks again (`report_store`).
-    source_reads.note_scan(getattr(module, "__name__", None))
+    source_reads.note_scan(plain_getattr(module, "__name__", None))
     version = settled_source_version(module)
     if version is not None:
         hit = _MODULE_MUTATIONS.get(version)
@@ -62,7 +63,7 @@ def module_modified_globals(module: Any) -> frozenset[str]:
         source = inspect.getsource(module)
     except SOURCE_RETRIEVAL_ERRORS:
         return frozenset()
-    path = version[0] if version is not None else (getattr(module, "__file__", None) or module.__name__)
+    path = version[0] if version is not None else (plain_getattr(module, "__file__", None) or module.__name__)
     modified = scan_store.scan("modified_globals", path, source, _scan_modified_globals)
     if version is not None and source_version_unchanged(version):
         _MODULE_MUTATIONS[version] = modified
@@ -119,11 +120,11 @@ def mutable_global_reads(
     modified = module_modified_globals(module)
     if not modified:
         return []
-    module_ns = getattr(func, "__globals__", None) or {}
+    module_ns = plain_getattr(func, "__globals__", None) or {}
     if locals_ is None:
         locals_ = scope_locals(func_def)
-    freevars = set(getattr(getattr(func, "__code__", None), "co_freevars", ()) or ())
-    own_name = getattr(func, "__name__", None)
+    freevars = set(getattr(plain_getattr(func, "__code__", None), "co_freevars", ()) or ())
+    own_name = plain_getattr(func, "__name__", None)
     candidates = (read_names.keys() & modified) - locals_ - freevars - BUILTIN_NAMES
     return [
         PurityIssue(

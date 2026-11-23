@@ -30,6 +30,7 @@ import sys
 from types import ModuleType
 
 from . import _weak
+from ._type_memo import class_name
 from ._user_attrs import attribute_or
 
 __all__ = ["AVAILABLE", "EXPECTED_API", "REASON", "cwatch", "kernels", "status_line"]
@@ -63,7 +64,7 @@ def _load() -> tuple[ModuleType | None, str | None]:
             return None, f"the C extension does not load: {exc}"
         return None, "this install has no C extension (the pure-Python wheel, or built without a C compiler)"
     except Exception as exc:  # noqa: BLE001 - whatever stops the module loading, cash runs without it
-        return None, f"the C extension does not load: {type(exc).__name__}: {exc}"
+        return None, f"the C extension does not load: {class_name(type(exc))}: {exc}"
     api = getattr(module, "API_VERSION", None)
     if api != EXPECTED_API:
         return None, f"the C extension has API {api}, this cash needs {EXPECTED_API}; reinstall cash-lib"

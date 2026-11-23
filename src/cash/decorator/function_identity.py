@@ -20,7 +20,8 @@ from typing import Any
 from .. import _weak
 from .._memo import CODE_OBJECTS, LruMemo
 from .._paths import MAIN_MODULE_NAMES, is_pseudo_filename, resolve_main_module
-from .._user_attrs import module_file
+from .._type_memo import class_qualname
+from .._user_attrs import module_file, plain_getattr, plain_hasattr
 from ..canonical_form import stable_key_repr
 from ..code_digest import callable_identity, compiled_identity, own_source_digest, source_digest, unwrap_partials
 from ..content_hashers import BUILTIN_CONTENT
@@ -83,7 +84,7 @@ def file_stamp(st: os.stat_result) -> tuple[int, int, int]:
 
 def stat_code_file(fn: Any) -> tuple[Any, str, int, tuple[int, int, int]] | None:
     """``(code, path, size, file_stamp)`` for *fn*'s source file, or None."""
-    code = getattr(fn, "__code__", None)
+    code = plain_getattr(fn, "__code__", None)
     path = getattr(code, "co_filename", "") or ""
     if not path or is_pseudo_filename(path):
         return None
@@ -101,13 +102,13 @@ def stat_code_file(fn: Any) -> tuple[Any, str, int, tuple[int, int, int]] | None
 
 def warn_source_changed_since_load(fn: Callable) -> None:
     """Say, once per file, that a helper is keyed by its loaded code."""
-    code = getattr(fn, "__code__", None)
+    code = plain_getattr(fn, "__code__", None)
     path = getattr(code, "co_filename", "") or ""
     if path in _SOURCE_CHANGED_WARNED:
         return
     _SOURCE_CHANGED_WARNED.add(path)
-    name = getattr(fn, "__qualname__", None) or getattr(fn, "__name__", "a function")
-    module = sys.modules.get(getattr(fn, "__module__", None) or "")
+    name = plain_getattr(fn, "__qualname__", None) or plain_getattr(fn, "__name__", "a function")
+    module = sys.modules.get(plain_getattr(fn, "__module__", None) or "")
     try:
         if module is not None and module_file(module) == path and not loaded_module_matches_disk(module):
             # Not an edit after the import: Python loaded bytecode compiled
@@ -179,22 +180,22 @@ def func_key(func: Callable) -> str:
                 pickle.dumps(stable_key_repr((func.args, sorted(func.keywords.items())), BUILTIN_CONTENT), protocol=4),
             ).hexdigest()[:12]
         except Exception:  # noqa: BLE001 - an unpicklable argument keys on its type
-            shape = [type(v).__qualname__ for v in (*func.args, *func.keywords.values())]
+            shape = [class_qualname(type(v)) for v in (*func.args, *func.keywords.values())]
             bound = hashlib.sha256(repr((shape, sorted(func.keywords))).encode("utf-8")).hexdigest()[:12]
         return f"{inner}[partial:{bound}]"
-    qualname = getattr(func, "__qualname__", None) or getattr(func, "__name__", None)
+    qualname = plain_getattr(func, "__qualname__", None) or plain_getattr(func, "__name__", None)
     if not qualname and callable(func) and not isinstance(func, type):
         # A callable INSTANCE (`cash.cache(Scaler(2))`) reprs with its address,
         # so every process took a fresh namespace and none ever hit. Named
         # after its class; what it holds is keyed per call
         # (`ClosureFold.fold_bound_self`).
         cls = type(func)
-        module = getattr(cls, "__module__", None) or "__unknown__"
+        module = plain_getattr(cls, "__module__", None) or "__unknown__"
         if module in MAIN_MODULE_NAMES:
             call = getattr(cls, "__call__", None)
-            module = resolve_main_module(call) if hasattr(call, "__globals__") else module
-        return f"{module}.{cls.__qualname__}[instance]"
-    module = getattr(func, "__module__", None) or "__unknown__"
+            module = resolve_main_module(call) if plain_hasattr(call, "__globals__") else module
+        return f"{module}.{class_qualname(cls)}[instance]"
+    module = plain_getattr(func, "__module__", None) or "__unknown__"
     if module in MAIN_MODULE_NAMES:
         module = resolve_main_module(func)
     return f"{module}.{qualname or repr(func)}"
@@ -244,8 +245,10 @@ def hash_callable_source(fn: Callable) -> str:
     compiled = jit_python_function(fn)
     if compiled is not None:
         return jit_identity(hash_callable_source(compiled), fn)
-    memo_owner: Any = getattr(fn, "__code__", None)
-    if (memo_owner is None and isinstance(fn, type)) or (type(fn) is types.FunctionType and hasattr(fn, "__wrapped__")):
+    memo_owner: Any = plain_getattr(fn, "__code__", None)
+    if (memo_owner is None and isinstance(fn, type)) or (
+        type(fn) is types.FunctionType and plain_hasattr(fn, "__wrapped__")
+    ):
         # A class has no code object; a `functools.wraps` wrapper shares
         # its code with every function its decorator wraps, and its
         # identity includes the one it wraps -- so it is memoized as itself.
@@ -436,7 +439,7 @@ class OwnSourcePins:
         # the hash it just computed) always takes a fresh pin.
         entry = self._own_pins.get(key)
         pin = entry[1] if entry is not None and source_hash is None and entry[0]() is owner else None
-        if pin is not None and getattr(func, "__code__", None) is not entry[2]:
+        if pin is not None and plain_getattr(func, "__code__", None) is not entry[2]:
             # ``func.__code__`` was assigned since the pin was taken: the pin
             # describes code that no longer runs. Keyed by what runs now;
             # the pin itself is kept, so assigning the old code back keys
@@ -473,13 +476,13 @@ class OwnSourcePins:
             if disk_digest is not None:
                 CODE_KEYED_STATS[id(keyed_stat[0])] = (*keyed_stat, disk_digest)
         pin = source_hash
-        if getattr(func, "__name__", "") == "<lambda>":
-            code = getattr(func, "__code__", None)
+        if plain_getattr(func, "__name__", "") == "<lambda>":
+            code = plain_getattr(func, "__code__", None)
             if code is not None:
                 pin = hashlib.sha256(f"{pin}:{code_fingerprint(code)}".encode("utf-8")).hexdigest()
         self._own_pins_unverified.discard(key)
         if key in self._own_pins or len(self._own_pins) < self.OWN_PINS_MAX:
-            self._own_pins[key] = (self._pin_owner_ref(owner, key), pin, getattr(func, "__code__", None))
+            self._own_pins[key] = (self._pin_owner_ref(owner, key), pin, plain_getattr(func, "__code__", None))
             held = entry is not None and entry[0]() is owner
             if not ((held and entry[1] == pin) or (quiet and not held)):
                 _generation_moved()

@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from cash._user_attrs import attribute_or, has_attribute
 
+from ..._type_memo import class_name, class_qualname
 from .._tee import StreamTaken, TeeWriter
 
 if TYPE_CHECKING:
@@ -207,7 +208,7 @@ def _attach_kernel_publisher_api(pub: Any, real: Any) -> None:
     for name in _KERNEL_PUBLISHER_METHODS:
         if has_attribute(pub, name):
             continue
-        target = attribute_or(real, name, None)
+        target = attribute_or(real, name, None, asked=True)
         if target is None:
             # A publisher that never had this method (a plain terminal
             # ``DisplayPublisher``) is not one ipykernel calls it on either, so
@@ -240,8 +241,8 @@ def _kernel_safe_capture(cls: Any) -> Any:
                     _attach_kernel_publisher_api(pub, self.save_display_pub)
             return captured
 
-    _KernelSafeCaptureOutput.__name__ = cls.__name__
-    _KernelSafeCaptureOutput.__qualname__ = cls.__qualname__
+    _KernelSafeCaptureOutput.__name__ = class_name(cls)
+    _KernelSafeCaptureOutput.__qualname__ = class_qualname(cls)
     return _KernelSafeCaptureOutput
 
 

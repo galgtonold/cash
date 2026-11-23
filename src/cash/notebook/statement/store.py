@@ -58,6 +58,7 @@ from cash.tracking.randomness import capture_object_rng_states
 from cash.value_hash import known_size
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
+from ..._type_memo import class_name
 from ..call_key import TooMuchToLookThrough, holds_a_closure_with_state
 from ..call_refs import DECORATOR_ENTRY, REF_BYTES_FIELD, REFS_FIELD, CallRef
 from ..closed_stream import ClosedStream, stored_form
@@ -433,7 +434,7 @@ def _warn_not_stored(exc: BaseException) -> None:
     warn_diagnostic(
         CashCacheStoreFailedWarning,
         "STORE-FAILED",
-        f"cash could not store this statement's result ({type(exc).__name__}: {exc}); "
+        f"cash could not store this statement's result ({class_name(type(exc))}: {exc}); "
         "it ran, and runs again next time.",
         fix,
     )
@@ -532,7 +533,9 @@ class StatementStore:
                 if name not in captured_vars:
                     continue
                 value = captured_vars[name]
-                write += cost_model.estimated_serialize_time(type(value).__name__, estimate_object_size(value), "disk")
+                write += cost_model.estimated_serialize_time(
+                    class_name(type(value)), estimate_object_size(value), "disk"
+                )
         except Exception:  # noqa: BLE001 - an estimate it cannot make guards as before
             return False
         return write <= self.CHEAP_WRITE_SHARE * execution_time
@@ -1018,7 +1021,7 @@ class StatementStore:
             # object holding its design matrix read as 48 bytes, so a 145 MiB
             # copy of it was predicted free, made, and then refused the disk.
             obj_size = max(estimate_object_size(var_value), pickled_size_estimate(var_value))
-            type_name = type(var_value).__name__
+            type_name = class_name(type(var_value))
             family = cost_model.resolve_family(type_name)
             est_restore_time = cost_model.estimated_restore_time(type_name, obj_size, backend_kind)
             # What unpickling one of its class took here (`round_trip_seconds`):
@@ -1625,9 +1628,11 @@ class StatementStore:
                 )
             except AnchorUnrebuilt as exc:
                 cause = exc.__cause__ or exc
-                raise _AnchorsUnstorable(f"{type(cause).__name__}: {cause}", [exc.name] if exc.name else ()) from cause
+                raise _AnchorsUnstorable(
+                    f"{class_name(type(cause))}: {cause}", [exc.name] if exc.name else ()
+                ) from cause
             except Exception as exc:  # the value's own pickling: STORE-FAILED, as without anchors
-                raise _AnchorsUnstorable(f"{type(exc).__name__}: {exc}", ()) from exc
+                raise _AnchorsUnstorable(f"{class_name(type(exc))}: {exc}", ()) from exc
             payload["variables"] = held["variables"]
             if ECHO_FIELD in payload:
                 payload[ECHO_FIELD] = held[ECHO_FIELD]

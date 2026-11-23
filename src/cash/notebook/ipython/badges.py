@@ -24,6 +24,7 @@ from cash._own_work import own_work
 from cash._user_attrs import attribute_or, has_attribute
 
 from ... import __version__
+from ..._type_memo import class_name
 from .. import badge_renderer as _badge
 from ..server_discovery import get_notebook_cells, last_notebook_cells
 from ..statement import ProcessResult
@@ -193,7 +194,7 @@ class BadgePresenter:
         context = {
             "version": __version__,
             "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
-            "backend": type(backend).__name__ if backend else "unknown",
+            "backend": class_name(type(backend)) if backend else "unknown",
         }
         key = (self._configured_tier_labels(), tuple(context.items()))
         kept = self._opening
@@ -540,7 +541,7 @@ class BadgePresenter:
 
     def _collect_bug_report_context(self) -> dict:
         backend = attribute_or(self._cash, "backend", None)
-        backend_name = type(backend).__name__ if backend else "unknown"
+        backend_name = class_name(type(backend)) if backend else "unknown"
         python_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
 
         # --- Execution history (what IPython actually ran) ---

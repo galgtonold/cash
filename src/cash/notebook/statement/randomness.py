@@ -52,6 +52,7 @@ from cash.tracking.randomness.detect import RandomnessCallInfo, mints_unseeded_g
 from cash.tracking.randomness.estimator_draws import estimator_draws
 
 from ..._memo import NOTEBOOK_STATEMENTS
+from ..._type_memo import class_module
 from ...analysis.ast_util import parse_cached, walk_tree
 from ...analysis.code_analyzer import clean_cell_source, parse_cell_source
 from ...decorator.rng import unseeded_library_calls_in
@@ -88,7 +89,9 @@ def _draws_from_its_own_generator(call: str, namespace: dict) -> bool:
     does; pandas and scikit-learn take ``np.random`` for ``random_state=None``."""
     value = namespace.get(call.partition(".")[0])
     module = (
-        attribute_or(value, "__name__", None) if issubclass(type(value), types.ModuleType) else type(value).__module__
+        attribute_or(value, "__name__", None)
+        if issubclass(type(value), types.ModuleType)
+        else class_module(type(value))
     )
     return isinstance(module, str) and module.partition(".")[0] == "polars"
 

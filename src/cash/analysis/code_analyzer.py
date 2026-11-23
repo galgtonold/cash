@@ -11,7 +11,6 @@ import ast
 import builtins
 import functools
 import importlib
-import inspect
 import logging
 import re
 import sys
@@ -25,7 +24,7 @@ from typing import Any
 from .. import _weak
 from .._memo import NOTEBOOK_STATEMENTS
 from .._paths import MAIN_MODULE_NAMES, resolve_main_module
-from .._user_attrs import attribute_or, instance_of
+from .._user_attrs import attribute_or, instance_of, plain_getattr, static_attr
 from ..code_digest import unwrap_partials
 from ..effects import Action, classify_call
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
@@ -681,7 +680,7 @@ def _reaches_cached_wrapper(obj: Any) -> bool:
         try:
             if getattr(obj, "_cash_cached", False) is True:
                 return True
-            obj = getattr(obj, "__wrapped__", None)
+            obj = plain_getattr(obj, "__wrapped__", None)
         except Exception:  # noqa: BLE001 - an object's __getattr__ may raise anything
             return False
     return False
@@ -706,14 +705,14 @@ def _callee_name(obj: Any, known_by_id: Mapping[int, str]) -> str | None:
         name = known_by_id.get(id(inner))
         if name is not None:
             return name
-        nxt = getattr(inner, "__wrapped__", None)
+        nxt = plain_getattr(inner, "__wrapped__", None)
         if nxt is None:
             break
         inner = nxt
-    qualname = getattr(obj, "__qualname__", None)
+    qualname = plain_getattr(obj, "__qualname__", None)
     if not isinstance(qualname, str):
         return None
-    module = getattr(obj, "__module__", None) or "__unknown__"
+    module = plain_getattr(obj, "__module__", None) or "__unknown__"
     if module in MAIN_MODULE_NAMES:
         module = resolve_main_module(inner)
     return f"{module}.{qualname}"
@@ -733,7 +732,7 @@ def static_attribute(obj: Any, name: str) -> Any:
     reach it. Raises AttributeError when nothing is found.
     """
     try:
-        value = inspect.getattr_static(obj, name, _MISSING)
+        value = static_attr(obj, name, _MISSING)
         if value is _MISSING and issubclass(type(obj), types.ModuleType) and "__getattr__" in vars(obj):
             value = getattr(obj, name)
     except Exception as exc:
@@ -763,7 +762,7 @@ def _dynamic_hook(obj: Any, root_module: str | None) -> Callable | None:
     cls = obj if isinstance(obj, type) else type(obj)
     owner = type(cls) if isinstance(obj, type) else cls
     for hook_name in ("__getattr__", "__getattribute__"):
-        hook = inspect.getattr_static(owner, hook_name, None)
+        hook = static_attr(owner, hook_name, None)
         if isinstance(hook, (staticmethod, classmethod)):
             hook = hook.__func__
         if type(hook) is types.FunctionType and is_user_code(hook, root_module):
@@ -782,10 +781,10 @@ def _body_targets(fn: Callable) -> list[Any]:
         tree = ast.parse(textwrap.dedent(getsource(fn)))
     except (*SOURCE_RETRIEVAL_ERRORS, SyntaxError):
         return []
-    code = getattr(fn, "__code__", None)
+    code = plain_getattr(fn, "__code__", None)
     visitor = _CallVisitor()
     visitor.visit(tree)
-    namespace: dict[str, Any] = dict(getattr(fn, "__globals__", None) or {})
+    namespace: dict[str, Any] = dict(plain_getattr(fn, "__globals__", None) or {})
     for name, cell in zip(getattr(code, "co_freevars", ()) or (), getattr(fn, "__closure__", None) or ()):
         try:
             namespace[name] = cell.cell_contents
@@ -902,7 +901,7 @@ class CodeAnalyzer:
         reaches it through its ``@cash.cache`` wrapper
         (`_reaches_cached_wrapper`); the bare function is a helper.
         """
-        code = getattr(func, "__code__", None)
+        code = plain_getattr(func, "__code__", None)
         visitor = _CallVisitor(frozenset(getattr(code, "co_freevars", ()) or ()))
         try:
             source = textwrap.dedent(getsource(func))
@@ -918,13 +917,13 @@ class CodeAnalyzer:
         # An opaque callable (builtin / C-extension / ufunc / partial) may have
         # source available via ``__wrapped__`` yet lack ``__globals__``; without
         # it, names can't be resolved, so skip dependency analysis.
-        globals_dict = getattr(func, "__globals__", None)
+        globals_dict = plain_getattr(func, "__globals__", None)
         if globals_dict is None:
             return set(), []
         resolved_qualnames: set[str] = set()
         gaps: list[str] = []
         known_by_id = {id(f): n for n, f in known_functions.items()} if known_functions else {}
-        root_module = getattr(func, "__module__", None)
+        root_module = plain_getattr(func, "__module__", None)
 
         for name in visitor.names_to_resolve:
             parts = name.split(".")
@@ -955,7 +954,7 @@ class CodeAnalyzer:
                     # Through a getter cash could not see into, or to a plain
                     # helper the key does not follow that way.
                     same_named = [
-                        n for n, f in (known_functions or {}).items() if getattr(f, "__name__", None) == parts[-1]
+                        n for n, f in (known_functions or {}).items() if plain_getattr(f, "__name__", None) == parts[-1]
                     ]
                     resolved_qualnames.update(same_named)
                     if not same_named and (
@@ -993,7 +992,7 @@ class CodeAnalyzer:
             for part in parts[1:]:
                 if not issubclass(type(obj), (types.ModuleType, type)):
                     return None
-                obj = inspect.getattr_static(obj, part, None)
+                obj = static_attr(obj, part, None)
             obj = unwrap_partials(obj)
             if not callable(obj) or isinstance(obj, type):
                 return None

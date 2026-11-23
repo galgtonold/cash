@@ -20,7 +20,6 @@ from __future__ import annotations
 import ast
 import builtins as _builtins
 import functools
-import inspect
 import io
 import logging
 import os
@@ -31,6 +30,8 @@ from typing import Any
 
 from cash._user_attrs import attribute_or, has_attribute, own_dict
 
+from ..._type_memo import class_module
+from ..._user_attrs import static_attr
 from ...analysis.cacheability import statement_writes_files
 
 logger = logging.getLogger(__name__)
@@ -191,7 +192,7 @@ def file_in_progress_bar(iterable: Any) -> io.IOBase | None:
     The bar has no length of its own and the header's ``open(...)`` call
     cannot be evaluated to size it, so the file it was handed is read for it.
     """
-    if str(type(iterable).__module__).partition(".")[0] != "tqdm":
+    if str(class_module(type(iterable))).partition(".")[0] != "tqdm":
         return None
     inner = attribute_or(iterable, "iterable", None)
     return inner if isinstance(inner, io.IOBase) else None
@@ -460,7 +461,7 @@ def _is_builtin_callable(value: Any) -> bool:
     no notebook code."""
     if type(value) is types.BuiltinFunctionType:
         return attribute_or(value, "__module__", None) == "builtins"
-    return isinstance(value, type) and value.__module__ == "builtins"
+    return isinstance(value, type) and class_module(value) == "builtins"
 
 
 def header_may_be_left_to_the_unit(iter_node: ast.AST, user_ns: dict[str, Any]) -> bool:
@@ -536,11 +537,11 @@ def _plain_attribute(base: Any, attr: str) -> Any:
     else :data:`_UNKNOWN`."""
     if issubclass(type(base), types.ModuleType):
         return vars(base).get(attr, _UNKNOWN)
-    getter = inspect.getattr_static(type(base), "__getattribute__", None)
+    getter = static_attr(type(base), "__getattribute__", None)
     if getter is not object.__getattribute__ and getter is not type.__getattribute__:
         return _UNKNOWN
     try:
-        value = inspect.getattr_static(base, attr)
+        value = static_attr(base, attr)
     except AttributeError:
         return _UNKNOWN  # a `__getattr__` answer, or no such attribute
     own = own_dict(base, subclasses=True)

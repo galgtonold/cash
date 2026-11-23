@@ -32,6 +32,7 @@ from itertools import accumulate, chain, compress, islice, repeat
 from typing import Any, NamedTuple
 
 from . import _native, _weak, kept_state
+from ._type_memo import class_name
 from .value_types import IMMUTABLE_LEAF_TYPES, LEAF_TYPES, PLAIN_SEQS
 
 MAX_LEVELS = 16
@@ -936,7 +937,7 @@ def level_key_bytes(value: Any) -> bytes:
     import numpy
 
     numbers = numpy_scalar_types()
-    parts = [type(value).__name__.encode()]
+    parts = [class_name(type(value)).encode()]
     for flat, types in _levels(value, numbers):
         if len(types) == 1:
             parts.append(pickle.dumps(next(iter(types)), protocol=4))
@@ -947,7 +948,7 @@ def level_key_bytes(value: Any) -> bytes:
             parts.append(pickle.dumps(list(map(len, seqs)), protocol=4))
         for kind in sorted(types.intersection(numbers), key=lambda t: t.__name__):
             same = flat if len(types) == 1 else [x for x in flat if type(x) is kind]
-            parts.append(kind.__name__.encode() + numpy.array(same, dtype=kind).tobytes())
+            parts.append(class_name(kind).encode() + numpy.array(same, dtype=kind).tobytes())
         rest = types.difference(numbers).difference(_SEQS)
         if rest:
             parts.append(pickle_unshared(flat if len(types) == len(rest) else [x for x in flat if type(x) in rest]))

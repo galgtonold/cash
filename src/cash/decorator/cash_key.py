@@ -25,7 +25,8 @@ from collections.abc import Callable
 from typing import Any
 
 from .. import _weak
-from .._type_memo import TypeMemo, type_key
+from .._type_memo import TypeMemo, class_module, class_qualname, type_key
+from .._user_attrs import plain_getattr
 from ..backends.cache_dir import CASH_KEYS_FILENAME, create_temp_file
 from ..canonical_form import canonical_bytes, object_state
 from ..content_hashers import BUILTIN_CONTENT
@@ -64,7 +65,7 @@ def _lookup(t: type) -> Callable[[Any], Any] | None:
     if issubclass(t, type):
         return None
     try:
-        fn = getattr(t, CASH_KEY, None)
+        fn = plain_getattr(t, CASH_KEY, None)
     except Exception:  # noqa: BLE001 - an exotic metaclass: no key method
         return None
     return fn if callable(fn) else None
@@ -81,7 +82,7 @@ _IDLE_S = 5.0
 
 def type_name(value: Any) -> str:
     t = type(value)
-    return f"{t.__module__}.{t.__qualname__}"
+    return f"{class_module(t)}.{class_qualname(t)}"
 
 
 def content_digest(value: Any) -> str | None:
@@ -254,9 +255,9 @@ class KeyCheck:
         if content_digest(value) != digest:
             return
         self._warned.add(key_id)
-        code = getattr(method, "__code__", None)
+        code = plain_getattr(method, "__code__", None)
         location = (code.co_filename, code.co_firstlineno) if code is not None else None
-        name = type(value).__qualname__
+        name = class_qualname(type(value))
         warn_diagnostic(
             CashCacheIneffectiveWarning,
             "KEY-STALE-CASH-KEY",

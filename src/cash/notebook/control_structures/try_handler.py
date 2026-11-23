@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING
 from cash._user_attrs import attribute_or
 from cash.control_markers import mark_control
 
+from ..._type_memo import class_name
 from ..cache_status import CacheStatus
 from . import helpers as _helpers
 from .common import ControlStructureResult, is_control_structure
@@ -241,7 +242,7 @@ class TryHandler:
             return
         self.shell.user_ns[matched_handler.name] = caught_exception
         try:
-            exc_class_name = type(caught_exception).__name__
+            exc_class_name = class_name(type(caught_exception))
             class_lineage = self.statement_processor.tracking_state.variable_lineage.get(exc_class_name, "")
             exc_lineage = hashlib.sha256(
                 f"__exception__:{exc_class_name}:{class_lineage}:{caught_exception!s}:{caught_exception!r}".encode()

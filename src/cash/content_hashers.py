@@ -32,7 +32,7 @@ from typing import Any
 
 from . import _plain_data, _weak
 from ._memo import ARROW_VALUES, LruMemo
-from ._type_memo import per_type
+from ._type_memo import class_module, class_name, class_qualname, per_type
 from ._user_attrs import from_family
 from .bulk_digest import DIRECT_MAX_BYTES, LEAF_BYTES, BulkHasher, fold_buffer, hashing_threads
 from .canonical_form import ContentHashing, CyclicValueError, canonical_bytes
@@ -59,7 +59,7 @@ def builtin_hash_family(type_: type) -> str | None:
     """
     if not isinstance(type_, type):
         return None
-    type_name = type_.__name__
+    type_name = class_name(type_)
     if type_name in ("DataFrame", "Series") and from_family(type_, "pandas"):
         return "pandas"
     if type_name in ("GeoDataFrame", "GeoSeries") and from_family(type_, "geopandas"):
@@ -127,13 +127,13 @@ def hash_geopandas(value: Any) -> str | None:
     if digest is None:
         return None
     active = getattr(value, "_geometry_column_name", None) if _is_frame(value) else None
-    return hashlib.sha256(f"geopandas:{type(value).__name__}:{active!r}:{digest}".encode()).hexdigest()
+    return hashlib.sha256(f"geopandas:{class_name(type(value))}:{active!r}:{digest}".encode()).hexdigest()
 
 
 def _is_frame(value: Any) -> bool:
     """Is *value*, a pandas or geopandas value `builtin_hash` claims, a
     table (not a series)?"""
-    return type(value).__name__ in ("DataFrame", "GeoDataFrame")
+    return class_name(type(value)) in ("DataFrame", "GeoDataFrame")
 
 
 def hash_pandas(value: Any) -> str | None:
@@ -178,7 +178,7 @@ def hash_pandas(value: Any) -> str | None:
     except CyclicValueError:
         raise  # a cell holds the frame: no digest stands for it (`canonical_form`)
     except (ImportError, TypeError, ValueError, AttributeError, NotImplementedError, pickle.PicklingError):
-        logger.debug("Failed to hash pandas %s via hash_pandas_object", type(value).__name__)
+        logger.debug("Failed to hash pandas %s via hash_pandas_object", class_name(type(value)))
         return None
 
 
@@ -300,7 +300,7 @@ def index_memory_key(index: Any, pd: Any) -> tuple | None:
             return None
         return (
             "index",
-            type(index).__name__,
+            class_name(type(index)),
             array.__array_interface__["data"][0],
             array.shape,
             array.strides,
@@ -330,14 +330,12 @@ def hash_pandas_index(index: Any) -> str | None:
 
         dtypes = [_pandas_dtype_key(dt) for dt in getattr(index, "dtypes", [index.dtype])]
         kind = type(index)
-        schema = (
-            f"{kind.__module__}.{kind.__qualname__}:{list(index.names)!r}:{dtypes!r}:{getattr(index, 'freq', None)!r}:"
-        )
+        schema = f"{class_module(kind)}.{class_qualname(kind)}:{list(index.names)!r}:{dtypes!r}:{getattr(index, 'freq', None)!r}:"
         h = hashlib.sha256(schema.encode("utf-8"))
         _fold_pandas_index(h, index, pd)
         return h.hexdigest()
     except (ImportError, TypeError, ValueError, AttributeError, NotImplementedError, pickle.PicklingError):
-        logger.debug("Failed to hash a pandas %s", type(index).__name__)
+        logger.debug("Failed to hash a pandas %s", class_name(type(index)))
         return None
 
 
@@ -413,9 +411,9 @@ def pandas_value_route(dtype: Any, pd: Any) -> str | None:
         return "arrow" if str(getattr(dtype, "storage", "")).startswith("pyarrow") else "objects"
     if isinstance(dtype, getattr(pd, "ArrowDtype", ())):
         return "arrow"
-    if type(dtype).__name__ in _MASKED_DTYPES:
+    if class_name(type(dtype)) in _MASKED_DTYPES:
         return "masked"
-    if type(dtype).__name__ == "GeometryDtype" and from_family(type(dtype), "geopandas"):
+    if class_name(type(dtype)) == "GeometryDtype" and from_family(type(dtype), "geopandas"):
         return "geometry"
     return None
 
@@ -622,7 +620,7 @@ def column_memory_key(frame: Any, pos: int, route: str | None, dtype: Any = None
         interface = array.__array_interface__
         return (
             "numpy",
-            type(values).__name__,
+            class_name(type(values)),
             interface["data"][0],
             array.shape,
             array.strides,
@@ -1297,7 +1295,7 @@ def _fold_typed_items(h: Any, array: Any, items: list) -> bool:
         typed = array.astype(dtype)
     except (OverflowError, ValueError, TypeError):  # an int beyond 64 bits
         return False
-    h.update(f"|items:{kind.__name__}|".encode())
+    h.update(f"|items:{class_name(kind)}|".encode())
     fold_buffer(h, typed)
     return True
 
@@ -1383,7 +1381,7 @@ def _pandas_dtype_key(dtype: Any) -> str:
     """
     categories = getattr(dtype, "categories", None)
     if categories is None or getattr(dtype, "name", None) != "category":
-        if type(dtype).__name__ == "GeometryDtype" and from_family(type(dtype), "geopandas"):
+        if class_name(type(dtype)) == "GeometryDtype" and from_family(type(dtype), "geopandas"):
             # Its ``repr`` is its address; its CRS is keyed with the values
             # (`_fold_geometries`).
             return "geopandas:geometry"
@@ -1629,11 +1627,11 @@ def hash_polars(value: Any) -> str | None:
                 logger.debug("polars LazyFrame serialize() failed; no built-in hash for it")
                 return None
     except (ImportError, TypeError, ValueError, AttributeError):
-        logger.debug("Failed to hash polars %s", type(value).__name__)
+        logger.debug("Failed to hash polars %s", class_name(type(value)))
     except BaseException as exc:
         if not is_native_panic(exc):
             raise
-        logger.debug("polars panicked hashing a %s: %s", type(value).__name__, exc)
+        logger.debug("polars panicked hashing a %s: %s", class_name(type(value)), exc)
     return None
 
 
@@ -1977,7 +1975,7 @@ def held_objects(value: Any) -> list | None:
             if getattr(value.dtype, "hasobject", False):
                 columns.append(value.ravel(order="K"))
         elif family == "pandas":
-            frame = type(value).__name__ == "DataFrame"
+            frame = class_name(type(value)) == "DataFrame"
             dtypes = list(value.dtypes) if frame else [value.dtype]
             # Asked of each distinct dtype once: ``str`` of a dtype per
             # column of a 2,000-column frame was most of a call's key.
@@ -1993,7 +1991,7 @@ def held_objects(value: Any) -> list | None:
             elif isinstance(value, pl.Series) and value.dtype == pl.Object:
                 columns.append(value.to_list())
     except Exception:  # a library's internals changed: nothing found
-        logger.debug("Could not list the objects a %s holds", type(value).__name__, exc_info=True)
+        logger.debug("Could not list the objects a %s holds", class_name(type(value)), exc_info=True)
         return None
     found: list = []
     for column in columns:
@@ -2014,7 +2012,7 @@ def is_native_panic(exc: BaseException) -> bool:
     """Is *exc* a panic raised out of a Rust extension (``pyo3``), such as
     polars'? It derives from ``BaseException``, so no ``except Exception``
     stops it, and a panic while building a key ended the user's call."""
-    return type(exc).__name__ == "PanicException"
+    return class_name(type(exc)) == "PanicException"
 
 
 class _HashSink:
@@ -2052,18 +2050,18 @@ def hash_pyarrow(value: Any) -> str | None:
         import pyarrow as pa
 
         if isinstance(value, (pa.Table, pa.RecordBatch)):
-            h = hashlib.sha256(f"{type(value).__name__}:{value.num_rows}:".encode())
+            h = hashlib.sha256(f"{class_name(type(value))}:{value.num_rows}:".encode())
             fold_buffer(h, value.schema.serialize())
             for column in value.columns:
                 h.update(b"|column|")
                 fold_arrow_column(h, column)
             return h.hexdigest()
         if isinstance(value, (pa.Array, pa.ChunkedArray)):
-            h = hashlib.sha256(f"{type(value).__name__}:{len(value)}:{value.type}:".encode())
+            h = hashlib.sha256(f"{class_name(type(value))}:{len(value)}:{value.type}:".encode())
             fold_arrow_column(h, value)
             return h.hexdigest()
     except (ImportError, TypeError, ValueError, AttributeError, MemoryError, NotImplementedError):
-        logger.debug("Failed to hash PyArrow %s", type(value).__name__)
+        logger.debug("Failed to hash PyArrow %s", class_name(type(value)))
     return None
 
 
@@ -2132,7 +2130,7 @@ def hash_modin(value: Any) -> str | None:
     try:
         return hash_pandas(value._to_pandas() if hasattr(value, "_to_pandas") else value)
     except (TypeError, ValueError, AttributeError):
-        logger.debug("Failed to hash modin %s", type(value).__name__)
+        logger.debug("Failed to hash modin %s", class_name(type(value)))
         return None
 
 
@@ -2186,5 +2184,5 @@ def hash_sparse(value: Any) -> str | None:
             h.update(f"|{name}:{digest}".encode())
         return h.hexdigest()
     except (TypeError, ValueError, AttributeError, MemoryError):
-        logger.debug("Failed to hash scipy sparse %s", type(value).__name__)
+        logger.debug("Failed to hash scipy sparse %s", class_name(type(value)))
         return None

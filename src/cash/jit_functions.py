@@ -20,6 +20,7 @@ import hashlib
 import types
 from typing import Any
 
+from ._type_memo import class_qualname, module_of_class
 from ._user_attrs import own_dict
 
 __all__ = ["jit_identity", "jit_options", "jit_python_function", "is_jit_type"]
@@ -32,7 +33,7 @@ _NOT_RESULT_OPTIONS = frozenset({"cache", "no_cfunc_wrapper", "_dbg_extend_lifet
 
 def is_jit_type(t: type) -> bool:
     """Is *t* a class numba defines (its dispatchers, ufunc builders, cfuncs)?"""
-    module = getattr(t, "__module__", None)
+    module = module_of_class(t)
     return isinstance(module, str) and (module == "numba" or module.startswith("numba."))
 
 
@@ -102,7 +103,7 @@ def _stable(value: Any) -> str:
     if issubclass(type(value), (type, types.FunctionType)):
         return f"{getattr(value, '__module__', '?')}.{getattr(value, '__qualname__', '?')}"
     # A numba type (``float64``, ``array(float64, 1d, C)``) prints as itself.
-    return f"{type(value).__qualname__}:{value}"
+    return f"{class_qualname(type(value))}:{value}"
 
 
 def jit_options(obj: Any) -> str:

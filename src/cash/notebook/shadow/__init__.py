@@ -46,6 +46,7 @@ from typing import Any
 
 from cash._user_attrs import attribute_or, instance_of
 
+from ..._type_memo import class_module, class_qualname
 from ...tracking.process_registries import register_atexit, unregister_atexit
 
 __all__ = ["SHADOW", "Shadow", "disable", "enable", "requested", "status"]
@@ -392,19 +393,19 @@ class Shadow:
         def user_class(cls: Any) -> bool:
             if not isinstance(cls, type):
                 return False
-            if cls.__module__ == nbn:
+            if class_module(cls) == nbn:
                 return True
-            mod = sys.modules.get(cls.__module__ or "")
+            mod = sys.modules.get(class_module(cls) or "")
             return mod is not None and is_user_code_module(mod)
 
         def add_class(cls: type) -> None:
-            q = cls.__qualname__
-            if own(cls.__module__, q):
+            q = class_qualname(cls)
+            if own(class_module(cls), q):
                 return
             if "<locals>" in q:
-                add(("gap", cls.__module__, q), "local class")
+                add(("gap", class_module(cls), q), "local class")
                 return
-            add(("class", cls.__module__, q), class_digest(cls))
+            add(("class", class_module(cls), q), class_digest(cls))
 
         # A lambda or function made inside code that ran (the statement's
         # own ``df.apply(lambda r: ...)``) is part of that code's text: the
@@ -617,7 +618,7 @@ class Shadow:
         if isinstance(owner, type) and user_class(owner):
             add_class(owner)
             try:
-                subs = owner.__subclasses__()[:16]
+                subs = type.__subclasses__(owner)[:16]
             except TypeError:
                 subs = []
             for sub in subs:

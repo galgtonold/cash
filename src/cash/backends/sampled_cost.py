@@ -34,6 +34,7 @@ from collections.abc import Callable
 from typing import Any, NamedTuple
 
 from .. import _plain_data, kept_state
+from .._type_memo import class_name
 from .._user_attrs import from_family
 
 __all__ = ["SampledCost", "many_frames_cost", "many_objects_cost", "sampled_cost"]
@@ -168,7 +169,7 @@ def _frame_cost(value: Any) -> SampledCost | None:
 
 def _small_frame(item: Any) -> bool:
     kind = type(item)
-    if kind.__name__ not in ("DataFrame", "Series") or not from_family(kind, "pandas"):
+    if class_name(kind) not in ("DataFrame", "Series") or not from_family(kind, "pandas"):
         return False
     try:
         return int(item.size) <= _SMALL_FRAME_CELLS

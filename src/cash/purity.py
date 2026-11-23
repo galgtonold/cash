@@ -6,6 +6,8 @@ import builtins
 from collections.abc import Callable, Mapping
 from typing import Any, TypeVar
 
+from ._user_attrs import plain_getattr
+
 __all__ = [
     "pure",
     "stateful",
@@ -77,12 +79,12 @@ def stateful(func: F) -> F:
 
 def is_pure(func: Any) -> bool:
     """Return whether ``func`` was marked with `pure`."""
-    return getattr(func, _PURE_ATTR, False) is True
+    return plain_getattr(func, _PURE_ATTR, False) is True
 
 
 def is_stateful(func: Any) -> bool:
     """Return whether ``func`` was marked with `stateful`."""
-    return getattr(func, _STATEFUL_ATTR, False) is True
+    return plain_getattr(func, _STATEFUL_ATTR, False) is True
 
 
 # ============================================================================

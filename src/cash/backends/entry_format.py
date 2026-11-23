@@ -116,6 +116,8 @@ import zlib
 from collections.abc import Sequence
 from typing import Any, NamedTuple
 
+from .._type_memo import class_name
+
 __all__ = [
     "MAGIC",
     "MAGIC_SPLIT",
@@ -292,9 +294,9 @@ def _load_metadata(meta_bytes: bytes, where: str) -> dict[str, Any]:
         # A module missing in this environment (a numpy scalar written by
         # another one), a user object's __setstate__: any of it means the
         # entry cannot be read here.
-        raise CorruptEntry(f"{where}: metadata does not unpickle ({type(exc).__name__}: {exc})") from exc
+        raise CorruptEntry(f"{where}: metadata does not unpickle ({class_name(type(exc))}: {exc})") from exc
     if not isinstance(metadata, dict):
-        raise CorruptEntry(f"{where}: metadata is a {type(metadata).__name__}, not a dict")
+        raise CorruptEntry(f"{where}: metadata is a {class_name(type(metadata))}, not a dict")
     return metadata
 
 

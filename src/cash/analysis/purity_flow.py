@@ -33,6 +33,8 @@ from contextvars import ContextVar
 from typing import Any
 
 from .. import source_reads
+from .._type_memo import class_name
+from .._user_attrs import named_attr, plain_getattr
 
 __all__ = [
     "fresh_name_nodes",
@@ -496,7 +498,7 @@ def _plain_attr(obj: Any, attr: str) -> str:
     library objects answer any attribute (polars' ``pl.col.__name__`` is an
     expression), and a lookup may raise."""
     try:
-        value = getattr(obj, attr, "")
+        value = plain_getattr(obj, attr, "")
     except Exception:  # noqa: BLE001 - a third-party __getattr__ may raise anything
         return ""
     return value if isinstance(value, str) else ""
@@ -525,7 +527,7 @@ def _resolve_callee(func: ast.AST, namespace: dict[str, Any]) -> Any:
         if not issubclass(type(obj), types.ModuleType):
             return _UNRESOLVED
         try:
-            obj = getattr(obj, attr, _UNRESOLVED)
+            obj = named_attr(obj, attr, _UNRESOLVED)
         except Exception:  # noqa: BLE001 - a module's __getattr__ may raise anything
             return _UNRESOLVED
         if obj is _UNRESOLVED:
@@ -1232,7 +1234,7 @@ class _FreshFlow:
                     _bound_names(item.optional_vars, bound)
                     out = _without(out, bound)
             return self.block(s.body, out)
-        if isinstance(s, ast.Try) or type(s).__name__ == "TryStar":
+        if isinstance(s, ast.Try) or class_name(type(s)) == "TryStar":
             body_end = self.block(s.body, fresh)
             start = set(fresh) & body_end  # a handler may run from any point
             ends = [self.block(s.orelse, body_end)]

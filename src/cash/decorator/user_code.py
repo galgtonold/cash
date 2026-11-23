@@ -9,8 +9,8 @@ import sys
 import types
 from typing import Any
 
-from .._type_memo import per_type
-from .._user_attrs import module_file
+from .._type_memo import class_dict, class_mro, class_qualname, per_type
+from .._user_attrs import module_file, named_attr, plain_getattr
 from ..analysis.helper_code import UnwalkableLayers, callable_layers
 from ..code_digest import unwrap_partials
 from ..install_paths import in_own_package, is_cash_path, is_user_code_file, is_user_code_module, top_package
@@ -21,7 +21,7 @@ def is_cash_wrapper(value: Any) -> bool:
     """Is *value* the wrapper ``@cash.cache`` returns, or a method bound
     from one? A mock answers every attribute, never with True."""
     try:
-        return getattr(value, "_cash_cached", False) is True
+        return plain_getattr(value, "_cash_cached", False) is True
     except Exception:  # noqa: BLE001 - an object's __getattr__ may raise anything
         return False
 
@@ -39,12 +39,12 @@ def cash_wrapped(value: Any) -> Any:
     meets one keys the function it wraps, and a data channel keys its state
     (`GlobalValues.data_callable_identity`).
     """
-    return getattr(value, "__wrapped__", value) if is_cash_wrapper(value) else value
+    return plain_getattr(value, "__wrapped__", value) if is_cash_wrapper(value) else value
 
 
 def own_package(func: Any) -> str | None:
     """The top-level package of the module that defines *func*."""
-    return top_package(getattr(func, "__module__", None))
+    return top_package(plain_getattr(func, "__module__", None))
 
 
 def is_user_class(cls: Any, own_pkg: str | None = None) -> bool:
@@ -55,7 +55,7 @@ def is_user_class(cls: Any, own_pkg: str | None = None) -> bool:
     class): editing a class-level constant invalidates, while a library
     class's attributes do not churn the key.
     """
-    name = getattr(cls, "__module__", None)
+    name = plain_getattr(cls, "__module__", None)
     if in_own_package(name, own_pkg):
         return True
     mod = sys.modules.get(name or "")
@@ -85,7 +85,7 @@ def _is_c_type(cls: type) -> bool:
     type, or a heap type an extension created immutable; Python cannot make
     either -- or a heap type of an extension's that holds nothing but C
     code (`_holds_only_c_code`)."""
-    flags = getattr(cls, "__flags__", 0)
+    flags = plain_getattr(cls, "__flags__", 0)
     return not flags & _HEAPTYPE or bool(flags & _IMMUTABLETYPE) or _holds_only_c_code(cls)
 
 
@@ -116,13 +116,13 @@ def _holds_only_c_code(cls: type) -> bool:
     have none is not one. One whose instances have one may be: before 3.13
     (no ``__firstlineno__``), an empty class, or one holding only C
     functions (``__call__ = staticmethod(abs)``), holds nothing else."""
-    if getattr(cls, "__dictoffset__", 0):
+    if plain_getattr(cls, "__dictoffset__", 0):
         return False
     try:
-        for klass in cls.__mro__:
+        for klass in class_mro(cls):
             if klass is object:
                 continue
-            for name, value in vars(klass).items():
+            for name, value in class_dict(klass).items():
                 if name in _C_TYPE_NAMES or isinstance(value, _C_MEMBERS):
                     continue
                 if name == "__slotnames__" and type(value) is list:
@@ -156,7 +156,7 @@ def _c_code_verdict(obj: Any) -> bool | None:
         return False if _is_c_type(obj) else None
     if not isinstance(obj, _C_CALLABLES):
         return None
-    owner = getattr(obj, "__self__", None)
+    owner = plain_getattr(obj, "__self__", None)
     if owner is None:
         owner = getattr(obj, "__objclass__", None)
     if issubclass(type(owner), types.ModuleType):
@@ -164,9 +164,9 @@ def _c_code_verdict(obj: Any) -> bool | None:
     if owner is None:
         return False
     cls = owner if isinstance(owner, type) else type(owner)
-    name = getattr(obj, "__name__", None)
+    name = plain_getattr(obj, "__name__", None)
     try:
-        cls = next((klass for klass in cls.__mro__ if name in vars(klass)), cls)
+        cls = next((klass for klass in class_mro(cls) if name in class_dict(klass)), cls)
     except Exception:  # noqa: BLE001 - an odd class must not break the verdict
         pass
     return is_user_code_object(cls)
@@ -190,12 +190,12 @@ def is_user_code_object(obj: Any) -> bool:
     user code (mirroring ``is_user_code_module``'s fileless-module
     handling) -- unless it is C code (`_c_code_verdict`).
     """
-    code = getattr(obj, "__code__", None)
+    code = plain_getattr(obj, "__code__", None)
     if isinstance(code, types.CodeType) and is_cash_path(code.co_filename):
         # cash's own code -- the wrapper `@cash.cache` returns, whose
         # ``__module__`` and ``__qualname__`` are the user function's.
         return False
-    mod_name = getattr(obj, "__module__", None)
+    mod_name = plain_getattr(obj, "__module__", None)
     mod = sys.modules.get(mod_name) if mod_name else None
     if mod is None or not qualname_resolves_in(mod, obj):
         if (
@@ -237,13 +237,13 @@ def _built_by_library(cls: type) -> bool:
     or method descriptor in its own namespace, or a base of the user's,
     keeps the lenient verdict.
     """
-    mod = sys.modules.get(getattr(cls, "__module__", None) or "")
+    mod = sys.modules.get(plain_getattr(cls, "__module__", None) or "")
     if mod is None or module_file(mod) is None or is_user_code_module(mod):
         return False
     try:
-        if any(isinstance(v, types.FunctionType) or wraps_code(v) for v in vars(cls).values()):
+        if any(isinstance(v, types.FunctionType) or wraps_code(v) for v in class_dict(cls).values()):
             return False
-        return not any(is_user_code_object(base) for base in cls.__mro__[1:] if base is not object)
+        return not any(is_user_code_object(base) for base in class_mro(cls)[1:] if base is not object)
     except Exception:  # noqa: BLE001 - an odd class keeps the lenient verdict
         return False
 
@@ -259,14 +259,14 @@ def _library_methods(cls: type) -> bool:
     ``zoneinfo.ZoneInfo``, the C class's name) does not resolve at its
     name, and counted as exec'd user code: its weak cache was folded as
     the class's data. Its code says whose it is."""
-    mod = sys.modules.get(getattr(cls, "__module__", None) or "")
+    mod = sys.modules.get(plain_getattr(cls, "__module__", None) or "")
     if mod is None or module_file(mod) is None or is_user_code_module(mod):
         return False
     try:
         files = set()
-        for v in vars(cls).values():
+        for v in class_dict(cls).values():
             fn = v.__func__ if isinstance(v, (staticmethod, classmethod)) else v.fget if isinstance(v, property) else v
-            code = getattr(fn, "__code__", None) if type(fn) is types.FunctionType else None
+            code = plain_getattr(fn, "__code__", None) if type(fn) is types.FunctionType else None
             if code is not None:
                 files.add(code.co_filename)
         return bool(files) and not any(is_user_code_file(f) for f in files)
@@ -281,7 +281,7 @@ library_methods = per_type(_library_methods)
 def unnamed_library_class(cls: type) -> bool:
     """Is *cls* a class a library built (`_built_by_library`) that its
     ``module:qualname`` does not find, so the name stands for another?"""
-    mod = sys.modules.get(getattr(cls, "__module__", None) or "")
+    mod = sys.modules.get(plain_getattr(cls, "__module__", None) or "")
     return mod is not None and not qualname_resolves_in(mod, cls) and built_by_library(cls)
 
 
@@ -295,8 +295,8 @@ def unregistered_namespace_code(obj: Any) -> bool:
     none, so the walk takes it for a library's and keys only its name.
     A method replaced on such a class, or a helper redefined there, then
     served the result of the old one."""
-    fn = getattr(obj, "__func__", obj)
-    home = sys.modules.get(getattr(fn, "__module__", None) or "")
+    fn = plain_getattr(obj, "__func__", obj)
+    home = sys.modules.get(plain_getattr(fn, "__module__", None) or "")
     if home is not None and qualname_resolves_in(home, fn):
         # Found by its name (a namedtuple's ``__new__`` is made in a
         # namespace of its own, its class is found): keyed as any other.
@@ -312,12 +312,12 @@ def unregistered_namespace_code(obj: Any) -> bool:
         g = fn.__globals__
         name = g.get("__name__")
         mod = sys.modules.get(name) if isinstance(name, str) else None
-        return getattr(mod, "__dict__", None) is not g and is_user_code_object(fn)
+        return plain_getattr(mod, "__dict__", None) is not g and is_user_code_object(fn)
     if isinstance(obj, type):
         # By its methods: a class says nothing of where it was built (one
         # ``exec``'d into a bare ``{}`` calls itself ``builtins``).
         try:
-            members = list(vars(obj).values())
+            members = list(class_dict(obj).values())
         except TypeError:
             return False
         for member in members:
@@ -340,7 +340,7 @@ def qualname_resolves_in(mod: Any, obj: Any) -> bool:
     just returning it) can make this walk raise something else entirely,
     and ``is_user_code_object`` must never raise.
     """
-    qualname = getattr(obj, "__qualname__", None) or getattr(obj, "__name__", None)
+    qualname = plain_getattr(obj, "__qualname__", None) or plain_getattr(obj, "__name__", None)
     if not qualname:
         return False
     cur = mod
@@ -348,7 +348,7 @@ def qualname_resolves_in(mod: Any, obj: Any) -> bool:
         for part in qualname.split("."):
             if part == "<locals>":
                 return False  # nested in a function body - not module-reachable
-            cur = getattr(cur, part, None)
+            cur = named_attr(cur, part, None)
             if cur is None:
                 return False
         return cur is obj
@@ -359,17 +359,17 @@ def qualname_resolves_in(mod: Any, obj: Any) -> bool:
 def _wrapped_under_its_name(mod: Any, fn: Any) -> bool:
     """Does *fn*'s ``__qualname__`` find, from *mod*, a wrapper whose
     ``__wrapped__`` chain reaches *fn*?"""
-    qualname = getattr(fn, "__qualname__", None)
+    qualname = plain_getattr(fn, "__qualname__", None)
     if not qualname or "<locals>" in qualname:
         return False
     cur = mod
     try:
         for part in qualname.split("."):
-            cur = getattr(cur, part, None)
+            cur = named_attr(cur, part, None)
             if cur is None:
                 return False
         for _ in range(8):
-            cur = getattr(cur, "__wrapped__", None)
+            cur = plain_getattr(cur, "__wrapped__", None)
             if cur is None:
                 return False
             if cur is fn:
@@ -398,7 +398,7 @@ def user_layers(fn: Any) -> list[Any]:
     except UnwalkableLayers as e:
         raise KeyBuildFailed(
             "KEY-HELPERS-UNWALKABLE",
-            f"cash cannot key the code {getattr(fn, '__qualname__', type(fn).__qualname__)} runs: {e}, "
+            f"cash cannot key the code {getattr(fn, '__qualname__', class_qualname(type(fn)))} runs: {e}, "
             f"so the call ran uncached.",
             "Name what the result depends on with depends_on=[...].",
         ) from e

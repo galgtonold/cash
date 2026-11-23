@@ -138,6 +138,7 @@ from cash.notebook.versioned_json_store import resolve_cache_dir
 from cash.purity import is_known_pure, is_stateful
 from cash.tracking.file_tracker import unrecorded_reads, unseen_native_reads
 
+from ..._type_memo import class_dict, class_mro, class_name, mro_of
 from ...analysis.analysis_budget import (
     ANALYSIS_BUDGET_REASON,
     AnalysisBudget,
@@ -588,7 +589,7 @@ def _classes_with_state(
                 depth += 1
         for cls in classes:
             origin = named.get(id(cls))
-            for related in (*cls.__mro__, *type(cls).__mro__):
+            for related in (*class_mro(cls), *mro_of(type(cls))):
                 name = named.get(id(related))
                 if name is not None and has_state(related):
                     found.setdefault(name, set()).update({origin} if origin else ())
@@ -597,7 +598,7 @@ def _classes_with_state(
 
 def _reached(classes: set[type]) -> set[int]:
     """The ids of *classes* and of the classes they derive from."""
-    return {id(related) for cls in classes for related in (*cls.__mro__, *type(cls).__mro__)}
+    return {id(related) for cls in classes for related in (*class_mro(cls), *mro_of(type(cls)))}
 
 
 def _read_into(kind: type, named: Mapping[int, str]) -> bool:
@@ -680,7 +681,7 @@ def _class_state(cls: type) -> tuple | None:
 
 def _own_attributes(cls: type) -> list[Any]:
     """What *cls* holds in its own attributes but Python's ``__dunder__`` ones."""
-    return [value for key, value in vars(cls).items() if not (key.startswith("__") and key.endswith("__"))]
+    return [value for key, value in class_dict(cls).items() if not (key.startswith("__") and key.endswith("__"))]
 
 
 def _defined_class_bases(tree: ast.AST, user_ns: Mapping[str, Any]) -> list[type]:
@@ -765,7 +766,7 @@ def _has_class_state(cls: type, value_types: tuple[type, ...]) -> bool:
         not (key.startswith("__") and key.endswith("__"))
         and not is_value(member, value_types)
         and not instance_of(member, _NO_STATE)
-        for key, member in list(vars(cls).items())
+        for key, member in list(class_dict(cls).items())
     )
 
 
@@ -5239,7 +5240,7 @@ class StatementProcessor:
         # Each, an empty ``registry = []`` too: what the new class's
         # creation puts there is not known before it runs.
         named = {id(value): name for name, value in user_ns.items() if instance_of(value, type)}
-        derived = {named[id(cls)] for base in bases for cls in base.__mro__ if id(cls) in named}
+        derived = {named[id(cls)] for base in bases for cls in class_mro(base) if id(cls) in named}
         if unread:
             # Past the items read, any class with state may be the one the
             # call reaches (`_link_inputs_kept_by`): each one's state now,
@@ -5361,7 +5362,7 @@ class StatementProcessor:
                 and not is_value(value, value_types)
                 and not instance_of(value, (type, types.ModuleType, types.FunctionType))
             }
-            self._warn_holders_unfound(run, sorted(cls.__name__ for cls in replaced), cost)
+            self._warn_holders_unfound(run, sorted(class_name(cls) for cls in replaced), cost)
         for name in names:
             self.forget_variable(name)
 
@@ -5727,7 +5728,7 @@ class StatementProcessor:
         write to ``X`` no longer reaches it. (Where the tree holds a view
         of ``X``, ``X`` is an anchor and asked so; where it holds ``X``
         itself, as some SciPy builds do, ``X`` was a holder, and served.)"""
-        arrays = {name: obj for name, obj in holders.items() if type(obj).__name__ == "ndarray"}
+        arrays = {name: obj for name, obj in holders.items() if class_name(type(obj)) == "ndarray"}
         if not arrays:
             return None
         values = {name: captured_vars[name] for name in outputs if name in captured_vars}

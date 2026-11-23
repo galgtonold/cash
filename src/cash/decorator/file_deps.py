@@ -15,7 +15,8 @@ from typing import TYPE_CHECKING, Any
 
 from .._clock import perf_counter as _perf_counter
 from .._paths import is_remote_url, normalize_path
-from .._user_attrs import from_family
+from .._type_memo import class_name
+from .._user_attrs import from_family, plain_getattr
 from ..code_digest import own_source_digest
 from ..content_hashers import lazy_frame_sources
 from ..exceptions import CashCacheIneffectiveWarning, CashCacheStoreFailedWarning
@@ -329,7 +330,7 @@ def _code_of(fn: Any) -> types.CodeType | None:
     """*fn*'s code object, or None. A class whose metaclass answers every
     attribute (a catch-all ``__getattr__``) hands back a value for
     ``__code__`` too; that is not code."""
-    code = getattr(fn, "__code__", None)
+    code = plain_getattr(fn, "__code__", None)
     return code if isinstance(code, types.CodeType) else None
 
 
@@ -390,13 +391,15 @@ class FileDeps:
         """
         values: list[Any] = [*args, *kwargs.values()]
         for value in list(values):
+            if issubclass(type(value), type):
+                continue  # a class: ``isinstance`` would ask its metaclass's hook
             if isinstance(value, (list, tuple)) and len(value) <= 64:
                 values.extend(value)
             elif isinstance(value, dict) and len(value) <= 64:
                 values.extend(value.values())
         for value in values:
             cls = type(value)
-            if cls.__name__ != "LazyFrame" or not from_family(cls, "polars"):
+            if class_name(cls) != "LazyFrame" or not from_family(cls, "polars"):
                 continue
             for path in lazy_frame_sources(value) or ():
                 if is_remote_url(path):

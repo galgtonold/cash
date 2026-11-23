@@ -17,11 +17,11 @@ helper walk (`helper_walk`) resolves and visits them.
 from __future__ import annotations
 
 import ast
-import inspect
 import sqlite3
 import types
 from typing import Any
 
+from .._user_attrs import named_attr, static_attr
 from ..effects import (
     ENVIRON_KEYED_METHODS,
     ENVIRON_NAMES,
@@ -83,7 +83,7 @@ def _opens_tracked_database(func: ast.expr, namespace: dict[str, Any] | None) ->
         # Read without running code: a module-level value's property must
         # not run (or cost a whole table's conversion) during analysis.
         try:
-            return inspect.getattr_static(namespace.get(func.value.id), func.attr, None) is sqlite3.connect
+            return static_attr(namespace.get(func.value.id), func.attr, None) is sqlite3.connect
         except Exception:  # noqa: BLE001 - a probe of arbitrary objects
             return False
     return False
@@ -921,7 +921,7 @@ class PurityVisitor(ast.NodeVisitor):
         for attr in chain[1:]:
             if not issubclass(type(obj), types.ModuleType):
                 return False
-            obj = getattr(obj, attr, None)
+            obj = named_attr(obj, attr, None)
         return issubclass(type(obj), types.ModuleType)
 
     def visit_Expr(self, node: ast.Expr) -> None:

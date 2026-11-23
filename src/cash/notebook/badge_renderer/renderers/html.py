@@ -35,6 +35,7 @@ from typing import Any
 
 from cash._user_attrs import attribute_or
 
+from ...._type_memo import class_name
 from .. import theme
 from .._headline import mixed_headline
 from .._reasons import stale_export_text
@@ -647,11 +648,14 @@ def _fmt_iter_value(v: Any) -> str:
     (``{3 items}``); truncate other long reprs in the middle so both the
     head and tail of the value stay visible.
     """
-    if isinstance(v, dict):
+    # A class is none of these: ``isinstance`` would ask it for its
+    # ``__class__``, which a metaclass's hook of the user's answers.
+    container = not issubclass(type(v), type)
+    if container and isinstance(v, dict):
         n = len(v)
         if n > 2:
             return f"{{{n} items}}"
-    if isinstance(v, (list, tuple, set)) and len(v) > 4:
+    if container and isinstance(v, (list, tuple, set)) and len(v) > 4:
         opener, closer = ("[", "]") if isinstance(v, list) else ("(", ")") if isinstance(v, tuple) else ("{", "}")
         return f"{opener}{len(v)} items{closer}"
     r = _binding_repr(v)
@@ -1271,7 +1275,7 @@ def _render_section_item(item: SectionItem, rp: _RenderPass) -> str:
         return _decorator_group_html(item, rp)
     if isinstance(item, OverheadBreakdown):
         return _overhead_html(item, rp)
-    raise TypeError(f"Unsupported BadgeView node: {type(item).__name__}")
+    raise TypeError(f"Unsupported BadgeView node: {class_name(type(item))}")
 
 
 def _section_label(kind: SectionKind, header: str) -> str:

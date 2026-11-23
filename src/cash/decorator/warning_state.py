@@ -42,13 +42,13 @@ from __future__ import annotations
 
 import contextlib
 import functools
-import inspect
 import sys
 import threading
 import warnings
 from collections.abc import Iterator
 from typing import Any
 
+from .._user_attrs import plain_getattr, unwrapped
 from ..code_digest import callable_identity
 from ..install_paths import is_cash_path, is_user_code_file
 
@@ -286,16 +286,16 @@ def _code_of(hook: Any) -> Any:
         if isinstance(hook, functools.partial):
             hook = hook.func
             continue
-        wrapped = getattr(hook, "__wrapped__", None)
-        code = getattr(inspect.unwrap(hook) if wrapped is not None else hook, "__code__", None)
+        wrapped = plain_getattr(hook, "__wrapped__", None)
+        code = getattr(unwrapped(hook) if wrapped is not None else hook, "__code__", None)
         if code is not None:
             return code
-        func = getattr(hook, "__func__", None)
+        func = plain_getattr(hook, "__func__", None)
         if func is not None:
             hook = func
             continue
         call = getattr(type(hook), "__call__", None)
-        if call is not None and not isinstance(hook, type) and getattr(call, "__code__", None) is not None:
+        if call is not None and not isinstance(hook, type) and plain_getattr(call, "__code__", None) is not None:
             return call.__code__
         return None
     return None

@@ -34,6 +34,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from .. import _native
+from .._type_memo import class_dict
 
 __all__ = [
     "Patches",
@@ -369,7 +370,7 @@ class Patches:
             if isinstance(owner, type):
                 # The class's own attribute, raw: a staticmethod stays one, and
                 # an inherited one is deleted again rather than copied down.
-                old = owner.__dict__.get(name, _ABSENT)
+                old = class_dict(owner).get(name, _ABSENT)
             else:
                 old = getattr(owner, name)
             self._set(owner, name, new)
@@ -425,5 +426,5 @@ class Patches:
 
 def _current(owner: Any, name: str) -> Any:
     if isinstance(owner, type):
-        return owner.__dict__.get(name, _ABSENT)
+        return class_dict(owner).get(name, _ABSENT)
     return getattr(owner, name, _ABSENT)

@@ -12,6 +12,8 @@ import typing
 from dataclasses import dataclass, field, fields
 from typing import Any
 
+from .._type_memo import class_name
+from .._user_attrs import plain_getattr
 from ..units import parse_size
 from .notices import config_notice
 
@@ -522,6 +524,6 @@ def _typed_value(name: str, value: Any, dataclass_type: type) -> Any:
             return value
     else:
         return value  # lists, nested configs: checked elsewhere
-    expected = getattr(base, "__name__", str(base))
+    expected = plain_getattr(base, "__name__", str(base))
     hint = " (or a size string such as '2GB')" if name in SIZE_FIELDS else ""
-    raise ValueError(f"{name}={value!r} is a {type(value).__name__}; expected {expected}{hint}")
+    raise ValueError(f"{name}={value!r} is a {class_name(type(value))}; expected {expected}{hint}")

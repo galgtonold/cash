@@ -68,6 +68,7 @@ import weakref
 from typing import Any
 
 from .. import _weak
+from .._type_memo import class_name
 from .._user_attrs import from_family
 from ..sizing import array_nbytes
 from . import heap_blocks
@@ -950,7 +951,7 @@ def _freeze(frame: Any, *, cells_known: bool = False) -> bool:
         _freeze_in_place(frame)
         return True
     except Exception:
-        logger.debug("cash: could not freeze a %s", type(frame).__name__, exc_info=True)
+        logger.debug("cash: could not freeze a %s", class_name(type(frame)), exc_info=True)
         try:
             _undo(frame, journal)
         except Exception:
@@ -1045,7 +1046,7 @@ def share_checked(frame: Any) -> tuple[Any, bytes] | None:
     try:
         return _share_checked(frame)
     except Exception:  # unknown internals: copied as before
-        logger.debug("cash: could not share a %s", type(frame).__name__, exc_info=True)
+        logger.debug("cash: could not share a %s", class_name(type(frame)), exc_info=True)
         return None
 
 
@@ -1225,7 +1226,7 @@ def adopt(frame: Any) -> bool:
     try:
         return _adoptable(frame) and _freeze(frame, cells_known=True)
     except Exception:  # unknown internals: left as it is
-        logger.debug("cash: could not take over a %s", type(frame).__name__, exc_info=True)
+        logger.debug("cash: could not take over a %s", class_name(type(frame)), exc_info=True)
         return False
 
 
@@ -1386,7 +1387,7 @@ def copy_keeping_blocks(frame: Any, *, arrow: bool = True, reuse: Any = None, st
         copied_mgr = type(mgr).from_blocks(blocks, axes)
         return frame._constructor_from_mgr(copied_mgr, axes=copied_mgr.axes).__finalize__(frame, method="copy")
     except Exception:
-        logger.debug("cash: copying a %s the pandas way", type(frame).__name__, exc_info=True)
+        logger.debug("cash: copying a %s the pandas way", class_name(type(frame)), exc_info=True)
         copied = frame.copy(deep=True)
         own_parts(copied, arrow=arrow)
         return copied

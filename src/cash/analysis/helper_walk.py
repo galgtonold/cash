@@ -37,6 +37,8 @@ from typing import Any, NamedTuple
 
 from .. import _weak, source_reads
 from .._annotation_refs import annotation_referents
+from .._type_memo import class_mro, class_name, mro_of
+from .._user_attrs import instance_of, plain_getattr, plain_hasattr
 from ..code_digest import callable_identity, compiled_identity, extension_file_digest
 from ..effects import EffectKind
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
@@ -188,7 +190,7 @@ class HelperWalk:
 
     def __init__(self, root_func: Callable[..., Any]) -> None:
         self._root_func = root_func
-        self._root_module: str | None = getattr(root_func, "__module__", None)
+        self._root_module: str | None = plain_getattr(root_func, "__module__", None)
         self._issues: list[PurityIssue] = []
         self._helper_hashes: dict[str, str] = {}
         self._helper_paths: dict[str, BindingPath] = {}
@@ -337,7 +339,7 @@ class HelperWalk:
         stack = [_Entry(root, 0, False, root_reported)]
         if (
             type(root) is types.FunctionType
-            and hasattr(root, "__wrapped__")
+            and plain_hasattr(root, "__wrapped__")
             and not own_code_is_user(root, self._root_module)
         ):
             try:
@@ -592,7 +594,7 @@ class HelperWalk:
         self._record_walked_code(func)
 
         try:
-            tree = tree_memo.parse(src, getattr(getattr(code_fn, "__code__", None), "co_filename", None))
+            tree = tree_memo.parse(src, getattr(plain_getattr(code_fn, "__code__", None), "co_filename", None))
         except SyntaxError:
             if entry.reported:
                 self._emit("_put_opaque", qualname)
@@ -647,7 +649,7 @@ class HelperWalk:
 
     def _record_walked_code(self, func: Any) -> None:
         """Remember the code *func* ran when walked (`PurityReport.walked_code`)."""
-        owner = getattr(func, "__func__", func)  # a bound method is made anew per read
+        owner = plain_getattr(func, "__func__", func)  # a bound method is made anew per read
         codes = code_objects_of(owner)
         if not codes:
             return
@@ -761,7 +763,7 @@ class HelperWalk:
             more = _anchor_issue_lines(more, func)
         self._emit(
             "_put_body_issues",
-            getattr(func, "__code__", None),
+            plain_getattr(func, "__code__", None),
             entry.depth > 0,
             own,
             more,
@@ -871,7 +873,7 @@ class HelperWalk:
         """
         for name in body.visitor.read_names:
             value = body.namespace.get(name)
-            if _is_function(value) or inspect.ismethod(value):
+            if _is_function(value) or instance_of(value, types.MethodType):
                 self._queue_helper(body, value, 0, _call_site_path(body, (name,)))
             elif isinstance(value, type):
                 # A user class named but not called by a user path:
@@ -898,7 +900,7 @@ class HelperWalk:
         decider = next(
             (
                 f"{meta.__qualname__}.{d}"
-                for meta in type(cls).__mro__
+                for meta in mro_of(type(cls))
                 if meta not in (type, object) and is_user_code(meta, self._root_module)
                 for d in _DECIDERS
                 if d in vars(meta)
@@ -982,7 +984,7 @@ class HelperWalk:
         if is_mock(callee):
             self._note_binding(callee, path)
             where = f"{path[0]}.{'.'.join(path[1])}" if path else "a callee"
-            self._emit("_put_unkeyable", f"{where} is a {type(callee).__name__}")
+            self._emit("_put_unkeyable", f"{where} is a {class_name(type(callee))}")
             return
         # A call to another @cash.cache-decorated function is a
         # dependency-graph edge, not a helper to walk: its own source hash and
@@ -991,7 +993,7 @@ class HelperWalk:
         # same-package user code) and flag cash's own internal mutations as
         # the user's. Its binding is still noted: rebinding the name the
         # caller calls it by (``app.inner = fake``) replaces the edge.
-        if getattr(callee, "_cash_cached", False) is True:
+        if plain_getattr(callee, "_cash_cached", False) is True:
             self._note_binding(callee, path)
             self._note_cached(callee)
             return
@@ -1100,7 +1102,7 @@ class HelperWalk:
         one the body names only to test objects against (`check_targets`)."""
         if target is None or target is owner or not callable(target):
             return
-        if getattr(target, "_cash_cached", False) is True:
+        if plain_getattr(target, "_cash_cached", False) is True:
             if not is_mock(target):
                 self._note_cached(target)
             return
@@ -1191,7 +1193,7 @@ class HelperWalk:
         """
         if not isinstance(cls, type):
             return
-        for base in cls.__mro__[1:]:
+        for base in class_mro(cls)[1:]:
             if base is object or not is_user_code(base, self._root_module):
                 continue
             self._queue_hash_only(base, cls, reported, check_only=True, tested_only=tested_only)
@@ -1208,7 +1210,7 @@ class HelperWalk:
         name = path[1][0]
         if name in shadowed or name in body.local_imports:
             return
-        if name not in (getattr(body.func, "__globals__", None) or ()):
+        if name not in (plain_getattr(body.func, "__globals__", None) or ()):
             self._emit("_put_unbound", (path[0], name))
 
     def _note_binding(self, callee: Any, path: BindingPath | None) -> None:
@@ -1231,8 +1233,8 @@ class HelperWalk:
         if path is not None and resolve_binding(*path) is func:
             self._helper_paths[qualname] = path
             return
-        helper_module = getattr(func, "__module__", None)
-        helper_inner_qualname = getattr(func, "__qualname__", None)
+        helper_module = plain_getattr(func, "__module__", None)
+        helper_inner_qualname = plain_getattr(func, "__qualname__", None)
         home = (
             (helper_module, tuple(helper_inner_qualname.split(".")))
             if helper_module and helper_inner_qualname and "<locals>" not in helper_inner_qualname
@@ -1298,8 +1300,8 @@ class HelperWalk:
             if (
                 type(fn) is not types.FunctionType
                 or fn.__closure__
-                or hasattr(fn, "__wrapped__")
-                or top_package(getattr(fn, "__module__", None)) != package
+                or plain_hasattr(fn, "__wrapped__")
+                or top_package(plain_getattr(fn, "__module__", None)) != package
             ):
                 continue
             try:
@@ -1366,7 +1368,7 @@ def _scope_locals(func_def: ast.AST) -> frozenset[str]:
 def _library_code(func: Any) -> bool:
     """Was *func*'s code compiled from a file of an installed library (not
     the user's code: `is_user_code_file`)? False when it has no code."""
-    code = getattr(getattr(func, "__func__", func), "__code__", None)
+    code = getattr(plain_getattr(func, "__func__", func), "__code__", None)
     filename = getattr(code, "co_filename", None)
     return isinstance(filename, str) and bool(filename) and not is_user_code_file(filename)
 
@@ -1452,7 +1454,7 @@ def _anchor_issue_lines(issues: list[PurityIssue], func: Any) -> list[PurityIssu
     another file.
     """
     try:
-        target = func.__code__ if type(func) is types.FunctionType and hasattr(func, "__wrapped__") else func
+        target = func.__code__ if type(func) is types.FunctionType and plain_hasattr(func, "__wrapped__") else func
         first = getsourcelines(target)[1]
         filename = inspect.getsourcefile(target) or ""
     except SOURCE_RETRIEVAL_ERRORS:
@@ -1563,7 +1565,7 @@ def _code_shape(code: types.CodeType) -> tuple:
 def _const_shape(const: object) -> object:
     if isinstance(const, types.CodeType):
         return ("code", const.co_name, _code_shape(const))
-    return (type(const).__name__, repr(const))
+    return (class_name(type(const)), repr(const))
 
 
 def _compiles_to_shape_of(node: ast.Lambda, code: types.CodeType) -> bool:

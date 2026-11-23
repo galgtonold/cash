@@ -28,6 +28,7 @@ from typing import Any, Callable, Iterable
 from cash._user_attrs import attribute_or, has_attribute, instance_of, is_routine
 
 from .._memo import CODE_OBJECTS, NOTEBOOK_STATEMENTS, LruMemo
+from .._type_memo import class_module, class_mro, class_qualname
 from ..analysis.ast_util import parse_cached, walk_tree
 from ..analysis.mutations import repeatable_setting_receiver
 from ..analysis.purity_analyzer import get_analyzer
@@ -1049,7 +1050,7 @@ def module_data_digest(label: str, value: Any) -> str:
 
     try:
         if library_draw_source(label, value):
-            return f"drawn:{type(value).__qualname__}:{id(value)}"
+            return f"drawn:{class_qualname(type(value))}:{id(value)}"
         digest = compute_hash(value)
         code = held_code_digest(value)
         if code:
@@ -1127,11 +1128,11 @@ def _routine_parts(value: Any) -> list[str]:
             # ``__get__`` and no ``__set__`` (a callable descriptor, a
             # ``partialmethod``): its answer turns on what it holds, as a
             # callable object's does, not on its type's name.
-            parts.append(f"object:{kind.__module__}.{kind.__qualname__}")
+            parts.append(f"object:{class_module(kind)}.{class_qualname(kind)}")
             _held_part(routine, parts)
         else:
             name = f"{attribute_or(routine, '__module__', None)}.{attribute_or(routine, '__qualname__', None)}"
-            parts.append(f"named:{kind.__module__}.{kind.__qualname__}:{name}")
+            parts.append(f"named:{class_module(kind)}.{class_qualname(kind)}:{name}")
             if owner is not None and not instance_of(owner, types.ModuleType):
                 # A builtin bound to an object: ``{'a': 1}.get``, ``'aaa'.count``.
                 held = [owner]
@@ -1158,7 +1159,7 @@ def _defined_in_python(kind: type) -> bool:
     has a ``__get__`` or ``__call__`` written in Python: an object of the
     user's (or of a pure-Python library) holding data, not a builtin or
     compiled function, which is named by its qualified name."""
-    for klass in kind.__mro__:
+    for klass in class_mro(kind):
         own = _OWN_CLASS_DICT(klass)
         if type(own.get("__get__")) is types.FunctionType or type(own.get("__call__")) is types.FunctionType:
             return True
@@ -1246,7 +1247,7 @@ def _warn_unread_routine(label: str, value: Any) -> None:
     warn_diagnostic(
         CashCacheIneffectiveWarning,
         "KEY-UNHASHABLE-GLOBAL",
-        f"a call reads '{label.lstrip('@')}', a {type(value).__qualname__} holding a value cash could not hash, "
+        f"a call reads '{label.lstrip('@')}', a {class_qualname(type(value))} holding a value cash could not hash, "
         "so it cannot tell that routine from another put there: the call runs every time.",
         "register a hasher for the type it holds with cash.register_hasher, or set a function that "
         "holds plain values there.",

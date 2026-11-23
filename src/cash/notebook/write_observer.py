@@ -21,7 +21,6 @@ and is re-fired as before.
 from __future__ import annotations
 
 import contextvars
-import inspect
 import os
 import stat
 import sys
@@ -37,6 +36,8 @@ from cash.purity import is_pure
 from cash.tracking import io_watch, process_registries
 from cash.tracking.file_dep_snapshot import forget_young_digests
 from cash.tracking.read_classification import is_runtime_cache_path, own_lstat, own_stat
+
+from .._user_attrs import unwrapped
 
 __all__ = [
     "WrittenPaths",
@@ -181,7 +182,7 @@ def _write_waived() -> bool:
             if whole or frame.f_lineno in lines:
                 return True
             func = frame.f_globals.get(code.co_name)
-            if func is not None and is_pure(func) and attribute_or(inspect.unwrap(func), "__code__", None) is code:
+            if func is not None and is_pure(func) and attribute_or(unwrapped(func), "__code__", None) is code:
                 return True
         frame = frame.f_back
     return False

@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from .._memo import TABLES, LruMemo
+from .._type_memo import class_name, class_qualname
+from .._user_attrs import named_attr, plain_getattr
 from ..analysis.check_targets import function_only_tests_against
 from ..analysis.helper_bindings import resolve_binding
 from ..analysis.helper_code import own_code_is_user, qualname_of, renamed
@@ -288,7 +290,7 @@ class GlobalsFold:
     def _read_pairs(self, func: Callable, extra_names: tuple[str, ...]) -> list[tuple]:
         """The *seen* entries `GlobalsFold.fold_read_globals` records for
         *func*: each global it reads by name, and each function default."""
-        g = getattr(func, "__globals__", None)
+        g = plain_getattr(func, "__globals__", None)
         if not isinstance(g, dict):
             return []
         gid = id(g)
@@ -313,14 +315,14 @@ class GlobalsFold:
         names = self._reads.read_global_data_names(func)
         if extra_names:
             names = tuple(dict.fromkeys(names + extra_names))
-        g = getattr(func, "__globals__", None)
+        g = plain_getattr(func, "__globals__", None)
         if not isinstance(g, dict):
             return state_hash
         # NOTE: no early return on an empty ``names``. A body whose only global
         # reads are module attributes (``return conf.RATE``) has NO plain data
         # globals, so bailing here skipped the module-attribute channel in
         # exactly the case it exists for.
-        code = getattr(func, "__code__", None)
+        code = plain_getattr(func, "__code__", None)
         drift_owner = owner_code if owner_code is not None else code
         fold = _ReadsFold(
             func,
@@ -353,7 +355,7 @@ class GlobalsFold:
             parts.extend(self._classes.class_parts(cls, func_name, owner_code=drift_owner, seen=seen, reader=func))
         # By name, for a miss that has to say which global moved. A helper's
         # or a called function's reads are labelled with the reader.
-        ledger_note(("globals", None if owner_code is None else getattr(func, "__qualname__", None)), parts)
+        ledger_note(("globals", None if owner_code is None else plain_getattr(func, "__qualname__", None)), parts)
         if not parts:
             return state_hash
         payload = ":".join(f"{n}={h}" for n, h in sorted(parts))
@@ -405,7 +407,7 @@ class GlobalsFold:
             fold.parts.extend(module_ref_part(name, v))
             return
         if callable(v) and not isinstance(v, (dict, list, tuple, set)):
-            carried = self._values.carried_global_hash(v, getattr(fold.func, "__module__", None))
+            carried = self._values.carried_global_hash(v, plain_getattr(fold.func, "__module__", None))
             if carried is not None:
                 fold.parts.append((f"{name}#carried", carried))
                 fold.watch[name] = (carried, "carrier", (g, name), None)
@@ -489,7 +491,7 @@ class GlobalsFold:
         Read again on every key build, so a rebinding in this process moves
         it too; nothing for the drift guard, as a call cannot change what a
         name refers to without writing the global, which is never folded."""
-        ref = self._values.code_ref_part(v, getattr(fold.func, "__module__", None), fold.func_name, name)
+        ref = self._values.code_ref_part(v, plain_getattr(fold.func, "__module__", None), fold.func_name, name)
         if ref is not None:
             fold.parts.append((f"{name}#ref", ref))
         if unregistered_namespace_code(v):
@@ -499,7 +501,7 @@ class GlobalsFold:
             surface = self._code.code_surface_hash(v)
             if surface is not None:
                 fold.parts.append((f"{name}#code", surface))
-            fn = getattr(v, "__func__", v)
+            fn = plain_getattr(v, "__func__", v)
             if type(fn) is types.FunctionType:
                 # And what it reads, as the walk folds a helper's reads:
                 # a class attribute, a global, the helpers it calls there.
@@ -636,7 +638,7 @@ class GlobalsFold:
         for fn in table.functions:
             if folded is not None and (id(fn), id(owner_code), ()) in folded:
                 return None
-            if not own_code_is_user(fn, getattr(fn, "__module__", None)):
+            if not own_code_is_user(fn, plain_getattr(fn, "__module__", None)):
                 continue
             try:
                 report = get_analyzer().analyze_reached(fn)
@@ -684,7 +686,7 @@ class GlobalsFold:
                 if surface is None:
                     surface = self._code.code_surface_hash(item)
                 if surface is not None:
-                    parts.append((f"{label}#cls:{item.__qualname__}{renamed(item)}", surface))
+                    parts.append((f"{label}#cls:{class_qualname(item)}{renamed(item)}", surface))
         # Code deeper in: an instance held in a tuple in a list, a
         # function an instance holds (`Runner(scale)`), a user transformer
         # inside a library pipeline. The pickle has them by name
@@ -742,12 +744,12 @@ class GlobalsFold:
         report = self._registry.report_for(func, func_name)
         if report is None or not (report.helper_resolution_paths or report.helper_objects):
             return state_hash
-        owner_code = getattr(func, "__code__", None)
+        owner_code = plain_getattr(func, "__code__", None)
         # Pre-seed with what the cached function itself already folded, so a
         # global it reads directly is not folded a second time on behalf of a
         # helper that also reads it.
         seen = LoggedSeen()
-        own_globals = getattr(func, "__globals__", None)
+        own_globals = plain_getattr(func, "__globals__", None)
         if isinstance(own_globals, dict):
             for name in self._reads.read_global_data_names(func):
                 seen.add((id(own_globals), name))
@@ -785,7 +787,7 @@ class GlobalsFold:
         if folded is not None and (id(target), id(owner_code), extra_names) in folded:
             return compute()  # folded earlier in this key: `_fold_once` adds nothing new
         key = (id(target), id(owner_code), extra_names, func_name)
-        module = getattr(func, "__module__", None)
+        module = plain_getattr(func, "__module__", None)
         return self._helper_memo.fold(target, key, owner_code, module, state_hash, seen, compute)
 
     def fold_passed_function_reads(self, fn: types.FunctionType, func_name: str, owner_code: Any) -> str:
@@ -817,7 +819,7 @@ class GlobalsFold:
         try:
             report = get_analyzer().analyze_reached(fn)
         except Exception as e:  # noqa: BLE001 - no report means no key, not a partial one
-            report = PurityReport(unwalkable=f"cash could not find the helpers it calls ({type(e).__name__}: {e})")
+            report = PurityReport(unwalkable=f"cash could not find the helpers it calls ({class_name(type(e))}: {e})")
         if report.unwalkable:
             raise KeyBuildFailed(
                 "KEY-HELPERS-UNWALKABLE",
@@ -858,7 +860,7 @@ class GlobalsFold:
             if target is None:
                 continue
             for attr in attr_chain:
-                target = getattr(target, attr, None)
+                target = named_attr(target, attr, None)
                 if target is None:
                     break
             if target is None or target is func or not callable(target):
@@ -873,7 +875,7 @@ class GlobalsFold:
                 continue
             # A JIT-compiled helper reads what the function it compiles reads.
             target = jit_python_function(target) or target
-            if getattr(target, "__globals__", None) is None:
+            if plain_getattr(target, "__globals__", None) is None:
                 continue
             state_hash = self._fold_helper(target, func, func_name, state_hash, owner_code, seen)
         return state_hash
@@ -931,7 +933,7 @@ class GlobalsFold:
                 if qual not in report.check_only_classes:
                     state_hash = self._classes.fold_class_parts(target, func, func_name, state_hash, owner_code, seen)
                 continue
-            if target is None or target is func or getattr(target, "__globals__", None) is None:
+            if target is None or target is func or plain_getattr(target, "__globals__", None) is None:
                 continue
             state_hash = self._fold_helper(
                 target,
@@ -983,11 +985,11 @@ class GlobalsFold:
         A *covered* edge's callee is one of the caller's helpers, whose
         reads `fold_helper_read_globals` folded.
         """
-        owner_code = getattr(func, "__code__", None)
+        owner_code = plain_getattr(func, "__code__", None)
         # Pre-seed with what this function already folded for itself, so a
         # shared global is hashed once rather than once per reader.
         seen: set = set()
-        own_globals = getattr(func, "__globals__", None)
+        own_globals = plain_getattr(func, "__globals__", None)
         if isinstance(own_globals, dict):
             for name in self._reads.read_global_data_names(func):
                 seen.add((id(own_globals), name))
@@ -1000,7 +1002,7 @@ class GlobalsFold:
             visited.add(dep)
             stack.extend((dep, d) for d in sorted(self._registry.graph.get_dependencies(dep)))
             dep_func = self._registry.functions.get(dep)
-            if dep_func is None or getattr(dep_func, "__globals__", None) is None:
+            if dep_func is None or plain_getattr(dep_func, "__globals__", None) is None:
                 continue
             state_hash = self.fold_read_globals(
                 dep_func,

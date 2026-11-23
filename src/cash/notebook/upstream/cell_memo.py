@@ -35,6 +35,8 @@ from typing import TYPE_CHECKING, Any
 
 from cash._user_attrs import attribute_or, has_attribute
 
+from ..._type_memo import class_name
+
 if TYPE_CHECKING:
     from ._types import SimulationCacheEntry, SimulationResult, TraceEntry
 
@@ -231,7 +233,7 @@ def namespace_token(value: Any) -> Any:
     if value is _MISSING:
         return _MISSING
     kind = type(value)
-    if callable(value) or kind.__name__ in _BY_IDENTITY or has_attribute(kind, "__next__"):
+    if callable(value) or class_name(kind) in _BY_IDENTITY or has_attribute(kind, "__next__"):
         return (kind, id(value))
     return kind
 

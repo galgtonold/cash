@@ -11,7 +11,6 @@ started and warns RANDOM-HELD-GENERATOR.
 
 from __future__ import annotations
 
-import inspect
 import logging
 import textwrap
 import types
@@ -24,6 +23,7 @@ from cash.tracking.randomness import CashRandomnessWarning
 from cash.tracking.randomness.detect import attribute_draws
 from cash.tracking.randomness.state import object_carrier_state, same_carrier_state
 
+from ..._user_attrs import static_attr
 from ...exceptions import SOURCE_RETRIEVAL_ERRORS
 from ...install_paths import is_user_code_file
 from ...source_norm import exact_source_digest
@@ -41,7 +41,7 @@ _MISSING = object()
 def _attribute(obj: Any, name: str) -> Any:
     """``obj.name`` as stored, without running a property or ``__getattr__``."""
     try:
-        return inspect.getattr_static(obj, name)
+        return static_attr(obj, name)
     except AttributeError:
         return _MISSING
 

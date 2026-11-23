@@ -17,6 +17,8 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 from .. import _cash_views, _weak, kept_state
+from .._type_memo import class_module, class_name
+from .._user_attrs import plain_getattr
 from . import block_digests, text_columns
 from .datetime_columns import reduce_datetime_objects
 from .no_file_writes import NoFileWrites, import_what_it_imported, no_file_writes
@@ -44,7 +46,7 @@ def _numpy_frombuffer() -> Callable[..., Any] | None:
         rebuild = np.zeros(1).__reduce_ex__(5)[0]
     except Exception:  # noqa: BLE001 - an older numpy: arrays as before
         return None
-    return rebuild if getattr(rebuild, "__name__", None) == "_frombuffer" else None
+    return rebuild if plain_getattr(rebuild, "__name__", None) == "_frombuffer" else None
 
 
 _FROMBUFFER: list[Callable[..., Any] | None] = []
@@ -270,7 +272,7 @@ def rebuild(load: Callable[..., Any], *args: Any) -> Any:
         if isinstance(failed, RESTORE_ERRORS):
             raise failed
         raise pickle.UnpicklingError(
-            f"rebuilding the stored value raised {type(failed).__name__}: {failed}"
+            f"rebuilding the stored value raised {class_name(type(failed))}: {failed}"
         ) from failed
     return value
 
@@ -361,7 +363,7 @@ def _reduce_geometry_array(value: Any) -> Any:
         blob = np.frombuffer(b"".join(wkb), dtype=np.uint8)
         crs = value._crs
     except Exception:  # not the layout this expects: geopandas' own pickle
-        logger.debug("pickling a %s the geopandas way", type(value).__name__, exc_info=True)
+        logger.debug("pickling a %s the geopandas way", class_name(type(value)), exc_info=True)
         return value.__reduce_ex__(5)
     rows = _rows_of(index, len(distinct), len(data))  # None: no row shares an object
     _note_geometries(data, blob, lengths, rows, srid_free=distinct[~missing])
@@ -627,7 +629,7 @@ def _reduce_string_array(value: Any) -> Any:
             return reduced
         items = _items_buffer(value)
     except Exception:  # not the layout this expects: pandas' own pickle
-        logger.debug("pickling a %s the pandas way", type(value).__name__, exc_info=True)
+        logger.debug("pickling a %s the pandas way", class_name(type(value)), exc_info=True)
         return reduced
     return _string_array_from_items, (func, args, state[0], pickle.PickleBuffer(items), state[2:])
 
@@ -666,7 +668,7 @@ def _reduce_text_for_write(value: Any) -> Any:
         objects = value._ndarray
         encoded = text_columns.encode_column(value, objects, _content_key(objects))
     except Exception:  # not the layout this expects
-        logger.debug("pickling a %s as strings", type(value).__name__, exc_info=True)
+        logger.debug("pickling a %s as strings", class_name(type(value)), exc_info=True)
         return _reduce_string_array(value)
     if encoded is None:
         return _reduce_string_array(value)
@@ -869,7 +871,7 @@ def _arrow_array_classes() -> tuple[type, ...]:
         klass = pending.pop()
         pending.extend(klass.__subclasses__())
         if (
-            klass.__module__.startswith("pandas.")
+            class_module(klass).startswith("pandas.")
             and klass.__getstate__ is base.__getstate__
             and klass.__setstate__ is base.__setstate__
             and klass.__reduce_ex__ is object.__reduce_ex__
@@ -899,7 +901,7 @@ def _reduce_arrow_array(value: Any) -> Any:
         chunks = [_compact(chunk) for chunk in whole]
         arrow_type = chunked.type
     except Exception:  # not the layout this expects: pandas' own pickle
-        logger.debug("pickling a %s the pandas way", type(value).__name__, exc_info=True)
+        logger.debug("pickling a %s the pandas way", class_name(type(value)), exc_info=True)
         return value.__reduce_ex__(5)
     # The buffers written as they are, held by *chunked*: a table stored
     # again holding the same column is not hashed again (`block_digests`).

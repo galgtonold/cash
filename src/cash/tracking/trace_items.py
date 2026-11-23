@@ -54,6 +54,8 @@ import typing
 from collections.abc import Iterable, Iterator, Mapping
 from typing import Any
 
+from .._type_memo import class_dict, class_module, class_mro, class_name, class_qualname, module_of_class
+from .._user_attrs import class_attr, own_lookup, plain_getattr
 from ..kept_state import global_rng_stand_in
 from ..pint_values import pint_kind, registry_digest
 
@@ -285,9 +287,10 @@ NOTEBOOK = ["__main__"]
 def is_user_type(t: type) -> bool:
     from ..install_paths import is_user_code_module
 
-    if getattr(t, "__module__", None) == NOTEBOOK[0]:
+    module = module_of_class(t)
+    if module == NOTEBOOK[0]:
         return True
-    mod = sys.modules.get(getattr(t, "__module__", "") or "")
+    mod = sys.modules.get(module or "")
     return mod is not None and is_user_code_module(mod)
 
 
@@ -339,14 +342,17 @@ class _Digester:
             finally:
                 self.active.discard(id(v))
             return
+        if isinstance(v, type):
+            # First: a class is no builtin, and ``isinstance`` asks a class
+            # that is not one for its ``__class__``, which a metaclass's
+            # hook of the user's answers.
+            self._type(v)
+            return
         if isinstance(v, (types.BuiltinFunctionType, types.BuiltinMethodType)):
-            owner = getattr(v, "__self__", None)
+            owner = plain_getattr(v, "__self__", None)
             h.update(b"B" + f"{getattr(v, '__module__', None)}.{getattr(v, '__qualname__', '')}".encode())
             if owner is not None and not issubclass(type(owner), types.ModuleType):
-                h.update(b"@" + type(owner).__qualname__.encode())
-            return
-        if isinstance(v, type):
-            self._type(v)
+                h.update(b"@" + class_qualname(type(owner)).encode())
             return
         if id(v) in self.active:
             h.update(b"cycle")
@@ -408,7 +414,7 @@ class _Digester:
             h.update(t.__name__.encode() + "|".join(parts).encode())
             return
         if type(v) is types.MethodType:
-            h.update(b"M" + type(v.__self__).__qualname__.encode())
+            h.update(b"M" + class_qualname(type(v.__self__)).encode())
             self.feed(v.__func__)
             return
         if isinstance(v, functools.partial):
@@ -461,7 +467,7 @@ class _Digester:
             if size > VALUE_CAP:
                 raise _Opaque
         if is_user_type(t) and t.__reduce_ex__ is object.__reduce_ex__:
-            state = getattr(v, "__dict__", None)
+            state = plain_getattr(v, "__dict__", None)
             if isinstance(state, dict):
                 h.update(b"o")
                 self._type(t)
@@ -476,7 +482,7 @@ class _Digester:
                         state["__doc__"] = form
                 self.feed(state)
                 return
-        h.update(b"p" + f"{t.__module__}.{t.__qualname__}".encode())
+        h.update(b"p" + f"{class_module(t)}.{class_qualname(t)}".encode())
         try:
             _SetsInOrder(_CappedWriter(h), protocol=4).dump(v)
         except _Opaque:
@@ -569,7 +575,7 @@ class _Digester:
         """A type parameter of an alias, by its kind, name and what bounds
         it."""
         h = self.h
-        h.update(b"tp" + f"{type(p).__qualname__}:{getattr(p, '__name__', '')}".encode())
+        h.update(b"tp" + f"{class_qualname(type(p))}:{getattr(p, '__name__', '')}".encode())
         for part in ("__bound__", "__constraints__", "__default__", "__covariant__", "__contravariant__"):
             got = getattr(p, part, _MISSING)
             if got is _MISSING or got is _NO_DEFAULT:
@@ -579,7 +585,7 @@ class _Digester:
 
     def _type(self, t: type) -> None:
         h = self.h
-        h.update(b"t" + f"{t.__module__}.{t.__qualname__}".encode())
+        h.update(b"t" + f"{class_module(t)}.{class_qualname(t)}".encode())
         if id(t) in self.types or not is_user_type(t):
             return
         self.types.add(id(t))
@@ -765,9 +771,9 @@ def _value_digest_now(value: Any) -> str:
     try:
         _Digester(h).feed(value)
     except _Opaque:
-        return "opaque:" + type(value).__qualname__
+        return "opaque:" + class_qualname(type(value))
     except Exception:  # noqa: BLE001 - a value that breaks on being read
-        return "opaque:" + type(value).__qualname__
+        return "opaque:" + class_qualname(type(value))
     return h.hexdigest()
 
 
@@ -782,16 +788,16 @@ def logger_method_digest(obj: Any, name: str) -> str | None:
     if not isinstance(obj, logging.Logger):
         return None
     cls = type(obj)
-    if cls.__getattribute__ is not object.__getattribute__:
+    if own_lookup(cls) or class_attr(cls, "__getattribute__") is not object.__getattribute__:
         return None
-    func = next((k.__dict__[name] for k in cls.__mro__ if name in k.__dict__), None)
+    func = next((class_dict(k)[name] for k in class_mro(cls) if name in class_dict(k)), None)
     if type(func) is not types.FunctionType:
         return None
-    state = getattr(obj, "__dict__", None)
+    state = plain_getattr(obj, "__dict__", None)
     if type(state) is not dict or name in state:
         return None
     own = value_digest(types.MethodType(func, obj))
-    plain = value_digest((cls.__module__, cls.__qualname__, obj.name, obj.level, obj.disabled, obj.propagate))
+    plain = value_digest((class_module(cls), class_qualname(cls), obj.name, obj.level, obj.disabled, obj.propagate))
     if own.startswith("opaque:") or plain.startswith("opaque:"):
         return None
     return hashlib.blake2b(f"logger-method:{own}:{plain}".encode(), digest_size=12).hexdigest()
@@ -862,19 +868,19 @@ def class_surface_digest(cls: type) -> str | None:
     edit to a method no call ran leaves this digest alone, and one to a
     method that ran moves that method's item. Remembered as
     `remembered_class_digest` is."""
-    if not isinstance(cls, type) or not is_user_type(cls) or "<locals>" in cls.__qualname__:
+    if not isinstance(cls, type) or not is_user_type(cls) or "<locals>" in class_qualname(cls):
         # One no module of the user's holds (made by ``exec``, or inside a
         # function), which no trace item finds again by name.
         return None
     parts = []
-    for klass in cls.__mro__:
+    for klass in class_mro(cls):
         if is_user_type(klass):
             got = _remembered(klass, "surface", lambda klass=klass: _own_surface(klass))
             if got.startswith("opaque:"):
                 return None
             parts.append(got)
         else:
-            parts.append(f"{klass.__module__}.{klass.__qualname__}")
+            parts.append(f"{class_module(klass)}.{class_qualname(klass)}")
     return hashlib.blake2b("|".join(parts).encode(), digest_size=12).hexdigest()
 
 
@@ -888,7 +894,7 @@ def _own_surface(cls: type) -> str:
         d.open.add(id(cls))
         return _class_digest(cls, h, d, surface=True)
     except Exception:  # noqa: BLE001 - a class that breaks on being read
-        return "opaque:" + cls.__qualname__
+        return "opaque:" + class_qualname(cls)
     finally:
         SURFACE.reset(token)
 
@@ -921,7 +927,7 @@ def _remembered(cls: type, kind: str, compute: Any) -> str:
     if _started_in(codes, starts):
         return fresh
     if got is not class_memo.MISS and got[0] != fresh:
-        raise class_memo.ClassMemoMismatch(f"the {kind} of {cls.__qualname__} changed unseen")
+        raise class_memo.ClassMemoMismatch(f"the {kind} of {class_qualname(cls)} changed unseen")
     class_memo.DIGESTS.put(key, proof, (fresh, codes))
     return fresh
 
@@ -994,7 +1000,7 @@ def _plain_method_kind(value: Any) -> str | None:
     if plain(value):
         return "def"
     if isinstance(value, (staticmethod, classmethod)):
-        return type(value).__name__ if plain(value.__func__) else None
+        return class_name(type(value)) if plain(value.__func__) else None
     if type(value) is property:
         fns = [f for f in (value.fget, value.fset, value.fdel) if f is not None]
         return "property" if fns and all(map(plain, fns)) else None
@@ -1006,11 +1012,12 @@ def _plain_method_kind(value: Any) -> str | None:
 def _class_digest(cls: type, h: Any, d: _Digester, *, surface: bool = False) -> str:
     from ..decorator.loop_leftovers import leftover_value, set_loop_leftovers
 
-    h.update(",".join(f"{c.__module__}.{c.__qualname__}" for c in cls.__mro__).encode())
+    h.update(",".join(f"{class_module(c)}.{class_qualname(c)}" for c in class_mro(cls)).encode())
+    namespace = class_dict(cls)
     try:
-        attrs = sorted((k, v) for k, v in vars(cls).items() if k not in _CLASS_SKIP)
+        attrs = sorted((k, v) for k, v in namespace.items() if k not in _CLASS_SKIP)
     except TypeError:
-        attrs = [(k, v) for k, v in vars(cls).items() if k not in _CLASS_SKIP]
+        attrs = [(k, v) for k, v in namespace.items() if k not in _CLASS_SKIP]
     d.shared = d.shared | _shared_codes(attrs)
     leftovers = set_loop_leftovers(cls, tuple(k for k, v in attrs if isinstance(k, str) and not callable(v)))
     for name, value in attrs:
@@ -1024,13 +1031,13 @@ def _class_digest(cls: type, h: Any, d: _Digester, *, surface: bool = False) -> 
         if name in leftovers:
             # What a class-body loop over a set left: which set, not which
             # element its iteration order ended on.
-            value = leftover_value(vars(cls), name, leftovers)
+            value = leftover_value(namespace, name, leftovers)
         # Each by a digest of its own: one that turns out opaque part way
         # through left what it had written so far, and a dict filled in a
         # different order in another process (from a set) made a class
         # that had not changed read as changed every time.
         got = _sub_digest(value, d)
-        h.update(b"opaque:" + type(value).__qualname__.encode() if got is None else got.encode())
+        h.update(b"opaque:" + class_qualname(type(value)).encode() if got is None else got.encode())
     return h.hexdigest()
 
 
@@ -1045,7 +1052,7 @@ def _shared_codes(attrs: list) -> frozenset[types.CodeType]:
     shared: set[types.CodeType] = set()
     for _name, value in attrs:
         fn = value.__func__ if isinstance(value, (staticmethod, classmethod)) else value
-        code = getattr(fn, "__code__", None) if type(fn) is types.FunctionType else None
+        code = plain_getattr(fn, "__code__", None) if type(fn) is types.FunctionType else None
         if code is None or not fn.__closure__:
             continue
         (shared if code in seen else seen).add(code)
@@ -1076,6 +1083,10 @@ def candidates(obj: Any) -> Iterable[types.FunctionType]:
             stack.extend(f for _, f in private_forwards(o))
         elif issubclass(type(o), (types.MethodType, staticmethod, classmethod)):
             stack.append(o.__func__)
+        elif issubclass(type(o), type):
+            # A class stands for no function; ``isinstance`` would ask it
+            # for its ``__class__``, which a metaclass's hook answers.
+            continue
         elif isinstance(o, property):
             stack.extend(f for f in (o.fget, o.fset, o.fdel) if f is not None)
         elif type(o) is functools.cached_property:
@@ -1105,7 +1116,7 @@ def private_forwards(fn: types.FunctionType) -> list[tuple[str, types.FunctionTy
     if g.get("__file__"):
         return []
     module = sys.modules.get(g.get("__name__") or "")
-    if getattr(module, "__dict__", None) is g:
+    if plain_getattr(module, "__dict__", None) is g:
         return []
     out = []
     for name in sorted(set(fn.__code__.co_names)):
@@ -1157,7 +1168,7 @@ def namespace_of(module: str, notebook: Mapping[str, Any], notebook_name: str) -
     if module == notebook_name:
         return notebook
     mod = sys.modules.get(module)
-    ns = getattr(mod, "__dict__", None)
+    ns = plain_getattr(mod, "__dict__", None)
     return ns if isinstance(ns, dict) else None
 
 
@@ -1194,13 +1205,13 @@ def inspect_getattr(obj: Any, name: str) -> Any:
     """``obj.name`` without running a descriptor: a class's own staticmethod,
     classmethod or property object, not what binding it gives."""
     if isinstance(obj, type):
-        for klass in obj.__mro__:
-            found = klass.__dict__.get(name, _MISSING)
+        for klass in class_mro(obj):
+            found = class_dict(klass).get(name, _MISSING)
             if found is not _MISSING:
                 return found
         raise AttributeError(name)
     if issubclass(type(obj), types.ModuleType):
-        found = obj.__dict__.get(name, _MISSING)
+        found = class_dict(obj).get(name, _MISSING)
         if found is _MISSING:
             raise AttributeError(name)
         return found

@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from functools import cache
 
+from ._type_memo import class_name
 from .notebook.ipython.magics import CashMagics
 
 try:
@@ -21,7 +22,7 @@ except ImportError:
         def __init__(self, **options):
             for name, value in options.items():
                 if not hasattr(type(self), name):
-                    raise TypeError(f"{type(self).__name__} has no option {name!r}")
+                    raise TypeError(f"{class_name(type(self))} has no option {name!r}")
                 setattr(self, name, value)
 
         def preprocess(self, nb, resources):

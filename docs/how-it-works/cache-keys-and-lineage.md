@@ -50,7 +50,7 @@ value the watchers cannot fully cover is hashed every time.
 | `DataFrame`, `Series` | modin | converted to pandas, then hashed as pandas |
 | any collection | dask | the task-graph keys and the schema |
 
-<!-- claim: cash/canonical_form.py:_xarray_holds_content_data @33dde68f, cash/content_hashers.py:hash_pandas_index @f4a35a88, cash/pint_values.py:registry_digest @e746b012 -->
+<!-- claim: cash/canonical_form.py:_xarray_holds_content_data @07426313, cash/content_hashers.py:hash_pandas_index @eaf72b5c, cash/pint_values.py:registry_digest @e746b012 -->
 A few more values are keyed by content inside the canonical form rather than
 by a hasher of their own. An xarray `DataArray`, `Dataset` or `Variable`
 holding a big array has each array keyed by content, as an array argument
@@ -85,7 +85,7 @@ order-sensitive code can treat them differently; a strided view and its
 contiguous copy share a key. The dtypes are in a pandas key, so `int64` and
 `Int64` columns, or a tz-naive and a tz-aware series, never share an entry.
 
-<!-- claim: cash/value_hash.py:_pickle_digest @5b9dad60, cash/content_hashers.py:hash_sparse @b0bdb6a6, cash/stored_pickle.py:pickle_value @a6c9227e -->
+<!-- claim: cash/value_hash.py:_pickle_digest @5b9dad60, cash/content_hashers.py:hash_sparse @786cf7e9, cash/stored_pickle.py:pickle_value @a6c9227e -->
 Any other value, such as a networkx graph or a fitted model, is pickled and
 the pickle is hashed, so it is compared by content too, at the cost of
 pickling it. That pickle is the one cash stores the value as, its large
@@ -95,7 +95,7 @@ something a key must see (an attribute a class's own pickling leaves out),
 the key is taken over a pickle that keeps it, in the same format. To key a
 type faster, or one that cannot be pickled, register a hasher; see [custom hashers](../tutorials/feature-guides/custom-hashers.md).
 
-<!-- claim: cash/core.py:Cash.register_hasher @f8a61573, cash/value_hash.py:compute_hash @fb15f5df -->
+<!-- claim: cash/core.py:Cash.register_hasher @0fc93c81, cash/value_hash.py:compute_hash @fb15f5df -->
 === "Decorator"
 
     Registered hashers apply to call arguments and to the values inside a

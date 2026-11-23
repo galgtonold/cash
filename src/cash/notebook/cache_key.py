@@ -32,6 +32,7 @@ from cash.source_norm import exact_source_digest, unparse_without_docstrings
 from cash.tracking.function_tracker import is_local_module
 from cash.tracking.randomness import rng_carrier_kind
 
+from .._type_memo import class_dict
 from .held_functions import held_notebook_code, held_notebook_code_at
 from .held_modules import held_data_part, held_module_parts
 from .installed_code import installed_code_parts
@@ -1173,7 +1174,7 @@ def _members_of(cls: type) -> list[Any]:
     class method wraps and a property's accessors."""
     members: list[Any] = []
     try:
-        held = list(vars(cls).values())
+        held = list(class_dict(cls).values())
     except Exception:  # noqa: BLE001 - a metaclass that answers no lookup
         return members
     for member in held:

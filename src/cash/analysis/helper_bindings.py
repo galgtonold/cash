@@ -20,7 +20,8 @@ from collections.abc import Callable
 from typing import Any
 
 from .. import _weak
-from .._user_attrs import attribute_or
+from .._type_memo import class_dict
+from .._user_attrs import attribute_or, named_attr, plain_getattr
 from ..loaded_code import code_objects_of
 from .ast_util import walk_tree
 from .purity_report import PurityReport
@@ -38,11 +39,11 @@ def local_import_map(func_def: ast.AST, func: Any) -> dict[str, tuple[str, tuple
     holds it at call time: that is the path recorded for the per-call check.
     """
     package = None
-    g = getattr(func, "__globals__", None)
+    g = plain_getattr(func, "__globals__", None)
     if isinstance(g, dict):
         package = g.get("__package__")
     if package is None:
-        package = (getattr(func, "__module__", "") or "").rpartition(".")[0]
+        package = (plain_getattr(func, "__module__", "") or "").rpartition(".")[0]
     found: dict[str, tuple[str, tuple[str, ...]]] = {}
     for node in walk_tree(func_def):
         if isinstance(node, ast.Import):
@@ -118,7 +119,7 @@ def resolve_local_import(module_name: str, prefix: tuple[str, ...]) -> Any:
         if isinstance(obj, types.ModuleType):
             obj = attribute_or(obj, "__dict__", {}).get(attr)
         else:
-            obj = attribute_or(obj, attr, None)
+            obj = attribute_or(obj, attr, None, asked=True)
         if obj is None:
             return None
     return obj
@@ -145,12 +146,12 @@ def binding_path(caller: Any, chain: tuple[str, ...] | None) -> tuple[str, tuple
     not a registered module (``exec``, a class body)."""
     if not chain:
         return None
-    code = getattr(caller, "__code__", None)
+    code = plain_getattr(caller, "__code__", None)
     if code is not None and chain[0] in (getattr(code, "co_freevars", ()) or ()):
         return None
-    module_name = getattr(caller, "__module__", None)
+    module_name = plain_getattr(caller, "__module__", None)
     module = sys.modules.get(module_name or "")
-    if module is None or getattr(module, "__dict__", None) is not getattr(caller, "__globals__", None):
+    if module is None or plain_getattr(module, "__dict__", None) is not plain_getattr(caller, "__globals__", None):
         return None
     return module_name, chain
 
@@ -161,7 +162,7 @@ def resolve_callee_chain(namespace: dict[str, Any], chain: tuple[str, ...]) -> A
     for part in chain[1:]:
         if not issubclass(type(obj), types.ModuleType):
             return None
-        obj = getattr(obj, part, None)
+        obj = named_attr(obj, part, None)
     return obj
 
 
@@ -251,7 +252,10 @@ def resolve_binding(module_name: str, chain: tuple[str, ...]) -> Any:
     if obj is None:
         return UNRESOLVED
     for attr in chain:
-        obj = getattr(obj, attr, UNRESOLVED)
+        # A class's as its metaclass's own lookup would not run for it:
+        # by ``type``'s, a name of the user's it lacks asked of the
+        # metaclass's ``__getattr__`` (`attribute_or`).
+        obj = named_attr(obj, attr, UNRESOLVED)
         if obj is UNRESOLVED:
             return UNRESOLVED
     return obj
@@ -275,7 +279,7 @@ def bindings_changed(report: PurityReport) -> bool:
             return True
     for module_name, name in report.unbound_names:
         module = sys.modules.get(module_name)
-        if module is not None and name in (getattr(module, "__dict__", None) or ()):
+        if module is not None and name in (plain_getattr(module, "__dict__", None) or ()):
             return True
     if any(name in sys.modules for name in report.unloaded_modules):
         return True
@@ -332,11 +336,11 @@ def _class_namespaces(cls: type) -> list[dict[str, Any]]:
             seen.add(id(candidate))
             namespaces.append(candidate)
 
-    module = sys.modules.get(getattr(cls, "__module__", "") or "")
-    add(getattr(module, "__dict__", None))
+    module = sys.modules.get(plain_getattr(cls, "__module__", "") or "")
+    add(plain_getattr(module, "__dict__", None))
 
-    members: list[Any] = list(vars(cls).values())
-    fields_map = getattr(cls, "__dataclass_fields__", None)
+    members: list[Any] = list(class_dict(cls).values())
+    fields_map = plain_getattr(cls, "__dataclass_fields__", None)
     if isinstance(fields_map, dict):
         for fld in fields_map.values():
             factory = getattr(fld, "default_factory", None)
@@ -348,7 +352,7 @@ def _class_namespaces(cls: type) -> list[dict[str, Any]]:
     for member in members:
         if isinstance(member, (classmethod, staticmethod)):
             member = member.__func__
-        add(getattr(member, "__globals__", None))
+        add(plain_getattr(member, "__globals__", None))
     return namespaces
 
 
@@ -377,8 +381,8 @@ def build_namespace(func: Callable[..., Any]) -> dict[str, Any]:
     closure entries layered on top - same-name closure variables
     shadow globals, matching Python's normal scoping.
     """
-    ns = dict(getattr(func, "__globals__", None) or {})
-    code = getattr(func, "__code__", None)
+    ns = dict(plain_getattr(func, "__globals__", None) or {})
+    code = plain_getattr(func, "__code__", None)
     closure = getattr(func, "__closure__", None) or ()
     if code is not None and closure:
         freevars = getattr(code, "co_freevars", ()) or ()

@@ -33,6 +33,7 @@ from itertools import accumulate, chain, compress, islice
 from typing import Any
 
 from . import _weak
+from ._user_attrs import plain_getattr
 
 __all__ = ["find", "named_objects", "put_back", "resolver"]
 
@@ -228,7 +229,7 @@ def _children(node: Any) -> Any:
         return node
     if isinstance(node, dict):
         return node.values()
-    attrs = getattr(node, "__dict__", None)
+    attrs = plain_getattr(node, "__dict__", None)
     return attrs.values() if type(attrs) is dict else ()
 
 
@@ -296,5 +297,5 @@ def _swap(value: Any, levels: list, swap: dict[int, Any]) -> Any:
 def _length(node: Any) -> int:
     if isinstance(node, (list, tuple, dict)):
         return len(node)
-    attrs = getattr(node, "__dict__", None)
+    attrs = plain_getattr(node, "__dict__", None)
     return len(attrs) if type(attrs) is dict else 0

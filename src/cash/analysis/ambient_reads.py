@@ -12,13 +12,13 @@ which a cache hit skipping cannot change.
 from __future__ import annotations
 
 import ast
-import inspect
 import textwrap
 import types
 from typing import Any
 
 from .. import source_reads
 from .._memo import CODE_OBJECTS, LruMemo
+from .._user_attrs import named_attr, plain_getattr, static_attr
 from ..effects import (
     CLOCK_WHEN_ARG_CALLS,
     ENVIRON_NAMES,
@@ -76,7 +76,7 @@ def clock_helper_of(node: ast.Call, namespace: dict[str, Any] | None) -> Any:
         helper = namespace[chain[0]]
     else:
         helper = resolve_callee(node.func, namespace, modules_only=False)
-    helper = getattr(helper, "__func__", helper)  # a bound method or classmethod
+    helper = plain_getattr(helper, "__func__", helper)  # a bound method or classmethod
     return helper if clock_helper_read(helper) is not None else None
 
 
@@ -87,19 +87,19 @@ def method_namespace(func: Any, func_def: ast.AST, namespace: dict[str, Any]) ->
     names ``Class.stamp`` as far as its code goes. A plain function, a
     static method or a function nested in another function is left alone.
     """
-    qualname = getattr(func, "__qualname__", "") or ""
+    qualname = plain_getattr(func, "__qualname__", "") or ""
     parts = qualname.split(".")
     args = getattr(func_def, "args", None)
     positional = (args.posonlyargs + args.args) if args is not None else []
     if len(parts) < 2 or "<locals>" in parts or not positional:
         return namespace
-    owner: Any = getattr(func, "__globals__", {}).get(parts[0])
+    owner: Any = plain_getattr(func, "__globals__", {}).get(parts[0])
     for part in parts[1:-1]:
-        owner = getattr(owner, part, None) if isinstance(owner, type) else None
+        owner = named_attr(owner, part, None) if isinstance(owner, type) else None
     if not isinstance(owner, type):
         return namespace
     try:
-        raw = inspect.getattr_static(owner, parts[-1])
+        raw = static_attr(owner, parts[-1])
     except AttributeError:
         return namespace
     if isinstance(raw, staticmethod):
@@ -118,7 +118,7 @@ def clock_helper_read(value: Any) -> str | None:
     Inside the helper it is not
     reported at all when the helper is reached from a cached function.
     """
-    code = getattr(value, "__code__", None)
+    code = plain_getattr(value, "__code__", None)
     if type(value) is not types.FunctionType or code is None:
         return None
     if getattr(value, "_cash_cached", False) is True:
@@ -207,14 +207,14 @@ def log_only_ambient_reads(
 
 def log_helper_names(func_def: ast.AST, func: Any) -> frozenset[str]:
     """Names *func_def* calls that are, in *func*'s globals, log helpers."""
-    module_ns = getattr(func, "__globals__", None)
+    module_ns = plain_getattr(func, "__globals__", None)
     if not isinstance(module_ns, dict):
         return frozenset()
     return frozenset(name for name in called_names(func_def) if _is_log_helper_function(module_ns.get(name)))
 
 
 def _is_log_helper_function(value: Any) -> bool:
-    code = getattr(value, "__code__", None)
+    code = plain_getattr(value, "__code__", None)
     if type(value) is not types.FunctionType or code is None:
         return False
     source_reads.note_object(value)  # before the memo, as above

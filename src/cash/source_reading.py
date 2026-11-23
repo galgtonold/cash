@@ -26,8 +26,9 @@ import types
 
 from . import source_reads
 from ._memo import CODE_OBJECTS, MODULE_ANALYSES, LruMemo
+from ._type_memo import class_dict, class_qualname, module_of_class
+from ._user_attrs import hooked_class, instance_of, own_dict, plain_getattr, plain_hasattr, unwrapped
 from ._user_attrs import module_file as _module_file
-from ._user_attrs import own_dict
 from .tracking.tracker_context import untracked
 
 __all__ = [
@@ -200,7 +201,7 @@ def _source_target(obj: object) -> tuple | None:
     if type(obj) is types.CodeType:
         return ("code", obj.co_firstlineno)
     if issubclass(type(obj), type):
-        return ("class", obj.__qualname__, vars(obj).get("__firstlineno__"))
+        return ("class", class_qualname(obj), class_dict(obj).get("__firstlineno__"))
     return None
 
 
@@ -231,7 +232,7 @@ def getsourcelines(obj: object) -> tuple[list[str], int]:
     (`relocated_source_lines` finds where the code is defined instead).
     """
     with untracked():
-        obj = inspect.unwrap(obj)
+        obj = unwrapped(obj)
         _note_read(obj)
         lines, first = _inspect_source_lines(obj)
         code = _code_of(obj)
@@ -247,19 +248,21 @@ def getsourcelines(obj: object) -> tuple[list[str], int]:
 def _note_read(obj: object) -> None:
     """Tell a walk recording what it reads (`source_reads`) that it reads
     *obj*'s source: a module's is its whole file."""
-    if isinstance(obj, types.ModuleType):
-        source_reads.note_file(getattr(obj, "__file__", None))
+    if instance_of(obj, types.ModuleType):
+        source_reads.note_file(plain_getattr(obj, "__file__", None))
     else:
         source_reads.note_object(obj)
 
 
 def _code_of(obj: object) -> types.CodeType | None:
     """The code object *obj* runs as a function, or None."""
-    if inspect.ismethod(obj):
+    # By the real type: ``inspect`` asks for ``__class__``, which a
+    # metaclass's hook of the user's answers for a class.
+    if instance_of(obj, types.MethodType):
         obj = obj.__func__
-    if inspect.isfunction(obj):
+    if instance_of(obj, types.FunctionType):
         obj = obj.__code__
-    return obj if inspect.iscode(obj) else None
+    return obj if type(obj) is types.CodeType else None
 
 
 _DEF_LINE = re.compile(r"[ \t]*(?:async[ \t]+)?(?:def|class)[ \t]+(\w+)")
@@ -299,11 +302,11 @@ def _candidate_files(obj: object, code: types.CodeType) -> list[str]:
     the module whose namespace it runs in (``%autoreload`` compiles a
     decorated function under the decorator's file)."""
     paths = [code.co_filename]
-    func = getattr(obj, "__func__", obj)
-    namespace = getattr(func, "__globals__", None)
+    func = plain_getattr(obj, "__func__", obj)
+    namespace = plain_getattr(func, "__globals__", None)
     module_file = namespace.get("__file__") if isinstance(namespace, dict) else None
     if not isinstance(module_file, str):
-        module = sys.modules.get(getattr(func, "__module__", None) or "")
+        module = sys.modules.get(plain_getattr(func, "__module__", None) or "")
         module_file = _module_file(module)
     if isinstance(module_file, str) and module_file not in paths:
         paths.append(module_file)
@@ -315,8 +318,8 @@ def _qualnames(obj: object, code: types.CodeType) -> list[str]:
     (``%autoreload`` compiles a method inside a stand-in class, which its
     code's qualname then names), then its code's."""
     names: list[str] = []
-    func = getattr(obj, "__func__", obj)
-    for name in (getattr(func, "__qualname__", None), getattr(code, "co_qualname", None)):
+    func = plain_getattr(obj, "__func__", obj)
+    for name in (plain_getattr(func, "__qualname__", None), getattr(code, "co_qualname", None)):
         if isinstance(name, str) and name not in names:
             names.append(name)
     return names
@@ -397,7 +400,7 @@ def _getsourcelines(obj: object) -> tuple[list[str], int]:
     same lines, and the same block cut from them as ``inspect`` cuts it.
     Anything else asks ``inspect``.
     """
-    if inspect.iscode(obj):
+    if type(obj) is types.CodeType:
         found = _code_source_lines_on_disk(obj)
         if found is not None:
             return found
@@ -407,11 +410,42 @@ def _getsourcelines(obj: object) -> tuple[list[str], int]:
         # A dataclass's generated method, read on every watch of its class
         # (`class_memo`): the same answer, without ``inspect`` looking.
         raise OSError("could not get source code")
-    elif inspect.ismodule(obj):
+    elif issubclass(type(obj), types.ModuleType):
         path = _module_file(obj)
         if isinstance(path, str) and path.endswith((".py", ".pyw")):
             refresh_linecache(path)
+    elif hooked_class(obj) and "__firstlineno__" in class_dict(obj):
+        return _hooked_class_source_lines(obj)  # type: ignore[arg-type]
     return inspect.getsourcelines(obj)  # type: ignore[arg-type]
+
+
+def _hooked_class_source_lines(cls: type) -> tuple[list[str], int]:
+    """``inspect.getsourcelines(cls)`` for a class whose metaclass hooks its
+    lookups, read through ``type``'s own descriptors: ``inspect`` asks the
+    class for its ``__module__`` and ``__class__``, which the hook answers.
+    The same steps ``inspect.findsource`` takes for a class: its module's
+    source file, its lines through ``linecache``, and the block from its
+    ``__firstlineno__``."""
+    name = module_of_class(cls)
+    module = sys.modules.get(name) if type(name) is str else None
+    if module is None or not _module_file(module):
+        if name == "__main__":
+            raise OSError("source code not available")
+        raise TypeError(f"{class_qualname(cls)} is a built-in class")
+    file = inspect.getsourcefile(module)
+    if file:
+        linecache.checkcache(file)
+    else:
+        file = inspect.getfile(module)
+        if not (file.startswith("<") and file.endswith(">")):
+            raise OSError("source code not available")
+    lines = linecache.getlines(file, vars(module))
+    if not lines:
+        raise OSError("could not get source code")
+    first = class_dict(cls).get("__firstlineno__")
+    if type(first) is not int or not 0 < first <= len(lines):
+        raise OSError("lineno is out of bounds")
+    return inspect.getblock(lines[first - 1 :]), first
 
 
 def _compiled_from_no_file(code: types.CodeType) -> bool:
@@ -501,8 +535,15 @@ def settled_source_version(obj: object) -> tuple[str, int, int, int, int] | None
     # code was compiled under, and networkx numbers its decorators' names by
     # a process-wide count -- recorded as the running statement's absent
     # file, its lineage changed with each restart.
-    if inspect.iscode(obj) and _compiled_from_no_file(obj):
+    if type(obj) is types.CodeType and _compiled_from_no_file(obj):
         return None
+    if hooked_class(obj):
+        # ``inspect`` asks a class for its ``__module__``: its module's
+        # file, the one ``getfile`` hands back for a class, read by ``type``.
+        module = sys.modules.get(module_of_class(obj) or "")
+        if module is None:
+            return None
+        obj = module
     with untracked():
         try:
             path = inspect.getsourcefile(obj)  # type: ignore[arg-type]
@@ -550,7 +591,7 @@ def _class_source_lines(cls: object, version: tuple[str, int, int, int, int]) ->
         starts = _class_starts(ast.parse("".join(lines)))
         if source_version_unchanged(version):
             _CLASS_STARTS[version] = starts
-    first = starts.get(cls.__qualname__)  # type: ignore[attr-defined]
+    first = starts.get(class_qualname(cls))  # type: ignore[attr-defined]
     if first is None:
         raise OSError("could not find class definition")
     return inspect.getblock(lines[first:]), first + 1
@@ -598,7 +639,7 @@ def own_source(fn: object) -> str:
     text; whoever needs the wrapped half reaches it through ``__wrapped__``.
     Raises what ``inspect.getsource`` raises (`SOURCE_RETRIEVAL_ERRORS`).
     """
-    if type(fn) is types.FunctionType and hasattr(fn, "__wrapped__"):
+    if type(fn) is types.FunctionType and plain_hasattr(fn, "__wrapped__"):
         return getsource(fn.__code__)
     return getsource(fn)
 

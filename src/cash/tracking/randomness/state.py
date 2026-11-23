@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 
 from cash._user_attrs import instance_of
 
+from ..._user_attrs import plain_getattr
 from .detect import KIND_NP_GENERATOR, KIND_NP_RANDOMSTATE, KIND_PY_RANDOM
 
 if TYPE_CHECKING:
@@ -331,7 +332,7 @@ def _held_states(obj: object) -> dict | None:
     generator's would be. None when it holds none whose state can be read:
     one holding only the global ``RandomState`` draws from the module
     stream, which the module channel watches."""
-    attrs = getattr(obj, "__dict__", None)
+    attrs = plain_getattr(obj, "__dict__", None)
     if type(attrs) is not dict:
         return None
     held: dict[str, dict] = {}
@@ -367,12 +368,12 @@ def capture_reachable_carrier_states(fn: object) -> list[tuple[object, object, t
     stack = [fn]
     while stack:
         f = stack.pop()
-        f = getattr(f, "__func__", f)  # a bound method's function
-        code = getattr(f, "__code__", None)
+        f = plain_getattr(f, "__func__", f)  # a bound method's function
+        code = plain_getattr(f, "__code__", None)
         if code is None or id(f) in seen_fns:
             continue
         seen_fns.add(id(f))
-        f_globals = getattr(f, "__globals__", None) or {}
+        f_globals = plain_getattr(f, "__globals__", None) or {}
         module = f_globals.get("__name__")
         named: list[tuple[object, tuple[str, str] | None]] = [
             (cell.cell_contents, None) for cell in (getattr(f, "__closure__", None) or ()) if _cell_filled(cell)
@@ -432,7 +433,7 @@ def carrier_states_changed(before: list[tuple[object, object, tuple[str, str] | 
 
 def _set_carrier_state(obj: object, kind: str, state: object) -> None:
     if kind == KIND_NP_GENERATOR and type(state) is dict and _HELD in state:
-        attrs = getattr(obj, "__dict__", None) or {}
+        attrs = plain_getattr(obj, "__dict__", None) or {}
         for name, entry in state[_HELD].items():
             value = attrs.get(name)
             if rng_carrier_kind(value) != entry["kind"]:

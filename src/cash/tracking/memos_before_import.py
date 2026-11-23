@@ -23,6 +23,8 @@ from cash.diagnostics import warn_diagnostic
 from cash.exceptions import CashCacheIneffectiveWarning
 from cash.install_paths import is_user_module
 
+from .._user_attrs import plain_getattr
+
 __all__ = ["CODE", "warn_memos_filled_before_import"]
 
 CODE = "KEY-MEMO-BEFORE-IMPORT"
@@ -52,7 +54,7 @@ def _filled_memos(mod: object) -> list[object]:
     for i, value in enumerate(list(namespace.values())):
         if i >= _MAX_NAMES:
             break
-        if type(value) is not _LRU_WRAPPER or getattr(value, "__module__", None) != name:
+        if type(value) is not _LRU_WRAPPER or plain_getattr(value, "__module__", None) != name:
             continue
         try:
             if value.cache_info().currsize > 0:
@@ -82,7 +84,7 @@ def find_memos_filled_before_import() -> list[object]:
 
 
 def _label(memo: object) -> str:
-    module = getattr(memo, "__module__", "?")
+    module = plain_getattr(memo, "__module__", "?")
     return f"{module}.{getattr(memo, '__qualname__', getattr(memo, '__name__', '?'))}"
 
 

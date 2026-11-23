@@ -44,6 +44,7 @@ import threading
 import types
 from typing import TYPE_CHECKING, Any
 
+from .._type_memo import class_module, class_name, class_qualname
 from .function_identity import hash_callable_source
 
 if TYPE_CHECKING:
@@ -86,7 +87,7 @@ class ArgumentRefusal(str):
 
 def _type_name(value: Any) -> str:
     kind = type(value)
-    return f"{getattr(kind, '__module__', '')}.{getattr(kind, '__qualname__', kind.__name__)}"
+    return f"{getattr(kind, '__module__', '')}.{getattr(kind, '__qualname__', class_name(kind))}"
 
 
 def _argument_part(value: Any) -> str:
@@ -94,7 +95,7 @@ def _argument_part(value: Any) -> str:
         text = repr(value)
         if len(text) > _SCALAR_REPR_MAX:
             text = "#" + hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()[:16]
-        return f"{type(value).__name__}={text}"
+        return f"{class_name(type(value))}={text}"
     return _type_name(value)
 
 
@@ -116,7 +117,7 @@ def _captured_part(value: Any, depth: int) -> str | None:
         text = repr(value)
         if len(text) > _SCALAR_REPR_MAX:
             text = "#" + hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()[:16]
-        return f"{kind.__name__}={text}"
+        return f"{class_name(kind)}={text}"
     if kind is types.FunctionType:
         if depth >= _CLOSURE_DEPTH:
             return None
@@ -131,7 +132,7 @@ def _captured_part(value: Any, depth: int) -> str | None:
     if isinstance(value, type):
         from ..tracking.trace_items import class_digest
 
-        return f"class={value.__module__}.{value.__qualname__}={class_digest(value)}"
+        return f"class={class_module(value)}.{class_qualname(value)}={class_digest(value)}"
     if kind is logging.Logger or kind is logging.RootLogger:
         return f"logger={value.name}"
     if kind is tuple:
@@ -245,7 +246,7 @@ class RefusalVerdicts:
                 # paths through it (their own attributes and overrides).
                 owner = func.__self__
                 if isinstance(owner, type):  # a classmethod: the class it is bound to
-                    parts.append(f"cls={owner.__module__}.{owner.__qualname__}")
+                    parts.append(f"cls={class_module(owner)}.{class_qualname(owner)}")
                 else:
                     parts.append("self=" + _type_name(owner))
             parts.extend(_argument_part(a) for a in args)

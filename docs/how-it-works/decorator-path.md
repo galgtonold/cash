@@ -25,7 +25,7 @@ build. For the parameters (`ttl=`, `file_depends_on=`, `depends_on=`,
 
 ## The key
 
-<!-- claim: cash/decorator/runtime.py:decorator_key @58733f82, cash/decorator/function_identity.py:func_key @b8dbd1c0 -->
+<!-- claim: cash/decorator/runtime.py:decorator_key @58733f82, cash/decorator/function_identity.py:func_key @51af5d25 -->
 A key has four parts, joined by colons: `function:state:dynamic:args`.
 
 | Part | What it holds |
@@ -37,7 +37,7 @@ A key has four parts, joined by colons: `function:state:dynamic:args`.
 
 ## What goes into the state
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @89847a2a, cash/dependency_state.py:DependencyStateHasher.compute @1738c84b, cash/decorator/closure_fold.py:HelperIdentity._captures_of @ca61ef59, cash/decorator/global_values.py:GlobalValues.code_ref_part @33832ea2, cash/decorator/code_args.py:CodeArgs._installed_code @0898110a, cash/jit_functions.py:jit_options @0603176f -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @89847a2a, cash/dependency_state.py:DependencyStateHasher.compute @1738c84b, cash/decorator/closure_fold.py:HelperIdentity._captures_of @ba436489, cash/decorator/global_values.py:GlobalValues.code_ref_part @b57d3588, cash/decorator/code_args.py:CodeArgs._installed_code @22036f9e, cash/jit_functions.py:jit_options @0603176f -->
 The state starts from source code and then folds in, on every call, each input
 that can change the result without changing an argument:
 
@@ -126,7 +126,7 @@ Each argument is fingerprinted by the first rule that applies:
    sorted order, since `list(s)` and `s.pop()` read it; strings key alike in
    any order, as `PYTHONHASHSEED` picks theirs per process.
 
-<!-- claim: cash/kept_state.py:chooses_its_state @2d177a27, cash/kept_state.py:left_out_attrs @83bfa732 -->
+<!-- claim: cash/kept_state.py:chooses_its_state @2d177a27, cash/kept_state.py:left_out_attrs @fea60e7c -->
 A class of yours whose own `__getstate__`, `__reduce__` or `__reduce_ex__`,
 or a reducer registered for it with `copyreg.pickle`, leaves instance
 attributes out of what it pickles (a precision, a device, a lock) is keyed
@@ -137,7 +137,7 @@ pickled, such as a lock, is keyed by its type; one that holds the object
 leaving it out is keyed by its content, as pickle stores the cycle. A
 library's class is keyed by what it pickles.
 
-<!-- claim: cash/kept_state.py:logger_state @37d45541, cash/kept_state.py:_handler_state @5efc2fe1, cash/kept_state.py:_stream_key @8b5b191e, cash/kept_state.py:_held_key @016e4acc, cash/kept_state.py:_formatter_state @42510fc6, cash/tracking/reference_states.py:_describe @c8b61130, cash/kept_state.py:_own_attrs @43743a23, cash/kept_state.py:_reduce_by_reference_for_key @62e37a1b, cash/kept_state.py:stands_by_reference @930b26cd -->
+<!-- claim: cash/kept_state.py:logger_state @37d45541, cash/kept_state.py:_handler_state @bebe7d1f, cash/kept_state.py:_stream_key @8b5b191e, cash/kept_state.py:_held_key @65285c6c, cash/kept_state.py:_formatter_state @84fd1c86, cash/tracking/reference_states.py:_describe @c8b61130, cash/kept_state.py:_own_attrs @64878fb5, cash/kept_state.py:_reduce_by_reference_for_key @62e37a1b, cash/kept_state.py:stands_by_reference @930b26cd -->
 An object that pickles by reference, by its name or by a call that looks it
 up (a logger pickles as `getLogger(name)`), is keyed with the attributes it
 holds, as a pickle by value would hold them, in an argument and in a global
@@ -179,7 +179,7 @@ the function it compiles and its compile options, as a function is by its
 name; the code of either is keyed with the state, as code passed as an
 argument.
 
-<!-- claim: cash/canonical_form.py:holds_content_data @a741db46, cash/decorator/arg_hashing.py:ArgHasher._memo_content_digest @482746c6 -->
+<!-- claim: cash/canonical_form.py:holds_content_data @05164cfb, cash/decorator/arg_hashing.py:ArgHasher._memo_content_digest @482746c6 -->
 An object that holds frames, arrays or tables, directly or in a list, tuple or
 dict attribute, is keyed part by part rather than pickled whole: each frame
 by its content, the rest as pickle would store it. That happens when it holds
@@ -197,7 +197,7 @@ A categorical column is checked like any other; one you wrote through an
 array pandas handed you (`s.values`, `s.array`, `pd.Categorical(s,
 copy=False)`) is read again on the next call.
 
-<!-- claim: cash/canonical_form.py:_object_steps @da2c041a, cash/canonical_form.py:SORTED_SET_MIN == 256 -->
+<!-- claim: cash/canonical_form.py:_object_steps @f6bc3e0c, cash/canonical_form.py:SORTED_SET_MIN == 256 -->
 A frozenset of 256 or more numbers, strings and bytes is put in its sorted
 order once and recognised after that for as long as it exists, so a repeat
 call with a big frozenset costs milliseconds; a set, or a frozenset holding
@@ -220,7 +220,7 @@ registration.
 
 ## When you choose the arguments
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @89847a2a, cash/decorator/arg_key.py:keyed_arguments @d9fd1022 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder.build @89847a2a, cash/decorator/arg_key.py:keyed_arguments @2ce02f52 -->
 `ignore=`, a `cash.Ignore` annotation and `key=` change only the `args` part.
 The call is first bound to the signature with its defaults filled in. Ignored
 parameters are then dropped; a key function is called with the bound
@@ -231,7 +231,7 @@ under `key=`, and from what the key function returned on top; under
 `ignore=`, from the parameters that are left. A call that does not bind to the signature
 keeps every argument.
 
-<!-- claim: cash/decorator/runtime.py:KeyBuilder._fold_key_function @125f0613 -->
+<!-- claim: cash/decorator/runtime.py:KeyBuilder._fold_key_function @525ac2db -->
 The key function itself goes into `state`, as a function passed as an
 argument does: its code, the code it calls and the globals that code reads,
 and what it holds: the values it captured, its defaults, or a callable
@@ -321,7 +321,7 @@ a notebook, `# @cash:assume-safe` on the statement that changes a process
 setting caches it
 ([what gets cached](../notebook_caching_api.md#what-gets-cached)).
 
-<!-- claim: cash/decorator/runtime.py:CallRunner._carries_waiver @2533857f, cash/effect_observer.py:WaiverTrace.begin @1b84d2c0 -->
+<!-- claim: cash/decorator/runtime.py:CallRunner._carries_waiver @be3d8620, cash/effect_observer.py:WaiverTrace.begin @1b84d2c0 -->
 A comment on a line, or on the `def` line of a helper, is seen as the line
 runs: a miss of a function whose code, or a helper's that cash follows,
 carries the comment runs those functions under `sys.settrace` on its
@@ -349,7 +349,7 @@ The [decorator guide](../decorator.md#side-effects) covers
 
 ## Storing and returning
 
-<!-- claim: cash/decorator/store.py:ResultStore.store @c5fd2627 -->
+<!-- claim: cash/decorator/store.py:ResultStore.store @9ae74e54 -->
 A result is written to the RAM tier and to disk, however cheap it was (a big
 one to disk alone, and one holding 1 MiB or more of arrays to disk first and
 to the RAM tier on its first hit), unless a tier's size cap refuses it or a source it depends on cannot be pickled or

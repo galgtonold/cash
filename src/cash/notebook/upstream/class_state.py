@@ -27,6 +27,7 @@ from typing import Any
 from cash._user_attrs import has_attribute
 
 from ... import _weak
+from ..._type_memo import class_dict, class_mro
 from ...sizing import estimate_object_size
 
 #: Most bytes a cell's saved class state may take (estimated): above it the
@@ -48,13 +49,13 @@ def _is_state(name: str, value: Any) -> bool:
 
 
 def _state_of(cls: type) -> dict[str, Any]:
-    return {name: value for name, value in vars(cls).items() if _is_state(name, value)}
+    return {name: value for name, value in class_dict(cls).items() if _is_state(name, value)}
 
 
 def notebook_classes(cls: type, module: str) -> list[type]:
     """*cls*, the bases in its MRO and the subclasses below it that the
     notebook (module *module*) defines."""
-    found: list[type] = [c for c in cls.__mro__ if c.__module__ == module]
+    found: list[type] = [c for c in class_mro(cls) if c.__module__ == module]
     pending = list(type.__subclasses__(cls))
     while pending:
         sub = pending.pop()

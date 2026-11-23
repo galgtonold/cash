@@ -38,7 +38,8 @@ from typing import Any
 
 from .._lazy_module import LazyModule
 from .._location import per_user_cache_root
-from .._user_attrs import importable_attr
+from .._type_memo import class_module, class_qualname
+from .._user_attrs import importable_attr, plain_getattr
 from ..backends.cache_dir import LIBRARY_MAP_FILENAME, LIBRARY_RECORDS_FILENAME
 from ..install_paths import in_own_package, is_cash_path, is_user_path, top_package
 from ..jit_functions import jit_python_function
@@ -359,12 +360,12 @@ def _backport_path_finder(finder: Any) -> bool:
     the only ones from ``sys.path``: the map keeps them, and saves their
     folders as it does ``PathFinder``'s."""
     kind = type(finder)
-    return kind.__module__ == "importlib_metadata" and kind.__qualname__ == "MetadataPathFinder"
+    return class_module(kind) == "importlib_metadata" and class_qualname(kind) == "MetadataPathFinder"
 
 
 def _backport_distribution(dist: Any) -> bool:
     """Is *dist* one the backport's path finder named (`_backport_path_finder`)?"""
-    return type(dist).__module__ == "importlib_metadata" and type(dist).__qualname__ == "PathDistribution"
+    return class_module(type(dist)) == "importlib_metadata" and class_qualname(type(dist)) == "PathDistribution"
 
 
 def _fingerprint_header() -> list | None:
@@ -819,7 +820,7 @@ def _defining_module(value: Any) -> types.ModuleType | None:
         # A numba-compiled function is defined where the function it
         # compiles is: a ``@stencil`` answers ``__module__`` with numba's.
         value = jit_python_function(value) or value
-        name = getattr(value, "__module__", None)
+        name = plain_getattr(value, "__module__", None)
         return sys.modules.get(name) if isinstance(name, str) else None
     return None
 
@@ -873,8 +874,8 @@ def library_owns(bound: Any, imported: tuple[str, tuple[str, ...]]) -> bool:
     if issubclass(type(bound), types.ModuleType):
         return top_package(importable_attr(bound, "__name__")) == top
     try:
-        owner = getattr(bound, "__module__", None)
-        name = getattr(bound, "__name__", None)
+        owner = plain_getattr(bound, "__module__", None)
+        name = plain_getattr(bound, "__name__", None)
     except Exception:  # noqa: BLE001 - an object answering attributes with its own code: keyed by itself
         return False
     expected = prefix[-1] if prefix else None
@@ -924,8 +925,8 @@ def library_tops(functions: Iterable[Callable], own_pkg: str | None) -> set[str]
     a function: the same whether the import has run yet or not)."""
     tops: set[str] = set()
     for fn in functions:
-        code = getattr(fn, "__code__", None)
-        g = getattr(fn, "__globals__", None)
+        code = plain_getattr(fn, "__code__", None)
+        g = plain_getattr(fn, "__globals__", None)
         if not isinstance(code, types.CodeType) or not isinstance(g, dict):
             continue
         root = g.get("__name__") if isinstance(g.get("__name__"), str) else None

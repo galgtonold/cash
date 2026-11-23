@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
-import inspect
 import linecache
 import logging
 import threading
@@ -29,6 +28,7 @@ from .. import _weak
 from .._clock import fine_thread_clock
 from .._memo import PURITY_REPORTS, LruMemo
 from .._paths import is_pseudo_filename
+from .._user_attrs import plain_getattr, unwrapped
 from ..diagnostics import warn_diagnostic
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS, CashCacheIneffectiveWarning
 from ..purity import is_stateful
@@ -71,7 +71,7 @@ class PurityAnalyzer:
         of `PURITY_REPORTS` entries, which a table of more functions than
         that emptied on every call, and without reading its source again.
         An entry goes with its function."""
-        target = getattr(func, "__func__", func)
+        target = plain_getattr(func, "__func__", func)
         if type(target) is not types.FunctionType:
             return self.analyze(func)
         entry = self._reached.get(target)
@@ -139,13 +139,13 @@ class PurityAnalyzer:
         if entry is None:
             return None
         cached, cached_owner = entry
-        target = getattr(func, "__func__", func)
+        target = plain_getattr(func, "__func__", func)
         built_from = cached_owner() if cached_owner is not None else None
         if built_from is None:
             return None
         if (getattr(func, "__closure__", None) or memo_key.startswith(_BY_CODE)) and built_from is not target:
             return None
-        if getattr(built_from, "__globals__", None) is not getattr(func, "__globals__", None):
+        if plain_getattr(built_from, "__globals__", None) is not plain_getattr(func, "__globals__", None):
             return None
         # The source is the same, but a name it calls through may hold a
         # different object now (a patched helper, or a real one restored):
@@ -200,7 +200,7 @@ def get_analyzer() -> PurityAnalyzer:
 def _memo_key(func: Callable[..., Any]) -> tuple[str | None, Any]:
     """The key *func*'s report is memoised under, and a reference to the
     function it is built from; ``(None, None)`` when it cannot be memoised."""
-    target = getattr(func, "__func__", func)  # a bound method is made anew per access
+    target = plain_getattr(func, "__func__", func)  # a bound method is made anew per access
     by_code = _code_memo_key(target)
     if by_code[0] is not None:
         return by_code
@@ -250,10 +250,10 @@ def _code_memo_key(target: Any) -> tuple[str | None, Any]:
     stays unmemoised.
     """
     try:
-        inner = inspect.unwrap(target)
+        inner = unwrapped(target)
     except ValueError:  # a cycle of __wrapped__
         return None, None
-    code = getattr(inner, "__code__", None)
+    code = plain_getattr(inner, "__code__", None)
     if type(inner) is not types.FunctionType or not is_pseudo_filename(code.co_filename):
         return None, None
     if linecache.getlines(code.co_filename):
@@ -282,7 +282,7 @@ class _SameCode:
         if function is None or inner is None or inner.__code__ is not self._code():
             return None
         try:
-            return function if inspect.unwrap(function) is inner else None
+            return function if unwrapped(function) is inner else None
         except ValueError:
             return None
 

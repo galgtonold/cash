@@ -18,6 +18,7 @@ from cash._user_attrs import attribute_or, has_attribute, instance_of
 from cash.control_markers import strip_markers
 
 from ... import _weak
+from ..._type_memo import class_name
 from ...analysis.ast_util import parse_cached
 from ...analysis.cacheability import analyze_statement
 from ...analysis.code_analyzer import CodeAnalyzer, statement_code
@@ -483,7 +484,7 @@ class StaleValueGuard:
                     "drained on re-run (cell-entry base %r but live %r); marking broken "
                     "so its producer re-runs.",
                     var_name,
-                    type(live_value).__name__,
+                    class_name(type(live_value)),
                     baseline,
                     consumable_state(live_value),
                 )
@@ -1015,7 +1016,7 @@ class StaleValueGuard:
                 try:
                     saved.put_back()
                 except Exception as e:  # noqa: BLE001 - a class refusing it keeps its state, with the warning
-                    self._warn_class_state_kept(cell_idx, name, f"putting it back failed ({type(e).__name__})")
+                    self._warn_class_state_kept(cell_idx, name, f"putting it back failed ({class_name(type(e))})")
                 else:
                     trace_event("class_state_put_back", cls=name)
                 continue

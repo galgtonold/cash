@@ -31,6 +31,7 @@ import threading
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from cash._type_memo import class_name, module_of_class
 from cash._user_attrs import attribute_or
 
 from .._plain_data import is_plain
@@ -82,9 +83,10 @@ _GRAPHS = frozenset(name for module, name in _COMPARED if module == "networkx")
 
 def _compared(value: Any) -> bool:
     t = type(value)
-    if ((attribute_or(t, "__module__", None) or "").split(".", 1)[0], t.__name__) not in _COMPARED:
+    name = class_name(t)
+    if ((module_of_class(t) or "").split(".", 1)[0], name) not in _COMPARED:
         return False
-    if t.__name__ in _GRAPHS:
+    if name in _GRAPHS:
         return True
     # An array of objects (``axes`` from ``plt.subplots``) is hashed by
     # pickling what it holds -- a whole figure.
@@ -118,7 +120,7 @@ def _read_only(value: Any) -> str:
     One flag per array: ``"1"`` read-only, ``"0"`` writeable, ``"?"`` not
     told."""
     numpy = sys.modules.get("numpy")
-    if numpy is None or type(value).__name__ in _GRAPHS:
+    if numpy is None or class_name(type(value)) in _GRAPHS:
         return ""
     if isinstance(value, numpy.ndarray):
         arrays = [value]
@@ -353,7 +355,7 @@ class ValueCutoff:
             return None
         if is_identity_fallback_hash(value, digest):
             return None
-        return f"{type(value).__name__}:{_read_only(value)}:{digest}"
+        return f"{class_name(type(value))}:{_read_only(value)}:{digest}"
 
     def lineage_for(self, value: Any, lineage: str, compute_hash: Callable[[Any], str]) -> str:
         """The lineage *value*, just bound with *lineage*, should carry: an

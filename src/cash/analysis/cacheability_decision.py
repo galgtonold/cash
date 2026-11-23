@@ -54,6 +54,9 @@ from cash.diagnostics import warn_diagnostic
 from cash.exceptions import CashCacheIneffectiveWarning, CashImpurityWarning
 from cash.value_types import BUILTIN_NAMES, mro_kind
 
+from .._type_memo import class_name
+from .._user_attrs import has_attribute, plain_getattr
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -120,7 +123,7 @@ def is_lineage_exempt(var_name: str, val: Any) -> bool:
     """
     if issubclass(type(val), types.ModuleType) or var_name == "get_ipython":
         return True
-    return bool(callable(val) and (var_name.startswith("_") or hasattr(val, "__self__")))
+    return bool(callable(val) and (var_name.startswith("_") or has_attribute(val, "__self__")))
 
 
 #: The modules that define the classes above: a value cannot be an instance of
@@ -159,7 +162,7 @@ def _container_items(value: Any) -> Any:
         # By the real type: a proxy that only claims to be one is not opened.
         return builtin_items(value)
     if (
-        getattr(type(value), "__module__", None) == "numpy"
+        plain_getattr(type(value), "__module__", None) == "numpy"
         and getattr(getattr(value, "dtype", None), "kind", "") == "O"
     ):
         return value.flat
@@ -270,9 +273,9 @@ def analysis_failed(check: str, exc: BaseException) -> str:
     """
     if isinstance(exc, AnalysisBudgetExceeded):
         return ANALYSIS_BUDGET_REASON
-    reason = f"cash could not {check} ({type(exc).__name__}: {exc}), so the statement runs uncached"
+    reason = f"cash could not {check} ({class_name(type(exc))}: {exc}), so the statement runs uncached"
     logger.debug("analysis failed: %s", reason, exc_info=exc)
-    key = (check, type(exc).__name__)
+    key = (check, class_name(type(exc)))
     if key not in _REPORTED_FAILURES:
         _REPORTED_FAILURES.add(key)
         try:
@@ -420,11 +423,11 @@ def _helper_ambient_reasons(code: str, user_ns: Mapping[str, Any]) -> list[str]:
 
     reasons = []
     for fn, issue in helper_ambient_reads(code, user_ns):
-        name = getattr(fn, "__qualname__", getattr(fn, "__name__", "a function"))
+        name = plain_getattr(fn, "__qualname__", plain_getattr(fn, "__name__", "a function"))
         read = issue.description.partition(" - ")[0]
         via = f"{name}()"
         reasons.append(f"Runs {via}, which reads {read}: a cached result would freeze it, so it runs every time")
-        mark = (id(getattr(fn, "__code__", fn)), f"{issue.where}:{read}")
+        mark = (id(plain_getattr(fn, "__code__", fn)), f"{issue.where}:{read}")
         if mark in _AMBIENT_WARNED:
             continue
         _AMBIENT_WARNED.add(mark)

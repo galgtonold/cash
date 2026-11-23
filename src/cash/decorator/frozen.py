@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from .. import _weak, kept_state
 from .._memo import FROZEN_RESULTS, LruMemo
+from .._type_memo import class_name
 from ..content_hashers import builtin_hash
 from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning, CashImpurityWarning
@@ -251,7 +252,7 @@ class FrozenResults:
                     warn_diagnostic(
                         CashImpurityWarning,
                         "KEY-FROZEN-MUTATED",
-                        f"a {type(obj).__name__} returned by {entry[1]}, which is "
+                        f"a {class_name(type(obj))} returned by {entry[1]}, which is "
                         f"declared @cash.cache(frozen=True), has been modified since "
                         f"it was returned. Calls that received it before the change "
                         f"may have been served results for the unmodified object; "
@@ -270,7 +271,7 @@ class FrozenResults:
             func_name,
             "frozen_no_effect",
             f"@cash.cache(frozen=True) on {func_name}: it returned a "
-            f"{type(result).__name__}, which cash cannot mark, so frozen=True has "
+            f"{class_name(type(result))}, which cash cannot mark, so frozen=True has "
             f"no effect on it -- a call that receives it still hashes it in full. "
             f"frozen=True applies to a numpy array, a pandas/polars/modin frame, "
             f"a pyarrow table, a list, tuple or dict, and any object that takes "
@@ -287,7 +288,7 @@ class FrozenResults:
         warn_diagnostic(
             CashImpurityWarning,
             "KEY-FROZEN-MUTATED",
-            f"a {type(obj).__name__} returned by {producer}, which is declared "
+            f"a {class_name(type(obj))} returned by {producer}, which is declared "
             f"@cash.cache(frozen=True), has been modified since it was returned. "
             f"Calls that received it before the change may have been served "
             f"results for the unmodified object; from now on it is keyed by its "
@@ -348,7 +349,7 @@ class FrozenResults:
         warn_diagnostic(
             CashImpurityWarning,
             "KEY-FROZEN-MUTATED",
-            f"a {type(obj).__name__} returned by {producer}, which is declared "
+            f"a {class_name(type(obj))} returned by {producer}, which is declared "
             f"@cash.cache(frozen=True), has been modified since it was returned. "
             f"Calls that received it before the change may have been served "
             f"results for the unmodified object; from now on it is keyed by its "
@@ -367,7 +368,7 @@ class FrozenResults:
         warn_diagnostic(
             CashImpurityWarning,
             "KEY-FROZEN-MUTATED",
-            f"a {type(obj).__name__} returned by {entry[1]}, which is declared "
+            f"a {class_name(type(obj))} returned by {entry[1]}, which is declared "
             f"@cash.cache(frozen=True), was modified in place by a cached call. "
             f"From now on it is keyed by its contents.",
             f"take frozen=True off {entry[1]} if its result is meant to be "

@@ -25,7 +25,6 @@ from __future__ import annotations
 import ast
 import dis
 import functools
-import inspect
 import json
 import os
 import sys
@@ -35,7 +34,8 @@ from collections.abc import Callable, Collection, Iterable, Mapping
 from typing import Any
 
 from ... import _weak
-from ..._user_attrs import attribute_or, from_family, has_attribute, instance_of, own_dict
+from ..._type_memo import class_name
+from ..._user_attrs import attribute_or, from_family, has_attribute, instance_of, own_dict, static_attr
 from ...analysis.ast_util import walk_tree
 from ...analysis.callee_effects import free_vars_mutated_in_function, scope_locals
 from ...analysis.mutations import MUTATING_METHODS
@@ -211,7 +211,7 @@ def finalizer_left(since: int | None) -> str | None:
         if any(first <= info.index < last for first, last in windows):
             continue
         name = attribute_or(info.func, "__qualname__", None)
-        return name if isinstance(name, str) else type(info.func).__name__
+        return name if isinstance(name, str) else class_name(type(info.func))
     return None
 
 
@@ -678,7 +678,7 @@ def _object_array(held: Any, pd: Any, np: Any) -> Any:
     if issubclass(type(held), pd.Categorical):
         categories = vars(pd.Categorical)["categories"].__get__(held, pd.Categorical)
         held = vars(pd.Index)["array"].__get__(categories, pd.Index)
-    if type(held).__name__ != "NumpyExtensionArray" or not from_family(type(held), "pandas"):
+    if class_name(type(held)) != "NumpyExtensionArray" or not from_family(type(held), "pandas"):
         return None
     found = held._ndarray
     return found if type(found) is np.ndarray and found.dtype == np.dtype(object) else None
@@ -853,7 +853,7 @@ def _method_named(path: str, scope: Mapping[str, Any]) -> Any:
     if value is _MISSING or instance_of(value, types.ModuleType):
         return None
     try:
-        member = inspect.getattr_static(value, attr)
+        member = static_attr(value, attr)
     except AttributeError:
         return None
     if instance_of(member, (staticmethod, classmethod)):
@@ -1044,7 +1044,7 @@ def _method_writes(code: types.CodeType, globals_: Mapping[str, Any]) -> list[st
         owner = globals_.get(sub.func.value.id, _MISSING)
         if owner is _MISSING or isinstance(owner, (type, types.ModuleType)):
             continue
-        method = attribute_or(type(owner), sub.func.attr, None)
+        method = attribute_or(type(owner), sub.func.attr, None, asked=True)
         if isinstance(method, types.FunctionType) and is_user_code_file(method.__code__.co_filename):
             if _writes_its_object(method.__code__):
                 out.append(sub.func.value.id)

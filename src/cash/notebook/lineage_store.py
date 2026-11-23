@@ -29,6 +29,7 @@ from typing import Any
 from cash.lineage_tag import clear_tags, own_tag, set_tags
 
 from .. import _weak
+from .._type_memo import class_name
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +80,7 @@ def tag_value(value: Any, hash_: str) -> None:
     # This layer re-tags the value whenever it changes, which is what lets
     # the decorator trust the tag for its content ("statement").
     if not set_tags(value, _cash_lineage_hash=hash_, _cash_lineage_src="statement"):
-        logger.debug("LineageStore: cannot tag %s", type(value).__name__)
+        logger.debug("LineageStore: cannot tag %s", class_name(type(value)))
 
 
 def statement_tag(value: Any) -> str | None:

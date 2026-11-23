@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ._clock import perf_counter as _perf_counter
+from ._type_memo import class_name
 from .bulk_digest import PARALLEL_MIN_BYTES, SCHEME, hashing_threads, leaf_hasher
 from .content_hashers import builtin_hash, builtin_hash_family, raw_view
 
@@ -85,7 +86,7 @@ def row_count(value: Any) -> tuple[str, int] | None:
         if family == "pandas":
             return "pandas", len(value)
         if family == "polars":
-            if type(value).__name__ not in ("DataFrame", "Series"):
+            if class_name(type(value)) not in ("DataFrame", "Series"):
                 return None  # a LazyFrame has no rows yet
             return "polars", len(value)
     except (TypeError, AttributeError):

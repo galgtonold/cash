@@ -13,6 +13,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from .. import _weak
+from .._type_memo import class_name
 from .._user_attrs import from_family
 from .ast_util import plain_statement, walk_tree
 from .file_effects import SideEffectVisitor
@@ -779,7 +780,7 @@ class MutationVisitor(ast.NodeVisitor):
         """Detect augmented assignments like x += 1, arr *= 2."""
         base = extract_base_name(node.target)
         if base:
-            op_name = type(node.op).__name__
+            op_name = class_name(type(node.op))
             self.mutations.append(
                 MutationInfo(
                     variable=base,

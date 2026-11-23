@@ -31,6 +31,8 @@ from cash.install_paths import (
 )
 from cash.tracking.env_reads import environ_get
 
+from .._user_attrs import plain_getattr
+
 __all__ = [
     "SCRATCH_MEMMAP",
     "import_folders",
@@ -338,7 +340,7 @@ def _module_package_dir(module_name: str) -> str | None:
             return norm_dir(list(paths)[0])
         except (TypeError, IndexError):
             return None
-    file = getattr(top, "__file__", None)
+    file = plain_getattr(top, "__file__", None)
     return norm_dir(os.path.dirname(file)) if file else None
 
 

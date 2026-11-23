@@ -57,6 +57,7 @@ import time
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from .._type_memo import class_name
 from .read_classification import own_lstat, own_stat
 
 __all__ = ["FileWatch", "watcher", "reset", "status_line"]
@@ -1643,7 +1644,7 @@ def watcher() -> FileWatch | None:
     except Exception as exc:  # no watch: stat-ed every time
         logger.debug("file watch unavailable", exc_info=True)
         backend = None
-        why = f"could not start ({type(exc).__name__}: {exc})"
+        why = f"could not start ({class_name(type(exc))}: {exc})"
     _WHY_NONE = (
         None if backend is not None else f"off: {why}; every file a cached statement read is checked before each cell"
     )
