@@ -702,6 +702,9 @@ def _pandas_array_parts(values: Any) -> list[Any]:
         return spelled
     dtype = values.dtype
     kind = attribute_or(dtype, "kind")
+    pandas = sys.modules.get("pandas")
+    if kind == "O" and pandas is not None and isinstance(dtype, pandas.CategoricalDtype):
+        return [dtype.categories]  # every value is one of them (`_pandas_column`)
     if kind == "O":
         return [values.to_numpy(dtype=object)]
     if kind in ("i", "u") and attribute_or(dtype, "itemsize") == 8:
@@ -777,6 +780,12 @@ def _pandas_column(column: Any, dtype: Any) -> Any:
     one *dtype*) as a NumPy array when they could keep an ``id()`` or a
     weak reference: 8-byte integers, or objects. None otherwise."""
     kind = attribute_or(dtype, "kind")
+    pandas = sys.modules.get("pandas")
+    if kind == "O" and pandas is not None and isinstance(dtype, pandas.CategoricalDtype):
+        # Every value is one of its categories, the very object: read
+        # those, not a million values made objects one by one.
+        categories = dtype.categories
+        return _pandas_column(categories, categories.dtype)
     if kind == "O":
         spelled = _arrow_text_spelling_numbers(column)
         if spelled is not None:
@@ -1416,9 +1425,33 @@ def _addresses_in(array: Any) -> Any:
     numpy = sys.modules["numpy"]
     # An unsigned number past the sign bit reads negative: no address.
     flat = array.ravel().astype(numpy.int64, copy=False)
+    if flat.size >= _BOUNDS_FIRST and not _mapped_between(int(flat.min()), int(flat.max())):
+        # Two passes, not five: ``np.arange(10_000_000)`` lies below every
+        # mapping an object can be in.
+        return flat[:0]
     keep = numpy.bitwise_and(flat, _NO_ADDRESS_BITS) == 0
     numpy.logical_and(keep, flat >= _LOWEST_ADDRESS, out=keep)
     return numpy.compress(keep, flat)
+
+
+#: Fewest numbers of an array `_addresses_in` first tells by its lowest and
+#: highest whether any could be an address at all.
+_BOUNDS_FIRST = 100_000
+
+
+def _mapped_between(low: int, high: int) -> bool:
+    """Whether a writable mapping of this process where an object can lie
+    (not the executable's own image when it is at a fixed address:
+    `_fixed_image`) overlaps the numbers from *low* to *high*. True where
+    the mappings cannot be read."""
+    ranges = _read_mappings()
+    if ranges is None:
+        return True
+    fixed = _fixed_image()
+    return any(
+        start <= high and low < end and not (fixed is not None and fixed[0] <= start and end <= fixed[1])
+        for start, end in ranges
+    )
 
 
 def _any_held(in_arrays: list[Any], held: _Walk) -> bool:
