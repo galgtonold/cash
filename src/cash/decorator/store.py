@@ -266,8 +266,13 @@ class ResultStore:
         cost: float = 0.0,
         watch_identities: dict | None = None,
         file_deps: dict[str, Any] | None = None,
+        call_args: tuple[tuple, dict] | None = None,
     ) -> str | None:
         """Why *res* must not be stored, or ``None`` to store it.
+
+        *call_args* is ``(args, kwargs)`` as the call was handed them: an
+        ``id()`` of one of them in the result is one a hit would get wrong
+        (`PurityChecks.refuses_identity_held`).
 
         *file_deps* is the call's snapshot of what it read
         (`snapshot_tracked_deps`): a read in it that is never fresh would make
@@ -378,6 +383,10 @@ class ResultStore:
                 else f"it changed its argument{plural} {names} in place, which a hit would not do",
                 unreplayable=bool(why),
             )
+        if refusal is None and self._purity.refuses_identity_held(
+            func, func_name, res, call_args, closure_check_budget(cost)
+        ):
+            refusal = "the result holds the id() of a live object, or a weak reference, which a hit would get wrong"
         split = split_by_a_hit(res) if refusal is None else None
         if split is not None:
             # ``return a, a[2:5]`` or ``return a, pl.Series(a)``: a hit copies
@@ -1040,6 +1049,7 @@ class ResultStore:
                 observer=observer,
                 cost=chunks.produced_seconds,
                 file_deps=auto_file_deps,
+                call_args=(call.args, call.kwargs),
             )
             if refusal is not None:
                 self._misses.note_not_stored(call.cache_key, refusal, func_name)

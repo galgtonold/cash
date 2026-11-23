@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @f40a1c88 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @3b2080e7 -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -83,14 +83,14 @@ its warning class.
 | Family | Prefix | Codes | What it reports |
 |---|---|---:|---|
 | [Annotations](#annot-codes) | `ANNOT-` | 2 | A `# @cash:` comment that cash could not honour. |
-| [Caching](#cache-codes) | `CACHE-` | 21 | Caching happened, or refused to, and it is worth saying. |
+| [Caching](#cache-codes) | `CACHE-` | 22 | Caching happened, or refused to, and it is worth saying. |
 | [Configuration](#config-codes) | `CONFIG-` | 3 | A setting cash found but could not act on. |
 | [Side effects](#impure-codes) | `IMPURE-` | 4 | The function does something a cache hit will not repeat. |
 | [Cache keys](#key-codes) | `KEY-` | 30 | Something the result depends on may not be in the cache key. |
 | [Notebook](#notebook-codes) | `NOTEBOOK-` | 30 | Only in notebooks: the cells around the one you run, or a statement cash runs every time to stay safe. |
 | [Randomness](#random-codes) | `RANDOM-` | 5 | A cached value that randomness makes non-reproducible. |
 | [Remote files](#remote-codes) | `REMOTE-` | 3 | Checking whether a remote file changed. |
-| [Storing results](#store-codes) | `STORE-` | 15 | The call succeeded, but its result was not written. |
+| [Storing results](#store-codes) | `STORE-` | 16 | The call succeeded, but its result was not written. |
 
 ## Annotations {#annot-codes}
 
@@ -154,6 +154,7 @@ Caching happened, or refused to, and it is worth saying. Every code here starts 
 | [CACHE-EVICTED-RECOMPUTE](#cache-evicted-recompute) | both | the size cap had evicted a costly result, so it was computed again |
 | [CACHE-FRESHNESS-COST](#cache-freshness-cost) | decorator | checking tracked files costs much of what a hit saves |
 | [CACHE-IDENTITY-COUPLED](#cache-identity-coupled) | decorator | a live matplotlib figure is never stored |
+| [CACHE-IDENTITY-UNCHECKED](#cache-identity-unchecked) | decorator | a result was stored without being checked for a live object's `id()` |
 | [CACHE-IF-BYPASSED](#cache-if-bypassed) | decorator | a chunked result was stored without running `cache_if` |
 | [CACHE-IF-RAISED](#cache-if-raised) | decorator | the `cache_if` predicate raised |
 | [CACHE-LOOP-GROWTH](#cache-loop-growth) | notebook | a loop stores every state of a growing value |
@@ -356,6 +357,33 @@ the function simply runs every time.
 cache the part that computes the numbers, and draw in an uncached function.
 
 **When it is safe to ignore.** Almost always, when the function only draws.
+
+### CACHE-IDENTITY-UNCHECKED {#cache-identity-unchecked}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashWarning</span>
+
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.refuses_identity_held @1c16baec, cash/decorator/purity_checks.py:_identity_reason @53c9b0d6 -->
+**What happened.** Before storing a result, cash looks through it for the
+`id()` of a live object or a weak reference
+([STORE-IDENTITY-HELD](#store-identity-held)). The look could not finish,
+and the result was stored as before, unchecked. The message says why: the
+result held more objects than cash looks through in twice what the call
+took (and at least a second); it held an object of a library cash does not
+look inside next to a number that could be an `id()`; the call's arguments
+and the function's module globals hold more objects than cash looks through
+for such a number; or cash's check could not be imported. It is said once per function.
+
+**Why it matters.** If the result does hold an object's `id()`, as a number
+or in text (`f"run-{id(x)}"`, a default `repr`), a cache hit in another
+process hands back the old process's address, where running the function
+gives the current one.
+
+**What to do.** Nothing, if the result holds no `id()` and no default
+`repr` of an object. Otherwise return a name or key of your own for the
+object, or do not cache the function.
+
+**When it is safe to ignore.** When the result holds no address of an
+object: most big results of numbers, text and objects of your own do not.
 
 ### CACHE-RETURNS-AWAITABLE {#cache-returns-awaitable}
 
@@ -3266,6 +3294,7 @@ The call succeeded, but its result was not written. Every code here starts `STOR
 | [STORE-CODE-SWAPPED](#store-code-swapped) | decorator | a function's code is replaced in memory during every call; not stored |
 | [STORE-DEFAULT-CHANGED](#store-default-changed) | notebook | a call changed its callee's default (a memo default); not stored |
 | [STORE-FAILED](#store-failed) | both | the backend refused the write |
+| [STORE-IDENTITY-HELD](#store-identity-held) | decorator | the result holds the `id()` of a live object, or a weak reference; not stored |
 | [STORE-INPUT-CHANGED](#store-input-changed) | decorator | an input file changed during the call; not stored |
 | [STORE-LOCK-FAILED](#store-lock-failed) | decorator | the per-key lock failed; ran without it |
 | [STORE-METADATA-INVALID](#store-metadata-invalid) | decorator | a stored entry's metadata is unreadable |
@@ -3387,6 +3416,39 @@ the same code (`def ensemble(c, tsps=(greedy, rep))` after the cells
 defining `greedy` and `rep` ran again).
 
 **When it is safe to ignore.** A one-off on a cheap function.
+
+### STORE-IDENTITY-HELD {#store-identity-held}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
+
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.refuses_identity_held @1c16baec, cash/notebook/statement/identity_holders.py:returned_identity_reason @6f24efda -->
+**What happened.** The result finds an object by its identity: it holds the
+`id()` of an object that is alive, either as a number (`return id(x)`,
+`{id(x): "x"}`) or spelled in text (`'k' + str(id(x))`, `f"run-{id(x)}"`,
+`hex(id(x))`, an object's default `repr`, `<Q object at 0x7f...>`), or it
+holds a weak reference to an object outside it. The object is one the result
+itself, the call's arguments, or the function's closure, defaults or module
+globals hold. The result was returned but not stored. The same check keeps
+such a value out of a notebook's cache
+([NOTEBOOK-IDENTITY-HELD](#notebook-identity-held)). A result cash cannot
+finish looking through is stored as before, with
+[CACHE-IDENTITY-UNCHECKED](#cache-identity-unchecked).
+
+**Why it matters.** An address is only good in the process that took it,
+while the object lives. A cache hit in another process would hand back the
+old process's number or text, where running the function gives the
+object's current one; a hit in this process could name an object that is
+gone. A weak reference served from the cache finds nothing, or a copy.
+
+**What to do.** Return the object itself, or a name or key of your own for
+it (a counter, a field it holds), instead of its `id()` or its default
+`repr`. Give the class a `__repr__` of its own if the text is what you
+need. If the id is the point, do not cache the function.
+
+**When it is safe to ignore.** When the function is cheap: it runs every
+time, which is what plain Python does. A number that only happens to equal
+an object's address is refused too; that is rare, since it must be a
+multiple of 8 inside the memory the process uses.
 
 ### STORE-INPUT-CHANGED {#store-input-changed}
 
