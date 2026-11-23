@@ -1981,12 +1981,20 @@ static int same_object(Root *R, PyObject *o) {
    holds what proves it is still about the same object, as a root does: a
    dict stays watched, and its DEALLOCATED event ends the skip (`watched`);
    another object is held by a weak reference (`wref`). A list, a tuple or a
-   set has neither and is skipped by its address and its type: a dict made
-   where a skipped list was freed is not that list. Without the proof, a
-   dict skipped as too small, or for changing on every check, passed its skip
-   on to whatever dict was made at its address next: never armed for up to a
-   million checks, however big or still. */
-typedef struct { uintptr_t addr; uint64_t until; float secs; uint8_t state; uint8_t watched; PyObject *wref; PyTypeObject *type; } Sight;
+   set has neither and is skipped by its address, its type and what it
+   holds its items in (`sight_print`): a dict made where a skipped list was
+   freed is not that list, and neither is a list whose item array is not
+   the one the skipped list had. Without the proof, a dict skipped as too
+   small, or for changing on every check, passed its skip on to whatever
+   dict was made at its address next: never armed for up to a million
+   checks, however big or still. A list is made where the last one freed
+   was (CPython keeps freed lists to reuse), so with its address and type
+   alone a table of 30,000 records took on the skip of a three-item list
+   freed just before it, and was hashed whole on every check. */
+typedef struct {
+    uintptr_t addr; uint64_t until; float secs; uint8_t state; uint8_t watched;
+    PyObject *wref; PyTypeObject *type; uintptr_t print_p; Py_ssize_t print_n;
+} Sight;
 #define SIGHT_BITS 13
 /* Slots per bucket. One slot an address could land in was first-come: a
    value sighted once and never checked again (a temporary) held it for
@@ -2020,6 +2028,7 @@ static void sight_clear(Sight *g) {
     }
     Py_CLEAR(g->wref);
     g->addr = 0; g->state = SG_NONE; g->until = 0; g->secs = 0; g->type = NULL;
+    g->print_p = 0; g->print_n = 0;
 }
 
 static int sight_watches(uintptr_t a) {
@@ -2072,11 +2081,33 @@ static PyObject *py_set_weak_callback(PyObject *self, PyObject *cb) {
     Py_RETURN_NONE;
 }
 
+/* what a list or a tuple, which no weak reference can name, holds its
+   items in: a list its item array and that array's room (the same while
+   the list is, but for a resize, after which it is looked at afresh), a
+   tuple its length and its first and last items. Another object made at
+   the address shares them only by chance, and a value of another size
+   never does. */
+static void sight_print(PyObject *o, uintptr_t *p, Py_ssize_t *n) {
+    *p = 0; *n = 0;
+    if (PyList_Check(o)) {
+        *p = (uintptr_t)((PyListObject *)o)->ob_item;
+        *n = ((PyListObject *)o)->allocated;
+    } else if (PyTuple_Check(o)) {
+        Py_ssize_t len = PyTuple_GET_SIZE(o);
+        *n = len;
+        if (len) *p = (uintptr_t)PyTuple_GET_ITEM(o, 0) ^ ((uintptr_t)PyTuple_GET_ITEM(o, len - 1) << 1);
+    }
+}
+
 /* is the slot's skip still about `o`, not an object freed at its address? */
 static int sight_is(Sight *g, PyObject *o) {
     if (g->addr != (uintptr_t)o) return 0;
     if (g->wref) return weak_target(g->wref) == o;
-    return g->watched || g->type == Py_TYPE(o);   /* borrowed: compared, never read */
+    if (g->watched) return 1;
+    if (g->type != Py_TYPE(o)) return 0;   /* borrowed: compared, never read */
+    uintptr_t p; Py_ssize_t n;
+    sight_print(o, &p, &n);
+    return g->print_p == p && g->print_n == n;
 }
 
 static void skip_for(PyObject *o, uint64_t ticks) {
@@ -2091,6 +2122,7 @@ static void skip_for(PyObject *o, uint64_t ticks) {
         if (!g->wref) PyErr_Clear();   /* a list, a tuple, a set: its address alone */
     }
     g->addr = a; g->state = SG_SKIP; g->until = tick + ticks; g->type = Py_TYPE(o);
+    if (!g->watched && !g->wref) sight_print(o, &g->print_p, &g->print_n);
 }
 
 /* ------------------------------------------------------------ housekeeping */
