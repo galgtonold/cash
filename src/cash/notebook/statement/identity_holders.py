@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import array
 import bisect
+import collections
 import functools
 import operator
 import re
@@ -61,7 +62,7 @@ from typing import Any
 
 from cash import _native, _weak
 from cash._plain_data import tree_walk, whole_tree_facts
-from cash._user_attrs import attribute_or, builtin_base, builtin_items, has_attribute, own_dict
+from cash._user_attrs import attribute_or, builtin_base, builtin_items, has_attribute, own_dict, own_dicts
 from cash._weak import callback_of, is_cash_ref
 from cash.closure_sharing import slot_readers
 from cash.install_paths import is_user_code_module
@@ -1573,6 +1574,49 @@ def _nodes_read(items: list[Any]) -> set[int]:
     return walk.seen_all()
 
 
+#: Fewest objects in a level for `_Walk._open_in_bulk` to read them a class
+#: at a time.
+_BULK_MIN = 64
+#: Fewer items than a dict `_Walk._open_in_bulk` reads with the others.
+_BULK_DICT = 32
+#: The builtin containers `builtin_base` tells; a subclass of one is
+#: opened one by one.
+_BUILTIN_CONTAINERS = (dict, list, tuple, set, frozenset, collections.deque)
+_NEW_IN = attribute_or(_native.kernels, "new_in", None)
+
+
+_SPLIT_LEVEL = attribute_or(_native.kernels, "split_level", None)
+
+
+def _by_type(level: list[Any]) -> list[tuple[type, list[Any]]]:
+    """*level*'s objects grouped by their exact type, each group in order."""
+    if _SPLIT_LEVEL is not None:
+        groups = _SPLIT_LEVEL(level, set(), set())
+        if groups is not NotImplemented:
+            return groups
+    found: dict[type, list[Any]] = {}
+    for item in level:
+        found.setdefault(type(item), []).append(item)
+    return list(found.items())
+
+
+def _is_leaf(kind: type) -> bool:
+    """Whether `_Walk._open` reads an object of *kind* as a leaf."""
+    return kind is int or kind is str or kind in _LEAVES
+
+
+def _new_objects(group: list[Any], seen: set[int]) -> list[Any]:
+    """The objects of *group* not in *seen* (by id), each once, in the order
+    met; *seen* gets their ids."""
+    if _NEW_IN is not None:
+        return _NEW_IN(group, False, seen)
+    found = dict(zip(map(id, group), group))
+    for key in seen.intersection(found):
+        del found[key]
+    seen.update(found)
+    return list(found.values())
+
+
 class _Walk:
     """One look through what objects hold (see the module docstring): the
     ``id()`` of each object met in `seen`, each weak reference in `refs`,
@@ -1594,6 +1638,8 @@ class _Walk:
         levels: int | None = None,
     ) -> None:
         self.user_kinds = user_kinds
+        #: Per class, `_in_bulk`'s answer.
+        self.bulk_kinds: dict[type, bool] = {}
         #: Per class, `_plain_record`'s answer.
         self.record_kinds: dict[type, bool] = {}
         #: What the value's own walk reads as a leaf (`_value_kinds`), and
@@ -1659,6 +1705,11 @@ class _Walk:
             into: list[Any] = []
             queued: set[int] = set()
             self._queued = queued if ahead else None
+            if len(level) >= _BULK_MIN:
+                level = self._open_in_bulk(level, into)
+                if self.cut or (ahead and into and self._count_ahead(into, 0, queued)):
+                    self.cut = True
+                    return
             for item in level:
                 start = len(into)
                 self._open(item, into)
@@ -1673,6 +1724,107 @@ class _Walk:
             level = into
         self._queued = None
 
+    def _open_in_bulk(self, level: list[Any], into: list[Any]) -> list[Any]:
+        """Open the objects of *level* that `_open` would read as a few items
+        and no more, a class at a time: exact dicts (of fewer than
+        `_BULK_DICT` items), lists and tuples, and
+        the objects of a class of the user's or a ``SimpleNamespace`` (each
+        with fewer than `_SMALL_FLAT` items, so none is one `_open` would
+        read at C speed or as records). What each holds goes to *into*, as
+        `_open` puts it there; the rest of *level* is returned, to be opened
+        one by one. A trie of 285,000 slotted nodes and their child dicts
+        took 1 s opened an object at a time, past its budget."""
+        groups = _by_type(level)
+        if len(groups) == 1 and not self._in_bulk(groups[0][0]) and not _is_leaf(groups[0][0]):
+            return level
+        rest: list[Any] = []
+        for kind, group in groups:
+            if _is_leaf(kind):
+                self._leaves_in_bulk(group, kind)
+                continue
+            if not self._in_bulk(kind):
+                rest.extend(group)
+                continue
+            if kind is dict:
+                # A dict of up to `_BULK_DICT` items too: `_open` would try
+                # reading it at C speed (`_read_flat`), which a dict of
+                # objects fails; its leaves are read a class at a time here.
+                small = list(map(operator.gt, repeat(_BULK_DICT), map(len, group)))
+            elif kind in _NESTED:
+                small = list(map(operator.gt, repeat(_SMALL_FLAT), map(len, group)))
+            else:
+                small = None
+                readers = slot_readers(kind)
+                dicts = own_dicts(group, kind)
+                if max(map(len, dicts), default=0) + len(readers) >= _SMALL_FLAT:
+                    rest.extend(group)
+                    continue
+            if small is not None and not all(small):
+                rest.extend(compress(group, map(operator.not_, small)))
+                group = list(compress(group, small))
+            new = _new_objects(group, self.seen)
+            if not new:
+                continue
+            if self._queued:
+                self._queued.difference_update(map(id, new))
+            self.budget -= len(new)
+            if self.budget < 0 and not self._more(-self.budget):
+                self.cut = True
+                return []
+            if self.targets is not None and self._notebook_own(kind):
+                self.targets.extend(compress(new, map(weakref.getweakrefcount, new)))
+            if kind is dict:
+                into.extend(chain.from_iterable(map(dict.keys, new)))
+                into.extend(chain.from_iterable(map(dict.values, new)))
+            elif kind in _NESTED:
+                into.extend(chain.from_iterable(new))
+            else:
+                into.extend(chain.from_iterable(map(dict.values, own_dicts(new, kind))))
+                for reader in readers:
+                    try:
+                        into.extend(list(map(reader.__get__, new)))
+                    except AttributeError:  # an empty slot somewhere: read one by one
+                        for item in new:
+                            try:
+                                into.append(reader.__get__(item, kind))
+                            except AttributeError:
+                                continue
+        return rest
+
+    def _leaves_in_bulk(self, group: list[Any], kind: type) -> None:
+        """`_open` for each leaf of *group*, all of *kind*: an ``int`` is a
+        number, a text read for the numbers it spells, the rest holds none;
+        a *quiet* walk notes each one's id."""
+        if self.quiet:
+            self._leaves_held(group)
+        elif kind is int:
+            self.numbers.update(group)
+        elif kind is str:
+            self._read_texts(list(compress(group, map(operator.le, repeat(_SHORTEST_RUN), map(len, group)))))
+
+    def _in_bulk(self, kind: type) -> bool:
+        """Whether `_open_in_bulk` may read objects of *kind*: `_open` reads
+        one as its builtin items (an exact dict, list or tuple) or as its
+        attributes and slots alone (a class of the user's, a
+        ``SimpleNamespace``), with nothing else asked of it."""
+        found = self.bulk_kinds.get(kind)
+        if found is None:
+            if kind is dict or kind in _NESTED:
+                found = True
+            else:
+                found = (
+                    kind not in self.leaves
+                    and kind not in self.closed_kinds
+                    and not issubclass(
+                        kind,
+                        (*_REFERENCES, *_WEAK_CONTAINERS, weakref.finalize, *_BY_REFERENCE, *_BUILTIN_CONTAINERS),
+                    )
+                    and not _numpy_array(kind)
+                    and (issubclass(kind, types.SimpleNamespace) or self._users(kind))
+                )
+            self.bulk_kinds[kind] = found
+        return found
+
     def _count_ahead(self, into: list[Any], start: int, queued: set[int]) -> bool:
         """Add to *queued* the ids of the objects *into* got from *start*
         on that opening them will count against the budget: neither a leaf
@@ -1680,14 +1832,25 @@ class _Walk:
         the walk is certain to be cut a level down. An object queued that
         this level opens before then is taken out of *queued* when seen
         (`_open`), so none is counted that the budget would not pay for."""
-        seen = self.seen
-        for item in into[start:]:
-            kind = type(item)
-            if kind is int or kind is str or kind in self.leaves:
-                continue
-            key = id(item)
-            if key not in seen:
-                queued.add(key)
+        added = into[start:] if start else into
+        if len(added) < _BULK_MIN:
+            seen = self.seen
+            for item in added:
+                kind = type(item)
+                if kind is int or kind is str or kind in self.leaves:
+                    continue
+                key = id(item)
+                if key not in seen:
+                    queued.add(key)
+        elif walk_time_left():
+            # The answer is False while the time lasts; a level read in bulk
+            # is not counted for it (`run` only stops a walk sooner by it).
+            return False
+        else:
+            # At C speed: a level read in bulk puts hundreds of thousands here.
+            leaves = self.leaves | _ID_LEAVES
+            opened = compress(added, map(operator.not_, map(leaves.__contains__, map(type, added))))
+            queued.update(set(map(id, opened)).difference(self.seen))
         return len(queued) > self.budget and not walk_time_left()
 
     def _more(self, needed: int) -> bool:
