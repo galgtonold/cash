@@ -914,6 +914,11 @@ def _joined_runs(pyarrow: Any, chunked: Any) -> list[Any]:
 def _spelled_numbers(pyarrow: Any, compute: Any, chunked: Any, parts: list[Any]) -> None:
     """Append to *parts* the numbers the text of *chunked* (an Array or a
     ChunkedArray) spells, as `_arrow_text_numbers` reads them."""
+    narrowed = _starting_with_a_digit(pyarrow, chunked)
+    if narrowed is not None:
+        if not len(narrowed):
+            return
+        chunked = narrowed
     length = compute.binary_length(chunked)
     fits = compute.and_(compute.greater_equal(length, 7), compute.less_equal(length, 18))
     candidates = compute.filter(chunked, fits)
@@ -927,6 +932,62 @@ def _spelled_numbers(pyarrow: Any, compute: Any, chunked: Any, parts: list[Any])
     if len(prefixed):
         hexadecimal = compute.filter(prefixed, compute.match_substring_regex(prefixed, _HEX_TEXT))
         parts.extend(int(text, 16) for text in hexadecimal.to_pylist() if text is not None)
+
+
+def _starting_with_a_digit(pyarrow: Any, chunked: Any) -> Any:
+    """The values of *chunked* (Arrow text: an Array or a ChunkedArray)
+    that could spell a number as `_spelled_numbers` reads them, in order,
+    as one ChunkedArray: those 7 to 18 bytes long whose first byte is an
+    ASCII digit. Both spellings start with one (``0x`` for the
+    hexadecimal), so `_spelled_numbers` finds in them what it finds in all
+    of *chunked*; a missing value among them stays missing, as Arrow's
+    patterns drop it.
+
+    Read from the arrays' offsets and bytes through NumPy, without a copy
+    of the text: Arrow's length, mask and filter over every value took
+    most of the read, 0.13 s for a column of 5.6 million ids (``S011-00001``,
+    all of a fitting length) after each of p18's statements making a new
+    frame of lab rows, where the first byte rules every one out in 20 ms.
+    None when a chunk's buffers are not laid out as Arrow's ``string`` or
+    ``large_string`` lay them out: Arrow reads all of *chunked*, as before."""
+    numpy = sys.modules.get("numpy")
+    if numpy is None:
+        return None
+    if isinstance(chunked, pyarrow.ChunkedArray):
+        chunks = chunked.chunks
+    else:
+        chunks = [chunked]
+    kind = chunked.type
+    if pyarrow.types.is_string(kind):
+        offset_type = numpy.int32
+    elif pyarrow.types.is_large_string(kind):
+        offset_type = numpy.int64
+    else:
+        return None
+    width = numpy.dtype(offset_type).itemsize
+    taken: list[Any] = []
+    for chunk in chunks:
+        rows = len(chunk)
+        if not rows:
+            continue
+        buffers = chunk.buffers()
+        if len(buffers) != 3 or buffers[1] is None:
+            return None
+        offsets = numpy.frombuffer(buffers[1], dtype=offset_type, count=rows + 1, offset=chunk.offset * width)
+        if offsets[-1] == offsets[0]:
+            continue  # all empty (or missing): nothing fits
+        if buffers[2] is None:
+            return None
+        text = numpy.frombuffer(buffers[2], dtype=numpy.uint8)
+        # Each value's first byte; an empty one at the end of the text
+        # reads its last byte (``clip``), and is left out by its length.
+        first = text.take(offsets[:-1], mode="clip")
+        at = numpy.flatnonzero((first >= 0x30) & (first <= 0x39))
+        lengths = offsets[at + 1] - offsets[at]
+        at = at[(lengths >= 7) & (lengths <= 18)]
+        if at.size:
+            taken.append(chunk.take(pyarrow.array(at, type=pyarrow.int64())))
+    return pyarrow.chunked_array(taken, type=kind)
 
 
 #: What `_arrow_text_spelling_numbers` found, by what names the text read
