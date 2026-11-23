@@ -79,7 +79,12 @@ set by your script before the call): an atom, an enum member or a tuple of
 them (a list, dict or set on a class is left out, most often a cache its
 methods fill). The entry keeps
 them, and a lookup in any process serves it only while each reads the same
-(a miss says `library setting changed`). A `ContextVar` holding something
+(a miss says `library setting changed`). Each is kept as the call first
+read it: a cached function served inside the call brings its settings too,
+except one the call had read itself before and then changed around it
+(sklearn's `_fit_context`, which runs a `fit` inside
+`config_context(skip_parameter_validation=True)` and puts it back), which
+is checked on the value the call entered with. A `ContextVar` holding something
 other than plain data cannot be compared, and the call runs uncached with a
 [`KEY-LIBRARY-STATE-UNREAD`](../warnings.md#key-library-state-unread)
 warning. Not seen: a setting held as an object or a function (a formatter
