@@ -198,6 +198,18 @@ def held_ref(obj: Any) -> Callable[[], Any]:
         return lambda: obj
 
 
+def helper_ref(obj: Any) -> Callable[[], Any]:
+    """How a report holds a helper no name leads to (``helper_objects``): a
+    weak reference, and a bound method by what it binds (`_MethodRef`). A
+    method of a module-level instance is made anew on every read, so a weak
+    reference to the one the walk met died with the walk, and the report,
+    walked or read back from disk, held a helper that was gone. Raises
+    ``TypeError`` for an object no weak reference can hold."""
+    if type(obj) is types.MethodType:
+        return _MethodRef(obj)
+    return _weak.ref(obj)
+
+
 class _MethodRef:
     """`held_ref` of a bound method: its function and its ``__self__``,
     each held as `held_ref` holds an object. Called, a method binding the

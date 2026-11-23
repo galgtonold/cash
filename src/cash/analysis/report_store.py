@@ -73,7 +73,14 @@ from ..loaded_code import code_objects_of
 from ..purity import is_pure, is_stateful
 from ..source_reading import own_source, read_code_file
 from . import scan_store, tree_memo
-from .helper_bindings import UNRESOLVED, held_ref, resolve_binding, resolve_local_import, unloaded_local_imports
+from .helper_bindings import (
+    UNRESOLVED,
+    held_ref,
+    helper_ref,
+    resolve_binding,
+    resolve_local_import,
+    unloaded_local_imports,
+)
 from .helper_code import UnwalkableLayers, callable_layers, is_mock
 from .purity_report import PurityIssue, PurityReport
 from .unloaded_modules import source_digest
@@ -1209,7 +1216,7 @@ def _read(spelled: dict, objects: list[Any]) -> PurityReport:
         issues=tuple(_read_issue(i) for i in spelled["issues"]),
         helper_source_hashes=dict(spelled["hashes"]),
         helper_resolution_paths={q: (m, tuple(c)) for q, m, c in spelled["paths"]},
-        helper_objects={q: _weak.ref(_found(p)) for q, p in spelled["held"]},
+        helper_objects={q: helper_ref(_found(p)) for q, p in spelled["held"]},
         opaque_callees=tuple(spelled["opaque"]),
         helper_bindings=tuple(bindings),
         unbound_names=tuple(tuple(u) for u in spelled["unbound"]),
