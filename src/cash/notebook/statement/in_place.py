@@ -51,6 +51,7 @@ from typing import Any
 from cash import rewrite_in_place
 from cash._referents import get_referents
 from cash._user_attrs import attribute_or, builtin_base, builtin_items, from_family, own_dict
+from cash.analysis.ast_util import walk_tree
 from cash.closure_sharing import slot_readers
 from cash.install_paths import is_user_code_module
 from cash.live_state import is_live_stream
@@ -207,7 +208,7 @@ def _bound_anew(tree: ast.AST) -> set[str]:
     (``arr += 1``), which keeps the object."""
     rebound: set[str] = set()
     augmented: set[str] = set()
-    for node in ast.walk(tree):
+    for node in walk_tree(tree):
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store | ast.Del):
             rebound.add(node.id)
         elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
