@@ -157,12 +157,16 @@ def _memos_in(value: Any, path: list[str], seen: set[int]) -> Iterator[tuple[lis
             yield [*path, *steps], memo
 
 
+_CLASS_DICT = type.__dict__["__dict__"].__get__
+
+
 def _class_memos(cls: type, seen: set[int]) -> list[tuple[list[str], Any]]:
     """The memos the body of a class holds, remembered per class until names
     are added to or taken from it. Any class: one made in a cell names the
     notebook as its module, which `is_user_module` does not know, and a
     memo is the user's by its own code (`_is_user_memo`)."""
-    namespace = vars(cls)
+    # As ``type`` reads it: ``vars(cls)`` runs a metaclass's ``__getattribute__``.
+    namespace = _CLASS_DICT(cls)
     try:
         known = _owner_memos.get(cls)
     except TypeError:

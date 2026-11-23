@@ -455,8 +455,17 @@ def classes_below(cls: type) -> list[type]:
     return found
 
 
+#: A class's ``__module__`` and ``__qualname__`` as ``type`` reads them: a
+#: metaclass's ``__getattribute__`` of the user's does not run.
+_TYPE_MODULE = type.__dict__["__module__"].__get__
+_TYPE_QUALNAME = type.__dict__["__qualname__"].__get__
+
+
 def _class_name(k: type) -> str:
-    return f"{getattr(k, '__module__', '?')}.{getattr(k, '__qualname__', k.__name__)}"
+    try:
+        return f"{_TYPE_MODULE(k)}.{_TYPE_QUALNAME(k)}"
+    except Exception:  # noqa: BLE001 - a class with no ``__module__``
+        return f"?.{_TYPE_QUALNAME(k)}"
 
 
 def _class_print(k: type) -> str:
@@ -500,7 +509,11 @@ def _registrations() -> dict[int, tuple[Any, list[str]]]:
     with _REGISTRATIONS_LOCK:
         index: dict[int, tuple[Any, list[str]]] = {}
         for k in classes_below(object):
-            if isinstance(k, abc.ABCMeta):
+            # By its real metaclass: ``isinstance`` would ask each class in
+            # the process for its ``__class__``, and a metaclass of the
+            # user's with a ``__getattribute__`` ran -- in the middle of a
+            # statement, which then was taken to make that hook's writes.
+            if issubclass(type(k), abc.ABCMeta):
                 for c in _abc_registered(k):
                     entry = index.get(id(c))
                     if entry is None:
