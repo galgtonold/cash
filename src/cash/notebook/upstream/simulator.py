@@ -1122,11 +1122,20 @@ def _readers_of_rebound(trace: list, run: list[int], restored_by_index: Mapping[
     replaced, where plain Python, running the cell, keys the new one. Run,
     it reads the object the cell binds now (and is served its own entry
     when it has one). An import binds the module it bound before, so it
-    rebinds nothing."""
+    rebinds nothing.
+
+    Not one whose every output a later statement of the plan makes again
+    before anything reads it (`_superseded`): what it built is gone when
+    the cell ends, so no object of it is kept. Run, it would pull in the
+    producers of the version it reads -- ``sales['big'] = is_big.astype(int)``
+    below a restored ``is_big`` and above a restored ``sales['c'] = ...``
+    re-ran every costly step that built ``sales`` before it."""
     rebinding = set(run) | set(restored_by_index)
     added = set(run)
     for i, entry in enumerate(trace):
         if i in added or i in restored_by_index:
+            continue
+        if _superseded(trace, i, added, restored_by_index):
             continue
         for name in entry.inputs or ():
             maker = latest_producer(trace, name, before=i)
@@ -1135,3 +1144,27 @@ def _readers_of_rebound(trace: list, run: list[int], restored_by_index: Mapping[
                 rebinding.add(i)
                 break
     return sorted(added)
+
+
+def _superseded(trace: list, i: int, run: set[int], restored_by_index: Mapping[int, dict]) -> bool:
+    """Whether every output of *trace[i]* is made again, before any
+    statement reads it, by a later statement of the plan that runs, or is
+    restored with that output -- so the value statement *i* made is not
+    the one the cell ends with, and nothing reads it."""
+    outputs = trace[i].outputs
+    if not outputs:
+        return False
+    for name in outputs:
+        for k in range(i + 1, len(trace)):
+            later = trace[k]
+            if name in (later.outputs or ()):
+                restored = restored_by_index.get(k)
+                made = k in run or (restored is not None and name in (restored.get("restored_vars") or ()))
+                if not made:
+                    return False
+                break
+            if name in (later.inputs or ()):
+                return False
+        else:
+            return False
+    return True
