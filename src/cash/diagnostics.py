@@ -454,6 +454,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         "STORE-CHUNK-FAILED",  # a chunked write failed partway; the entry is
         # incomplete on retrieval
         "CACHE-RESULT-SHARED",  # the result shares state with the caller's own object
+        "CACHE-IDENTITY-UNCHECKED",  # a result was stored without being checked
+        # for the id() of a live object (too big to look through in time)
         "CACHE-SERVED-VIEW",  # a write into a table a hit returned will not
         # reach an array taken from the table before it
         "STORE-FAILED",  # the backend refused the write

@@ -173,3 +173,27 @@ def test_a_big_int_array_holding_an_arguments_id_is_not_stored(disk_cash):
         table(thing, 300_000)
         table(thing, 300_000)
     assert runs == [300_000, 300_000]
+
+
+def test_a_result_too_big_to_look_through_is_stored_and_says_so(disk_cash, monkeypatch):
+    """The look cut short is no id() found: stored as before, with
+    CACHE-IDENTITY-UNCHECKED, not refused."""
+    from cash.notebook.statement import identity_holders
+
+    monkeypatch.setattr(identity_holders, "_MAX_SEEN", 10)
+    monkeypatch.setattr(identity_holders, "walk_time_left", lambda: False)
+    runs = []
+
+    @disk_cash.cache
+    def many(n):
+        runs.append(n)
+        return [_Thing() for _ in range(n)]
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        many(50)
+        many(50)
+    assert runs == [50], "a result the look could not finish was not stored"
+    codes = _codes(caught)
+    assert "CACHE-IDENTITY-UNCHECKED" in codes
+    assert "STORE-IDENTITY-HELD" not in codes

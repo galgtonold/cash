@@ -47,6 +47,7 @@ from ..exceptions import (
     CashCacheStoreFailedWarning,
     CashImpureFunctionError,
     CashImpurityWarning,
+    CashWarning,
 )
 from ..install_paths import is_user_code_module, is_user_module
 from ..kept_state import reduce_counted
@@ -1329,17 +1330,24 @@ class PurityChecks:
         and module globals of *func* hold, as a number or spelled in text
         (``'k' + str(id(x))``, ``f"run-{id(x)}"``, a default ``repr``
         ``<Q object at 0x7f...>``), or a weak reference to an object outside
-        it; or the look could not finish within *seconds*. The notebook's
-        detector decides (`returned_identity_reason`), as it does for a
-        statement's value (``NOTEBOOK-IDENTITY-HELD``).
+        it (``STORE-IDENTITY-HELD``). The notebook's detector decides
+        (`returned_identity_reason`), as it does for a statement's value
+        (``NOTEBOOK-IDENTITY-HELD``).
 
         A hit in another process would hand back the old process's address
         where a plain run gives the current one, and a hit in this one an
-        address whose object may be gone. Not stored, so every call runs."""
-        from ..notebook.statement.identity_holders import returned_identity_reason
+        address whose object may be gone. Not stored, so every call runs.
 
-        reason = returned_identity_reason(result, _identity_holders(func, call_args), seconds)
+        When the look cannot finish -- the result is too big to look through
+        within *seconds*, holds an object cash does not look inside next to
+        such a number, or the detector cannot be imported (the notebook
+        package left out) -- the result is stored as before, and
+        ``CACHE-IDENTITY-UNCHECKED`` says once that it was not checked."""
+        reason = _identity_reason(result, _identity_holders(func, call_args), seconds)
         if reason is None:
+            return False
+        if type(reason) is str:  # not an IdentityHeld, itself a str: the check was not run
+            self._warn_identity_unchecked(func_name, reason)
             return False
         if reason.kind == "an id()" and reason.what is None:
             what = (
@@ -1355,10 +1363,12 @@ class PurityChecks:
                 "reference does not find, so the result was returned but not cached."
             )
         else:
-            what = (
-                f"@cash.cache on {func_name}: cash could not tell whether the result holds the id() of a "
-                f"live object or a weak reference ({reason}), so the result was returned but not cached."
-            )
+            # The notebook's words, up to where they say what the notebook
+            # does about it: "'the result' holds more objects than cash looks
+            # through".
+            why = str(reason).split("; it could")[0].split(", so the statement")[0].split(", and the notebook")[0]
+            self._warn_identity_unchecked(func_name, why.replace("'the result'", "the result"))
+            return False
         self._notices.warn_once(
             CashCacheStoreFailedWarning,
             func_name,
@@ -1369,6 +1379,21 @@ class PurityChecks:
             "or its default repr; if the id is the point, do not cache the function.",
         )
         return True
+
+    def _warn_identity_unchecked(self, func_name: str, why: str) -> None:
+        """Say once that *func_name*'s result was stored without knowing
+        whether it holds a live object's ``id()`` (*why*)."""
+        self._notices.warn_once(
+            CashWarning,
+            func_name,
+            "identity_unchecked",
+            f"@cash.cache on {func_name}: the result was stored without being checked for the id() of a "
+            f"live object or a weak reference ({why}). If it holds one, a cache hit hands back the old "
+            "address where running the function gives the current one.",
+            code="CACHE-IDENTITY-UNCHECKED",
+            fix="nothing, if the result holds no id() or default repr of an object; otherwise return a "
+            "name or key of your own for the object, or do not cache the function.",
+        )
 
     def _checked_arguments(self, func_name: str, args: tuple, kwargs: dict) -> tuple[tuple, dict]:
         """The arguments the in-place-change check looks at, canonicalised
@@ -2371,6 +2396,28 @@ def identity_moved(snapshot: tuple | None, value: Any) -> bool:
     if now is None or len(now) != len(before):
         return now is not None or bool(before)
     return any(k1 != k2 or v1 is not v2 for (k1, v1), (k2, v2) in zip(before, now))
+
+
+def _identity_reason(result: Any, holders: dict[str, Any], seconds: float) -> Any:
+    """`returned_identity_reason` for *result*, or a text saying why it could
+    not be asked: its module is in the notebook package, which an install
+    may leave out (``test_decorator_without_notebook``)."""
+    global _RETURNED_IDENTITY_REASON
+    if _RETURNED_IDENTITY_REASON is None:
+        try:
+            from ..notebook.statement.identity_holders import returned_identity_reason
+        except ImportError as error:
+            _RETURNED_IDENTITY_REASON = f"cash's identity check could not be imported: {error}"
+        else:
+            _RETURNED_IDENTITY_REASON = returned_identity_reason
+    if isinstance(_RETURNED_IDENTITY_REASON, str):
+        return _RETURNED_IDENTITY_REASON
+    return _RETURNED_IDENTITY_REASON(result, holders, seconds)
+
+
+#: The detector `_identity_reason` asks, imported on first use, or why it
+#: could not be.
+_RETURNED_IDENTITY_REASON: Any = None
 
 
 def _identity_holders(func: Callable | None, call_args: tuple[tuple, dict] | None) -> dict[str, Any]:
