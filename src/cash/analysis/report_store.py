@@ -1372,6 +1372,7 @@ def load(func: Callable[..., Any]) -> PurityReport | None:
             STATS["loaded"] += 1
             return report
     STATS["stale"] += 1
+    _STALE.add((root, text))
     return None
 
 
@@ -1448,11 +1449,18 @@ _PENDING: list[tuple[Any, tuple[str, tuple[str, ...], str], dict]] = []
 _FLUSH_EVERY = 64
 #: A walk that took less CPU time than working out its guards (which
 #: reading the report back does again) and reading its file is not stored:
-#: walking it again costs less than checking it would. CPU time of this
-#: thread, so a busy machine does not tip it -- where that clock is fine:
-#: on Windows it moves in 15.6 ms ticks, read every walk as 0 s and so as
-#: too cheap to store, and nothing was ever stored (`fine_thread_clock`).
+#: walking it again costs less than checking it would, unless an entry
+#: with its text is stored already, which is checked anyway (`_STALE`).
+#: CPU time of this thread, so a busy machine does not tip it -- where
+#: that clock is fine: on Windows it moves in 15.6 ms ticks, read every
+#: walk as 0 s and so as too cheap to store, and nothing was ever stored
+#: (`fine_thread_clock`).
 _READ_COST = 0.0005
+#: (root, text) of each function whose stored entries `load` found stale in
+#: this process. Its walk is stored whatever it cost: every later process
+#: checks those entries, with this text, before it walks, so leaving the
+#: walk out of the store does not spare the check, it adds the walk to it.
+_STALE: set[tuple[tuple[str, tuple[str, ...], str], str]] = set()
 
 
 def save(func: Callable[..., Any], report: PurityReport, walk: Any, seconds: float | None = None) -> None:
@@ -1479,7 +1487,9 @@ def save(func: Callable[..., Any], report: PurityReport, walk: Any, seconds: flo
     except Exception:  # noqa: BLE001 - a report that cannot be spelled is not stored; the walk stands
         STATS["refused"] += 1
         return
-    if seconds is not None and seconds < clock() - start + _READ_COST:
+    stale = (root, text) in _STALE
+    _STALE.discard((root, text))
+    if seconds is not None and not stale and seconds < clock() - start + _READ_COST:
         STATS["cheap"] += 1
         return
     _PENDING.append((directory, root, entry))
