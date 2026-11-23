@@ -22,14 +22,31 @@ The file-snapshot helper (`snapshot_file_deps`) lives in
 :mod:`cash.tracking.file_dep_snapshot`, not here: it has cross-subsystem
 callers (the decorator path in ``src/cash/core.py`` and
 ``upstream/virtual_lineage.py``).
+
+The names are imported when first asked for (`__getattr__`), so a module of
+this package the decorator path reads (`identity_holders`) is imported without
+the processor and everything it imports.
 """
 
 from __future__ import annotations
 
-from ._metadata import StatementCacheMetadata
-from .control_body import is_control_body
-from .processor import StatementProcessor
-from .results import DecoratorCallMetric, ProcessResult
+import importlib
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ._metadata import StatementCacheMetadata
+    from .control_body import is_control_body
+    from .processor import StatementProcessor
+    from .results import DecoratorCallMetric, ProcessResult
+
+#: Each public name, and the module of this package it is defined in.
+_HOMES = {
+    "DecoratorCallMetric": ".results",
+    "ProcessResult": ".results",
+    "StatementCacheMetadata": "._metadata",
+    "StatementProcessor": ".processor",
+    "is_control_body": ".control_body",
+}
 
 __all__ = [
     "DecoratorCallMetric",
@@ -38,3 +55,12 @@ __all__ = [
     "StatementProcessor",
     "is_control_body",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    home = _HOMES.get(name)
+    if home is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(importlib.import_module(home, __name__), name)
+    globals()[name] = value
+    return value

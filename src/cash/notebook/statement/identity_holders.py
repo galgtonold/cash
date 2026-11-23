@@ -65,10 +65,17 @@ from cash._user_attrs import attribute_or, builtin_base, builtin_items, has_attr
 from cash._weak import callback_of, is_cash_ref
 from cash.closure_sharing import slot_readers
 from cash.install_paths import is_user_code_module
-from cash.notebook.shared_objects import library_exact_values, walk_time_left
+from cash.notebook.shared_objects import library_exact_values, walk_budget, walk_time_left
 from cash.value_types import IMMUTABLE_LEAF_TYPES
 
-__all__ = ["IdentityHeld", "end_cell_reads", "forget_flat_reads", "identity_held_reason", "library_parts"]
+__all__ = [
+    "IdentityHeld",
+    "end_cell_reads",
+    "forget_flat_reads",
+    "identity_held_reason",
+    "library_parts",
+    "returned_identity_reason",
+]
 
 #: A container with more items is read at C speed when it holds only
 #: leaves or records of them, and walked item by item otherwise.
@@ -388,6 +395,39 @@ def identity_held_reason(
             f"({type(error).__name__}: {error}), so this statement runs every time instead."
         )
         return IdentityHeld(f"'{name}' could not be looked through", name, "an id()", what)
+
+
+def returned_identity_reason(value: Any, holders: dict[str, Any], seconds: float) -> IdentityHeld | None:
+    """For ``@cash.cache``: why *value*, what a call returned, must not be
+    served from the cache, as `identity_held_reason` tells it for a
+    statement's value; None when it may.
+
+    *holders* stands in for the notebook's variables: the call's arguments,
+    the function's closure and defaults, and the module globals it can
+    read. An ``int`` of the value, or one spelled in its text
+    (``f"run-{id(x)}"``, a default ``repr``), is an ``id()`` when it is that
+    of an object the value or one of *holders* holds. Served in another
+    process, it would name the old process's address where a plain run
+    names the new one's; in this one, an object that may be gone. A weak
+    reference to an object outside the value, or one a holder keeps to the
+    value, is refused as well: a hit hands back a copy.
+
+    The walk may take *seconds* of this thread's CPU time past `_MAX_SEEN`
+    objects (`walk_budget`); a value it cannot finish is refused, as it
+    could hold either. The memo of big containers read in a cell
+    (`_FLAT_READS`), which keeps the very objects it read until the cell
+    ends, is left as it was: outside a notebook no cell ends to clear it."""
+    if _plain_tree_without_ids(value):
+        return None
+    kept = {length: list(reads) for length, reads in _FLAT_READS.items()}
+    count = _flat_kept[0]
+    try:
+        with walk_budget(seconds):
+            return identity_held_reason("the result", value, holders, id_free=False)
+    finally:
+        _FLAT_READS.clear()
+        _FLAT_READS.update(kept)
+        _flat_kept[0] = count
 
 
 def _held_by_id(

@@ -44,6 +44,7 @@ from ..effects import EffectKind
 from ..exceptions import (
     SOURCE_RETRIEVAL_ERRORS,
     CashCacheIneffectiveWarning,
+    CashCacheStoreFailedWarning,
     CashImpureFunctionError,
     CashImpurityWarning,
 )
@@ -1319,6 +1320,56 @@ class PurityChecks:
         )
         return True
 
+    def refuses_identity_held(
+        self, func: Callable | None, func_name: str, result: Any, call_args: tuple[tuple, dict] | None, seconds: float
+    ) -> bool:
+        """True when *result* must never be stored because it finds an
+        object by its identity: it holds the ``id()`` of an object that the
+        result, the call's arguments (*call_args*), or the closure, defaults
+        and module globals of *func* hold, as a number or spelled in text
+        (``'k' + str(id(x))``, ``f"run-{id(x)}"``, a default ``repr``
+        ``<Q object at 0x7f...>``), or a weak reference to an object outside
+        it; or the look could not finish within *seconds*. The notebook's
+        detector decides (`returned_identity_reason`), as it does for a
+        statement's value (``NOTEBOOK-IDENTITY-HELD``).
+
+        A hit in another process would hand back the old process's address
+        where a plain run gives the current one, and a hit in this one an
+        address whose object may be gone. Not stored, so every call runs."""
+        from ..notebook.statement.identity_holders import returned_identity_reason
+
+        reason = returned_identity_reason(result, _identity_holders(func, call_args), seconds)
+        if reason is None:
+            return False
+        if reason.kind == "an id()" and reason.what is None:
+            what = (
+                f"@cash.cache on {func_name}: the result holds the id() of a live object, as a number "
+                "or inside text (str(id(x)), f\"run-{id(x)}\", a default repr '<Q object at 0x...>'). "
+                "A cache hit would hand back that old address, where running the function gives the "
+                "object's current one, so the result was returned but not cached."
+            )
+        elif reason.kind == "a weak reference":
+            what = (
+                f"@cash.cache on {func_name}: the result holds a weak reference to an object outside it, "
+                "or an object a weak reference elsewhere finds. A cache hit hands back a copy the "
+                "reference does not find, so the result was returned but not cached."
+            )
+        else:
+            what = (
+                f"@cash.cache on {func_name}: cash could not tell whether the result holds the id() of a "
+                f"live object or a weak reference ({reason}), so the result was returned but not cached."
+            )
+        self._notices.warn_once(
+            CashCacheStoreFailedWarning,
+            func_name,
+            "identity_held",
+            what,
+            code="STORE-IDENTITY-HELD",
+            fix="return the object itself, or a name or key of your own for it, rather than its id() "
+            "or its default repr; if the id is the point, do not cache the function.",
+        )
+        return True
+
     def _checked_arguments(self, func_name: str, args: tuple, kwargs: dict) -> tuple[tuple, dict]:
         """The arguments the in-place-change check looks at, canonicalised
         (`ArgHasher.normalize_call_args`): every one, except the parameters
@@ -2320,3 +2371,28 @@ def identity_moved(snapshot: tuple | None, value: Any) -> bool:
     if now is None or len(now) != len(before):
         return now is not None or bool(before)
     return any(k1 != k2 or v1 is not v2 for (k1, v1), (k2, v2) in zip(before, now))
+
+
+def _identity_holders(func: Callable | None, call_args: tuple[tuple, dict] | None) -> dict[str, Any]:
+    """What a cached call's result may hold the ``id()`` of besides itself,
+    as `returned_identity_reason` takes it: the call's arguments, the
+    function's closure and defaults, and the globals of its module."""
+    holders: dict[str, Any] = {}
+    target = getattr(func, "__func__", func)
+    try:
+        target = inspect.unwrap(target) if target is not None else None
+    except ValueError:  # a cycle of __wrapped__
+        pass
+    if isinstance(target, types.FunctionType):
+        holders.update(target.__globals__)
+        cells = []
+        for cell in target.__closure__ or ():
+            try:
+                cells.append(cell.cell_contents)
+            except ValueError:  # an empty cell
+                continue
+        holders["<closure>"] = cells
+        holders["<defaults>"] = (target.__defaults__, target.__kwdefaults__)
+    if call_args is not None:
+        holders["<arguments>"] = call_args
+    return holders

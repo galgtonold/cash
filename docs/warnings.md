@@ -8,7 +8,7 @@ search:
 !!! info "Applies to: both paths"
     Every warning code cash emits, for `@cash.cache` users and notebook users. Each code says which path it comes from.
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @f40a1c88 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @12f2de54 -->
 Every cash warning starts with a code in square brackets, such as
 `[CACHE-THRASH]`, and ends with a link to that code's section below.
 
@@ -90,7 +90,7 @@ its warning class.
 | [Notebook](#notebook-codes) | `NOTEBOOK-` | 30 | Only in notebooks: the cells around the one you run, or a statement cash runs every time to stay safe. |
 | [Randomness](#random-codes) | `RANDOM-` | 5 | A cached value that randomness makes non-reproducible. |
 | [Remote files](#remote-codes) | `REMOTE-` | 3 | Checking whether a remote file changed. |
-| [Storing results](#store-codes) | `STORE-` | 15 | The call succeeded, but its result was not written. |
+| [Storing results](#store-codes) | `STORE-` | 16 | The call succeeded, but its result was not written. |
 
 ## Annotations {#annot-codes}
 
@@ -3258,6 +3258,7 @@ The call succeeded, but its result was not written. Every code here starts `STOR
 | [STORE-CODE-SWAPPED](#store-code-swapped) | decorator | a function's code is replaced in memory during every call; not stored |
 | [STORE-DEFAULT-CHANGED](#store-default-changed) | notebook | a call changed its callee's default (a memo default); not stored |
 | [STORE-FAILED](#store-failed) | both | the backend refused the write |
+| [STORE-IDENTITY-HELD](#store-identity-held) | decorator | the result holds the `id()` of a live object, or a weak reference; not stored |
 | [STORE-INPUT-CHANGED](#store-input-changed) | decorator | an input file changed during the call; not stored |
 | [STORE-LOCK-FAILED](#store-lock-failed) | decorator | the per-key lock failed; ran without it |
 | [STORE-METADATA-INVALID](#store-metadata-invalid) | decorator | a stored entry's metadata is unreadable |
@@ -3379,6 +3380,40 @@ the same code (`def ensemble(c, tsps=(greedy, rep))` after the cells
 defining `greedy` and `rep` ran again).
 
 **When it is safe to ignore.** A one-off on a cheap function.
+
+### STORE-IDENTITY-HELD {#store-identity-held}
+
+<span class="md-tag cash-warning-path">decorator</span> <span class="md-tag cash-warning-class">CashCacheStoreFailedWarning</span>
+
+<!-- claim: cash/decorator/purity_checks.py:PurityChecks.refuses_identity_held @44511784, cash/notebook/statement/identity_holders.py:returned_identity_reason @6f24efda -->
+**What happened.** The result finds an object by its identity: it holds the
+`id()` of an object that is alive, either as a number (`return id(x)`,
+`{id(x): "x"}`) or spelled in text (`'k' + str(id(x))`, `f"run-{id(x)}"`,
+`hex(id(x))`, an object's default `repr`, `<Q object at 0x7f...>`), or it
+holds a weak reference to an object outside it. The object is one the result
+itself, the call's arguments, or the function's closure, defaults or module
+globals hold. The result was returned but not stored. The same check keeps
+such a value out of a notebook's cache
+([NOTEBOOK-IDENTITY-HELD](#notebook-identity-held)). A result cash cannot
+look through in time (twice what the call took, and at least a second), or
+that holds an object it does not look inside next to such a number, is not
+stored either, and the message says so.
+
+**Why it matters.** An address is only good in the process that took it,
+while the object lives. A cache hit in another process would hand back the
+old process's number or text, where running the function gives the
+object's current one; a hit in this process could name an object that is
+gone. A weak reference served from the cache finds nothing, or a copy.
+
+**What to do.** Return the object itself, or a name or key of your own for
+it (a counter, a field it holds), instead of its `id()` or its default
+`repr`. Give the class a `__repr__` of its own if the text is what you
+need. If the id is the point, do not cache the function.
+
+**When it is safe to ignore.** When the function is cheap: it runs every
+time, which is what plain Python does. A number that only happens to equal
+an object's address is refused too; that is rare, since it must be a
+multiple of 8 inside the memory the process uses.
 
 ### STORE-INPUT-CHANGED {#store-input-changed}
 

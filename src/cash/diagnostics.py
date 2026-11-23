@@ -457,6 +457,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset(
         "CACHE-SERVED-VIEW",  # a write into a table a hit returned will not
         # reach an array taken from the table before it
         "STORE-FAILED",  # the backend refused the write
+        "STORE-IDENTITY-HELD",  # the result holds the id() of a live object
+        # (or a weak reference), which a hit would hand back stale: not stored
         "STORE-INPUT-CHANGED",  # a file the call read changed before it
         # returned, so the result was not stored
         "STORE-LOCK-FAILED",  # lock acquisition failed; proceeding unlocked

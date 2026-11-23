@@ -348,6 +348,10 @@ paths from the project root or pass absolute paths.
   ([`CACHE-IDENTITY-COUPLED`](warnings.md#cache-identity-coupled)): a restored
   copy would become pyplot's "current figure" and `plt.savefig()` would save a
   blank image. Cache the data and draw from it.
+- A result holding the `id()` of a live object, as a number or in text
+  (`f"run-{id(x)}"`, a default `repr` such as `<Q object at 0x7f...>`), is
+  not stored ([`STORE-IDENTITY-HELD`](warnings.md#store-identity-held)): a
+  hit in another process would hand back the old process's address.
 - A result that can't be pickled is not stored
   ([`STORE-FAILED`](warnings.md#store-failed)), unless the function is
   `frozen=True`.
