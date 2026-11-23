@@ -1188,7 +1188,7 @@ or is given.
 
 <!-- claim: cash/effects.py:environment_input @cc5c0e0f, cash/decorator/environment_fold.py:EnvironmentFold.fold_environment @db1c6b07 -->
 <!-- claim: cash/analysis/purity_flow.py:is_log_helper @6bf250bd, cash/analysis/ambient_reads.py:log_helper_names @39516f3a -->
-<!-- claim: cash/analysis/ambient_reads.py:clock_helper_read @45c0a5ab -->
+<!-- claim: cash/analysis/ambient_reads.py:clock_helper_read @1e8c2112 -->
 An environment read with the name written out (`os.getenv("TENANT")`,
 `"DEBUG" in os.environ`) or held in a module constant named in capitals
 (`os.getenv(TENANT_VAR)`), what a standard-library helper reads for you

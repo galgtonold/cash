@@ -32,6 +32,8 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any
 
+from .. import source_reads
+
 __all__ = [
     "fresh_name_nodes",
     "fresh_flow_nodes",
@@ -698,8 +700,10 @@ _RETURNS_DEPTH_LIMIT = 3
 _RETURNS_DEPTH: ContextVar[int] = ContextVar("_RETURNS_DEPTH", default=0)
 #: CO_GENERATOR | CO_COROUTINE | CO_ITERABLE_COROUTINE | CO_ASYNC_GENERATOR
 _RESUMABLE_FLAGS = 0x20 | 0x80 | 0x100 | 0x200
-#: (function, depth) -> `returns_fresh`, for one `resolve_fresh_call_candidates`.
-_RETURNS_MEMO: ContextVar[dict[tuple[Any, int], bool] | None] = ContextVar("_RETURNS_MEMO", default=None)
+#: (function, depth) -> (`returns_fresh`, the source it read), for one `resolve_fresh_call_candidates`.
+_RETURNS_MEMO: ContextVar[dict[tuple[Any, int], tuple[bool, source_reads.Reads]] | None] = ContextVar(
+    "_RETURNS_MEMO", default=None
+)
 
 
 def returns_fresh(fn: Any) -> bool:
@@ -727,10 +731,16 @@ def returns_fresh(fn: Any) -> bool:
     if memo is None:
         return _returns_fresh(fn, code, depth)
     key = (fn, depth)
-    answer = memo.get(key)
-    if answer is None:
-        answer = memo[key] = _returns_fresh(fn, code, depth)
-    return answer
+    kept = memo.get(key)
+    if kept is None:
+        # With the source it read, which a later body asking again read too
+        # (`cash.source_reads`).
+        with source_reads.recording() as reads:
+            answer = _returns_fresh(fn, code, depth)
+        kept = memo[key] = (answer, reads)
+    else:
+        source_reads.replay(kept[1])
+    return kept[0]
 
 
 def _returns_fresh(fn: types.FunctionType, code: types.CodeType, depth: int) -> bool:

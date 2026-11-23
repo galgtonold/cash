@@ -50,7 +50,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from itertools import chain, compress, product, repeat
 from typing import Any, NamedTuple
 
-from .. import _plain_data, _weak
+from .. import _plain_data, _weak, source_reads
 from .._inspect_cache import forget_static_lookups
 from .._memo import CODE_OBJECTS, LruMemo
 from .._paths import is_pseudo_filename
@@ -2632,6 +2632,7 @@ def _source_of(fn: types.FunctionType) -> str | None:
     """*fn*'s own source: a ``functools.wraps`` wrapper's, not the wrapped
     function's (`own_source`), as the memo is keyed by the code that runs."""
     code = fn.__code__
+    source_reads.note_object(fn)  # before the memo: a walk that finds it there read it all the same
     if code in _SOURCES:
         return _SOURCES.get(code)
     try:
@@ -3144,6 +3145,7 @@ _CALL_FACTS: LruMemo[Any, _CallFacts | None] = LruMemo(CODE_OBJECTS)
 
 def _call_facts(fn: types.FunctionType) -> _CallFacts | None:
     code = fn.__code__
+    source_reads.note_object(fn)  # before the memo, as above
     if code in _CALL_FACTS:
         return _CALL_FACTS.get(code)
     source = _source_of(fn)

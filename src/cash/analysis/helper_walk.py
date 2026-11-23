@@ -35,7 +35,7 @@ import types
 from collections.abc import Callable, Iterator
 from typing import Any, NamedTuple
 
-from .. import _weak
+from .. import _weak, source_reads
 from .._annotation_refs import annotation_referents
 from ..code_digest import callable_identity, compiled_identity, extension_file_digest
 from ..effects import EffectKind
@@ -227,6 +227,8 @@ class HelperWalk:
         #: different method, which was then skipped as already walked.
         self._keep_alive: list[Any] = []
         self._unwalkable = ""
+        #: What the walk read of the source beyond what it visited.
+        self._reads = source_reads.Reads()
         #: `top_package` of the root's module: all of the root a callable's
         #: own walk depends on (`is_user_code` and the unloaded-import rules
         #: read nothing else of it).
@@ -270,6 +272,11 @@ class HelperWalk:
         """``id`` of each visited callable -> the name its key part went under."""
         return {id(f): self._walked_names[_walk_id(f)] for f in self._keep_alive if _walk_id(f) in self._walked_names}
 
+    def source_read(self) -> source_reads.Reads:
+        """The source the walk read besides the text of what it visited
+        (`cash.source_reads`), each read noted once per walk."""
+        return self._reads
+
     def local_imports_read(self) -> list[tuple[str, tuple[str, ...], tuple[str, ...]]]:
         """The imports written in the audited bodies (`_put_local_import`)."""
         return list(self._local_imports)
@@ -280,8 +287,10 @@ class HelperWalk:
         # One walk binds nothing anew: a helper's `returns_fresh` answer,
         # asked of every body that calls it, is worked out once.
         try:
-            with returns_memo():
+            # Whatever the walk reads outside one callable's walk too.
+            with returns_memo(), source_reads.recording() as reads:
                 self._run()
+            self._reads.merge(reads)
         finally:
             fact_store.flush()
         if self._layer_failures and not self._unwalkable:
@@ -402,7 +411,7 @@ class HelperWalk:
             # A bound method is made anew on every read: kept in the memo, it
             # would outlive the walk, and a weak reference the report holds
             # to it would stay alive where the walk's own dies.
-            self._walk_one(entry, qualname)
+            self._walk_one_noting_reads(entry, qualname)
             return
         slot = (
             id(func),
@@ -423,10 +432,20 @@ class HelperWalk:
         record: list[tuple[str, tuple]] = []
         self._record = record
         try:
-            self._walk_one(entry, qualname)
+            self._walk_one_noting_reads(entry, qualname)
         finally:
             self._record = None
         memo[slot] = (func, record)  # holds func, so its id is not reused
+
+    def _walk_one_noting_reads(self, entry: _Entry, qualname: str) -> None:
+        """`_walk_one`, noting the source it reads (`cash.source_reads`) as
+        one of its changes, so a walk that replays it notes them too."""
+        with source_reads.recording() as reads:
+            try:
+                self._walk_one(entry, qualname)
+            finally:
+                if reads:
+                    self._emit("_put_reads", reads)
 
     def _emit(self, name: str, *args: Any) -> None:
         """Make one change to this walk (the ``_put_`` method *name*), and
@@ -436,6 +455,9 @@ class HelperWalk:
         getattr(self, name)(*args)
 
     # --- the changes one callable's walk makes (see `_visit`) ---
+
+    def _put_reads(self, reads: source_reads.Reads) -> None:
+        self._reads.merge(reads)
 
     def _put_opaque(self, qualname: str) -> None:
         self._opaque.append(qualname)

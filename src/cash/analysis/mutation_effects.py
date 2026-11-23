@@ -28,6 +28,7 @@ from typing import Any
 from cash._referents import get_referents
 from cash._user_attrs import attribute_or, instance_of, is_routine
 
+from .. import source_reads
 from ..content_hashers import builtin_hash_family
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..install_paths import is_user_code_file
@@ -168,6 +169,7 @@ def live_function_source(name: str, namespace: Mapping[str, Any]) -> str | None:
         if type(fn) is not types.FunctionType or not is_user_code_file(fn.__code__.co_filename):
             return None
         try:
+            source_reads.note_object(fn)
             return inspect.getsource(fn)
         except SOURCE_RETRIEVAL_ERRORS:
             return None
@@ -180,6 +182,7 @@ def live_function_source(name: str, namespace: Mapping[str, Any]) -> str | None:
             # ``rcParams``; what a library call changes is told at run time.
             return None
         try:
+            source_reads.note_object(fn)
             return inspect.getsource(fn)
         except SOURCE_RETRIEVAL_ERRORS:
             pass
@@ -197,6 +200,7 @@ def live_function_source(name: str, namespace: Mapping[str, Any]) -> str | None:
         candidate = module_globals.get(name)
         if callable(candidate) and not isinstance(candidate, type) and not _library_function(candidate):
             try:
+                source_reads.note_object(candidate)
                 return inspect.getsource(candidate)
             except SOURCE_RETRIEVAL_ERRORS:
                 continue

@@ -17,6 +17,7 @@ import textwrap
 import types
 from typing import Any
 
+from .. import source_reads
 from .._memo import CODE_OBJECTS, LruMemo
 from ..effects import (
     CLOCK_WHEN_ARG_CALLS,
@@ -129,6 +130,7 @@ def clock_helper_read(value: Any) -> str | None:
         # A library function (`os.path.isdir`) is not the user's helper, and
         # reading its source inside a cached call would record the read.
         return None
+    source_reads.note_object(value)  # before the memo: a walk that finds it there read it all the same
     known = _CLOCK_HELPER_CACHE.get(code, _NOT_JUDGED)
     if known is not _NOT_JUDGED:
         return known
@@ -215,6 +217,7 @@ def _is_log_helper_function(value: Any) -> bool:
     code = getattr(value, "__code__", None)
     if type(value) is not types.FunctionType or code is None:
         return False
+    source_reads.note_object(value)  # before the memo, as above
     known = _LOG_HELPER_CACHE.get(code)
     if known is None:
         try:

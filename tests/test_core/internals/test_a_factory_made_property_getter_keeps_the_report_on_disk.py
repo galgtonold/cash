@@ -122,6 +122,9 @@ def test_an_edit_to_what_the_getter_runs_walks_it_again_and_misses(tmp_path):
     _write(code, _PRESETS.replace("return 3", "return 5"))
     edited = _run(code)
     # The stored report of the getter that reaches the edit is not used,
-    # and the call is not served from before the edit.
-    assert edited["getters"]["stale"] >= 1 and not edited["getters"]["loaded"], edited["getters"]
+    # and the call is not served from before the edit. The other getter
+    # reads nothing the edit touched (the function it reaches is another of
+    # the same file): its report is read back.
+    assert edited["getters"]["stale"] == 1 and edited["getters"]["loaded"] == 1, edited["getters"]
     assert edited["value"] == [10, True]
+    assert _run(code, verify=True)["stats"]["verified"] >= 2
