@@ -126,7 +126,7 @@ def test_a_text_spelling_no_object_s_id_is_restored(cash_magics, cash_instance, 
         ("k{h}", "h"),
         ("<Q object at {h}>", "h"),
         ("x{h}zz", "h"),
-        ("12{d}", "d"),  # glued to other digits: a run longer than any address
+        ("123456{d}", "d"),  # glued to other digits: a run longer than any address
         ("{d}{d}", "d"),
         ("a\n{d}\nb", "d"),
     ],
