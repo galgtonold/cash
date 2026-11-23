@@ -16,6 +16,7 @@ import textwrap
 from collections.abc import Callable
 from typing import Any
 
+from .. import source_reads
 from .._memo import MODULE_ANALYSES, LruMemo
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
 from ..source_reading import settled_source_version, source_version_unchanged
@@ -50,6 +51,8 @@ def module_modified_globals(module: Any) -> frozenset[str]:
     on the file's version, so each helper the walk meets in a big module does
     not read and hash the whole file again to find the scan it already did.
     """
+    # What a stored report that read this checks again (`report_store`).
+    source_reads.note_scan(getattr(module, "__name__", None))
     version = settled_source_version(module)
     if version is not None:
         hit = _MODULE_MUTATIONS.get(version)

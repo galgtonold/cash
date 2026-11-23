@@ -16,8 +16,14 @@ the same in the process asking:
   each found again from where its module holds it (an edit, a comment, a
   waiver, a revert, a function moved or rebound is a different text or a
   different object), and its key digest (`callable_identity`);
-* the whole text of each file those callables are defined in (its imports,
-  its globals, the class bodies);
+* of each file those callables are defined in, what the walk took from it
+  beyond their own text (`_plan`): the file with its function bodies cut
+  out (its imports, its globals, the class bodies, the conditions a
+  definition sits under), the whole text where the walk read more of it
+  than what it visited (`cash.source_reads`), which globals its functions
+  change where the walk asked. A finding's line is kept from the start of
+  the function holding it, so lines added above it move it with it. An
+  edit to a function no part of the walk read leaves the report as it is;
 * what every global, closure cell and default each visited function names
   is bound to now (`_token`: a module by name, a function or class by
   module, name and file and its ``@pure`` / ``@stateful`` mark, any other
@@ -41,20 +47,23 @@ and raises `StoredReportMismatch` when the report differs.
 
 from __future__ import annotations
 
+import ast
 import atexit
+import dataclasses
 import functools
 import hashlib
 import inspect
 import json
+import re
 import sys
 import types
 import weakref
 from collections.abc import Callable
 from typing import Any
 
-from .. import _weak
+from .. import _weak, source_reads
 from .._clock import fine_thread_clock
-from .._memo import CODE_OBJECTS, LruMemo
+from .._memo import CODE_OBJECTS, MODULE_ANALYSES, LruMemo
 from .._paths import is_pseudo_filename
 from ..code_digest import callable_identity
 from ..effects import EffectKind
@@ -63,7 +72,7 @@ from ..install_paths import top_package
 from ..loaded_code import code_objects_of
 from ..purity import is_pure, is_stateful
 from ..source_reading import own_source, read_code_file
-from . import scan_store
+from . import scan_store, tree_memo
 from .helper_bindings import UNRESOLVED, held_ref, resolve_binding, resolve_local_import, unloaded_local_imports
 from .helper_code import UnwalkableLayers, callable_layers, is_mock
 from .purity_report import PurityIssue, PurityReport
@@ -72,7 +81,7 @@ from .unloaded_modules import source_digest
 __all__ = ["STATS", "StoredReportMismatch", "flush", "load", "save", "status"]
 
 #: Layout of a stored file; a change makes every older one a miss.
-_FORMAT = 6
+_FORMAT = 7
 _KIND = "purity-report"
 #: Reports kept per function: its recent texts, and the worlds they ran in.
 _MAX_ENTRIES = 8
@@ -792,6 +801,195 @@ def _identity(live: Any, files: dict[str, str | None]) -> str:
     return identity
 
 
+# --- what a report checks of the files it read ---
+#
+# A report is not checked against the whole text of each file its helpers
+# are in: an edit to a function the walk never read would make every report
+# that visits any other function of that file stale, and a commit touching
+# one module had every cached function reaching it walked again. What the
+# walk took from a file is checked instead:
+#
+# * the text of each callable it visited, on its own (`_object_guard`);
+# * the file's outline (`_outline_of`): its text with the body of every
+#   function cut out, which holds its imports, its globals, the class
+#   bodies, the decorators, the signatures and defaults, every ``if`` a
+#   definition sits under, and a module ``__getattr__`` whole;
+# * the whole text of a file the walk read whole, or of one holding a
+#   callable whose text it read without visiting it (`cash.source_reads`
+#   notes both), or a visited callable whose own text cannot be checked
+#   (`_plan`);
+# * which globals each module whose global-change scan it read has its
+#   functions change (`mutable_globals.module_modified_globals`), the one
+#   answer it takes from bodies it does not visit;
+# * nothing of where a function starts: a finding's line is kept as an
+#   offset into the visited function holding it, and numbered again from
+#   where it starts when read back (`_anchored`).
+
+_OUTLINE_KIND = "file-outline"
+#: (path, digest of its text) -> digest of its outline.
+_OUTLINES: LruMemo[tuple[str, str], str] = LruMemo(MODULE_ANALYSES)
+#: Functions kept whole in an outline: what a name a module or class does
+#: not bind reads as.
+_WHOLE_FUNCTIONS = frozenset({"__getattr__", "__dir__"})
+#: Comments that say something to cash, wherever they are.
+_CASH_COMMENT = re.compile(rb"#[^\n]*@cash[^\n]*")
+
+
+def _cut_bodies(tree: ast.Module) -> None:
+    """Replace the body of every function in *tree* by ``...``, but a
+    `_WHOLE_FUNCTIONS` one's. A signature, a default or a decorator holds
+    no body (a lambda's is an expression) and stays."""
+    stack: list[ast.AST] = [tree]
+    while stack:
+        node = stack.pop()
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if child.name not in _WHOLE_FUNCTIONS:
+                    child.body = [ast.Expr(ast.Constant(...))]
+                continue
+            stack.append(child)
+
+
+def _outline_of(text: bytes) -> str:
+    """The digest of *text*'s outline (see above): its tree with every
+    function body cut, without positions, and every ``@cash`` comment.
+    Text that does not parse is its own outline."""
+    try:
+        tree = ast.parse(text)
+        _cut_bodies(tree)
+        dumped = ast.dump(tree).encode("utf-8", "surrogatepass")
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        return "text:" + hashlib.blake2b(text, digest_size=20).hexdigest()
+    h = hashlib.blake2b(dumped, digest_size=20)
+    for comment in _CASH_COMMENT.findall(text):
+        h.update(b"\0")
+        h.update(comment)
+    return h.hexdigest()
+
+
+def _outline_digest(filename: str, digest: str) -> str | None:
+    """The outline digest of the file at *filename* while its text digests
+    to *digest*; worked out once per text, across processes too
+    (`scan_store.save_record`). None when the file holds another text now."""
+    key = (filename, digest)
+    known = _OUTLINES.get(key)
+    if known is not None:
+        return known
+    record = scan_store.load_record(_OUTLINE_KIND, filename, digest)
+    outline = record.get("outline") if isinstance(record, dict) else None
+    if not isinstance(outline, str) or tree_memo.VERIFY:
+        try:
+            text = read_code_file(filename)
+        except OSError:
+            return None
+        if hashlib.blake2b(text, digest_size=20).hexdigest() != digest:
+            return None
+        fresh = _outline_of(text)
+        if isinstance(outline, str) and outline != fresh:
+            raise StoredReportMismatch(f"stored outline of {filename} differs from working it out again")
+        if not isinstance(outline, str):
+            scan_store.save_record(_OUTLINE_KIND, filename, digest, {"outline": fresh})
+        outline = fresh
+    _OUTLINES[key] = outline
+    return outline
+
+
+def _modified_globals(module_name: str) -> list[str] | None:
+    """The globals the functions of the module named *module_name* change,
+    as the walk's global-change scan finds them now; None when it is not loaded."""
+    from .mutable_globals import module_modified_globals
+
+    module = sys.modules.get(module_name)
+    if module is None:
+        return None
+    return sorted(module_modified_globals(module))
+
+
+def _read_file(obj: Any) -> str | None:
+    """The file whose text was read as *obj*'s (`cash.source_reads`)."""
+    if type(obj) is types.MethodType:
+        obj = obj.__func__
+    code = obj if type(obj) is types.CodeType else getattr(obj, "__code__", None)
+    if type(code) is types.CodeType:
+        filename = code.co_filename
+        return None if is_pseudo_filename(filename) else filename
+    try:
+        filename = inspect.getsourcefile(obj)
+    except (TypeError, OSError):
+        filename = None
+    return filename if filename and not is_pseudo_filename(filename) else _file_of(obj)
+
+
+def _spans(fn: types.FunctionType, line: int) -> bool:
+    """Is *line* of *fn*'s file one of the lines its own text holds?"""
+    first = fn.__code__.co_firstlineno
+    last = max(
+        (ln for code in _codes_below(fn.__code__) for _, _, ln in code.co_lines() if ln is not None), default=first
+    )
+    return first <= line <= last
+
+
+def _plan(objects: list[Any], paths: list[list], report: PurityReport, reads: source_reads.Reads) -> dict:
+    """Which files a report is checked against whole, which modules'
+    global-change scans, and where each finding's line is anchored (see
+    above). A function or class whose text the walk read without visiting it, and
+    that a name leads to, is added to *objects* (at its path in *paths*) to
+    be checked by its own text; any other read checks its file whole."""
+    whole: set[str] = {f for f in reads.files if not is_pseudo_filename(f)}
+    covered: set[int] = set()
+    for obj in objects:
+        covered.add(id(obj))
+        if type(obj) is types.FunctionType:
+            covered.add(id(obj.__code__))
+        own = type(obj) is types.FunctionType or isinstance(obj, type)
+        if not own or _raw_digest(obj) is None:
+            filename = _file_of(obj)
+            if filename is not None:
+                whole.add(filename)
+    for obj in reads.objects.values():
+        base = obj.__func__ if type(obj) is types.MethodType else obj
+        if id(base) in covered or id(getattr(base, "__code__", None)) in covered:
+            continue
+        if type(base) is types.FunctionType or isinstance(base, type):
+            try:
+                path = _path_of(base)
+            except _Unstorable:
+                path = None
+            if path is not None and _raw_digest(base) is not None:
+                covered.add(id(base))
+                objects.append(base)
+                paths.append(path)
+                continue
+        filename = _read_file(base)
+        if filename is None:
+            if type(base) is types.CodeType or isinstance(base, (types.FunctionType, type)):
+                continue  # code with no file: nothing in a file decides it
+            raise _Unstorable("a text read from no file")
+        whole.add(filename)
+    # Each finding's line, as an offset into a visited function that holds
+    # it: read back, it is numbered from where that function starts then,
+    # which an edit above it moves. A line no visited function holds
+    # checks its file whole.
+    anchors = []
+    for at, issue in enumerate(report.issues):
+        for field, line in enumerate((issue.line, issue.waiver_line)):
+            if not line or not issue.filename:
+                continue
+            holder = next(
+                (
+                    i
+                    for i, f in enumerate(objects)
+                    if type(f) is types.FunctionType and _file_of(f) == issue.filename and _spans(f, line)
+                ),
+                None,
+            )
+            if holder is None:
+                whole.add(issue.filename)
+            else:
+                anchors.append([at, field, holder, line - objects[holder].__code__.co_firstlineno])
+    return {"whole": sorted(whole), "scans": sorted(reads.scans), "anchors": anchors}
+
+
 # --- the guards: what a report was worked out from ---
 
 
@@ -804,9 +1002,12 @@ def _guards(
     unloaded: tuple[str, ...],
     root_module: str | None,
     files: dict[str, str | None],
+    plan: dict,
 ) -> dict:
     """What the report was worked out from, now. *files* (filled here) maps
-    each file read to the digest of its text, for the helper digests."""
+    each file read to the digest of its text, for the helper digests.
+    *plan* (`_plan`) says which files are checked whole (the others by
+    their outline) and which modules' global-change scans."""
     from ..decorator.library_versions import library_versions
 
     digests = []
@@ -818,6 +1019,16 @@ def _guards(
             if filename not in files:
                 files[filename] = _file_digest(filename)
         digests.append(_object_digest(obj, None if filename is None else files[filename]))
+    whole = set(plan["whole"])
+    texts = []
+    for filename in sorted(visited_files | whole):
+        if filename not in files:
+            files[filename] = _file_digest(filename)
+        digest = files[filename]
+        if digest is None or filename in whole:
+            texts.append([filename, "whole", digest])
+        else:
+            texts.append([filename, "outline", _outline_digest(filename, digest)])
     imports = []
     for module_name, prefix, dotted in local_imports:
         found = unloaded_local_imports(module_name, prefix, dotted, root_module)
@@ -838,7 +1049,8 @@ def _guards(
         "objects": digests,
         "bindings": [None if b is UNRESOLVED else _token(b) for b in bindings],
         "cached": [None if c is UNRESOLVED else _token(c) for c in cached],
-        "files": sorted((f, d) for f, d in files.items() if f in visited_files),
+        "files": texts,
+        "scans": [[m, _modified_globals(m)] for m in plan["scans"]],
         "imports": imports,
         "unbound": [[m, n, m in sys.modules and n in vars(sys.modules[m])] for m, n in unbound],
         "unloaded": [[n, n in sys.modules] for n in unloaded],
@@ -1026,9 +1238,16 @@ def _root_path(func: Any) -> tuple[str, tuple[str, ...], str] | None:
     module (`_holder_homes`), in every process, for each root."""
     if type(func) is not types.FunctionType:
         return None
-    return _place(func)
+    place = _place(func)
+    if place is None:
+        return None
+    # Not by its first line, which an edit above it moves (`_text`).
+    module, (qualname, filename, _first), _steps = place
+    return module, (qualname, filename), _SLOT
 
 
+#: The steps of a root's slot (`_root_path`): its module, name and file.
+_SLOT = "@slot"
 #: The steps of a root path `_root_spelled` names by `_place`: no name leads to it.
 _CODE_ROOT = "@"
 
@@ -1110,8 +1329,11 @@ def _entries(file: Any, root: tuple[str, tuple[str, ...], str]) -> list[dict]:
 
 
 def _text(func: Any) -> str | None:
+    """The root's own text and file. Not its first line: an edit above it
+    moves that and nothing the report holds, but the lines of its findings
+    (`_plan`)."""
     digest = _raw_digest(func)
-    return None if digest is None else f"{digest}:{func.__code__.co_filename}:{func.__code__.co_firstlineno}"
+    return None if digest is None else f"{digest}:{func.__code__.co_filename}"
 
 
 def load(func: Callable[..., Any]) -> PurityReport | None:
@@ -1165,6 +1387,7 @@ def _check(entry: dict, func: Any) -> PurityReport | None:
         tuple(spelled["unloaded"]),
         func.__module__,
         files,
+        entry["plan"],
     )
     now["owners"] = _owners_now(entry.get("owners", []))
     if _digest(now) != entry["guards"]:
@@ -1178,7 +1401,20 @@ def _check(entry: dict, func: Any) -> PurityReport | None:
         live = held.get(qualname, func) if path is None else resolve_binding(*path)  # the root has no path
         if live is UNRESOLVED or _identity(live, files) != digest:
             return None
-    return _read(spelled, objects)
+    return _anchored(_read(spelled, objects), entry["plan"]["anchors"], objects)
+
+
+def _anchored(report: PurityReport, anchors: list, objects: list[Any]) -> PurityReport:
+    """*report* with each anchored finding line (`_plan`) numbered from
+    where the function holding it starts now."""
+    if not anchors:
+        return report
+    issues = list(report.issues)
+    for at, field, holder, offset in anchors:
+        line = objects[holder].__code__.co_firstlineno + offset
+        name = "line" if field == 0 else "waiver_line"
+        issues[at] = dataclasses.replace(issues[at], **{name: line})
+    return dataclasses.replace(report, issues=tuple(issues))
 
 
 def _as_json(value: Any) -> Any:
@@ -1263,6 +1499,7 @@ def _entry(func: Any, report: PurityReport, walk: Any, text: str) -> dict:
     bindings = [resolve_binding(m, tuple(c)) for m, c in spelled["bindings"]]
     cached = [_find(p) for p in spelled["cached"]]
     imports = walk.local_imports_read()
+    plan = _plan(objects, paths, report, walk.source_read())
     guards = _guards(
         objects,
         bindings,
@@ -1272,6 +1509,7 @@ def _entry(func: Any, report: PurityReport, walk: Any, text: str) -> dict:
         report.unloaded_modules,
         func.__module__,
         files,
+        plan,
     )
     guards["owners"] = _owners_now(owners)
     return {
@@ -1280,6 +1518,7 @@ def _entry(func: Any, report: PurityReport, walk: Any, text: str) -> dict:
         "owners": owners,
         "report": spelled,
         "imports": [[m, list(p), list(d)] for m, p, d in imports],
+        "plan": plan,
         # Only the digest of the guards: they are worked out again to check.
         "guards": _digest(guards),
     }

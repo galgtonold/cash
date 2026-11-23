@@ -24,6 +24,7 @@ import sys
 import time
 import types
 
+from . import source_reads
 from ._memo import CODE_OBJECTS, MODULE_ANALYSES, LruMemo
 from ._user_attrs import module_file as _module_file
 from ._user_attrs import own_dict
@@ -162,6 +163,7 @@ def read_code_file(path: str) -> bytes:
     The tracker sees every Python-level open, ``io.FileIO`` included, so the
     read runs :class:`untracked`.
     """
+    source_reads.note_file(path)
     with untracked(), io.FileIO(path, "rb") as fh:
         return fh.readall()
 
@@ -230,14 +232,25 @@ def getsourcelines(obj: object) -> tuple[list[str], int]:
     """
     with untracked():
         obj = inspect.unwrap(obj)
+        _note_read(obj)
         lines, first = _inspect_source_lines(obj)
         code = _code_of(obj)
         if code is not None and not block_defines(lines, code):
             moved = relocated_source_lines(obj, code)
             if moved is None:
                 raise OSError(f"could not find the definition of {code.co_name}: its code was compiled from other text")
+            source_reads.note_file(moved[2])
             return moved[0], moved[1]
         return lines, first
+
+
+def _note_read(obj: object) -> None:
+    """Tell a walk recording what it reads (`source_reads`) that it reads
+    *obj*'s source: a module's is its whole file."""
+    if isinstance(obj, types.ModuleType):
+        source_reads.note_file(getattr(obj, "__file__", None))
+    else:
+        source_reads.note_object(obj)
 
 
 def _code_of(obj: object) -> types.CodeType | None:

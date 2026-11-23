@@ -25,6 +25,7 @@ from typing import Any
 
 from cash._user_attrs import attribute_or, instance_of, is_routine
 
+from .. import source_reads
 from .._memo import STATEMENTS, USER_CALLEES, LruMemo
 from ..diagnostics import warn_diagnostic
 from ..effects import is_open_write_mode
@@ -188,6 +189,7 @@ def code_waived_lines(code_obj: types.CodeType) -> tuple[frozenset[int], bool]:
     and whether the waiver is on its ``def`` line. Empty for code cash does
     not read (no source, not the user's)."""
     memo_key = (code_obj.co_filename, code_obj)
+    source_reads.note_object(code_obj)  # before the memo: a walk that finds it there read it all the same
     known = _waived_lines_cache.get(memo_key)
     if known is not None:
         return known
@@ -368,6 +370,7 @@ def _examined_body(func: Any) -> "tuple[types.FunctionType, bool, bool, bool, tu
         return None
     code_obj = func.__code__
     memo_key = (code_obj.co_filename, code_obj)
+    source_reads.note_object(func)  # before the memo, as above
     known = _body_cache.get(memo_key, _NOT_SEEN)
     if known is _NOT_SEEN:
         known = _read_body(func)
@@ -1609,6 +1612,7 @@ def _live_user_function_source(user_ns: Mapping[str, Any]) -> Callable[[str], st
         if type(fn) is not types.FunctionType:
             return None
         code = fn.__code__
+        source_reads.note_object(fn)  # before the memo, as above
         if code in _USER_SOURCES:
             return _USER_SOURCES[code]
         source = None
@@ -3226,6 +3230,7 @@ def _method_leaves(obj: Any, method: str, call: ast.Call, name: str, user_ns: Ma
         return False
     if type(fn) is not types.FunctionType or not is_user_code_file(fn.__code__.co_filename):
         return False
+    source_reads.note_object(fn)
     try:
         source = inspect.getsource(fn)
     except SOURCE_RETRIEVAL_ERRORS:
