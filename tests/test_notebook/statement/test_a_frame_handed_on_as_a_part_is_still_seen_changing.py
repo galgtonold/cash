@@ -80,7 +80,7 @@ def test_a_change_made_through_another_name_is_seen(cash_magics, mock_shell, tmp
     for _ in range(2):
         run_cash_cell(cash_magics, f"t = {fn}(x[x.b > 0])")
     assert mock_shell.user_ns["x"].loc[0, "a"] == 2.0
-    assert log.read_text() == ".."
+    assert log.read_text(encoding="utf-8") == ".."
 
 
 @pytest.mark.parametrize("fn", ["same_value", "reads_only"])
@@ -94,4 +94,4 @@ def test_a_statement_that_leaves_the_frame_as_it_was_is_served(cash_magics, mock
     assert mock_shell.user_ns["x"].loc[0, "a"] == 0.0
     assert mock_shell.user_ns["t"] == 300_000
     # Positive control for the counter: the first run ran.
-    assert log.read_text() == "."
+    assert log.read_text(encoding="utf-8") == "."
